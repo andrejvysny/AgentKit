@@ -6,13 +6,14 @@ import {
 } from "../src/providers/presets.js";
 
 describe("provider presets", () => {
-  it("exposes all 5 kinds", () => {
+  it("exposes all 6 kinds", () => {
     const kinds = AI_PROVIDER_PRESETS.map((p) => p.kind).sort();
     expect(kinds).toEqual([
       "lmstudio",
       "omlx",
       "openai",
       "openai-compatible",
+      "openpcb-cloud",
       "openrouter",
     ]);
   });
@@ -24,6 +25,13 @@ describe("provider presets", () => {
   it("lmstudio and omlx do not require API key", () => {
     expect(getPresetByKind("lmstudio")?.requiresApiKey).toBe(false);
     expect(getPresetByKind("omlx")?.requiresApiKey).toBe(false);
+  });
+
+  it("openpcb-cloud does not require API key (bearer sealed per run)", () => {
+    const cloud = getPresetByKind("openpcb-cloud");
+    expect(cloud?.requiresApiKey).toBe(false);
+    expect(cloud?.defaultBaseUrl).toBe("");
+    expect(cloud?.defaultModel).toBe("");
   });
 
   it("omlx has empty defaults but provides probe URLs", () => {

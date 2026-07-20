@@ -16,6 +16,14 @@ export interface OpenAiCompatibleClientOptions {
   kind: AiProviderKind;
   baseUrl: string;
   apiKey?: string;
+  /**
+   * Static headers sent on every request to this provider (merged after the
+   * built-in accept/authorization headers, so they cannot override auth). Used
+   * by the OpenPCB Cloud provider to attribute calls to a workspace + run
+   * (`x-openpcb-workspace-id`, required by the metered proxy; `x-openpcb-run-id`
+   * for usage stitching). The client is built per run, so per-run values ride here.
+   */
+  extraHeaders?: Record<string, string>;
   /** Override fetch for tests. */
   fetchImpl?: typeof fetch;
 }
@@ -25,6 +33,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
   readonly kind: AiProviderKind;
   private readonly baseUrl: string;
   private readonly apiKey?: string;
+  private readonly extraHeaders?: Record<string, string>;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: OpenAiCompatibleClientOptions) {
@@ -32,6 +41,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     this.kind = options.kind;
     this.baseUrl = stripTrailingSlash(options.baseUrl);
     this.apiKey = options.apiKey;
+    this.extraHeaders = options.extraHeaders;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
 
@@ -478,7 +488,9 @@ export class OpenAiCompatibleClient implements AiProviderClient {
   }
 
   private buildHeaders(): Record<string, string> {
-    const headers: Record<string, string> = { accept: "application/json" };
+    // extraHeaders first so the built-in accept/auth headers below always win.
+    const headers: Record<string, string> = { ...this.extraHeaders };
+    headers.accept = "application/json";
     if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
     if (this.kind === "openrouter") {
       // Optional attribution headers for OpenRouter's app leaderboard (no-op elsewhere).

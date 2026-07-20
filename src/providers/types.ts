@@ -6,7 +6,8 @@ export type AiProviderKind =
   | "openrouter"
   | "openai-compatible"
   | "lmstudio"
-  | "omlx";
+  | "omlx"
+  | "openpcb-cloud";
 
 export interface AiProviderConfig {
   id: string;

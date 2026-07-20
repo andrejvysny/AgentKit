@@ -1,6 +1,6 @@
 {
   "name": "@openpcb/ai-core",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Headless AI runtime primitives for OpenPCB ecosystem: providers, tools, context, citations, prompts, and run events. Pure TypeScript; no DB, no HTTP framework, no DOM, no provider SDKs.",
   "license": "AGPL-3.0-or-later",
   "type": "module",

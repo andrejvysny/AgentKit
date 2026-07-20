@@ -42,6 +42,42 @@ function makeEchoTool(): AiTool<{ text: string }, { echoed: string }> {
   };
 }
 
+/** A signal-aware tool that never resolves on its own — only ctx.signal ends it. */
+function makeSlowTool(): AiTool<Record<string, never>, { done: boolean }> {
+  return {
+    definition: {
+      name: "slow",
+      version: "1",
+      effect: "read",
+      capability: "test",
+      description: "slow",
+      inputSchema: { type: "object", properties: {} },
+      timeoutMs: 20,
+    },
+    async execute(ctx) {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 5000);
+        ctx.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(t);
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+      return {
+        ok: true,
+        data: { done: true },
+        sources: [],
+        warnings: [],
+        truncated: false,
+        limits: ctx.limits,
+      };
+    },
+  };
+}
+
 describe("runChat", () => {
   it("streams text-only response and completes", async () => {
     const client = new MockProviderClient();
@@ -213,5 +249,37 @@ describe("runChat", () => {
         (w) => (w as { data: { code: string } }).data.code === "max_iterations",
       ),
     ).toBe(true);
+  });
+
+  it("aborts a tool that exceeds its timeoutMs and continues the run", async () => {
+    const client = new MockProviderClient();
+    client.setScript([
+      {
+        steps: [
+          {
+            kind: "tool_call",
+            toolCallId: "c1",
+            name: "slow",
+            argumentsJson: "{}",
+          },
+        ],
+      },
+      { steps: [{ kind: "text", content: "handled" }] },
+    ]);
+    const registry = new AiToolRegistry();
+    registry.register(makeSlowTool() as unknown as AiTool);
+    const events = await collect({
+      client,
+      registry,
+      model: "m",
+      messages: [{ role: "user", content: "go" }],
+      limits: resolveToolLimits({ preference: "small" }),
+    });
+    const failed = events.find((e) => e.type === "run.tool.failed") as
+      | { data: { errorMessage: string } }
+      | undefined;
+    expect(failed).toBeDefined();
+    expect(failed?.data.errorMessage).toContain("timed out");
+    expect(events.find((e) => e.type === "run.completed")).toBeDefined();
   });
 });

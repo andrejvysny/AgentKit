@@ -484,13 +484,52 @@ async function executeToolSafely(
 ): Promise<
   { ok: true; value: AiToolResult<unknown> } | { ok: false; error: string }
 > {
+  const timeoutMs = tool.definition.timeoutMs;
+  // No per-tool timeout: unchanged fast path (every local tool hits this).
+  if (!timeoutMs || timeoutMs <= 0) {
+    try {
+      const value = await tool.execute(ctx, input);
+      return { ok: true, value };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+  // Per-tool timeout: abort via a controller linked to the run-level signal, so
+  // either the run cancelling OR the deadline elapsing aborts the tool's fetch.
+  const controller = new AbortController();
+  const parent = ctx.signal;
+  const onParentAbort = () => controller.abort(parent?.reason);
+  if (parent) {
+    if (parent.aborted) controller.abort(parent.reason);
+    else parent.addEventListener("abort", onParentAbort, { once: true });
+  }
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
-    const value = await tool.execute(ctx, input);
+    const value = await tool.execute(
+      { ...ctx, signal: controller.signal },
+      input,
+    );
     return { ok: true, value };
   } catch (err) {
+    if (timedOut) {
+      return {
+        ok: false,
+        error: `Tool ${tool.definition.name} timed out after ${timeoutMs}ms`,
+      };
+    }
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     };
+  } finally {
+    clearTimeout(timer);
+    if (parent) parent.removeEventListener("abort", onParentAbort);
   }
 }

@@ -36,6 +36,15 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
       "Cloud aggregator routing to many model providers via one OpenAI-compatible API. Requires an API key from openrouter.ai/keys. Models use vendor/model slugs (e.g. anthropic/claude-3.5-sonnet).",
   },
   {
+    kind: "openpcb-cloud",
+    label: "OpenPCB Cloud",
+    defaultBaseUrl: "",
+    defaultModel: "",
+    requiresApiKey: false,
+    notes:
+      "Zero-config cloud AI for Pro subscribers. Auto-configured after you sign in — no API key or base URL needed. The per-run bearer is your live session token.",
+  },
+  {
     kind: "lmstudio",
     label: "LM Studio",
     defaultBaseUrl: "http://127.0.0.1:1234/v1",

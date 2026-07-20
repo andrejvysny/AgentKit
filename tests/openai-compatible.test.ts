@@ -122,6 +122,38 @@ describe("OpenAiCompatibleClient.streamChat", () => {
   });
 });
 
+describe("OpenAiCompatibleClient extraHeaders", () => {
+  it("merges extraHeaders into requests but cannot override authorization", async () => {
+    let seen: Headers | undefined;
+    const client = new OpenAiCompatibleClient({
+      id: "cloud",
+      kind: "openpcb-cloud",
+      baseUrl: "http://localhost:9/v1/llm",
+      apiKey: "real-bearer",
+      extraHeaders: {
+        "x-openpcb-workspace-id": "ws_1",
+        "x-openpcb-run-id": "run_1",
+        authorization: "Bearer SPOOFED",
+        accept: "text/spoofed",
+      },
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        seen = new Headers(init?.headers);
+        return sseResponse([{ choices: [{ delta: {}, finish_reason: "stop" }] }]);
+      }) as unknown as typeof fetch,
+    });
+    for await (const _e of client.streamChat({
+      runId: "r",
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+    }));
+    expect(seen?.get("x-openpcb-workspace-id")).toBe("ws_1");
+    expect(seen?.get("x-openpcb-run-id")).toBe("run_1");
+    // The built-in headers win — extraHeaders cannot spoof auth or accept.
+    expect(seen?.get("authorization")).toBe("Bearer real-bearer");
+    expect(seen?.get("accept")).toBe("application/json");
+  });
+});
+
 describe("OpenAiCompatibleClient capability probe", () => {
   function routedFetch(probeJson: unknown): typeof fetch {
     return (async (url: string | URL) => {

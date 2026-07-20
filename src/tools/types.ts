@@ -22,6 +22,14 @@ export interface AiToolDefinition {
   description: string;
   inputSchema: AiJsonSchemaObject;
   outputSchema?: AiJsonSchemaObject;
+  /**
+   * Optional per-tool execution timeout (ms). When set, the run-loop races
+   * `execute()` against the deadline via an AbortController linked to
+   * `ctx.signal`, so either run-cancellation or the timeout aborts the call.
+   * Local tools omit it (unchanged fast path); remote tools set it from their
+   * manifest duration class.
+   */
+  timeoutMs?: number;
 }
 
 export interface AiToolCall {
