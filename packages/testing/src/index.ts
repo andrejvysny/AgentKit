@@ -13,3 +13,7 @@ export * from "./fixtures.js";
 
 // Golden traces
 export * from "./golden/golden.js";
+
+// Store conformance: the shared behavioral contract every AssistantStore
+// implementation must pass (see internal/reference-adapters).
+export * from "./store-conformance.js";

@@ -19,7 +19,8 @@
     "baseUrl": ".",
     "paths": {
       "@agentkit/contracts": ["../contracts/dist/index.d.ts"],
-      "@agentkit/core": ["../core/dist/index.d.ts"]
+      "@agentkit/core": ["../core/dist/index.d.ts"],
+      "@agentkit/host": ["../host/dist/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts"],
