@@ -3,16 +3,9 @@ import { runChat } from "../src/runs/run-loop.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
 import { MockProviderClient } from "./mocks/mock-provider.js";
+import { collectRun } from "./helpers.js";
 import type { AiTool } from "../src/tools/tool.js";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
-
-async function collect(
-  input: Parameters<typeof runChat>[0],
-): Promise<AiRunEvent[]> {
-  const out: AiRunEvent[] = [];
-  for await (const e of runChat(input)) out.push(e);
-  return out;
-}
 
 /**
  * A tool whose schema requires a string `text` and forbids extra keys. Records
@@ -73,13 +66,15 @@ describe("runChat — schema_invalid arguments", () => {
     const registry = new AiToolRegistry();
     registry.register(tool as unknown as AiTool);
     const messages: AiChatMessage[] = [{ role: "user", content: "go" }];
-    const events = await collect({
-      client,
-      registry,
-      model: "m",
-      messages,
-      limits: resolveToolLimits({ preference: "small" }),
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry,
+        model: "m",
+        messages,
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
 
     // No execution, no success — validation gates before the tool runs.
     expect(executed()).toBe(false);
@@ -92,7 +87,7 @@ describe("runChat — schema_invalid arguments", () => {
     expect(failed!.data.errorCode).toBe("schema_invalid");
 
     // The model is fed the balanced error envelope (F10), not a raw {ok,error}.
-    const toolMsg = messages.find((m) => m.role === "tool");
+    const toolMsg = result.appendedMessages.find((m) => m.role === "tool");
     expect(toolMsg).toBeDefined();
     const env = JSON.parse(toolMsg!.content) as {
       ok: boolean;

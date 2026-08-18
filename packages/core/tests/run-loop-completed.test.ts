@@ -4,15 +4,15 @@ import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
 import { MockProviderClient } from "./mocks/mock-provider.js";
 import { CompletedOnlyProviderClient } from "./mocks/mock-completed-provider.js";
+import { collectRun } from "./helpers.js";
 import type { AiTool } from "../src/tools/tool.js";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
 
+/** Events only, for the cases that don't care about the return value. */
 async function collect(
   input: Parameters<typeof runChat>[0],
 ): Promise<AiRunEvent[]> {
-  const out: AiRunEvent[] = [];
-  for await (const e of runChat(input)) out.push(e);
-  return out;
+  return (await collectRun(runChat(input))).events;
 }
 
 function makeEchoTool(): AiTool<{ text: string }, { echoed: string }> {
@@ -77,17 +77,21 @@ describe("runChat — completed-only providers", () => {
     const client = new CompletedOnlyProviderClient();
     client.setScript([{ content: "Final answer", finishReason: "stop" }]);
     const messages: AiChatMessage[] = [{ role: "user", content: "hi" }];
-    const events = await collect({
-      client,
-      registry: new AiToolRegistry(),
-      model: "m",
-      messages,
-      limits: resolveToolLimits({ preference: "small" }),
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry: new AiToolRegistry(),
+        model: "m",
+        messages,
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
     expect(events.find((e) => e.type === "run.completed")).toBeDefined();
-    const last = messages.at(-1);
+    const last = result.appendedMessages.at(-1);
     expect(last?.role).toBe("assistant");
     expect(last?.content).toBe("Final answer");
+    expect(result.terminal).toBe("completed");
+    expect(messages.length).toBe(1);
   });
 
   it("executes a tool from completed-only {toolCalls} (no deltas from the provider)", async () => {
@@ -102,20 +106,23 @@ describe("runChat — completed-only providers", () => {
     const registry = new AiToolRegistry();
     registry.register(makeEchoTool() as unknown as AiTool);
     const messages: AiChatMessage[] = [{ role: "user", content: "go" }];
-    const events = await collect({
-      client,
-      registry,
-      model: "m",
-      messages,
-      limits: resolveToolLimits({ preference: "small" }),
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry,
+        model: "m",
+        messages,
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
     expect(events.some((e) => e.type === "run.tool.succeeded")).toBe(true);
-    expect(messages.map((m) => m.role)).toEqual([
+    expect([...messages, ...result.appendedMessages].map((m) => m.role)).toEqual([
       "user",
       "assistant",
       "tool",
       "assistant",
     ]);
+    expect(messages.map((m) => m.role)).toEqual(["user"]);
     // The provider announced nothing, so the loop synthesizes the announcement:
     // consumers keyed on run.tool.requested see the call before it runs, whether
     // or not the provider streams.
@@ -225,13 +232,15 @@ describe("runChat — tool-own ok and envelopes", () => {
     const registry = new AiToolRegistry();
     registry.register(makeFailingTool() as unknown as AiTool);
     const messages: AiChatMessage[] = [{ role: "user", content: "go" }];
-    const events = await collect({
-      client,
-      registry,
-      model: "m",
-      messages,
-      limits: resolveToolLimits({ preference: "small" }),
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry,
+        model: "m",
+        messages,
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
     expect(events.some((e) => e.type === "run.tool.succeeded")).toBe(false);
     const failed = events.find((e) => e.type === "run.tool.failed") as
       | (AiRunEvent & {
@@ -255,7 +264,7 @@ describe("runChat — tool-own ok and envelopes", () => {
     };
     expect(evtEnv.status).toBe("partial");
     // Error envelope fed back to the model on the tool message.
-    const toolMsg = messages.find((m) => m.role === "tool");
+    const toolMsg = result.appendedMessages.find((m) => m.role === "tool");
     expect(toolMsg).toBeDefined();
     const env = JSON.parse(toolMsg!.content) as {
       ok: boolean;
@@ -310,13 +319,15 @@ describe("runChat — tool-own ok and envelopes", () => {
     const registry = new AiToolRegistry();
     registry.register(slimTool);
     const messages: AiChatMessage[] = [{ role: "user", content: "go" }];
-    const events = await collect({
-      client,
-      registry,
-      model: "m",
-      messages,
-      limits: resolveToolLimits({ preference: "small" }),
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry,
+        model: "m",
+        messages,
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
     const ok = events.find((e) => e.type === "run.tool.succeeded") as
       | (AiRunEvent & {
           data: {
@@ -342,7 +353,7 @@ describe("runChat — tool-own ok and envelopes", () => {
     expect(env.warnings).toEqual(["heads up"]);
     expect(env.truncated).toBe(true);
     // The tool message fed to the model is the slim envelope, not the full data.
-    const toolMsg = messages.find((m) => m.role === "tool");
+    const toolMsg = result.appendedMessages.find((m) => m.role === "tool");
     expect(toolMsg!.content).not.toContain("xxxx");
   });
 });
@@ -378,14 +389,16 @@ describe("runChat — terminal events for every requested/capped call", () => {
     const registry = new AiToolRegistry();
     registry.register(makeEchoTool() as unknown as AiTool);
     const messages: AiChatMessage[] = [{ role: "user", content: "go" }];
-    const events = await collect({
-      client,
-      registry,
-      model: "m",
-      messages,
-      limits: resolveToolLimits({ preference: "small" }),
-      maxToolCallsPerIteration: 1,
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry,
+        model: "m",
+        messages,
+        limits: resolveToolLimits({ preference: "small" }),
+        maxToolCallsPerIteration: 1,
+      }),
+    );
     // One success (c1) + two capped failures (c2, c3).
     expect(events.filter((e) => e.type === "run.tool.succeeded").length).toBe(
       1,
@@ -400,7 +413,7 @@ describe("runChat — terminal events for every requested/capped call", () => {
     // F1: the assistant message lists EVERY tool call it will answer (all 3),
     // not just the executed subset — otherwise capped calls become orphan
     // tool_call_ids that Chat Completions rejects.
-    const assistantMsg = messages.find(
+    const assistantMsg = result.appendedMessages.find(
       (m) => m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0,
     );
     expect(assistantMsg?.toolCalls?.map((tc) => tc.id)).toEqual([
@@ -409,12 +422,12 @@ describe("runChat — terminal events for every requested/capped call", () => {
       "c3",
     ]);
     // Every assistant tool_call_id has a matching tool message (no dangling state).
-    const toolMsgIds = messages
+    const toolMsgIds = result.appendedMessages
       .filter((m) => m.role === "tool")
       .map((m) => m.toolCallId);
     expect(new Set(toolMsgIds)).toEqual(new Set(["c1", "c2", "c3"]));
     // The capped (skipped) tool messages carry the balanced error envelope (F10).
-    const cappedMsg = messages.find(
+    const cappedMsg = result.appendedMessages.find(
       (m) => m.role === "tool" && m.toolCallId === "c2",
     );
     const cappedEnv = JSON.parse(cappedMsg!.content) as {

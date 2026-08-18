@@ -20,7 +20,8 @@ export interface RunChatInput {
   client: AiProviderClient;
   registry: AiToolRegistry;
   model: string;
-  messages: AiChatMessage[];
+  /** Conversation so far. Treated as read-only: the loop works on a copy. */
+  messages: readonly AiChatMessage[];
   bindings?: AiContextBinding[];
   limits: AiToolLimits;
   chatId?: string;
@@ -34,23 +35,59 @@ export interface RunChatInput {
   runId?: string;
 }
 
+/**
+ * What the run produced, returned as the generator's return value (`for await`
+ * discards it — see the `collectRun` pattern in the tests to capture it).
+ *
+ * This is an in-process API type, deliberately NOT part of `@agentkit/contracts`:
+ * nothing here crosses the wire. The events are the wire format; this is the
+ * handoff between `runChat` and whoever drove it.
+ */
+export interface RunChatResult {
+  runId: string;
+  /** Which terminal event ended the run. */
+  terminal: "completed" | "failed" | "cancelled";
+  /**
+   * Assistant + tool messages the run appended, in order. Append these to your
+   * own history to continue the conversation.
+   */
+  appendedMessages: readonly AiChatMessage[];
+  /** Provider round-trips actually taken (1-based). */
+  iterations: number;
+}
+
 const DEFAULT_MAX_TOOL_ITERATIONS = 4;
 const DEFAULT_MAX_TOOL_CALLS_PER_ITERATION = 8;
 
 /**
- * Run a multi-turn chat with tool calls. Yields normalized AiRunEvents.
- * Mutates the messages array in place (appending assistant + tool messages).
+ * Run a multi-turn chat with tool calls. Yields normalized AiRunEvents and
+ * returns a {@link RunChatResult}.
+ *
+ * `input.messages` is never mutated: the loop appends to a private copy and hands
+ * back what it appended. Mutating a caller's array was a hidden side effect that
+ * made a run impossible to retry, fan out, or run twice from the same history —
+ * the second attempt would start from a conversation the first one had rewritten.
  */
 export async function* runChat(
   input: RunChatInput,
-): AsyncGenerator<AiRunEvent, void, unknown> {
+): AsyncGenerator<AiRunEvent, RunChatResult, unknown> {
   const runId = input.runId ?? newRunId();
   const maxIterations = input.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
   const maxCallsPerIter =
     input.maxToolCallsPerIteration ?? DEFAULT_MAX_TOOL_CALLS_PER_ITERATION;
   const toolDefinitions = input.registry.listDefinitions();
+  const messages: AiChatMessage[] = input.messages.slice();
+  const initialLength = messages.length;
   let iteration = 0;
   let finishReason: string | undefined;
+
+  /** Build the generator's return value for whichever terminal we reached. */
+  const finish = (terminal: RunChatResult["terminal"]): RunChatResult => ({
+    runId,
+    terminal,
+    appendedMessages: messages.slice(initialLength),
+    iterations: iteration,
+  });
 
   for (let i = 0; i < maxIterations; i++) {
     iteration = i + 1;
@@ -61,7 +98,7 @@ export async function* runChat(
         timestamp: nowIso(),
         data: { reason: "aborted" },
       };
-      return;
+      return finish("cancelled");
     }
 
     // Deltas are display-only; the turn's authoritative content + tool calls come
@@ -90,7 +127,7 @@ export async function* runChat(
       for await (const event of input.client.streamChat({
         runId,
         model: input.model,
-        messages: input.messages,
+        messages,
         tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
         temperature: input.temperature,
         maxOutputTokens: input.maxOutputTokens,
@@ -127,7 +164,7 @@ export async function* runChat(
             break;
           case "run.cancelled":
             yield stamped;
-            return;
+            return finish("cancelled");
           case "run.started":
             if (iteration === 1) yield stamped;
             break;
@@ -151,7 +188,7 @@ export async function* runChat(
           timestamp: nowIso(),
           data: { reason: "aborted" },
         };
-        return;
+        return finish("cancelled");
       }
       yield {
         type: "run.failed",
@@ -162,12 +199,12 @@ export async function* runChat(
           errorCode: "provider_error",
         },
       };
-      return;
+      return finish("failed");
     }
 
     if (turnFailed) {
       // Provider already yielded run.failed during the stream — don't double-emit.
-      return;
+      return finish("failed");
     }
 
     const assistantContent = completedContent ?? deltaContent;
@@ -215,7 +252,7 @@ export async function* runChat(
       // execute only the capped subset and emit a terminal tool message for each
       // skipped call below, so every tool_call_id has both an assistant entry and
       // a tool response.
-      input.messages.push({
+      messages.push({
         role: "assistant",
         content: assistantContent,
         toolCalls: turnToolCalls,
@@ -236,7 +273,7 @@ export async function* runChat(
         ])
           yield* failTool(
             runId,
-            input.messages,
+            messages,
             rem,
             "Run cancelled before this tool produced a result.",
             "cancelled",
@@ -253,7 +290,7 @@ export async function* runChat(
             timestamp: nowIso(),
             data: { reason: "aborted" },
           };
-          return;
+          return finish("cancelled");
         }
         yield {
           type: "run.tool.running",
@@ -264,13 +301,13 @@ export async function* runChat(
         const tool = input.registry.get(tc.name);
         if (!tool) {
           const err = `Tool not registered: ${tc.name}`;
-          yield* failTool(runId, input.messages, tc, err, "tool_missing");
+          yield* failTool(runId, messages, tc, err, "tool_missing");
           continue;
         }
         const parsed = parseToolArguments(tc.argumentsJson);
         if (!parsed.ok) {
           const err = `Invalid arguments JSON: ${parsed.error}`;
-          yield* failTool(runId, input.messages, tc, err, "bad_args");
+          yield* failTool(runId, messages, tc, err, "bad_args");
           continue;
         }
         const args = parsed.value;
@@ -284,7 +321,7 @@ export async function* runChat(
         );
         if (schemaErrors.length > 0) {
           const err = describeValidationErrors(tc.name, schemaErrors);
-          yield* failTool(runId, input.messages, tc, err, "schema_invalid");
+          yield* failTool(runId, messages, tc, err, "schema_invalid");
           continue;
         }
 
@@ -332,7 +369,7 @@ export async function* runChat(
             },
           };
           // Feed the model the balanced envelope, not the raw data.
-          input.messages.push({
+          messages.push({
             role: "tool",
             content: modelResultJson,
             toolCallId: tc.id,
@@ -361,7 +398,7 @@ export async function* runChat(
               modelResultJson: JSON.stringify(envelope),
             },
           };
-          input.messages.push({
+          messages.push({
             role: "tool",
             content: JSON.stringify(envelope),
             toolCallId: tc.id,
@@ -370,7 +407,7 @@ export async function* runChat(
         } else if (!result.ok) {
           yield* failTool(
             runId,
-            input.messages,
+            messages,
             tc,
             result.error,
             "exec_failed",
@@ -393,7 +430,7 @@ export async function* runChat(
             errorCode: "tool_call_cap",
           },
         };
-        input.messages.push({
+        messages.push({
           role: "tool",
           content: JSON.stringify(errorEnvelope("tool_call_cap", err)),
           toolCallId: tc.id,
@@ -405,7 +442,7 @@ export async function* runChat(
     }
 
     // No tool calls; commit final assistant message and finish.
-    input.messages.push({ role: "assistant", content: assistantContent });
+    messages.push({ role: "assistant", content: assistantContent });
     finishReason = turnFinishReason ?? "stop";
     // #4: surface finish_reason="tool_calls" with no reconstructable call — but
     // only if the provider didn't already emit it during streaming (dedup).
@@ -439,7 +476,7 @@ export async function* runChat(
       timestamp: nowIso(),
       data: { iterations: iteration, finishReason },
     };
-    return;
+    return finish("completed");
   }
 
   yield {
@@ -451,12 +488,15 @@ export async function* runChat(
       message: `Reached maxToolIterations=${maxIterations} without final answer.`,
     },
   };
+  // Exhausting the iteration budget still ends on run.completed (with a warning),
+  // so the terminal reported here matches the event stream.
   yield {
     type: "run.completed",
     runId,
     timestamp: nowIso(),
     data: { iterations: iteration, finishReason: "max_iterations" },
   };
+  return finish("completed");
 }
 
 /** `err.message ?? err`, without assuming `err` is an Error at all. */

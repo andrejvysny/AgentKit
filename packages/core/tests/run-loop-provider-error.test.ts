@@ -3,6 +3,7 @@ import { runChat } from "../src/runs/run-loop.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
 import { nowIso } from "../src/ids.js";
+import { collectRun } from "./helpers.js";
 import type { AiChatRequest, AiProviderClient } from "../src/providers/client.js";
 import type {
   AiProviderCapabilities,
@@ -10,12 +11,11 @@ import type {
   AiRunEvent,
 } from "@agentkit/contracts";
 
+/** Events only, for the cases that don't care about the return value. */
 async function collect(
   input: Parameters<typeof runChat>[0],
 ): Promise<AiRunEvent[]> {
-  const out: AiRunEvent[] = [];
-  for await (const e of runChat(input)) out.push(e);
-  return out;
+  return (await collectRun(runChat(input))).events;
 }
 
 /**
@@ -55,14 +55,17 @@ const TERMINAL = new Set(["run.completed", "run.failed", "run.cancelled"]);
 
 describe("runChat — provider throws mid-stream", () => {
   it("normalizes the throw into exactly one terminal run.failed", async () => {
-    const events = await collect({
-      client: new ThrowingProviderClient(new Error("socket hang up")),
-      registry: new AiToolRegistry(),
-      model: "m",
-      messages: [{ role: "user", content: "hi" }],
-      limits: resolveToolLimits({ preference: "small" }),
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client: new ThrowingProviderClient(new Error("socket hang up")),
+        registry: new AiToolRegistry(),
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
 
+    expect(result.terminal).toBe("failed");
     const terminals = events.filter((e) => TERMINAL.has(e.type));
     expect(terminals.length).toBe(1);
     const failed = terminals[0] as AiRunEvent & {
@@ -94,13 +97,16 @@ describe("runChat — provider throws mid-stream", () => {
   it("classifies an AbortError throw as cancellation, not failure", async () => {
     const abortError = new Error("The operation was aborted.");
     abortError.name = "AbortError";
-    const events = await collect({
-      client: new ThrowingProviderClient(abortError),
-      registry: new AiToolRegistry(),
-      model: "m",
-      messages: [{ role: "user", content: "hi" }],
-      limits: resolveToolLimits({ preference: "small" }),
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client: new ThrowingProviderClient(abortError),
+        registry: new AiToolRegistry(),
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
+    expect(result.terminal).toBe("cancelled");
     const terminals = events.filter((e) => TERMINAL.has(e.type));
     expect(terminals.length).toBe(1);
     expect(terminals[0]!.type).toBe("run.cancelled");
@@ -112,14 +118,17 @@ describe("runChat — provider throws mid-stream", () => {
     controller.abort();
     // Signal aborted at the top of iteration 1 — the loop cancels before it ever
     // reaches the client, which is the same terminal from the caller's view.
-    const events = await collect({
-      client: new ThrowingProviderClient(new Error("aborted")),
-      registry: new AiToolRegistry(),
-      model: "m",
-      messages: [{ role: "user", content: "hi" }],
-      limits: resolveToolLimits({ preference: "small" }),
-      signal: controller.signal,
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client: new ThrowingProviderClient(new Error("aborted")),
+        registry: new AiToolRegistry(),
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        limits: resolveToolLimits({ preference: "small" }),
+        signal: controller.signal,
+      }),
+    );
+    expect(result.terminal).toBe("cancelled");
     const terminals = events.filter((e) => TERMINAL.has(e.type));
     expect(terminals.length).toBe(1);
     expect(terminals[0]!.type).toBe("run.cancelled");
