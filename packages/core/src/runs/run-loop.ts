@@ -79,57 +79,87 @@ export async function* runChat(
     // re-emit a duplicate (while still covering providers/mocks that don't).
     let sawNoToolCallWarning = false;
 
-    for await (const event of input.client.streamChat({
-      runId,
-      model: input.model,
-      messages: input.messages,
-      tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
-      temperature: input.temperature,
-      maxOutputTokens: input.maxOutputTokens,
-      signal: input.signal,
-    })) {
-      // Re-yield provider events with the canonical runId.
-      const stamped = { ...event, runId } as AiRunEvent;
-      switch (stamped.type) {
-        case "run.message.delta":
-          deltaContent += stamped.data.delta;
-          yield stamped;
-          break;
-        case "run.message.completed":
-          completedContent = stamped.data.content;
-          if (stamped.data.toolCalls && stamped.data.toolCalls.length > 0) {
-            completedToolCalls = stamped.data.toolCalls;
-          }
-          turnFinishReason = stamped.data.finishReason;
-          yield stamped;
-          break;
-        case "run.tool.requested":
-          requestedToolCalls.push({
-            id: stamped.data.toolCallId,
-            name: stamped.data.toolName,
-            argumentsJson: stamped.data.argumentsJson,
-          });
-          yield stamped;
-          break;
-        case "run.failed":
-          // The provider already emitted run.failed; record it and don't re-emit.
-          turnFailed = true;
-          yield stamped;
-          break;
-        case "run.cancelled":
-          yield stamped;
-          return;
-        case "run.started":
-          if (iteration === 1) yield stamped;
-          break;
-        case "run.warning":
-          if (stamped.data.code === "tool_call_unparseable")
-            sawNoToolCallWarning = true;
-          yield stamped;
-          break;
-        default:
-          yield stamped;
+    // A provider client is expected to normalize its own transport failures into
+    // run.failed, but a THROW still escapes — a bad JSON body, a socket reset, a
+    // bug in a third-party client. Unwrapped it would blow past every consumer
+    // as a raw rejection, leaving the run with no terminal event at all. Catch it
+    // here and turn it into the one terminal event the contract promises.
+    try {
+      for await (const event of input.client.streamChat({
+        runId,
+        model: input.model,
+        messages: input.messages,
+        tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
+        temperature: input.temperature,
+        maxOutputTokens: input.maxOutputTokens,
+        signal: input.signal,
+      })) {
+        // Re-yield provider events with the canonical runId.
+        const stamped = { ...event, runId } as AiRunEvent;
+        switch (stamped.type) {
+          case "run.message.delta":
+            deltaContent += stamped.data.delta;
+            yield stamped;
+            break;
+          case "run.message.completed":
+            completedContent = stamped.data.content;
+            if (stamped.data.toolCalls && stamped.data.toolCalls.length > 0) {
+              completedToolCalls = stamped.data.toolCalls;
+            }
+            turnFinishReason = stamped.data.finishReason;
+            yield stamped;
+            break;
+          case "run.tool.requested":
+            requestedToolCalls.push({
+              id: stamped.data.toolCallId,
+              name: stamped.data.toolName,
+              argumentsJson: stamped.data.argumentsJson,
+            });
+            yield stamped;
+            break;
+          case "run.failed":
+            // The provider already emitted run.failed; record it and don't re-emit.
+            turnFailed = true;
+            yield stamped;
+            break;
+          case "run.cancelled":
+            yield stamped;
+            return;
+          case "run.started":
+            if (iteration === 1) yield stamped;
+            break;
+          case "run.warning":
+            if (stamped.data.code === "tool_call_unparseable")
+              sawNoToolCallWarning = true;
+            yield stamped;
+            break;
+          default:
+            yield stamped;
+        }
       }
+    } catch (err) {
+      // An abort surfaces as a throw from fetch/the stream reader. That is a
+      // cancellation, not a provider fault — classifying it as failure would
+      // make every user-cancelled run look broken.
+      if (input.signal?.aborted || isAbortError(err)) {
+        yield {
+          type: "run.cancelled",
+          runId,
+          timestamp: nowIso(),
+          data: { reason: "aborted" },
+        };
+        return;
+      }
+      yield {
+        type: "run.failed",
+        runId,
+        timestamp: nowIso(),
+        data: {
+          errorMessage: errorMessageOf(err),
+          errorCode: "provider_error",
+        },
+      };
+      return;
     }
 
     if (turnFailed) {
@@ -403,6 +433,26 @@ export async function* runChat(
     timestamp: nowIso(),
     data: { iterations: iteration, finishReason: "max_iterations" },
   };
+}
+
+/** `err.message ?? err`, without assuming `err` is an Error at all. */
+function errorMessageOf(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "object" && err !== null && "message" in err) {
+    const message = (err as { message: unknown }).message;
+    if (message !== undefined && message !== null) return String(message);
+  }
+  return String(err);
+}
+
+/** DOMException/AbortError duck-typing (works across realms and polyfills). */
+function isAbortError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "name" in err &&
+    (err as { name: unknown }).name === "AbortError"
+  );
 }
 
 /** Emit a run.tool.failed event and append the matching error tool message. */
