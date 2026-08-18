@@ -90,7 +90,7 @@ describe("runChat — completed-only providers", () => {
     expect(last?.content).toBe("Final answer");
   });
 
-  it("executes a tool from completed-only {toolCalls} (no deltas/requested)", async () => {
+  it("executes a tool from completed-only {toolCalls} (no deltas from the provider)", async () => {
     const client = new CompletedOnlyProviderClient();
     client.setScript([
       {
@@ -116,6 +116,93 @@ describe("runChat — completed-only providers", () => {
       "tool",
       "assistant",
     ]);
+    // The provider announced nothing, so the loop synthesizes the announcement:
+    // consumers keyed on run.tool.requested see the call before it runs, whether
+    // or not the provider streams.
+    const requested = events.filter((e) => e.type === "run.tool.requested") as
+      | Array<
+          AiRunEvent & {
+            data: { toolCallId: string; toolName: string; argumentsJson: string };
+          }
+        >;
+    expect(requested.length).toBe(1);
+    expect(requested[0]!.data).toEqual({
+      toolCallId: "c1",
+      toolName: "echo",
+      argumentsJson: '{"text":"ok"}',
+    });
+    // ...and it precedes the running event for that call.
+    const requestedIdx = events.findIndex((e) => e.type === "run.tool.requested");
+    const runningIdx = events.findIndex((e) => e.type === "run.tool.running");
+    expect(requestedIdx).toBeGreaterThanOrEqual(0);
+    expect(requestedIdx).toBeLessThan(runningIdx);
+  });
+
+  it("synthesizes exactly one requested event per call for a multi-call turn", async () => {
+    const client = new CompletedOnlyProviderClient();
+    client.setScript([
+      {
+        toolCalls: [
+          { id: "c1", name: "echo", argumentsJson: '{"text":"a"}' },
+          { id: "c2", name: "echo", argumentsJson: '{"text":"b"}' },
+        ],
+        finishReason: "tool_calls",
+      },
+      { content: "Done.", finishReason: "stop" },
+    ]);
+    const registry = new AiToolRegistry();
+    registry.register(makeEchoTool() as unknown as AiTool);
+    const events = await collect({
+      client,
+      registry,
+      model: "m",
+      messages: [{ role: "user", content: "go" }],
+      limits: resolveToolLimits({ preference: "small" }),
+    });
+    const ids = events
+      .filter((e) => e.type === "run.tool.requested")
+      .map((e) => (e as { data: { toolCallId: string } }).data.toolCallId);
+    expect(ids).toEqual(["c1", "c2"]);
+  });
+
+  it("does not double-announce when the provider emits both requested and completed.toolCalls", async () => {
+    // MockProviderClient emits run.tool.requested; make it ALSO echo the calls
+    // into the completed payload, the way a real streaming provider does.
+    const client = new MockProviderClient();
+    client.echoToolCallsIntoCompleted = true;
+    client.setScript([
+      {
+        steps: [
+          {
+            kind: "tool_call",
+            toolCallId: "c1",
+            name: "echo",
+            argumentsJson: '{"text":"a"}',
+          },
+          {
+            kind: "tool_call",
+            toolCallId: "c2",
+            name: "echo",
+            argumentsJson: '{"text":"b"}',
+          },
+        ],
+      },
+      { steps: [{ kind: "text", content: "done" }] },
+    ]);
+    const registry = new AiToolRegistry();
+    registry.register(makeEchoTool() as unknown as AiTool);
+    const events = await collect({
+      client,
+      registry,
+      model: "m",
+      messages: [{ role: "user", content: "go" }],
+      limits: resolveToolLimits({ preference: "small" }),
+    });
+    const ids = events
+      .filter((e) => e.type === "run.tool.requested")
+      .map((e) => (e as { data: { toolCallId: string } }).data.toolCallId);
+    expect(ids).toEqual(["c1", "c2"]);
+    expect(events.filter((e) => e.type === "run.tool.succeeded").length).toBe(2);
   });
 });
 

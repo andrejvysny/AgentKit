@@ -72,6 +72,8 @@ export async function* runChat(
     let completedContent: string | undefined;
     let completedToolCalls: AiToolCall[] | undefined;
     const requestedToolCalls: AiToolCall[] = [];
+    /** Tool call ids the provider already announced with run.tool.requested. */
+    const announcedToolCallIds = new Set<string>();
     let turnFailed = false;
     let turnFinishReason: string | undefined;
     // #4: the real provider emits the "finish_reason=tool_calls, no usable call"
@@ -115,6 +117,7 @@ export async function* runChat(
               name: stamped.data.toolName,
               argumentsJson: stamped.data.argumentsJson,
             });
+            announcedToolCallIds.add(stamped.data.toolCallId);
             yield stamped;
             break;
           case "run.failed":
@@ -173,6 +176,27 @@ export async function* runChat(
     // If the assistant produced tool calls, append the assistant message with tool_calls
     // and execute each tool, appending role:'tool' messages with tool_call_id.
     if (turnToolCalls.length > 0) {
+      // A completed-only provider carries its tool calls solely in
+      // run.message.completed.data.toolCalls and announces nothing, so a UI keyed
+      // on run.tool.requested would show a tool jumping straight to running (or
+      // never appearing at all). Synthesize the missing announcements — deduped
+      // by id, so a provider that emits BOTH still produces exactly one per call —
+      // before any of them executes.
+      for (const tc of turnToolCalls) {
+        if (announcedToolCallIds.has(tc.id)) continue;
+        announcedToolCallIds.add(tc.id);
+        yield {
+          type: "run.tool.requested",
+          runId,
+          timestamp: nowIso(),
+          data: {
+            toolCallId: tc.id,
+            toolName: tc.name,
+            argumentsJson: tc.argumentsJson,
+          },
+        };
+      }
+
       const limitedToolCalls = turnToolCalls.slice(0, maxCallsPerIter);
       const skippedToolCalls = turnToolCalls.slice(maxCallsPerIter);
       if (skippedToolCalls.length > 0) {
