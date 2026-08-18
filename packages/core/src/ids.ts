@@ -15,6 +15,11 @@ export function newCallId(): string {
   return `call_${crypto.randomUUID()}`;
 }
 
+/** Identifies a single run event; the key consumers dedup on when replaying. */
+export function newEventId(): string {
+  return `evt_${crypto.randomUUID()}`;
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }

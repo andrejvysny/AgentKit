@@ -1,4 +1,5 @@
 import { newCallId, nowIso } from "../ids.js";
+import { createEventStamper } from "../events.js";
 import { parseSseStream } from "./sse.js";
 import type { AiChatRequest, AiProviderClient } from "./client.js";
 import type {
@@ -140,53 +141,58 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     // One id per call to this method, so a run's several provider calls stay
     // distinguishable in the usage stream.
     const callId = newCallId();
-    yield {
+    // These events also reach consumers directly (capability probes, callers who
+    // drive streamChat themselves), so the client stamps its own valid base
+    // fields rather than relying on the run-loop to fix them up. The loop
+    // re-stamps what it re-yields, which is what makes seq monotonic per RUN.
+    const stamp = createEventStamper();
+    yield stamp({
       type: "run.started",
       runId,
       timestamp: nowIso(),
       data: { model: input.model, toolCount: input.tools?.length ?? 0 },
-    };
+    });
 
     let response: Response;
     try {
       response = await this.postChatCompletions(body, input.signal);
     } catch (err) {
       if (input.signal?.aborted) {
-        yield {
+        yield stamp({
           type: "run.cancelled",
           runId,
           timestamp: nowIso(),
           data: { reason: errMsg(err) },
-        };
+        });
         return;
       }
-      yield {
+      yield stamp({
         type: "run.failed",
         runId,
         timestamp: nowIso(),
         data: { errorMessage: errMsg(err) },
-      };
+      });
       return;
     }
 
     if (!response.ok) {
       const errorMessage = `POST /chat/completions -> ${response.status}: ${await safeBody(response)}`;
-      yield {
+      yield stamp({
         type: "run.failed",
         runId,
         timestamp: nowIso(),
         data: { errorMessage, errorCode: String(response.status) },
-      };
+      });
       return;
     }
 
     if (!response.body) {
-      yield {
+      yield stamp({
         type: "run.failed",
         runId,
         timestamp: nowIso(),
         data: { errorMessage: "Provider returned empty body" },
-      };
+      });
       return;
     }
 
@@ -215,12 +221,12 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         const delta = choice.delta ?? {};
         if (typeof delta.content === "string" && delta.content.length > 0) {
           aggregatedContent += delta.content;
-          yield {
+          yield stamp({
             type: "run.message.delta",
             runId,
             timestamp: nowIso(),
             data: { delta: delta.content },
-          };
+          });
         }
         // Reasoning models emit chain-of-thought into a separate field; accumulate it
         // (do NOT merge into the visible answer) so empty-content turns can surface it.
@@ -252,27 +258,27 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       }
     } catch (err) {
       if (input.signal?.aborted) {
-        yield {
+        yield stamp({
           type: "run.cancelled",
           runId,
           timestamp: nowIso(),
           data: { reason: errMsg(err) },
-        };
+        });
         return;
       }
-      yield {
+      yield stamp({
         type: "run.failed",
         runId,
         timestamp: nowIso(),
         data: { errorMessage: errMsg(err) },
-      };
+      });
       return;
     }
 
     // Token accounting for THIS provider call. Emitted only when the server
     // actually reported usage — a fabricated zero would be worse than silence.
     if (usage) {
-      yield {
+      yield stamp({
         type: "run.usage",
         runId,
         timestamp: nowIso(),
@@ -289,7 +295,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           source: "stream",
           finalForCall: true,
         },
-      };
+      });
     }
 
     const toolCalls: AiToolCall[] = Array.from(toolCallAccumulators.entries())
@@ -308,7 +314,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       aggregatedContent.length === 0 &&
       toolCalls.length === 0
     ) {
-      yield {
+      yield stamp({
         type: "run.warning",
         runId,
         timestamp: nowIso(),
@@ -316,14 +322,14 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           code: "sse_parse",
           message: `Dropped ${droppedSseLines} malformed SSE line(s); response may be incomplete.`,
         },
-      };
+      });
     }
 
     // finish_reason=tool_calls but no reconstructable call (truncated/garbled tool
     // block) would otherwise read as an empty success. Warn so the loop doesn't
     // silently end an iteration with nothing to act on.
     if (finishReason === "tool_calls" && toolCalls.length === 0) {
-      yield {
+      yield stamp({
         type: "run.warning",
         runId,
         timestamp: nowIso(),
@@ -332,10 +338,10 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           message:
             "Provider reported finish_reason=tool_calls but emitted no usable tool call.",
         },
-      };
+      });
     }
 
-    yield {
+    yield stamp({
       type: "run.message.completed",
       runId,
       timestamp: nowIso(),
@@ -346,10 +352,10 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         reasoningContent: aggregatedReasoning || undefined,
         finishReason,
       },
-    };
+    });
 
     for (const tc of toolCalls) {
-      yield {
+      yield stamp({
         type: "run.tool.requested",
         runId,
         timestamp: nowIso(),
@@ -358,7 +364,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           toolName: tc.name,
           argumentsJson: tc.argumentsJson,
         },
-      };
+      });
     }
   }
 

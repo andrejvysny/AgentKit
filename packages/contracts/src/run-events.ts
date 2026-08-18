@@ -18,17 +18,53 @@ export const AiRunEventTypeSchema = Type.Union([
 ]);
 export type AiRunEventType = Static<typeof AiRunEventTypeSchema>;
 
+/**
+ * Transport-level fields carried by EVERY run event, independent of what the
+ * event says.
+ *
+ * - `runId` — the run these events belong to.
+ * - `timestamp` — ISO-8601 emission time. Wall-clock, therefore NOT an ordering
+ *   key: two events can share a millisecond, and clocks move.
+ * - `contractVersion` — the {@link CONTRACT_VERSION} the emitter spoke, so a
+ *   consumer reading a persisted stream knows which shape it is looking at
+ *   instead of guessing from the fields present.
+ * - `eventId` — unique per event. What deduplication and acknowledgement key on
+ *   when a stream is replayed or re-delivered.
+ * - `seq` — strictly increasing within a run. The real ordering key; a consumer
+ *   can detect a gap (dropped event) or a reorder, which timestamps cannot show.
+ * - `attemptId` — optional; groups the events of one attempt when a run is
+ *   retried, so a replay of attempt 2 is distinguishable from attempt 1.
+ */
+const runEventBaseFields = {
+  runId: Type.String(),
+  timestamp: Type.String({
+    description: "ISO-8601 emission time. Not an ordering key — use `seq`.",
+  }),
+  contractVersion: Type.String({
+    description: "CONTRACT_VERSION the emitter spoke.",
+  }),
+  eventId: Type.String({
+    description: "Unique per event; the key for dedup on replay.",
+  }),
+  seq: Type.Number({
+    description: "Strictly increasing within a run; the ordering key.",
+  }),
+  attemptId: Type.Optional(
+    Type.String({
+      description: "Groups the events of one attempt when a run is retried.",
+    }),
+  ),
+};
+
 export const AiRunEventBaseSchema = Type.Object({
   type: AiRunEventTypeSchema,
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
 });
 export type AiRunEventBase = Static<typeof AiRunEventBaseSchema>;
 
 export const AiRunStartedEventSchema = Type.Object({
   type: Type.Literal("run.started"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({
     model: Type.String(),
     toolCount: Type.Number(),
@@ -38,8 +74,7 @@ export type AiRunStartedEvent = Static<typeof AiRunStartedEventSchema>;
 
 export const AiRunMessageDeltaEventSchema = Type.Object({
   type: Type.Literal("run.message.delta"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({ delta: Type.String() }),
 });
 export type AiRunMessageDeltaEvent = Static<
@@ -48,8 +83,7 @@ export type AiRunMessageDeltaEvent = Static<
 
 export const AiRunMessageCompletedEventSchema = Type.Object({
   type: Type.Literal("run.message.completed"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({
     content: Type.String(),
     toolCallCount: Type.Number(),
@@ -74,8 +108,7 @@ export type AiRunMessageCompletedEvent = Static<
 
 export const AiRunToolRequestedEventSchema = Type.Object({
   type: Type.Literal("run.tool.requested"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({
     toolCallId: Type.String(),
     toolName: Type.String(),
@@ -88,8 +121,7 @@ export type AiRunToolRequestedEvent = Static<
 
 export const AiRunToolRunningEventSchema = Type.Object({
   type: Type.Literal("run.tool.running"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({
     toolCallId: Type.String(),
     toolName: Type.String(),
@@ -99,8 +131,7 @@ export type AiRunToolRunningEvent = Static<typeof AiRunToolRunningEventSchema>;
 
 export const AiRunToolSucceededEventSchema = Type.Object({
   type: Type.Literal("run.tool.succeeded"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({
     toolCallId: Type.String(),
     toolName: Type.String(),
@@ -129,8 +160,7 @@ export type AiRunToolSucceededEvent = Static<
 
 export const AiRunToolFailedEventSchema = Type.Object({
   type: Type.Literal("run.tool.failed"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({
     toolCallId: Type.String(),
     toolName: Type.String(),
@@ -190,8 +220,7 @@ export type AiRunWarningCode =
 
 export const AiRunWarningEventSchema = Type.Object({
   type: Type.Literal("run.warning"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({
     code: Type.String({
       description:
@@ -236,8 +265,7 @@ export type AiRunWarningEvent = Omit<
  */
 export const AiRunUsageEventSchema = Type.Object({
   type: Type.Literal("run.usage"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({
     callId: Type.String(),
     attempt: Type.Number(),
@@ -254,8 +282,7 @@ export type AiRunUsageEvent = Static<typeof AiRunUsageEventSchema>;
 
 export const AiRunCompletedEventSchema = Type.Object({
   type: Type.Literal("run.completed"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({
     iterations: Type.Number(),
     finishReason: Type.Optional(Type.String()),
@@ -265,8 +292,7 @@ export type AiRunCompletedEvent = Static<typeof AiRunCompletedEventSchema>;
 
 export const AiRunFailedEventSchema = Type.Object({
   type: Type.Literal("run.failed"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({
     errorMessage: Type.String(),
     errorCode: Type.Optional(Type.String()),
@@ -276,8 +302,7 @@ export type AiRunFailedEvent = Static<typeof AiRunFailedEventSchema>;
 
 export const AiRunCancelledEventSchema = Type.Object({
   type: Type.Literal("run.cancelled"),
-  runId: Type.String(),
-  timestamp: Type.String(),
+  ...runEventBaseFields,
   data: Type.Object({ reason: Type.Optional(Type.String()) }),
 });
 export type AiRunCancelledEvent = Static<typeof AiRunCancelledEventSchema>;
