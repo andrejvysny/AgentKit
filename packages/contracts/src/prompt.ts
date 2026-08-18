@@ -1,13 +1,17 @@
-export interface AiPromptPreset {
-  id: string;
-  label: string;
-  description: string;
-  systemText: string;
-}
+import { Type, type Static } from "@sinclair/typebox";
 
-export interface AiPromptContextBlock {
-  id: string;
-  title: string;
-  content: string;
-  priority: number;
-}
+export const AiPromptPresetSchema = Type.Object({
+  id: Type.String(),
+  label: Type.String(),
+  description: Type.String(),
+  systemText: Type.String(),
+});
+export type AiPromptPreset = Static<typeof AiPromptPresetSchema>;
+
+export const AiPromptContextBlockSchema = Type.Object({
+  id: Type.String(),
+  title: Type.String(),
+  content: Type.String(),
+  priority: Type.Number(),
+});
+export type AiPromptContextBlock = Static<typeof AiPromptContextBlockSchema>;

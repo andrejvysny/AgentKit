@@ -1,25 +1,33 @@
-import type { AiJsonSchemaObject } from "./json-schema.js";
-import type { AiSourceRef } from "./source-ref.js";
+import { Type, type Static } from "@sinclair/typebox";
+import { AiJsonSchemaObjectSchema } from "./json-schema.js";
+import { AiSourceRefSchema } from "./source-ref.js";
 
-export type AiToolEffect = "read" | "write";
+export const AiToolEffectSchema = Type.Union([
+  Type.Literal("read"),
+  Type.Literal("write"),
+]);
+export type AiToolEffect = Static<typeof AiToolEffectSchema>;
 
-export type AiToolStatus =
-  | "requested"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "rejected";
+export const AiToolStatusSchema = Type.Union([
+  Type.Literal("requested"),
+  Type.Literal("running"),
+  Type.Literal("succeeded"),
+  Type.Literal("failed"),
+  Type.Literal("rejected"),
+]);
+export type AiToolStatus = Static<typeof AiToolStatusSchema>;
 
+/** Not a wire DTO — a validation constant applied to `AiToolDefinition.name`. */
 export const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
-export interface AiToolDefinition {
-  name: string;
-  version: string;
-  effect: AiToolEffect;
-  capability: string;
-  description: string;
-  inputSchema: AiJsonSchemaObject;
-  outputSchema?: AiJsonSchemaObject;
+export const AiToolDefinitionSchema = Type.Object({
+  name: Type.String(),
+  version: Type.String(),
+  effect: AiToolEffectSchema,
+  capability: Type.String(),
+  description: Type.String(),
+  inputSchema: AiJsonSchemaObjectSchema,
+  outputSchema: Type.Optional(AiJsonSchemaObjectSchema),
   /**
    * Optional per-tool execution timeout (ms). When set, the run-loop races
    * `execute()` against the deadline via an AbortController linked to
@@ -27,47 +35,81 @@ export interface AiToolDefinition {
    * Local tools omit it (unchanged fast path); remote tools set it from their
    * manifest duration class.
    */
-  timeoutMs?: number;
-}
+  timeoutMs: Type.Optional(
+    Type.Number({
+      description:
+        "Optional per-tool execution timeout (ms). When set, the run-loop races execute() against the deadline via an AbortController linked to ctx.signal.",
+    }),
+  ),
+});
+export type AiToolDefinition = Static<typeof AiToolDefinitionSchema>;
 
-export interface AiToolCall {
-  id: string;
-  name: string;
-  argumentsJson: string;
-}
+export const AiToolCallSchema = Type.Object({
+  id: Type.String(),
+  name: Type.String(),
+  argumentsJson: Type.String(),
+});
+export type AiToolCall = Static<typeof AiToolCallSchema>;
 
-export type AiContextSizePreference = "small" | "medium" | "large";
+export const AiContextSizePreferenceSchema = Type.Union([
+  Type.Literal("small"),
+  Type.Literal("medium"),
+  Type.Literal("large"),
+]);
+export type AiContextSizePreference = Static<
+  typeof AiContextSizePreferenceSchema
+>;
 
-export interface AiToolLimits {
-  profile: AiContextSizePreference;
-  maxBytes: number;
-  maxItems?: number;
-}
+export const AiToolLimitsSchema = Type.Object({
+  profile: AiContextSizePreferenceSchema,
+  maxBytes: Type.Number(),
+  maxItems: Type.Optional(Type.Number()),
+});
+export type AiToolLimits = Static<typeof AiToolLimitsSchema>;
 
-export interface AiToolResult<T = unknown> {
-  ok: boolean;
-  data: T;
-  sources: AiSourceRef[];
-  warnings: string[];
-  truncated: boolean;
-  limits: AiToolLimits;
+export const AiToolResultSchema = Type.Object({
+  ok: Type.Boolean(),
+  data: Type.Unknown(),
+  sources: Type.Array(AiSourceRefSchema),
+  warnings: Type.Array(Type.String()),
+  truncated: Type.Boolean(),
+  limits: AiToolLimitsSchema,
   /** Slim object the model should see instead of `data` (Track A/D). `data` stays for UI. */
-  modelData?: unknown;
+  modelData: Type.Optional(Type.Unknown()),
   /** One-line status the model should see (Track A/D). */
-  summary?: string;
+  summary: Type.Optional(Type.String()),
   /** Tool-reported status; distinguishes a partial apply from a clean success (Track A/D). */
-  status?: "ok" | "partial";
-}
+  status: Type.Optional(
+    Type.Union([Type.Literal("ok"), Type.Literal("partial")]),
+  ),
+});
+
+/**
+ * DIVERGENCE (hybrid): the wire schema types `data` as unknown, but the TS type is
+ * generic in the payload (`AiToolResult<T>`) — a type-level nicety `Static<>` cannot
+ * express, since a TypeBox schema is a value and cannot carry a type parameter. So
+ * the type is layered over the schema: every field but `data` comes from
+ * `Static<typeof AiToolResultSchema>`; `data` is re-declared as `T`.
+ */
+export type AiToolResult<T = unknown> = Omit<
+  Static<typeof AiToolResultSchema>,
+  "data"
+> & { data: T };
 
 /**
  * Balanced model-facing envelope (Wave 0 §0.2). `data` carries `modelData` when present,
  * else the trimmed `data`.
  */
-export type AiToolEnvelope = {
-  ok: boolean;
-  status: "ok" | "error" | "partial";
-  summary?: string;
-  warnings: string[];
-  truncated: boolean;
-  data: unknown;
-};
+export const AiToolEnvelopeSchema = Type.Object({
+  ok: Type.Boolean(),
+  status: Type.Union([
+    Type.Literal("ok"),
+    Type.Literal("error"),
+    Type.Literal("partial"),
+  ]),
+  summary: Type.Optional(Type.String()),
+  warnings: Type.Array(Type.String()),
+  truncated: Type.Boolean(),
+  data: Type.Unknown(),
+});
+export type AiToolEnvelope = Static<typeof AiToolEnvelopeSchema>;

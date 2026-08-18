@@ -1,103 +1,165 @@
-import type { AiSourceRef } from "./source-ref.js";
-import type { AiToolCall } from "./tool.js";
+import { Type, type Static } from "@sinclair/typebox";
+import { AiSourceRefSchema } from "./source-ref.js";
+import { AiToolCallSchema } from "./tool.js";
 
-export type AiRunEventType =
-  | "run.started"
-  | "run.message.delta"
-  | "run.message.completed"
-  | "run.tool.requested"
-  | "run.tool.running"
-  | "run.tool.succeeded"
-  | "run.tool.failed"
-  | "run.warning"
-  | "run.completed"
-  | "run.failed"
-  | "run.cancelled";
+export const AiRunEventTypeSchema = Type.Union([
+  Type.Literal("run.started"),
+  Type.Literal("run.message.delta"),
+  Type.Literal("run.message.completed"),
+  Type.Literal("run.tool.requested"),
+  Type.Literal("run.tool.running"),
+  Type.Literal("run.tool.succeeded"),
+  Type.Literal("run.tool.failed"),
+  Type.Literal("run.warning"),
+  Type.Literal("run.completed"),
+  Type.Literal("run.failed"),
+  Type.Literal("run.cancelled"),
+]);
+export type AiRunEventType = Static<typeof AiRunEventTypeSchema>;
 
-export interface AiRunEventBase {
-  type: AiRunEventType;
-  runId: string;
-  timestamp: string;
-}
+export const AiRunEventBaseSchema = Type.Object({
+  type: AiRunEventTypeSchema,
+  runId: Type.String(),
+  timestamp: Type.String(),
+});
+export type AiRunEventBase = Static<typeof AiRunEventBaseSchema>;
 
-export interface AiRunStartedEvent extends AiRunEventBase {
-  type: "run.started";
-  data: { model: string; toolCount: number };
-}
+export const AiRunStartedEventSchema = Type.Object({
+  type: Type.Literal("run.started"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({
+    model: Type.String(),
+    toolCount: Type.Number(),
+  }),
+});
+export type AiRunStartedEvent = Static<typeof AiRunStartedEventSchema>;
 
-export interface AiRunMessageDeltaEvent extends AiRunEventBase {
-  type: "run.message.delta";
-  data: { delta: string };
-}
+export const AiRunMessageDeltaEventSchema = Type.Object({
+  type: Type.Literal("run.message.delta"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({ delta: Type.String() }),
+});
+export type AiRunMessageDeltaEvent = Static<
+  typeof AiRunMessageDeltaEventSchema
+>;
 
-export interface AiRunMessageCompletedEvent extends AiRunEventBase {
-  type: "run.message.completed";
-  data: {
-    content: string;
-    toolCallCount: number;
-    toolCalls?: AiToolCall[];
-    /** Chain-of-thought from reasoning models (OpenAI `reasoning_content`). */
-    reasoningContent?: string;
-    /** Raw provider finish_reason for this turn (e.g. "stop", "length", "tool_calls"). */
-    finishReason?: string;
-  };
-}
+export const AiRunMessageCompletedEventSchema = Type.Object({
+  type: Type.Literal("run.message.completed"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({
+    content: Type.String(),
+    toolCallCount: Type.Number(),
+    toolCalls: Type.Optional(Type.Array(AiToolCallSchema)),
+    reasoningContent: Type.Optional(
+      Type.String({
+        description:
+          "Chain-of-thought from reasoning models (OpenAI `reasoning_content`).",
+      }),
+    ),
+    finishReason: Type.Optional(
+      Type.String({
+        description:
+          'Raw provider finish_reason for this turn (e.g. "stop", "length", "tool_calls").',
+      }),
+    ),
+  }),
+});
+export type AiRunMessageCompletedEvent = Static<
+  typeof AiRunMessageCompletedEventSchema
+>;
 
-export interface AiRunToolRequestedEvent extends AiRunEventBase {
-  type: "run.tool.requested";
-  data: {
-    toolCallId: string;
-    toolName: string;
-    argumentsJson: string;
-  };
-}
+export const AiRunToolRequestedEventSchema = Type.Object({
+  type: Type.Literal("run.tool.requested"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({
+    toolCallId: Type.String(),
+    toolName: Type.String(),
+    argumentsJson: Type.String(),
+  }),
+});
+export type AiRunToolRequestedEvent = Static<
+  typeof AiRunToolRequestedEventSchema
+>;
 
-export interface AiRunToolRunningEvent extends AiRunEventBase {
-  type: "run.tool.running";
-  data: { toolCallId: string; toolName: string };
-}
+export const AiRunToolRunningEventSchema = Type.Object({
+  type: Type.Literal("run.tool.running"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({
+    toolCallId: Type.String(),
+    toolName: Type.String(),
+  }),
+});
+export type AiRunToolRunningEvent = Static<typeof AiRunToolRunningEventSchema>;
 
-export interface AiRunToolSucceededEvent extends AiRunEventBase {
-  type: "run.tool.succeeded";
-  data: {
-    toolCallId: string;
-    toolName: string;
-    resultJson: string;
-    sources: AiSourceRef[];
-    truncated: boolean;
-    warnings: string[];
+export const AiRunToolSucceededEventSchema = Type.Object({
+  type: Type.Literal("run.tool.succeeded"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({
+    toolCallId: Type.String(),
+    toolName: Type.String(),
+    resultJson: Type.String(),
+    sources: Type.Array(AiSourceRefSchema),
+    truncated: Type.Boolean(),
+    warnings: Type.Array(Type.String()),
     /** Tool-reported status (Track A/D). Distinguishes a partial apply from a clean success. */
-    status?: "ok" | "partial";
+    status: Type.Optional(
+      Type.Union([Type.Literal("ok"), Type.Literal("partial")]),
+    ),
     /** Short human/model-facing line summarising the result (Track A/D). */
-    summary?: string;
+    summary: Type.Optional(Type.String()),
     /** Slim payload fed to the model (Wave 0 §0.2). Full payload stays in `resultJson` for UI. */
-    modelResultJson?: string;
-  };
-}
+    modelResultJson: Type.Optional(
+      Type.String({
+        description:
+          "Slim payload fed to the model (Wave 0 §0.2). Full payload stays in resultJson for UI.",
+      }),
+    ),
+  }),
+});
+export type AiRunToolSucceededEvent = Static<
+  typeof AiRunToolSucceededEventSchema
+>;
 
-export interface AiRunToolFailedEvent extends AiRunEventBase {
-  type: "run.tool.failed";
-  data: {
-    toolCallId: string;
-    toolName: string;
-    errorMessage: string;
-    errorCode?: string;
+export const AiRunToolFailedEventSchema = Type.Object({
+  type: Type.Literal("run.tool.failed"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({
+    toolCallId: Type.String(),
+    toolName: Type.String(),
+    errorMessage: Type.String(),
+    errorCode: Type.Optional(Type.String()),
     /**
      * #3: when a tool RAN and reported failure (esp. status:"partial"), the
      * balanced model envelope is carried here so consumers persist/replay it
      * faithfully instead of a generic error. Absent for pre-execution failures
      * (tool_missing/bad_args/schema_invalid/cap/cancelled) and exec throws.
      */
-    modelResultJson?: string;
-    status?: "error" | "partial";
-  };
-}
+    modelResultJson: Type.Optional(
+      Type.String({
+        description:
+          "When a tool RAN and reported failure, the balanced model envelope is carried here so consumers persist/replay it faithfully. Absent for pre-execution failures and exec throws.",
+      }),
+    ),
+    status: Type.Optional(
+      Type.Union([Type.Literal("error"), Type.Literal("partial")]),
+    ),
+  }),
+});
+export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
 
 /**
- * Known `run.warning` codes. `code` stays an open string (the field type is `string`)
- * for forward-compat; this union documents the recognised values. Existing emitted code:
- * `tool_call_cap`. The P6 codes (`duplicate_loop` | `stall` | `tool_cap` | `timeout`) are
- * declared now but not emitted this iteration.
+ * Known `run.warning` codes. `code` stays an open string on the wire (the schema
+ * types it as `Type.String()`) for forward-compat; this union documents the
+ * recognised values. Existing emitted code: `tool_call_cap`. The P6 codes
+ * (`duplicate_loop` | `stall` | `tool_cap` | `timeout`) are declared now but not
+ * emitted this iteration.
  */
 export type AiRunWarningCode =
   | "tool_call_cap"
@@ -106,26 +168,83 @@ export type AiRunWarningCode =
   | "tool_cap"
   | "timeout";
 
-export interface AiRunWarningEvent extends AiRunEventBase {
-  type: "run.warning";
+export const AiRunWarningEventSchema = Type.Object({
+  type: Type.Literal("run.warning"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({
+    code: Type.String({
+      description:
+        "Open warning code; see AiRunWarningCode for the recognised vocabulary.",
+    }),
+    message: Type.String(),
+  }),
+});
+
+/**
+ * DIVERGENCE (hybrid): the wire schema keeps `data.code` an open `Type.String()`
+ * (forward-compat: an unknown code must still validate), but the TS type narrows it
+ * to `AiRunWarningCode | (string & {})` so editors complete the known vocabulary
+ * while still accepting any string. `Static<>` cannot express that "closed union,
+ * open at the type level" trick, so `data` is re-declared over the schema's static.
+ */
+export type AiRunWarningEvent = Omit<
+  Static<typeof AiRunWarningEventSchema>,
+  "data"
+> & {
   data: { code: AiRunWarningCode | (string & {}); message: string };
-}
+};
 
-export interface AiRunCompletedEvent extends AiRunEventBase {
-  type: "run.completed";
-  data: { iterations: number; finishReason?: string };
-}
+export const AiRunCompletedEventSchema = Type.Object({
+  type: Type.Literal("run.completed"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({
+    iterations: Type.Number(),
+    finishReason: Type.Optional(Type.String()),
+  }),
+});
+export type AiRunCompletedEvent = Static<typeof AiRunCompletedEventSchema>;
 
-export interface AiRunFailedEvent extends AiRunEventBase {
-  type: "run.failed";
-  data: { errorMessage: string; errorCode?: string };
-}
+export const AiRunFailedEventSchema = Type.Object({
+  type: Type.Literal("run.failed"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({
+    errorMessage: Type.String(),
+    errorCode: Type.Optional(Type.String()),
+  }),
+});
+export type AiRunFailedEvent = Static<typeof AiRunFailedEventSchema>;
 
-export interface AiRunCancelledEvent extends AiRunEventBase {
-  type: "run.cancelled";
-  data: { reason?: string };
-}
+export const AiRunCancelledEventSchema = Type.Object({
+  type: Type.Literal("run.cancelled"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({ reason: Type.Optional(Type.String()) }),
+});
+export type AiRunCancelledEvent = Static<typeof AiRunCancelledEventSchema>;
 
+export const AiRunEventSchema = Type.Union([
+  AiRunStartedEventSchema,
+  AiRunMessageDeltaEventSchema,
+  AiRunMessageCompletedEventSchema,
+  AiRunToolRequestedEventSchema,
+  AiRunToolRunningEventSchema,
+  AiRunToolSucceededEventSchema,
+  AiRunToolFailedEventSchema,
+  AiRunWarningEventSchema,
+  AiRunCompletedEventSchema,
+  AiRunFailedEventSchema,
+  AiRunCancelledEventSchema,
+]);
+
+/**
+ * DIVERGENCE (hybrid): spelled out rather than `Static<typeof AiRunEventSchema>` so
+ * the member list carries the layered {@link AiRunWarningEvent} (with its narrowed
+ * `code` type) instead of the schema's raw `code: string`. Member-for-member
+ * identical to `AiRunEventSchema` otherwise.
+ */
 export type AiRunEvent =
   | AiRunStartedEvent
   | AiRunMessageDeltaEvent
