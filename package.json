@@ -1,0 +1,18 @@
+{
+  "name": "agentkit",
+  "private": true,
+  "license": "MIT",
+  "workspaces": ["packages/*", "internal/*"],
+  "scripts": {
+    "test": "bun test",
+    "test:core": "bun test packages/core",
+    "typecheck": "bun run typecheck:core",
+    "typecheck:core": "tsc -p packages/core/tsconfig.json",
+    "build": "bun run build:core",
+    "build:core": "tsc -p packages/core/tsconfig.build.json",
+    "ci": "bun install --frozen-lockfile && bun run typecheck && bun test && bun run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
