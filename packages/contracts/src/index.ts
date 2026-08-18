@@ -16,5 +16,9 @@ export * from "./provider.js";
 export * from "./prompt.js";
 export * from "./run-events.js";
 
+// The versioned HTTP surface: route table + DTOs. Types and schemas only — no
+// adapter serves them yet (docs/non-goals.md).
+export * from "./rest.js";
+
 // The schema values again, as one enumerable barrel (validation/codegen/docs).
 export * from "./schemas.js";

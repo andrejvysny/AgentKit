@@ -5,11 +5,14 @@ and where each piece is expected to land when it does. None of this is
 implemented in `packages/` or `internal/` today; do not import paths named
 below.
 
-- **HTTP/Hono adapter.** No HTTP layer exists in this repo. When built, it
-  will be a thin adapter translating `@agentkit/host` calls to and from REST
-  requests, over DTOs defined in `packages/contracts/src/rest.ts`. That file
-  does not exist yet either — the REST DTOs themselves are still pending,
-  not only the adapter that would serve them.
+- **HTTP/Hono adapter.** No HTTP layer exists in this repo — no server, no
+  router, no client. What *does* exist is the contract it would implement:
+  `packages/contracts/src/rest.ts` defines `REST_API_VERSION`, the
+  `REST_ROUTES` table, and every request/response DTO as TypeBox schemas +
+  types (see [`docs/contracts.md`](contracts.md#rest-v1-surface)). Writing
+  the shapes down first is deliberate: they are reviewable and validatable
+  now, and the adapter that serves them — translating `@agentkit/host` calls
+  to and from HTTP, streaming `AiRunEvent`s over SSE — remains deferred.
 - **React / UI packages.** No frontend package exists in this monorepo.
   A consuming app (OpenPCB, a cloud-agent service, OneCAD) owns its own UI
   against the `@agentkit/host` port contracts and the `AiRunEvent` stream.
