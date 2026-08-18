@@ -3,9 +3,8 @@ import { runChat } from "../src/runs/run-loop.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
 import { MockProviderClient } from "./mocks/mock-provider.js";
-import type { AiChatMessage } from "../src/providers/types.js";
-import type { AiTool } from "../src/tools/types.js";
-import type { AiRunEvent } from "../src/runs/events.js";
+import type { AiTool } from "../src/tools/tool.js";
+import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
 
 async function collect(
   input: Parameters<typeof runChat>[0],

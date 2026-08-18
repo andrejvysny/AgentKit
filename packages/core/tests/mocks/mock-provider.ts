@@ -1,11 +1,10 @@
+import type { AiChatRequest, AiProviderClient } from "../../src/providers/client.js";
 import type {
-  AiChatRequest,
   AiProviderCapabilities,
-  AiProviderClient,
   AiProviderKind,
   AiProviderModel,
-} from "../../src/providers/types.js";
-import type { AiRunEvent } from "../../src/runs/events.js";
+  AiRunEvent,
+} from "@agentkit/contracts";
 import { nowIso } from "../../src/ids.js";
 
 export type MockScriptStep =

@@ -1,5 +1,5 @@
-import type { AiSourceRef } from "../sources/source-ref.js";
-import type { AiToolCall } from "../tools/types.js";
+import type { AiSourceRef } from "./source-ref.js";
+import type { AiToolCall } from "./tool.js";
 
 export type AiRunEventType =
   | "run.started"

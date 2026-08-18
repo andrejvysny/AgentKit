@@ -1,15 +1,15 @@
 import { nowIso } from "../ids.js";
 import { parseSseStream } from "./sse.js";
+import type { AiChatRequest, AiProviderClient } from "./client.js";
 import type {
-  AiChatRequest,
   AiProviderCapabilities,
-  AiProviderClient,
   AiProviderConfig,
   AiProviderKind,
   AiProviderModel,
-} from "./types.js";
-import type { AiRunEvent } from "../runs/events.js";
-import type { AiToolCall, AiToolDefinition } from "../tools/types.js";
+  AiRunEvent,
+  AiToolCall,
+  AiToolDefinition,
+} from "@agentkit/contracts";
 
 export interface OpenAiCompatibleClientOptions {
   id: string;

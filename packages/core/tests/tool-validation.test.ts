@@ -6,7 +6,7 @@ import {
   validateAgainstSchema,
   validateToolInput,
 } from "../src/tools/validation.js";
-import type { AiJsonSchemaObject } from "../src/json-schema.js";
+import type { AiJsonSchemaObject } from "@agentkit/contracts";
 
 // Representative WireEndpoint shape: each endpoint is either a "REF.PIN" string
 // or an explicit { ref, pin } object. Ajv `oneOf` is required — the hand-rolled

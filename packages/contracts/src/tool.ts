@@ -1,7 +1,5 @@
-import type { AiJsonSchemaObject } from "../json-schema.js";
-import type { AiContextBinding } from "../context/bindings.js";
-import type { AiSourceRef } from "../sources/source-ref.js";
-import type { AiToolLimits } from "./limits.js";
+import type { AiJsonSchemaObject } from "./json-schema.js";
+import type { AiSourceRef } from "./source-ref.js";
 
 export type AiToolEffect = "read" | "write";
 
@@ -38,14 +36,12 @@ export interface AiToolCall {
   argumentsJson: string;
 }
 
-export interface AiToolExecutionContext {
-  runId: string;
-  chatId?: string;
-  userId?: string;
-  bindings: AiContextBinding[];
-  limits: AiToolLimits;
-  signal?: AbortSignal;
-  metadata?: Record<string, unknown>;
+export type AiContextSizePreference = "small" | "medium" | "large";
+
+export interface AiToolLimits {
+  profile: AiContextSizePreference;
+  maxBytes: number;
+  maxItems?: number;
 }
 
 export interface AiToolResult<T = unknown> {
@@ -75,11 +71,3 @@ export type AiToolEnvelope = {
   truncated: boolean;
   data: unknown;
 };
-
-export interface AiTool<TInput = unknown, TOutput = unknown> {
-  definition: AiToolDefinition;
-  execute(
-    ctx: AiToolExecutionContext,
-    input: TInput,
-  ): Promise<AiToolResult<TOutput>>;
-}

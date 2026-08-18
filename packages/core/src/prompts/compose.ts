@@ -1,4 +1,4 @@
-import type { AiPromptContextBlock, AiPromptPreset } from "./types.js";
+import type { AiPromptContextBlock, AiPromptPreset } from "@agentkit/contracts";
 
 export interface ComposeSystemPromptInput {
   preset: AiPromptPreset;
