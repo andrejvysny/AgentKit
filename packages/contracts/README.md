@@ -10,13 +10,20 @@ type and a runtime JSON Schema that cannot drift from it. Import a type from the
 package root, or `@agentkit/contracts` → `schemas` barrel for the schema values.
 
 `CONTRACT_VERSION` is the semver of the wire contract itself, independent of this
-package's npm version.
+package's npm version. The policy is additive-only within a major: new optional
+fields, new warning codes, and new event types are non-breaking; removing or
+repurposing an existing field is not. See
+[`docs/contracts.md`](../../docs/contracts.md) for the full event vocabulary,
+warning-code table, and tool-envelope semantics.
 
 Two documented exceptions, each commented where it lives: `AiJsonSchemaObject` is
 a hand-written interface (it is a meta-type describing JSON Schema documents, not
 a wire DTO), and a few types layer a hand-written nicety over their schema —
 `AiToolResult<T>`, `AiSourceRef<K>`, `AiContextBinding<K>`, `AiRunWarningEvent`,
 `AiRunEvent`.
+
+Zero runtime dependency beyond `@sinclair/typebox`. No storage, no HTTP, no
+notion of a run loop — this package is DTOs only.
 
 ## Modules
 
@@ -27,8 +34,17 @@ a wire DTO), and a few types layer a hand-written nicety over their schema —
 - `tool` — `AiToolDefinition`, `AiToolCall`, `AiToolResult`, `AiToolEnvelope`, `AiToolLimits`, `TOOL_NAME_PATTERN`
 - `provider` — `AiProviderKind`, `AiProviderConfig`, `AiProviderCapabilities`, `AiProviderModel`, `AiChatMessage`
 - `prompt` — `AiPromptPreset`, `AiPromptContextBlock`
-- `run-events` — `AiRunEvent` and its per-type variants
+- `run-events` — `AiRunEvent` and its per-type variants (12 types; see `docs/contracts.md`)
 - `schemas` — the value barrel: every `<Name>Schema` in one place
+
+## Tests
+
+`bun test` (from this directory, or `bun run test:contracts` from the repo
+root) runs:
+
+- `tests/schemas-compile.test.ts` — every exported schema compiles under Ajv.
+- `tests/golden-validate.test.ts` — every event in `@agentkit/testing`'s
+  committed golden traces validates against `AiRunEventSchema`.
 
 ## License
 

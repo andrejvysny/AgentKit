@@ -1,32 +1,72 @@
 # AgentKit
 
 AgentKit is an embeddable AI-assistant framework extracted from OpenPCB's
-assistant module. This repo currently contains the loop runtime
-(`packages/core`, published as `@agentkit/core`); contracts, host, and
-testing packages are arriving in subsequent commits on this branch.
+assistant module: a pure, in-process chat-with-tools loop (`@agentkit/core`)
+wrapped in a durable orchestration layer (`@agentkit/host`) over a small set
+of storage/execution ports, with wire DTOs (`@agentkit/contracts`) and test
+support (`@agentkit/testing`) shared across both. See
+[`docs/architecture.md`](docs/architecture.md) for the full layer
+breakdown and an ASCII diagram.
 
 **Status:** pre-release, 0.x. APIs may change without notice.
 
 > **Not published to npm.** The `@agentkit` npm scope is not yet
 > verified/owned — do not publish any package under this scope until scope
-> ownership is confirmed.
+> ownership is confirmed. Every package's `package.json` has a
+> `publishConfig` ready for that day; none of them are on the registry
+> today.
 
 ## Packages
 
-- [`packages/core`](packages/core) — `@agentkit/core`: headless AI agent
-  runtime primitives (providers, tools, prompts, run events). Pure
-  TypeScript, single runtime dependency (`ajv`).
+| Package | Description | Status |
+|---|---|---|
+| [`packages/contracts`](packages/contracts) — `@agentkit/contracts` | Wire DTOs and JSON Schemas (TypeBox): run events, tool/provider/prompt shapes, source refs, context bindings. | 0.1.0-dev |
+| [`packages/core`](packages/core) — `@agentkit/core` | Pure, in-process chat-with-tools loop: provider client, Ajv-backed tool registry, `runChat()`. | 0.5.0-dev |
+| [`packages/host`](packages/host) — `@agentkit/host` | Durable orchestration over `@agentkit/core`: storage ports, `TurnRunner`, proposal lifecycle, write policy. | 0.1.0-dev |
+| [`packages/testing`](packages/testing) — `@agentkit/testing` | Mocks, fixtures, golden run-event traces, and the `AssistantStore` conformance suite. | 0.1.0-dev |
+| [`internal/reference-adapters`](internal/reference-adapters) — `@agentkit/reference-adapters` | Reference `AssistantStore` + `TaskRunner` implementations (in-memory, `bun:sqlite`). Workspace-private, never published — dev/test only. | 0.1.0-dev, private |
+
+## Layers
+
+```
+internal/reference-adapters  →  @agentkit/host  →  @agentkit/core  →  @agentkit/contracts
+```
+
+Each package depends only on the ones to its right. Full diagram, the event
+flow (`seq`/`eventId` stamping, lease fencing), the run/attempt/lease model,
+and the loop invariants `runChat()` preserves: see
+[`docs/architecture.md`](docs/architecture.md).
+
+## Documentation
+
+- [`docs/architecture.md`](docs/architecture.md) — the three layers, event
+  flow, run/attempt/lease model and recovery, at-least-once stance, loop
+  invariants.
+- [`docs/contracts.md`](docs/contracts.md) — the event vocabulary, v2 base
+  fields, warning codes, tool envelope, `run.usage` semantics, generic
+  kinds, TypeBox conventions.
+- [`docs/ports.md`](docs/ports.md) — the full port catalog (responsibility,
+  key invariant, reference adapter per port) and the proposal lifecycle
+  diagram.
+- [`docs/non-goals.md`](docs/non-goals.md) — what this repository
+  deliberately does not include yet, and where it will live.
+- [`PROVENANCE.md`](PROVENANCE.md) — how `packages/core` was extracted from
+  `@openpcb/ai-core` and relicensed to MIT.
 
 ## Development
 
-This is a Bun workspaces monorepo.
+This is a Bun workspaces monorepo (`packages/*`, `internal/*`).
 
 ```sh
 bun install
-bun run typecheck
 bun test
-bun run build
+bun run ci        # install --frozen-lockfile && typecheck && test && build
 ```
+
+Other useful scripts (see [`package.json`](package.json)): `bun run
+typecheck`, `bun run build`, and per-package variants
+(`bun run test:core`, `bun run test:host`, `bun run test:contracts`,
+`bun run test:testing`, `bun run test:adapters`).
 
 ## License
 
