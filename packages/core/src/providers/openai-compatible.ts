@@ -1,4 +1,4 @@
-import { nowIso } from "../ids.js";
+import { newCallId, nowIso } from "../ids.js";
 import { parseSseStream } from "./sse.js";
 import type { AiChatRequest, AiProviderClient } from "./client.js";
 import type {
@@ -137,6 +137,9 @@ export class OpenAiCompatibleClient implements AiProviderClient {
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
     const body = this.buildRequestBody(input, true);
     const runId = input.runId;
+    // One id per call to this method, so a run's several provider calls stay
+    // distinguishable in the usage stream.
+    const callId = newCallId();
     yield {
       type: "run.started",
       runId,
@@ -192,6 +195,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     let droppedSseLines = 0;
     const toolCallAccumulators = new Map<number, ToolCallAccumulator>();
     let finishReason: string | undefined;
+    let usage: OpenAiUsage | undefined;
 
     try {
       for await (const line of parseSseStream(response.body, input.signal)) {
@@ -202,6 +206,10 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           droppedSseLines += 1;
           continue;
         }
+        // Usage may ride on its own trailing chunk (choices empty/absent) or
+        // alongside choices — read it before the choice guard so the former
+        // isn't skipped.
+        if (event.usage) usage = event.usage;
         const choice = event.choices?.[0];
         if (!choice) continue;
         const delta = choice.delta ?? {};
@@ -259,6 +267,29 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         data: { errorMessage: errMsg(err) },
       };
       return;
+    }
+
+    // Token accounting for THIS provider call. Emitted only when the server
+    // actually reported usage — a fabricated zero would be worse than silence.
+    if (usage) {
+      yield {
+        type: "run.usage",
+        runId,
+        timestamp: nowIso(),
+        data: {
+          callId,
+          attempt: 1,
+          // The client has no loop context; the run-loop re-stamps this with the
+          // iteration the call belongs to.
+          step: 0,
+          model: input.model,
+          promptTokens: usage.prompt_tokens,
+          completionTokens: usage.completion_tokens,
+          totalTokens: usage.total_tokens,
+          source: "stream",
+          finalForCall: true,
+        },
+      };
     }
 
     const toolCalls: AiToolCall[] = Array.from(toolCallAccumulators.entries())
@@ -487,6 +518,10 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       }),
       stream,
     };
+    // Without this, OpenAI-compatible servers omit `usage` from a streamed
+    // response entirely — token counts would be observable only for
+    // non-streaming calls, i.e. never on the path the loop actually uses.
+    if (stream) body.stream_options = { include_usage: true };
     if (input.temperature !== undefined) body.temperature = input.temperature;
     if (input.maxOutputTokens !== undefined)
       body.max_tokens = input.maxOutputTokens;
@@ -523,7 +558,14 @@ interface ToolCallAccumulator {
   argumentsJson: string;
 }
 
+interface OpenAiUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
 interface OpenAiStreamChunk {
+  usage?: OpenAiUsage | null;
   choices?: Array<{
     delta?: {
       content?: string;

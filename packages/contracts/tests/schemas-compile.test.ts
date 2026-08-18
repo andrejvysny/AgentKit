@@ -73,6 +73,43 @@ describe("AiRunEventSchema validation", () => {
     ).toBe(true);
   });
 
+  it("accepts a run.usage event and rejects an out-of-vocabulary source", () => {
+    const usage = {
+      type: "run.usage",
+      runId: "run_1",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      data: {
+        callId: "call_1",
+        attempt: 1,
+        step: 2,
+        model: "gpt-4o-mini",
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15,
+        source: "stream",
+        finalForCall: true,
+      },
+    };
+    expect(validate(usage)).toBe(true);
+    // Token fields are optional — servers report them partially or not at all.
+    expect(
+      validate({
+        ...usage,
+        data: {
+          callId: "call_1",
+          attempt: 1,
+          step: 0,
+          model: "m",
+          source: "response",
+          finalForCall: false,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validate({ ...usage, data: { ...usage.data, source: "telepathy" } }),
+    ).toBe(false);
+  });
+
   it("rejects a garbage object", () => {
     expect(validate({ nope: true })).toBe(false);
   });
