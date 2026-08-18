@@ -3,9 +3,13 @@ import Ajv from "ajv";
 import type { TSchema } from "@sinclair/typebox";
 import * as schemas from "../src/schemas.js";
 import {
+  AiContextBindingSchema,
   AiRunEventSchema,
+  AiSourceRefSchema,
   AiToolEnvelopeSchema,
   CONTRACT_VERSION,
+  type AiContextBinding,
+  type AiSourceRef,
 } from "../src/index.js";
 
 /**
@@ -93,6 +97,67 @@ describe("AiRunEventSchema validation", () => {
         data: {},
       }),
     ).toBe(false);
+  });
+});
+
+describe("host-defined kinds", () => {
+  type EdaSourceKind = "schematic" | "footprint";
+  type EdaBindingKind = "design" | "selection";
+
+  it("validates any host `kind` string on the wire", () => {
+    const ajv = makeAjv();
+    const sourceRef = ajv.compile(asJson(AiSourceRefSchema));
+    const binding = ajv.compile(asJson(AiContextBindingSchema));
+
+    // A kind this contract has never heard of still validates — the vocabulary
+    // belongs to the host, not the framework.
+    expect(
+      sourceRef({ id: "s1", kind: "invoice-line", label: "Line 7" }),
+    ).toBe(true);
+    expect(
+      binding({
+        id: "b1",
+        kind: "spreadsheet",
+        refId: "sheet-3",
+        label: "Q3",
+        role: "primary",
+        status: "active",
+      }),
+    ).toBe(true);
+    // `kind` is still required, and still a string.
+    expect(sourceRef({ id: "s1", label: "no kind" })).toBe(false);
+    expect(sourceRef({ id: "s1", kind: 7, label: "numeric kind" })).toBe(false);
+    // `role`/`status` stay closed unions — those are framework concepts.
+    expect(
+      binding({
+        id: "b1",
+        kind: "spreadsheet",
+        refId: "sheet-3",
+        label: "Q3",
+        role: "sidekick",
+        status: "active",
+      }),
+    ).toBe(false);
+  });
+
+  it("narrows `kind` at the type level via the type parameter", () => {
+    const ref: AiSourceRef<EdaSourceKind> = {
+      id: "s1",
+      kind: "footprint",
+      label: "R_0402",
+    };
+    const binding: AiContextBinding<EdaBindingKind> = {
+      id: "b1",
+      kind: "design",
+      refId: "d1",
+      label: "Main board",
+      role: "primary",
+      status: "active",
+    };
+    // The unparameterised alias still accepts them (default K = string).
+    const widened: AiSourceRef[] = [ref];
+    expect(widened[0]?.kind).toBe("footprint");
+    expect(binding.kind).toBe("design");
   });
 });
 
