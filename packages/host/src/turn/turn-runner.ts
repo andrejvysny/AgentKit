@@ -27,7 +27,6 @@ import type { ToolSetContributor } from "../ports/tool-contributor.js";
 import type { AssistantSettings } from "../ports/settings-store.js";
 import type { RunRecord, RunStatus } from "../ports/run-store.js";
 import type { VerificationHook } from "../ports/verification.js";
-import type { WritePolicy } from "../ports/write-policy.js";
 import {
   EMULATED_TOOL_CALL_MESSAGE,
   looksLikeEmulatedToolCall,
@@ -48,6 +47,16 @@ export const PROVIDER_SECRET_REF_KEY = "apiKeySecretRef";
 /** Default number of messages replayed to the provider. */
 const DEFAULT_HISTORY_LIMIT = 200;
 
+/**
+ * Everything the worker needs, injected.
+ *
+ * There is deliberately no `WritePolicy` here: the runner never asks whether a
+ * write may apply itself. That question belongs to the write tool, which is the
+ * only place that knows what is being written — `createProposalBuilderTool`
+ * consults the policy inside `execute`, on the staged proposal, and a copy of
+ * the policy on the runner would be a second consultation point that could
+ * disagree with the first.
+ */
 export interface TurnRunnerDeps {
   store: AssistantStore;
   taskRunner: TaskRunner;
@@ -57,7 +66,6 @@ export interface TurnRunnerDeps {
   contributors: ToolSetContributor[];
   context?: ContextProvider;
   verification?: VerificationHook;
-  policy?: WritePolicy;
   /** Overrides the limits derived from settings + provider capabilities. */
   limits?: AiToolLimits;
   clock: Clock;
@@ -468,6 +476,10 @@ export class TurnRunner implements TaskWorker {
       bindings: input.bindings,
       limits: input.limits,
       chatId: input.run.chatId,
+      // The run's own scope, threaded to every tool: a write tool stages
+      // against it, and re-deriving it downstream is how a host writing a
+      // shared document ends up with two different answers.
+      scopeId: input.run.scopeId,
       runId: input.run.runId,
       attemptId: input.execution.attemptId,
       firstSeq,

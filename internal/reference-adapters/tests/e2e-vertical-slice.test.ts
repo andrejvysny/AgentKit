@@ -62,7 +62,13 @@ import {
 // ---------------------------------------------------------------------------
 
 const CHAT_ID = "chat-e2e";
-/** What `notes_append` writes to; the idempotency + serialization namespace. */
+/**
+ * The scope the directly-staged proposals below use — a second namespace, so
+ * the crash-reconciliation scenario cannot collide with what the tool stages.
+ *
+ * The TOOL's scope is not this constant: it reads `ctx.scopeId`, which the run
+ * carries (here the chat, since `submitMessage` scopes a turn on its chat).
+ */
 const SCOPE_KEY = "scope-A";
 /** `<verb>_<primaryKey>_<scopeId>`, as the model is told to derive it. */
 const ACTION_ID = "append_note-1_scope-A";
@@ -337,7 +343,10 @@ function embedSlice(options: { provider?: AiProviderClient } = {}): Slice {
     store,
     policy,
     ids,
-    scopeKeyOf: () => SCOPE_KEY,
+    // The scope comes from the run, not from a constant in this file: the
+    // framework threads `RunRecord.scopeId` through `runChat` onto every tool
+    // context, which is the only thing that knows what this turn writes to.
+    scopeKeyOf: (ctx) => ctx.scopeId ?? SCOPE_KEY,
     build: async (_ctx, input) => {
       builds += 1;
       return {
@@ -567,10 +576,16 @@ describe("e2e vertical slice (A) — a write stages, waits, then applies once", 
         "skipped",
         "status",
       ]);
-      expect(tool.content).not.toContain(SCOPE_KEY);
+      // Neither the scope it was staged against nor the payload it staged
+      // reaches the model's replayed history.
+      expect(tool.content).not.toContain(CHAT_ID);
+      expect(tool.content).not.toContain(NOTE_TEXT);
 
-      // (4) Exactly one proposal, staged and waiting.
+      // (4) Exactly one proposal, staged and waiting — against the RUN's scope,
+      //     which reached the write tool as `ctx.scopeId` (a turn is scoped on
+      //     its chat; a host writing a shared document would scope on that).
       const proposal = await onlyProposal(slice);
+      expect(proposal.scopeKey).toBe(CHAT_ID);
       expect(proposal.status).toBe("pending");
       expect(proposal.actionId).toBe(ACTION_ID);
       expect(proposal.toolName).toBe(NOTES_APPEND.name);

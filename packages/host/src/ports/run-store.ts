@@ -9,6 +9,11 @@ import { InvalidRunTransitionError } from "../errors.js";
  * started" loses nothing. `waiting_approval` exists because a run that staged a
  * write and is waiting on a human is neither running nor finished, and calling
  * it either would make the queue's recovery pass do the wrong thing.
+ *
+ * Nothing in this repository currently produces `waiting_approval`: a staged
+ * write returns `pending` to the model and `TurnRunner` completes the run. It is
+ * reserved for a host that parks a run on the decision and resumes it after —
+ * the state and its transitions exist so that host does not fork this table.
  */
 export type RunStatus =
   | "queued"

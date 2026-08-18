@@ -30,6 +30,12 @@ export interface AssistantStore {
    *
    * Implementations need not support nesting: a host that cannot nest should
    * pass the ambient transaction through rather than opening a second one.
+   *
+   * ISOLATION CAVEAT: `transaction()` provides no isolation from concurrent
+   * operations on the same store instance; over `bun:sqlite`, concurrent store
+   * calls issued while a transaction callback awaits genuinely-async work JOIN
+   * that transaction and roll back with it — keep transaction callbacks free of
+   * foreign async work. Do the awaiting outside, and pass the results in.
    */
   transaction<T>(fn: (tx: AssistantStore) => Promise<T>): Promise<T>;
 }

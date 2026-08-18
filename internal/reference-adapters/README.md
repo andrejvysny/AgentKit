@@ -63,6 +63,17 @@ plus adapter-specific tests (`tests/sqlite-specific.test.ts`,
 mocked — see
 [`packages/host/README.md`](../../packages/host/README.md#embedding-turnrunner)).
 
+## Transaction isolation caveat
+
+Neither store isolates a transaction from concurrent work on the **same store
+instance**. `transaction()` gives atomicity (all-or-nothing on the sqlite
+store), not isolation: over `bun:sqlite`, concurrent store calls issued while a
+transaction callback awaits genuinely-async work JOIN that transaction and roll
+back with it — the connection has exactly one open transaction, and every
+statement issued on it belongs to that one. Keep transaction callbacks free of
+foreign async work: await the model, the applier, or another subsystem
+*outside*, then pass the results in.
+
 ## Single-process limits
 
 Documented in `single-process-task-runner.ts`'s module doc, and worth

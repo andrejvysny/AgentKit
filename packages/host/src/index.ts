@@ -5,6 +5,9 @@
 export * from "./errors.js";
 export * from "./ports/index.js";
 
+// Startup: the recovery pass a host runs before it claims any work.
+export * from "./bootstrap.js";
+
 // Proposals: the staged-write pipeline.
 export * from "./proposals/state-machine.js";
 export * from "./proposals/action-id.js";
