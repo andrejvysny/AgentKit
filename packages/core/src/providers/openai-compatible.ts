@@ -54,6 +54,9 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       kind: config.kind,
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
+      // Dropping these silently loses per-provider attribution/routing headers
+      // that a metered proxy may require, turning every call into a 4xx.
+      extraHeaders: config.extraHeaders,
       fetchImpl,
     });
   }

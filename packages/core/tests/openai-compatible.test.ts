@@ -152,6 +152,35 @@ describe("OpenAiCompatibleClient extraHeaders", () => {
     expect(seen?.get("authorization")).toBe("Bearer real-bearer");
     expect(seen?.get("accept")).toBe("application/json");
   });
+
+  it("fromConfig carries extraHeaders through to the outgoing request", async () => {
+    let seen: Headers | undefined;
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      seen = new Headers(init?.headers);
+      return sseResponse([{ choices: [{ delta: {}, finish_reason: "stop" }] }]);
+    }) as unknown as typeof fetch;
+    const client = OpenAiCompatibleClient.fromConfig(
+      {
+        id: "cfg",
+        label: "Configured",
+        kind: "openai-compatible",
+        baseUrl: "http://localhost:9/v1",
+        apiKey: "k",
+        defaultModel: "m",
+        enabled: true,
+        extraHeaders: { "x-workspace-id": "ws_1", "x-run-id": "run_1" },
+      },
+      fetchImpl,
+    );
+    for await (const _e of client.streamChat({
+      runId: "r",
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+    }));
+    expect(seen?.get("x-workspace-id")).toBe("ws_1");
+    expect(seen?.get("x-run-id")).toBe("run_1");
+    expect(seen?.get("authorization")).toBe("Bearer k");
+  });
 });
 
 describe("OpenAiCompatibleClient capability probe", () => {
