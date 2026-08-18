@@ -25,6 +25,3 @@ export * from "./providers/client.js";
 export * from "./providers/presets.js";
 export * from "./providers/sse.js";
 export * from "./providers/openai-compatible.js";
-
-// Search pipeline
-export * from "./search/pipeline.js";
