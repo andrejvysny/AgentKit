@@ -11,6 +11,7 @@ export const AiRunEventTypeSchema = Type.Union([
   Type.Literal("run.tool.succeeded"),
   Type.Literal("run.tool.failed"),
   Type.Literal("run.warning"),
+  Type.Literal("run.usage"),
   Type.Literal("run.completed"),
   Type.Literal("run.failed"),
   Type.Literal("run.cancelled"),
@@ -214,6 +215,43 @@ export type AiRunWarningEvent = Omit<
   data: { code: AiRunWarningCode | (string & {}); message: string };
 };
 
+/**
+ * Token accounting for ONE provider call. A run makes several (every tool
+ * round-trip is another call), so usage is reported per call rather than once
+ * per run — summing is the consumer's job, and it cannot sum what it never saw.
+ *
+ * - `callId` — identifies the provider call these numbers belong to; stable
+ *   across the events of that call, distinct between calls of the same run.
+ * - `attempt` — 1-based retry counter within that call (a retried request bills
+ *   again, so its usage is a separate event with the same `callId`).
+ * - `step` — the run-loop iteration the call belongs to (0 when the emitter has
+ *   no loop context; the run-loop re-stamps it as it passes through).
+ * - `source` — `"stream"` when scraped off a streaming chunk, `"response"` when
+ *   read from a non-streaming response body.
+ * - `finalForCall` — true on the last usage event for this `callId`/`attempt`,
+ *   so a consumer knows the numbers are settled and won't be superseded.
+ *
+ * Token fields are optional throughout: plenty of OpenAI-compatible servers
+ * report partial usage, or none at all.
+ */
+export const AiRunUsageEventSchema = Type.Object({
+  type: Type.Literal("run.usage"),
+  runId: Type.String(),
+  timestamp: Type.String(),
+  data: Type.Object({
+    callId: Type.String(),
+    attempt: Type.Number(),
+    step: Type.Number(),
+    model: Type.String(),
+    promptTokens: Type.Optional(Type.Number()),
+    completionTokens: Type.Optional(Type.Number()),
+    totalTokens: Type.Optional(Type.Number()),
+    source: Type.Union([Type.Literal("stream"), Type.Literal("response")]),
+    finalForCall: Type.Boolean(),
+  }),
+});
+export type AiRunUsageEvent = Static<typeof AiRunUsageEventSchema>;
+
 export const AiRunCompletedEventSchema = Type.Object({
   type: Type.Literal("run.completed"),
   runId: Type.String(),
@@ -253,6 +291,7 @@ export const AiRunEventSchema = Type.Union([
   AiRunToolSucceededEventSchema,
   AiRunToolFailedEventSchema,
   AiRunWarningEventSchema,
+  AiRunUsageEventSchema,
   AiRunCompletedEventSchema,
   AiRunFailedEventSchema,
   AiRunCancelledEventSchema,
@@ -273,6 +312,7 @@ export type AiRunEvent =
   | AiRunToolSucceededEvent
   | AiRunToolFailedEvent
   | AiRunWarningEvent
+  | AiRunUsageEvent
   | AiRunCompletedEvent
   | AiRunFailedEvent
   | AiRunCancelledEvent;

@@ -173,6 +173,12 @@ export async function* runChat(
               sawNoToolCallWarning = true;
             yield stamped;
             break;
+          case "run.usage":
+            // The client counts tokens but has no idea which round-trip it is;
+            // only the loop knows. Stamp the iteration so a consumer can
+            // attribute spend to a step without tracking call order itself.
+            yield { ...stamped, data: { ...stamped.data, step: iteration } };
+            break;
           default:
             yield stamped;
         }

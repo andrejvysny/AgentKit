@@ -53,6 +53,7 @@ export {
   AiRunToolSucceededEventSchema,
   AiRunToolFailedEventSchema,
   AiRunWarningEventSchema,
+  AiRunUsageEventSchema,
   AiRunCompletedEventSchema,
   AiRunFailedEventSchema,
   AiRunCancelledEventSchema,
