@@ -24,7 +24,16 @@ runtime dependency between the two packages.
   no separate `run.tool.requested` events. Useful for exercising the
   run-loop's completed-only synthesis path.
 
-Both emit contract-valid `AiRunEvent`s via `createTestEventStamper()`
+- **`HangingProviderClient`** (`hanging-provider.ts`) — streams what it was
+  configured to stream (`{ emitStarted?, deltas? }`), then parks until the
+  run is cancelled and throws the `AbortError` a cancelled `fetch` reports
+  (`createAbortError()`, exported separately). `blocking` /
+  `whenBlocking()` is the deterministic handle: a cancellation test waits
+  for the stream to be demonstrably parked instead of racing a sleep. A
+  `streamChat` call with no `signal` rejects rather than hanging forever —
+  a provider that cannot be cancelled is a wiring bug worth naming.
+
+All three emit contract-valid `AiRunEvent`s via `createTestEventStamper()`
 (`stamp.ts`) — a duplicate of `@agentkit/core`'s `createEventStamper`
 re-implemented against `@agentkit/contracts` alone, so this package never
 needs `@agentkit/core` at runtime to produce valid events.

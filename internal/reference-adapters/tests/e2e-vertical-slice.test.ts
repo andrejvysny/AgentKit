@@ -45,11 +45,7 @@ import {
   type ToolSetContributor,
   type WriteToolModelData,
 } from "@agentkit/host";
-import {
-  MockProviderClient,
-  createTestEventStamper,
-  nowIso,
-} from "@agentkit/testing";
+import { HangingProviderClient, MockProviderClient } from "@agentkit/testing";
 import { SingleProcessTaskRunner, SqliteAssistantStore } from "../src/index.js";
 import {
   createTestClock,
@@ -219,66 +215,6 @@ class RecordingProviderClient implements AiProviderClient {
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
     this.calls.push(input.messages.map((message) => ({ ...message })));
     yield* this.inner.streamChat(input);
-  }
-}
-
-/** DOMException-free `AbortError`, duck-typed the way `fetch` reports one. */
-function abortError(): Error {
-  const err = new Error("The operation was aborted.");
-  err.name = "AbortError";
-  return err;
-}
-
-function untilAborted(signal: AbortSignal | undefined): Promise<void> {
-  if (!signal) {
-    return Promise.reject(
-      new Error("the run loop must hand the provider a signal"),
-    );
-  }
-  if (signal.aborted) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
-}
-
-/**
- * A provider that streams a little and then hangs until the run is cancelled,
- * failing the way a real one does: the aborted `fetch` throws.
- *
- * `blocking` is the deterministic handle a test cancels on — no sleeping, no
- * guessing whether the stream got started.
- */
-class HangingProviderClient implements AiProviderClient {
-  readonly id = "hanging";
-  readonly kind = "openai-compatible" as const;
-  /** True once the stream is parked, waiting to be aborted. */
-  blocking = false;
-
-  async capabilities() {
-    return { streaming: true, toolCalling: true, modelList: true };
-  }
-
-  async listModels() {
-    return [];
-  }
-
-  async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
-    const stamp = createTestEventStamper();
-    yield stamp({
-      type: "run.started",
-      runId: input.runId,
-      timestamp: nowIso(),
-      data: { model: input.model, toolCount: input.tools?.length ?? 0 },
-    });
-    yield stamp({
-      type: "run.message.delta",
-      runId: input.runId,
-      timestamp: nowIso(),
-      data: { delta: "Thinking" },
-    });
-    this.blocking = true;
-    await untilAborted(input.signal);
-    throw abortError();
   }
 }
 
