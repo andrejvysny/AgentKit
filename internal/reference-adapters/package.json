@@ -1,0 +1,27 @@
+{
+  "name": "@agentkit/reference-adapters",
+  "version": "0.1.0-dev",
+  "private": true,
+  "description": "Workspace-private reference AssistantStore implementations (in-memory and bun:sqlite) that pass @agentkit/testing's store-conformance suite. Never published.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "bun test tests"
+  },
+  "dependencies": {
+    "@agentkit/contracts": "workspace:*",
+    "@agentkit/core": "workspace:*",
+    "@agentkit/host": "workspace:*"
+  },
+  "devDependencies": {
+    "@agentkit/testing": "workspace:*",
+    "@types/bun": "^1.3.5",
+    "typescript": "^5.8.3"
+  }
+}
