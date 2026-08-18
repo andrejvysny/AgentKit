@@ -1,14 +1,26 @@
 import { Type, type Static } from "@sinclair/typebox";
 import { AiToolCallSchema } from "./tool.js";
 
-export const AiProviderKindSchema = Type.Union([
-  Type.Literal("openai"),
-  Type.Literal("openrouter"),
-  Type.Literal("openai-compatible"),
-  Type.Literal("lmstudio"),
-  Type.Literal("omlx"),
-  Type.Literal("openpcb-cloud"),
-]);
+/**
+ * Provider kinds this framework ships presets for. The vocabulary is **open**:
+ * `AiProviderKind` is a plain string so a host can register its own provider
+ * (a gateway, an internal proxy, a vendor the framework has never heard of)
+ * without a contract change. This list is the recognised set, useful for UI
+ * pickers and preset lookup — not a validation boundary.
+ */
+export const KNOWN_PROVIDER_KINDS = [
+  "openai",
+  "openrouter",
+  "openai-compatible",
+  "lmstudio",
+  "omlx",
+] as const;
+export type KnownProviderKind = (typeof KNOWN_PROVIDER_KINDS)[number];
+
+export const AiProviderKindSchema = Type.String({
+  description:
+    "Open provider-kind discriminator; see KNOWN_PROVIDER_KINDS for the recognised vocabulary.",
+});
 export type AiProviderKind = Static<typeof AiProviderKindSchema>;
 
 export const AiProviderConfigSchema = Type.Object({

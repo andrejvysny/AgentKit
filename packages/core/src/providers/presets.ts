@@ -1,7 +1,12 @@
-import type { AiProviderKind } from "@agentkit/contracts";
+import type { AiProviderKind, KnownProviderKind } from "@agentkit/contracts";
 
 export interface AiProviderPreset {
-  kind: AiProviderKind;
+  /**
+   * Presets exist only for the kinds this package ships defaults for. Hosts may
+   * configure any other `AiProviderKind` (the vocabulary is open) — they just
+   * supply their own base URL and model instead of reading them from here.
+   */
+  kind: KnownProviderKind;
   label: string;
   defaultBaseUrl: string;
   defaultModel: string;
@@ -34,15 +39,6 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
     docsUrl: "https://openrouter.ai/docs",
     notes:
       "Cloud aggregator routing to many model providers via one OpenAI-compatible API. Requires an API key from openrouter.ai/keys. Models use vendor/model slugs (e.g. anthropic/claude-3.5-sonnet).",
-  },
-  {
-    kind: "openpcb-cloud",
-    label: "OpenPCB Cloud",
-    defaultBaseUrl: "",
-    defaultModel: "",
-    requiresApiKey: false,
-    notes:
-      "Zero-config cloud AI for Pro subscribers. Auto-configured after you sign in — no API key or base URL needed. The per-run bearer is your live session token.",
   },
   {
     kind: "lmstudio",
