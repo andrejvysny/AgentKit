@@ -19,6 +19,12 @@ export const AiProviderConfigSchema = Type.Object({
   apiKey: Type.Optional(Type.String()),
   defaultModel: Type.String(),
   enabled: Type.Boolean(),
+  /**
+   * Static headers sent on every request to this provider. Merged *under* the
+   * built-in accept/authorization headers, so they can add attribution or
+   * routing metadata but never override auth.
+   */
+  extraHeaders: Type.Optional(Type.Record(Type.String(), Type.String())),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 });
 export type AiProviderConfig = Static<typeof AiProviderConfigSchema>;
