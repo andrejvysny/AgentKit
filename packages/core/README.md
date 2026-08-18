@@ -1,12 +1,10 @@
-# @openpcb/ai-core
+# @agentkit/core
 
-Headless AI runtime primitives for the OpenPCB ecosystem.
+Headless AI agent runtime primitives.
 
 Provides provider interfaces, an OpenAI-compatible HTTP transport, tool registry, run-loop primitives, context bindings, source/citation types, prompt composition, output limits, and search/rerank pipeline interfaces.
 
-Pure TypeScript. Zero runtime dependencies. No DB, no HTTP framework, no DOM, no provider SDKs. Uses global `fetch`.
-
-Consumed by OpenPCB Assistant and (later) Cloud AI features.
+Pure TypeScript. Single runtime dependency: ajv. No DB, no HTTP framework, no DOM, no provider SDKs. Uses global `fetch`.
 
 ## Modules
 
@@ -16,8 +14,8 @@ Consumed by OpenPCB Assistant and (later) Cloud AI features.
 - `context/` — `AiContextBinding` model
 - `prompts/` — `AiPromptPreset`, `composeSystemPrompt()`
 - `sources/` — `AiSourceRef`
-- `search/` — `AiSearchQueryRewriteResult`, `AiCandidateSearchAdapter`, `AiRerankResult` interfaces (Cloud reuse)
+- `search/` — `AiSearchQueryRewriteResult`, `AiCandidateSearchAdapter`, `AiRerankResult` interfaces
 
 ## License
 
-AGPL-3.0-or-later
+MIT
