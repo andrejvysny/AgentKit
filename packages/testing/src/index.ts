@@ -4,6 +4,7 @@
 // Mocks
 export * from "./mock-provider.js";
 export * from "./mock-completed-provider.js";
+export * from "./hanging-provider.js";
 
 // Stamping (mirrors @agentkit/core's createEventStamper, contracts-only)
 export * from "./stamp.js";
