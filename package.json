@@ -7,12 +7,15 @@
     "test": "bun test",
     "test:core": "bun test packages/core",
     "test:contracts": "bun test packages/contracts",
-    "typecheck": "bun run typecheck:contracts && bun run typecheck:core",
+    "test:testing": "bun test packages/testing",
+    "typecheck": "bun run typecheck:contracts && bun run typecheck:core && bun run typecheck:testing",
     "typecheck:contracts": "tsc -p packages/contracts/tsconfig.json",
     "typecheck:core": "tsc -p packages/core/tsconfig.json",
-    "build": "bun run build:contracts && bun run build:core",
+    "typecheck:testing": "tsc -p packages/testing/tsconfig.json",
+    "build": "bun run build:contracts && bun run build:core && bun run build:testing",
     "build:contracts": "tsc -p packages/contracts/tsconfig.build.json",
     "build:core": "tsc -p packages/core/tsconfig.build.json",
+    "build:testing": "tsc -p packages/testing/tsconfig.build.json",
     "ci": "bun install --frozen-lockfile && bun run typecheck && bun test && bun run build"
   },
   "devDependencies": {

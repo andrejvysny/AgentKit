@@ -1,0 +1,68 @@
+[
+  {
+    "type": "run.started",
+    "runId": "run-golden-usage-run",
+    "timestamp": "2026-08-18T18:41:27.414Z",
+    "data": {
+      "model": "gpt-golden",
+      "toolCount": 0
+    },
+    "contractVersion": "0.1.0",
+    "eventId": "evt_5448f357-edfb-4e58-863b-4c98fd1b909d",
+    "seq": 0
+  },
+  {
+    "type": "run.message.delta",
+    "runId": "run-golden-usage-run",
+    "timestamp": "2026-08-18T18:41:27.414Z",
+    "data": {
+      "delta": "Usage-tracked answer."
+    },
+    "contractVersion": "0.1.0",
+    "eventId": "evt_40701c72-e3b4-44c4-888e-a3b161b841f9",
+    "seq": 1
+  },
+  {
+    "type": "run.message.completed",
+    "runId": "run-golden-usage-run",
+    "timestamp": "2026-08-18T18:41:27.414Z",
+    "data": {
+      "content": "Usage-tracked answer.",
+      "toolCallCount": 0
+    },
+    "contractVersion": "0.1.0",
+    "eventId": "evt_ae1a93c2-92a2-43e7-bd42-b2b6ec526e43",
+    "seq": 2
+  },
+  {
+    "type": "run.usage",
+    "runId": "run-golden-usage-run",
+    "timestamp": "2026-08-18T18:41:27.414Z",
+    "data": {
+      "callId": "call-usage-0",
+      "attempt": 1,
+      "step": 1,
+      "model": "gpt-golden",
+      "promptTokens": 10,
+      "completionTokens": 5,
+      "totalTokens": 15,
+      "source": "stream",
+      "finalForCall": true
+    },
+    "contractVersion": "0.1.0",
+    "eventId": "evt_0e5a516c-f13c-4931-ab45-c4be5231dafa",
+    "seq": 3
+  },
+  {
+    "type": "run.completed",
+    "runId": "run-golden-usage-run",
+    "timestamp": "2026-08-18T18:41:27.414Z",
+    "data": {
+      "iterations": 1,
+      "finishReason": "stop"
+    },
+    "contractVersion": "0.1.0",
+    "eventId": "evt_4ae4d465-562d-4375-9e26-0a6f71beca55",
+    "seq": 4
+  }
+]

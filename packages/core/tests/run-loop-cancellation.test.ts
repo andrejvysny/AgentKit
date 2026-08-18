@@ -5,7 +5,7 @@ import { resolveToolLimits } from "../src/tools/limits.js";
 import {
   MockProviderClient,
   type MockScriptStep,
-} from "./mocks/mock-provider.js";
+} from "@agentkit/testing";
 import { collectRun } from "./helpers.js";
 import type { AiTool } from "../src/tools/tool.js";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";

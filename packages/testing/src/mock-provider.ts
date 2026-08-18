@@ -1,4 +1,4 @@
-import type { AiChatRequest, AiProviderClient } from "../../src/providers/client.js";
+import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
 import type {
   AiProviderCapabilities,
   AiProviderKind,
@@ -6,8 +6,7 @@ import type {
   AiRunEvent,
   AiToolCall,
 } from "@agentkit/contracts";
-import { nowIso } from "../../src/ids.js";
-import { createEventStamper } from "../../src/events.js";
+import { nowIso, createTestEventStamper } from "./stamp.js";
 
 export type MockScriptStep =
   | { kind: "text"; content: string }
@@ -35,6 +34,12 @@ export class MockProviderClient implements AiProviderClient {
    * reports them twice.
    */
   echoToolCallsIntoCompleted = false;
+  /**
+   * When true, each turn also emits a `run.usage` draft after its message
+   * events, the way a real streaming provider reports token accounting for the
+   * call it just made.
+   */
+  emitUsage = false;
   /** How many times streamChat has been invoked — i.e. provider round-trips. */
   callCount = 0;
   models: AiProviderModel[] = [];
@@ -59,12 +64,13 @@ export class MockProviderClient implements AiProviderClient {
 
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
     this.callCount++;
+    const turnNumber = this.turnIndex;
     const turn = this.turns[this.turnIndex] ?? { steps: [] };
     this.turnIndex++;
     const runId = input.runId;
     // A mock still has to emit valid events: the base fields are part of the
     // contract, not decoration the run-loop adds later.
-    const stamp = createEventStamper();
+    const stamp = createTestEventStamper();
     yield stamp({
       type: "run.started",
       runId,
@@ -118,6 +124,24 @@ export class MockProviderClient implements AiProviderClient {
           },
         });
       }
+    }
+    if (this.emitUsage) {
+      yield stamp({
+        type: "run.usage",
+        runId,
+        timestamp: nowIso(),
+        data: {
+          callId: `call-usage-${turnNumber}`,
+          attempt: 1,
+          step: 0,
+          model: input.model,
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+          source: "stream",
+          finalForCall: true,
+        },
+      });
     }
   }
 }
