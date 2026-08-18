@@ -7,6 +7,7 @@ import type {
   AiToolCall,
 } from "@agentkit/contracts";
 import { nowIso } from "../../src/ids.js";
+import { createEventStamper } from "../../src/events.js";
 
 export type MockScriptStep =
   | { kind: "text"; content: string }
@@ -58,23 +59,26 @@ export class MockProviderClient implements AiProviderClient {
     const turn = this.turns[this.turnIndex] ?? { steps: [] };
     this.turnIndex++;
     const runId = input.runId;
-    yield {
+    // A mock still has to emit valid events: the base fields are part of the
+    // contract, not decoration the run-loop adds later.
+    const stamp = createEventStamper();
+    yield stamp({
       type: "run.started",
       runId,
       timestamp: nowIso(),
       data: { model: input.model, toolCount: input.tools?.length ?? 0 },
-    };
+    });
     let content = "";
     const toolCalls: AiToolCall[] = [];
     for (const step of turn.steps) {
       if (step.kind === "text") {
         content += step.content;
-        yield {
+        yield stamp({
           type: "run.message.delta",
           runId,
           timestamp: nowIso(),
           data: { delta: step.content },
-        };
+        });
       } else {
         toolCalls.push({
           id: step.toolCallId,
@@ -83,7 +87,7 @@ export class MockProviderClient implements AiProviderClient {
         });
       }
     }
-    yield {
+    yield stamp({
       type: "run.message.completed",
       runId,
       timestamp: nowIso(),
@@ -97,10 +101,10 @@ export class MockProviderClient implements AiProviderClient {
         reasoningContent: turn.reasoning,
         finishReason: turn.finishReason,
       },
-    };
+    });
     for (const step of turn.steps) {
       if (step.kind === "tool_call") {
-        yield {
+        yield stamp({
           type: "run.tool.requested",
           runId,
           timestamp: nowIso(),
@@ -109,7 +113,7 @@ export class MockProviderClient implements AiProviderClient {
             toolName: step.name,
             argumentsJson: step.argumentsJson,
           },
-        };
+        });
       }
     }
   }

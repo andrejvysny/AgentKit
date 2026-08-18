@@ -1,4 +1,5 @@
 import { newRunId, newToolEventId, nowIso } from "../ids.js";
+import { createEventStamper, type EventStamper } from "../events.js";
 import type { AiProviderClient } from "../providers/client.js";
 import type { AiToolRegistry } from "../tools/registry.js";
 import type { AiTool } from "../tools/tool.js";
@@ -33,6 +34,14 @@ export interface RunChatInput {
   signal?: AbortSignal;
   /** Override runId for deterministic tests. */
   runId?: string;
+  /**
+   * First `seq` stamped on this run's events. Resume a stream without breaking
+   * the consumer's ordering key by passing the number after the last one already
+   * delivered. Default 0.
+   */
+  firstSeq?: number;
+  /** Stamped on every event; groups the events of one attempt of this run. */
+  attemptId?: string;
 }
 
 /**
@@ -78,6 +87,14 @@ export async function* runChat(
   const toolDefinitions = input.registry.listDefinitions();
   const messages: AiChatMessage[] = input.messages.slice();
   const initialLength = messages.length;
+  // EVERY event leaves through this stamper — loop-originated and re-yielded
+  // provider events alike — so one run emits one unbroken, gap-detectable
+  // sequence. A client's own numbering is deliberately overwritten: it counts
+  // per call, and a run spans several calls from possibly several clients.
+  const stamp = createEventStamper({
+    firstSeq: input.firstSeq,
+    attemptId: input.attemptId,
+  });
   let iteration = 0;
   let finishReason: string | undefined;
 
@@ -92,12 +109,12 @@ export async function* runChat(
   for (let i = 0; i < maxIterations; i++) {
     iteration = i + 1;
     if (input.signal?.aborted) {
-      yield {
+      yield stamp({
         type: "run.cancelled",
         runId,
         timestamp: nowIso(),
         data: { reason: "aborted" },
-      };
+      });
       return finish("cancelled");
     }
 
@@ -138,7 +155,7 @@ export async function* runChat(
         switch (stamped.type) {
           case "run.message.delta":
             deltaContent += stamped.data.delta;
-            yield stamped;
+            yield stamp(stamped);
             break;
           case "run.message.completed":
             completedContent = stamped.data.content;
@@ -146,7 +163,7 @@ export async function* runChat(
               completedToolCalls = stamped.data.toolCalls;
             }
             turnFinishReason = stamped.data.finishReason;
-            yield stamped;
+            yield stamp(stamped);
             break;
           case "run.tool.requested":
             requestedToolCalls.push({
@@ -155,32 +172,35 @@ export async function* runChat(
               argumentsJson: stamped.data.argumentsJson,
             });
             announcedToolCallIds.add(stamped.data.toolCallId);
-            yield stamped;
+            yield stamp(stamped);
             break;
           case "run.failed":
             // The provider already emitted run.failed; record it and don't re-emit.
             turnFailed = true;
-            yield stamped;
+            yield stamp(stamped);
             break;
           case "run.cancelled":
-            yield stamped;
+            yield stamp(stamped);
             return finish("cancelled");
           case "run.started":
-            if (iteration === 1) yield stamped;
+            if (iteration === 1) yield stamp(stamped);
             break;
           case "run.warning":
             if (stamped.data.code === "tool_call_unparseable")
               sawNoToolCallWarning = true;
-            yield stamped;
+            yield stamp(stamped);
             break;
           case "run.usage":
             // The client counts tokens but has no idea which round-trip it is;
             // only the loop knows. Stamp the iteration so a consumer can
             // attribute spend to a step without tracking call order itself.
-            yield { ...stamped, data: { ...stamped.data, step: iteration } };
+            yield stamp({
+              ...stamped,
+              data: { ...stamped.data, step: iteration },
+            });
             break;
           default:
-            yield stamped;
+            yield stamp(stamped);
         }
       }
     } catch (err) {
@@ -188,15 +208,15 @@ export async function* runChat(
       // cancellation, not a provider fault — classifying it as failure would
       // make every user-cancelled run look broken.
       if (input.signal?.aborted || isAbortError(err)) {
-        yield {
+        yield stamp({
           type: "run.cancelled",
           runId,
           timestamp: nowIso(),
           data: { reason: "aborted" },
-        };
+        });
         return finish("cancelled");
       }
-      yield {
+      yield stamp({
         type: "run.failed",
         runId,
         timestamp: nowIso(),
@@ -204,7 +224,7 @@ export async function* runChat(
           errorMessage: errorMessageOf(err),
           errorCode: "provider_error",
         },
-      };
+      });
       return finish("failed");
     }
 
@@ -228,7 +248,7 @@ export async function* runChat(
       for (const tc of turnToolCalls) {
         if (announcedToolCallIds.has(tc.id)) continue;
         announcedToolCallIds.add(tc.id);
-        yield {
+        yield stamp({
           type: "run.tool.requested",
           runId,
           timestamp: nowIso(),
@@ -237,13 +257,13 @@ export async function* runChat(
             toolName: tc.name,
             argumentsJson: tc.argumentsJson,
           },
-        };
+        });
       }
 
       const limitedToolCalls = turnToolCalls.slice(0, maxCallsPerIter);
       const skippedToolCalls = turnToolCalls.slice(maxCallsPerIter);
       if (skippedToolCalls.length > 0) {
-        yield {
+        yield stamp({
           type: "run.warning",
           runId,
           timestamp: nowIso(),
@@ -251,7 +271,7 @@ export async function* runChat(
             code: "tool_call_cap",
             message: `Truncated ${turnToolCalls.length} tool calls to ${maxCallsPerIter} per iteration.`,
           },
-        };
+        });
       }
       // The assistant message must list EVERY tool call it will answer (Chat
       // Completions rejects orphan tool_call_ids). Include ALL turnToolCalls here;
@@ -278,6 +298,7 @@ export async function* runChat(
           ...skippedToolCalls,
         ])
           yield* failTool(
+            stamp,
             runId,
             messages,
             rem,
@@ -290,30 +311,30 @@ export async function* runChat(
         // Abort race: stop before starting a tool if cancellation arrived.
         if (input.signal?.aborted) {
           yield* balanceCancelled(tc);
-          yield {
+          yield stamp({
             type: "run.cancelled",
             runId,
             timestamp: nowIso(),
             data: { reason: "aborted" },
-          };
+          });
           return finish("cancelled");
         }
-        yield {
+        yield stamp({
           type: "run.tool.running",
           runId,
           timestamp: nowIso(),
           data: { toolCallId: tc.id, toolName: tc.name },
-        };
+        });
         const tool = input.registry.get(tc.name);
         if (!tool) {
           const err = `Tool not registered: ${tc.name}`;
-          yield* failTool(runId, messages, tc, err, "tool_missing");
+          yield* failTool(stamp, runId, messages, tc, err, "tool_missing");
           continue;
         }
         const parsed = parseToolArguments(tc.argumentsJson);
         if (!parsed.ok) {
           const err = `Invalid arguments JSON: ${parsed.error}`;
-          yield* failTool(runId, messages, tc, err, "bad_args");
+          yield* failTool(stamp, runId, messages, tc, err, "bad_args");
           continue;
         }
         const args = parsed.value;
@@ -327,7 +348,7 @@ export async function* runChat(
         );
         if (schemaErrors.length > 0) {
           const err = describeValidationErrors(tc.name, schemaErrors);
-          yield* failTool(runId, messages, tc, err, "schema_invalid");
+          yield* failTool(stamp, runId, messages, tc, err, "schema_invalid");
           continue;
         }
 
@@ -358,7 +379,7 @@ export async function* runChat(
         if (result.ok && result.value.ok) {
           const envelope = buildEnvelope(result.value);
           const modelResultJson = JSON.stringify(envelope);
-          yield {
+          yield stamp({
             type: "run.tool.succeeded",
             runId,
             timestamp: nowIso(),
@@ -373,7 +394,7 @@ export async function* runChat(
               summary: result.value.summary,
               modelResultJson,
             },
-          };
+          });
           // Feed the model the balanced envelope, not the raw data.
           messages.push({
             role: "tool",
@@ -389,7 +410,7 @@ export async function* runChat(
             (result.value.warnings.length > 0
               ? result.value.warnings.join("; ")
               : `Tool ${tc.name} reported failure`);
-          yield {
+          yield stamp({
             type: "run.tool.failed",
             runId,
             timestamp: nowIso(),
@@ -403,7 +424,7 @@ export async function* runChat(
               status: envelope.status === "partial" ? "partial" : "error",
               modelResultJson: JSON.stringify(envelope),
             },
-          };
+          });
           messages.push({
             role: "tool",
             content: JSON.stringify(envelope),
@@ -412,6 +433,7 @@ export async function* runChat(
           });
         } else if (!result.ok) {
           yield* failTool(
+            stamp,
             runId,
             messages,
             tc,
@@ -425,7 +447,7 @@ export async function* runChat(
       // is left dangling (and the message history stays balanced for the provider).
       for (const tc of skippedToolCalls) {
         const err = `Skipped: exceeded maxToolCallsPerIteration=${maxCallsPerIter}.`;
-        yield {
+        yield stamp({
           type: "run.tool.failed",
           runId,
           timestamp: nowIso(),
@@ -435,7 +457,7 @@ export async function* runChat(
             errorMessage: err,
             errorCode: "tool_call_cap",
           },
-        };
+        });
         messages.push({
           role: "tool",
           content: JSON.stringify(errorEnvelope("tool_call_cap", err)),
@@ -453,7 +475,7 @@ export async function* runChat(
     // #4: surface finish_reason="tool_calls" with no reconstructable call — but
     // only if the provider didn't already emit it during streaming (dedup).
     if (finishReason === "tool_calls" && !sawNoToolCallWarning) {
-      yield {
+      yield stamp({
         type: "run.warning",
         runId,
         timestamp: nowIso(),
@@ -462,10 +484,10 @@ export async function* runChat(
           message:
             "Provider reported finish_reason=tool_calls but emitted no usable tool call.",
         },
-      };
+      });
     }
     if (finishReason === "length") {
-      yield {
+      yield stamp({
         type: "run.warning",
         runId,
         timestamp: nowIso(),
@@ -474,18 +496,18 @@ export async function* runChat(
           message:
             "Response truncated (finish_reason=length); increase max output tokens.",
         },
-      };
+      });
     }
-    yield {
+    yield stamp({
       type: "run.completed",
       runId,
       timestamp: nowIso(),
       data: { iterations: iteration, finishReason },
-    };
+    });
     return finish("completed");
   }
 
-  yield {
+  yield stamp({
     type: "run.warning",
     runId,
     timestamp: nowIso(),
@@ -493,15 +515,15 @@ export async function* runChat(
       code: "max_iterations",
       message: `Reached maxToolIterations=${maxIterations} without final answer.`,
     },
-  };
+  });
   // Exhausting the iteration budget still ends on run.completed (with a warning),
   // so the terminal reported here matches the event stream.
-  yield {
+  yield stamp({
     type: "run.completed",
     runId,
     timestamp: nowIso(),
     data: { iterations: iteration, finishReason: "max_iterations" },
-  };
+  });
   return finish("completed");
 }
 
@@ -527,18 +549,19 @@ function isAbortError(err: unknown): boolean {
 
 /** Emit a run.tool.failed event and append the matching error tool message. */
 function* failTool(
+  stamp: EventStamper,
   runId: string,
   messages: AiChatMessage[],
   tc: AiToolCall,
   errorMessage: string,
   errorCode: string,
 ): Generator<AiRunEvent, void, unknown> {
-  yield {
+  yield stamp({
     type: "run.tool.failed",
     runId,
     timestamp: nowIso(),
     data: { toolCallId: tc.id, toolName: tc.name, errorMessage, errorCode },
-  };
+  });
   messages.push({
     role: "tool",
     content: JSON.stringify(errorEnvelope(errorCode, errorMessage)),

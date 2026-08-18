@@ -4,6 +4,7 @@
 export * from "@agentkit/contracts";
 
 export * from "./ids.js";
+export * from "./events.js";
 
 // Context bindings
 export * from "./context/resolver.js";

@@ -4,6 +4,7 @@ import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
 import { nowIso } from "../src/ids.js";
 import { collectRun } from "./helpers.js";
+import { createEventStamper } from "../src/events.js";
 import type { AiChatRequest, AiProviderClient } from "../src/providers/client.js";
 import type {
   AiProviderCapabilities,
@@ -35,18 +36,19 @@ class ThrowingProviderClient implements AiProviderClient {
     return [];
   }
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
-    yield {
+    const stamp = createEventStamper();
+    yield stamp({
       type: "run.started",
       runId: input.runId,
       timestamp: nowIso(),
       data: { model: input.model, toolCount: 0 },
-    };
-    yield {
+    });
+    yield stamp({
       type: "run.message.delta",
       runId: input.runId,
       timestamp: nowIso(),
       data: { delta: "half an ans" },
-    };
+    });
     throw this.error;
   }
 }

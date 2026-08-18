@@ -7,6 +7,7 @@ import type {
   AiToolCall,
 } from "@agentkit/contracts";
 import { nowIso } from "../../src/ids.js";
+import { createEventStamper } from "../../src/events.js";
 
 /**
  * A non-streaming provider mock: emits a single `run.message.completed` carrying
@@ -42,14 +43,15 @@ export class CompletedOnlyProviderClient implements AiProviderClient {
     const turn = this.turns[this.turnIndex] ?? {};
     this.turnIndex++;
     const runId = input.runId;
-    yield {
+    const stamp = createEventStamper();
+    yield stamp({
       type: "run.started",
       runId,
       timestamp: nowIso(),
       data: { model: input.model, toolCount: input.tools?.length ?? 0 },
-    };
+    });
     const toolCalls = turn.toolCalls ?? [];
-    yield {
+    yield stamp({
       type: "run.message.completed",
       runId,
       timestamp: nowIso(),
@@ -59,6 +61,6 @@ export class CompletedOnlyProviderClient implements AiProviderClient {
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         finishReason: turn.finishReason,
       },
-    };
+    });
   }
 }

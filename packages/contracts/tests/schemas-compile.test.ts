@@ -51,23 +51,73 @@ describe("contract schemas", () => {
 describe("AiRunEventSchema validation", () => {
   const validate = makeAjv().compile(asJson(AiRunEventSchema));
 
+  /** The v2 transport base every event carries, whatever it says. */
+  const base = {
+    runId: "run_1",
+    timestamp: "2026-01-01T00:00:00.000Z",
+    contractVersion: CONTRACT_VERSION,
+    eventId: "evt_1",
+    seq: 0,
+  };
+
   it("accepts a well-formed run.started event", () => {
     expect(
       validate({
         type: "run.started",
-        runId: "run_1",
-        timestamp: "2026-01-01T00:00:00.000Z",
+        ...base,
         data: { model: "gpt-4o-mini", toolCount: 2 },
       }),
     ).toBe(true);
+  });
+
+  it("accepts the optional attemptId", () => {
+    expect(
+      validate({
+        type: "run.started",
+        ...base,
+        attemptId: "attempt_2",
+        data: { model: "gpt-4o-mini", toolCount: 2 },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an event missing a base field", () => {
+    // Every base field is load-bearing: without eventId a replayed stream cannot
+    // be deduplicated, so it is required, not optional.
+    const { eventId: _dropped, ...withoutEventId } = base;
+    expect(
+      validate({
+        type: "run.started",
+        ...withoutEventId,
+        data: { model: "gpt-4o-mini", toolCount: 2 },
+      }),
+    ).toBe(false);
+    const { seq: _alsoDropped, ...withoutSeq } = base;
+    expect(
+      validate({
+        type: "run.started",
+        ...withoutSeq,
+        data: { model: "gpt-4o-mini", toolCount: 2 },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a base field of the wrong type", () => {
+    expect(
+      validate({
+        type: "run.started",
+        ...base,
+        seq: "first",
+        data: { model: "gpt-4o-mini", toolCount: 2 },
+      }),
+    ).toBe(false);
   });
 
   it("accepts a run.warning event with an unrecognised (forward-compat) code", () => {
     expect(
       validate({
         type: "run.warning",
-        runId: "run_1",
-        timestamp: "2026-01-01T00:00:00.000Z",
+        ...base,
         data: { code: "some_future_code", message: "hi" },
       }),
     ).toBe(true);
@@ -76,8 +126,7 @@ describe("AiRunEventSchema validation", () => {
   it("accepts a run.usage event and rejects an out-of-vocabulary source", () => {
     const usage = {
       type: "run.usage",
-      runId: "run_1",
-      timestamp: "2026-01-01T00:00:00.000Z",
+      ...base,
       data: {
         callId: "call_1",
         attempt: 1,
@@ -118,22 +167,14 @@ describe("AiRunEventSchema validation", () => {
     expect(
       validate({
         type: "run.started",
-        runId: "run_1",
-        timestamp: "2026-01-01T00:00:00.000Z",
+        ...base,
         data: { model: 42, toolCount: "two" },
       }),
     ).toBe(false);
   });
 
   it("rejects an unknown event type", () => {
-    expect(
-      validate({
-        type: "run.exploded",
-        runId: "run_1",
-        timestamp: "2026-01-01T00:00:00.000Z",
-        data: {},
-      }),
-    ).toBe(false);
+    expect(validate({ type: "run.exploded", ...base, data: {} })).toBe(false);
   });
 });
 
