@@ -3,15 +3,15 @@ import { runChat } from "../src/runs/run-loop.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
 import { MockProviderClient } from "./mocks/mock-provider.js";
+import { collectRun } from "./helpers.js";
 import type { AiTool } from "../src/tools/tool.js";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
 
+/** Events only, for the cases that don't care about the return value. */
 async function collect(
   input: Parameters<typeof runChat>[0],
 ): Promise<AiRunEvent[]> {
-  const out: AiRunEvent[] = [];
-  for await (const e of runChat(input)) out.push(e);
-  return out;
+  return (await collectRun(runChat(input))).events;
 }
 
 function makeEchoTool(): AiTool<{ text: string }, { echoed: string }> {
@@ -82,18 +82,25 @@ describe("runChat", () => {
     const client = new MockProviderClient();
     client.setScript([{ steps: [{ kind: "text", content: "Hello" }] }]);
     const messages: AiChatMessage[] = [{ role: "user", content: "hi" }];
-    const events = await collect({
-      client,
-      registry: new AiToolRegistry(),
-      model: "m",
-      messages,
-      limits: resolveToolLimits({ preference: "small" }),
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry: new AiToolRegistry(),
+        model: "m",
+        messages,
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
     expect(events.find((e) => e.type === "run.completed")).toBeDefined();
     expect(events.filter((e) => e.type === "run.message.delta").length).toBe(1);
-    const last = messages.at(-1);
+    const last = result.appendedMessages.at(-1);
     expect(last?.role).toBe("assistant");
     expect(last?.content).toBe("Hello");
+    expect(result.terminal).toBe("completed");
+    expect(result.iterations).toBe(1);
+    // The caller's array is untouched — the run hands back what it appended.
+    expect(messages.length).toBe(1);
+    expect(messages).toEqual([{ role: "user", content: "hi" }]);
   });
 
   it("executes a tool call and re-invokes the model", async () => {
@@ -114,18 +121,24 @@ describe("runChat", () => {
     const registry = new AiToolRegistry();
     registry.register(makeEchoTool() as unknown as AiTool);
     const messages: AiChatMessage[] = [{ role: "user", content: "go" }];
-    const events = await collect({
-      client,
-      registry,
-      model: "m",
-      messages,
-      limits: resolveToolLimits({ preference: "small" }),
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry,
+        model: "m",
+        messages,
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
     expect(events.some((e) => e.type === "run.tool.succeeded")).toBe(true);
     expect(events.find((e) => e.type === "run.completed")).toBeDefined();
     // assistant tool_call message + tool result + final assistant
-    const roles = messages.map((m) => m.role);
+    const roles = [...messages, ...result.appendedMessages].map((m) => m.role);
     expect(roles).toEqual(["user", "assistant", "tool", "assistant"]);
+    // ...all of which live in the result, not in the caller's array.
+    expect(messages.map((m) => m.role)).toEqual(["user"]);
+    expect(result.terminal).toBe("completed");
+    expect(result.iterations).toBe(2);
   });
 
   it("fails gracefully when tool not registered", async () => {
@@ -234,20 +247,25 @@ describe("runChat", () => {
     ]);
     const registry = new AiToolRegistry();
     registry.register(makeEchoTool() as unknown as AiTool);
-    const events = await collect({
-      client,
-      registry,
-      model: "m",
-      messages: [{ role: "user", content: "loop" }],
-      limits: resolveToolLimits({ preference: "small" }),
-      maxToolIterations: 2,
-    });
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry,
+        model: "m",
+        messages: [{ role: "user", content: "loop" }],
+        limits: resolveToolLimits({ preference: "small" }),
+        maxToolIterations: 2,
+      }),
+    );
     const warnings = events.filter((e) => e.type === "run.warning");
     expect(
       warnings.some(
         (w) => (w as { data: { code: string } }).data.code === "max_iterations",
       ),
     ).toBe(true);
+    // Exhaustion still ends on run.completed, so the reported terminal matches.
+    expect(result.terminal).toBe("completed");
+    expect(result.iterations).toBe(2);
   });
 
   it("aborts a tool that exceeds its timeoutMs and continues the run", async () => {
