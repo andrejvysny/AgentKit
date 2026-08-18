@@ -12,10 +12,9 @@ export {
   AiJsonSchemaObjectSchema,
 } from "./json-schema.js";
 
-export { AiSourceRefKindSchema, AiSourceRefSchema } from "./source-ref.js";
+export { AiSourceRefSchema } from "./source-ref.js";
 
 export {
-  AiContextBindingKindSchema,
   AiContextBindingRoleSchema,
   AiContextBindingStatusSchema,
   AiContextBindingSchema,

@@ -15,14 +15,15 @@ package's npm version.
 Two documented exceptions, each commented where it lives: `AiJsonSchemaObject` is
 a hand-written interface (it is a meta-type describing JSON Schema documents, not
 a wire DTO), and a few types layer a hand-written nicety over their schema —
-`AiToolResult<T>`, `AiRunWarningEvent`, `AiRunEvent`.
+`AiToolResult<T>`, `AiSourceRef<K>`, `AiContextBinding<K>`, `AiRunWarningEvent`,
+`AiRunEvent`.
 
 ## Modules
 
 - `version` — `CONTRACT_VERSION`
 - `json-schema` — `AiJsonSchemaObject`, `AiJsonPrimitiveType`
-- `source-ref` — `AiSourceRef`, `AiSourceRefKind`
-- `context-binding` — `AiContextBinding` and its kind/role/status unions
+- `source-ref` — `AiSourceRef<K>` (host-defined `kind`)
+- `context-binding` — `AiContextBinding<K>` (host-defined `kind`) and its role/status unions
 - `tool` — `AiToolDefinition`, `AiToolCall`, `AiToolResult`, `AiToolEnvelope`, `AiToolLimits`, `TOOL_NAME_PATTERN`
 - `provider` — `AiProviderKind`, `AiProviderConfig`, `AiProviderCapabilities`, `AiProviderModel`, `AiChatMessage`
 - `prompt` — `AiPromptPreset`, `AiPromptContextBlock`
