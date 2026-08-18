@@ -156,17 +156,36 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
 
 /**
  * Known `run.warning` codes. `code` stays an open string on the wire (the schema
- * types it as `Type.String()`) for forward-compat; this union documents the
- * recognised values. Existing emitted code: `tool_call_cap`. The P6 codes
- * (`duplicate_loop` | `stall` | `tool_cap` | `timeout`) are declared now but not
- * emitted this iteration.
+ * types it as `Type.String()`) for forward-compat; this union is the recognised
+ * vocabulary.
+ *
+ * - `tool_call_cap` — a turn produced more tool calls than
+ *   `maxToolCallsPerIteration`; the excess was truncated. Also the `errorCode`
+ *   on the `run.tool.failed` events emitted for the skipped calls.
+ * - `tool_call_unparseable` — the provider reported `finish_reason=tool_calls`
+ *   but no usable tool call could be reconstructed (truncated or garbled tool
+ *   block). Emitted by the provider during streaming, and by the run-loop as a
+ *   fallback for providers that don't.
+ * - `truncated` — `finish_reason=length`; the answer was cut off.
+ * - `max_iterations` — `maxToolIterations` was reached without a final answer.
+ * - `sse_parse` — malformed SSE lines were dropped and the response is likely
+ *   incomplete.
+ * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
+ *   produce them, but hosts layering their own provider adapters on top of this
+ *   contract do, so they are part of the shared vocabulary.
+ *
+ * Removed: `duplicate_loop` | `stall` | `tool_cap` | `timeout`. They were
+ * declared as "P6, not emitted this iteration" and never were; reserved for
+ * whoever implements those detectors.
  */
 export type AiRunWarningCode =
   | "tool_call_cap"
-  | "duplicate_loop"
-  | "stall"
-  | "tool_cap"
-  | "timeout";
+  | "tool_call_unparseable"
+  | "truncated"
+  | "max_iterations"
+  | "sse_parse"
+  | "empty_response"
+  | "emulated_tool_call";
 
 export const AiRunWarningEventSchema = Type.Object({
   type: Type.Literal("run.warning"),

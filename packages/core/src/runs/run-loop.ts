@@ -123,7 +123,7 @@ export async function* runChat(
           if (iteration === 1) yield stamped;
           break;
         case "run.warning":
-          if (stamped.data.code === "tool_call_cap")
+          if (stamped.data.code === "tool_call_unparseable")
             sawNoToolCallWarning = true;
           yield stamped;
           break;
@@ -361,7 +361,7 @@ export async function* runChat(
         runId,
         timestamp: nowIso(),
         data: {
-          code: "tool_call_cap",
+          code: "tool_call_unparseable",
           message:
             "Provider reported finish_reason=tool_calls but emitted no usable tool call.",
         },

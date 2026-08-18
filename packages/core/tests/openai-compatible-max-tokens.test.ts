@@ -106,7 +106,8 @@ describe("OpenAiCompatibleClient finish_reason=tool_calls guard", () => {
       events.some(
         (e) =>
           e.type === "run.warning" &&
-          (e as { data: { code: string } }).data.code === "tool_call_cap",
+          (e as { data: { code: string } }).data.code ===
+            "tool_call_unparseable",
       ),
     ).toBe(true);
   });

@@ -357,7 +357,8 @@ describe("runChat — finish_reason tool_calls with no usable call", () => {
       events.some(
         (e) =>
           e.type === "run.warning" &&
-          (e as { data: { code: string } }).data.code === "tool_call_cap",
+          (e as { data: { code: string } }).data.code ===
+            "tool_call_unparseable",
       ),
     ).toBe(true);
     expect(events.find((e) => e.type === "run.completed")).toBeDefined();
