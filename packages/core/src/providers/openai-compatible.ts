@@ -280,7 +280,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         runId,
         timestamp: nowIso(),
         data: {
-          code: "tool_call_cap",
+          code: "tool_call_unparseable",
           message:
             "Provider reported finish_reason=tool_calls but emitted no usable tool call.",
         },
