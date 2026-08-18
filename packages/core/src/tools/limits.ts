@@ -1,10 +1,4 @@
-export type AiContextSizePreference = "small" | "medium" | "large";
-
-export interface AiToolLimits {
-  profile: AiContextSizePreference;
-  maxBytes: number;
-  maxItems?: number;
-}
+import type { AiContextSizePreference, AiToolLimits } from "@agentkit/contracts";
 
 const PROFILE_BYTES: Record<AiContextSizePreference, number> = {
   small: 16 * 1024,

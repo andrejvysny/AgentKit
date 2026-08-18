@@ -1,12 +1,11 @@
+import type { AiChatRequest, AiProviderClient } from "../../src/providers/client.js";
 import type {
-  AiChatRequest,
   AiProviderCapabilities,
-  AiProviderClient,
   AiProviderKind,
   AiProviderModel,
-} from "../../src/providers/types.js";
-import type { AiRunEvent } from "../../src/runs/events.js";
-import type { AiToolCall } from "../../src/tools/types.js";
+  AiRunEvent,
+  AiToolCall,
+} from "@agentkit/contracts";
 import { nowIso } from "../../src/ids.js";
 
 /**

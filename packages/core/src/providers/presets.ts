@@ -1,4 +1,4 @@
-import type { AiProviderKind } from "./types.js";
+import type { AiProviderKind } from "@agentkit/contracts";
 
 export interface AiProviderPreset {
   kind: AiProviderKind;

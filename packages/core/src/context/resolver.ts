@@ -1,4 +1,4 @@
-import type { AiContextBinding } from "./bindings.js";
+import type { AiContextBinding } from "@agentkit/contracts";
 
 /**
  * Filter helpers for context bindings. Pure functions; storage is the adapter's concern.

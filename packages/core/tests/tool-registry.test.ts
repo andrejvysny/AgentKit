@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { AiToolRegistry } from "../src/tools/registry.js";
-import type { AiTool } from "../src/tools/types.js";
+import type { AiTool } from "../src/tools/tool.js";
 
 function makeTool(name: string): AiTool {
   return {

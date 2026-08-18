@@ -1,5 +1,5 @@
 import Ajv, { type ValidateFunction, type ErrorObject } from "ajv";
-import type { AiJsonSchemaObject } from "../json-schema.js";
+import type { AiJsonSchemaObject } from "@agentkit/contracts";
 
 export interface AiValidationError {
   path: string;

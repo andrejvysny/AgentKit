@@ -1,5 +1,4 @@
-import type { AiRunEvent } from "../runs/events.js";
-import type { AiToolCall, AiToolDefinition } from "../tools/types.js";
+import type { AiToolCall } from "./tool.js";
 
 export type AiProviderKind =
   | "openai"
@@ -49,31 +48,4 @@ export interface AiChatMessage {
   toolCallId?: string;
   toolCalls?: AiToolCall[];
   metadata?: Record<string, unknown>;
-}
-
-export interface AiChatRequest {
-  runId: string;
-  model: string;
-  messages: AiChatMessage[];
-  tools?: AiToolDefinition[];
-  temperature?: number;
-  maxOutputTokens?: number;
-  signal?: AbortSignal;
-}
-
-export interface AiChatTurnResult {
-  content: string;
-  toolCalls: AiToolCall[];
-  finishReason?: string;
-}
-
-export interface AiProviderClient {
-  id: string;
-  kind: AiProviderKind;
-  capabilities(
-    signal?: AbortSignal,
-    model?: string,
-  ): Promise<AiProviderCapabilities>;
-  listModels(signal?: AbortSignal): Promise<AiProviderModel[]>;
-  streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent>;
 }

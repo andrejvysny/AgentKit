@@ -6,9 +6,11 @@
   "scripts": {
     "test": "bun test",
     "test:core": "bun test packages/core",
-    "typecheck": "bun run typecheck:core",
+    "typecheck": "bun run typecheck:contracts && bun run typecheck:core",
+    "typecheck:contracts": "tsc -p packages/contracts/tsconfig.json",
     "typecheck:core": "tsc -p packages/core/tsconfig.json",
-    "build": "bun run build:core",
+    "build": "bun run build:contracts && bun run build:core",
+    "build:contracts": "tsc -p packages/contracts/tsconfig.build.json",
     "build:core": "tsc -p packages/core/tsconfig.build.json",
     "ci": "bun install --frozen-lockfile && bun run typecheck && bun test && bun run build"
   },

@@ -1,5 +1,6 @@
 import Ajv, { type ValidateFunction } from "ajv";
-import { TOOL_NAME_PATTERN, type AiTool } from "./types.js";
+import { TOOL_NAME_PATTERN } from "@agentkit/contracts";
+import type { AiTool } from "./tool.js";
 import { mapValidatorErrors, type ValidationError } from "./validation.js";
 
 export class AiToolRegistry {

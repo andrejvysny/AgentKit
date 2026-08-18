@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { OpenAiCompatibleClient } from "../src/providers/openai-compatible.js";
-import type { AiRunEvent } from "../src/runs/events.js";
+import type { AiRunEvent } from "@agentkit/contracts";
 
 function sseResponse(chunks: unknown[]): Response {
   const enc = new TextEncoder();
