@@ -182,6 +182,55 @@ EDA-specific vocabulary is hard-coded here. `AiContextBinding`'s `role`
 (`active` | `missing` | `stale`) stay closed unions, because those *are*
 framework-level concepts.
 
+## REST v1 surface
+
+[`packages/contracts/src/rest.ts`](../packages/contracts/src/rest.ts) is the
+versioned HTTP surface as **types and JSON Schemas only** — there is no
+server and no client in this repository (see
+[`docs/non-goals.md`](non-goals.md)). It exists so the shapes an adapter
+will serialize are reviewable and validatable before anything serves them.
+
+- `REST_API_VERSION` (`"v1"`) is the URL-visible version, distinct from
+  `CONTRACT_VERSION`: an additive DTO field bumps the contract version and
+  leaves the URL alone, because a client written against `/v1` keeps working.
+- `REST_ROUTES` is the route table as data — 17 operations keyed by name,
+  `{ method, path }` each, `as const satisfies Readonly<Record<string,
+  RouteDef>>` — so a router, a client generator, and the documentation
+  cannot drift apart by transcription. Two carry header semantics no path
+  expresses: `submitMessage` requires an `Idempotency-Key` (it creates a run
+  and two messages, and a retried POST without one duplicates the turn), and
+  `streamRun` is SSE resuming from `Last-Event-ID`, whose value is an
+  `AiRunEvent.eventId` — which is why `eventId` and `seq` are required base
+  fields rather than decoration.
+
+**DTOs are projections of host records, not copies.** Each one mirrors a
+record in [`packages/host/src/ports/`](../packages/host/src/ports/) with the
+orchestrator's internals removed — leases and fencing tokens, queue
+bookkeeping (`priority`, `availableAt`, `attemptCount`, `poisonCount`), the
+host-shaped `envelope`/`operations` body of a proposal, the `operationId` and
+`revisionAtCreate` behind idempotency and staleness. Those exist so the
+system can recover from a crash; publishing them would freeze private
+mechanics into a public contract. Every omission is documented on the DTO
+that makes it.
+
+Three unions are **mirrored rather than imported** — `RunStatusDto`,
+`ProposalStatusDto`, `RiskLevelDto` — because contracts sits below host and
+cannot depend on it. They restate `RunStatus`, `ProposalStatus`, and
+`RiskLevel` verbatim and must be kept in step by hand.
+
+Where a DTO carries something this package already defines, it embeds the
+existing schema by reference rather than re-declaring it: `MessageDto` embeds
+`AiToolCallSchema`, `ToolEventDto` embeds `AiSourceRefSchema` and
+`AiToolStatusSchema`, `ToolDefinitionDto` *is* `AiToolDefinition` (the
+definition a model is shown and the one a client lists are the same
+document), and an SSE frame (`RunEventFrameDto`) is an `AiRunEvent`.
+
+Errors are RFC 7807 `application/problem+json` (`ProblemDetailsDto`) on every
+route, with one AgentKit extension member: `code`, the stable machine-readable
+code host errors already carry (`lease_lost`, `duplicate_action_id`,
+`revision_conflict`, …). A client branches on `code`; `type`/`title` are for
+humans.
+
 ## TypeBox as the single source of truth
 
 Every wire DTO is declared once as a `<Name>Schema` TypeBox value; its

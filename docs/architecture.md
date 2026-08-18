@@ -52,6 +52,13 @@ type parameter outruns what `Static<>` can express (`AiToolResult<T>`,
 `AiSourceRef<K>`, `AiContextBinding<K>`, `AiRunWarningEvent`, `AiRunEvent`) —
 see [`docs/contracts.md`](contracts.md).
 
+It also carries the REST v1 surface (`src/rest.ts`): the route table and the
+request/response DTOs an HTTP adapter would serialize, as types and schemas
+only — the DTOs are projections of the host records with the orchestrator's
+internals removed (see
+[`docs/contracts.md`](contracts.md#rest-v1-surface)). No adapter implements
+them here.
+
 This package has zero runtime dependency beyond `@sinclair/typebox`. It has
 no notion of a run loop, a queue, or a database.
 

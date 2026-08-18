@@ -20,7 +20,7 @@ breakdown and an ASCII diagram.
 
 | Package | Description | Status |
 |---|---|---|
-| [`packages/contracts`](packages/contracts) — `@agentkit/contracts` | Wire DTOs and JSON Schemas (TypeBox): run events, tool/provider/prompt shapes, source refs, context bindings. | 0.1.0-dev |
+| [`packages/contracts`](packages/contracts) — `@agentkit/contracts` | Wire DTOs and JSON Schemas (TypeBox): run events, tool/provider/prompt shapes, source refs, context bindings, and the REST v1 route table + DTOs. | 0.1.0-dev |
 | [`packages/core`](packages/core) — `@agentkit/core` | Pure, in-process chat-with-tools loop: provider client, Ajv-backed tool registry, `runChat()`. | 0.5.0-dev |
 | [`packages/host`](packages/host) — `@agentkit/host` | Durable orchestration over `@agentkit/core`: storage ports, `TurnRunner`, proposal lifecycle, write policy. | 0.1.0-dev |
 | [`packages/testing`](packages/testing) — `@agentkit/testing` | Mocks, fixtures, golden run-event traces, and the `AssistantStore` conformance suite. | 0.1.0-dev |

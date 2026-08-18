@@ -8,6 +8,10 @@ import {
   AiSourceRefSchema,
   AiToolEnvelopeSchema,
   CONTRACT_VERSION,
+  ProposalDtoSchema,
+  REST_API_VERSION,
+  REST_ROUTES,
+  RunDtoSchema,
   type AiContextBinding,
   type AiSourceRef,
 } from "../src/index.js";
@@ -281,5 +285,156 @@ describe("AiToolEnvelopeSchema validation", () => {
 
   it("rejects an envelope missing required fields", () => {
     expect(validate({ ok: true })).toBe(false);
+  });
+});
+
+describe("REST v1 surface", () => {
+  it("exports every REST DTO schema through the schema barrel", () => {
+    // The barrel test above compiles whatever is exported; this one is the
+    // guard against a DTO being added to rest.ts and never re-exported, which
+    // would leave it uncompiled and unvalidated forever.
+    const exported = new Set(Object.keys(schemas));
+    for (const name of [
+      "RunStatusDtoSchema",
+      "ProposalStatusDtoSchema",
+      "RiskLevelDtoSchema",
+      "ChatDtoSchema",
+      "MessageDtoSchema",
+      "MessagePageDtoSchema",
+      "RunDtoSchema",
+      "ProposalDecisionDtoSchema",
+      "ApplyOutcomeDtoSchema",
+      "ProposalDtoSchema",
+      "ToolEventDtoSchema",
+      "ToolDefinitionDtoSchema",
+      "CreateChatRequestSchema",
+      "SubmitMessageRequestSchema",
+      "SubmitMessageResponseSchema",
+      "ProposalDecisionRequestSchema",
+      "ApplyProposalRequestSchema",
+      "VersionDtoSchema",
+      "ProblemDetailsDtoSchema",
+      "RunEventFrameDtoSchema",
+    ]) {
+      expect(exported.has(name), `${name} must be in the schema barrel`).toBe(
+        true,
+      );
+    }
+  });
+
+  it("declares a route table whose paths all sit under the API version", () => {
+    expect(REST_API_VERSION).toBe("v1");
+    const routes = Object.entries(REST_ROUTES);
+    expect(routes.length).toBe(17);
+    for (const [name, route] of routes) {
+      expect(route.path.startsWith(`/${REST_API_VERSION}/`), name).toBe(true);
+      expect(["GET", "POST", "PATCH", "DELETE"]).toContain(route.method);
+    }
+    // Every path+method pair is distinct: two operations on one route would be
+    // a table that cannot be turned into a router.
+    const pairs = routes.map(([, r]) => `${r.method} ${r.path}`);
+    expect(new Set(pairs).size).toBe(pairs.length);
+    // Reading a route yields literals, not `string` — the point of `satisfies`.
+    const path: "/v1/runs/:runId" = REST_ROUTES.getRun.path;
+    expect(path).toBe("/v1/runs/:runId");
+  });
+
+  describe("RunDtoSchema validation", () => {
+    const validate = makeAjv().compile(asJson(RunDtoSchema));
+
+    it("accepts a completed run with its optional timestamps", () => {
+      expect(
+        validate({
+          runId: "run_1",
+          chatId: "chat_1",
+          scopeId: "chat_1",
+          status: "completed",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          startedAt: "2026-01-01T00:00:01.000Z",
+          finishedAt: "2026-01-01T00:00:09.000Z",
+        }),
+      ).toBe(true);
+      // A queued run has neither — both are optional for exactly this case.
+      expect(
+        validate({
+          runId: "run_2",
+          chatId: "chat_1",
+          scopeId: "chat_1",
+          status: "queued",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ).toBe(true);
+    });
+
+    it("rejects a status outside the six-state vocabulary", () => {
+      expect(
+        validate({
+          runId: "run_1",
+          chatId: "chat_1",
+          scopeId: "chat_1",
+          status: "thinking",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ).toBe(false);
+    });
+  });
+
+  describe("ProposalDtoSchema validation", () => {
+    const validate = makeAjv().compile(asJson(ProposalDtoSchema));
+
+    const applied = {
+      id: "prp_1",
+      chatId: "chat_1",
+      runId: "run_1",
+      scopeKey: "doc-42",
+      actionId: "append_note-1_doc-42",
+      toolName: "notes_append",
+      kind: "notes.append",
+      risk: "medium",
+      status: "applied",
+      summary: 'Append "hello"',
+      warnings: [],
+      truncated: false,
+      decision: {
+        actor: "policy",
+        policyId: "session-write-policy",
+        decidedAt: "2026-01-01T00:00:02.000Z",
+      },
+      outcome: { status: "partial", appliedOps: 1, failedOps: [] },
+      createdAt: "2026-01-01T00:00:01.000Z",
+      decidedAt: "2026-01-01T00:00:02.000Z",
+      appliedAt: "2026-01-01T00:00:03.000Z",
+    };
+
+    it("accepts a fully-decided, applied proposal", () => {
+      expect(validate(applied)).toBe(true);
+    });
+
+    it("accepts a bare pending proposal — everything optional is absent", () => {
+      expect(
+        validate({
+          id: "prp_2",
+          chatId: "chat_1",
+          scopeKey: "doc-42",
+          toolName: "notes_append",
+          kind: "notes.append",
+          risk: "low",
+          status: "pending",
+          warnings: [],
+          truncated: false,
+          createdAt: "2026-01-01T00:00:01.000Z",
+        }),
+      ).toBe(true);
+    });
+
+    it("rejects an out-of-vocabulary risk and a malformed outcome", () => {
+      expect(validate({ ...applied, risk: "spicy" })).toBe(false);
+      expect(
+        validate({
+          ...applied,
+          outcome: { status: "applied", appliedOps: 1, failedOps: ["boom"] },
+        }),
+      ).toBe(false);
+    });
   });
 });

@@ -59,3 +59,28 @@ export {
   AiRunCancelledEventSchema,
   AiRunEventSchema,
 } from "./run-events.js";
+
+// REST v1 DTOs. The route table (`REST_ROUTES`) and `REST_API_VERSION` are
+// deliberately absent: this barrel is schemas and nothing else.
+export {
+  RunStatusDtoSchema,
+  ProposalStatusDtoSchema,
+  RiskLevelDtoSchema,
+  ChatDtoSchema,
+  MessageDtoSchema,
+  MessagePageDtoSchema,
+  RunDtoSchema,
+  ProposalDecisionDtoSchema,
+  ApplyOutcomeDtoSchema,
+  ProposalDtoSchema,
+  ToolEventDtoSchema,
+  ToolDefinitionDtoSchema,
+  CreateChatRequestSchema,
+  SubmitMessageRequestSchema,
+  SubmitMessageResponseSchema,
+  ProposalDecisionRequestSchema,
+  ApplyProposalRequestSchema,
+  VersionDtoSchema,
+  ProblemDetailsDtoSchema,
+  RunEventFrameDtoSchema,
+} from "./rest.js";
