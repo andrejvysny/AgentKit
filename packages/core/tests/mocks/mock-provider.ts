@@ -35,6 +35,8 @@ export class MockProviderClient implements AiProviderClient {
    * reports them twice.
    */
   echoToolCallsIntoCompleted = false;
+  /** How many times streamChat has been invoked — i.e. provider round-trips. */
+  callCount = 0;
   models: AiProviderModel[] = [];
   caps: AiProviderCapabilities = {
     streaming: true,
@@ -56,6 +58,7 @@ export class MockProviderClient implements AiProviderClient {
   }
 
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
+    this.callCount++;
     const turn = this.turns[this.turnIndex] ?? { steps: [] };
     this.turnIndex++;
     const runId = input.runId;
