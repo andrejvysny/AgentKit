@@ -26,6 +26,13 @@ export interface RunChatInput {
   bindings?: AiContextBinding[];
   limits: AiToolLimits;
   chatId?: string;
+  /**
+   * The serialization/idempotency scope this run writes to, passed through
+   * verbatim to every tool's {@link AiToolExecutionContext}. The loop does not
+   * interpret it: only the host knows whether a run is scoped on its chat or on
+   * the document several chats share.
+   */
+  scopeId?: string;
   userId?: string;
   temperature?: number;
   maxOutputTokens?: number;
@@ -357,6 +364,7 @@ export async function* runChat(
           {
             runId,
             chatId: input.chatId,
+            scopeId: input.scopeId,
             userId: input.userId,
             bindings: input.bindings ?? [],
             limits: input.limits,

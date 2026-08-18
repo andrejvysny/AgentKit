@@ -4,7 +4,7 @@ import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
 import { MockProviderClient } from "@agentkit/testing";
 import { collectRun } from "./helpers.js";
-import type { AiTool } from "../src/tools/tool.js";
+import type { AiTool, AiToolExecutionContext } from "../src/tools/tool.js";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
 
 /** Events only, for the cases that don't care about the return value. */
@@ -139,6 +139,78 @@ describe("runChat", () => {
     expect(messages.map((m) => m.role)).toEqual(["user"]);
     expect(result.terminal).toBe("completed");
     expect(result.iterations).toBe(2);
+  });
+
+  it("hands a tool the run's chatId and scopeId, and omits what it wasn't given", async () => {
+    const seen: AiToolExecutionContext[] = [];
+    const spyTool: AiTool<{ text: string }, null> = {
+      definition: {
+        name: "echo",
+        version: "1",
+        effect: "read",
+        capability: "test",
+        description: "echo",
+        inputSchema: {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+        },
+      },
+      async execute(ctx) {
+        seen.push(ctx);
+        return {
+          ok: true,
+          data: null,
+          sources: [],
+          warnings: [],
+          truncated: false,
+          limits: ctx.limits,
+        };
+      },
+    };
+    const script = (): MockProviderClient => {
+      const client = new MockProviderClient();
+      client.setScript([
+        {
+          steps: [
+            {
+              kind: "tool_call",
+              toolCallId: "c1",
+              name: "echo",
+              argumentsJson: '{"text":"ok"}',
+            },
+          ],
+        },
+        { steps: [{ kind: "text", content: "Done." }] },
+      ]);
+      return client;
+    };
+    const registry = new AiToolRegistry();
+    registry.register(spyTool as unknown as AiTool);
+    const base = {
+      registry,
+      model: "m",
+      messages: [{ role: "user" as const, content: "go" }],
+      limits: resolveToolLimits({ preference: "small" }),
+    };
+
+    await collect({
+      ...base,
+      client: script(),
+      chatId: "chat-7",
+      // The document two chats share — deliberately NOT the chat id, so a tool
+      // that fell back to chatId would read the wrong namespace.
+      scopeId: "doc-42",
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.chatId).toBe("chat-7");
+    expect(seen[0]?.scopeId).toBe("doc-42");
+
+    // Both are optional: a caller that names neither hands the tool neither.
+    await collect({ ...base, client: script() });
+    expect(seen).toHaveLength(2);
+    expect(seen[1]?.chatId).toBeUndefined();
+    expect(seen[1]?.scopeId).toBeUndefined();
   });
 
   it("fails gracefully when tool not registered", async () => {

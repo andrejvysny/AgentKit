@@ -73,6 +73,13 @@ recovery reads.
 - `claimNext` MUST be atomic: claiming a run creates its attempt and lease
   in the same operation, so no other caller can claim the same run.
 
+**`waiting_approval` is currently producer-less.** No code in this repository
+moves a run into it: a staged write returns `pending` to the model and the run
+completes normally (see the proposal lifecycle below). The status and its
+transitions are reserved for hosts that instead park a run on approval and
+resume it when the decision arrives — `RUN_TRANSITIONS` already admits
+`running → waiting_approval → running | completed | failed | cancelled`.
+
 **Reference / conformance**: `MemoryRunStore` / `SqliteRunStore`
 (fencing enforced via a guarded `UPDATE ... WHERE lease_token=?` plus the
 driver's reported `changes` count, in a transaction); conformance suite
@@ -144,6 +151,13 @@ subscription on the runner would be a second, lossier channel.
 - `recover()` is the startup pass: expire dead leases, end their attempts
   `abandoned`, reconcile interrupted applies by operation id, then
   re-enqueue or dead-letter — run before any worker starts claiming.
+
+`recoverOnBoot({ taskRunner, proposals })`
+([`packages/host/src/bootstrap.ts`](../packages/host/src/bootstrap.ts))
+is the pair of them a host actually calls at startup: `TaskRunner.recover()`
+first, then `ProposalService.reconcileInterrupted()`, so a recovered run is
+picked back up only after the writes it may have left mid-apply are settled.
+Both halves are idempotent; it returns `{ proposalsReconciled }`.
 
 **Reference**: `SingleProcessTaskRunner`
 ([`internal/reference-adapters/src/task-runner/single-process-task-runner.ts`](../internal/reference-adapters/src/task-runner/single-process-task-runner.ts)) —

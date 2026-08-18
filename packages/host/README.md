@@ -34,6 +34,9 @@ that package before writing your own adapter from scratch.
   empty-response retry decisions), `message-order.ts`
   (`orderMessagesForProvider`), `emulated-tool-call.ts`
   (`looksLikeEmulatedToolCall`), `registry-staging.ts` (`stageRegistry`).
+- `bootstrap.ts` — `recoverOnBoot({ taskRunner, proposals })`: the startup
+  pass that cleans up after a crash — `TaskRunner.recover()` first, then
+  `ProposalService.reconcileInterrupted()` — before any worker claims work.
 - `errors.ts` — `AgentKitHostError` and its subclasses, each carrying a
   stable machine-readable `code` (`invalid_run_transition`, `lease_lost`,
   `seq_conflict`, `duplicate_action_id`, `revision_conflict`, `not_found`,
@@ -50,7 +53,12 @@ against real (non-mocked) `TurnRunner` + `SingleProcessTaskRunner` +
 The sketch:
 
 ```ts
-import { TurnRunner, defaultClock, defaultIds } from "@agentkit/host";
+import {
+  TurnRunner,
+  defaultClock,
+  defaultIds,
+  recoverOnBoot,
+} from "@agentkit/host";
 import { MemoryAssistantStore, SingleProcessTaskRunner } from "@agentkit/reference-adapters";
 
 const store = new MemoryAssistantStore();
@@ -64,6 +72,10 @@ const turnRunner = new TurnRunner({
   clock: defaultClock,
   ids: defaultIds,
 });
+
+// Clean up after the last crash BEFORE claiming anything: expired leases and
+// abandoned attempts, then the proposals a dying process left mid-apply.
+await recoverOnBoot({ taskRunner, proposals: proposalService });
 
 const handle = await taskRunner.startWorker(turnRunner, { concurrency: 2 });
 

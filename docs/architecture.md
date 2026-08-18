@@ -105,7 +105,14 @@ to run it durably, across process restarts and retries:
   a host's write tools are built on.
 - **Policy** ([`packages/host/src/policy/session-write-policy.ts`](../packages/host/src/policy/session-write-policy.ts))
   — `SessionWritePolicy`, an in-memory `WritePolicy` implementation whose
-  standing allowances live only for the process lifetime.
+  standing allowances live only for the process lifetime. Only the write tool
+  consults it (`createProposalBuilderTool`, on the proposal it just staged);
+  `TurnRunner` takes no policy dependency, so there is exactly one place the
+  auto-apply question is answered.
+- **Bootstrap** ([`packages/host/src/bootstrap.ts`](../packages/host/src/bootstrap.ts))
+  — `recoverOnBoot`: `TaskRunner.recover()` then
+  `ProposalService.reconcileInterrupted()`, in that order, before any worker
+  starts claiming.
 
 `@agentkit/host` depends on `@agentkit/core` and `@agentkit/contracts`; it
 implements no storage itself — every store is a port, implemented by the
@@ -156,7 +163,11 @@ embedding host or by the reference adapters under `internal/`.
 Source: `RUN_TRANSITIONS` in
 [`packages/host/src/ports/run-store.ts`](../packages/host/src/ports/run-store.ts).
 Note there is **no `running → queued` edge** — a run that started never goes
-back to the queue.
+back to the queue. Note also that **nothing in this repository produces
+`waiting_approval`**: `TurnRunner` lets a staged write return `pending` to the
+model and completes the run. The state is reserved for hosts that park a run on
+a human decision and resume it afterwards; its transitions exist so such a host
+does not have to fork the table.
 
 `AttemptStatus` is `running → completed | failed | abandoned | cancelled`.
 `abandoned` is specifically the crash outcome: a lease expired while the
