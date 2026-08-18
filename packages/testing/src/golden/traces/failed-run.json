@@ -1,0 +1,37 @@
+[
+  {
+    "type": "run.started",
+    "runId": "run-golden-failed-run",
+    "timestamp": "2026-08-18T18:41:27.410Z",
+    "data": {
+      "model": "gpt-golden",
+      "toolCount": 0
+    },
+    "contractVersion": "0.1.0",
+    "eventId": "evt_6166b3ee-92a5-4339-af9d-9c8fa4532ebd",
+    "seq": 0
+  },
+  {
+    "type": "run.message.delta",
+    "runId": "run-golden-failed-run",
+    "timestamp": "2026-08-18T18:41:27.410Z",
+    "data": {
+      "delta": "half an ans"
+    },
+    "contractVersion": "0.1.0",
+    "eventId": "evt_3e0cb148-e2df-4eaa-aab6-63adfc2a8a4b",
+    "seq": 1
+  },
+  {
+    "type": "run.failed",
+    "runId": "run-golden-failed-run",
+    "timestamp": "2026-08-18T18:41:27.413Z",
+    "data": {
+      "errorMessage": "socket hang up",
+      "errorCode": "provider_error"
+    },
+    "contractVersion": "0.1.0",
+    "eventId": "evt_f0d0862b-2749-4e85-8885-d0890f063720",
+    "seq": 2
+  }
+]

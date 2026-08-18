@@ -1,7 +1,6 @@
 {
-  "name": "@agentkit/core",
-  "version": "0.5.0-dev",
-  "description": "Headless AI agent runtime primitives: providers, tools, prompts, and run events. Pure TypeScript; no DB, no HTTP framework, no DOM, no provider SDKs.",
+  "name": "@agentkit/testing",
+  "version": "0.1.0-dev",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -29,21 +28,22 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "bun test tests",
-    "dev": "tsc -p tsconfig.build.json --watch"
+    "test": "bun test tests"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/andrejvysny/AgentKit.git",
-    "directory": "packages/core"
+    "directory": "packages/testing"
   },
   "dependencies": {
-    "@agentkit/contracts": "workspace:*",
-    "ajv": "^8.17.1"
+    "@agentkit/contracts": "workspace:*"
+  },
+  "peerDependencies": {
+    "@agentkit/core": "workspace:*"
   },
   "devDependencies": {
-    "@agentkit/testing": "workspace:*",
-    "@types/bun": "^1.3.5",
-    "typescript": "^5.8.3"
+    "@agentkit/core": "workspace:*",
+    "typescript": "^5.8.3",
+    "@types/bun": "^1.3.5"
   }
 }

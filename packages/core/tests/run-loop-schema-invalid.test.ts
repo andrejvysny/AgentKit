@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { runChat } from "../src/runs/run-loop.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
-import { MockProviderClient } from "./mocks/mock-provider.js";
+import { MockProviderClient } from "@agentkit/testing";
 import { collectRun } from "./helpers.js";
 import type { AiTool } from "../src/tools/tool.js";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";

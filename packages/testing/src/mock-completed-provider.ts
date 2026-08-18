@@ -1,4 +1,4 @@
-import type { AiChatRequest, AiProviderClient } from "../../src/providers/client.js";
+import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
 import type {
   AiProviderCapabilities,
   AiProviderKind,
@@ -6,8 +6,7 @@ import type {
   AiRunEvent,
   AiToolCall,
 } from "@agentkit/contracts";
-import { nowIso } from "../../src/ids.js";
-import { createEventStamper } from "../../src/events.js";
+import { nowIso, createTestEventStamper } from "./stamp.js";
 
 /**
  * A non-streaming provider mock: emits a single `run.message.completed` carrying
@@ -43,7 +42,7 @@ export class CompletedOnlyProviderClient implements AiProviderClient {
     const turn = this.turns[this.turnIndex] ?? {};
     this.turnIndex++;
     const runId = input.runId;
-    const stamp = createEventStamper();
+    const stamp = createTestEventStamper();
     yield stamp({
       type: "run.started",
       runId,
