@@ -68,6 +68,20 @@ typecheck`, `bun run build`, and per-package variants
 (`bun run test:core`, `bun run test:host`, `bun run test:contracts`,
 `bun run test:testing`, `bun run test:adapters`).
 
+Bun is the primary runtime, but `@agentkit/contracts` and `@agentkit/core`
+must stay Node-loadable — a `bun:` import in either passes the whole Bun
+suite and breaks the first Node consumer. `scripts/node-smoke.mjs` runs the
+built dists under plain Node (Ajv-validating a golden event, then driving
+`runChat` with a stub provider). **Build first** — it reads `dist/`, which is
+not checked in:
+
+```sh
+bun run build:contracts && bun run build:core && bun run smoke:node
+```
+
+CI runs the same thing in a separate `node-smoke` job, preceded by a grep
+that fails on any `bun:` import in those two dists.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). See [PROVENANCE.md](PROVENANCE.md) for the
