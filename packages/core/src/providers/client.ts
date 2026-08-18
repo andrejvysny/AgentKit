@@ -4,7 +4,6 @@ import type {
   AiProviderCapabilities,
   AiProviderKind,
   AiProviderModel,
-  AiToolCall,
   AiToolDefinition,
 } from "@agentkit/contracts";
 
@@ -16,12 +15,6 @@ export interface AiChatRequest {
   temperature?: number;
   maxOutputTokens?: number;
   signal?: AbortSignal;
-}
-
-export interface AiChatTurnResult {
-  content: string;
-  toolCalls: AiToolCall[];
-  finishReason?: string;
 }
 
 export interface AiProviderClient {

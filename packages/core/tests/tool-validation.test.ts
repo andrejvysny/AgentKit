@@ -1,16 +1,35 @@
 import { describe, expect, it } from "bun:test";
 import Ajv from "ajv";
-import {
-  mapValidatorErrors,
-  parseToolArguments,
-  validateAgainstSchema,
-  validateToolInput,
-} from "../src/tools/validation.js";
+import { mapValidatorErrors, parseToolArguments } from "../src/tools/validation.js";
+import { AiToolRegistry } from "../src/tools/registry.js";
+import type { AiTool } from "../src/tools/tool.js";
 import type { AiJsonSchemaObject } from "@agentkit/contracts";
 
+function makeTool(name: string, inputSchema: AiJsonSchemaObject): AiTool {
+  return {
+    definition: {
+      name,
+      version: "1",
+      effect: "read",
+      capability: "test",
+      description: "test",
+      inputSchema,
+    },
+    async execute(ctx) {
+      return {
+        ok: true,
+        data: null,
+        sources: [],
+        warnings: [],
+        truncated: false,
+        limits: ctx.limits,
+      };
+    },
+  };
+}
+
 // Representative WireEndpoint shape: each endpoint is either a "REF.PIN" string
-// or an explicit { ref, pin } object. Ajv `oneOf` is required — the hand-rolled
-// validateAgainstSchema cannot express this.
+// or an explicit { ref, pin } object. Ajv `oneOf` is required to express this.
 const wireEndpoint = {
   oneOf: [
     { type: "string", maxLength: 64 },
@@ -34,17 +53,21 @@ const wireSchema = {
     source: wireEndpoint,
     target: wireEndpoint,
   },
-};
+} as unknown as AiJsonSchemaObject;
 
-describe("validateToolInput (Ajv)", () => {
+describe("AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage)", () => {
   it("accepts a valid WireEndpoint pair → []", () => {
+    const r = new AiToolRegistry();
+    r.register(makeTool("wire_connect", wireSchema));
     expect(
-      validateToolInput(wireSchema, { source: "U1.OUT", target: "R1.1" }),
+      r.validateInput("wire_connect", { source: "U1.OUT", target: "R1.1" }),
     ).toEqual([]);
   });
 
   it("flags an empty-object endpoint that matches neither oneOf branch", () => {
-    const errors = validateToolInput(wireSchema, { source: {} });
+    const r = new AiToolRegistry();
+    r.register(makeTool("wire_connect", wireSchema));
+    const errors = r.validateInput("wire_connect", { source: {} });
     expect(errors.length).toBeGreaterThan(0);
   });
 
@@ -52,70 +75,64 @@ describe("validateToolInput (Ajv)", () => {
     const schema = {
       type: "object",
       properties: { mode: { type: "string", enum: ["read", "write"] } },
-    };
-    expect(
-      validateToolInput(schema, { mode: "delete" }).length,
-    ).toBeGreaterThan(0);
-    expect(validateToolInput(schema, { mode: "read" })).toEqual([]);
+    } as unknown as AiJsonSchemaObject;
+    const r = new AiToolRegistry();
+    r.register(makeTool("set_mode", schema));
+    expect(r.validateInput("set_mode", { mode: "delete" }).length).toBeGreaterThan(
+      0,
+    );
+    expect(r.validateInput("set_mode", { mode: "read" })).toEqual([]);
   });
 
   it("catches a maxLength overflow", () => {
-    const schema = {
+    const schema: AiJsonSchemaObject = {
       type: "object",
       properties: { ref: { type: "string", maxLength: 3 } },
     };
-    expect(
-      validateToolInput(schema, { ref: "toolong" }).length,
-    ).toBeGreaterThan(0);
-    expect(validateToolInput(schema, { ref: "ok" })).toEqual([]);
+    const r = new AiToolRegistry();
+    r.register(makeTool("set_ref", schema));
+    expect(r.validateInput("set_ref", { ref: "toolong" }).length).toBeGreaterThan(
+      0,
+    );
+    expect(r.validateInput("set_ref", { ref: "ok" })).toEqual([]);
   });
 
   it("catches an additionalProperties violation and names the key", () => {
-    const schema = {
+    const schema: AiJsonSchemaObject = {
       type: "object",
       additionalProperties: false,
       properties: { ref: { type: "string" } },
     };
-    const errors = validateToolInput(schema, { ref: "x", extra: 1 });
+    const r = new AiToolRegistry();
+    r.register(makeTool("strict_ref", schema));
+    const errors = r.validateInput("strict_ref", { ref: "x", extra: 1 });
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.some((e) => e.message.includes("extra"))).toBe(true);
   });
 
   it("maps error paths without a leading slash", () => {
-    const schema = {
+    const schema: AiJsonSchemaObject = {
       type: "object",
       properties: { ref: { type: "string" } },
     };
-    const errors = validateToolInput(schema, { ref: 1 });
+    const r = new AiToolRegistry();
+    r.register(makeTool("typed_ref", schema));
+    const errors = r.validateInput("typed_ref", { ref: 1 });
     expect(errors.length).toBeGreaterThan(0);
     expect(errors[0]?.path.startsWith("/")).toBe(false);
   });
 
-  it("returns [] when the schema is not an object", () => {
-    expect(validateToolInput(undefined, { a: 1 })).toEqual([]);
-    expect(validateToolInput(null, { a: 1 })).toEqual([]);
-  });
-});
-
-describe("validateAgainstSchema (hand-rolled, preserved)", () => {
-  const schema: AiJsonSchemaObject = {
-    type: "object",
-    required: ["name"],
-    properties: { name: { type: "string" }, count: { type: "number" } },
-  };
-
-  it("accepts a valid object → []", () => {
-    expect(validateAgainstSchema({ name: "x", count: 1 }, schema)).toEqual([]);
-  });
-
-  it("flags a missing required property", () => {
-    const errors = validateAgainstSchema({ count: 1 }, schema);
-    expect(errors.length).toBeGreaterThan(0);
-  });
-
-  it("flags a wrong type", () => {
-    const errors = validateAgainstSchema({ name: 1 }, schema);
-    expect(errors.length).toBeGreaterThan(0);
+  it("returns [] for a non-object schema: registration rejects it, so nothing is ever validated", () => {
+    const r = new AiToolRegistry();
+    // Ajv.compile throws on a non-object schema — register() must reject it
+    // rather than silently leaving a validator-less tool behind.
+    expect(() =>
+      r.register(makeTool("bad_tool", undefined as unknown as AiJsonSchemaObject)),
+    ).toThrow();
+    // The tool never made it into the registry, so validateInput's unknown-tool
+    // fallback (`[]`) is what a caller observes — same end result as the old
+    // standalone validateToolInput's "no usable schema → []" guard.
+    expect(r.validateInput("bad_tool", { a: 1 })).toEqual([]);
   });
 });
 
