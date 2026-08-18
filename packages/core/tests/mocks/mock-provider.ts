@@ -4,6 +4,7 @@ import type {
   AiProviderKind,
   AiProviderModel,
   AiRunEvent,
+  AiToolCall,
 } from "@agentkit/contracts";
 import { nowIso } from "../../src/ids.js";
 
@@ -27,6 +28,12 @@ export class MockProviderClient implements AiProviderClient {
   readonly kind: AiProviderKind = "openai-compatible";
   private turns: MockTurn[] = [];
   private turnIndex = 0;
+  /**
+   * When true, tool calls are ALSO echoed into `run.message.completed.data.toolCalls`
+   * (on top of the `run.tool.requested` events), the way a real streaming provider
+   * reports them twice.
+   */
+  echoToolCallsIntoCompleted = false;
   models: AiProviderModel[] = [];
   caps: AiProviderCapabilities = {
     streaming: true,
@@ -58,7 +65,7 @@ export class MockProviderClient implements AiProviderClient {
       data: { model: input.model, toolCount: input.tools?.length ?? 0 },
     };
     let content = "";
-    let toolCount = 0;
+    const toolCalls: AiToolCall[] = [];
     for (const step of turn.steps) {
       if (step.kind === "text") {
         content += step.content;
@@ -69,7 +76,11 @@ export class MockProviderClient implements AiProviderClient {
           data: { delta: step.content },
         };
       } else {
-        toolCount++;
+        toolCalls.push({
+          id: step.toolCallId,
+          name: step.name,
+          argumentsJson: step.argumentsJson,
+        });
       }
     }
     yield {
@@ -78,7 +89,11 @@ export class MockProviderClient implements AiProviderClient {
       timestamp: nowIso(),
       data: {
         content,
-        toolCallCount: toolCount,
+        toolCallCount: toolCalls.length,
+        toolCalls:
+          this.echoToolCallsIntoCompleted && toolCalls.length > 0
+            ? toolCalls
+            : undefined,
         reasoningContent: turn.reasoning,
         finishReason: turn.finishReason,
       },
