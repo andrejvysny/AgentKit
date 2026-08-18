@@ -24,3 +24,30 @@ jobs:
       - run: bun test
 
       - run: bun run build
+
+  # The shippable packages promise to be plain, portable JavaScript. Nothing
+  # about a green `bun test` proves that — a `bun:` import or a Bun global in
+  # @agentkit/contracts or @agentkit/core passes the whole suite and breaks the
+  # first Node consumer. So the dists are grepped and then actually executed
+  # under Node.
+  node-smoke:
+    needs: bun
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run build:contracts && bun run build:core
+
+      - name: shippable dists import nothing from bun
+        run: |
+          ! grep -rE "require\(['\"]bun|from ['\"]bun:" packages/contracts/dist packages/core/dist
+
+      - run: node scripts/node-smoke.mjs

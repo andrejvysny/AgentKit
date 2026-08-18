@@ -21,6 +21,7 @@
     "build:core": "tsc -p packages/core/tsconfig.build.json",
     "build:testing": "tsc -p packages/testing/tsconfig.build.json",
     "build:host": "tsc -p packages/host/tsconfig.build.json",
+    "smoke:node": "node scripts/node-smoke.mjs",
     "ci": "bun install --frozen-lockfile && bun run typecheck && bun test && bun run build"
   },
   "devDependencies": {
