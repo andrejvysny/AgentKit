@@ -128,14 +128,38 @@ export interface ListProposalsOptions {
   limit?: number;
 }
 
+/**
+ * Statuses that do NOT hold an `actionId` reservation.
+ *
+ * A rejected or invalidated proposal never wrote anything — a human declined it,
+ * or the world moved before it ran — so re-using its key cannot duplicate an
+ * effect. Holding the key anyway would strand the model: told to derive keys
+ * from intent, it would find its only correct key permanently unusable and
+ * either stop or start inventing ones that defeat the dedup entirely. Every
+ * other status keeps its reservation: `applied`/`failed` because something may
+ * have landed, the live ones because something still might.
+ */
+export const ACTION_ID_RELEASING_STATUSES: readonly ProposalStatus[] =
+  Object.freeze(["rejected", "invalidated"] as const);
+
 export interface ProposalStore {
   /**
    * MUST enforce UNIQUE `(scopeKey, actionId)` when `actionId` is set and throw
    * {@link DuplicateActionIdError} on collision — that pair IS the idempotency
    * guarantee a write tool advertises to the model.
+   *
+   * The constraint covers every status except
+   * {@link ACTION_ID_RELEASING_STATUSES} (a SQL adapter expresses this as a
+   * partial unique index).
    */
   create(input: CreateProposalInput): Promise<ProposalRecord>;
   get(proposalId: string): Promise<ProposalRecord | null>;
+  /**
+   * The MOST RECENT proposal carrying this key in this scope. Recency matters
+   * because a released key can be re-used (see
+   * {@link ACTION_ID_RELEASING_STATUSES}): the dedup decision must reflect the
+   * latest attempt, not the rejected one it superseded.
+   */
   getByActionId(
     scopeKey: string,
     actionId: string,
