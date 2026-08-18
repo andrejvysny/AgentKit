@@ -4,18 +4,24 @@ import {
   getPresetByKind,
   listPresets,
 } from "../src/providers/presets.js";
+import { KNOWN_PROVIDER_KINDS } from "@agentkit/contracts";
 
 describe("provider presets", () => {
-  it("exposes all 6 kinds", () => {
+  it("exposes all 5 kinds", () => {
     const kinds = AI_PROVIDER_PRESETS.map((p) => p.kind).sort();
     expect(kinds).toEqual([
       "lmstudio",
       "omlx",
       "openai",
       "openai-compatible",
-      "openpcb-cloud",
       "openrouter",
     ]);
+  });
+
+  it("covers exactly the KNOWN_PROVIDER_KINDS vocabulary", () => {
+    expect([...AI_PROVIDER_PRESETS.map((p) => p.kind)].sort()).toEqual(
+      [...KNOWN_PROVIDER_KINDS].sort(),
+    );
   });
 
   it("openai requires API key", () => {
@@ -27,11 +33,10 @@ describe("provider presets", () => {
     expect(getPresetByKind("omlx")?.requiresApiKey).toBe(false);
   });
 
-  it("openpcb-cloud does not require API key (bearer sealed per run)", () => {
-    const cloud = getPresetByKind("openpcb-cloud");
-    expect(cloud?.requiresApiKey).toBe(false);
-    expect(cloud?.defaultBaseUrl).toBe("");
-    expect(cloud?.defaultModel).toBe("");
+  it("returns undefined for a kind with no preset", () => {
+    // The kind vocabulary is open, so an unknown kind is a legal config — it
+    // simply has no shipped defaults.
+    expect(getPresetByKind("some-host-gateway")).toBeUndefined();
   });
 
   it("omlx has empty defaults but provides probe URLs", () => {
@@ -39,6 +44,13 @@ describe("provider presets", () => {
     expect(omlx?.defaultBaseUrl).toBe("");
     expect(omlx?.defaultModel).toBe("");
     expect(omlx?.probeBaseUrls?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it("carries no product-specific branding in its notes", () => {
+    for (const preset of AI_PROVIDER_PRESETS) {
+      expect(preset.notes ?? "").not.toMatch(/openpcb/i);
+      expect(preset.label).not.toMatch(/openpcb/i);
+    }
   });
 
   it("listPresets returns a copy", () => {

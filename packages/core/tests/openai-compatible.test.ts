@@ -126,13 +126,13 @@ describe("OpenAiCompatibleClient extraHeaders", () => {
   it("merges extraHeaders into requests but cannot override authorization", async () => {
     let seen: Headers | undefined;
     const client = new OpenAiCompatibleClient({
-      id: "cloud",
-      kind: "openpcb-cloud",
+      id: "gateway",
+      kind: "host-gateway",
       baseUrl: "http://localhost:9/v1/llm",
       apiKey: "real-bearer",
       extraHeaders: {
-        "x-openpcb-workspace-id": "ws_1",
-        "x-openpcb-run-id": "run_1",
+        "x-workspace-id": "ws_1",
+        "x-run-id": "run_1",
         authorization: "Bearer SPOOFED",
         accept: "text/spoofed",
       },
@@ -146,8 +146,8 @@ describe("OpenAiCompatibleClient extraHeaders", () => {
       model: "m",
       messages: [{ role: "user", content: "hi" }],
     }));
-    expect(seen?.get("x-openpcb-workspace-id")).toBe("ws_1");
-    expect(seen?.get("x-openpcb-run-id")).toBe("run_1");
+    expect(seen?.get("x-workspace-id")).toBe("ws_1");
+    expect(seen?.get("x-run-id")).toBe("run_1");
     // The built-in headers win — extraHeaders cannot spoof auth or accept.
     expect(seen?.get("authorization")).toBe("Bearer real-bearer");
     expect(seen?.get("accept")).toBe("application/json");
@@ -180,6 +180,72 @@ describe("OpenAiCompatibleClient extraHeaders", () => {
     expect(seen?.get("x-workspace-id")).toBe("ws_1");
     expect(seen?.get("x-run-id")).toBe("run_1");
     expect(seen?.get("authorization")).toBe("Bearer k");
+  });
+});
+
+describe("OpenAiCompatibleClient app attribution headers", () => {
+  async function headersFor(
+    options: Partial<ConstructorParameters<typeof OpenAiCompatibleClient>[0]>,
+  ): Promise<Headers | undefined> {
+    let seen: Headers | undefined;
+    const client = new OpenAiCompatibleClient({
+      id: "test",
+      kind: "openrouter",
+      baseUrl: "http://localhost:9/v1",
+      ...options,
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        seen = new Headers(init?.headers);
+        return sseResponse([{ choices: [{ delta: {}, finish_reason: "stop" }] }]);
+      }) as unknown as typeof fetch,
+    });
+    for await (const _e of client.streamChat({
+      runId: "r",
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+    }));
+    return seen;
+  }
+
+  it("sends no attribution headers by default, not even for openrouter", async () => {
+    const seen = await headersFor({});
+    expect(seen?.get("HTTP-Referer")).toBeNull();
+    expect(seen?.get("X-Title")).toBeNull();
+  });
+
+  it("sends the caller's attribution when configured, regardless of kind", async () => {
+    const seen = await headersFor({
+      kind: "openai-compatible",
+      appReferer: "https://example.test",
+      appTitle: "Example App",
+    });
+    expect(seen?.get("HTTP-Referer")).toBe("https://example.test");
+    expect(seen?.get("X-Title")).toBe("Example App");
+  });
+
+  it("maps appReferer/appTitle from config metadata in fromConfig", async () => {
+    let seen: Headers | undefined;
+    const client = OpenAiCompatibleClient.fromConfig(
+      {
+        id: "cfg",
+        label: "Configured",
+        kind: "openrouter",
+        baseUrl: "http://localhost:9/v1",
+        defaultModel: "m",
+        enabled: true,
+        metadata: { appReferer: "https://host.test", appTitle: "Host" },
+      },
+      (async (_url: string, init?: RequestInit) => {
+        seen = new Headers(init?.headers);
+        return sseResponse([{ choices: [{ delta: {}, finish_reason: "stop" }] }]);
+      }) as unknown as typeof fetch,
+    );
+    for await (const _e of client.streamChat({
+      runId: "r",
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+    }));
+    expect(seen?.get("HTTP-Referer")).toBe("https://host.test");
+    expect(seen?.get("X-Title")).toBe("Host");
   });
 });
 

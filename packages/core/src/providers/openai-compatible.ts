@@ -17,13 +17,21 @@ export interface OpenAiCompatibleClientOptions {
   baseUrl: string;
   apiKey?: string;
   /**
-   * Static headers sent on every request to this provider (merged after the
-   * built-in accept/authorization headers, so they cannot override auth). Used
-   * by the OpenPCB Cloud provider to attribute calls to a workspace + run
-   * (`x-openpcb-workspace-id`, required by the metered proxy; `x-openpcb-run-id`
-   * for usage stitching). The client is built per run, so per-run values ride here.
+   * Static headers sent on every request to this provider (merged *under* the
+   * built-in accept/authorization headers, so they cannot override auth). The
+   * place for host-specific attribution or routing metadata a gateway requires
+   * (workspace id, run id, tenant). The client is built per run, so per-run
+   * values can ride here.
    */
   extraHeaders?: Record<string, string>;
+  /**
+   * Optional app attribution, sent as `HTTP-Referer` / `X-Title`. Aggregators
+   * (OpenRouter among them) use these for their app leaderboard; every other
+   * OpenAI-compatible server ignores them. Unset ⇒ not sent: the framework has
+   * no app identity of its own to advertise on a host's behalf.
+   */
+  appReferer?: string;
+  appTitle?: string;
   /** Override fetch for tests. */
   fetchImpl?: typeof fetch;
 }
@@ -34,6 +42,8 @@ export class OpenAiCompatibleClient implements AiProviderClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
   private readonly extraHeaders?: Record<string, string>;
+  private readonly appReferer?: string;
+  private readonly appTitle?: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: OpenAiCompatibleClientOptions) {
@@ -42,6 +52,8 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     this.baseUrl = stripTrailingSlash(options.baseUrl);
     this.apiKey = options.apiKey;
     this.extraHeaders = options.extraHeaders;
+    this.appReferer = options.appReferer;
+    this.appTitle = options.appTitle;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
 
@@ -57,6 +69,8 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       // Dropping these silently loses per-provider attribution/routing headers
       // that a metered proxy may require, turning every call into a 4xx.
       extraHeaders: config.extraHeaders,
+      appReferer: readStringMetadata(config, "appReferer"),
+      appTitle: readStringMetadata(config, "appTitle"),
       fetchImpl,
     });
   }
@@ -495,11 +509,10 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     const headers: Record<string, string> = { ...this.extraHeaders };
     headers.accept = "application/json";
     if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
-    if (this.kind === "openrouter") {
-      // Optional attribution headers for OpenRouter's app leaderboard (no-op elsewhere).
-      headers["HTTP-Referer"] = "https://openpcb.app";
-      headers["X-Title"] = "OpenPCB";
-    }
+    // Attribution is opt-in and kind-independent: the caller decides what app
+    // name to advertise, if any.
+    if (this.appReferer) headers["HTTP-Referer"] = this.appReferer;
+    if (this.appTitle) headers["X-Title"] = this.appTitle;
     return headers;
   }
 }
@@ -528,6 +541,15 @@ interface OpenAiStreamChunk {
     };
     finish_reason?: string;
   }>;
+}
+
+/** Read an optional string off `config.metadata` (untyped host bag). */
+function readStringMetadata(
+  config: AiProviderConfig,
+  key: string,
+): string | undefined {
+  const value = config.metadata?.[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function stripTrailingSlash(url: string): string {
