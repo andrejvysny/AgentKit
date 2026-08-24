@@ -12,6 +12,9 @@ export * from "./context/resolver.js";
 // Prompts
 export * from "./prompts/compose.js";
 
+// Messages
+export * from "./messages/content.js";
+
 // Tools
 export * from "./tools/tool.js";
 export * from "./tools/limits.js";

@@ -21,6 +21,14 @@ export {
 } from "./context-binding.js";
 
 export {
+  AiTextPartSchema,
+  AiImageSourceSchema,
+  AiImagePartSchema,
+  AiContentPartSchema,
+  AiMessageContentSchema,
+} from "./content.js";
+
+export {
   AiToolEffectSchema,
   AiToolStatusSchema,
   AiToolDefinitionSchema,
@@ -59,6 +67,8 @@ export {
   AiRunCancelledEventSchema,
   AiRunEventSchema,
 } from "./run-events.js";
+
+export { TaskEventEnvelopeSchema } from "./task-events.js";
 
 // REST v1 DTOs. The route table (`REST_ROUTES`) and `REST_API_VERSION` are
 // deliberately absent: this barrel is schemas and nothing else.

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { runChat } from "../src/runs/run-loop.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
+import { messageContentToText } from "../src/messages/content.js";
 import { MockProviderClient } from "@agentkit/testing";
 import { collectRun } from "./helpers.js";
 import type { AiTool } from "../src/tools/tool.js";
@@ -89,7 +90,7 @@ describe("runChat — schema_invalid arguments", () => {
     // The model is fed the balanced error envelope (F10), not a raw {ok,error}.
     const toolMsg = result.appendedMessages.find((m) => m.role === "tool");
     expect(toolMsg).toBeDefined();
-    const env = JSON.parse(toolMsg!.content) as {
+    const env = JSON.parse(messageContentToText(toolMsg!.content)) as {
       ok: boolean;
       status: string;
       warnings: string[];

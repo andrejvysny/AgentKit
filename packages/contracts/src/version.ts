@@ -4,4 +4,4 @@
  * version in `package.json`: a packaging-only release bumps the package version
  * and leaves this alone, while any breaking change to a DTO bumps this major.
  */
-export const CONTRACT_VERSION = "0.1.0";
+export const CONTRACT_VERSION = "0.2.0";

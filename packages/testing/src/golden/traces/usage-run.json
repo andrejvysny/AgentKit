@@ -2,42 +2,42 @@
   {
     "type": "run.started",
     "runId": "run-golden-usage-run",
-    "timestamp": "2026-08-18T18:41:27.414Z",
+    "timestamp": "2026-08-24T10:27:15.068Z",
     "data": {
       "model": "gpt-golden",
       "toolCount": 0
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_5448f357-edfb-4e58-863b-4c98fd1b909d",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_89be6100-363f-47d6-86c8-b304806ff1ef",
     "seq": 0
   },
   {
     "type": "run.message.delta",
     "runId": "run-golden-usage-run",
-    "timestamp": "2026-08-18T18:41:27.414Z",
+    "timestamp": "2026-08-24T10:27:15.068Z",
     "data": {
       "delta": "Usage-tracked answer."
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_40701c72-e3b4-44c4-888e-a3b161b841f9",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_d911ef47-f7bc-4ece-95f0-abcfc9bc8294",
     "seq": 1
   },
   {
     "type": "run.message.completed",
     "runId": "run-golden-usage-run",
-    "timestamp": "2026-08-18T18:41:27.414Z",
+    "timestamp": "2026-08-24T10:27:15.068Z",
     "data": {
       "content": "Usage-tracked answer.",
       "toolCallCount": 0
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_ae1a93c2-92a2-43e7-bd42-b2b6ec526e43",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_b441b4c7-8260-406d-9111-d4bb5360bbb3",
     "seq": 2
   },
   {
     "type": "run.usage",
     "runId": "run-golden-usage-run",
-    "timestamp": "2026-08-18T18:41:27.414Z",
+    "timestamp": "2026-08-24T10:27:15.068Z",
     "data": {
       "callId": "call-usage-0",
       "attempt": 1,
@@ -49,20 +49,20 @@
       "source": "stream",
       "finalForCall": true
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_0e5a516c-f13c-4931-ab45-c4be5231dafa",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_213bea9b-e63c-4c4c-827c-5eeb5a76acfe",
     "seq": 3
   },
   {
     "type": "run.completed",
     "runId": "run-golden-usage-run",
-    "timestamp": "2026-08-18T18:41:27.414Z",
+    "timestamp": "2026-08-24T10:27:15.068Z",
     "data": {
       "iterations": 1,
       "finishReason": "stop"
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_4ae4d465-562d-4375-9e26-0a6f71beca55",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_1dabb905-960b-4d09-ba3b-0f8b6a59fa97",
     "seq": 4
   }
 ]

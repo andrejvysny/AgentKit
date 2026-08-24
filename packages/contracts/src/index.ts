@@ -11,10 +11,15 @@ export * from "./version.js";
 export * from "./json-schema.js";
 export * from "./source-ref.js";
 export * from "./context-binding.js";
+export * from "./content.js";
 export * from "./tool.js";
 export * from "./provider.js";
 export * from "./prompt.js";
 export * from "./run-events.js";
+
+// The task-kind-agnostic envelope every durable event log stores; AiRunEvent is
+// one vocabulary that satisfies it.
+export * from "./task-events.js";
 
 // The versioned HTTP surface: route table + DTOs. Types and schemas only — no
 // adapter serves them yet (docs/non-goals.md).

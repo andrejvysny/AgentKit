@@ -1,8 +1,12 @@
 import { newCallId, nowIso } from "../ids.js";
 import { createEventStamper } from "../events.js";
+import { messageContentToText } from "../messages/content.js";
 import { parseSseStream } from "./sse.js";
 import type { AiChatRequest, AiProviderClient } from "./client.js";
 import type {
+  AiChatRole,
+  AiContentPart,
+  AiMessageContent,
   AiProviderCapabilities,
   AiProviderConfig,
   AiProviderKind,
@@ -136,7 +140,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
   }
 
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
-    const body = this.buildRequestBody(input, true);
+    const { body, flattenedRoles } = this.buildRequestBody(input, true);
     const runId = input.runId;
     // One id per call to this method, so a run's several provider calls stay
     // distinguishable in the usage stream.
@@ -152,6 +156,22 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       timestamp: nowIso(),
       data: { model: input.model, toolCount: input.tools?.length ?? 0 },
     });
+
+    // A role that cannot carry content parts had images dropped on the way to
+    // the wire. Degraded, not broken — say so once and send the request anyway.
+    if (flattenedRoles.length > 0) {
+      yield stamp({
+        type: "run.warning",
+        runId,
+        timestamp: nowIso(),
+        data: {
+          code: "multimodal_flattened",
+          message: `Flattened content parts to text on ${flattenedRoles.join(
+            ", ",
+          )} message(s); image parts were dropped.`,
+        },
+      });
+    }
 
     let response: Response;
     try {
@@ -432,7 +452,10 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         },
       },
     ];
-    const body = this.buildRequestBody(
+    // Same mapping as a real turn (the probe's own message is a plain string,
+    // so nothing is ever flattened here) — one code path, no parts-shaped input
+    // that only the probe would choke on.
+    const { body } = this.buildRequestBody(
       {
         runId: "probe",
         model: model ?? "",
@@ -500,16 +523,25 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     }
   }
 
+  /**
+   * Build the `/chat/completions` body, reporting back which roles lost image
+   * parts to flattening. The report rides out with the body rather than being
+   * warned about in here: this is a pure mapping, and the events belong to the
+   * caller's stream.
+   */
   private buildRequestBody(
     input: AiChatRequest,
     stream: boolean,
-  ): Record<string, unknown> {
+  ): { body: Record<string, unknown>; flattenedRoles: AiChatRole[] } {
+    const flattened = new Set<AiChatRole>();
     const body: Record<string, unknown> = {
       model: input.model,
       messages: input.messages.map((m) => {
+        const mapped = mapMessageContent(m.role, m.content);
+        if (mapped.droppedImages) flattened.add(m.role);
         const out: Record<string, unknown> = {
           role: m.role,
-          content: m.content,
+          content: mapped.content,
         };
         if (m.name) out.name = m.name;
         if (m.toolCallId) out.tool_call_id = m.toolCallId;
@@ -542,7 +574,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       }));
       body.tool_choice = "auto";
     }
-    return body;
+    return { body, flattenedRoles: [...flattened] };
   }
 
   private buildHeaders(): Record<string, string> {
@@ -556,6 +588,50 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     if (this.appTitle) headers["X-Title"] = this.appTitle;
     return headers;
   }
+}
+
+/**
+ * Map one message body onto the OpenAI wire shape.
+ *
+ * A string stays a string — byte-identical to what this client sent before
+ * multimodal existed. A parts array becomes OpenAI's `content` array on the two
+ * roles that can carry one (`user`/`assistant`); on `system`/`tool` it is
+ * flattened to text, because no OpenAI-compatible server accepts parts there
+ * and failing the whole request over an attachment would be worse than sending
+ * the words without it. `droppedImages` says whether that flattening actually
+ * cost anything, so the caller can warn exactly once per request.
+ */
+function mapMessageContent(
+  role: AiChatRole,
+  content: AiMessageContent,
+): { content: unknown; droppedImages: boolean } {
+  if (typeof content === "string") return { content, droppedImages: false };
+  if (role === "system" || role === "tool") {
+    return {
+      content: messageContentToText(content),
+      droppedImages: content.some((part) => part.type === "image"),
+    };
+  }
+  return {
+    content: content.map(toOpenAiContentPart),
+    droppedImages: false,
+  };
+}
+
+/** One content part in OpenAI's shape; inline images become `data:` URLs. */
+function toOpenAiContentPart(part: AiContentPart): Record<string, unknown> {
+  if (part.type === "text") return { type: "text", text: part.text };
+  const url =
+    part.source.kind === "url"
+      ? part.source.url
+      : `data:${part.source.mediaType};base64,${part.source.base64}`;
+  return {
+    type: "image_url",
+    image_url: {
+      url,
+      ...(part.detail === undefined ? {} : { detail: part.detail }),
+    },
+  };
 }
 
 interface ToolCallAccumulator {
