@@ -2,7 +2,10 @@
   "name": "agentkit",
   "private": true,
   "license": "MIT",
-  "workspaces": ["packages/*", "internal/*"],
+  "workspaces": [
+    "packages/*",
+    "internal/*"
+  ],
   "scripts": {
     "test": "bun test",
     "test:core": "bun test packages/core",
@@ -10,19 +13,25 @@
     "test:testing": "bun test packages/testing",
     "test:host": "bun test packages/host",
     "test:adapters": "bun test internal/reference-adapters",
-    "typecheck": "bun run typecheck:contracts && bun run typecheck:core && bun run typecheck:testing && bun run typecheck:host && bun run typecheck:adapters",
+    "typecheck": "bun run typecheck:contracts && bun run typecheck:core && bun run typecheck:testing && bun run typecheck:host && bun run typecheck:mcp-client && bun run typecheck:transport-http && bun run typecheck:adapters",
     "typecheck:contracts": "tsc -p packages/contracts/tsconfig.json",
     "typecheck:core": "tsc -p packages/core/tsconfig.json",
     "typecheck:testing": "tsc -p packages/testing/tsconfig.json",
     "typecheck:host": "tsc -p packages/host/tsconfig.json",
     "typecheck:adapters": "tsc -p internal/reference-adapters/tsconfig.json",
-    "build": "bun run build:contracts && bun run build:core && bun run build:host && bun run build:testing",
+    "build": "bun run build:contracts && bun run build:core && bun run build:host && bun run build:mcp-client && bun run build:transport-http && bun run build:testing",
     "build:contracts": "tsc -p packages/contracts/tsconfig.build.json",
     "build:core": "tsc -p packages/core/tsconfig.build.json",
     "build:testing": "tsc -p packages/testing/tsconfig.build.json",
     "build:host": "tsc -p packages/host/tsconfig.build.json",
     "smoke:node": "node scripts/node-smoke.mjs",
-    "ci": "bun install --frozen-lockfile && bun run typecheck && bun test && bun run build"
+    "ci": "bun install --frozen-lockfile && bun run typecheck && bun test && bun run build",
+    "test:mcp-client": "bun test packages/mcp-client",
+    "test:transport-http": "bun test packages/transport-http",
+    "typecheck:mcp-client": "tsc -p packages/mcp-client/tsconfig.json",
+    "typecheck:transport-http": "tsc -p packages/transport-http/tsconfig.json",
+    "build:mcp-client": "tsc -p packages/mcp-client/tsconfig.build.json",
+    "build:transport-http": "tsc -p packages/transport-http/tsconfig.build.json"
   },
   "devDependencies": {
     "typescript": "^5.8.3"

@@ -1,0 +1,49 @@
+{
+  "name": "@agentkit/transport-http",
+  "version": "0.1.0-dev",
+  "description": "Optional fetch-standard HTTP + SSE adapter serving the AgentKit REST v1 contract over any host.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    },
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "bun test tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andrejvysny/AgentKit.git",
+    "directory": "packages/transport-http"
+  },
+  "dependencies": {
+    "@agentkit/contracts": "workspace:*",
+    "@agentkit/core": "workspace:*",
+    "@agentkit/host": "workspace:*"
+  },
+  "devDependencies": {
+    "@agentkit/testing": "workspace:*",
+    "@types/bun": "^1.3.5",
+    "typescript": "^5.8.3"
+  }
+}
