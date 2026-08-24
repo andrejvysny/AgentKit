@@ -7,6 +7,7 @@ import {
 } from "@agentkit/testing";
 import {
   CHAT_TURN_TASK_KIND,
+  DuplicateTaskError,
   LeaseLostError,
   TurnRunner,
   type MessageRecord,
@@ -206,6 +207,85 @@ describe("TurnRunner.submitMessage", () => {
     expect(placeholder?.content).toBe("");
     expect(placeholder?.metadata["placeholder"]).toBe(true);
     expect(placeholder?.runId).toBe(submitted.runId);
+  });
+});
+
+describe("TurnRunner.submitMessage — idempotency key", () => {
+  /** Count every enqueue, including the ones the port dedupes internally. */
+  function countEnqueues(f: RunnerFixture): () => number {
+    let calls = 0;
+    const inner = f.taskRunner.enqueue.bind(f.taskRunner);
+    f.taskRunner.enqueue = async (input) => {
+      calls += 1;
+      await inner(input);
+    };
+    return () => calls;
+  }
+
+  it("resubmitting one key returns the first turn's ids and writes nothing new", async () => {
+    const f = await setupRunner();
+    const enqueues = countEnqueues(f);
+    const input = { chatId: f.chatId, content: "hello", taskId: "turn-idem" };
+
+    const first = await f.runner.submitMessage(input);
+    const second = await f.runner.submitMessage({
+      ...input,
+      content: "hello again",
+    });
+
+    // Identical ids both times: the caller cannot tell which of its two
+    // attempts landed, and does not have to.
+    expect(second).toEqual(first);
+    expect(first.runId).toBe("turn-idem");
+    // One task, one user message, one placeholder. The second submit is a
+    // redelivery, not a second turn — and its content never reached the chat.
+    expect(f.store.tasks.tasks.size).toBe(1);
+    expect(messagesOf(f).map((m) => m.content)).toEqual(["hello", ""]);
+    // Re-poked, because the case this exists for is a first submit that
+    // committed and then died before it could enqueue. The port dedupes, so
+    // the queue still only ever heard about one task.
+    expect(enqueues()).toBe(2);
+    expect(f.taskRunner.enqueued).toEqual([
+      { taskId: "turn-idem", scopeId: f.chatId },
+    ]);
+    expect(f.client.calls).toBe(0);
+  });
+
+  it("rethrows when the key already names a turn in a DIFFERENT chat", async () => {
+    const f = await setupRunner();
+    await f.store.conversations.createChat({ id: "chat-2" });
+    await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hi",
+      taskId: "turn-clash",
+    });
+
+    // Two callers colliding on a key, not one caller retrying. Answering the
+    // second with the first's ids would hand it someone else's conversation.
+    await expect(
+      f.runner.submitMessage({
+        chatId: "chat-2",
+        content: "hi",
+        taskId: "turn-clash",
+      }),
+    ).rejects.toThrow(DuplicateTaskError);
+    expect(messagesOf(f).filter((m) => m.chatId === "chat-2")).toEqual([]);
+    expect(f.store.tasks.tasks.size).toBe(1);
+  });
+
+  it("starts a new turn every time when no key is supplied", async () => {
+    const f = await setupRunner();
+    const first = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hi",
+    });
+    const second = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hi",
+    });
+    expect(second.runId).not.toBe(first.runId);
+    expect(f.store.tasks.tasks.size).toBe(2);
+    expect(messagesOf(f)).toHaveLength(4);
   });
 });
 
@@ -717,6 +797,27 @@ describe("TurnRunner.execute — cancellation and failure", () => {
     const task = await f.store.tasks.getTask("task-no-chat");
     expect(task?.status).toBe("failed");
     expect(task?.error).toContain("no chatId");
+    expect(f.client.calls).toBe(0);
+  });
+
+  it("fails terminally when the task payload has no assistantMessageId", async () => {
+    // Same terminal guard, other half: a chat with no placeholder to stream
+    // into would fail on the first `updateMessage` — after the model had
+    // already been called and paid for.
+    const f = await setupRunner();
+    await f.store.tasks.createTask({
+      taskId: "task-no-placeholder",
+      kind: CHAT_TURN_TASK_KIND,
+      scopeId: f.chatId,
+      payload: { chatId: f.chatId },
+    });
+    await expect(drive(f, "task-no-placeholder")).rejects.toThrow(
+      /no assistantMessageId/,
+    );
+
+    const task = await f.store.tasks.getTask("task-no-placeholder");
+    expect(task?.status).toBe("failed");
+    expect(task?.error).toContain("no assistantMessageId");
     expect(f.client.calls).toBe(0);
   });
 

@@ -204,6 +204,28 @@ describe("TaskService.submitTask", () => {
     expect(f.enqueueCalls()).toBe(1);
   });
 
+  it("rethrows when the duplicate id belongs to a DIFFERENT scope", async () => {
+    const f = setup();
+    await f.service.submitTask({
+      taskId: "task-clash-scope",
+      kind: "demo.echo",
+      scopeId: "scope-1",
+      payload: {},
+    });
+    // Same kind, same key, another scope: the scope is what the queue
+    // serializes on, so this is two callers colliding on a key rather than one
+    // caller retrying. Handing back scope-1's task would report it as theirs.
+    await expect(
+      f.service.submitTask({
+        taskId: "task-clash-scope",
+        kind: "demo.echo",
+        scopeId: "scope-2",
+        payload: {},
+      }),
+    ).rejects.toThrow(DuplicateTaskError);
+    expect(f.enqueueCalls()).toBe(1);
+  });
+
   it("rethrows a duplicate on a MINTED id — that is a broken IdGenerator, not a redelivery", async () => {
     const f = setup();
     // Pre-seed the id the generator is about to hand out.

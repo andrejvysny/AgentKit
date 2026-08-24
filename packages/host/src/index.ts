@@ -10,6 +10,7 @@ export * from "./ports/index.js";
 // one kind among however many a host defines.
 export * from "./tasks/kinds.js";
 export * from "./tasks/task-executor.js";
+export * from "./tasks/load-executable-task.js";
 export * from "./tasks/executor-registry.js";
 export * from "./tasks/task-service.js";
 export * from "./tasks/task-event-writer.js";

@@ -6,6 +6,7 @@ import { resolveToolLimits } from "../src/tools/limits.js";
 import { MockProviderClient } from "@agentkit/testing";
 import { collectRun } from "./helpers.js";
 import type { AiChatRequest } from "../src/providers/client.js";
+import type { AiTool } from "../src/tools/tool.js";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
 
 function sseResponse(chunks: unknown[]): Response {
@@ -240,6 +241,29 @@ class RecordingMockClient extends MockProviderClient {
   }
 }
 
+/** An echo tool, so a scripted tool call has something real to execute. */
+const echoTool: AiTool<{ text?: string }, { echoed: string }> = {
+  definition: {
+    name: "echo",
+    version: "1.0.0",
+    effect: "read",
+    capability: "echo",
+    description: "Echo the input.",
+    inputSchema: { type: "object", properties: { text: { type: "string" } } },
+  },
+  async execute(ctx, input) {
+    return {
+      ok: true,
+      data: { echoed: input.text ?? "" },
+      summary: "echoed",
+      sources: [],
+      warnings: [],
+      truncated: false,
+      limits: ctx.limits,
+    };
+  },
+};
+
 describe("runChat passthrough of multimodal content", () => {
   it("hands the provider the parts array untouched and completes normally", async () => {
     const client = new RecordingMockClient();
@@ -267,5 +291,74 @@ describe("runChat passthrough of multimodal content", () => {
     expect(events.at(-1)?.type).toBe("run.completed");
     // The loop copies the message list but must not touch the body.
     expect(client.calls[0]?.[0]?.content).toEqual(content);
+  });
+
+  it("warns about a flattened system message once per RUN, not once per call", async () => {
+    // Two provider round-trips over the SAME flattened system message. The
+    // client has no idea it is being called twice and re-derives the warning
+    // every time; only the loop knows, so only the loop can collapse it.
+    let call = 0;
+    const client = new OpenAiCompatibleClient({
+      id: "test",
+      kind: "openai-compatible",
+      baseUrl: "http://localhost:9/v1",
+      fetchImpl: (async () => {
+        call += 1;
+        return call === 1
+          ? sseResponse([
+              {
+                choices: [
+                  {
+                    delta: {
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: "c1",
+                          function: { name: "echo", arguments: '{"text":"x"}' },
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+              { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+            ])
+          : sseResponse([
+              { choices: [{ delta: { content: "done" } }] },
+              { choices: [{ delta: {}, finish_reason: "stop" }] },
+            ]);
+      }) as unknown as typeof fetch,
+    });
+    const registry = new AiToolRegistry();
+    registry.register(echoTool as AiTool);
+
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry,
+        model: "m",
+        messages: [
+          {
+            role: "system",
+            content: [
+              { type: "text", text: "be terse" },
+              {
+                type: "image",
+                source: { kind: "url", url: "https://example.test/a.png" },
+              },
+            ],
+          },
+          { role: "user", content: "hi" },
+        ],
+        limits: resolveToolLimits({ preference: "small" }),
+        runId: "run-flatten-once",
+        firstSeq: 0,
+      }),
+    );
+
+    expect(result.terminal).toBe("completed");
+    expect(result.iterations).toBe(2);
+    expect(call).toBe(2);
+    expect(flattenedWarnings(events).length).toBe(1);
   });
 });

@@ -195,6 +195,14 @@ export async function* runChat(
           case "run.warning":
             if (stamped.data.code === "tool_call_unparseable")
               sawNoToolCallWarning = true;
+            // The flatten is recomputed identically on every call — same
+            // messages in, same parts dropped — so iterations 2..n re-announce
+            // exactly what iteration 1 already said. One durable warning per
+            // run is the signal a consumer acts on; N copies of it are noise
+            // that consumer then has to dedupe. Suppressed the same way
+            // `run.started` is, and for the same reason.
+            if (stamped.data.code === "multimodal_flattened" && iteration > 1)
+              break;
             yield stamp(stamped);
             break;
           case "run.usage":

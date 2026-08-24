@@ -262,29 +262,64 @@ export function describeAssistantStoreConformance(
     it("claimNext honours the kinds filter, and claims anything without one", async () => {
       const { store, close } = await create();
       try {
+        // `a` is stacked to win EVERY tie-break the ordering knows about: it is
+        // created first (FIFO) and carries the higher priority. So a claim that
+        // returns `b` can only have got there by filtering on kind — an
+        // implementation that ignored `kinds` entirely would hand back `a`, and
+        // this test would fail rather than pass by accident.
         // Different scopes, so neither task can be excluded by scope
-        // serialization — the only thing separating them is `kind`.
+        // serialization either.
         const a = await store.tasks.createTask(
-          makeTaskInput({ kind: "kind.A", scopeId: uniqueId("scope") }),
+          makeTaskInput({
+            kind: "kind.A",
+            scopeId: uniqueId("scope"),
+            priority: 10,
+          }),
         );
         const b = await store.tasks.createTask(
-          makeTaskInput({ kind: "kind.B", scopeId: uniqueId("scope") }),
+          makeTaskInput({
+            kind: "kind.B",
+            scopeId: uniqueId("scope"),
+            priority: 0,
+          }),
         );
         const filtered = await store.tasks.claimNext({
-          ownerId: "worker-A",
+          ownerId: "worker-B",
           now: new Date(),
           scopesBusy: [],
-          kinds: ["kind.A"],
+          kinds: ["kind.B"],
         });
-        expect(filtered?.task.taskId).toBe(a.taskId);
-        expect(filtered?.task.taskId).not.toBe(b.taskId);
+        expect(filtered?.task.taskId).toBe(b.taskId);
+
+        // A kind nobody enqueued claims nothing, even though `a` is sitting
+        // right there, queued and available.
+        expect(
+          await store.tasks.claimNext({
+            ownerId: "worker-Z",
+            now: new Date(),
+            scopesBusy: [],
+            kinds: ["kind.Z"],
+          }),
+        ).toBeNull();
+        // And an EMPTY list means "no kind is acceptable", not "any kind" —
+        // the difference between a worker pool registered for nothing idling
+        // and it eating everyone else's work.
+        expect(
+          await store.tasks.claimNext({
+            ownerId: "worker-none",
+            now: new Date(),
+            scopesBusy: [],
+            kinds: [],
+          }),
+        ).toBeNull();
+
         // Unfiltered, the remaining task is claimable by whoever asks.
         const unfiltered = await store.tasks.claimNext({
           ownerId: "worker-any",
           now: new Date(),
           scopesBusy: [],
         });
-        expect(unfiltered?.task.taskId).toBe(b.taskId);
+        expect(unfiltered?.task.taskId).toBe(a.taskId);
       } finally {
         close?.();
       }

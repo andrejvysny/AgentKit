@@ -111,6 +111,16 @@ function toOptionalIntBool(value: boolean | undefined): number | null {
 function fromOptionalIntBool(value: number | null): boolean | undefined {
   return value === null ? undefined : value === 1;
 }
+/**
+ * Whether a driver error is a unique-constraint violation — ANY of them, on
+ * whatever index tripped.
+ *
+ * `createTask` reads that as "duplicate task id", which is correct only because
+ * `tasks` has exactly ONE unique constraint: its `task_id` primary key. Add a
+ * second unique index to that table and this predicate stops being a
+ * translation and starts being a lie — narrow it (to the constraint name, or by
+ * probing for the existing row) at the call site before you do.
+ */
 function isConstraintError(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
   return (
@@ -779,6 +789,9 @@ class SqliteTaskStore implements TaskStore {
       // The PK collision IS the idempotency guard doing its job; leaking the
       // raw SQLite constraint error would make every caller match on a driver
       // string to tell "already submitted" from "the database is broken".
+      // `isConstraintError` does not check WHICH constraint tripped, which is
+      // sound only while `task_id`'s primary key is the sole unique constraint
+      // on `tasks` — see its doc comment before adding another unique index.
       if (isConstraintError(err)) {
         throw new DuplicateTaskError(`Task already exists: ${input.taskId}.`, {
           taskId: input.taskId,
@@ -1668,7 +1681,18 @@ function assertSchemaVersion(db: Database, path: string): void {
   const version = (
     db.query(`PRAGMA user_version`).get() as { user_version: number } | null
   )?.user_version;
-  if (version === undefined || version === SCHEMA_VERSION) return;
+  if (version === SCHEMA_VERSION) return;
+  if (version === undefined) {
+    // A pragma every SQLite build answers came back with nothing. Whatever this
+    // handle is, it is not a database this adapter can reason about — and the
+    // one thing worse than refusing to open it is opening it anyway and running
+    // `SCHEMA_V2` against it, which is exactly what falling through would do.
+    throw new AgentKitHostError(
+      "sqlite_schema_version",
+      `Cannot read user_version from the SQLite store at ${path}; refusing to touch this database.`,
+      { path, expected: SCHEMA_VERSION },
+    );
+  }
   // An unstamped database with no tables is a fresh file (or an older build's
   // empty scratch db): there is nothing to preserve, so stamping it is safe.
   const tables = (
@@ -1708,7 +1732,7 @@ export interface SqliteAssistantStoreOptions {
  * `transaction(fn)` opens a real `BEGIN IMMEDIATE` and commits or rolls back
  * around `fn` — unlike `MemoryAssistantStore`, a throw inside `fn` discards
  * every write `fn` made. Nested `transaction()` calls (including a port
- * method that itself opens a mini-transaction, like `transitionRun` or
+ * method that itself opens a mini-transaction, like `transitionTask` or
  * `createAttempt`) are FLATTENED into the outermost one rather than nested —
  * `bun:sqlite` has no savepoint support in this v1, so re-entrant calls just
  * run against the already-open transaction. See {@link SqliteConnection}.

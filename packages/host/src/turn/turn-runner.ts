@@ -13,7 +13,11 @@ import {
   runChat,
   type AiProviderClient,
 } from "@agentkit/core";
-import { AgentKitHostError, RecordNotFoundError } from "../errors.js";
+import {
+  AgentKitHostError,
+  DuplicateTaskError,
+  RecordNotFoundError,
+} from "../errors.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { ContextProvider } from "../ports/context-provider.js";
 import type { SecretStore } from "../ports/secret-store.js";
@@ -28,6 +32,7 @@ import type { AssistantSettings } from "../ports/settings-store.js";
 import type { TaskRecord, TaskStatus } from "../ports/task-store.js";
 import type { VerificationHook } from "../ports/verification.js";
 import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
+import { loadExecutableTask } from "../tasks/load-executable-task.js";
 import type {
   TaskExecutionContext,
   TaskExecutor,
@@ -87,6 +92,20 @@ export interface SubmitMessageInput {
   providerId?: string;
   metadata?: Record<string, unknown>;
   priority?: number;
+  /**
+   * The caller's idempotency key for this submit, used verbatim as the task id.
+   *
+   * Omit it and every call starts a new turn — the right default for a UI
+   * holding an open socket, and the wrong one for anything that can retry.
+   * Anything that CAN retry must supply one (the REST layer maps its
+   * `Idempotency-Key` header onto this field): resubmitting the same key writes
+   * nothing, returns the ids of the turn that already exists, and re-pokes the
+   * queue, so a retried request cannot answer a user twice.
+   *
+   * Reusing a key for a DIFFERENT conversation is an id collision rather than a
+   * retry, and throws `DuplicateTaskError` instead of answering.
+   */
+  taskId?: string;
 }
 
 export interface SubmitMessageResult {
@@ -153,10 +172,12 @@ interface PassResult {
  *
  * Two halves, deliberately far apart in time:
  *
- * `submitMessage` writes the user message, an empty assistant placeholder, and a
- * queued task — in ONE transaction — and returns immediately. The caller gets
+ * `submitMessage` writes a queued task, the user message and an empty assistant
+ * placeholder — in ONE transaction — and returns immediately. The caller gets
  * ids it can render against before a single token exists, and a crash one
- * millisecond later loses nothing, because the work is already recorded.
+ * millisecond later loses nothing, because the work is already recorded. Given
+ * a caller-supplied `taskId` it is idempotent: the second submit of one key
+ * writes nothing and returns the first submit's ids.
  *
  * `executeTask` is what the executor registry dispatches to (and what the legacy
  * {@link TurnRunner.execute} delegates to). It drives `runChat`, and every event
@@ -173,38 +194,36 @@ export class TurnRunner implements TaskWorker {
    * Record a turn and hand it to the queue. Never waits on the model: the task
    * is durable the moment this returns, and the answer arrives through the event
    * log.
+   *
+   * Both message ids are minted HERE rather than taken from what the store
+   * assigns, because the task row has to be written before them (see below) and
+   * its payload names them.
    */
   async submitMessage(
     input: SubmitMessageInput,
   ): Promise<SubmitMessageResult> {
-    const taskId = this.deps.ids.taskId();
-    const { userMessageId, assistantMessageId } =
+    const taskId = input.taskId ?? this.deps.ids.taskId();
+    const userMessageId = this.deps.ids.messageId();
+    const assistantMessageId = this.deps.ids.messageId();
+    const payload: TurnRequest = {
+      chatId: input.chatId,
+      ...(input.model === undefined ? {} : { model: input.model }),
+      ...(input.providerId === undefined
+        ? {}
+        : { providerId: input.providerId }),
+      assistantMessageId,
+      userMessageId,
+    };
+
+    try {
       await this.deps.store.transaction(async (tx) => {
-        const user = await tx.conversations.appendMessage({
-          chatId: input.chatId,
-          role: "user",
-          content: input.content,
-          metadata: input.metadata ?? {},
-        });
-        // The placeholder exists so the UI has a message to stream into, and so
-        // the task has one durable target to write the answer to no matter how
-        // many provider passes it takes.
-        const placeholder = await tx.conversations.appendMessage({
-          chatId: input.chatId,
-          runId: taskId,
-          role: "assistant",
-          content: "",
-          metadata: { placeholder: true },
-        });
-        const payload: TurnRequest = {
-          chatId: input.chatId,
-          ...(input.model === undefined ? {} : { model: input.model }),
-          ...(input.providerId === undefined
-            ? {}
-            : { providerId: input.providerId }),
-          assistantMessageId: placeholder.id,
-          userMessageId: user.id,
-        };
+        // The task goes in FIRST, ahead of both messages. It is the only write
+        // in this transaction that can reject, and on a resubmitted
+        // `input.taskId` it must reject before anything else lands: a store
+        // whose `transaction` is a real BEGIN/ROLLBACK would undo the messages
+        // anyway, but one where it is only a logical grouping (the reference
+        // `MemoryAssistantStore`, the host's own test fakes) would leave two
+        // orphan messages in the chat for every retried request.
         await tx.tasks.createTask({
           taskId,
           kind: CHAT_TURN_TASK_KIND,
@@ -214,8 +233,35 @@ export class TurnRunner implements TaskWorker {
           payload: payload as unknown as Record<string, unknown>,
           ...(input.priority === undefined ? {} : { priority: input.priority }),
         });
-        return { userMessageId: user.id, assistantMessageId: placeholder.id };
+        await tx.conversations.appendMessage({
+          id: userMessageId,
+          chatId: input.chatId,
+          role: "user",
+          content: input.content,
+          metadata: input.metadata ?? {},
+        });
+        // The placeholder exists so the UI has a message to stream into, and so
+        // the task has one durable target to write the answer to no matter how
+        // many provider passes it takes.
+        await tx.conversations.appendMessage({
+          id: assistantMessageId,
+          chatId: input.chatId,
+          runId: taskId,
+          role: "assistant",
+          content: "",
+          metadata: { placeholder: true },
+        });
       });
+    } catch (err) {
+      const existing = await this.resubmitted(err, input, taskId);
+      if (existing === null) throw err;
+      // Re-poked deliberately. `enqueue` is idempotent per the port's contract,
+      // so this is a no-op for a task already running or finished — and the
+      // rescue for the case the redelivery exists to cover, where the FIRST
+      // submit committed its transaction and then died before it could poke.
+      await this.deps.taskRunner.enqueue({ taskId, scopeId: input.chatId });
+      return existing;
+    }
 
     await this.deps.taskRunner.enqueue({ taskId, scopeId: input.chatId });
     return {
@@ -223,6 +269,47 @@ export class TurnRunner implements TaskWorker {
       runId: taskId,
       userMessageId,
       assistantMessageId,
+    };
+  }
+
+  /**
+   * The already-recorded turn when `err` says this submit is a redelivery of
+   * one; null when the caller should see the original throw.
+   *
+   * Everything it checks is about the key identifying THE SAME turn:
+   *
+   * - a MINTED id that collides is not a redelivery, it is a broken
+   *   `IdGenerator`, and swallowing it would hand the caller someone else's
+   *   conversation;
+   * - a task under this key that is not a `chat.turn`, or is a turn in another
+   *   chat, is an id collision between two unrelated callers — same reasoning,
+   *   louder failure mode;
+   * - a payload missing either message id cannot answer the caller at all, and
+   *   a `chat.turn` row without them did not come from this method.
+   */
+  private async resubmitted(
+    err: unknown,
+    input: SubmitMessageInput,
+    taskId: string,
+  ): Promise<SubmitMessageResult | null> {
+    if (!(err instanceof DuplicateTaskError) || input.taskId === undefined) {
+      return null;
+    }
+    const existing = await this.deps.store.tasks.getTask(taskId);
+    if (!existing || existing.kind !== CHAT_TURN_TASK_KIND) return null;
+    const payload = existing.payload as unknown as Partial<TurnRequest>;
+    if (
+      payload.chatId !== input.chatId ||
+      typeof payload.userMessageId !== "string" ||
+      typeof payload.assistantMessageId !== "string"
+    ) {
+      return null;
+    }
+    return {
+      chatId: payload.chatId,
+      runId: existing.taskId,
+      userMessageId: payload.userMessageId,
+      assistantMessageId: payload.assistantMessageId,
     };
   }
 
@@ -235,32 +322,17 @@ export class TurnRunner implements TaskWorker {
    * The legacy direct-execute entry point, kept because a host (and this
    * package's own tests) may drive one attempt without standing up a registry.
    *
-   * It repeats the load-and-guard that `createDispatchingWorker` performs,
-   * because on this path there is no dispatcher to have done it — the two must
-   * stay in step, and both exist to make sure exactly one of "the task is
-   * executable" and "somebody already moved it" is true before the model is
-   * touched.
+   * The load-and-guard is {@link loadExecutableTask}, the same call
+   * `createDispatchingWorker` makes: on this path there is no dispatcher to have
+   * done it, and two hand-written copies of that guard drifting apart is exactly
+   * how one entry point ends up re-running a finished turn.
    */
   async execute(execution: TaskExecution): Promise<void> {
-    const { taskId } = execution;
-    const tasks = this.deps.store.tasks;
-    const loaded = await tasks.getTask(taskId);
-    if (!loaded) {
-      throw new RecordNotFoundError(`Task not found: ${taskId}`, { taskId });
-    }
-    if (loaded.status !== "queued" && loaded.status !== "running") {
-      throw new AgentKitHostError(
-        "task_not_executable",
-        `Task ${taskId} is ${loaded.status}; only queued or running tasks execute.`,
-        { taskId, status: loaded.status },
-      );
-    }
-    const task =
-      loaded.status === "queued"
-        ? await tasks.transitionTask(taskId, ["queued"], "running", {
-            startedAt: this.deps.clock.nowIso(),
-          })
-        : loaded;
+    const task = await loadExecutableTask(
+      this.deps.store,
+      execution.taskId,
+      this.deps.clock,
+    );
 
     await this.executeTask({
       task,
@@ -283,16 +355,27 @@ export class TurnRunner implements TaskWorker {
     const { task, attemptId } = ctx;
     const payload = task.payload as unknown as Partial<TurnRequest>;
     const chatId = payload.chatId;
-    if (typeof chatId !== "string" || chatId.length === 0) {
-      // A chat.turn task whose payload has no chat is unexecutable and will be
-      // unexecutable on every retry: something other than `submitMessage`
-      // created it (a hand-written row, a host that reused the kind for its own
-      // work). Classified terminal, so the queue fails it instead of burning
-      // the attempt budget re-reading the same payload.
+    const assistantMessageId = payload.assistantMessageId;
+    // A chat.turn task is unexecutable without a chat to answer in AND a
+    // placeholder to answer into: with no `assistantMessageId` the turn has
+    // nowhere to stream, and every `updateMessage` below would throw mid-run
+    // after the model had already been paid for. Both are absent for the same
+    // reason — something other than `submitMessage` created this row (a
+    // hand-written one, a host that reused the kind for its own work) — and
+    // both stay absent on every retry, so this is classified terminal and the
+    // queue fails it instead of burning the attempt budget re-reading the same
+    // payload.
+    if (!isPresent(chatId) || !isPresent(assistantMessageId)) {
+      const missing = [
+        isPresent(chatId) ? null : "chatId",
+        isPresent(assistantMessageId) ? null : "assistantMessageId",
+      ].filter((field): field is string => field !== null);
       const error = new AgentKitHostError(
         "invalid_task_payload",
-        `Task ${task.taskId} of kind ${CHAT_TURN_TASK_KIND} has no chatId in its payload; only TurnRunner.submitMessage may create tasks of this kind.`,
-        { taskId: task.taskId, kind: task.kind },
+        `Task ${task.taskId} of kind ${CHAT_TURN_TASK_KIND} has no ${missing.join(
+          " and no ",
+        )} in its payload; only TurnRunner.submitMessage may create tasks of this kind.`,
+        { taskId: task.taskId, kind: task.kind, missing },
       );
       await this.failQuietly(task.taskId, attemptId, error.message);
       throw error;
@@ -300,7 +383,7 @@ export class TurnRunner implements TaskWorker {
 
     const request = payload as TurnRequest;
     try {
-      await this.runTurn(ctx, chatId, request, request.assistantMessageId);
+      await this.runTurn(ctx, chatId, request, assistantMessageId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await this.failQuietly(task.taskId, attemptId, message);
@@ -880,6 +963,11 @@ export class ChatTurnExecutor implements TaskExecutor {
   async execute(ctx: TaskExecutionContext): Promise<void> {
     await this.runner.executeTask(ctx);
   }
+}
+
+/** A required payload field that is actually there: a string, and non-empty. */
+function isPresent(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 function hasContent(state: PassState): boolean {

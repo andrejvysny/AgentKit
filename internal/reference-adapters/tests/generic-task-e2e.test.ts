@@ -39,6 +39,7 @@ import {
 } from "../src/index.js";
 import {
   createTestClock,
+  settle,
   waitFor,
   type TestClock,
 } from "./support/task-runner-harness.js";
@@ -302,10 +303,12 @@ for (const backing of ["memory", "sqlite"] as const) {
         expect(again.payload).toEqual({ text: "once" });
 
         // Give the claim loop several poll cycles to prove it does NOT re-run.
-        await waitFor(
-          async () => (await statusOf(env, "task-once")) === "completed",
-          "task-once to stay completed",
-        );
+        // `settle`, not `waitFor`: the task is already `completed`, so a
+        // predicate that is true on its first evaluation returns immediately and
+        // asserts nothing about what the loop does NEXT — which is the whole
+        // claim being made here.
+        await settle();
+        expect(await statusOf(env, "task-once")).toBe("completed");
         expect(env.echo.invocations).toBe(1);
         expect(
           (await env.store.tasks.getTask("task-once"))?.attemptCount,

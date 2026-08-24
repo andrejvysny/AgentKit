@@ -57,10 +57,11 @@ export const CONTRACT_VERSION = "0.2.0";
 ([`packages/contracts/src/version.ts`](../packages/contracts/src/version.ts))
 
 Deliberately independent of the npm package version: a packaging-only
-release bumps `package.json` and leaves `CONTRACT_VERSION` alone; any
-breaking change to a DTO bumps this. The policy is **additive changes
-only** within a major — new optional fields, new warning codes, new event
-types are non-breaking; removing or repurposing an existing field is not.
+release bumps `package.json` and leaves `CONTRACT_VERSION` alone. While the
+contract is `0.x`, a breaking change to a DTO bumps the **minor**; from
+`1.0.0` on it bumps the **major**. Additive changes never bump either — new
+optional fields, new warning codes, new event types are non-breaking;
+removing, narrowing or repurposing an existing field is not.
 
 ## Warning codes
 
@@ -76,7 +77,7 @@ TS type narrows it to the union below while still accepting any string.
 | `truncated` | core (`runs/run-loop.ts`) | `finish_reason=length` — the answer was cut off. |
 | `max_iterations` | core (`runs/run-loop.ts`) | `maxToolIterations` was reached without a final answer. |
 | `sse_parse` | core (`providers/openai-compatible.ts`) | Malformed SSE lines were dropped; the response is likely incomplete. |
-| `multimodal_flattened` | core (`providers/openai-compatible.ts`) | A `system`/`tool` message arrived with content parts (only `user`/`assistant` can carry them); the provider client flattened the text parts to a string and dropped the image parts rather than failing the request. See [Message content parts](#message-content-parts). |
+| `multimodal_flattened` | core (`providers/openai-compatible.ts`) | A `system`/`tool` message arrived with content parts (only `user`/`assistant` can carry them); the provider client flattened the text parts to a string and dropped the image parts rather than failing the request. **At most one per run** — see [Message content parts](#message-content-parts). |
 | `empty_response` | host (`turn/turn-runner.ts`) | The model returned no visible content and no tool calls, even after recovery passes. Not produced by core. |
 | `emulated_tool_call` | host (`turn/turn-runner.ts`, `turn/emulated-tool-call.ts`) | The model wrote a JSON-shaped tool call as text instead of calling a real tool, so nothing ran. Not produced by core. |
 
@@ -105,6 +106,14 @@ export type AiContentPart = AiTextPart | AiImagePart;
 export type AiMessageContent = string | AiContentPart[];
 ```
 
+Two constraints the TS types cannot express, both enforced by the JSON
+Schema: a parts array has `minItems: 1` (an empty body is the empty
+STRING — `content: []` is a caller bug, and providers reject it), and
+`mediaType` is a bare `type/subtype` over RFC 6838's restricted-name
+characters. The second is a safety constraint, not pedantry: an adapter
+interpolates it into `data:<mediaType>;base64,<payload>`, so a `;` or a `,`
+would end the field early and change what the provider decodes.
+
 **Provider-neutral by design.** These are not OpenAI's `image_url` blocks,
 nor Anthropic's `source` blocks — an adapter maps them onto whatever its
 provider speaks; `OpenAiCompatibleClient` (`@agentkit/core`) is the shipped
@@ -122,6 +131,15 @@ flattens them to text and drops the non-text parts, emitting
 `multimodal_flattened` (see the warning-code table above) rather than
 failing the request — a dropped image degrades a turn, it does not break
 one.
+
+**One flatten warning per RUN, not per provider call.** A tool-using run
+re-sends the same history on every iteration, so the client — which knows
+nothing about iterations — re-derives the identical warning each time.
+`runChat` yields it on the first iteration only and suppresses the repeats
+(the same treatment `run.started` gets, in `runs/run-loop.ts`). A consumer
+reading a run's event log therefore sees exactly one, and does not have to
+dedupe. A caller driving `streamChat` directly still gets one per call,
+because there is no run for them to be one per.
 
 **`messageContentToText()`**
 ([`packages/core/src/messages/content.ts`](../packages/core/src/messages/content.ts))

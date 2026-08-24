@@ -18,6 +18,20 @@
  */
 import { Type, type Static } from "@sinclair/typebox";
 
+/**
+ * A bare `type/subtype` over RFC 6838's restricted-name characters, matched
+ * case-insensitively — no parameters, no whitespace, nothing that needs
+ * quoting.
+ *
+ * Not pedantry about IANA: an adapter builds a
+ * `` `data:${mediaType};base64,${base64}` `` URL out of this string (see
+ * `toOpenAiContentPart` in `@agentkit/core`), so a `;` or a `,` smuggled in
+ * here would end the media-type field early and hand the provider a URL that
+ * decodes to something the caller never sent.
+ */
+const MEDIA_TYPE_PATTERN =
+  "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$";
+
 export const AiTextPartSchema = Type.Object({
   type: Type.Literal("text"),
   text: Type.String(),
@@ -39,8 +53,10 @@ export const AiImageSourceSchema = Type.Union([
     base64: Type.String({
       description: "Raw base64 payload — no `data:` prefix, no media type.",
     }),
+    /** Constrained by {@link MEDIA_TYPE_PATTERN}. */
     mediaType: Type.String({
       description: 'IANA media type of the payload, e.g. "image/png".',
+      pattern: MEDIA_TYPE_PATTERN,
     }),
   }),
 ]);
@@ -82,6 +98,10 @@ export type AiContentPart = Static<typeof AiContentPartSchema>;
  */
 export const AiMessageContentSchema = Type.Union([
   Type.String(),
-  Type.Array(AiContentPartSchema),
+  // `minItems: 1`: an empty parts array is not "a message with no content", it
+  // is a caller bug — OpenAI rejects `content: []` outright, so the only thing
+  // permitting it buys is discovering the mistake as a provider error instead
+  // of a validation error. A genuinely empty body is the empty STRING.
+  Type.Array(AiContentPartSchema, { minItems: 1 }),
 ]);
 export type AiMessageContent = Static<typeof AiMessageContentSchema>;

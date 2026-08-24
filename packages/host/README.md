@@ -28,7 +28,7 @@ that package before writing your own adapter from scratch.
   `kinds.ts` (`CHAT_TURN_TASK_KIND`; `chat.*`/`agentkit.*` prefixes
   reserved), `task-executor.ts` (`TaskExecutor`, `TaskExecutionContext`),
   `executor-registry.ts` (`ExecutorRegistry`, `createDispatchingWorker` —
-  an unclaimed kind is a terminal failure, never a dead-letter),
+  an unregistered kind is a terminal failure, never a dead-letter),
   `task-service.ts` (`TaskService`: `createTask`/`dispatch`/`submitTask`,
   dispatch strictly post-commit, idempotent resubmit per caller-supplied
   `taskId`), `task-event-writer.ts` (`createTaskEventWriter` — stamps and
