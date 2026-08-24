@@ -99,13 +99,28 @@ its transitions are reserved for hosts that instead park a task on approval
 and resume it when the decision arrives — `TASK_TRANSITIONS` already admits
 `running → waiting_approval → running | completed | failed | cancelled`.
 
-**Reference / conformance**: `MemoryTaskStore` / `SqliteTaskStore`
-(fencing enforced via a guarded `UPDATE ... WHERE lease_token=?` plus the
-driver's reported `changes` count, in a transaction); conformance suite
-covers CAS rejection, lease renewal/expiry with a strictly higher
-`fencingToken` on re-acquire, `seq` monotonicity rejection, atomic
-`claimNext` under a busy scope, kind round-trip, duplicate-task rejection,
-and the `kinds` claim filter.
+**Reference / conformance**: `MemoryTaskStore` / `SqliteTaskStore`. Two
+different guards, for two different questions (the SQL shapes below are
+`SqliteTaskStore`'s; `MemoryTaskStore` does the Map equivalent):
+
+- **Fencing** (`appendEvents`, `renewLease`) SELECTs the task's current
+  lease inside the store transaction and compares tokens in code, rejecting
+  a stale one with `LeaseLostError`. There is no `WHERE lease_token = ?` on
+  the write: a no-op UPDATE cannot say whether the lease moved or the row
+  never existed, and the two are different errors.
+- **Guarded write + `changes` count** is used where losing a race IS the
+  answer: `releaseLease` deletes `WHERE lease_token = ?` and reads
+  `changes === 0` as "not current"; `transitionTask`'s status CAS updates
+  `WHERE task_id = ? AND status = ?` and reads `changes === 0` as "changed
+  underneath the SELECT" (`InvalidTaskTransitionError`).
+
+The conformance suite covers CAS rejection, lease renewal/expiry with a
+strictly higher `fencingToken` on re-acquire, `seq` monotonicity rejection,
+atomic `claimNext` under a busy scope, kind round-trip, duplicate-task
+rejection, and the `kinds` claim filter — the last of these arranged so that
+only a real filter passes it (the wanted kind is the one the priority and
+FIFO ordering would NOT have picked), plus `kinds: []` meaning "no kind is
+acceptable" rather than "any kind".
 
 ### `ProposalStore`
 

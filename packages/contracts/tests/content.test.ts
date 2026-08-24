@@ -42,9 +42,14 @@ describe("AiMessageContentSchema", () => {
         },
       ]),
     ).toBe(true);
-    // An empty parts array is structurally fine; whether it is useful is the
-    // caller's problem, not the schema's.
-    expect(validate([])).toBe(true);
+  });
+
+  it("rejects an empty parts array", () => {
+    // Not "a message with no content" — a caller bug. OpenAI rejects
+    // `content: []`, so accepting it here only moves the diagnosis from a
+    // validation error to a provider error. The empty body is the empty string.
+    expect(validate([])).toBe(false);
+    expect(validate("")).toBe(true);
   });
 
   it("rejects anything that is neither a string nor a parts array", () => {
@@ -67,6 +72,30 @@ describe("AiContentPartSchema", () => {
     );
     expect(validate({ type: "text" })).toBe(false);
     expect(validate({ type: "text", text: 7 })).toBe(false);
+  });
+
+  it("rejects a mediaType that could break out of a data: URL", () => {
+    const source = makeAjv().compile(asJson(AiImageSourceSchema));
+    const withType = (mediaType: string): unknown => ({
+      kind: "data",
+      base64: "aGVsbG8=",
+      mediaType,
+    });
+    // `toOpenAiContentPart` interpolates this straight into
+    // `data:<mediaType>;base64,<payload>`; a `;` or `,` would end the field
+    // early and change what the provider decodes.
+    expect(source(withType("image/png;base64,AAAA"))).toBe(false);
+    expect(source(withType("image/png,x"))).toBe(false);
+    expect(source(withType("image/png; charset=utf-8"))).toBe(false);
+    expect(source(withType("image png"))).toBe(false);
+    expect(source(withType("image/"))).toBe(false);
+    expect(source(withType("/png"))).toBe(false);
+    expect(source(withType("imagepng"))).toBe(false);
+    // …while the shapes a real caller sends still pass, in either case.
+    expect(source(withType("image/png"))).toBe(true);
+    expect(source(withType("image/svg+xml"))).toBe(true);
+    expect(source(withType("IMAGE/PNG"))).toBe(true);
+    expect(source(withType("application/vnd.foo.bar-1"))).toBe(true);
   });
 
   it("rejects an image part whose source is malformed", () => {

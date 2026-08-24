@@ -1,11 +1,8 @@
-import {
-  AgentKitHostError,
-  ExecutorNotFoundError,
-  RecordNotFoundError,
-} from "../errors.js";
+import { AgentKitHostError, ExecutorNotFoundError } from "../errors.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import { defaultClock, type Clock, type Logger } from "../ports/system.js";
 import type { TaskExecution, TaskWorker } from "../ports/task-runner.js";
+import { loadExecutableTask } from "./load-executable-task.js";
 import type { TaskExecutor } from "./task-executor.js";
 
 /**
@@ -58,8 +55,9 @@ export interface DispatchingWorkerDeps {
   store: AssistantStore;
   /**
    * Stamps `startedAt` on the direct-execute `queued → running` transition
-   * below. Defaults to {@link defaultClock}; injected in tests so the timestamp
-   * is a statement about a fake clock rather than about wall-clock.
+   * {@link loadExecutableTask} performs. Defaults to {@link defaultClock};
+   * injected in tests so the timestamp is a statement about a fake clock rather
+   * than about wall-clock.
    */
   clock?: Clock;
   logger?: Logger;
@@ -69,12 +67,10 @@ export interface DispatchingWorkerDeps {
  * The {@link TaskWorker} a host hands to `TaskRunner.startWorker`: load the
  * task, guard it, and route it to the executor for its kind.
  *
- * The load-and-guard lives here, once, rather than in each executor — see
+ * The load-and-guard happens here, once, rather than in each executor — see
  * {@link TaskExecutionContext} on why the record is passed down instead of the
- * id. The `queued → running` branch is for the direct-execute path (a host or a
- * test that calls `execute` without going through a claim); `claimNext` already
- * performs that transition atomically as part of claiming, so on the normal
- * queue path the task arrives here already `running` and nothing is written.
+ * id. It is {@link loadExecutableTask}, shared with `TurnRunner.execute`, which
+ * is the other entry point that must guard a task nobody claimed for it.
  */
 export function createDispatchingWorker(
   registry: ExecutorRegistry,
@@ -84,24 +80,7 @@ export function createDispatchingWorker(
   return {
     async execute(execution: TaskExecution): Promise<void> {
       const { taskId, attemptId, leaseToken, signal } = execution;
-      const tasks = deps.store.tasks;
-      const loaded = await tasks.getTask(taskId);
-      if (!loaded) {
-        throw new RecordNotFoundError(`Task not found: ${taskId}`, { taskId });
-      }
-      if (loaded.status !== "queued" && loaded.status !== "running") {
-        throw new AgentKitHostError(
-          "task_not_executable",
-          `Task ${taskId} is ${loaded.status}; only queued or running tasks execute.`,
-          { taskId, status: loaded.status },
-        );
-      }
-      const task =
-        loaded.status === "queued"
-          ? await tasks.transitionTask(taskId, ["queued"], "running", {
-              startedAt: clock.nowIso(),
-            })
-          : loaded;
+      const task = await loadExecutableTask(deps.store, taskId, clock);
 
       const executor = registry.get(task.kind);
       if (!executor) {

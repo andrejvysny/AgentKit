@@ -108,8 +108,8 @@ export class TaskService {
    * Idempotent resubmit: when the caller supplied a `taskId` that already
    * exists, the duplicate is not an error but a redelivery — the existing task
    * is re-dispatched (a no-op if it is already running or finished) and
-   * returned. A caller reusing an id for a DIFFERENT kind is a bug, not a
-   * redelivery, so that rethrows.
+   * returned. A caller reusing an id for a DIFFERENT kind or a DIFFERENT scope
+   * is a bug, not a redelivery, so that rethrows.
    */
   async submitTask(input: CreateTaskInputRequest): Promise<TaskRecord> {
     const taskId = input.taskId ?? this.deps.ids.taskId();
@@ -129,7 +129,7 @@ export class TaskService {
 
   /**
    * The existing task when `err` is a duplicate of a caller-supplied id for the
-   * same kind; null when the caller should see the original throw.
+   * same work; null when the caller should see the original throw.
    */
   private async onDuplicate(
     err: unknown,
@@ -142,7 +142,18 @@ export class TaskService {
       return null;
     }
     const existing = await this.deps.store.tasks.getTask(taskId);
-    if (!existing || existing.kind !== input.kind) return null;
+    // Kind AND scope: the scope is what the queue serializes on, so a task
+    // under this id that runs against a different one is not the work this
+    // caller asked for — it is two callers colliding on a key. Returning it
+    // would report someone else's task as this caller's, and re-dispatch it
+    // into the bargain.
+    if (
+      !existing ||
+      existing.kind !== input.kind ||
+      existing.scopeId !== input.scopeId
+    ) {
+      return null;
+    }
     return existing;
   }
 }

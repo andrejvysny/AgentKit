@@ -462,7 +462,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
       this.logger?.warn("claimed a task whose scope was locally busy", {
         taskId: task.taskId,
         scopeId: task.scopeId,
-        holder: this.scopeLock.activeRun(task.scopeId),
+        holder: this.scopeLock.activeTask(task.scopeId),
       });
     }
     const entry: ActiveExecution = {

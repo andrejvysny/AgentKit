@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { runChat, AiToolRegistry, resolveToolLimits } from "@agentkit/core";
-import type { AiRunEvent } from "@agentkit/contracts";
+import { CONTRACT_VERSION, type AiRunEvent } from "@agentkit/contracts";
 import {
   GOLDEN_TRACE_NAMES,
   loadGoldenTrace,
@@ -27,11 +27,14 @@ describe("golden traces", () => {
         expect(events.at(-1)).toBe(terminals[0]);
       });
 
-      it("stamps contractVersion on every event", () => {
+      it("stamps the CURRENT contractVersion on every event", () => {
+        // Pinned to the live constant, not merely "some non-empty string": a
+        // contract bump that nobody re-recorded against must fail all five
+        // traces here, rather than waiting for the chat-only replay below to
+        // be the single test that notices.
         const events = loadGoldenTrace(name);
         for (const e of events) {
-          expect(typeof e.contractVersion).toBe("string");
-          expect(e.contractVersion.length).toBeGreaterThan(0);
+          expect(e.contractVersion).toBe(CONTRACT_VERSION);
         }
       });
     });
