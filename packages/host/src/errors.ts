@@ -26,11 +26,34 @@ export class AgentKitHostError extends Error {
 }
 
 /**
+ * Base for the named subclasses below, whose `code` is part of the closed
+ * {@link HostErrorCode} union.
+ *
+ * `AgentKitHostError` itself keeps `code: string` — other host modules throw
+ * it directly with ad hoc codes (`no_model`, `invalid_decision`, …) that are
+ * not part of this stable, documented vocabulary, and typing the base
+ * constructor to the union would break those call sites. This intermediate
+ * class exists so THIS file cannot drift instead: a subclass's `super(code, …)`
+ * literal is checked against {@link HostErrorCode}, so adding a subclass here
+ * without adding its code to {@link HOST_ERROR_CODES} fails to compile.
+ */
+abstract class NamedHostError extends AgentKitHostError {
+  // biome-ignore lint/complexity/noUselessConstructor: not useless — narrows `code` to HostErrorCode; removing it silently widens every subclass's code param back to string.
+  constructor(
+    code: HostErrorCode,
+    message: string,
+    details?: Record<string, unknown>,
+  ) {
+    super(code, message, details);
+  }
+}
+
+/**
  * A task status change that the {@link TASK_TRANSITIONS} table forbids, or whose
  * `from` set did not include the task's current status (a lost race: someone
  * else moved the task first).
  */
-export class InvalidTaskTransitionError extends AgentKitHostError {
+export class InvalidTaskTransitionError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("invalid_task_transition", message, details);
   }
@@ -45,7 +68,7 @@ export class InvalidTaskTransitionError extends AgentKitHostError {
  * lets the caller decide: `TaskService.submitTask` treats it as "already
  * submitted" and re-pokes the queue instead of writing a second task.
  */
-export class DuplicateTaskError extends AgentKitHostError {
+export class DuplicateTaskError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("duplicate_task", message, details);
   }
@@ -61,7 +84,7 @@ export class DuplicateTaskError extends AgentKitHostError {
  * by classification: retrying cannot conjure the executor, and re-running the
  * same claim would just burn the attempt budget on the same lookup.
  */
-export class ExecutorNotFoundError extends AgentKitHostError {
+export class ExecutorNotFoundError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("executor_not_found", message, details);
   }
@@ -72,7 +95,7 @@ export class ExecutorNotFoundError extends AgentKitHostError {
  * Same-state "transitions" are illegal too: re-entering `applying` would mean a
  * second apply of side effects that already happened.
  */
-export class InvalidProposalTransitionError extends AgentKitHostError {
+export class InvalidProposalTransitionError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("invalid_proposal_transition", message, details);
   }
@@ -83,7 +106,7 @@ export class InvalidProposalTransitionError extends AgentKitHostError {
  * taken over, or was released. The writer MUST stop: a second worker owns the
  * run now, and appending would interleave two attempts into one event stream.
  */
-export class LeaseLostError extends AgentKitHostError {
+export class LeaseLostError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("lease_lost", message, details);
   }
@@ -95,7 +118,7 @@ export class LeaseLostError extends AgentKitHostError {
  * gap-detection key, so a store that quietly accepted a duplicate would make
  * "did I miss an event?" unanswerable.
  */
-export class SeqConflictError extends AgentKitHostError {
+export class SeqConflictError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("seq_conflict", message, details);
   }
@@ -106,7 +129,7 @@ export class SeqConflictError extends AgentKitHostError {
  * `(scopeKey, actionId)` is the idempotency key for model-issued writes, so the
  * uniqueness violation is the guard doing its job, not a storage accident.
  */
-export class DuplicateActionIdError extends AgentKitHostError {
+export class DuplicateActionIdError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("duplicate_action_id", message, details);
   }
@@ -117,14 +140,14 @@ export class DuplicateActionIdError extends AgentKitHostError {
  * not what would be written. The proposal is invalidated rather than applied —
  * a stale write is worse than no write.
  */
-export class RevisionConflictError extends AgentKitHostError {
+export class RevisionConflictError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("revision_conflict", message, details);
   }
 }
 
 /** A record the caller referenced by id does not exist (or is out of scope). */
-export class RecordNotFoundError extends AgentKitHostError {
+export class RecordNotFoundError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("not_found", message, details);
   }
@@ -142,8 +165,41 @@ export class RecordNotFoundError extends AgentKitHostError {
  * on-call. Terminal by classification: the referenced id will not appear
  * retroactively.
  */
-export class UnknownDependencyError extends AgentKitHostError {
+export class UnknownDependencyError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
     super("unknown_dependency", message, details);
   }
 }
+
+/**
+ * The closed set of codes the named error classes above use — every literal
+ * passed to a `super(...)` call in this file, and nothing else.
+ *
+ * This is deliberately NOT every code `AgentKitHostError` is ever constructed
+ * with: other host modules throw the base class directly with situational
+ * codes (`no_model`, `invalid_decision`, `task_not_executable`, …) that are
+ * not part of this stable, cross-package vocabulary. Consumers outside the
+ * host package (`@agentkit/transport-http`'s status table) map against THIS
+ * list; unrecognized codes fall back to a generic status rather than being
+ * silently misclassified.
+ *
+ * Keep in sync with the classes above by construction, not by discipline:
+ * {@link NamedHostError}'s constructor types `code` as {@link HostErrorCode},
+ * so a new subclass with a code missing from this tuple fails to compile
+ * (see `tests/errors.test.ts` for the belt-and-suspenders repo-scan that also
+ * catches it at test time).
+ */
+export const HOST_ERROR_CODES = [
+  "invalid_task_transition",
+  "duplicate_task",
+  "executor_not_found",
+  "invalid_proposal_transition",
+  "lease_lost",
+  "seq_conflict",
+  "duplicate_action_id",
+  "revision_conflict",
+  "not_found",
+  "unknown_dependency",
+] as const;
+
+export type HostErrorCode = (typeof HOST_ERROR_CODES)[number];

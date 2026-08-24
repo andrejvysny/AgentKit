@@ -1,9 +1,16 @@
 import type { AiRunEvent } from "@agentkit/contracts";
-import chatOnlyTrace from "./traces/chat-only.json";
-import toolRunTrace from "./traces/tool-run.json";
-import cancelledRunTrace from "./traces/cancelled-run.json";
-import failedRunTrace from "./traces/failed-run.json";
-import usageRunTrace from "./traces/usage-run.json";
+// `with { type: "json" }` (TS 5.3+, preserved verbatim through compilation)
+// is required, not decorative: Node 20+ throws ERR_IMPORT_ATTRIBUTE_MISSING
+// on a bare JSON import with no attribute, so a published `@agentkit/testing`
+// dist would fail to even load under plain Node without it — bun does not
+// need this, which is exactly why it went unnoticed under `bun test`.
+import chatOnlyTrace from "./traces/chat-only.json" with { type: "json" };
+import toolRunTrace from "./traces/tool-run.json" with { type: "json" };
+import cancelledRunTrace from "./traces/cancelled-run.json" with {
+  type: "json",
+};
+import failedRunTrace from "./traces/failed-run.json" with { type: "json" };
+import usageRunTrace from "./traces/usage-run.json" with { type: "json" };
 
 /**
  * The recorded golden scenarios. See `scripts/record-goldens.ts` at the repo
@@ -73,9 +80,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
   if (typeof a !== "object" || typeof b !== "object") return false;
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
-    return (
-      a.length === b.length && a.every((item, i) => deepEqual(item, b[i]))
-    );
+    return a.length === b.length && a.every((item, i) => deepEqual(item, b[i]));
   }
   const aRecord = a as Record<string, unknown>;
   const bRecord = b as Record<string, unknown>;
@@ -83,8 +88,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
   const bKeys = Object.keys(bRecord).sort();
   if (aKeys.length !== bKeys.length) return false;
   return aKeys.every(
-    (key, i) =>
-      key === bKeys[i] && deepEqual(aRecord[key], bRecord[key]),
+    (key, i) => key === bKeys[i] && deepEqual(aRecord[key], bRecord[key]),
   );
 }
 

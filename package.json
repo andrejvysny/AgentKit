@@ -25,15 +25,20 @@
     "build:testing": "tsc -p packages/testing/tsconfig.build.json",
     "build:host": "tsc -p packages/host/tsconfig.build.json",
     "smoke:node": "node scripts/node-smoke.mjs",
+    "smoke:pack": "node scripts/pack-smoke.mjs",
     "ci": "bun install --frozen-lockfile && bun run typecheck && bun test && bun run build",
     "test:mcp-client": "bun test packages/mcp-client",
     "test:transport-http": "bun test packages/transport-http",
     "typecheck:mcp-client": "tsc -p packages/mcp-client/tsconfig.json",
     "typecheck:transport-http": "tsc -p packages/transport-http/tsconfig.json",
     "build:mcp-client": "tsc -p packages/mcp-client/tsconfig.build.json",
-    "build:transport-http": "tsc -p packages/transport-http/tsconfig.build.json"
+    "build:transport-http": "tsc -p packages/transport-http/tsconfig.build.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test:coverage": "bun test --coverage"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.10",
     "typescript": "^5.8.3"
   }
 }

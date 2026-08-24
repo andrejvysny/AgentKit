@@ -27,7 +27,7 @@ below.
 - **Memory port** (long-term/cross-session recall beyond one chat's
   message history). No `MemoryStore` port or implementation exists.
   `ConversationStore` covers one chat's messages; anything spanning chats
-  is future scope — see [`docs/roadmap.md`](roadmap.md), P3.
+  is future scope — see [`docs/roadmap.md`](roadmap.md), P6.
 - **Cloud salvage pieces**: token-crypto helpers and trusted-field injection
   for a multi-tenant gateway. Referenced in port documentation
   (`docs/ports.md`, `docs/architecture.md`) as things a durable,

@@ -9,7 +9,7 @@
  * breaks the first Node consumer. So: plain Node, no Bun APIs, the built `dist`
  * output rather than the source.
  *
- * Five checks, end-to-end rather than smoke-in-name-only where a package has
+ * Six checks, end-to-end rather than smoke-in-name-only where a package has
  * something end-to-end to run:
  *
  *   1. Ajv (Node's, not Bun's) compiles `AiRunEventSchema` out of the contracts
@@ -24,6 +24,9 @@
  *      about the module graph and the constructor's eager validation.
  *   5. The transport-http dist serves `GET /v1/version` through a real
  *      `Request`/`Response` round trip against stub deps.
+ *   6. The testing dist loads and a golden trace round-trips through it —
+ *      this is the JSON-import path that needs `with { type: "json" }" to
+ *      even load under Node (see `packages/testing/src/golden/golden.ts`).
  *
  * RESOLUTION NOTE: each package's `exports` deliberately points at TypeScript
  * SOURCE during development (so a bundler-resolution typecheck reads the real
@@ -73,6 +76,7 @@ const CORE_ENTRY = publishedEntry("core");
 const HOST_ENTRY = publishedEntry("host");
 const MCP_CLIENT_ENTRY = publishedEntry("mcp-client");
 const TRANSPORT_HTTP_ENTRY = publishedEntry("transport-http");
+const TESTING_ENTRY = publishedEntry("testing");
 
 // Apply the published mapping to every workspace specifier the dists import at
 // runtime. Registered before any dynamic import below.
@@ -82,6 +86,7 @@ const WORKSPACE_ENTRIES = {
   "@agentkit/host": HOST_ENTRY,
   "@agentkit/mcp-client": MCP_CLIENT_ENTRY,
   "@agentkit/transport-http": TRANSPORT_HTTP_ENTRY,
+  "@agentkit/testing": TESTING_ENTRY,
 };
 
 register(
@@ -98,7 +103,9 @@ register(
 
 // Ajv is a dependency of @agentkit/core, not of this script: resolve it the way
 // core itself does rather than assuming the installer hoisted it to the root.
-const requireFromCore = createRequire(new URL("packages/core/package.json", ROOT));
+const requireFromCore = createRequire(
+  new URL("packages/core/package.json", ROOT),
+);
 const ajvModule = requireFromCore("ajv");
 const Ajv = ajvModule.default ?? ajvModule;
 
@@ -133,14 +140,20 @@ const tracePath = new URL(
   ROOT,
 );
 const trace = JSON.parse(readFileSync(tracePath, "utf8"));
-check(Array.isArray(trace) && trace.length > 0, "golden trace chat-only loaded");
+check(
+  Array.isArray(trace) && trace.length > 0,
+  "golden trace chat-only loaded",
+);
 
 const golden = trace[0];
 const goldenValid = validateEvent(golden);
 if (!goldenValid) {
   console.error(JSON.stringify(validateEvent.errors, null, 2));
 }
-check(goldenValid, `golden event "${golden?.type}" validates against AiRunEventSchema`);
+check(
+  goldenValid,
+  `golden event "${golden?.type}" validates against AiRunEventSchema`,
+);
 // The negative half: a validator that accepts anything proves nothing.
 check(
   validateEvent({ type: "run.exploded", runId: "r", seq: 0 }) === false,
@@ -155,7 +168,10 @@ const core = await import(CORE_ENTRY);
 console.log("core dist");
 check(typeof core.runChat === "function", "exports runChat");
 check(typeof core.AiToolRegistry === "function", "exports AiToolRegistry");
-check(typeof core.createEventStamper === "function", "exports createEventStamper");
+check(
+  typeof core.createEventStamper === "function",
+  "exports createEventStamper",
+);
 
 /** One completed text turn — the smallest provider that can end a run. */
 const stubProvider = {
@@ -215,7 +231,10 @@ for (;;) {
 }
 
 check(events.length > 0, `runChat emitted ${events.length} events`);
-check(result?.terminal === "completed", `runChat terminal is "${result?.terminal}"`);
+check(
+  result?.terminal === "completed",
+  `runChat terminal is "${result?.terminal}"`,
+);
 check(
   events.every((event) => event.contractVersion === contracts.CONTRACT_VERSION),
   "every emitted event carries the contract version",
@@ -238,8 +257,14 @@ console.log("host dist");
 check(typeof host.TurnRunner === "function", "exports TurnRunner");
 check(typeof host.TaskService === "function", "exports TaskService");
 check(typeof host.ProposalService === "function", "exports ProposalService");
-check(typeof host.AgentKitHostError === "function", "exports AgentKitHostError");
-check(typeof host.defaultClock?.nowIso === "function", "exports a working defaultClock");
+check(
+  typeof host.AgentKitHostError === "function",
+  "exports AgentKitHostError",
+);
+check(
+  typeof host.defaultClock?.nowIso === "function",
+  "exports a working defaultClock",
+);
 // Two pure functions the whole task system is graded against — cheap to run,
 // and a broken one would mean the dist is not the code the tests exercised.
 check(
@@ -261,7 +286,10 @@ check(
 const mcp = await import(MCP_CLIENT_ENTRY);
 console.log("mcp-client dist");
 check(typeof mcp.McpClientManager === "function", "exports McpClientManager");
-check(typeof mcp.createMcpToolSetContributor === "function", "exports createMcpToolSetContributor");
+check(
+  typeof mcp.createMcpToolSetContributor === "function",
+  "exports createMcpToolSetContributor",
+);
 check(
   mcp.buildMcpToolIdentity({ serverAlias: "gh", toolName: "list_issues" })
     .registryName === "mcp__gh__list_issues",
@@ -283,8 +311,14 @@ const nullSecrets = {
 const manager = new mcp.McpClientManager({ secrets: nullSecrets }, [
   { alias: "gh", transport: { kind: "stdio", command: "gh-mcp" } },
 ]);
-check(manager.aliases().join(",") === "gh", "manager registers its configured alias");
-check(manager.connectedAliases().length === 0, "manager starts with nothing connected");
+check(
+  manager.aliases().join(",") === "gh",
+  "manager registers its configured alias",
+);
+check(
+  manager.connectedAliases().length === 0,
+  "manager starts with nothing connected",
+);
 
 // ---------------------------------------------------------------------------
 // 5. Transport-http dist: a real Request/Response round trip
@@ -292,7 +326,10 @@ check(manager.connectedAliases().length === 0, "manager starts with nothing conn
 
 const transport = await import(TRANSPORT_HTTP_ENTRY);
 console.log("transport-http dist");
-check(typeof transport.createRestHandler === "function", "exports createRestHandler");
+check(
+  typeof transport.createRestHandler === "function",
+  "exports createRestHandler",
+);
 
 /** The narrowest deps `GET /v1/version` touches: none of them, plus `packages`. */
 const restDeps = {
@@ -311,19 +348,48 @@ const restDeps = {
 };
 const handler = transport.createRestHandler(restDeps);
 const versionResponse = await handler(new Request("http://x/v1/version"));
-check(versionResponse.status === 200, `GET /v1/version answered ${versionResponse.status}`);
+check(
+  versionResponse.status === 200,
+  `GET /v1/version answered ${versionResponse.status}`,
+);
 const versionBody = await versionResponse.json();
 check(
   versionBody.contractVersion === contracts.CONTRACT_VERSION,
   `version route reports contractVersion ${versionBody.contractVersion}`,
 );
 check(
-  typeof versionBody.restApiVersion === "string" && versionBody.restApiVersion.length > 0,
+  typeof versionBody.restApiVersion === "string" &&
+    versionBody.restApiVersion.length > 0,
   `version route reports restApiVersion ${versionBody.restApiVersion}`,
 );
 // The negative half: routing is real, not a handler that answers everything.
 const missing = await handler(new Request("http://x/v1/nope"));
 check(missing.status === 404, `an unrouted path answered ${missing.status}`);
+
+// ---------------------------------------------------------------------------
+// 6. Testing dist: a golden trace loads and validates — this is the exact
+//    path that broke before `golden.ts`'s JSON imports carried
+//    `with { type: "json" }`. Node throws ERR_IMPORT_ATTRIBUTE_MISSING on a
+//    bare JSON import; bun does not need the attribute, so `bun test` alone
+//    could never have caught this dist being unloadable under plain Node.
+// ---------------------------------------------------------------------------
+
+const testing = await import(TESTING_ENTRY);
+console.log("testing dist");
+check(
+  Array.isArray(testing.GOLDEN_TRACE_NAMES) &&
+    testing.GOLDEN_TRACE_NAMES.includes("chat-only"),
+  "exports GOLDEN_TRACE_NAMES",
+);
+const loadedTrace = testing.loadGoldenTrace("chat-only");
+check(
+  Array.isArray(loadedTrace) && loadedTrace.length > 0,
+  `loadGoldenTrace("chat-only") returned ${loadedTrace?.length ?? 0} event(s)`,
+);
+check(
+  testing.makeUserMessage("hi").role === "user",
+  'makeUserMessage builds a "user" message',
+);
 
 // ---------------------------------------------------------------------------
 

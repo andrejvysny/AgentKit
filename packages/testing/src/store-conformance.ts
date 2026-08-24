@@ -55,6 +55,7 @@ export interface AssistantStoreConformanceHarness {
 export interface AssistantStoreConformanceTestApi {
   describe: (name: string, fn: () => void) => void;
   it: (name: string, fn: () => void | Promise<void>) => void;
+  // biome-ignore lint/suspicious/noExplicitAny: intentional, see doc comment above — a precise return type here means importing one runner's matcher types.
   expect: (value: unknown) => any;
   beforeEach?: (fn: () => void | Promise<void>) => void;
 }
@@ -190,7 +191,9 @@ export function describeAssistantStoreConformance(
     it("creates chats and appends messages with per-chat monotonic orderKey", async () => {
       const { store, close } = await create();
       try {
-        const chat = await store.conversations.createChat({ title: "Test chat" });
+        const chat = await store.conversations.createChat({
+          title: "Test chat",
+        });
         expect(chat.title).toBe("Test chat");
         const other = await store.conversations.createChat({});
         const m1 = await store.conversations.appendMessage({
@@ -246,7 +249,11 @@ export function describeAssistantStoreConformance(
       try {
         const task = await store.tasks.createTask(makeTaskInput());
         expect(task.status).toBe("queued");
-        const running = await store.tasks.transitionTask(task.taskId, ["queued"], "running");
+        const running = await store.tasks.transitionTask(
+          task.taskId,
+          ["queued"],
+          "running",
+        );
         expect(running.status).toBe("running");
         // "queued" -> "completed" is not a legal edge from TASK_TRANSITIONS.
         await expectRejectsWithCode(
@@ -453,7 +460,9 @@ export function describeAssistantStoreConformance(
         // is needed to simulate expiry.
         const future = new Date(Date.now() + 60_000);
         const expired = await store.tasks.expireStaleLeases(future);
-        expect(expired.some((l) => l.leaseToken === first.leaseToken)).toBe(true);
+        expect(expired.some((l) => l.leaseToken === first.leaseToken)).toBe(
+          true,
+        );
         const second = await store.tasks.acquireLease({
           taskId: task.taskId,
           attemptId: attempt.attemptId,
@@ -478,7 +487,9 @@ export function describeAssistantStoreConformance(
           data: { model: "m", toolCount: 0 },
         });
         await expectRejectsWithCode(
-          store.tasks.appendEvents(task.taskId, [event], { leaseToken: "bogus" }),
+          store.tasks.appendEvents(task.taskId, [event], {
+            leaseToken: "bogus",
+          }),
           "lease_lost",
           expect,
         );
@@ -572,7 +583,9 @@ export function describeAssistantStoreConformance(
           leaseToken: lease.leaseToken,
         });
         expect(await store.tasks.nextSeq(task.taskId)).toBe(3);
-        const after = await store.tasks.listEvents(task.taskId, { afterSeq: 0 });
+        const after = await store.tasks.listEvents(task.taskId, {
+          afterSeq: 0,
+        });
         expect(after.map((e) => e.seq)).toEqual([1, 2]);
         const all = await store.tasks.listEvents(task.taskId);
         expect(all.map((e) => e.type)).toEqual([
@@ -619,7 +632,9 @@ export function describeAssistantStoreConformance(
       const { store, close } = await create();
       try {
         const scope = uniqueId("scope");
-        const task = await store.tasks.createTask(makeTaskInput({ scopeId: scope }));
+        const task = await store.tasks.createTask(
+          makeTaskInput({ scopeId: scope }),
+        );
         const claimed = await store.tasks.claimNext({
           ownerId: "worker-1",
           now: new Date(),
@@ -641,7 +656,9 @@ export function describeAssistantStoreConformance(
       const { store, close } = await create();
       try {
         await store.tasks.createTask(makeTaskInput({ priority: 0 }));
-        const high = await store.tasks.createTask(makeTaskInput({ priority: 10 }));
+        const high = await store.tasks.createTask(
+          makeTaskInput({ priority: 10 }),
+        );
         // Captured AFTER both creates: an adapter stamps enqueuedAt/availableAt
         // from its own clock at createTask time, so a `now` captured any
         // earlier can race that stamp and spuriously exclude a just-created
@@ -677,7 +694,9 @@ export function describeAssistantStoreConformance(
       const { store, close } = await create();
       try {
         const scope = uniqueId("scope");
-        const task = await store.tasks.createTask(makeTaskInput({ scopeId: scope }));
+        const task = await store.tasks.createTask(
+          makeTaskInput({ scopeId: scope }),
+        );
         const claimed = await store.tasks.claimNext({
           ownerId: "worker-1",
           now: new Date(),
@@ -708,7 +727,9 @@ export function describeAssistantStoreConformance(
           expect,
         );
         await expectRejectsWithCode(
-          store.tasks.createTask(makeTaskInput({ parentTaskId: "task-nobody" })),
+          store.tasks.createTask(
+            makeTaskInput({ parentTaskId: "task-nobody" }),
+          ),
           "unknown_dependency",
           expect,
         );
@@ -1134,7 +1155,11 @@ export function describeAssistantStoreConformance(
         expect(second.status).toBe("pending");
 
         const third = await store.proposals.create(
-          makeProposalInput({ scopeKey: scope, actionId: "act-inv", revisionAtCreate: "rev-1" }),
+          makeProposalInput({
+            scopeKey: scope,
+            actionId: "act-inv",
+            revisionAtCreate: "rev-1",
+          }),
         );
         expect(third.status).toBe("pending");
         await store.proposals.invalidatePendingForRevision(scope, "rev-2");
@@ -1182,7 +1207,9 @@ export function describeAssistantStoreConformance(
         expect(second).toEqual(first); // first write wins
         const fetched = await store.proposals.getOutcome(operationId);
         expect(fetched).toEqual(first);
-        expect(await store.proposals.getOutcome(uniqueId("never-recorded"))).toBeNull();
+        expect(
+          await store.proposals.getOutcome(uniqueId("never-recorded")),
+        ).toBeNull();
       } finally {
         close?.();
       }
@@ -1218,7 +1245,10 @@ export function describeAssistantStoreConformance(
         const fresh = await store.proposals.create(
           makeProposalInput({ scopeKey: scope, revisionAtCreate: "rev-2" }),
         );
-        const count = await store.proposals.invalidatePendingForRevision(scope, "rev-2");
+        const count = await store.proposals.invalidatePendingForRevision(
+          scope,
+          "rev-2",
+        );
         expect(count).toBe(1);
         const staleAfter = await store.proposals.get(stale.id);
         expect(staleAfter?.status).toBe("invalidated");
@@ -1249,9 +1279,9 @@ export function describeAssistantStoreConformance(
         expect((await store.providers.getProvider(providerId))?.label).toBe(
           "Renamed",
         );
-        expect((await store.providers.listProviders()).map((p) => p.id)).toContain(
-          providerId,
-        );
+        expect(
+          (await store.providers.listProviders()).map((p) => p.id),
+        ).toContain(providerId);
 
         await store.providers.replaceModels(providerId, [
           {
@@ -1273,7 +1303,9 @@ export function describeAssistantStoreConformance(
         const caps = await store.providers.getCapabilities(providerId);
         expect(caps?.streaming).toBe(true);
         expect(caps?.toolCalling).toBe(false);
-        expect(await store.providers.getCapabilities(uniqueId("no-such"))).toBeNull();
+        expect(
+          await store.providers.getCapabilities(uniqueId("no-such")),
+        ).toBeNull();
       } finally {
         close?.();
       }
@@ -1291,7 +1323,9 @@ export function describeAssistantStoreConformance(
         expect(updated.defaultModel).toBe("gpt-test");
         expect(updated.allowRawToolData).toBe(true);
         // Untouched fields survive the partial update.
-        expect(updated.contextSizePreference).toBe(initial.contextSizePreference);
+        expect(updated.contextSizePreference).toBe(
+          initial.contextSizePreference,
+        );
         const fetched = await store.settings.getSettings();
         expect(fetched.defaultModel).toBe("gpt-test");
       } finally {
@@ -1337,9 +1371,16 @@ export function describeAssistantStoreConformance(
     it("markFailed schedules a retry via availableAt", async () => {
       const { store, close } = await create();
       try {
-        const enqueued = await store.outbox.enqueue({ topic: "run.events", payload: {} });
+        const enqueued = await store.outbox.enqueue({
+          topic: "run.events",
+          payload: {},
+        });
         const now = new Date();
-        await store.outbox.claimBatch({ limit: 10, now, ownerId: "publisher-1" });
+        await store.outbox.claimBatch({
+          limit: 10,
+          now,
+          ownerId: "publisher-1",
+        });
         const retryAt = new Date(now.getTime() + 5_000);
         await store.outbox.markFailed(enqueued.id, "boom", retryAt);
         const tooSoon = await store.outbox.claimBatch({
