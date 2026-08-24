@@ -91,6 +91,14 @@ import {
 import { SCHEMA_V3, SCHEMA_VERSION } from "./schema.js";
 
 const DEFAULT_LEASE_TTL_MS = 30_000;
+/**
+ * How long a transaction waits for another connection's write lock.
+ *
+ * Generous on purpose: the cost of waiting is latency, and the cost of not
+ * waiting is a raw `SQLITE_BUSY` surfacing out of a port method that documents
+ * no such failure. See the multi-handle section on {@link SqliteConnection}.
+ */
+const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const DEFAULT_OUTBOX_CLAIM_VISIBILITY_MS = 30_000;
 
 // ---------------------------------------------------------------------------
@@ -134,6 +142,23 @@ function isConstraintError(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
   return (
     code === "SQLITE_CONSTRAINT_UNIQUE" || code === "SQLITE_CONSTRAINT_PRIMARYKEY"
+  );
+}
+
+/**
+ * Whether a driver error means "someone else holds the lock, try again" —
+ * SQLITE_BUSY and its variants, plus SQLITE_LOCKED.
+ *
+ * A prefix match rather than an equality one: SQLite reports extended codes
+ * (`SQLITE_BUSY_SNAPSHOT`, `SQLITE_BUSY_TIMEOUT`) whose meaning for a caller is
+ * identical — the write lock was not available — and enumerating them would
+ * only mean missing whichever one a future SQLite adds.
+ */
+function isBusyError(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return (
+    typeof code === "string" &&
+    (code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_LOCKED"))
   );
 }
 
@@ -523,11 +548,37 @@ type Params = Record<string, string | number | boolean | bigint | null>;
  * re-entrant calls: only the outermost `withTx`/`withAsyncTx` issues
  * BEGIN/COMMIT/ROLLBACK; anything nested inside it just runs against the
  * already-open transaction.
+ *
+ * ── SEVERAL HANDLES OVER ONE FILE ─────────────────────────────────────────
+ *
+ * Supported, and this class is where the support lives. Two
+ * {@link SqliteAssistantStore} instances on one path — two worker processes, or
+ * two connections in one process — are two connections contending for SQLite's
+ * single write lock, and `SqliteTaskStore`'s per-instance claim mutex means
+ * nothing across that boundary. `BEGIN IMMEDIATE` is what keeps them correct;
+ * what keeps them USABLE is waiting for the lock instead of failing on it, and
+ * the two waits are deliberately different:
+ *
+ * - SYNCHRONOUS transactions ({@link withTx}) wait inside SQLite, via the
+ *   `PRAGMA busy_timeout` the store sets on open. They cannot await, and when
+ *   the lock holder is another OS process, parking this thread is exactly the
+ *   right thing to do.
+ * - ASYNCHRONOUS transactions ({@link withAsyncTx} — `claimNext` and
+ *   `AssistantStore.transaction`) wait on the EVENT LOOP instead, and set
+ *   `busy_timeout` to zero while they try. They hold the lock across `await`s,
+ *   so the holder may well be this same process's other handle — and then the
+ *   thread SQLite would park is the only thread that could ever release the
+ *   lock. Sleeping on it turns a moment of contention into a deadlock that
+ *   lasts the whole timeout and then fails anyway.
  */
 class SqliteConnection {
   private txDepth = 0;
 
-  constructor(readonly db: Database) {}
+  constructor(
+    readonly db: Database,
+    /** Ceiling on how long either wait above will keep trying. */
+    private readonly busyTimeoutMs: number,
+  ) {}
 
   run(sql: string, params?: Params): Changes {
     // bun-types' generic for Database.run (`...bindings: ParamsType[]` where
@@ -559,11 +610,23 @@ class SqliteConnection {
     this.db.exec(sql);
   }
 
-  /** Synchronous transaction helper for a single port method's own SQL. */
+  /**
+   * Synchronous transaction helper for a single port method's own SQL.
+   *
+   * THE BEGIN RUNS BEFORE `txDepth` MOVES, and that order is load-bearing: a
+   * `BEGIN IMMEDIATE` that throws (another connection holds the write lock)
+   * used to leave the counter raised forever, so every later call on this
+   * connection took the "already in a transaction" branch and ran with no
+   * BEGIN, no COMMIT and no ROLLBACK — atomicity silently gone for the life of
+   * the connection. Raising the counter only once the transaction really is
+   * open makes the pair exception-safe without changing the flatten-on-reentry
+   * semantics: a raised counter still means, exactly, "a transaction is open".
+   */
   withTx<T>(fn: () => T): T {
     if (this.txDepth > 0) return fn();
-    this.txDepth += 1;
+    // Waits inside SQLite for up to `busy_timeout` — see the class doc.
     this.exec("BEGIN IMMEDIATE");
+    this.txDepth += 1;
     try {
       const result = fn();
       this.exec("COMMIT");
@@ -580,11 +643,31 @@ class SqliteConnection {
    * Async transaction helper for {@link AssistantStore.transaction}: `fn` may
    * itself `await` several port calls, each of which calls `withTx` and sees
    * `txDepth > 0`, flattening into this same outer transaction.
+   *
+   * Same BEGIN-then-increment ordering as {@link withTx}, for the same reason,
+   * and the same exception-safety: a lock this call never won leaves the
+   * counter untouched.
    */
   async withAsyncTx<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.txDepth > 0) return fn();
-    this.txDepth += 1;
-    this.exec("BEGIN IMMEDIATE");
+    const deadline = Date.now() + this.busyTimeoutMs;
+    // THE DEPTH CHECK AND THE BEGIN MUST NOT BE SEPARATED BY AN AWAIT. Every
+    // iteration re-does both synchronously: if a transaction is open by the
+    // time this caller is scheduled it flattens into it, exactly as it always
+    // has; otherwise it tries for the lock, and only the WAIT between attempts
+    // is asynchronous. Awaiting before the check instead would leave a window
+    // where `txDepth` reads 0 while a BEGIN is already in flight, and the
+    // second caller would raise "cannot start a transaction within a
+    // transaction" where it used to flatten.
+    for (let attempt = 0; ; attempt += 1) {
+      if (this.txDepth > 0) return fn();
+      const busy = this.tryBeginImmediate();
+      if (busy === null) break;
+      if (Date.now() >= deadline) throw busy;
+      // A macrotask, not a microtask: the lock holder's next step may be queued
+      // behind one, and a microtask-only yield would spin without ever letting
+      // it run. The short backoff keeps a long wait from burning the loop.
+      await new Promise((resolve) => setTimeout(resolve, Math.min(attempt, 10)));
+    }
     try {
       const result = await fn();
       this.exec("COMMIT");
@@ -597,11 +680,41 @@ class SqliteConnection {
     }
   }
 
+  /**
+   * One non-blocking attempt at the write lock: `null` when the transaction is
+   * open and `txDepth` has been raised, the SQLITE_BUSY error when it is not.
+   *
+   * `busy_timeout` is dropped to zero for the attempt and restored after,
+   * because SQLite's own wait PARKS THE CALLING THREAD — and when the holder is
+   * this process's other handle, that thread is the only one that could ever
+   * run the holder's continuation and commit. Measured against a real
+   * two-handle claim, the parking version stalls for the whole timeout and then
+   * raises SQLITE_BUSY anyway; yielding between attempts resolves the same
+   * contention in single-digit milliseconds. Synchronous callers cannot do
+   * this, which is why {@link withTx} keeps SQLite's wait — for the
+   * cross-PROCESS holder it is aimed at, parking the thread is right.
+   */
+  private tryBeginImmediate(): unknown | null {
+    try {
+      this.exec("PRAGMA busy_timeout = 0");
+      this.exec("BEGIN IMMEDIATE");
+    } catch (err) {
+      if (isBusyError(err)) return err;
+      throw err;
+    } finally {
+      this.exec(`PRAGMA busy_timeout = ${this.busyTimeoutMs}`);
+    }
+    // Raised here, with no await since the BEGIN — see withAsyncTx's comment.
+    this.txDepth += 1;
+    return null;
+  }
+
   private rollback(): void {
     try {
       this.exec("ROLLBACK");
     } catch {
-      // Nothing to roll back — the failure happened before BEGIN took effect.
+      // No transaction to roll back — the connection died, or something below
+      // COMMIT already ended it. Either way there is nothing left to undo.
     }
   }
 }
@@ -1948,6 +2061,14 @@ export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
   leaseTtlMs?: number;
   /** Outbox claim-visibility window. Default 30s. */
   outboxClaimVisibilityMs?: number;
+  /**
+   * How long a transaction waits for the write lock before giving up, when
+   * another connection on the same file holds it. Default 5s.
+   *
+   * Only meaningful for a file-backed store opened by more than one handle —
+   * see the multi-handle section on {@link SqliteConnection}.
+   */
+  busyTimeoutMs?: number;
 }
 
 /**
@@ -1975,9 +2096,14 @@ export class SqliteAssistantStore implements AssistantStore {
     options: SqliteAssistantStoreOptions = {},
   ) {
     const db = new Database(path);
+    const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
     if (path !== ":memory:") {
       db.exec("PRAGMA journal_mode = WAL;");
     }
+    // Several handles over one file are supported; this is half of what makes
+    // them wait for each other rather than fail on each other (the other half
+    // is `SqliteConnection.beginImmediateAsync` — see that class's doc).
+    db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
     db.exec("PRAGMA foreign_keys = ON;");
     assertSchemaVersion(db, path);
     // Idempotent: every statement is CREATE ... IF NOT EXISTS / INSERT OR
@@ -1985,7 +2111,7 @@ export class SqliteAssistantStore implements AssistantStore {
     // initialized) is a safe no-op.
     db.exec(SCHEMA_V3);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
-    this.conn = new SqliteConnection(db);
+    this.conn = new SqliteConnection(db, busyTimeoutMs);
     const clock = options.clock ?? defaultClock;
     const ids = options.ids ?? defaultIds;
     this.conversations = new SqliteConversationStore(this.conn, clock, ids);

@@ -36,6 +36,14 @@
  * disjunction — either the claim threw AND changed nothing, or it succeeded AND
  * produced a whole claim — which means it does not have to hard-code which call
  * index hits which step, and stays honest if the adapter's call order changes.
+ *
+ * WHAT IT FOUND. `MemoryTaskStore.claimNext` used to fail this: its three
+ * writes had no undo, so a throw at `nowIso` #2, `attemptId` #1 or `now` #1 left
+ * the task `running` with no lease — work nothing could finish, nothing could
+ * re-claim (there is no `running → queued` edge) and `expireStaleLeases` could
+ * not see. It now captures the pre-claim state and restores it, mirroring the
+ * sqlite adapter's ROLLBACK, and BOTH adapters are held to the identical
+ * assertions below — which is the point of running one suite over both.
  */
 import { describe, expect, it } from "bun:test";
 import {
@@ -78,7 +86,11 @@ type FaultTarget = "nowIso" | "now" | "attemptId";
 function createFaultRig(): FaultRig {
   let armed: { target: FaultTarget; nth: number } | null = null;
   let fired = false;
-  const counts: Record<FaultTarget, number> = { nowIso: 0, now: 0, attemptId: 0 };
+  const counts: Record<FaultTarget, number> = {
+    nowIso: 0,
+    now: 0,
+    attemptId: 0,
+  };
 
   const maybeThrow = (target: FaultTarget): void => {
     if (armed === null || armed.target !== target) return;
@@ -147,8 +159,8 @@ function memoryInjectionHarness(): InjectionHarness {
     dumpLiveLeases: () =>
       [
         ...(
-          (store.tasks as unknown as { leases: Map<string, never> }).leases
-        ).values(),
+          store.tasks as unknown as { leases: Map<string, never> }
+        ).leases.values(),
       ] as ReturnType<typeof dumpSqliteLeases>,
     close: () => undefined,
   };
@@ -231,7 +243,6 @@ async function claimUnderFault(
 function describeInjectedClaimFailure(
   name: string,
   create: () => InjectionHarness,
-  atomicClaim: boolean,
 ): void {
   describe(`${name} — injected mid-claim failure`, () => {
     /** Injection points that actually interrupted a claim — see the anti-vacuity case. */
@@ -254,7 +265,9 @@ function describeInjectedClaimFailure(
           if (outcome.threw) {
             // A broken claim may undo itself or may keep the task; it may never
             // land it, and it may never leave a lease over work it did not take.
-            expect(["queued", "running"]).toContain(outcome.status ?? "missing");
+            expect(["queued", "running"]).toContain(
+              outcome.status ?? "missing",
+            );
             if (outcome.status === "queued") {
               expect(outcome.attempts).toBe(0);
               expect(outcome.leases).toBe(0);
@@ -272,102 +285,76 @@ function describeInjectedClaimFailure(
             // fails it.
             dumpLiveLeases: harness.dumpLiveLeases,
           });
-          const violations = checkTaskInvariants(view, {
-            phase: "quiescent",
-            label: `${name} ${label}`,
-          });
-          if (atomicClaim) {
-            expect(violations).toEqual([]);
-          } else if (outcome.threw && outcome.status === "running") {
-            // The memory adapter kept the task without finishing the claim (see
-            // the skipped rollback case below). This asserts the CHECKER, not
-            // the adapter: an orphan is exactly what it must name, and a
-            // checker that shrugged at a `running` task nothing owns would be
-            // worthless in the randomized suite where the shape is rarer.
-            expect(violations.join("\n")).toContain("no live lease owns it");
+          expect(
+            checkTaskInvariants(view, {
+              phase: "quiescent",
+              label: `${name} ${label}`,
+            }),
+          ).toEqual([]);
+        } finally {
+          harness.close();
+        }
+      });
+
+      it(`rolls the whole claim back on a failure at ${label}`, async () => {
+        const harness = create();
+        try {
+          const outcome = await claimUnderFault(harness, point);
+          if (outcome.threw) {
+            expect(harness.rig.fired()).toBe(true);
+            // Nothing the claim wrote survives: not the status, not the
+            // attempt counter, not the attempt row, not the lease.
+            expect(outcome.status).toBe("queued");
+            expect(outcome.attemptCount).toBe(0);
+            expect(outcome.attempts).toBe(0);
+            expect(outcome.leases).toBe(0);
+          } else {
+            // The fault never reached this claim; it must then be a WHOLE
+            // claim, not a partial one.
+            expect(outcome.claimed).toBe(true);
+            expect(outcome.status).toBe("running");
+            expect(outcome.attemptCount).toBe(1);
+            expect(outcome.runningAttempts).toBe(1);
+            expect(outcome.leases).toBe(1);
           }
         } finally {
           harness.close();
         }
       });
 
-      const rollsBack = it.skipIf(!atomicClaim);
-      rollsBack(
-        `rolls the whole claim back on a failure at ${label}`,
-        async () => {
-          // SKIPPED FOR THE MEMORY ADAPTER — and that is a finding, not a
-          // configuration choice. `MemoryTaskStore.claimNext` transitions the
-          // task, creates the attempt and acquires the lease as three separate
-          // writes with no undo, so a throw at `nowIso` #2, `attemptId` #1 or
-          // `now` #1 leaves the task `running` with no lease. Nothing can
-          // finish it (no worker holds a token), nothing can re-claim it (there
-          // is no `running → queued` edge) and `expireStaleLeases` cannot
-          // surface it (it reports leases, and there is none). The task is
-          // stranded for the life of the process. See the report accompanying
-          // this suite; the fix belongs in the adapter, not here.
-          const harness = create();
-          try {
-            const outcome = await claimUnderFault(harness, point);
-            if (outcome.threw) {
-              expect(harness.rig.fired()).toBe(true);
-              // Nothing the claim wrote survives: not the status, not the
-              // attempt counter, not the attempt row, not the lease.
-              expect(outcome.status).toBe("queued");
-              expect(outcome.attemptCount).toBe(0);
-              expect(outcome.attempts).toBe(0);
-              expect(outcome.leases).toBe(0);
-            } else {
-              // The fault never reached this claim; it must then be a WHOLE
-              // claim, not a partial one.
-              expect(outcome.claimed).toBe(true);
-              expect(outcome.status).toBe("running");
-              expect(outcome.attemptCount).toBe(1);
-              expect(outcome.runningAttempts).toBe(1);
-              expect(outcome.leases).toBe(1);
-            }
-          } finally {
-            harness.close();
-          }
-        },
-      );
-
-      const recovers = it.skipIf(!atomicClaim);
-      recovers(
-        `hands the task to a later, clean claim after a failure at ${label}`,
-        async () => {
-          // A rollback that leaves the row unclaimable would be a different bug
-          // wearing the same clothes: the point of rolling back is that the
-          // work is still there for the next worker.
-          const harness = create();
-          try {
-            const outcome = await claimUnderFault(harness, point);
-            if (!outcome.threw) return;
-            const claim = await harness.store.tasks.claimNext({
-              ownerId: "worker-b",
-              now: new Date(FIXED_NOW),
-              scopesBusy: [],
-            });
-            expect(claim?.task.taskId).toBe("victim");
-            expect(claim?.task.status).toBe("running");
-            expect(claim?.attempt.attemptNumber).toBe(1);
-            // A rolled-back claim must not have consumed a fencing token that
-            // the surviving one then skips past — the counter is rolled back
-            // with everything else, so the first real lease is token 1.
-            expect(claim?.lease.fencingToken).toBe(1);
-            await harness.store.tasks.transitionTask(
-              "victim",
-              ["running"],
-              "completed",
-              { finishedAt: FIXED_NOW },
-            );
-            expect((await harness.store.tasks.getTask("victim"))?.status).toBe(
-              "completed",
-            );
-          } finally {
-            harness.close();
-          }
-        },
-      );
+      it(`hands the task to a later, clean claim after a failure at ${label}`, async () => {
+        // A rollback that leaves the row unclaimable would be a different bug
+        // wearing the same clothes: the point of rolling back is that the
+        // work is still there for the next worker.
+        const harness = create();
+        try {
+          const outcome = await claimUnderFault(harness, point);
+          if (!outcome.threw) return;
+          const claim = await harness.store.tasks.claimNext({
+            ownerId: "worker-b",
+            now: new Date(FIXED_NOW),
+            scopesBusy: [],
+          });
+          expect(claim?.task.taskId).toBe("victim");
+          expect(claim?.task.status).toBe("running");
+          expect(claim?.attempt.attemptNumber).toBe(1);
+          // A rolled-back claim must not have consumed a fencing token that
+          // the surviving one then skips past — the counter is rolled back
+          // with everything else, so the first real lease is token 1.
+          expect(claim?.lease.fencingToken).toBe(1);
+          await harness.store.tasks.transitionTask(
+            "victim",
+            ["running"],
+            "completed",
+            { finishedAt: FIXED_NOW },
+          );
+          expect((await harness.store.tasks.getTask("victim"))?.status).toBe(
+            "completed",
+          );
+        } finally {
+          harness.close();
+        }
+      });
     }
 
     it("interrupted the claim at several different steps", () => {
@@ -377,30 +364,11 @@ function describeInjectedClaimFailure(
       // cases that fill `interrupted` (bun runs an `it` in declaration order).
       expect(interrupted.length).toBeGreaterThanOrEqual(3);
     });
-
-    const strands = it.skipIf(atomicClaim);
-    strands(
-      "strands the task when a claim sub-step throws (memory adapter is not atomic)",
-      async () => {
-        // Deliberately UNIMPLEMENTED, and skipped: writing the assertion would
-        // freeze the bug into the suite as expected behaviour. The scenario is
-        // described on the skipped `rolls the whole claim back` case above and
-        // in this landing's report. Fixing it means giving
-        // `MemoryTaskStore.claimNext` an undo (or a snapshot-and-restore around
-        // the three writes), which is adapter source and out of scope here.
-        expect(true).toBe(true);
-      },
-    );
   });
 }
 
 describeInjectedClaimFailure(
   "SqliteAssistantStore (file)",
   sqliteInjectionHarness,
-  true,
 );
-describeInjectedClaimFailure(
-  "MemoryAssistantStore",
-  memoryInjectionHarness,
-  false,
-);
+describeInjectedClaimFailure("MemoryAssistantStore", memoryInjectionHarness);

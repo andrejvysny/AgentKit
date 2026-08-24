@@ -526,6 +526,16 @@ export class MemoryTaskStore implements TaskStore {
         }
         continue;
       }
+      // CAPTURED BEFORE THE FIRST WRITE, because everything from here on is one
+      // claim and a claim is all-or-nothing. `claimNext` promises an ATOMIC
+      // claim, and the promise is about FAILURE — success looks atomic in any
+      // implementation. The sqlite adapter gets this from `BEGIN IMMEDIATE`; a
+      // Map-backed store has to undo by hand, and the cost of not doing so is
+      // not a stale field but a LOST TASK: `running` with no lease is work
+      // nothing can finish (no worker holds a token), nothing can re-claim
+      // (there is no `running → queued` edge) and no recovery can see
+      // (`expireStaleLeases` reports leases, and there would be none).
+      const undo = this.captureClaimUndo(candidate.taskId);
       let task: TaskRecord;
       try {
         task = await this.transitionTask(
@@ -535,21 +545,32 @@ export class MemoryTaskStore implements TaskStore {
           { startedAt: this.clock.nowIso() },
         );
       } catch (err) {
-        if (!(err instanceof InvalidTaskTransitionError)) throw err;
+        // A lost CAS wrote nothing, so there is nothing to undo — skip the
+        // candidate and keep walking. Anything else did not necessarily stop
+        // that cleanly.
+        if (!(err instanceof InvalidTaskTransitionError)) {
+          undo();
+          throw err;
+        }
         continue;
       }
-      const attempt = await this.createAttempt({
-        attemptId: this.ids.attemptId(),
-        taskId: task.taskId,
-        ownerId: input.ownerId,
-      });
-      const lease = await this.acquireLease({
-        taskId: task.taskId,
-        attemptId: attempt.attemptId,
-        ownerId: input.ownerId,
-        ttlMs: this.leaseTtlMs,
-      });
-      return { task, attempt, lease };
+      try {
+        const attempt = await this.createAttempt({
+          attemptId: this.ids.attemptId(),
+          taskId: task.taskId,
+          ownerId: input.ownerId,
+        });
+        const lease = await this.acquireLease({
+          taskId: task.taskId,
+          attemptId: attempt.attemptId,
+          ownerId: input.ownerId,
+          ttlMs: this.leaseTtlMs,
+        });
+        return { task, attempt, lease };
+      } catch (err) {
+        undo();
+        throw err;
+      }
     }
     return null;
   }
@@ -560,6 +581,61 @@ export class MemoryTaskStore implements TaskStore {
     task.deadLetteredAt = this.clock.nowIso();
     task.deadLetterReason = reason;
     return { ...task };
+  }
+
+  /**
+   * Snapshot everything a claim is about to touch, and hand back the function
+   * that puts it all back — this store's stand-in for the sqlite adapter's
+   * ROLLBACK.
+   *
+   * Written against the private Maps rather than through the port on purpose:
+   * the public path back would be a `running → queued` transition, and that
+   * edge does not exist ({@link TASK_TRANSITIONS} omits it precisely so a
+   * started task cannot be handed to a second worker). Undoing a claim that was
+   * never completed is not that transition — nobody ever saw the row as
+   * `running`, because the claim that wrote it is the same call that is now
+   * unwinding — so this restores the fields directly instead of asking the
+   * state machine to permit something it is right to forbid.
+   */
+  private captureClaimUndo(taskId: string): () => void {
+    const task = this.tasks.get(taskId);
+    const before = {
+      status: task?.status,
+      startedAt: task?.startedAt,
+      attemptCount: task?.attemptCount,
+    };
+    const attemptsBefore = new Set(this.attempts.keys());
+    const fencingBefore = this.fencing;
+    const hadLease = this.leases.has(taskId);
+    return () => {
+      const current = this.tasks.get(taskId);
+      if (current && before.status !== undefined) {
+        current.status = before.status;
+        if (before.startedAt === undefined) delete current.startedAt;
+        else current.startedAt = before.startedAt;
+        current.attemptCount = before.attemptCount ?? 0;
+      }
+      // Any attempt row this claim managed to write.
+      for (const attemptId of this.attempts.keys()) {
+        if (!attemptsBefore.has(attemptId)) this.attempts.delete(attemptId);
+      }
+      // A lease this claim minted. Only ever one, and only when there was none
+      // before — a claim takes a `queued` task, which by definition has no
+      // lease to preserve.
+      if (!hadLease) {
+        const lease = this.leases.get(taskId);
+        if (lease) {
+          this.leases.delete(taskId);
+          this.leasesByToken.delete(lease.leaseToken);
+        }
+      }
+      // The fencing counter goes back ONLY if nothing else drew from it in the
+      // meantime. Handing token N to a real lease and then rewinding past it
+      // would break the one property the token has — and a skipped value costs
+      // nothing, since the contract is that tokens increase, not that they are
+      // dense.
+      if (this.fencing === fencingBefore + 1) this.fencing = fencingBefore;
+    };
   }
 
   private effectivePriorityOf(task: TaskRecord, nowMs: number): number {
