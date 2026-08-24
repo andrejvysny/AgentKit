@@ -9,7 +9,7 @@ export interface AiToolExecutionContext {
   runId: string;
   chatId?: string;
   /**
-   * What this run writes to, as the host defined it (`RunRecord.scopeId`) —
+   * What this run writes to, as the host defined it (`TaskRecord.scopeId`) —
    * usually the chat, but a host writing a shared document scopes on the
    * document instead, so two chats editing it are serialized against each other.
    *

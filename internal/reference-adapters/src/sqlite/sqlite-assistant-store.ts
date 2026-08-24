@@ -5,10 +5,10 @@
  * network-backed store without changing call sites.
  *
  * Fencing/lease enforcement pattern: a write guarded by a `leaseToken` first
- * reads the run's current lease inside the same transaction, then performs
+ * reads the task's current lease inside the same transaction, then performs
  * its INSERT/UPDATE, and rejects on mismatch with {@link LeaseLostError} —
- * see {@link SqliteRunStore.appendEvents}. Compare-and-set operations
- * (`transitionRun`, `ProposalStore.transition`) use a guarded
+ * see {@link SqliteTaskStore.appendEvents}. Compare-and-set operations
+ * (`transitionTask`, `ProposalStore.transition`) use a guarded
  * `UPDATE ... WHERE id = ? AND status = ?` and check the driver's reported
  * `changes` count as the backstop against a race the initial SELECT could not
  * see — see {@link SqliteConnection}.
@@ -19,18 +19,20 @@ import type {
   AiProviderCapabilities,
   AiProviderConfig,
   AiProviderModel,
-  AiRunEvent,
   AiToolCall,
+  TaskEventEnvelope,
 } from "@agentkit/contracts";
 import {
+  AgentKitHostError,
   DuplicateActionIdError,
+  DuplicateTaskError,
   InvalidProposalTransitionError,
-  InvalidRunTransitionError,
+  InvalidTaskTransitionError,
   LeaseLostError,
   RecordNotFoundError,
   SeqConflictError,
   assertProposalTransition,
-  assertRunTransition,
+  assertTaskTransition,
   defaultClock,
   defaultIds,
   type AppendEventsOptions,
@@ -44,12 +46,12 @@ import {
   type ChatRecord,
   type Clock,
   type ClaimNextInput,
-  type ClaimedRun,
+  type ClaimedTask,
   type ConversationStore,
   type CreateAttemptInput,
   type CreateChatInput,
   type CreateProposalInput,
-  type CreateRunInput,
+  type CreateTaskInput,
   type EndAttemptInput,
   type IdGenerator,
   type Lease,
@@ -69,15 +71,15 @@ import {
   type ProposalStore,
   type ProviderStore,
   type RiskLevel,
-  type RunPatch,
-  type RunRecord,
-  type RunStatus,
-  type RunStore,
   type SettingsStore,
+  type TaskPatch,
+  type TaskRecord,
+  type TaskStatus,
+  type TaskStore,
   type UpdateMessagePatch,
   type WritePolicyMode,
 } from "@agentkit/host";
-import { SCHEMA_V1 } from "./schema.js";
+import { SCHEMA_V2, SCHEMA_VERSION } from "./schema.js";
 
 const DEFAULT_LEASE_TTL_MS = 30_000;
 const DEFAULT_OUTBOX_CLAIM_VISIBILITY_MS = 30_000;
@@ -140,9 +142,9 @@ interface MessageRow {
   metadata: string;
   created_at: string;
 }
-interface RunRow {
-  run_id: string;
-  chat_id: string;
+interface TaskRow {
+  task_id: string;
+  kind: string;
   scope_id: string;
   status: string;
   priority: number;
@@ -150,7 +152,7 @@ interface RunRow {
   available_at: string;
   started_at: string | null;
   finished_at: string | null;
-  request: string;
+  payload: string;
   error: string | null;
   attempt_count: number;
   poison_count: number;
@@ -159,7 +161,7 @@ interface RunRow {
 }
 interface AttemptRow {
   attempt_id: string;
-  run_id: string;
+  task_id: string;
   attempt_number: number;
   status: string;
   owner_id: string;
@@ -168,15 +170,15 @@ interface AttemptRow {
   error: string | null;
 }
 interface LeaseRow {
-  run_id: string;
+  task_id: string;
   attempt_id: string;
   owner_id: string;
   lease_token: string;
   fencing_token: number;
   expires_at: string;
 }
-interface RunEventRow {
-  run_id: string;
+interface TaskEventRow {
+  task_id: string;
   seq: number;
   event_id: string;
   attempt_id: string | null;
@@ -300,18 +302,18 @@ function messageFromRow(row: MessageRow): MessageRecord {
   };
 }
 
-function runFromRow(row: RunRow): RunRecord {
+function taskFromRow(row: TaskRow): TaskRecord {
   return {
-    runId: row.run_id,
-    chatId: row.chat_id,
+    taskId: row.task_id,
+    kind: row.kind,
     scopeId: row.scope_id,
-    status: row.status as RunStatus,
+    status: row.status as TaskStatus,
     priority: row.priority,
     enqueuedAt: row.enqueued_at,
     availableAt: row.available_at,
     ...(row.started_at === null ? {} : { startedAt: row.started_at }),
     ...(row.finished_at === null ? {} : { finishedAt: row.finished_at }),
-    request: parseJson<Record<string, unknown>>(row.request),
+    payload: parseJson<Record<string, unknown>>(row.payload),
     ...(row.error === null ? {} : { error: row.error }),
     attemptCount: row.attempt_count,
     poisonCount: row.poison_count,
@@ -327,7 +329,7 @@ function runFromRow(row: RunRow): RunRecord {
 function attemptFromRow(row: AttemptRow): AttemptRecord {
   return {
     attemptId: row.attempt_id,
-    runId: row.run_id,
+    taskId: row.task_id,
     attemptNumber: row.attempt_number,
     status: row.status as AttemptStatus,
     ownerId: row.owner_id,
@@ -339,7 +341,7 @@ function attemptFromRow(row: AttemptRow): AttemptRecord {
 
 function leaseFromRow(row: LeaseRow): Lease {
   return {
-    runId: row.run_id,
+    taskId: row.task_id,
     attemptId: row.attempt_id,
     ownerId: row.owner_id,
     leaseToken: row.lease_token,
@@ -742,10 +744,10 @@ class SqliteConversationStore implements ConversationStore {
 }
 
 // ---------------------------------------------------------------------------
-// RunStore
+// TaskStore
 // ---------------------------------------------------------------------------
 
-class SqliteRunStore implements RunStore {
+class SqliteTaskStore implements TaskStore {
   constructor(
     private readonly conn: SqliteConnection,
     private readonly clock: Clock,
@@ -753,63 +755,76 @@ class SqliteRunStore implements RunStore {
     private readonly leaseTtlMs: number = DEFAULT_LEASE_TTL_MS,
   ) {}
 
-  async createRun(input: CreateRunInput): Promise<RunRecord> {
+  async createTask(input: CreateTaskInput): Promise<TaskRecord> {
     const now = this.clock.nowIso();
     const availableAt = input.availableAt ?? now;
     const priority = input.priority ?? 0;
-    this.conn.run(
-      `INSERT INTO runs
-         (run_id, chat_id, scope_id, status, priority, enqueued_at, available_at, request, attempt_count, poison_count)
-       VALUES
-         ($runId, $chatId, $scopeId, 'queued', $priority, $now, $availableAt, $request, 0, 0)`,
-      {
-        $runId: input.runId,
-        $chatId: input.chatId,
-        $scopeId: input.scopeId,
-        $priority: priority,
-        $now: now,
-        $availableAt: availableAt,
-        $request: toJson(input.request),
-      },
-    );
+    try {
+      this.conn.run(
+        `INSERT INTO tasks
+           (task_id, kind, scope_id, status, priority, enqueued_at, available_at, payload, attempt_count, poison_count)
+         VALUES
+           ($taskId, $kind, $scopeId, 'queued', $priority, $now, $availableAt, $payload, 0, 0)`,
+        {
+          $taskId: input.taskId,
+          $kind: input.kind,
+          $scopeId: input.scopeId,
+          $priority: priority,
+          $now: now,
+          $availableAt: availableAt,
+          $payload: toJson(input.payload),
+        },
+      );
+    } catch (err) {
+      // The PK collision IS the idempotency guard doing its job; leaking the
+      // raw SQLite constraint error would make every caller match on a driver
+      // string to tell "already submitted" from "the database is broken".
+      if (isConstraintError(err)) {
+        throw new DuplicateTaskError(`Task already exists: ${input.taskId}.`, {
+          taskId: input.taskId,
+          cause: String(err),
+        });
+      }
+      throw err;
+    }
     return {
-      runId: input.runId,
-      chatId: input.chatId,
+      taskId: input.taskId,
+      kind: input.kind,
       scopeId: input.scopeId,
       status: "queued",
       priority,
       enqueuedAt: now,
       availableAt,
-      request: input.request,
+      payload: input.payload,
       attemptCount: 0,
       poisonCount: 0,
     };
   }
 
-  async getRun(runId: string): Promise<RunRecord | null> {
-    const row = this.selectRunRow(runId);
-    return row ? runFromRow(row) : null;
+  async getTask(taskId: string): Promise<TaskRecord | null> {
+    const row = this.selectTaskRow(taskId);
+    return row ? taskFromRow(row) : null;
   }
 
-  async transitionRun(
-    runId: string,
-    from: RunStatus[],
-    to: RunStatus,
-    patch?: RunPatch,
-  ): Promise<RunRecord> {
+  async transitionTask(
+    taskId: string,
+    from: TaskStatus[],
+    to: TaskStatus,
+    patch?: TaskPatch,
+  ): Promise<TaskRecord> {
     return this.conn.withTx(() => {
-      const row = this.selectRunRow(runId);
-      if (!row) throw new RecordNotFoundError(`Run not found: ${runId}`);
-      const current = row.status as RunStatus;
+      const row = this.selectTaskRow(taskId);
+      if (!row) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+      const current = row.status as TaskStatus;
       if (!from.includes(current)) {
-        throw new InvalidRunTransitionError(
-          `Run ${runId} is ${current}, expected one of [${from.join(", ")}].`,
-          { runId, current, from, to },
+        throw new InvalidTaskTransitionError(
+          `Task ${taskId} is ${current}, expected one of [${from.join(", ")}].`,
+          { taskId, current, from, to },
         );
       }
-      assertRunTransition(current, to);
+      assertTaskTransition(current, to);
       const result = this.conn.run(
-        `UPDATE runs SET
+        `UPDATE tasks SET
            status = $status,
            started_at = COALESCE($startedAt, started_at),
            finished_at = COALESCE($finishedAt, finished_at),
@@ -817,8 +832,8 @@ class SqliteRunStore implements RunStore {
            available_at = COALESCE($availableAt, available_at),
            priority = COALESCE($priority, priority),
            poison_count = COALESCE($poisonCount, poison_count),
-           request = COALESCE($request, request)
-         WHERE run_id = $id AND status = $current`,
+           payload = COALESCE($payload, payload)
+         WHERE task_id = $id AND status = $current`,
         {
           $status: to,
           $startedAt: patch?.startedAt ?? null,
@@ -827,38 +842,38 @@ class SqliteRunStore implements RunStore {
           $availableAt: patch?.availableAt ?? null,
           $priority: patch?.priority ?? null,
           $poisonCount: patch?.poisonCount ?? null,
-          $request: patch?.request !== undefined ? toJson(patch.request) : null,
-          $id: runId,
+          $payload: patch?.payload !== undefined ? toJson(patch.payload) : null,
+          $id: taskId,
           $current: current,
         },
       );
       if (result.changes === 0) {
         // Lost a race between the SELECT above and this UPDATE.
-        throw new InvalidRunTransitionError(
-          `Run ${runId} changed concurrently; expected one of [${from.join(", ")}].`,
-          { runId, from, to },
+        throw new InvalidTaskTransitionError(
+          `Task ${taskId} changed concurrently; expected one of [${from.join(", ")}].`,
+          { taskId, from, to },
         );
       }
-      return runFromRow(this.selectRunRow(runId)!);
+      return taskFromRow(this.selectTaskRow(taskId)!);
     });
   }
 
   async createAttempt(input: CreateAttemptInput): Promise<AttemptRecord> {
     return this.conn.withTx(() => {
-      const run = this.selectRunRow(input.runId);
-      if (!run) throw new RecordNotFoundError(`Run not found: ${input.runId}`);
-      const attemptNumber = run.attempt_count + 1;
+      const task = this.selectTaskRow(input.taskId);
+      if (!task) throw new RecordNotFoundError(`Task not found: ${input.taskId}`);
+      const attemptNumber = task.attempt_count + 1;
       const startedAt = this.clock.nowIso();
-      this.conn.run(`UPDATE runs SET attempt_count = $n WHERE run_id = $id`, {
+      this.conn.run(`UPDATE tasks SET attempt_count = $n WHERE task_id = $id`, {
         $n: attemptNumber,
-        $id: input.runId,
+        $id: input.taskId,
       });
       this.conn.run(
-        `INSERT INTO run_attempts (attempt_id, run_id, attempt_number, status, owner_id, started_at)
-         VALUES ($attemptId, $runId, $attemptNumber, 'running', $ownerId, $startedAt)`,
+        `INSERT INTO task_attempts (attempt_id, task_id, attempt_number, status, owner_id, started_at)
+         VALUES ($attemptId, $taskId, $attemptNumber, 'running', $ownerId, $startedAt)`,
         {
           $attemptId: input.attemptId,
-          $runId: input.runId,
+          $taskId: input.taskId,
           $attemptNumber: attemptNumber,
           $ownerId: input.ownerId,
           $startedAt: startedAt,
@@ -866,7 +881,7 @@ class SqliteRunStore implements RunStore {
       );
       return {
         attemptId: input.attemptId,
-        runId: input.runId,
+        taskId: input.taskId,
         attemptNumber,
         status: "running",
         ownerId: input.ownerId,
@@ -878,7 +893,7 @@ class SqliteRunStore implements RunStore {
   async endAttempt(input: EndAttemptInput): Promise<AttemptRecord> {
     return this.conn.withTx(() => {
       const row = this.conn.get(
-        `SELECT * FROM run_attempts WHERE attempt_id = $id`,
+        `SELECT * FROM task_attempts WHERE attempt_id = $id`,
         { $id: input.attemptId },
       ) as AttemptRow | null;
       if (!row) {
@@ -886,7 +901,7 @@ class SqliteRunStore implements RunStore {
       }
       const endedAt = this.clock.nowIso();
       this.conn.run(
-        `UPDATE run_attempts SET status = $status, ended_at = $endedAt, error = COALESCE($error, error) WHERE attempt_id = $id`,
+        `UPDATE task_attempts SET status = $status, ended_at = $endedAt, error = COALESCE($error, error) WHERE attempt_id = $id`,
         {
           $status: input.status,
           $endedAt: endedAt,
@@ -915,19 +930,19 @@ class SqliteRunStore implements RunStore {
       const expiresAt = new Date(
         this.clock.now().getTime() + input.ttlMs,
       ).toISOString();
-      // PK on run_id: this always mints a fresh lease, replacing whatever was
+      // PK on task_id: this always mints a fresh lease, replacing whatever was
       // there — see the module doc on lease semantics.
       this.conn.run(
-        `INSERT INTO leases (run_id, attempt_id, owner_id, lease_token, fencing_token, expires_at)
-         VALUES ($runId, $attemptId, $ownerId, $leaseToken, $fencingToken, $expiresAt)
-         ON CONFLICT(run_id) DO UPDATE SET
+        `INSERT INTO leases (task_id, attempt_id, owner_id, lease_token, fencing_token, expires_at)
+         VALUES ($taskId, $attemptId, $ownerId, $leaseToken, $fencingToken, $expiresAt)
+         ON CONFLICT(task_id) DO UPDATE SET
            attempt_id = excluded.attempt_id,
            owner_id = excluded.owner_id,
            lease_token = excluded.lease_token,
            fencing_token = excluded.fencing_token,
            expires_at = excluded.expires_at`,
         {
-          $runId: input.runId,
+          $taskId: input.taskId,
           $attemptId: input.attemptId,
           $ownerId: input.ownerId,
           $leaseToken: leaseToken,
@@ -936,7 +951,7 @@ class SqliteRunStore implements RunStore {
         },
       );
       return {
-        runId: input.runId,
+        taskId: input.taskId,
         attemptId: input.attemptId,
         ownerId: input.ownerId,
         leaseToken,
@@ -996,33 +1011,33 @@ class SqliteRunStore implements RunStore {
   }
 
   async appendEvents(
-    runId: string,
-    events: AiRunEvent[],
+    taskId: string,
+    events: TaskEventEnvelope[],
     opts: AppendEventsOptions,
   ): Promise<void> {
     if (events.length === 0) return;
     this.conn.withTx(() => {
       const lease = this.conn.get(
-        `SELECT lease_token FROM leases WHERE run_id = $runId`,
-        { $runId: runId },
+        `SELECT lease_token FROM leases WHERE task_id = $taskId`,
+        { $taskId: taskId },
       ) as { lease_token: string } | null;
       if (!lease || lease.lease_token !== opts.leaseToken) {
         throw new LeaseLostError(
-          `Lease token ${opts.leaseToken} is not current for run ${runId}.`,
-          { runId, leaseToken: opts.leaseToken },
+          `Lease token ${opts.leaseToken} is not current for task ${taskId}.`,
+          { taskId, leaseToken: opts.leaseToken },
         );
       }
       const lastRow = this.conn.get(
-        `SELECT MAX(seq) as maxSeq FROM run_events WHERE run_id = $runId`,
-        { $runId: runId },
+        `SELECT MAX(seq) as maxSeq FROM task_events WHERE task_id = $taskId`,
+        { $taskId: taskId },
       ) as { maxSeq: number | null };
       let last = lastRow.maxSeq ?? -1;
       // Validate the whole batch before writing anything.
       for (const event of events) {
         if (event.seq <= last) {
           throw new SeqConflictError(
-            `Non-monotonic seq ${event.seq} for run ${runId} (last ${last}).`,
-            { runId, seq: event.seq, last },
+            `Non-monotonic seq ${event.seq} for task ${taskId} (last ${last}).`,
+            { taskId, seq: event.seq, last },
           );
         }
         last = event.seq;
@@ -1030,10 +1045,10 @@ class SqliteRunStore implements RunStore {
       for (const event of events) {
         try {
           this.conn.run(
-            `INSERT INTO run_events (run_id, seq, event_id, attempt_id, type, timestamp, payload)
-             VALUES ($runId, $seq, $eventId, $attemptId, $type, $timestamp, $payload)`,
+            `INSERT INTO task_events (task_id, seq, event_id, attempt_id, type, timestamp, payload)
+             VALUES ($taskId, $seq, $eventId, $attemptId, $type, $timestamp, $payload)`,
             {
-              $runId: runId,
+              $taskId: taskId,
               $seq: event.seq,
               $eventId: event.eventId,
               $attemptId: event.attemptId ?? null,
@@ -1045,8 +1060,8 @@ class SqliteRunStore implements RunStore {
         } catch (err) {
           if (isConstraintError(err)) {
             throw new SeqConflictError(
-              `Duplicate seq or eventId for run ${runId} (seq ${event.seq}).`,
-              { runId, seq: event.seq, cause: String(err) },
+              `Duplicate seq or eventId for task ${taskId} (seq ${event.seq}).`,
+              { taskId, seq: event.seq, cause: String(err) },
             );
           }
           throw err;
@@ -1056,11 +1071,11 @@ class SqliteRunStore implements RunStore {
   }
 
   async listEvents(
-    runId: string,
+    taskId: string,
     opts?: ListEventsOptions,
-  ): Promise<AiRunEvent[]> {
-    let sql = `SELECT * FROM run_events WHERE run_id = $runId`;
-    const params: Params = { $runId: runId };
+  ): Promise<TaskEventEnvelope[]> {
+    let sql = `SELECT * FROM task_events WHERE task_id = $taskId`;
+    const params: Params = { $taskId: taskId };
     if (opts?.afterSeq !== undefined) {
       sql += ` AND seq > $after`;
       params.$after = opts.afterSeq;
@@ -1070,67 +1085,71 @@ class SqliteRunStore implements RunStore {
       sql += ` LIMIT $limit`;
       params.$limit = opts.limit;
     }
-    const rows = this.conn.all(sql, params) as RunEventRow[];
-    return rows.map((row) => parseJson<AiRunEvent>(row.payload));
+    const rows = this.conn.all(sql, params) as TaskEventRow[];
+    return rows.map((row) => parseJson<TaskEventEnvelope>(row.payload));
   }
 
-  async nextSeq(runId: string): Promise<number> {
+  async nextSeq(taskId: string): Promise<number> {
     const row = this.conn.get(
-      `SELECT MAX(seq) as maxSeq FROM run_events WHERE run_id = $runId`,
-      { $runId: runId },
+      `SELECT MAX(seq) as maxSeq FROM task_events WHERE task_id = $taskId`,
+      { $taskId: taskId },
     ) as { maxSeq: number | null };
     return (row.maxSeq ?? -1) + 1;
   }
 
-  async claimNext(input: ClaimNextInput): Promise<ClaimedRun | null> {
+  async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
     return this.conn.withAsyncTx(async () => {
       const nowIso = input.now.toISOString();
-      const row = this.selectClaimCandidate(nowIso, input.scopesBusy);
+      const row = this.selectClaimCandidate(
+        nowIso,
+        input.scopesBusy,
+        input.kinds,
+      );
       if (!row) return null;
-      const run = await this.transitionRun(row.run_id, ["queued"], "running", {
+      const task = await this.transitionTask(row.task_id, ["queued"], "running", {
         startedAt: this.clock.nowIso(),
       });
       const attempt = await this.createAttempt({
         attemptId: this.ids.attemptId(),
-        runId: run.runId,
+        taskId: task.taskId,
         ownerId: input.ownerId,
       });
       const lease = await this.acquireLease({
-        runId: run.runId,
+        taskId: task.taskId,
         attemptId: attempt.attemptId,
         ownerId: input.ownerId,
         ttlMs: this.leaseTtlMs,
       });
-      return { run, attempt, lease };
+      return { task, attempt, lease };
     });
   }
 
-  async markDeadLettered(runId: string, reason: string): Promise<RunRecord> {
+  async markDeadLettered(taskId: string, reason: string): Promise<TaskRecord> {
     return this.conn.withTx(() => {
-      const row = this.selectRunRow(runId);
-      if (!row) throw new RecordNotFoundError(`Run not found: ${runId}`);
+      const row = this.selectTaskRow(taskId);
+      if (!row) throw new RecordNotFoundError(`Task not found: ${taskId}`);
       const at = this.clock.nowIso();
       this.conn.run(
-        `UPDATE runs SET dead_lettered_at = $at, dead_letter_reason = $reason WHERE run_id = $id`,
-        { $at: at, $reason: reason, $id: runId },
+        `UPDATE tasks SET dead_lettered_at = $at, dead_letter_reason = $reason WHERE task_id = $id`,
+        { $at: at, $reason: reason, $id: taskId },
       );
-      return runFromRow(this.selectRunRow(runId)!);
+      return taskFromRow(this.selectTaskRow(taskId)!);
     });
   }
 
-  private selectRunRow(runId: string): RunRow | null {
+  private selectTaskRow(taskId: string): TaskRow | null {
     return (
-      (this.conn.get(`SELECT * FROM runs WHERE run_id = $id`, {
-        $id: runId,
-      }) as RunRow | undefined) ?? null
+      (this.conn.get(`SELECT * FROM tasks WHERE task_id = $id`, {
+        $id: taskId,
+      }) as TaskRow | undefined) ?? null
     );
   }
 
   /**
-   * The claim query: status/availableAt/scope filters, ordered by effective
-   * priority (`priority + floor(waitMs / 30s)`) desc, then `enqueued_at` asc,
-   * then `rowid` asc as a final deterministic tie-break (insertion order,
-   * for when two rows share a millisecond timestamp).
+   * The claim query: status/availableAt/scope/kind filters, ordered by
+   * effective priority (`priority + floor(waitMs / 30s)`) desc, then
+   * `enqueued_at` asc, then `rowid` asc as a final deterministic tie-break
+   * (insertion order, for when two rows share a millisecond timestamp).
    *
    * `$now` is the CALLER-SUPPLIED `ClaimNextInput.now`, bound once and reused
    * in both the WHERE filter and the aging expression — not SQL's own
@@ -1139,12 +1158,17 @@ class SqliteRunStore implements RunStore {
    * query takes to reach that clause, and would make the aging term
    * untestable (a caller cannot advance the database engine's clock, but
    * freely controls what `now` it passes in).
+   *
+   * An EMPTY `kinds` array means "no kind is acceptable", not "any kind": a
+   * worker with an empty executor registry can claim nothing, and quietly
+   * treating that as unfiltered would hand it work it cannot run.
    */
   private selectClaimCandidate(
     nowIso: string,
     scopesBusy: string[],
-  ): RunRow | null {
-    let sql = `SELECT * FROM runs WHERE status = 'queued' AND available_at <= $now`;
+    kinds: string[] | undefined,
+  ): TaskRow | null {
+    let sql = `SELECT * FROM tasks WHERE status = 'queued' AND available_at <= $now`;
     const params: Params = { $now: nowIso };
     if (scopesBusy.length > 0) {
       const placeholders = scopesBusy.map((_, i) => `$busy${i}`).join(", ");
@@ -1153,9 +1177,17 @@ class SqliteRunStore implements RunStore {
         params[`$busy${i}`] = scope;
       });
     }
+    if (kinds !== undefined) {
+      if (kinds.length === 0) return null;
+      const placeholders = kinds.map((_, i) => `$kind${i}`).join(", ");
+      sql += ` AND kind IN (${placeholders})`;
+      kinds.forEach((kind, i) => {
+        params[`$kind${i}`] = kind;
+      });
+    }
     sql += ` ORDER BY (priority + CAST((strftime('%s', $now) - strftime('%s', enqueued_at)) / 30 AS INTEGER)) DESC,
              enqueued_at ASC, rowid ASC LIMIT 1`;
-    return (this.conn.get(sql, params) as RunRow | undefined) ?? null;
+    return (this.conn.get(sql, params) as TaskRow | undefined) ?? null;
   }
 }
 
@@ -1618,6 +1650,43 @@ class SqliteOutboxStore implements OutboxStore {
   }
 }
 
+/**
+ * Refuse a database this build cannot read, instead of layering v2 tables over
+ * v1 ones and discovering the mismatch at the first query.
+ *
+ * `PRAGMA user_version` is SQLite's own four-byte header slot — no bookkeeping
+ * table, nothing to create before it can be read, and 0 on a database nobody
+ * has stamped. A FRESH (or empty) file is stamped and initialized; anything
+ * else carrying a different version is a hard error, because this adapter is
+ * workspace-private and deliberately ships NO MIGRATIONS: a reference
+ * implementation with half-tested upgrade scripts would be advertising a
+ * durability guarantee it has not earned. Recreating the dev database is the
+ * intended fix; a host that needs upgrades in place owns that with its own
+ * store.
+ */
+function assertSchemaVersion(db: Database, path: string): void {
+  const version = (
+    db.query(`PRAGMA user_version`).get() as { user_version: number } | null
+  )?.user_version;
+  if (version === undefined || version === SCHEMA_VERSION) return;
+  // An unstamped database with no tables is a fresh file (or an older build's
+  // empty scratch db): there is nothing to preserve, so stamping it is safe.
+  const tables = (
+    db
+      .query(
+        `SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+      )
+      .get() as { count: number }
+  ).count;
+  if (version === 0 && tables === 0) return;
+  throw new AgentKitHostError(
+    "sqlite_schema_version",
+    `SQLite store at ${path} is schema version ${version}, but this build expects ${SCHEMA_VERSION}. ` +
+      `This workspace-private reference adapter ships no migrations — delete and recreate the dev database.`,
+    { path, found: version, expected: SCHEMA_VERSION },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Aggregate
 // ---------------------------------------------------------------------------
@@ -1647,7 +1716,7 @@ export interface SqliteAssistantStoreOptions {
 export class SqliteAssistantStore implements AssistantStore {
   private readonly conn: SqliteConnection;
   readonly conversations: ConversationStore;
-  readonly runs: RunStore;
+  readonly tasks: TaskStore;
   readonly proposals: ProposalStore;
   readonly providers: ProviderStore;
   readonly settings: SettingsStore;
@@ -1662,15 +1731,17 @@ export class SqliteAssistantStore implements AssistantStore {
       db.exec("PRAGMA journal_mode = WAL;");
     }
     db.exec("PRAGMA foreign_keys = ON;");
+    assertSchemaVersion(db, path);
     // Idempotent: every statement is CREATE ... IF NOT EXISTS / INSERT OR
     // IGNORE, so reopening the same file (or a file another process already
     // initialized) is a safe no-op.
-    db.exec(SCHEMA_V1);
+    db.exec(SCHEMA_V2);
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
     this.conn = new SqliteConnection(db);
     const clock = options.clock ?? defaultClock;
     const ids = options.ids ?? defaultIds;
     this.conversations = new SqliteConversationStore(this.conn, clock, ids);
-    this.runs = new SqliteRunStore(this.conn, clock, ids, options.leaseTtlMs);
+    this.tasks = new SqliteTaskStore(this.conn, clock, ids, options.leaseTtlMs);
     this.proposals = new SqliteProposalStore(this.conn, clock);
     this.providers = new SqliteProviderStore(this.conn);
     this.settings = new SqliteSettingsStore(this.conn);

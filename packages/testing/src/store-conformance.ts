@@ -18,7 +18,7 @@
 import type {
   AssistantStore,
   CreateProposalInput,
-  CreateRunInput,
+  CreateTaskInput,
 } from "@agentkit/host";
 import { createTestEventStamper } from "./stamp.js";
 
@@ -114,11 +114,13 @@ export function describeAssistantStoreConformance(
     return `${prefix}-${counter}`;
   };
 
-  const makeRunInput = (overrides: Partial<CreateRunInput> = {}): CreateRunInput => ({
-    runId: uniqueId("run"),
-    chatId: "chat-1",
+  const makeTaskInput = (
+    overrides: Partial<CreateTaskInput> = {},
+  ): CreateTaskInput => ({
+    taskId: uniqueId("task"),
+    kind: "test.kind",
     scopeId: uniqueId("scope"),
-    request: { model: "test-model" },
+    payload: { model: "test-model" },
     ...overrides,
   });
 
@@ -194,19 +196,95 @@ export function describeAssistantStoreConformance(
       }
     });
 
-    it("creates a run, allows a legal transition, and rejects an illegal one", async () => {
+    it("creates a task, allows a legal transition, and rejects an illegal one", async () => {
       const { store, close } = await create();
       try {
-        const run = await store.runs.createRun(makeRunInput());
-        expect(run.status).toBe("queued");
-        const running = await store.runs.transitionRun(run.runId, ["queued"], "running");
+        const task = await store.tasks.createTask(makeTaskInput());
+        expect(task.status).toBe("queued");
+        const running = await store.tasks.transitionTask(task.taskId, ["queued"], "running");
         expect(running.status).toBe("running");
-        // "queued" -> "completed" is not a legal edge from RUN_TRANSITIONS.
+        // "queued" -> "completed" is not a legal edge from TASK_TRANSITIONS.
         await expectRejectsWithCode(
-          store.runs.transitionRun(run.runId, ["queued"], "completed"),
-          "invalid_run_transition",
+          store.tasks.transitionTask(task.taskId, ["queued"], "completed"),
+          "invalid_task_transition",
           expect,
         );
+      } finally {
+        close?.();
+      }
+    });
+
+    it("round-trips the task kind through create, read, and claim", async () => {
+      const { store, close } = await create();
+      try {
+        const created = await store.tasks.createTask(
+          makeTaskInput({ kind: "index.rebuild" }),
+        );
+        expect(created.kind).toBe("index.rebuild");
+        expect((await store.tasks.getTask(created.taskId))?.kind).toBe(
+          "index.rebuild",
+        );
+        // The claim path must carry it too: the dispatcher reads `kind` off the
+        // claimed record to pick an executor, and a store that dropped it there
+        // would route every claimed task to nobody.
+        const claimed = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(claimed?.task.kind).toBe("index.rebuild");
+      } finally {
+        close?.();
+      }
+    });
+
+    it("rejects a duplicate taskId instead of overwriting the existing task", async () => {
+      const { store, close } = await create();
+      try {
+        const taskId = uniqueId("task");
+        await store.tasks.createTask(makeTaskInput({ taskId }));
+        await expectRejectsWithCode(
+          store.tasks.createTask(
+            makeTaskInput({ taskId, payload: { model: "other" } }),
+          ),
+          "duplicate_task",
+          expect,
+        );
+        // …and the FIRST task is intact: a silent overwrite would have replaced
+        // the payload a live task is executing against.
+        const stored = await store.tasks.getTask(taskId);
+        expect(stored?.payload).toEqual({ model: "test-model" });
+      } finally {
+        close?.();
+      }
+    });
+
+    it("claimNext honours the kinds filter, and claims anything without one", async () => {
+      const { store, close } = await create();
+      try {
+        // Different scopes, so neither task can be excluded by scope
+        // serialization — the only thing separating them is `kind`.
+        const a = await store.tasks.createTask(
+          makeTaskInput({ kind: "kind.A", scopeId: uniqueId("scope") }),
+        );
+        const b = await store.tasks.createTask(
+          makeTaskInput({ kind: "kind.B", scopeId: uniqueId("scope") }),
+        );
+        const filtered = await store.tasks.claimNext({
+          ownerId: "worker-A",
+          now: new Date(),
+          scopesBusy: [],
+          kinds: ["kind.A"],
+        });
+        expect(filtered?.task.taskId).toBe(a.taskId);
+        expect(filtered?.task.taskId).not.toBe(b.taskId);
+        // Unfiltered, the remaining task is claimable by whoever asks.
+        const unfiltered = await store.tasks.claimNext({
+          ownerId: "worker-any",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(unfiltered?.task.taskId).toBe(b.taskId);
       } finally {
         close?.();
       }
@@ -215,15 +293,15 @@ export function describeAssistantStoreConformance(
     it("creates and ends an attempt", async () => {
       const { store, close } = await create();
       try {
-        const run = await store.runs.createRun(makeRunInput());
-        const attempt = await store.runs.createAttempt({
+        const task = await store.tasks.createTask(makeTaskInput());
+        const attempt = await store.tasks.createAttempt({
           attemptId: uniqueId("att"),
-          runId: run.runId,
+          taskId: task.taskId,
           ownerId: "worker-1",
         });
         expect(attempt.status).toBe("running");
         expect(attempt.attemptNumber).toBe(1);
-        const ended = await store.runs.endAttempt({
+        const ended = await store.tasks.endAttempt({
           attemptId: attempt.attemptId,
           status: "completed",
         });
@@ -237,26 +315,26 @@ export function describeAssistantStoreConformance(
     it("acquires, renews, and releases a lease", async () => {
       const { store, close } = await create();
       try {
-        const run = await store.runs.createRun(makeRunInput());
-        const attempt = await store.runs.createAttempt({
+        const task = await store.tasks.createTask(makeTaskInput());
+        const attempt = await store.tasks.createAttempt({
           attemptId: uniqueId("att"),
-          runId: run.runId,
+          taskId: task.taskId,
           ownerId: "worker-1",
         });
-        const lease = await store.runs.acquireLease({
-          runId: run.runId,
+        const lease = await store.tasks.acquireLease({
+          taskId: task.taskId,
           attemptId: attempt.attemptId,
           ownerId: "worker-1",
           ttlMs: 60_000,
         });
-        expect(lease.runId).toBe(run.runId);
+        expect(lease.taskId).toBe(task.taskId);
         expect(lease.fencingToken).toBeGreaterThan(0);
-        const renewed = await store.runs.renewLease(lease.leaseToken, 120_000);
+        const renewed = await store.tasks.renewLease(lease.leaseToken, 120_000);
         expect(renewed.leaseToken).toBe(lease.leaseToken);
         expect(new Date(renewed.expiresAt).getTime()).toBeGreaterThan(
           new Date(lease.expiresAt).getTime(),
         );
-        await store.runs.releaseLease(lease.leaseToken);
+        await store.tasks.releaseLease(lease.leaseToken);
       } finally {
         close?.();
       }
@@ -266,7 +344,7 @@ export function describeAssistantStoreConformance(
       const { store, close } = await create();
       try {
         await expectRejectsWithCode(
-          store.runs.renewLease("not-a-real-token", 30_000),
+          store.tasks.renewLease("not-a-real-token", 30_000),
           "lease_lost",
           expect,
         );
@@ -278,14 +356,14 @@ export function describeAssistantStoreConformance(
     it("issues a strictly higher fencingToken when re-acquiring after expiry", async () => {
       const { store, close } = await create();
       try {
-        const run = await store.runs.createRun(makeRunInput());
-        const attempt = await store.runs.createAttempt({
+        const task = await store.tasks.createTask(makeTaskInput());
+        const attempt = await store.tasks.createAttempt({
           attemptId: uniqueId("att"),
-          runId: run.runId,
+          taskId: task.taskId,
           ownerId: "worker-1",
         });
-        const first = await store.runs.acquireLease({
-          runId: run.runId,
+        const first = await store.tasks.acquireLease({
+          taskId: task.taskId,
           attemptId: attempt.attemptId,
           ownerId: "worker-1",
           ttlMs: 1,
@@ -294,10 +372,10 @@ export function describeAssistantStoreConformance(
         // caller controls `now` for expireStaleLeases, so no real sleeping
         // is needed to simulate expiry.
         const future = new Date(Date.now() + 60_000);
-        const expired = await store.runs.expireStaleLeases(future);
+        const expired = await store.tasks.expireStaleLeases(future);
         expect(expired.some((l) => l.leaseToken === first.leaseToken)).toBe(true);
-        const second = await store.runs.acquireLease({
-          runId: run.runId,
+        const second = await store.tasks.acquireLease({
+          taskId: task.taskId,
           attemptId: attempt.attemptId,
           ownerId: "worker-2",
           ttlMs: 30_000,
@@ -311,16 +389,16 @@ export function describeAssistantStoreConformance(
     it("rejects appendEvents when the leaseToken is not current", async () => {
       const { store, close } = await create();
       try {
-        const run = await store.runs.createRun(makeRunInput());
+        const task = await store.tasks.createTask(makeTaskInput());
         const stamp = createTestEventStamper();
         const event = stamp({
           type: "run.started",
-          runId: run.runId,
+          runId: task.taskId,
           timestamp: new Date().toISOString(),
           data: { model: "m", toolCount: 0 },
         });
         await expectRejectsWithCode(
-          store.runs.appendEvents(run.runId, [event], { leaseToken: "bogus" }),
+          store.tasks.appendEvents(task.taskId, [event], { leaseToken: "bogus" }),
           "lease_lost",
           expect,
         );
@@ -332,14 +410,14 @@ export function describeAssistantStoreConformance(
     it("rejects a non-monotonic seq in appendEvents", async () => {
       const { store, close } = await create();
       try {
-        const run = await store.runs.createRun(makeRunInput());
-        const attempt = await store.runs.createAttempt({
+        const task = await store.tasks.createTask(makeTaskInput());
+        const attempt = await store.tasks.createAttempt({
           attemptId: uniqueId("att"),
-          runId: run.runId,
+          taskId: task.taskId,
           ownerId: "worker-1",
         });
-        const lease = await store.runs.acquireLease({
-          runId: run.runId,
+        const lease = await store.tasks.acquireLease({
+          taskId: task.taskId,
           attemptId: attempt.attemptId,
           ownerId: "worker-1",
           ttlMs: 60_000,
@@ -347,22 +425,22 @@ export function describeAssistantStoreConformance(
         const stamp = createTestEventStamper();
         const e0 = stamp({
           type: "run.started",
-          runId: run.runId,
+          runId: task.taskId,
           timestamp: new Date().toISOString(),
           data: { model: "m", toolCount: 0 },
         });
-        await store.runs.appendEvents(run.runId, [e0], {
+        await store.tasks.appendEvents(task.taskId, [e0], {
           leaseToken: lease.leaseToken,
         });
         const stampAgain = createTestEventStamper({ firstSeq: 0 });
         const regressed = stampAgain({
           type: "run.completed",
-          runId: run.runId,
+          runId: task.taskId,
           timestamp: new Date().toISOString(),
           data: { iterations: 1 },
         });
         await expectRejectsWithCode(
-          store.runs.appendEvents(run.runId, [regressed], {
+          store.tasks.appendEvents(task.taskId, [regressed], {
             leaseToken: lease.leaseToken,
           }),
           "seq_conflict",
@@ -376,47 +454,47 @@ export function describeAssistantStoreConformance(
     it("lists events after a seq and reports nextSeq", async () => {
       const { store, close } = await create();
       try {
-        const run = await store.runs.createRun(makeRunInput());
-        const attempt = await store.runs.createAttempt({
+        const task = await store.tasks.createTask(makeTaskInput());
+        const attempt = await store.tasks.createAttempt({
           attemptId: uniqueId("att"),
-          runId: run.runId,
+          taskId: task.taskId,
           ownerId: "worker-1",
         });
-        const lease = await store.runs.acquireLease({
-          runId: run.runId,
+        const lease = await store.tasks.acquireLease({
+          taskId: task.taskId,
           attemptId: attempt.attemptId,
           ownerId: "worker-1",
           ttlMs: 60_000,
         });
-        expect(await store.runs.nextSeq(run.runId)).toBe(0);
+        expect(await store.tasks.nextSeq(task.taskId)).toBe(0);
         const stamp = createTestEventStamper();
         const events = [
           stamp({
             type: "run.started",
-            runId: run.runId,
+            runId: task.taskId,
             timestamp: new Date().toISOString(),
             data: { model: "m", toolCount: 0 },
           }),
           stamp({
             type: "run.message.delta",
-            runId: run.runId,
+            runId: task.taskId,
             timestamp: new Date().toISOString(),
             data: { delta: "hi" },
           }),
           stamp({
             type: "run.completed",
-            runId: run.runId,
+            runId: task.taskId,
             timestamp: new Date().toISOString(),
             data: { iterations: 1 },
           }),
         ];
-        await store.runs.appendEvents(run.runId, events, {
+        await store.tasks.appendEvents(task.taskId, events, {
           leaseToken: lease.leaseToken,
         });
-        expect(await store.runs.nextSeq(run.runId)).toBe(3);
-        const after = await store.runs.listEvents(run.runId, { afterSeq: 0 });
+        expect(await store.tasks.nextSeq(task.taskId)).toBe(3);
+        const after = await store.tasks.listEvents(task.taskId, { afterSeq: 0 });
         expect(after.map((e) => e.seq)).toEqual([1, 2]);
-        const all = await store.runs.listEvents(run.runId);
+        const all = await store.tasks.listEvents(task.taskId);
         expect(all.map((e) => e.type)).toEqual([
           "run.started",
           "run.message.delta",
@@ -430,7 +508,7 @@ export function describeAssistantStoreConformance(
     it("claimNext returns null when there is nothing queued", async () => {
       const { store, close } = await create();
       try {
-        const claimed = await store.runs.claimNext({
+        const claimed = await store.tasks.claimNext({
           ownerId: "worker-1",
           now: new Date(),
           scopesBusy: [],
@@ -441,12 +519,12 @@ export function describeAssistantStoreConformance(
       }
     });
 
-    it("claimNext does not claim a run whose availableAt is in the future", async () => {
+    it("claimNext does not claim a task whose availableAt is in the future", async () => {
       const { store, close } = await create();
       try {
         const future = new Date(Date.now() + 3_600_000).toISOString();
-        await store.runs.createRun(makeRunInput({ availableAt: future }));
-        const claimed = await store.runs.claimNext({
+        await store.tasks.createTask(makeTaskInput({ availableAt: future }));
+        const claimed = await store.tasks.claimNext({
           ownerId: "worker-1",
           now: new Date(),
           scopesBusy: [],
@@ -461,39 +539,39 @@ export function describeAssistantStoreConformance(
       const { store, close } = await create();
       try {
         const scope = uniqueId("scope");
-        const run = await store.runs.createRun(makeRunInput({ scopeId: scope }));
-        const claimed = await store.runs.claimNext({
+        const task = await store.tasks.createTask(makeTaskInput({ scopeId: scope }));
+        const claimed = await store.tasks.claimNext({
           ownerId: "worker-1",
           now: new Date(),
           scopesBusy: [scope],
         });
         expect(claimed).toBeNull();
-        const claimedAfter = await store.runs.claimNext({
+        const claimedAfter = await store.tasks.claimNext({
           ownerId: "worker-1",
           now: new Date(),
           scopesBusy: [],
         });
-        expect(claimedAfter?.run.runId).toBe(run.runId);
+        expect(claimedAfter?.task.taskId).toBe(task.taskId);
       } finally {
         close?.();
       }
     });
 
-    it("claimNext prefers the higher-priority run", async () => {
+    it("claimNext prefers the higher-priority task", async () => {
       const { store, close } = await create();
       try {
-        await store.runs.createRun(makeRunInput({ priority: 0 }));
-        const high = await store.runs.createRun(makeRunInput({ priority: 10 }));
+        await store.tasks.createTask(makeTaskInput({ priority: 0 }));
+        const high = await store.tasks.createTask(makeTaskInput({ priority: 10 }));
         // Captured AFTER both creates: an adapter stamps enqueuedAt/availableAt
-        // from its own clock at createRun time, so a `now` captured any
+        // from its own clock at createTask time, so a `now` captured any
         // earlier can race that stamp and spuriously exclude a just-created
         // row from claimNext's `availableAt <= now` filter.
-        const claimed = await store.runs.claimNext({
+        const claimed = await store.tasks.claimNext({
           ownerId: "worker-1",
           now: new Date(),
           scopesBusy: [],
         });
-        expect(claimed?.run.runId).toBe(high.runId);
+        expect(claimed?.task.taskId).toBe(high.taskId);
       } finally {
         close?.();
       }
@@ -502,14 +580,14 @@ export function describeAssistantStoreConformance(
     it("claimNext breaks a priority tie in FIFO (enqueuedAt) order", async () => {
       const { store, close } = await create();
       try {
-        const first = await store.runs.createRun(makeRunInput());
-        await store.runs.createRun(makeRunInput());
-        const claimed = await store.runs.claimNext({
+        const first = await store.tasks.createTask(makeTaskInput());
+        await store.tasks.createTask(makeTaskInput());
+        const claimed = await store.tasks.claimNext({
           ownerId: "worker-1",
           now: new Date(),
           scopesBusy: [],
         });
-        expect(claimed?.run.runId).toBe(first.runId);
+        expect(claimed?.task.taskId).toBe(first.taskId);
       } finally {
         close?.();
       }
@@ -519,17 +597,17 @@ export function describeAssistantStoreConformance(
       const { store, close } = await create();
       try {
         const scope = uniqueId("scope");
-        const run = await store.runs.createRun(makeRunInput({ scopeId: scope }));
-        const claimed = await store.runs.claimNext({
+        const task = await store.tasks.createTask(makeTaskInput({ scopeId: scope }));
+        const claimed = await store.tasks.claimNext({
           ownerId: "worker-1",
           now: new Date(),
           scopesBusy: [],
         });
-        expect(claimed?.run.runId).toBe(run.runId);
-        expect(claimed?.run.status).toBe("running");
+        expect(claimed?.task.taskId).toBe(task.taskId);
+        expect(claimed?.task.status).toBe("running");
         expect(claimed?.attempt.ownerId).toBe("worker-1");
-        expect(claimed?.lease.runId).toBe(run.runId);
-        const second = await store.runs.claimNext({
+        expect(claimed?.lease.taskId).toBe(task.taskId);
+        const second = await store.tasks.claimNext({
           ownerId: "worker-2",
           now: new Date(),
           scopesBusy: [scope],

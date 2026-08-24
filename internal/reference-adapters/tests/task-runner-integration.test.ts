@@ -11,7 +11,14 @@
  * not repeat.
  */
 import { describe, expect, it } from "bun:test";
-import { TurnRunner, defaultIds } from "@agentkit/host";
+import type { AiRunEvent } from "@agentkit/contracts";
+import {
+  ChatTurnExecutor,
+  ExecutorRegistry,
+  TurnRunner,
+  createDispatchingWorker,
+  defaultIds,
+} from "@agentkit/host";
 import { MockProviderClient } from "@agentkit/testing";
 import { MemoryAssistantStore, SingleProcessTaskRunner } from "../src/index.js";
 import { createTestClock, waitFor } from "./support/task-runner-harness.js";
@@ -49,10 +56,15 @@ describe("SingleProcessTaskRunner + TurnRunner", () => {
       ids: defaultIds,
     });
 
-    const handle = await taskRunner.startWorker(turnRunner, {
-      concurrency: 1,
-      ownerId: "owner-1",
-    });
+    // The queue talks to the dispatcher, not to TurnRunner directly: this is
+    // the wiring a host uses, and it is what proves the chat turn still works
+    // as one registered kind among however many others.
+    const registry = new ExecutorRegistry();
+    registry.register(new ChatTurnExecutor(turnRunner));
+    const handle = await taskRunner.startWorker(
+      createDispatchingWorker(registry, { store, clock }),
+      { concurrency: 1, ownerId: "owner-1" },
+    );
     try {
       const submitted = await turnRunner.submitMessage({
         chatId: "chat-1",
@@ -61,7 +73,7 @@ describe("SingleProcessTaskRunner + TurnRunner", () => {
 
       await waitFor(
         async () =>
-          (await store.runs.getRun(submitted.runId))?.status === "completed",
+          (await store.tasks.getTask(submitted.runId))?.status === "completed",
         "the submitted run to complete",
       );
 
@@ -76,7 +88,9 @@ describe("SingleProcessTaskRunner + TurnRunner", () => {
 
       // One attempt, one unbroken event sequence, written under the lease the
       // runner granted.
-      const events = await store.runs.listEvents(submitted.runId);
+      const events = (await store.tasks.listEvents(
+        submitted.runId,
+      )) as AiRunEvent[];
       expect(events.length).toBeGreaterThan(0);
       expect(events.map((event) => event.seq)).toEqual(
         events.map((_, index) => index),
@@ -86,7 +100,7 @@ describe("SingleProcessTaskRunner + TurnRunner", () => {
         true,
       );
 
-      const attempts = [...store.runs.attempts.values()];
+      const attempts = [...store.tasks.attempts.values()];
       expect(attempts.length).toBe(1);
       expect(attempts[0]?.status).toBe("completed");
       expect(provider.callCount).toBe(1);

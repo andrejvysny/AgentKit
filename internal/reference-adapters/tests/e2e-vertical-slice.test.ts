@@ -31,9 +31,12 @@ import {
 } from "@agentkit/contracts";
 import type { AiChatRequest, AiProviderClient, AiTool } from "@agentkit/core";
 import {
+  ChatTurnExecutor,
+  ExecutorRegistry,
   ProposalService,
   SessionWritePolicy,
   TurnRunner,
+  createDispatchingWorker,
   createProposalBuilderTool,
   type ApplyOutcome,
   type ApplyProposalInput,
@@ -103,7 +106,7 @@ function createSequentialIds(): IdGenerator {
     return `${kind}-${n}`;
   };
   return {
-    runId: () => next("run"),
+    taskId: () => next("task"),
     attemptId: () => next("att"),
     eventId: () => next("evt"),
     proposalId: () => next("prp"),
@@ -280,7 +283,7 @@ function embedSlice(options: { provider?: AiProviderClient } = {}): Slice {
     policy,
     ids,
     // The scope comes from the run, not from a constant in this file: the
-    // framework threads `RunRecord.scopeId` through `runChat` onto every tool
+    // framework threads `TaskRecord.scopeId` through `runChat` onto every tool
     // context, which is the only thing that knows what this turn writes to.
     scopeKeyOf: (ctx) => ctx.scopeId ?? SCOPE_KEY,
     build: async (_ctx, input) => {
@@ -354,10 +357,18 @@ async function submitAndSettle(
   content: string,
   options: { onceRunning?: (runId: string) => Promise<void> } = {},
 ): Promise<SubmitMessageResult> {
-  const handle = await slice.taskRunner.startWorker(slice.turnRunner, {
-    concurrency: 1,
-    ownerId: "owner-e2e",
-  });
+  // The queue is handed the DISPATCHER, not the turn worker: a chat turn is one
+  // registered kind, and the slice wires it the way a host with several kinds
+  // would.
+  const registry = new ExecutorRegistry();
+  registry.register(new ChatTurnExecutor(slice.turnRunner));
+  const handle = await slice.taskRunner.startWorker(
+    createDispatchingWorker(registry, {
+      store: slice.store,
+      clock: slice.clock,
+    }),
+    { concurrency: 1, ownerId: "owner-e2e" },
+  );
   try {
     const submitted = await slice.turnRunner.submitMessage({
       chatId: CHAT_ID,
@@ -375,7 +386,12 @@ async function submitAndSettle(
 }
 
 async function runStatus(slice: Slice, runId: string): Promise<string> {
-  return (await slice.store.runs.getRun(runId))?.status ?? "missing";
+  return (await slice.store.tasks.getTask(runId))?.status ?? "missing";
+}
+
+/** The turn's event log, narrowed to the chat-turn vocabulary it holds. */
+async function eventsOf(slice: Slice, taskId: string): Promise<AiRunEvent[]> {
+  return (await slice.store.tasks.listEvents(taskId)) as AiRunEvent[];
 }
 
 function isTerminal(status: string): boolean {
@@ -464,7 +480,7 @@ describe("e2e vertical slice (A) — a write stages, waits, then applies once", 
       const submitted = await submitAndSettle(slice, "add a note");
 
       // (1) The run landed where a completed turn should, on one attempt.
-      const run = await slice.store.runs.getRun(submitted.runId);
+      const run = await slice.store.tasks.getTask(submitted.runId);
       expect(run?.status).toBe("completed");
       expect(run?.attemptCount).toBe(1);
       expect(run?.finishedAt).toBeDefined();
@@ -539,7 +555,7 @@ describe("e2e vertical slice (A) — a write stages, waits, then applies once", 
 
       // (5) One unbroken, gap-detectable event stream across BOTH provider
       //     round-trips, ending exactly once.
-      const events = await slice.store.runs.listEvents(submitted.runId);
+      const events = await eventsOf(slice, submitted.runId);
       expectOneUnbrokenStream(events, "run.completed");
 
       // (6) The tool's whole visible life is in the log.
@@ -725,7 +741,7 @@ describe("e2e vertical slice (B) — a policy-approved write applies in the turn
       );
 
       const submitted = await submitAndSettle(slice, "add a note");
-      expect((await slice.store.runs.getRun(submitted.runId))?.status).toBe(
+      expect((await slice.store.tasks.getTask(submitted.runId))?.status).toBe(
         "completed",
       );
 
@@ -762,7 +778,7 @@ describe("e2e vertical slice (B) — a policy-approved write applies in the turn
       expect(placeholder?.content).toBe(FINAL_ANSWER);
       expect(placeholder?.metadata["placeholder"]).toBe(false);
       expectOneUnbrokenStream(
-        await slice.store.runs.listEvents(submitted.runId),
+        await eventsOf(slice, submitted.runId),
         "run.completed",
       );
     } finally {
@@ -793,7 +809,7 @@ describe("e2e vertical slice (C) — a cancel mid-stream still lands cleanly", (
         },
       });
 
-      const run = await slice.store.runs.getRun(submitted.runId);
+      const run = await slice.store.tasks.getTask(submitted.runId);
       expect(run?.status).toBe("cancelled");
       expect(run?.finishedAt).toBeDefined();
 
@@ -806,7 +822,7 @@ describe("e2e vertical slice (C) — a cancel mid-stream still lands cleanly", (
       expect(placeholder?.metadata["placeholder"]).toBe(false);
 
       // One attempt, ended cancelled; no retry of a run the user stopped.
-      const events = await slice.store.runs.listEvents(submitted.runId);
+      const events = await eventsOf(slice, submitted.runId);
       expectOneUnbrokenStream(events, "run.cancelled");
       expect(events.map((event) => event.type)).toEqual([
         "run.started",

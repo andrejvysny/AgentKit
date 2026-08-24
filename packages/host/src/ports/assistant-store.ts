@@ -2,22 +2,22 @@ import type { ConversationStore } from "./conversation-store.js";
 import type { OutboxStore } from "./outbox-store.js";
 import type { ProposalStore } from "./proposal-store.js";
 import type { ProviderStore } from "./provider-store.js";
-import type { RunStore } from "./run-store.js";
 import type { SettingsStore } from "./settings-store.js";
+import type { TaskStore } from "./task-store.js";
 
 /**
  * The host's persistence, as one aggregate.
  *
  * The six stores are grouped rather than injected separately because the
  * operations that matter span them — submitting a turn writes two messages AND a
- * run; finishing one writes events AND a message AND a status — and those writes
+ * task; finishing one writes events AND a message AND a status — and those writes
  * must land together or not at all. A single aggregate with one
  * {@link AssistantStore.transaction} is what makes that expressible; six
  * independent stores would leave every consumer to invent its own atomicity.
  */
 export interface AssistantStore {
   conversations: ConversationStore;
-  runs: RunStore;
+  tasks: TaskStore;
   proposals: ProposalStore;
   providers: ProviderStore;
   settings: SettingsStore;

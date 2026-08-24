@@ -8,6 +8,7 @@
  * depend on how fast the machine is.
  */
 import { afterEach, describe, expect, it } from "bun:test";
+import type { AiRunEvent } from "@agentkit/contracts";
 import { LeaseLostError } from "@agentkit/host";
 import { createTestEventStamper } from "@agentkit/testing";
 import {
@@ -49,19 +50,19 @@ function networkError(): Error {
   });
 }
 
-const runStatus = async (harness: Harness, runId: string) =>
-  (await harness.store.runs.getRun(runId))?.status;
+const taskStatus = async (harness: Harness, taskId: string) =>
+  (await harness.store.tasks.getTask(taskId))?.status;
 
 describe("SingleProcessTaskRunner — dispatch", () => {
   it("(a) executes an enqueued run once and leaves it completed", async () => {
     const harness = createHarness();
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     harness.worker.script("run-1", [{ kind: "complete" }]);
     await start(harness);
 
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await waitFor(
-      async () => (await runStatus(harness, "run-1")) === "completed",
+      async () => (await taskStatus(harness, "run-1")) === "completed",
       "run-1 to complete",
     );
 
@@ -71,33 +72,33 @@ describe("SingleProcessTaskRunner — dispatch", () => {
     expect(harness.attemptsFor("run-1")).toEqual([
       { status: "completed", attemptNumber: 1 },
     ]);
-    const events = await harness.store.runs.listEvents("run-1");
+    const events = (await harness.store.tasks.listEvents("run-1")) as AiRunEvent[];
     expect(events.map((event) => event.seq)).toEqual([0]);
-    const run = await harness.store.runs.getRun("run-1");
+    const run = await harness.store.tasks.getTask("run-1");
     expect(run?.finishedAt).toBeDefined();
     expect(run?.deadLetteredAt).toBeUndefined();
   });
 
   it("(b) is idempotent: re-enqueuing a run that is not queued does nothing", async () => {
     const harness = createHarness();
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     harness.worker.script("run-1", [{ kind: "hold" }]);
     await start(harness);
 
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await waitFor(
       () => harness.worker.callsFor("run-1").length === 1,
       "run-1 to start",
     );
 
     // Re-delivery while it is running, and again after it finished.
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     harness.worker.release("run-1");
     await waitFor(
-      async () => (await runStatus(harness, "run-1")) === "completed",
+      async () => (await taskStatus(harness, "run-1")) === "completed",
       "run-1 to complete",
     );
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await settle();
 
     expect(harness.worker.callsFor("run-1").length).toBe(1);
@@ -108,7 +109,7 @@ describe("SingleProcessTaskRunner — dispatch", () => {
     const harness = createHarness();
     let code: string | undefined;
     try {
-      await harness.runner.enqueue({ runId: "ghost", scopeId: "chat-1" });
+      await harness.runner.enqueue({ taskId: "ghost", scopeId: "chat-1" });
     } catch (err) {
       code = (err as { code?: string }).code;
     }
@@ -117,14 +118,14 @@ describe("SingleProcessTaskRunner — dispatch", () => {
 
   it("(c) runs two scopes at once — dispatch is fire-and-forget", async () => {
     const harness = createHarness();
-    await harness.seedRun("run-a", "chat-a");
-    await harness.seedRun("run-b", "chat-b");
+    await harness.seedTask("run-a", "chat-a");
+    await harness.seedTask("run-b", "chat-b");
     harness.worker.script("run-a", [{ kind: "hold" }]);
     harness.worker.script("run-b", [{ kind: "hold" }]);
     await start(harness, 2);
 
-    await harness.runner.enqueue({ runId: "run-a", scopeId: "chat-a" });
-    await harness.runner.enqueue({ runId: "run-b", scopeId: "chat-b" });
+    await harness.runner.enqueue({ taskId: "run-a", scopeId: "chat-a" });
+    await harness.runner.enqueue({ taskId: "run-b", scopeId: "chat-b" });
     await waitFor(
       () => harness.worker.calls.length === 2,
       "both runs to be executing",
@@ -141,36 +142,36 @@ describe("SingleProcessTaskRunner — dispatch", () => {
     harness.worker.release("run-b");
     await waitFor(
       async () =>
-        (await runStatus(harness, "run-a")) === "completed" &&
-        (await runStatus(harness, "run-b")) === "completed",
+        (await taskStatus(harness, "run-a")) === "completed" &&
+        (await taskStatus(harness, "run-b")) === "completed",
       "both runs to complete",
     );
   });
 
   it("(d) serializes two runs sharing a scope, and reports the queue position", async () => {
     const harness = createHarness();
-    await harness.seedRun("run-1", "chat-1");
-    await harness.seedRun("run-2", "chat-1");
+    await harness.seedTask("run-1", "chat-1");
+    await harness.seedTask("run-2", "chat-1");
     harness.worker.script("run-1", [{ kind: "hold" }]);
     harness.worker.script("run-2", [{ kind: "complete" }]);
     await start(harness, 2);
 
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await waitFor(
       () => harness.worker.callsFor("run-1").length === 1,
       "run-1 to start",
     );
-    await harness.runner.enqueue({ runId: "run-2", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-2", scopeId: "chat-1" });
 
     expect(harness.runner.scopeLock.getPosition("chat-1", "run-1")).toBe(0);
     expect(harness.runner.scopeLock.getPosition("chat-1", "run-2")).toBe(1);
     await settle();
     expect(harness.worker.callsFor("run-2").length).toBe(0);
-    expect(await runStatus(harness, "run-2")).toBe("queued");
+    expect(await taskStatus(harness, "run-2")).toBe("queued");
 
     harness.worker.release("run-1");
     await waitFor(
-      async () => (await runStatus(harness, "run-2")) === "completed",
+      async () => (await taskStatus(harness, "run-2")) === "completed",
       "run-2 to complete",
     );
     expect(harness.worker.timeline).toEqual([
@@ -186,16 +187,16 @@ describe("SingleProcessTaskRunner — dispatch", () => {
 describe("SingleProcessTaskRunner — failure taxonomy", () => {
   it("(e) retries a transient failure in place, on one run and one event stream", async () => {
     const harness = createHarness({ maxAttempts: 3 });
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     harness.worker.script("run-1", [
       { kind: "throw", error: networkError() },
       { kind: "complete" },
     ]);
     await start(harness);
 
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await waitFor(
-      async () => (await runStatus(harness, "run-1")) === "completed",
+      async () => (await taskStatus(harness, "run-1")) === "completed",
       "run-1 to complete after a retry",
     );
 
@@ -206,9 +207,9 @@ describe("SingleProcessTaskRunner — failure taxonomy", () => {
     ]);
     // One run, one unbroken sequence: the retry never went back to `queued`
     // and never restarted the log.
-    const events = await harness.store.runs.listEvents("run-1");
+    const events = (await harness.store.tasks.listEvents("run-1")) as AiRunEvent[];
     expect(events.map((event) => event.seq)).toEqual([0, 1]);
-    const run = await harness.store.runs.getRun("run-1");
+    const run = await harness.store.tasks.getTask("run-1");
     expect(run?.attemptCount).toBe(2);
     expect(run?.deadLetteredAt).toBeUndefined();
     // Each attempt wrote under its own lease token.
@@ -218,15 +219,15 @@ describe("SingleProcessTaskRunner — failure taxonomy", () => {
 
   it("(f) fails a terminal error immediately, with no retry and no dead-letter", async () => {
     const harness = createHarness({ maxAttempts: 3 });
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     harness.worker.script("run-1", [
       { kind: "throw", error: new Error("401 unauthorized: invalid api key") },
     ]);
     await start(harness);
 
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await waitFor(
-      async () => (await runStatus(harness, "run-1")) === "failed",
+      async () => (await taskStatus(harness, "run-1")) === "failed",
       "run-1 to fail",
     );
     await settle();
@@ -235,7 +236,7 @@ describe("SingleProcessTaskRunner — failure taxonomy", () => {
     expect(harness.attemptsFor("run-1")).toEqual([
       { status: "failed", attemptNumber: 1 },
     ]);
-    const run = await harness.store.runs.getRun("run-1");
+    const run = await harness.store.tasks.getTask("run-1");
     // Dead-letter is for poison retry loops, not for a diagnosed failure.
     expect(run?.deadLetteredAt).toBeUndefined();
     expect(run?.error).toContain("http_rejected");
@@ -243,13 +244,13 @@ describe("SingleProcessTaskRunner — failure taxonomy", () => {
 
   it("(g) dead-letters a run whose transient failures exhaust the budget", async () => {
     const harness = createHarness({ maxAttempts: 2 });
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     harness.worker.script("run-1", [{ kind: "throw", error: networkError() }]);
     await start(harness);
 
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await waitFor(
-      async () => (await runStatus(harness, "run-1")) === "failed",
+      async () => (await taskStatus(harness, "run-1")) === "failed",
       "run-1 to exhaust its attempts",
     );
     await settle();
@@ -259,7 +260,7 @@ describe("SingleProcessTaskRunner — failure taxonomy", () => {
       { status: "failed", attemptNumber: 1 },
       { status: "failed", attemptNumber: 2 },
     ]);
-    const run = await harness.store.runs.getRun("run-1");
+    const run = await harness.store.tasks.getTask("run-1");
     expect(run?.deadLetteredAt).toBeDefined();
     expect(run?.deadLetterReason).toContain("network:ECONNRESET");
     // Nothing re-dispatches a dead-lettered run: it is not `queued`.
@@ -270,11 +271,11 @@ describe("SingleProcessTaskRunner — failure taxonomy", () => {
 describe("SingleProcessTaskRunner — cancellation", () => {
   it("(h) cancels a queued run before any worker sees it", async () => {
     const harness = createHarness();
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     await start(harness);
 
     await harness.runner.requestCancel("run-1");
-    expect(await runStatus(harness, "run-1")).toBe("cancelled");
+    expect(await taskStatus(harness, "run-1")).toBe("cancelled");
 
     await settle();
     expect(harness.worker.calls.length).toBe(0);
@@ -284,11 +285,11 @@ describe("SingleProcessTaskRunner — cancellation", () => {
 
   it("(i) aborts a running run's signal and tolerates the worker landing it", async () => {
     const harness = createHarness();
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     harness.worker.script("run-1", [{ kind: "await-abort" }]);
     await start(harness);
 
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await waitFor(
       () => harness.worker.callsFor("run-1").length === 1,
       "run-1 to start",
@@ -296,7 +297,7 @@ describe("SingleProcessTaskRunner — cancellation", () => {
     await harness.runner.requestCancel("run-1");
 
     await waitFor(
-      async () => (await runStatus(harness, "run-1")) === "cancelled",
+      async () => (await taskStatus(harness, "run-1")) === "cancelled",
       "run-1 to land cancelled",
     );
     await settle();
@@ -306,24 +307,24 @@ describe("SingleProcessTaskRunner — cancellation", () => {
     expect(harness.attemptsFor("run-1")).toEqual([
       { status: "cancelled", attemptNumber: 1 },
     ]);
-    const events = await harness.store.runs.listEvents("run-1");
+    const events = (await harness.store.tasks.listEvents("run-1")) as AiRunEvent[];
     expect(events.map((event) => event.type)).toEqual(["run.cancelled"]);
     expect(harness.worker.callsFor("run-1").length).toBe(1);
   });
 
   it("ignores a cancel for a run that already finished", async () => {
     const harness = createHarness();
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     harness.worker.script("run-1", [{ kind: "complete" }]);
     await start(harness);
 
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await waitFor(
-      async () => (await runStatus(harness, "run-1")) === "completed",
+      async () => (await taskStatus(harness, "run-1")) === "completed",
       "run-1 to complete",
     );
     await harness.runner.requestCancel("run-1");
-    expect(await runStatus(harness, "run-1")).toBe("completed");
+    expect(await taskStatus(harness, "run-1")).toBe("completed");
   });
 });
 
@@ -332,11 +333,11 @@ describe("SingleProcessTaskRunner — recovery", () => {
     // Tiny lease TTL on the fake clock; the heartbeat interval is far longer
     // than the test's real lifetime, so nothing renews behind our back.
     const harness = createHarness({ leaseTtlMs: 1_000, maxAttempts: 3 });
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     harness.worker.script("run-1", [{ kind: "never" }, { kind: "hold" }]);
     await start(harness);
 
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await waitFor(
       () => harness.worker.callsFor("run-1").length === 1,
       "run-1 to start",
@@ -366,20 +367,20 @@ describe("SingleProcessTaskRunner — recovery", () => {
     });
     let staleCode: unknown;
     try {
-      await harness.store.runs.appendEvents("run-1", [event], {
+      await harness.store.tasks.appendEvents("run-1", [event], {
         leaseToken: staleToken,
       });
     } catch (err) {
       staleCode = err;
     }
     expect(staleCode).toBeInstanceOf(LeaseLostError);
-    await harness.store.runs.appendEvents("run-1", [event], {
+    await harness.store.tasks.appendEvents("run-1", [event], {
       leaseToken: freshToken,
     });
 
     harness.worker.release("run-1");
     await waitFor(
-      async () => (await runStatus(harness, "run-1")) === "completed",
+      async () => (await taskStatus(harness, "run-1")) === "completed",
       "the recovered attempt to complete",
     );
     expect(harness.attemptsFor("run-1")).toEqual([
@@ -387,7 +388,7 @@ describe("SingleProcessTaskRunner — recovery", () => {
       { status: "completed", attemptNumber: 2 },
     ]);
     // One run, one event stream: the recovered attempt continued the sequence.
-    const events = await harness.store.runs.listEvents("run-1");
+    const events = (await harness.store.tasks.listEvents("run-1")) as AiRunEvent[];
     expect(events.map((e) => e.seq)).toEqual([0, 1]);
 
     harness.worker.releaseAll();
@@ -395,11 +396,11 @@ describe("SingleProcessTaskRunner — recovery", () => {
 
   it("(k) dead-letters an abandoned run that has no attempts left", async () => {
     const harness = createHarness({ leaseTtlMs: 1_000, maxAttempts: 1 });
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     harness.worker.script("run-1", [{ kind: "never" }]);
     await start(harness);
 
-    await harness.runner.enqueue({ runId: "run-1", scopeId: "chat-1" });
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
     await waitFor(
       () => harness.worker.callsFor("run-1").length === 1,
       "run-1 to start",
@@ -409,7 +410,7 @@ describe("SingleProcessTaskRunner — recovery", () => {
     const report = await harness.runner.recoverWithReport();
     expect(report).toEqual({ expired: 1, redispatched: 0, deadLettered: 1 });
 
-    const run = await harness.store.runs.getRun("run-1");
+    const run = await harness.store.tasks.getTask("run-1");
     expect(run?.status).toBe("failed");
     expect(run?.deadLetteredAt).toBeDefined();
     expect(run?.deadLetterReason).toContain("poison");
@@ -423,18 +424,18 @@ describe("SingleProcessTaskRunner — recovery", () => {
 
   it("leaves an abandoned run for the next owner when no worker is running", async () => {
     const harness = createHarness({ leaseTtlMs: 1_000, maxAttempts: 3 });
-    await harness.seedRun("run-1");
+    await harness.seedTask("run-1");
     // A lease acquired by nobody in particular — the crashed-process shape.
-    const attempt = await harness.store.runs.createAttempt({
+    const attempt = await harness.store.tasks.createAttempt({
       attemptId: "att-orphan",
-      runId: "run-1",
+      taskId: "run-1",
       ownerId: "dead-owner",
     });
-    await harness.store.runs.transitionRun("run-1", ["queued"], "running", {
+    await harness.store.tasks.transitionTask("run-1", ["queued"], "running", {
       startedAt: harness.clock.nowIso(),
     });
-    await harness.store.runs.acquireLease({
-      runId: "run-1",
+    await harness.store.tasks.acquireLease({
+      taskId: "run-1",
       attemptId: attempt.attemptId,
       ownerId: "dead-owner",
       ttlMs: 1_000,
@@ -444,7 +445,7 @@ describe("SingleProcessTaskRunner — recovery", () => {
     const report = await harness.runner.recoverWithReport();
 
     expect(report).toEqual({ expired: 1, redispatched: 0, deadLettered: 0 });
-    expect(await runStatus(harness, "run-1")).toBe("running");
+    expect(await taskStatus(harness, "run-1")).toBe("running");
     expect(harness.attemptsFor("run-1")).toEqual([
       { status: "abandoned", attemptNumber: 1 },
     ]);

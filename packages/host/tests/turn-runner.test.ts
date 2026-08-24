@@ -6,6 +6,7 @@ import {
   MockProviderClient,
 } from "@agentkit/testing";
 import {
+  CHAT_TURN_TASK_KIND,
   LeaseLostError,
   TurnRunner,
   type MessageRecord,
@@ -127,16 +128,16 @@ async function setupRunner(
 /** Stand in for the task runner: create the attempt, take the lease, execute. */
 async function drive(
   f: RunnerFixture,
-  runId: string,
+  taskId: string,
   opts: { abort?: boolean; leaseToken?: string } = {},
 ): Promise<{ attemptId: string }> {
-  const attempt = await f.store.runs.createAttempt({
+  const attempt = await f.store.tasks.createAttempt({
     attemptId: f.ids.attemptId(),
-    runId,
+    taskId,
     ownerId: "worker-1",
   });
-  const lease = await f.store.runs.acquireLease({
-    runId,
+  const lease = await f.store.tasks.acquireLease({
+    taskId,
     attemptId: attempt.attemptId,
     ownerId: "worker-1",
     ttlMs: 60_000,
@@ -144,7 +145,7 @@ async function drive(
   const controller = new AbortController();
   if (opts.abort) controller.abort();
   await f.runner.execute({
-    runId,
+    taskId,
     attemptId: attempt.attemptId,
     leaseToken: opts.leaseToken ?? lease.leaseToken,
     signal: controller.signal,
@@ -152,7 +153,18 @@ async function drive(
   return { attemptId: attempt.attemptId };
 }
 
-/** The event log is one unbroken, deduplicated sequence for the run. */
+/**
+ * The task's event log, read back as the chat-turn vocabulary it holds.
+ *
+ * `TaskStore.listEvents` returns the kind-agnostic envelope — that is the whole
+ * point of the generalization — so a consumer that knows which kind it is
+ * looking at narrows on the way out, exactly as a host would.
+ */
+async function eventsOf(f: RunnerFixture, taskId: string): Promise<AiRunEvent[]> {
+  return (await f.store.tasks.listEvents(taskId)) as AiRunEvent[];
+}
+
+/** The event log is one unbroken, deduplicated sequence for the turn. */
 function expectOneSequence(events: AiRunEvent[], runId: string): void {
   events.forEach((event, index) => {
     expect(event.seq).toBe(index);
@@ -177,11 +189,14 @@ describe("TurnRunner.submitMessage", () => {
     // One transaction for both messages and the run: a crash cannot leave a
     // user message with no run, or a run with nothing to answer.
     expect(f.store.transactions).toBe(1);
-    const run = await f.store.runs.getRun(submitted.runId);
-    expect(run?.status).toBe("queued");
-    expect(run?.scopeId).toBe(f.chatId);
+    const task = await f.store.tasks.getTask(submitted.runId);
+    expect(task?.status).toBe("queued");
+    expect(task?.kind).toBe(CHAT_TURN_TASK_KIND);
+    expect(task?.scopeId).toBe(f.chatId);
+    // chatId moved into the payload when the record went generic.
+    expect(task?.payload["chatId"]).toBe(f.chatId);
     expect(f.taskRunner.enqueued).toEqual([
-      { runId: submitted.runId, scopeId: f.chatId },
+      { taskId: submitted.runId, scopeId: f.chatId },
     ]);
     expect(f.client.calls).toBe(0);
 
@@ -212,13 +227,13 @@ describe("TurnRunner.execute — text only", () => {
     expect(placeholder?.content).toBe("Hello world");
     expect(placeholder?.metadata["placeholder"]).toBe(false);
 
-    const run = await f.store.runs.getRun(submitted.runId);
+    const run = await f.store.tasks.getTask(submitted.runId);
     expect(run?.status).toBe("completed");
     expect(run?.startedAt).toBeDefined();
     expect(run?.finishedAt).toBeDefined();
-    expect(f.store.runs.attempts.get(attemptId)?.status).toBe("completed");
+    expect(f.store.tasks.attempts.get(attemptId)?.status).toBe("completed");
 
-    const events = await f.store.runs.listEvents(submitted.runId);
+    const events = await eventsOf(f, submitted.runId);
     expectOneSequence(events, submitted.runId);
     expect(events.every((e) => e.attemptId === attemptId)).toBe(true);
     expect(events.at(-1)?.type).toBe("run.completed");
@@ -241,7 +256,7 @@ describe("TurnRunner.execute — text only", () => {
     expect(
       messagesOf(f).find((m) => m.id === submitted.assistantMessageId)?.content,
     ).toBe("answered in one shot");
-    expect((await f.store.runs.getRun(submitted.runId))?.status).toBe(
+    expect((await f.store.tasks.getTask(submitted.runId))?.status).toBe(
       "completed",
     );
   });
@@ -289,7 +304,7 @@ describe("TurnRunner.execute — tool round trip", () => {
     expect(envelope.data).toEqual({ echoed: "hi" });
     expect(toolRecord?.content).not.toContain("VERBOSE_PAYLOAD");
 
-    const events = await f.store.runs.listEvents(submitted.runId);
+    const events = await eventsOf(f, submitted.runId);
     const succeeded = events.find((e) => e.type === "run.tool.succeeded") as
       | (AiRunEvent & { data: { resultJson: string } })
       | undefined;
@@ -412,7 +427,7 @@ describe("TurnRunner.execute — tool round trip", () => {
     expect(
       replayed.some((m) => (m.toolCalls?.length ?? 0) > 0),
     ).toBe(false);
-    expect((await f.store.runs.getRun(second.runId))?.status).toBe("completed");
+    expect((await f.store.tasks.getTask(second.runId))?.status).toBe("completed");
     expect(
       messagesOf(f).find((m) => m.id === second.assistantMessageId)?.content,
     ).toBe("second answer");
@@ -435,10 +450,10 @@ describe("TurnRunner.execute — retries", () => {
     expect(
       messagesOf(f).find((m) => m.id === submitted.assistantMessageId)?.content,
     ).toBe("chat only answer");
-    const run = await f.store.runs.getRun(submitted.runId);
+    const run = await f.store.tasks.getTask(submitted.runId);
     expect(run?.status).toBe("completed");
 
-    const events = await f.store.runs.listEvents(submitted.runId);
+    const events = await eventsOf(f, submitted.runId);
     // One run id, one attempt, one uninterrupted sequence across both passes.
     expectOneSequence(events, submitted.runId);
     expect(events.every((e) => e.attemptId === attemptId)).toBe(true);
@@ -456,7 +471,7 @@ describe("TurnRunner.execute — retries", () => {
     await drive(f, submitted.runId);
 
     expect(f.client.calls).toBe(1);
-    expect((await f.store.runs.getRun(submitted.runId))?.status).toBe("failed");
+    expect((await f.store.tasks.getTask(submitted.runId))?.status).toBe("failed");
   });
 
   it("retries once on an empty answer, then warns", async () => {
@@ -470,14 +485,14 @@ describe("TurnRunner.execute — retries", () => {
     await drive(f, submitted.runId);
 
     expect(f.client.calls).toBe(2);
-    const events = await f.store.runs.listEvents(submitted.runId);
+    const events = await eventsOf(f, submitted.runId);
     expectOneSequence(events, submitted.runId);
     const warning = events.find(
       (e) => e.type === "run.warning" && e.data.code === "empty_response",
     );
     expect(warning).toBeDefined();
     expect(warning?.attemptId).toBeDefined();
-    expect((await f.store.runs.getRun(submitted.runId))?.status).toBe(
+    expect((await f.store.tasks.getTask(submitted.runId))?.status).toBe(
       "completed",
     );
   });
@@ -495,7 +510,7 @@ describe("TurnRunner.execute — retries", () => {
     await drive(f, submitted.runId);
 
     expect(f.client.calls).toBe(2);
-    const events = await f.store.runs.listEvents(submitted.runId);
+    const events = await eventsOf(f, submitted.runId);
     expect(
       events.some(
         (e) => e.type === "run.warning" && e.data.code === "empty_response",
@@ -527,7 +542,7 @@ describe("TurnRunner.execute — emulated tool calls", () => {
     });
     await drive(f, submitted.runId);
 
-    const events = await f.store.runs.listEvents(submitted.runId);
+    const events = await eventsOf(f, submitted.runId);
     expect(
       events.some(
         (e) => e.type === "run.warning" && e.data.code === "emulated_tool_call",
@@ -568,7 +583,7 @@ describe("TurnRunner.execute — emulated tool calls", () => {
     });
     await drive(f, submitted.runId);
 
-    const events = await f.store.runs.listEvents(submitted.runId);
+    const events = await eventsOf(f, submitted.runId);
     expect(
       events.some(
         (e) => e.type === "run.warning" && e.data.code === "emulated_tool_call",
@@ -644,9 +659,9 @@ describe("TurnRunner.execute — cancellation and failure", () => {
     });
     const { attemptId } = await drive(f, submitted.runId, { abort: true });
 
-    const run = await f.store.runs.getRun(submitted.runId);
+    const run = await f.store.tasks.getTask(submitted.runId);
     expect(run?.status).toBe("cancelled");
-    expect(f.store.runs.attempts.get(attemptId)?.status).toBe("cancelled");
+    expect(f.store.tasks.attempts.get(attemptId)?.status).toBe("cancelled");
 
     const placeholder = messagesOf(f).find(
       (m) => m.id === submitted.assistantMessageId,
@@ -654,7 +669,7 @@ describe("TurnRunner.execute — cancellation and failure", () => {
     expect(placeholder?.metadata["placeholder"]).toBe(false);
     expect(placeholder?.content).toBe("");
 
-    const events = await f.store.runs.listEvents(submitted.runId);
+    const events = await eventsOf(f, submitted.runId);
     expect(events.at(-1)?.type).toBe("run.cancelled");
     // A cancelled run is not an "empty answer" — it was stopped.
     expect(
@@ -681,9 +696,28 @@ describe("TurnRunner.execute — cancellation and failure", () => {
       drive(f, submitted.runId, { leaseToken: "someone-elses-lease" }),
     ).rejects.toThrow(LeaseLostError);
 
-    const run = await f.store.runs.getRun(submitted.runId);
+    const run = await f.store.tasks.getTask(submitted.runId);
     expect(run?.status).toBe("failed");
     expect(run?.error).toContain("lease");
+  });
+
+  it("fails terminally when the task payload has no chatId", async () => {
+    // Only submitMessage may create a chat.turn task; a row from anywhere else
+    // is unexecutable now and on every retry, so it must land failed rather
+    // than burn the attempt budget re-reading the same payload.
+    const f = await setupRunner();
+    await f.store.tasks.createTask({
+      taskId: "task-no-chat",
+      kind: CHAT_TURN_TASK_KIND,
+      scopeId: f.chatId,
+      payload: { assistantMessageId: "msg-1" },
+    });
+    await expect(drive(f, "task-no-chat")).rejects.toThrow(/no chatId/);
+
+    const task = await f.store.tasks.getTask("task-no-chat");
+    expect(task?.status).toBe("failed");
+    expect(task?.error).toContain("no chatId");
+    expect(f.client.calls).toBe(0);
   });
 
   it("refuses to execute a run that already finished", async () => {

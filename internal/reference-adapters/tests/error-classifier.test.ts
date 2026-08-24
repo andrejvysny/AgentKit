@@ -7,7 +7,13 @@
  * that from coming back by accident.
  */
 import { describe, expect, it } from "bun:test";
-import { LeaseLostError, SeqConflictError } from "@agentkit/host";
+import {
+  DuplicateTaskError,
+  ExecutorNotFoundError,
+  InvalidTaskTransitionError,
+  LeaseLostError,
+  SeqConflictError,
+} from "@agentkit/host";
 import { classifyExecutionError } from "../src/index.js";
 
 describe("classifyExecutionError — cancellation", () => {
@@ -118,6 +124,21 @@ describe("classifyExecutionError — terminal", () => {
       kind: "terminal",
       reason: "seq_conflict",
     });
+  });
+
+  it("treats the wiring failures as terminal, by code and not by message", () => {
+    // A kind nobody registered, an id already taken, a payload the executor
+    // cannot read: all three reproduce identically on every attempt.
+    expect(
+      classifyExecutionError(new ExecutorNotFoundError("no executor")),
+    ).toEqual({ kind: "terminal", reason: "executor_not_found" });
+    expect(classifyExecutionError(new DuplicateTaskError("taken"))).toEqual({
+      kind: "terminal",
+      reason: "duplicate_task",
+    });
+    expect(
+      classifyExecutionError(new InvalidTaskTransitionError("illegal")),
+    ).toEqual({ kind: "terminal", reason: "invalid_task_transition" });
   });
 
   it.each([401, 403, 400, 422])("treats HTTP %i as terminal", (status) => {

@@ -1,16 +1,16 @@
 /**
- * The durable queue that turns "a run exists" into "a worker is executing it".
+ * The durable queue that turns "a task exists" into "a worker is executing it".
  *
- * Note what is NOT here: `subscribe()`. Events reach consumers through the run
+ * Note what is NOT here: `subscribe()`. Events reach consumers through the task
  * event log and the outbox, both of which survive a restart. A subscription on
  * the runner would be an in-memory second channel that silently delivers less
  * than the durable one after any crash — two sources of truth, one of them
  * lossy.
  */
 
-/** What a worker is handed for one attempt at one run. */
+/** What a worker is handed for one attempt at one task. */
 export interface TaskExecution {
-  runId: string;
+  taskId: string;
   attemptId: string;
   /** Proof of ownership; every store write for this attempt must carry it. */
   leaseToken: string;
@@ -23,8 +23,8 @@ export interface TaskWorker {
 }
 
 export interface EnqueueInput {
-  runId: string;
-  /** Serialization key: two runs in one scope never execute concurrently. */
+  taskId: string;
+  /** Serialization key: two tasks in one scope never execute concurrently. */
   scopeId: string;
   priority?: number;
   /** Delay the first claim until this instant. */
@@ -43,16 +43,16 @@ export interface WorkerHandle {
 
 export interface TaskRunner {
   /**
-   * Idempotent per `runId`: re-delivering the same enqueue (a retried HTTP call,
-   * a replayed message) must not create a second execution of one turn.
+   * Idempotent per `taskId`: re-delivering the same enqueue (a retried HTTP
+   * call, a replayed message) must not create a second execution of one task.
    */
   enqueue(input: EnqueueInput): Promise<void>;
 
   /**
-   * Ask the run to stop. Queued runs are cancelled outright; a running one has
+   * Ask the task to stop. Queued tasks are cancelled outright; a running one has
    * its execution signal aborted, and the worker decides how to land.
    */
-  requestCancel(runId: string): Promise<void>;
+  requestCancel(taskId: string): Promise<void>;
 
   /**
    * Startup pass: expire dead leases, end their attempts as `abandoned`,

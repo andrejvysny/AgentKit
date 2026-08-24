@@ -8,7 +8,7 @@ import type { Changes } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteAssistantStore } from "../src/index.js";
+import { SCHEMA_VERSION, SqliteAssistantStore } from "../src/index.js";
 
 /** A fresh temp dir per test, cleaned up (even on failure) once `fn` settles. */
 function withTempDb(
@@ -51,7 +51,7 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
   );
 
   it(
-    "re-applies SCHEMA_V1 idempotently when the same file is opened again",
+    "re-applies SCHEMA_V2 idempotently when the same file is opened again",
     withTempDb(async (path) => {
       const first = new SqliteAssistantStore(path);
       await first.conversations.createChat({ id: "seed-chat" });
@@ -68,6 +68,50 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
         expect(chat?.id).toBe("seed-chat");
       } finally {
         second?.close();
+      }
+    }),
+  );
+
+  it(
+    "refuses a database written by a different schema version instead of layering tables over it",
+    withTempDb(async (path) => {
+      const first = new SqliteAssistantStore(path);
+      await first.conversations.createChat({ id: "v1-era-chat" });
+      first.close();
+
+      // Rewind the stamp to simulate a database an older build wrote. The rows
+      // are still there, so this is NOT the "fresh file" case — the adapter
+      // ships no migrations and must say so rather than guess.
+      const raw = new Database(path);
+      raw.exec("PRAGMA user_version = 1;");
+      raw.close();
+
+      let code: string | undefined;
+      let message = "";
+      try {
+        new SqliteAssistantStore(path);
+      } catch (err) {
+        code = (err as { code?: string }).code;
+        message = (err as Error).message;
+      }
+      expect(code).toBe("sqlite_schema_version");
+      expect(message).toContain("no migrations");
+    }),
+  );
+
+  it(
+    "stamps user_version on a fresh database so the next open recognises it",
+    withTempDb(async (path) => {
+      const store = new SqliteAssistantStore(path);
+      store.close();
+      const raw = new Database(path);
+      try {
+        const row = raw.query(`PRAGMA user_version`).get() as {
+          user_version: number;
+        };
+        expect(row.user_version).toBe(SCHEMA_VERSION);
+      } finally {
+        raw.close();
       }
     }),
   );

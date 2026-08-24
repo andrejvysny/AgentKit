@@ -12,6 +12,7 @@
  *   sleeping for a fixed guess.
  */
 import type { AiRunEvent } from "@agentkit/contracts";
+import { CHAT_TURN_TASK_KIND } from "@agentkit/host";
 import type { Clock, TaskExecution, TaskWorker } from "@agentkit/host";
 import { createTestEventStamper } from "@agentkit/testing";
 import { MemoryAssistantStore } from "../../src/index.js";
@@ -54,13 +55,13 @@ export async function settle(ms = 40): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** What one attempt of one run does when the worker is handed it. */
+/** What one attempt of one task does when the worker is handed it. */
 export type AttemptBehavior =
-  /** Append an event, then finalize the run `completed` (what TurnRunner does). */
+  /** Append an event, then finalize the task `completed` (what TurnRunner does). */
   | { kind: "complete" }
   /** Append an event, then throw — the classifier decides what it meant. */
   | { kind: "throw"; error: unknown }
-  /** Block until the test releases this run, then behave like `complete`. */
+  /** Block until the test releases this task, then behave like `complete`. */
   | { kind: "hold" }
   /** Block until the signal aborts, then append `run.cancelled` and finalize. */
   | { kind: "await-abort" }
@@ -68,25 +69,25 @@ export type AttemptBehavior =
   | { kind: "never" };
 
 export interface WorkerCall {
-  runId: string;
+  taskId: string;
   attemptId: string;
   leaseToken: string;
   behavior: AttemptBehavior["kind"];
 }
 
 /**
- * A {@link TaskWorker} whose behaviour is scripted per run and per attempt, and
- * which records enough to assert on overlap, ordering, and fencing.
+ * A {@link TaskWorker} whose behaviour is scripted per task and per attempt,
+ * and which records enough to assert on overlap, ordering, and fencing.
  *
  * The scripted paths write through the store the way the real worker does —
- * `appendEvents` with the attempt's `leaseToken`, then `transitionRun` +
- * `endAttempt` — so a test that says "the worker finalized the run" is testing
+ * `appendEvents` with the attempt's `leaseToken`, then `transitionTask` +
+ * `endAttempt` — so a test that says "the worker finalized the task" is testing
  * the runner's tolerance of a self-finalizing worker, not a mock's opinion.
  */
 export class FakeWorker implements TaskWorker {
   /** Every execute() call, in order. */
   readonly calls: WorkerCall[] = [];
-  /** `start:<runId>` / `end:<runId>`, for ordering assertions. */
+  /** `start:<taskId>` / `end:<taskId>`, for ordering assertions. */
   readonly timeline: string[] = [];
   /** Highest number of executions running at the same instant. */
   peakConcurrency = 0;
@@ -98,20 +99,20 @@ export class FakeWorker implements TaskWorker {
 
   constructor(private readonly store: MemoryAssistantStore) {}
 
-  /** Behaviour per attempt of `runId`; the LAST entry repeats forever. */
-  script(runId: string, behaviors: AttemptBehavior[]): void {
-    this.scripts.set(runId, behaviors);
+  /** Behaviour per attempt of `taskId`; the LAST entry repeats forever. */
+  script(taskId: string, behaviors: AttemptBehavior[]): void {
+    this.scripts.set(taskId, behaviors);
   }
 
-  callsFor(runId: string): WorkerCall[] {
-    return this.calls.filter((call) => call.runId === runId);
+  callsFor(taskId: string): WorkerCall[] {
+    return this.calls.filter((call) => call.taskId === taskId);
   }
 
-  /** Let the oldest blocked `hold` for this run finish. */
-  release(runId: string): void {
-    const gates = this.holdGates.get(runId);
+  /** Let the oldest blocked `hold` for this task finish. */
+  release(taskId: string): void {
+    const gates = this.holdGates.get(taskId);
     const gate = gates?.shift();
-    if (!gate) throw new Error(`no held execution for ${runId}`);
+    if (!gate) throw new Error(`no held execution for ${taskId}`);
     gate();
   }
 
@@ -124,30 +125,30 @@ export class FakeWorker implements TaskWorker {
   }
 
   async execute(execution: TaskExecution): Promise<void> {
-    const { runId, attemptId, leaseToken, signal } = execution;
-    const behavior = this.nextBehavior(runId);
-    this.calls.push({ runId, attemptId, leaseToken, behavior: behavior.kind });
+    const { taskId, attemptId, leaseToken, signal } = execution;
+    const behavior = this.nextBehavior(taskId);
+    this.calls.push({ taskId, attemptId, leaseToken, behavior: behavior.kind });
     this.running += 1;
     this.peakConcurrency = Math.max(this.peakConcurrency, this.running);
-    this.timeline.push(`start:${runId}`);
+    this.timeline.push(`start:${taskId}`);
     try {
       switch (behavior.kind) {
         case "complete":
-          await this.appendCompleted(runId, attemptId, leaseToken);
-          await this.finish(runId, attemptId, "completed");
+          await this.appendCompleted(taskId, attemptId, leaseToken);
+          await this.finish(taskId, attemptId, "completed");
           return;
         case "throw":
-          await this.appendCompleted(runId, attemptId, leaseToken);
+          await this.appendCompleted(taskId, attemptId, leaseToken);
           throw behavior.error;
         case "hold":
-          await this.hold(runId);
-          await this.appendCompleted(runId, attemptId, leaseToken);
-          await this.finish(runId, attemptId, "completed");
+          await this.hold(taskId);
+          await this.appendCompleted(taskId, attemptId, leaseToken);
+          await this.finish(taskId, attemptId, "completed");
           return;
         case "await-abort":
           await this.untilAborted(signal);
-          await this.appendCancelled(runId, attemptId, leaseToken);
-          await this.finish(runId, attemptId, "cancelled");
+          await this.appendCancelled(taskId, attemptId, leaseToken);
+          await this.finish(taskId, attemptId, "cancelled");
           return;
         case "never":
           await new Promise<void>((resolve) => this.deadGates.push(resolve));
@@ -155,22 +156,22 @@ export class FakeWorker implements TaskWorker {
       }
     } finally {
       this.running -= 1;
-      this.timeline.push(`end:${runId}`);
+      this.timeline.push(`end:${taskId}`);
     }
   }
 
-  private nextBehavior(runId: string): AttemptBehavior {
-    const script = this.scripts.get(runId);
+  private nextBehavior(taskId: string): AttemptBehavior {
+    const script = this.scripts.get(taskId);
     if (!script || script.length === 0) return { kind: "complete" };
-    const index = Math.min(this.callsFor(runId).length, script.length - 1);
+    const index = Math.min(this.callsFor(taskId).length, script.length - 1);
     return script[index]!;
   }
 
-  private hold(runId: string): Promise<void> {
+  private hold(taskId: string): Promise<void> {
     return new Promise<void>((resolve) => {
-      const gates = this.holdGates.get(runId) ?? [];
+      const gates = this.holdGates.get(taskId) ?? [];
       gates.push(resolve);
-      this.holdGates.set(runId, gates);
+      this.holdGates.set(taskId, gates);
     });
   }
 
@@ -182,51 +183,51 @@ export class FakeWorker implements TaskWorker {
   }
 
   private async appendCompleted(
-    runId: string,
+    taskId: string,
     attemptId: string,
     leaseToken: string,
   ): Promise<void> {
     const stamp = createTestEventStamper({
-      firstSeq: await this.store.runs.nextSeq(runId),
+      firstSeq: await this.store.tasks.nextSeq(taskId),
       attemptId,
     });
     const event: AiRunEvent = stamp({
       type: "run.completed",
-      runId,
+      runId: taskId,
       timestamp: new Date().toISOString(),
       data: { iterations: 1 },
     });
-    await this.store.runs.appendEvents(runId, [event], { leaseToken });
+    await this.store.tasks.appendEvents(taskId, [event], { leaseToken });
   }
 
   private async appendCancelled(
-    runId: string,
+    taskId: string,
     attemptId: string,
     leaseToken: string,
   ): Promise<void> {
     const stamp = createTestEventStamper({
-      firstSeq: await this.store.runs.nextSeq(runId),
+      firstSeq: await this.store.tasks.nextSeq(taskId),
       attemptId,
     });
     const event: AiRunEvent = stamp({
       type: "run.cancelled",
-      runId,
+      runId: taskId,
       timestamp: new Date().toISOString(),
       data: { reason: "requested" },
     });
-    await this.store.runs.appendEvents(runId, [event], { leaseToken });
+    await this.store.tasks.appendEvents(taskId, [event], { leaseToken });
   }
 
-  /** Land the run the way TurnRunner does: transition first, then end the attempt. */
+  /** Land the task the way TurnRunner does: transition first, then end the attempt. */
   private async finish(
-    runId: string,
+    taskId: string,
     attemptId: string,
     status: "completed" | "cancelled",
   ): Promise<void> {
-    await this.store.runs.transitionRun(runId, ["running"], status, {
+    await this.store.tasks.transitionTask(taskId, ["running"], status, {
       finishedAt: new Date().toISOString(),
     });
-    await this.store.runs.endAttempt({ attemptId, status });
+    await this.store.tasks.endAttempt({ attemptId, status });
   }
 }
 
@@ -235,10 +236,10 @@ export interface Harness {
   store: MemoryAssistantStore;
   runner: SingleProcessTaskRunner;
   worker: FakeWorker;
-  /** Create the `queued` run row a host would have written in its transaction. */
-  seedRun(runId: string, scopeId?: string): Promise<void>;
-  /** Attempt rows for a run, oldest first. */
-  attemptsFor(runId: string): Array<{ status: string; attemptNumber: number }>;
+  /** Create the `queued` task row a host would have written in its transaction. */
+  seedTask(taskId: string, scopeId?: string): Promise<void>;
+  /** Attempt rows for a task, oldest first. */
+  attemptsFor(taskId: string): Array<{ status: string; attemptNumber: number }>;
 }
 
 export interface HarnessOptions {
@@ -277,17 +278,17 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     store,
     runner,
     worker: new FakeWorker(store),
-    seedRun: async (runId: string, scopeId = "chat-1") => {
-      await store.runs.createRun({
-        runId,
-        chatId: scopeId,
+    seedTask: async (taskId: string, scopeId = "chat-1") => {
+      await store.tasks.createTask({
+        taskId,
+        kind: CHAT_TURN_TASK_KIND,
         scopeId,
-        request: {},
+        payload: { chatId: scopeId },
       });
     },
-    attemptsFor: (runId: string) =>
-      [...store.runs.attempts.values()]
-        .filter((attempt) => attempt.runId === runId)
+    attemptsFor: (taskId: string) =>
+      [...store.tasks.attempts.values()]
+        .filter((attempt) => attempt.taskId === taskId)
         .sort((a, b) => a.attemptNumber - b.attemptNumber)
         .map((attempt) => ({
           status: attempt.status,

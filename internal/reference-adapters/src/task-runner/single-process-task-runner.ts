@@ -3,11 +3,11 @@
  * retry, dead-letter, recover.
  *
  * It owns no state a restart needs. Everything that decides what happens next —
- * run status, attempt history, lease ownership, the fencing token — lives in the
- * {@link AssistantStore}. What lives here is scheduling: which claimed run to
- * hand the worker, when to try again, and when to stop trying. Kill this process
- * mid-run and the next one's `recover()` finds the expired lease and continues
- * the SAME run, on a new attempt, with the event sequence unbroken.
+ * task status, attempt history, lease ownership, the fencing token — lives in
+ * the {@link AssistantStore}. What lives here is scheduling: which claimed task
+ * to hand the worker, when to try again, and when to stop trying. Kill this
+ * process mid-task and the next one's `recover()` finds the expired lease and
+ * continues the SAME task, on a new attempt, with the event sequence unbroken.
  *
  * Three things it deliberately does differently from the task-system runtime it
  * salvages ideas from:
@@ -19,16 +19,16 @@
  *    concurrency budget is spent, and sleeps.
  * 2. RETRY IS CLASSIFIED. See {@link classifyExecutionError} — unknown failures
  *    are terminal, not retried forever.
- * 3. RETRY HAPPENS IN PLACE. {@link RUN_TRANSITIONS} has no `running → queued`
- *    edge, on purpose: a run that has started is not "waiting to start" again,
+ * 3. RETRY HAPPENS IN PLACE. {@link TASK_TRANSITIONS} has no `running → queued`
+ *    edge, on purpose: a task that has started is not "waiting to start" again,
  *    and pretending otherwise would make it claimable by a second worker while
  *    the first is still landing. So a retry creates a NEW ATTEMPT (with a new
- *    lease, so the previous attempt's token is fenced out) on a run that stays
- *    `running` for its whole life. The run's terminal transition happens once.
+ *    lease, so the previous attempt's token is fenced out) on a task that stays
+ *    `running` for its whole life. The task's terminal transition happens once.
  *
  * SINGLE-PROCESS LIMITS, which belong to a distributed adapter rather than to
- * this one: cancellation of a RUNNING run is delivered in memory, by aborting
- * the `AbortController` this process registered for it. A cancel aimed at a run
+ * this one: cancellation of a RUNNING task is delivered in memory, by aborting
+ * the `AbortController` this process registered for it. A cancel aimed at a task
  * some other process is executing does nothing here; a durable cross-process
  * cancel needs a cancellation flag in the store that the worker polls, which is
  * a different design with a different cost. Likewise
@@ -42,7 +42,7 @@ import {
   defaultClock,
   type AssistantStore,
   type AttemptRecord,
-  type ClaimedRun,
+  type ClaimedTask,
   type Clock,
   type EnqueueInput,
   type Lease,
@@ -61,7 +61,7 @@ const DEFAULT_POLL_MS = 100;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_CONCURRENCY = 2;
 
-/** Dead-letter reason for a run whose attempts died without ever landing. */
+/** Dead-letter reason for a task whose attempts died without ever landing. */
 const POISON_REASON = "poison: attempts exhausted without a terminal outcome";
 
 export interface SingleProcessTaskRunnerDeps {
@@ -75,7 +75,7 @@ export interface SingleProcessTaskRunnerDeps {
   heartbeatMs?: number;
   /** Idle delay between claim attempts. Default 100ms. */
   pollMs?: number;
-  /** Attempts per run before it is dead-lettered. Default 3. */
+  /** Attempts per task before it is dead-lettered. Default 3. */
   maxAttempts?: number;
 }
 
@@ -83,19 +83,19 @@ export interface SingleProcessTaskRunnerDeps {
 export interface RecoveryReport {
   /** Leases found past their expiry. */
   expired: number;
-  /** Runs given a fresh attempt and handed back to the worker. */
+  /** Tasks given a fresh attempt and handed back to the worker. */
   redispatched: number;
-  /** Runs that had burned their attempt budget and were dead-lettered. */
+  /** Tasks that had burned their attempt budget and were dead-lettered. */
   deadLettered: number;
 }
 
-/** One run this process is executing right now. */
+/** One task this process is executing right now. */
 interface ActiveExecution {
-  runId: string;
+  taskId: string;
   scopeId: string;
   /** Replaced per attempt: a retry must not inherit an aborted signal. */
   controller: AbortController;
-  /** A cancel arrived; do not retry, and land the run `cancelled`. */
+  /** A cancel arrived; do not retry, and land the task `cancelled`. */
   cancelRequested: boolean;
 }
 
@@ -120,7 +120,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
   private readonly pollMs: number;
   private readonly maxAttempts: number;
 
-  /** runId → the execution this process is running for it. */
+  /** taskId → the execution this process is running for it. */
   private readonly active = new Map<string, ActiveExecution>();
   /** Every un-settled execution promise, so `stop()` can wait them out. */
   private readonly inFlight = new Set<Promise<void>>();
@@ -148,93 +148,96 @@ export class SingleProcessTaskRunner implements TaskRunner {
   // ───────────────────────────── TaskRunner ──────────────────────────────
 
   /**
-   * Wake the claim loop for a run that is ALREADY persisted.
+   * Wake the claim loop for a task that is ALREADY persisted.
    *
-   * This runner does not create the run row: the host wrote it (queued) in the
-   * same transaction as the messages it belongs to — that transaction is what
+   * This runner does not create the task row: the host wrote it (queued) in the
+   * same transaction as the records it belongs to — that transaction is what
    * makes "the user hit send" survive a crash, and re-deriving the row here
    * would be a second, weaker source of truth. So `enqueue` validates and pokes.
    *
-   * Idempotent per the port contract: a re-delivered enqueue for a run that is
-   * no longer `queued` is a silent no-op, never a second execution of one turn.
+   * Idempotent per the port contract: a re-delivered enqueue for a task that is
+   * no longer `queued` is a silent no-op, never a second execution of one task.
    * `priority` / `availableAt` on the input are NOT re-applied — the store owns
    * them, and the port has no `queued → queued` patch to write them through.
    */
   async enqueue(input: EnqueueInput): Promise<void> {
-    const run = await this.store.runs.getRun(input.runId);
-    if (!run) {
-      throw new RecordNotFoundError(`Run not found: ${input.runId}`, {
-        runId: input.runId,
+    const task = await this.store.tasks.getTask(input.taskId);
+    if (!task) {
+      throw new RecordNotFoundError(`Task not found: ${input.taskId}`, {
+        taskId: input.taskId,
       });
     }
-    if (run.scopeId !== input.scopeId) {
+    if (task.scopeId !== input.scopeId) {
       // The stored scope wins: it is what `claimNext` serializes on.
-      this.logger?.warn("enqueue scopeId disagrees with the stored run", {
-        runId: input.runId,
+      this.logger?.warn("enqueue scopeId disagrees with the stored task", {
+        taskId: input.taskId,
         enqueued: input.scopeId,
-        stored: run.scopeId,
+        stored: task.scopeId,
       });
     }
-    if (run.status !== "queued") {
-      this.logger?.debug("enqueue ignored: run is not queued", {
-        runId: run.runId,
-        status: run.status,
+    if (task.status !== "queued") {
+      this.logger?.debug("enqueue ignored: task is not queued", {
+        taskId: task.taskId,
+        status: task.status,
       });
       return;
     }
     // Record the queue position ONLY when something is already executing in the
-    // scope. Marking a free scope busy for a run nobody has claimed yet would
-    // make `claimNext` skip the very run we are trying to start.
-    if (this.scopeLock.hasActive(run.scopeId)) {
-      this.scopeLock.tryAcquire(run.scopeId, run.runId);
+    // scope. Marking a free scope busy for a task nobody has claimed yet would
+    // make `claimNext` skip the very task we are trying to start.
+    if (this.scopeLock.hasActive(task.scopeId)) {
+      this.scopeLock.tryAcquire(task.scopeId, task.taskId);
     }
     this.kick();
   }
 
   /**
-   * Queued run: cancelled outright, before any worker sees it. Running run: the
-   * execution's signal is aborted and the worker decides how to land (TurnRunner
-   * emits `run.cancelled` and finalizes the run itself; this runner then sees a
-   * terminal run and writes nothing more).
+   * Queued task: cancelled outright, before any worker sees it. Running task:
+   * the execution's signal is aborted and the worker decides how to land
+   * (TurnRunner emits `run.cancelled` and finalizes the task itself; this runner
+   * then sees a terminal task and writes nothing more).
    *
-   * A running run with no local execution means another process owns it — see
+   * A running task with no local execution means another process owns it — see
    * the class doc on the single-process limit. `recover()` reconciles it once
    * that owner's lease expires.
    */
-  async requestCancel(runId: string): Promise<void> {
-    const run = await this.store.runs.getRun(runId);
-    if (!run) return;
+  async requestCancel(taskId: string): Promise<void> {
+    const task = await this.store.tasks.getTask(taskId);
+    if (!task) return;
 
-    if (run.status === "queued" || run.status === "waiting_approval") {
+    if (task.status === "queued" || task.status === "waiting_approval") {
       // `waiting_approval` is included because the transition table allows it
-      // and nothing else in this runner can reach it: a run parked on a human
+      // and nothing else in this runner can reach it: a task parked on a human
       // is exactly the kind a user cancels.
       try {
-        await this.store.runs.transitionRun(runId, [run.status], "cancelled", {
-          finishedAt: this.clock.nowIso(),
-        });
-        // Only after the store agreed: if a claim beat us to it, this run now
-        // HOLDS the scope, and clearing the lock would let a second run in the
+        await this.store.tasks.transitionTask(
+          taskId,
+          [task.status],
+          "cancelled",
+          { finishedAt: this.clock.nowIso() },
+        );
+        // Only after the store agreed: if a claim beat us to it, this task now
+        // HOLDS the scope, and clearing the lock would let a second task in the
         // same scope start alongside it.
-        this.scopeLock.remove(run.scopeId, runId);
+        this.scopeLock.remove(task.scopeId, taskId);
       } catch (err) {
         // Lost the race: a claim flipped it to `running` between the read and
         // the write. Fall through to the abort path rather than reporting a
         // cancel that did not happen.
         this.logger?.debug("cancel raced a claim; aborting instead", {
-          runId,
+          taskId,
           error: errorMessage(err),
         });
-        this.abortActive(runId);
+        this.abortActive(taskId);
       }
       return;
     }
 
-    if (run.status === "running") {
-      if (!this.abortActive(runId)) {
+    if (task.status === "running") {
+      if (!this.abortActive(taskId)) {
         this.logger?.info(
-          "cancel for a running run with no local execution; recover() will reconcile",
-          { runId },
+          "cancel for a running task with no local execution; recover() will reconcile",
+          { taskId },
         );
       }
       return;
@@ -248,11 +251,11 @@ export class SingleProcessTaskRunner implements TaskRunner {
    * `expireStaleLeases` is the only evidence available that a process stopped
    * mid-attempt — there is no callback from a crash. Each expired lease ends its
    * attempt as `abandoned` (not `failed`: nobody knows whether the work
-   * succeeded), and its run, still `running`, either gets a fresh attempt or is
+   * succeeded), and its task, still `running`, either gets a fresh attempt or is
    * dead-lettered for having burned its budget.
    *
    * Safe to call before `startWorker`; with no worker started there is nobody to
-   * hand the work to, so abandoned runs are left for the next owner's `recover`
+   * hand the work to, so abandoned tasks are left for the next owner's `recover`
    * (the report says how many).
    *
    * NOT done here: reconciling a proposal apply that a crash interrupted. That
@@ -272,7 +275,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
 
   /** {@link recover}, with a summary of what the pass did. */
   async recoverWithReport(): Promise<RecoveryReport> {
-    const expired = await this.store.runs.expireStaleLeases(this.clock.now());
+    const expired = await this.store.tasks.expireStaleLeases(this.clock.now());
     const report: RecoveryReport = {
       expired: expired.length,
       redispatched: 0,
@@ -281,47 +284,47 @@ export class SingleProcessTaskRunner implements TaskRunner {
     const worker = this.worker;
 
     for (const lease of expired) {
-      const run = await this.store.runs.getRun(lease.runId);
-      if (!run) continue;
+      const task = await this.store.tasks.getTask(lease.taskId);
+      if (!task) continue;
 
-      // A terminal run means its worker finalized the attempt before dying (or
+      // A terminal task means its worker finalized the attempt before dying (or
       // the lease simply outlived a clean finish). Its recorded outcome is the
       // truth; overwriting it with `abandoned` would be a lie about what
       // happened.
-      if (run.status !== "running") continue;
+      if (task.status !== "running") continue;
 
       try {
-        await this.store.runs.endAttempt({
+        await this.store.tasks.endAttempt({
           attemptId: lease.attemptId,
           status: "abandoned",
           error: "lease expired",
         });
       } catch (err) {
         this.logger?.warn("could not end an abandoned attempt", {
-          runId: run.runId,
+          taskId: task.taskId,
           attemptId: lease.attemptId,
           error: errorMessage(err),
         });
       }
 
-      if (run.attemptCount >= this.maxAttempts) {
-        await this.deadLetter(run.runId, POISON_REASON);
+      if (task.attemptCount >= this.maxAttempts) {
+        await this.deadLetter(task.taskId, POISON_REASON);
         report.deadLettered += 1;
         continue;
       }
 
       if (!worker || this.stopped) {
-        this.logger?.info("abandoned run left for the next owner to recover", {
-          runId: run.runId,
-          attempts: run.attemptCount,
+        this.logger?.info("abandoned task left for the next owner to recover", {
+          taskId: task.taskId,
+          attempts: task.attemptCount,
         });
         continue;
       }
 
-      const next = await this.startAttempt(run.runId);
-      // The re-dispatch continues the SAME run: same id, same event sequence,
+      const next = await this.startAttempt(task.taskId);
+      // The re-dispatch continues the SAME task: same id, same event sequence,
       // one more attempt.
-      this.dispatch({ run, attempt: next.attempt, lease: next.lease }, worker);
+      this.dispatch({ task, attempt: next.attempt, lease: next.lease }, worker);
       report.redispatched += 1;
     }
 
@@ -400,7 +403,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
    *
    * The executions started here are NOT awaited. That is the whole point — see
    * the class doc. Awaiting even one of them would serialize the queue behind
-   * the slowest run, which is precisely the task-system bug this replaces.
+   * the slowest task, which is precisely the task-system bug this replaces.
    */
   private async tick(): Promise<void> {
     const worker = this.worker;
@@ -412,9 +415,9 @@ export class SingleProcessTaskRunner implements TaskRunner {
     this.ticking = true;
     try {
       while (!this.stopped && this.active.size < this.concurrency) {
-        let claimed: ClaimedRun | null;
+        let claimed: ClaimedTask | null;
         try {
-          claimed = await this.store.runs.claimNext({
+          claimed = await this.store.tasks.claimNext({
             ownerId: this.ownerId,
             now: this.clock.now(),
             scopesBusy: this.scopeLock.busyScopes(),
@@ -438,37 +441,37 @@ export class SingleProcessTaskRunner implements TaskRunner {
    * Register an execution and start it without waiting for it.
    *
    * Registration is synchronous so the claim loop's `active.size` budget check
-   * on the very next iteration already accounts for this run.
+   * on the very next iteration already accounts for this task.
    */
-  private dispatch(claimed: ClaimedRun, worker: TaskWorker): void {
-    const { run } = claimed;
-    const superseded = this.active.get(run.runId);
+  private dispatch(claimed: ClaimedTask, worker: TaskWorker): void {
+    const { task } = claimed;
+    const superseded = this.active.get(task.taskId);
     if (superseded) {
-      // Only reachable via `recover()` re-dispatching a run whose previous
-      // execution is still hanging in this process. The new one owns the run
+      // Only reachable via `recover()` re-dispatching a task whose previous
+      // execution is still hanging in this process. The new one owns the task
       // from here; the old one is fenced out by the lease and will write
       // nothing when it eventually settles.
       this.logger?.warn("superseding a still-running execution after recovery", {
-        runId: run.runId,
+        taskId: task.taskId,
       });
     }
-    if (!this.scopeLock.tryAcquire(run.scopeId, run.runId)) {
+    if (!this.scopeLock.tryAcquire(task.scopeId, task.taskId)) {
       // Should not happen: the claim passed `scopesBusy` from this same lock.
       // The store already handed us the lease, so refusing to run would strand
-      // the run in `running` with nobody executing it — log and proceed.
-      this.logger?.warn("claimed a run whose scope was locally busy", {
-        runId: run.runId,
-        scopeId: run.scopeId,
-        holder: this.scopeLock.activeRun(run.scopeId),
+      // the task in `running` with nobody executing it — log and proceed.
+      this.logger?.warn("claimed a task whose scope was locally busy", {
+        taskId: task.taskId,
+        scopeId: task.scopeId,
+        holder: this.scopeLock.activeRun(task.scopeId),
       });
     }
     const entry: ActiveExecution = {
-      runId: run.runId,
-      scopeId: run.scopeId,
+      taskId: task.taskId,
+      scopeId: task.scopeId,
       controller: new AbortController(),
       cancelRequested: false,
     };
-    this.active.set(run.runId, entry);
+    this.active.set(task.taskId, entry);
 
     const promise = this.executeClaimed(claimed, worker, entry);
     this.inFlight.add(promise);
@@ -478,25 +481,25 @@ export class SingleProcessTaskRunner implements TaskRunner {
   }
 
   /**
-   * Drive one run to a terminal state, attempt after attempt.
+   * Drive one task to a terminal state, attempt after attempt.
    *
    * The retry loop lives HERE rather than going back through the claim loop, and
-   * holds the scope lock and its concurrency slot for the whole chain: the run
+   * holds the scope lock and its concurrency slot for the whole chain: the task
    * never returns to `queued`, so there is nothing for a claim to pick up. See
    * the class doc's point 3.
    */
   private async executeClaimed(
-    claimed: ClaimedRun,
+    claimed: ClaimedTask,
     worker: TaskWorker,
     entry: ActiveExecution,
   ): Promise<void> {
-    const { runId, scopeId } = entry;
+    const { taskId, scopeId } = entry;
     let attemptId = claimed.attempt.attemptId;
     let lease = claimed.lease;
     try {
       for (;;) {
         const outcome = await this.runAttempt(
-          runId,
+          taskId,
           attemptId,
           lease,
           entry,
@@ -507,11 +510,11 @@ export class SingleProcessTaskRunner implements TaskRunner {
         lease = outcome.next.lease;
       }
     } catch (err) {
-      // Bookkeeping itself failed (the store threw while landing the run). The
-      // run stays `running` with a live lease, which is recoverable: the lease
+      // Bookkeeping itself failed (the store threw while landing the task). The
+      // task stays `running` with a live lease, which is recoverable: the lease
       // expires and `recover()` picks it up. Losing the loop would not be.
       this.logger?.error("task execution bookkeeping failed", {
-        runId,
+        taskId,
         attemptId,
         error: errorMessage(err),
       });
@@ -519,19 +522,19 @@ export class SingleProcessTaskRunner implements TaskRunner {
       // Best effort: the token may already have been replaced (a retry) or
       // expired (a takeover), and both throw here.
       try {
-        await this.store.runs.releaseLease(lease.leaseToken);
+        await this.store.tasks.releaseLease(lease.leaseToken);
       } catch {
         /* not ours any more — nothing to release */
       }
-      // A superseded execution (recovery re-dispatched its run while it hung)
+      // A superseded execution (recovery re-dispatched its task while it hung)
       // must not release resources the new execution now owns.
-      if (this.active.get(runId) === entry) {
-        this.active.delete(runId);
-        const successor = this.scopeLock.release(scopeId, runId);
+      if (this.active.get(taskId) === entry) {
+        this.active.delete(taskId);
+        const successor = this.scopeLock.release(scopeId, taskId);
         if (successor !== null) {
           this.logger?.debug("scope freed for the next waiter", {
             scopeId,
-            runId: successor,
+            taskId: successor,
           });
         }
         this.kick();
@@ -543,12 +546,12 @@ export class SingleProcessTaskRunner implements TaskRunner {
    * One attempt: heartbeat, execute, then decide what the outcome means.
    *
    * Every durable write below is gated on a fencing check first. An attempt that
-   * lost its lease while running is a zombie — some other owner has the run now,
-   * and a write from here would interleave with theirs or overwrite a verdict
-   * they already recorded.
+   * lost its lease while running is a zombie — some other owner has the task
+   * now, and a write from here would interleave with theirs or overwrite a
+   * verdict they already recorded.
    */
   private async runAttempt(
-    runId: string,
+    taskId: string,
     attemptId: string,
     lease: Lease,
     entry: ActiveExecution,
@@ -558,7 +561,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
     if (entry.cancelRequested) entry.controller.abort();
 
     const heartbeat = setInterval(() => {
-      void this.renewLease(runId, lease.leaseToken, entry);
+      void this.renewLease(taskId, lease.leaseToken, entry);
     }, this.heartbeatMs);
     (heartbeat as unknown as { unref?: () => void }).unref?.();
 
@@ -566,7 +569,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
     let threw = false;
     try {
       await worker.execute({
-        runId,
+        taskId,
         attemptId,
         leaseToken: lease.leaseToken,
         signal: entry.controller.signal,
@@ -580,39 +583,39 @@ export class SingleProcessTaskRunner implements TaskRunner {
 
     if (!(await this.stillHoldsLease(lease.leaseToken))) {
       this.logger?.warn("attempt finished without its lease; writing nothing", {
-        runId,
+        taskId,
         attemptId,
       });
       return { kind: "done" };
     }
 
     return threw
-      ? await this.settleThrown(runId, attemptId, entry, thrown)
-      : await this.settleResolved(runId, attemptId, entry);
+      ? await this.settleThrown(taskId, attemptId, entry, thrown)
+      : await this.settleResolved(taskId, attemptId, entry);
   }
 
   /**
-   * The worker returned. Normally it has already finalized the run itself
-   * (TurnRunner transitions the run and ends its own attempt on its way out), in
-   * which case there is nothing left to do — the run is no longer `running` and
-   * this method writes nothing.
+   * The worker returned. Normally it has already finalized the task itself
+   * (TurnRunner transitions the task and ends its own attempt on its way out),
+   * in which case there is nothing left to do — the task is no longer `running`
+   * and this method writes nothing.
    *
    * The defensive branch below is for a worker that returns without landing the
-   * run: leaving it `running` forever with no lease would make it invisible to
+   * task: leaving it `running` forever with no lease would make it invisible to
    * both the claim loop (which only takes `queued`) and `recover()` (which only
    * sees expired leases).
    */
   private async settleResolved(
-    runId: string,
+    taskId: string,
     attemptId: string,
     entry: ActiveExecution,
   ): Promise<AttemptOutcome> {
-    const run = await this.store.runs.getRun(runId);
-    if (!run || run.status !== "running") return { kind: "done" };
+    const task = await this.store.tasks.getTask(taskId);
+    if (!task || task.status !== "running") return { kind: "done" };
     // A cancel that the worker swallowed still means cancelled, not completed.
     const status = entry.cancelRequested ? "cancelled" : "completed";
-    await this.store.runs.endAttempt({ attemptId, status });
-    await this.store.runs.transitionRun(runId, ["running"], status, {
+    await this.store.tasks.endAttempt({ attemptId, status });
+    await this.store.tasks.transitionTask(taskId, ["running"], status, {
       finishedAt: this.clock.nowIso(),
     });
     return { kind: "done" };
@@ -620,7 +623,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
 
   /** The worker threw: classify, then retry / dead-letter / fail / cancel. */
   private async settleThrown(
-    runId: string,
+    taskId: string,
     attemptId: string,
     entry: ActiveExecution,
     err: unknown,
@@ -630,16 +633,16 @@ export class SingleProcessTaskRunner implements TaskRunner {
     const message = errorMessage(err);
 
     if (kind === "cancelled") {
-      await this.store.runs.endAttempt({
+      await this.store.tasks.endAttempt({
         attemptId,
         status: "cancelled",
         error: message,
       });
-      await this.landIfRunning(runId, "cancelled");
+      await this.landIfRunning(taskId, "cancelled");
       return { kind: "done" };
     }
 
-    await this.store.runs.endAttempt({
+    await this.store.tasks.endAttempt({
       attemptId,
       status: "failed",
       error: `${classified.reason}: ${message}`,
@@ -647,54 +650,55 @@ export class SingleProcessTaskRunner implements TaskRunner {
 
     if (kind === "terminal") {
       // NOT dead-lettered: the dead-letter row means "this poisoned the queue,
-      // stop feeding it work". A cleanly-diagnosed failure is just a failure.
-      this.logger?.info("run failed with a terminal error", {
-        runId,
+      // stop feeding it work". A cleanly-diagnosed failure — an unregistered
+      // kind, a rejected request — is just a failure.
+      this.logger?.info("task failed with a terminal error", {
+        taskId,
         attemptId,
         reason: classified.reason,
       });
-      await this.landIfRunning(runId, "failed", `${classified.reason}: ${message}`);
+      await this.landIfRunning(taskId, "failed", `${classified.reason}: ${message}`);
       return { kind: "done" };
     }
 
     // Transient from here down.
-    const run = await this.store.runs.getRun(runId);
-    if (!run || run.status !== "running") {
-      // A worker that lands the run itself before rethrowing (TurnRunner's
-      // `failQuietly` does exactly this) has already spent the run's life; the
+    const task = await this.store.tasks.getTask(taskId);
+    if (!task || task.status !== "running") {
+      // A worker that lands the task itself before rethrowing (TurnRunner's
+      // `failQuietly` does exactly this) has already spent the task's life; the
       // transition table has no way back from `failed`, and inventing one to
-      // force a retry would resurrect a run the worker deliberately buried.
+      // force a retry would resurrect a task the worker deliberately buried.
       // Such a worker opts out of runner-level retries by construction — its
-      // own retry policy lives inside the turn.
-      this.logger?.debug("no retry: the worker already landed the run", {
-        runId,
-        status: run?.status,
+      // own retry policy lives inside the executor.
+      this.logger?.debug("no retry: the worker already landed the task", {
+        taskId,
+        status: task?.status,
       });
       return { kind: "done" };
     }
 
     // `attemptCount` is the store's own count, incremented by `createAttempt` —
     // no separate bookkeeping to drift out of sync with the attempt rows.
-    if (run.attemptCount >= this.maxAttempts) {
-      await this.deadLetter(runId, `${classified.reason}: ${message}`);
+    if (task.attemptCount >= this.maxAttempts) {
+      await this.deadLetter(taskId, `${classified.reason}: ${message}`);
       return { kind: "done" };
     }
     if (this.stopped || !this.worker) {
-      // Shutting down mid-retry: leave the run `running` with a live lease that
+      // Shutting down mid-retry: leave the task `running` with a live lease that
       // will expire, so the next owner's `recover()` continues it.
       this.logger?.info("retry deferred to recovery: the worker is stopping", {
-        runId,
-        attempts: run.attemptCount,
+        taskId,
+        attempts: task.attemptCount,
       });
       return { kind: "done" };
     }
 
-    this.logger?.info("retrying run in place", {
-      runId,
-      attempt: run.attemptCount + 1,
+    this.logger?.info("retrying task in place", {
+      taskId,
+      attempt: task.attemptCount + 1,
       reason: classified.reason,
     });
-    const next = await this.startAttempt(runId);
+    const next = await this.startAttempt(taskId);
     return {
       kind: "retry",
       next: { attemptId: next.attempt.attemptId, lease: next.lease },
@@ -704,7 +708,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
   // ────────────────────────────── store ops ──────────────────────────────
 
   /**
-   * A fresh attempt + lease on a run that stays `running`.
+   * A fresh attempt + lease on a task that stays `running`.
    *
    * Acquiring replaces the run's lease and draws the next fencing token, so the
    * previous attempt's `leaseToken` stops being accepted by `appendEvents` from
@@ -712,15 +716,15 @@ export class SingleProcessTaskRunner implements TaskRunner {
    * the live attempt's stream.
    */
   private async startAttempt(
-    runId: string,
+    taskId: string,
   ): Promise<{ attempt: AttemptRecord; lease: Lease }> {
-    const attempt = await this.store.runs.createAttempt({
+    const attempt = await this.store.tasks.createAttempt({
       attemptId: `att_${crypto.randomUUID()}`,
-      runId,
+      taskId,
       ownerId: this.ownerId,
     });
-    const lease = await this.store.runs.acquireLease({
-      runId,
+    const lease = await this.store.tasks.acquireLease({
+      taskId,
       attemptId: attempt.attemptId,
       ownerId: this.ownerId,
       ttlMs: this.leaseTtlMs,
@@ -728,34 +732,34 @@ export class SingleProcessTaskRunner implements TaskRunner {
     return { attempt, lease };
   }
 
-  /** Mark the run poisoned AND land it failed — the row alone stops nothing. */
-  private async deadLetter(runId: string, reason: string): Promise<void> {
-    this.logger?.warn("dead-lettering run", { runId, reason });
-    await this.store.runs.markDeadLettered(runId, reason);
-    await this.landIfRunning(runId, "failed", reason);
+  /** Mark the task poisoned AND land it failed — the row alone stops nothing. */
+  private async deadLetter(taskId: string, reason: string): Promise<void> {
+    this.logger?.warn("dead-lettering task", { taskId, reason });
+    await this.store.tasks.markDeadLettered(taskId, reason);
+    await this.landIfRunning(taskId, "failed", reason);
   }
 
   /**
-   * Transition a run that is still `running`, tolerating the race where it is
+   * Transition a task that is still `running`, tolerating the race where it is
    * not: the worker may have finalized it (TurnRunner does), or a cancel may
    * have landed first. Re-reading rather than assuming is what keeps the runner
-   * from throwing `InvalidRunTransitionError` at itself on every happy path.
+   * from throwing `InvalidTaskTransitionError` at itself on every happy path.
    */
   private async landIfRunning(
-    runId: string,
+    taskId: string,
     to: "completed" | "failed" | "cancelled",
     error?: string,
   ): Promise<void> {
-    const run = await this.store.runs.getRun(runId);
-    if (!run || run.status !== "running") {
-      this.logger?.debug("run already terminal; skipping transition", {
-        runId,
-        status: run?.status,
+    const task = await this.store.tasks.getTask(taskId);
+    if (!task || task.status !== "running") {
+      this.logger?.debug("task already terminal; skipping transition", {
+        taskId,
+        status: task?.status,
         intended: to,
       });
       return;
     }
-    await this.store.runs.transitionRun(runId, ["running"], to, {
+    await this.store.tasks.transitionTask(taskId, ["running"], to, {
       finishedAt: this.clock.nowIso(),
       ...(error === undefined ? {} : { error }),
     });
@@ -767,7 +771,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
    */
   private async stillHoldsLease(leaseToken: string): Promise<boolean> {
     try {
-      await this.store.runs.renewLease(leaseToken, this.leaseTtlMs);
+      await this.store.tasks.renewLease(leaseToken, this.leaseTtlMs);
       return true;
     } catch (err) {
       if (err instanceof LeaseLostError) return false;
@@ -776,20 +780,20 @@ export class SingleProcessTaskRunner implements TaskRunner {
   }
 
   private async renewLease(
-    runId: string,
+    taskId: string,
     leaseToken: string,
     entry: ActiveExecution,
   ): Promise<void> {
     try {
-      await this.store.runs.renewLease(leaseToken, this.leaseTtlMs);
+      await this.store.tasks.renewLease(leaseToken, this.leaseTtlMs);
     } catch (err) {
       if (err instanceof LeaseLostError) {
-        // The run belongs to someone else now. Abort so the worker stops
+        // The task belongs to someone else now. Abort so the worker stops
         // burning provider calls on output nobody will accept — and so the
         // fencing check after `execute` has an aborted attempt to report on.
         entry.controller.abort();
         this.logger?.warn("lease lost mid-attempt; aborting the execution", {
-          runId,
+          taskId,
           error: errorMessage(err),
         });
         return;
@@ -797,15 +801,15 @@ export class SingleProcessTaskRunner implements TaskRunner {
       // A store hiccup is not a lost lease. Let the next heartbeat try again
       // rather than killing a healthy attempt over one failed write.
       this.logger?.warn("lease renewal failed; will retry on the next beat", {
-        runId,
+        taskId,
         error: errorMessage(err),
       });
     }
   }
 
-  /** Abort the local execution of `runId`. False when there is none. */
-  private abortActive(runId: string): boolean {
-    const entry = this.active.get(runId);
+  /** Abort the local execution of `taskId`. False when there is none. */
+  private abortActive(taskId: string): boolean {
+    const entry = this.active.get(taskId);
     if (!entry) return false;
     entry.cancelRequested = true;
     entry.controller.abort();

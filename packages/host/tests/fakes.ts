@@ -11,17 +11,18 @@
  * The reference adapters (in-memory + sqlite, with a shared conformance suite)
  * arrive in a later wave; these live in the test folder and ship to nobody.
  */
-import type { AiRunEvent, AiToolCall } from "@agentkit/contracts";
+import type { AiToolCall, TaskEventEnvelope } from "@agentkit/contracts";
 import {
   ACTION_ID_RELEASING_STATUSES,
   DuplicateActionIdError,
+  DuplicateTaskError,
   InvalidProposalTransitionError,
-  InvalidRunTransitionError,
+  InvalidTaskTransitionError,
   LeaseLostError,
   RecordNotFoundError,
   SeqConflictError,
   assertProposalTransition,
-  assertRunTransition,
+  assertTaskTransition,
   type ApplyOutcome,
   type ApplyProposalInput,
   type AppendEventsOptions,
@@ -32,13 +33,13 @@ import {
   type AcquireLeaseInput,
   type ChatRecord,
   type ClaimNextInput,
-  type ClaimedRun,
+  type ClaimedTask,
   type Clock,
   type ConversationStore,
   type CreateAttemptInput,
   type CreateChatInput,
   type CreateProposalInput,
-  type CreateRunInput,
+  type CreateTaskInput,
   type EndAttemptInput,
   type EnqueueInput,
   type IdGenerator,
@@ -57,12 +58,12 @@ import {
   type ProposalStatus,
   type ProposalStore,
   type ProviderStore,
-  type RunPatch,
-  type RunRecord,
-  type RunStatus,
-  type RunStore,
   type SettingsStore,
   type StartWorkerOptions,
+  type TaskPatch,
+  type TaskRecord,
+  type TaskStatus,
+  type TaskStore,
   type TaskRunner,
   type TaskWorker,
   type WorkerHandle,
@@ -104,7 +105,7 @@ export function createTestIds(): IdGenerator {
     return `${kind}-${n}`;
   };
   return {
-    runId: () => next("run"),
+    taskId: () => next("task"),
     attemptId: () => next("att"),
     eventId: () => next("evt"),
     proposalId: () => next("prp"),
@@ -203,12 +204,12 @@ export class FakeConversationStore implements ConversationStore {
   }
 }
 
-export class FakeRunStore implements RunStore {
-  readonly runs = new Map<string, RunRecord>();
+export class FakeTaskStore implements TaskStore {
+  readonly tasks = new Map<string, TaskRecord>();
   readonly attempts = new Map<string, AttemptRecord>();
-  /** One live lease per run, keyed by runId. */
+  /** One live lease per task, keyed by taskId. */
   readonly leases = new Map<string, Lease>();
-  readonly events = new Map<string, AiRunEvent[]>();
+  readonly events = new Map<string, TaskEventEnvelope[]>();
   private fencing = 0;
 
   constructor(
@@ -216,62 +217,67 @@ export class FakeRunStore implements RunStore {
     private readonly ids: IdGenerator,
   ) {}
 
-  async createRun(input: CreateRunInput): Promise<RunRecord> {
+  async createTask(input: CreateTaskInput): Promise<TaskRecord> {
+    if (this.tasks.has(input.taskId)) {
+      throw new DuplicateTaskError(`Task already exists: ${input.taskId}.`, {
+        taskId: input.taskId,
+      });
+    }
     const now = this.clock.nowIso();
-    const run: RunRecord = {
-      runId: input.runId,
-      chatId: input.chatId,
+    const task: TaskRecord = {
+      taskId: input.taskId,
+      kind: input.kind,
       scopeId: input.scopeId,
       status: "queued",
       priority: input.priority ?? 0,
       enqueuedAt: now,
       availableAt: input.availableAt ?? now,
-      request: input.request,
+      payload: input.payload,
       attemptCount: 0,
       poisonCount: 0,
     };
-    this.runs.set(run.runId, run);
-    return run;
+    this.tasks.set(task.taskId, task);
+    return task;
   }
 
-  async getRun(runId: string): Promise<RunRecord | null> {
-    return this.runs.get(runId) ?? null;
+  async getTask(taskId: string): Promise<TaskRecord | null> {
+    return this.tasks.get(taskId) ?? null;
   }
 
-  async transitionRun(
-    runId: string,
-    from: RunStatus[],
-    to: RunStatus,
-    patch?: RunPatch,
-  ): Promise<RunRecord> {
-    const run = this.runs.get(runId);
-    if (!run) throw new RecordNotFoundError(`Run not found: ${runId}`);
-    if (!from.includes(run.status)) {
-      throw new InvalidRunTransitionError(
-        `Run ${runId} is ${run.status}, expected one of [${from.join(", ")}].`,
-        { runId, current: run.status, from, to },
+  async transitionTask(
+    taskId: string,
+    from: TaskStatus[],
+    to: TaskStatus,
+    patch?: TaskPatch,
+  ): Promise<TaskRecord> {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+    if (!from.includes(task.status)) {
+      throw new InvalidTaskTransitionError(
+        `Task ${taskId} is ${task.status}, expected one of [${from.join(", ")}].`,
+        { taskId, current: task.status, from, to },
       );
     }
-    assertRunTransition(run.status, to);
-    run.status = to;
-    if (patch?.startedAt !== undefined) run.startedAt = patch.startedAt;
-    if (patch?.finishedAt !== undefined) run.finishedAt = patch.finishedAt;
-    if (patch?.error !== undefined) run.error = patch.error;
-    if (patch?.availableAt !== undefined) run.availableAt = patch.availableAt;
-    if (patch?.priority !== undefined) run.priority = patch.priority;
-    if (patch?.poisonCount !== undefined) run.poisonCount = patch.poisonCount;
-    if (patch?.request !== undefined) run.request = patch.request;
-    return run;
+    assertTaskTransition(task.status, to);
+    task.status = to;
+    if (patch?.startedAt !== undefined) task.startedAt = patch.startedAt;
+    if (patch?.finishedAt !== undefined) task.finishedAt = patch.finishedAt;
+    if (patch?.error !== undefined) task.error = patch.error;
+    if (patch?.availableAt !== undefined) task.availableAt = patch.availableAt;
+    if (patch?.priority !== undefined) task.priority = patch.priority;
+    if (patch?.poisonCount !== undefined) task.poisonCount = patch.poisonCount;
+    if (patch?.payload !== undefined) task.payload = patch.payload;
+    return task;
   }
 
   async createAttempt(input: CreateAttemptInput): Promise<AttemptRecord> {
-    const run = this.runs.get(input.runId);
-    if (!run) throw new RecordNotFoundError(`Run not found: ${input.runId}`);
-    run.attemptCount += 1;
+    const task = this.tasks.get(input.taskId);
+    if (!task) throw new RecordNotFoundError(`Task not found: ${input.taskId}`);
+    task.attemptCount += 1;
     const attempt: AttemptRecord = {
       attemptId: input.attemptId,
-      runId: input.runId,
-      attemptNumber: run.attemptCount,
+      taskId: input.taskId,
+      attemptNumber: task.attemptCount,
       status: "running",
       ownerId: input.ownerId,
       startedAt: this.clock.nowIso(),
@@ -294,14 +300,14 @@ export class FakeRunStore implements RunStore {
   async acquireLease(input: AcquireLeaseInput): Promise<Lease> {
     this.fencing += 1;
     const lease: Lease = {
-      runId: input.runId,
+      taskId: input.taskId,
       attemptId: input.attemptId,
       ownerId: input.ownerId,
       leaseToken: `lease-${this.fencing}`,
       fencingToken: this.fencing,
       expiresAt: new Date(this.clock.now().getTime() + input.ttlMs).toISOString(),
     };
-    this.leases.set(input.runId, lease);
+    this.leases.set(input.taskId, lease);
     return lease;
   }
 
@@ -315,52 +321,52 @@ export class FakeRunStore implements RunStore {
 
   async releaseLease(leaseToken: string): Promise<void> {
     const lease = this.leaseByToken(leaseToken);
-    this.leases.delete(lease.runId);
+    this.leases.delete(lease.taskId);
   }
 
   async expireStaleLeases(now: Date): Promise<Lease[]> {
     const expired: Lease[] = [];
-    for (const [runId, lease] of this.leases) {
+    for (const [taskId, lease] of this.leases) {
       if (new Date(lease.expiresAt).getTime() <= now.getTime()) {
         expired.push(lease);
-        this.leases.delete(runId);
+        this.leases.delete(taskId);
       }
     }
     return expired;
   }
 
   async appendEvents(
-    runId: string,
-    events: AiRunEvent[],
+    taskId: string,
+    events: TaskEventEnvelope[],
     opts: AppendEventsOptions,
   ): Promise<void> {
-    const lease = this.leases.get(runId);
+    const lease = this.leases.get(taskId);
     if (!lease || lease.leaseToken !== opts.leaseToken) {
       throw new LeaseLostError(
-        `Lease token ${opts.leaseToken} is not current for run ${runId}.`,
-        { runId, leaseToken: opts.leaseToken },
+        `Lease token ${opts.leaseToken} is not current for task ${taskId}.`,
+        { taskId, leaseToken: opts.leaseToken },
       );
     }
-    const log = this.events.get(runId) ?? [];
+    const log = this.events.get(taskId) ?? [];
     let last = log.length > 0 ? log[log.length - 1]!.seq : -1;
     for (const event of events) {
       if (event.seq <= last) {
         throw new SeqConflictError(
-          `Non-monotonic seq ${event.seq} for run ${runId} (last ${last}).`,
-          { runId, seq: event.seq, last },
+          `Non-monotonic seq ${event.seq} for task ${taskId} (last ${last}).`,
+          { taskId, seq: event.seq, last },
         );
       }
       last = event.seq;
       log.push(event);
     }
-    this.events.set(runId, log);
+    this.events.set(taskId, log);
   }
 
   async listEvents(
-    runId: string,
+    taskId: string,
     opts?: ListEventsOptions,
-  ): Promise<AiRunEvent[]> {
-    let log = [...(this.events.get(runId) ?? [])];
+  ): Promise<TaskEventEnvelope[]> {
+    let log = [...(this.events.get(taskId) ?? [])];
     if (opts?.afterSeq !== undefined) {
       const after = opts.afterSeq;
       log = log.filter((e) => e.seq > after);
@@ -369,43 +375,45 @@ export class FakeRunStore implements RunStore {
     return log;
   }
 
-  async nextSeq(runId: string): Promise<number> {
-    const log = this.events.get(runId);
+  async nextSeq(taskId: string): Promise<number> {
+    const log = this.events.get(taskId);
     if (!log || log.length === 0) return 0;
     return log[log.length - 1]!.seq + 1;
   }
 
-  async claimNext(input: ClaimNextInput): Promise<ClaimedRun | null> {
+  async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
     const busy = new Set(input.scopesBusy);
-    const candidate = [...this.runs.values()]
+    const kinds = input.kinds === undefined ? null : new Set(input.kinds);
+    const candidate = [...this.tasks.values()]
       .filter(
-        (run) =>
-          run.status === "queued" &&
-          !busy.has(run.scopeId) &&
-          new Date(run.availableAt).getTime() <= input.now.getTime(),
+        (task) =>
+          task.status === "queued" &&
+          !busy.has(task.scopeId) &&
+          (kinds === null || kinds.has(task.kind)) &&
+          new Date(task.availableAt).getTime() <= input.now.getTime(),
       )
       .sort((a, b) => b.priority - a.priority)[0];
     if (!candidate) return null;
     const attempt = await this.createAttempt({
       attemptId: this.ids.attemptId(),
-      runId: candidate.runId,
+      taskId: candidate.taskId,
       ownerId: input.ownerId,
     });
     const lease = await this.acquireLease({
-      runId: candidate.runId,
+      taskId: candidate.taskId,
       attemptId: attempt.attemptId,
       ownerId: input.ownerId,
       ttlMs: 30_000,
     });
-    return { run: candidate, attempt, lease };
+    return { task: candidate, attempt, lease };
   }
 
-  async markDeadLettered(runId: string, reason: string): Promise<RunRecord> {
-    const run = this.runs.get(runId);
-    if (!run) throw new RecordNotFoundError(`Run not found: ${runId}`);
-    run.deadLetteredAt = this.clock.nowIso();
-    run.deadLetterReason = reason;
-    return run;
+  async markDeadLettered(taskId: string, reason: string): Promise<TaskRecord> {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+    task.deadLetteredAt = this.clock.nowIso();
+    task.deadLetterReason = reason;
+    return task;
   }
 
   private leaseByToken(leaseToken: string): Lease {
@@ -669,7 +677,7 @@ export class FakeOutboxStore implements OutboxStore {
 
 export class FakeAssistantStore implements AssistantStore {
   readonly conversations: FakeConversationStore;
-  readonly runs: FakeRunStore;
+  readonly tasks: FakeTaskStore;
   readonly proposals: FakeProposalStore;
   readonly providers = new FakeProviderStore();
   readonly settings = new FakeSettingsStore();
@@ -679,7 +687,7 @@ export class FakeAssistantStore implements AssistantStore {
 
   constructor(clock: Clock, ids: IdGenerator) {
     this.conversations = new FakeConversationStore(clock, ids);
-    this.runs = new FakeRunStore(clock, ids);
+    this.tasks = new FakeTaskStore(clock, ids);
     this.proposals = new FakeProposalStore(clock);
     this.outbox = new FakeOutboxStore(clock);
   }
@@ -743,13 +751,13 @@ export class FakeTaskRunner implements TaskRunner {
   worker: TaskWorker | null = null;
 
   async enqueue(input: EnqueueInput): Promise<void> {
-    // Idempotent per runId, as the port requires.
-    if (this.enqueued.some((e) => e.runId === input.runId)) return;
+    // Idempotent per taskId, as the port requires.
+    if (this.enqueued.some((e) => e.taskId === input.taskId)) return;
     this.enqueued.push(input);
   }
 
-  async requestCancel(runId: string): Promise<void> {
-    this.cancelled.push(runId);
+  async requestCancel(taskId: string): Promise<void> {
+    this.cancelled.push(taskId);
   }
 
   async recover(): Promise<void> {

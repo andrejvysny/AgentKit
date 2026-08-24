@@ -26,13 +26,44 @@ export class AgentKitHostError extends Error {
 }
 
 /**
- * A run status change that the {@link RUN_TRANSITIONS} table forbids, or whose
- * `from` set did not include the run's current status (a lost race: someone
- * else moved the run first).
+ * A task status change that the {@link TASK_TRANSITIONS} table forbids, or whose
+ * `from` set did not include the task's current status (a lost race: someone
+ * else moved the task first).
  */
-export class InvalidRunTransitionError extends AgentKitHostError {
+export class InvalidTaskTransitionError extends AgentKitHostError {
   constructor(message: string, details?: Record<string, unknown>) {
-    super("invalid_run_transition", message, details);
+    super("invalid_task_transition", message, details);
+  }
+}
+
+/**
+ * A task was created with a `taskId` that already exists.
+ *
+ * The id is the caller's idempotency key — a retried submit, a re-delivered
+ * message — so a store that silently overwrote would discard a live task's
+ * payload and attempt history while its event log stayed behind. Failing loudly
+ * lets the caller decide: `TaskService.submitTask` treats it as "already
+ * submitted" and re-pokes the queue instead of writing a second task.
+ */
+export class DuplicateTaskError extends AgentKitHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("duplicate_task", message, details);
+  }
+}
+
+/**
+ * A task was claimed whose `kind` no executor in this worker's registry
+ * handles — a kind that was never registered, or a deployment that routed the
+ * work to the wrong process.
+ *
+ * `details.kind` carries the offending kind, because that is the only thing a
+ * human fixing this needs and the only thing a metric should group on. Terminal
+ * by classification: retrying cannot conjure the executor, and re-running the
+ * same claim would just burn the attempt budget on the same lookup.
+ */
+export class ExecutorNotFoundError extends AgentKitHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("executor_not_found", message, details);
   }
 }
 

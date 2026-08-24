@@ -25,8 +25,13 @@ import type {
 } from "../ports/task-runner.js";
 import type { ToolSetContributor } from "../ports/tool-contributor.js";
 import type { AssistantSettings } from "../ports/settings-store.js";
-import type { RunRecord, RunStatus } from "../ports/run-store.js";
+import type { TaskRecord, TaskStatus } from "../ports/task-store.js";
 import type { VerificationHook } from "../ports/verification.js";
+import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
+import type {
+  TaskExecutionContext,
+  TaskExecutor,
+} from "../tasks/task-executor.js";
 import {
   EMULATED_TOOL_CALL_MESSAGE,
   looksLikeEmulatedToolCall,
@@ -91,8 +96,17 @@ export interface SubmitMessageResult {
   assistantMessageId: string;
 }
 
-/** What a run's `request` carries for this worker. */
+/**
+ * What a `chat.turn` task's `payload` carries for this worker.
+ *
+ * `chatId` lives here rather than on {@link TaskRecord}: the durable record is
+ * kind-agnostic — it knows about scopes, attempts and leases — and a reindex
+ * task has no conversation to name. A turn's scope happens to BE its chat, but
+ * that is this kind's choice, not the queue's, and a host that scopes a turn on
+ * a shared document instead still needs the chat spelled out here.
+ */
 interface TurnRequest {
+  chatId: string;
   model?: string;
   providerId?: string;
   assistantMessageId: string;
@@ -113,8 +127,10 @@ interface PassState {
 }
 
 interface PassInput {
-  run: RunRecord;
-  execution: TaskExecution;
+  task: TaskRecord;
+  /** The conversation this turn belongs to, read once from the payload. */
+  chatId: string;
+  ctx: TaskExecutionContext;
   client: AiProviderClient;
   model: string;
   messages: AiChatMessage[];
@@ -132,34 +148,36 @@ interface PassResult {
 }
 
 /**
- * Turns a submitted message into a durable run, and executes that run.
+ * Turns a submitted message into a durable task of kind `chat.turn`, and
+ * executes that task.
  *
  * Two halves, deliberately far apart in time:
  *
  * `submitMessage` writes the user message, an empty assistant placeholder, and a
- * queued run — in ONE transaction — and returns immediately. The caller gets ids
- * it can render against before a single token exists, and a crash one
+ * queued task — in ONE transaction — and returns immediately. The caller gets
+ * ids it can render against before a single token exists, and a crash one
  * millisecond later loses nothing, because the work is already recorded.
  *
- * `execute` is the {@link TaskWorker} the queue calls back. It drives
- * `runChat`, and every event it yields goes two places: appended to the run's
- * durable log (the replayable truth) and projected onto conversation state (what
- * the next turn replays to the provider). Retries stay inside ONE run id, each
- * pass continuing the same `seq` sequence via `RunStore.nextSeq`, so a consumer
- * that reconnects mid-retry still sees one unbroken, gap-detectable stream.
+ * `executeTask` is what the executor registry dispatches to (and what the legacy
+ * {@link TurnRunner.execute} delegates to). It drives `runChat`, and every event
+ * it yields goes two places: appended to the task's durable log (the replayable
+ * truth) and projected onto conversation state (what the next turn replays to
+ * the provider). Retries stay inside ONE task id, each pass continuing the same
+ * `seq` sequence via `TaskStore.nextSeq`, so a consumer that reconnects
+ * mid-retry still sees one unbroken, gap-detectable stream.
  */
 export class TurnRunner implements TaskWorker {
   constructor(private readonly deps: TurnRunnerDeps) {}
 
   /**
-   * Record a turn and hand it to the queue. Never waits on the model: the run is
-   * durable the moment this returns, and the answer arrives through the event
+   * Record a turn and hand it to the queue. Never waits on the model: the task
+   * is durable the moment this returns, and the answer arrives through the event
    * log.
    */
   async submitMessage(
     input: SubmitMessageInput,
   ): Promise<SubmitMessageResult> {
-    const runId = this.deps.ids.runId();
+    const taskId = this.deps.ids.taskId();
     const { userMessageId, assistantMessageId } =
       await this.deps.store.transaction(async (tx) => {
         const user = await tx.conversations.appendMessage({
@@ -169,16 +187,17 @@ export class TurnRunner implements TaskWorker {
           metadata: input.metadata ?? {},
         });
         // The placeholder exists so the UI has a message to stream into, and so
-        // the run has one durable target to write the answer to no matter how
+        // the task has one durable target to write the answer to no matter how
         // many provider passes it takes.
         const placeholder = await tx.conversations.appendMessage({
           chatId: input.chatId,
-          runId,
+          runId: taskId,
           role: "assistant",
           content: "",
           metadata: { placeholder: true },
         });
-        const request: TurnRequest = {
+        const payload: TurnRequest = {
+          chatId: input.chatId,
           ...(input.model === undefined ? {} : { model: input.model }),
           ...(input.providerId === undefined
             ? {}
@@ -186,77 +205,125 @@ export class TurnRunner implements TaskWorker {
           assistantMessageId: placeholder.id,
           userMessageId: user.id,
         };
-        await tx.runs.createRun({
-          runId,
-          chatId: input.chatId,
+        await tx.tasks.createTask({
+          taskId,
+          kind: CHAT_TURN_TASK_KIND,
           // Scope on the chat: two turns in one conversation must not run at
           // once, or they would interleave into the same message history.
           scopeId: input.chatId,
-          request: request as unknown as Record<string, unknown>,
+          payload: payload as unknown as Record<string, unknown>,
           ...(input.priority === undefined ? {} : { priority: input.priority }),
         });
         return { userMessageId: user.id, assistantMessageId: placeholder.id };
       });
 
-    await this.deps.taskRunner.enqueue({ runId, scopeId: input.chatId });
+    await this.deps.taskRunner.enqueue({ taskId, scopeId: input.chatId });
     return {
       chatId: input.chatId,
-      runId,
+      runId: taskId,
       userMessageId,
       assistantMessageId,
     };
   }
 
-  /** Ask the queue to stop a run; the worker's signal is what actually aborts. */
-  async cancel(runId: string): Promise<void> {
-    await this.deps.taskRunner.requestCancel(runId);
+  /** Ask the queue to stop a turn; the worker's signal is what actually aborts. */
+  async cancel(taskId: string): Promise<void> {
+    await this.deps.taskRunner.requestCancel(taskId);
   }
 
+  /**
+   * The legacy direct-execute entry point, kept because a host (and this
+   * package's own tests) may drive one attempt without standing up a registry.
+   *
+   * It repeats the load-and-guard that `createDispatchingWorker` performs,
+   * because on this path there is no dispatcher to have done it — the two must
+   * stay in step, and both exist to make sure exactly one of "the task is
+   * executable" and "somebody already moved it" is true before the model is
+   * touched.
+   */
   async execute(execution: TaskExecution): Promise<void> {
-    const { runId, attemptId } = execution;
-    const runs = this.deps.store.runs;
-    const run = await runs.getRun(runId);
-    if (!run) throw new RecordNotFoundError(`Run not found: ${runId}`, { runId });
-    if (run.status !== "queued" && run.status !== "running") {
+    const { taskId } = execution;
+    const tasks = this.deps.store.tasks;
+    const loaded = await tasks.getTask(taskId);
+    if (!loaded) {
+      throw new RecordNotFoundError(`Task not found: ${taskId}`, { taskId });
+    }
+    if (loaded.status !== "queued" && loaded.status !== "running") {
       throw new AgentKitHostError(
-        "run_not_executable",
-        `Run ${runId} is ${run.status}; only queued or running runs execute.`,
-        { runId, status: run.status },
+        "task_not_executable",
+        `Task ${taskId} is ${loaded.status}; only queued or running tasks execute.`,
+        { taskId, status: loaded.status },
       );
     }
-    if (run.status === "queued") {
-      await runs.transitionRun(runId, ["queued"], "running", {
-        startedAt: this.deps.clock.nowIso(),
-      });
+    const task =
+      loaded.status === "queued"
+        ? await tasks.transitionTask(taskId, ["queued"], "running", {
+            startedAt: this.deps.clock.nowIso(),
+          })
+        : loaded;
+
+    await this.executeTask({
+      task,
+      attemptId: execution.attemptId,
+      leaseToken: execution.leaseToken,
+      signal: execution.signal,
+    });
+  }
+
+  /**
+   * Execute one attempt at one `chat.turn` task, on a record the dispatcher has
+   * already loaded and guarded.
+   *
+   * Everything it can fail on is bookkept the same way: the original error
+   * reaches the caller (the queue classifies it), and the task is landed
+   * `failed` on the way out so it is never left `running` with nobody executing
+   * it.
+   */
+  async executeTask(ctx: TaskExecutionContext): Promise<void> {
+    const { task, attemptId } = ctx;
+    const payload = task.payload as unknown as Partial<TurnRequest>;
+    const chatId = payload.chatId;
+    if (typeof chatId !== "string" || chatId.length === 0) {
+      // A chat.turn task whose payload has no chat is unexecutable and will be
+      // unexecutable on every retry: something other than `submitMessage`
+      // created it (a hand-written row, a host that reused the kind for its own
+      // work). Classified terminal, so the queue fails it instead of burning
+      // the attempt budget re-reading the same payload.
+      const error = new AgentKitHostError(
+        "invalid_task_payload",
+        `Task ${task.taskId} of kind ${CHAT_TURN_TASK_KIND} has no chatId in its payload; only TurnRunner.submitMessage may create tasks of this kind.`,
+        { taskId: task.taskId, kind: task.kind },
+      );
+      await this.failQuietly(task.taskId, attemptId, error.message);
+      throw error;
     }
 
-    const request = run.request as unknown as TurnRequest;
-    const assistantMessageId = request.assistantMessageId;
+    const request = payload as TurnRequest;
     try {
-      await this.runTurn(run, request, assistantMessageId, execution);
+      await this.runTurn(ctx, chatId, request, request.assistantMessageId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.failQuietly(runId, attemptId, message);
+      await this.failQuietly(task.taskId, attemptId, message);
       throw err;
     }
   }
 
   private async runTurn(
-    run: RunRecord,
+    ctx: TaskExecutionContext,
+    chatId: string,
     request: TurnRequest,
     assistantMessageId: string,
-    execution: TaskExecution,
   ): Promise<void> {
     const { store, clock } = this.deps;
-    const chatId = run.chatId;
+    const { task } = ctx;
     const settings = await store.settings.getSettings();
     const provider = await this.resolveProvider(request, settings);
     const model = request.model ?? provider.defaultModel ?? settings.defaultModel;
     if (!model) {
       throw new AgentKitHostError(
         "no_model",
-        `No model resolved for run ${run.runId}.`,
-        { runId: run.runId, providerId: provider.id },
+        `No model resolved for task ${task.taskId}.`,
+        { taskId: task.taskId, providerId: provider.id },
       );
     }
     const capabilities = await store.providers.getCapabilities(provider.id);
@@ -269,9 +336,9 @@ export class TurnRunner implements TaskWorker {
           : { modelContextTokens: capabilities.maxContextTokens }),
       });
 
-    await this.deps.context?.refresh?.(chatId, execution.signal);
+    await this.deps.context?.refresh?.(chatId, ctx.signal);
     const bindings =
-      (await this.deps.context?.listBindings(chatId, execution.signal)) ?? [];
+      (await this.deps.context?.listBindings(chatId, ctx.signal)) ?? [];
     const hasPrimaryBinding = bindings.some(
       (binding) => binding.role === "primary" && binding.status === "active",
     );
@@ -285,11 +352,11 @@ export class TurnRunner implements TaskWorker {
           contributors: this.deps.contributors,
           ctx: {
             chatId,
-            runId: run.runId,
-            scopeId: run.scopeId,
+            runId: task.taskId,
+            scopeId: task.scopeId,
             bindings,
             limits,
-            signal: execution.signal,
+            signal: ctx.signal,
             ...(this.deps.logger === undefined
               ? {}
               : { logger: this.deps.logger }),
@@ -301,8 +368,7 @@ export class TurnRunner implements TaskWorker {
 
     const client = this.deps.providerFactory(await this.withSecret(provider));
     const systemPrompt =
-      (await this.deps.context?.systemPrompt?.(chatId, execution.signal)) ??
-      null;
+      (await this.deps.context?.systemPrompt?.(chatId, ctx.signal)) ?? null;
     const assembled = await this.assembleMessages(
       chatId,
       assistantMessageId,
@@ -320,8 +386,9 @@ export class TurnRunner implements TaskWorker {
       pendingToolCalls: [],
     };
     const basePass = {
-      run,
-      execution,
+      task,
+      chatId,
+      ctx,
       client,
       model,
       bindings,
@@ -379,7 +446,7 @@ export class TurnRunner implements TaskWorker {
     const toolCallCount = state.toolCallIds.size;
     const finalContent = state.content;
 
-    // Still nothing, after every recovery pass. A cancelled run is exempt: it
+    // Still nothing, after every recovery pass. A cancelled turn is exempt: it
     // has no answer because it was stopped, which is not the same failure.
     if (
       terminal !== "cancelled" &&
@@ -387,7 +454,7 @@ export class TurnRunner implements TaskWorker {
       toolCallCount === 0
     ) {
       await this.emitWarning(
-        execution,
+        ctx,
         "empty_response",
         "The model returned no answer.",
       );
@@ -399,38 +466,38 @@ export class TurnRunner implements TaskWorker {
       looksLikeEmulatedToolCall(finalContent)
     ) {
       await this.emitWarning(
-        execution,
+        ctx,
         "emulated_tool_call",
         EMULATED_TOOL_CALL_MESSAGE,
       );
       await store.conversations.appendMessage({
         chatId,
-        runId: run.runId,
+        runId: task.taskId,
         role: "system",
         content: EMULATED_TOOL_CALL_MESSAGE,
         metadata: { banner: "emulated_tool_call" },
       });
     }
 
-    // Verification runs once, and only when the run actually did tool work —
+    // Verification runs once, and only when the turn actually did tool work —
     // there is nothing to verify about a chat answer. A single pass is
     // deliberate: feeding the deficiencies back for the model to correct is a
     // multi-pass harness, and that belongs in a later phase where its cost and
     // its stopping condition can be designed properly rather than bolted on.
     if (this.deps.verification && toolCallCount > 0) {
       const report = await this.deps.verification.verify({
-        runId: run.runId,
+        runId: task.taskId,
         chatId,
-        scopeId: run.scopeId,
-        attemptId: execution.attemptId,
+        scopeId: task.scopeId,
+        attemptId: ctx.attemptId,
         toolCallCount,
         finalContent,
-        signal: execution.signal,
+        signal: ctx.signal,
       });
       if (report && report.status !== "pass") {
         await store.conversations.appendMessage({
           chatId,
-          runId: run.runId,
+          runId: task.taskId,
           role: "system",
           content: describeDeficiencies(report.deficiencies),
           metadata: { banner: "verification", status: report.status },
@@ -443,17 +510,17 @@ export class TurnRunner implements TaskWorker {
       metadata: { placeholder: false },
     });
 
-    const finalStatus: RunStatus =
+    const finalStatus: TaskStatus =
       terminal === "completed"
         ? "completed"
         : terminal === "cancelled"
           ? "cancelled"
           : "failed";
-    await store.runs.transitionRun(run.runId, ["running"], finalStatus, {
+    await store.tasks.transitionTask(task.taskId, ["running"], finalStatus, {
       finishedAt: clock.nowIso(),
     });
-    await store.runs.endAttempt({
-      attemptId: execution.attemptId,
+    await store.tasks.endAttempt({
+      attemptId: ctx.attemptId,
       status: finalStatus,
     });
   }
@@ -462,12 +529,12 @@ export class TurnRunner implements TaskWorker {
    * One `runChat` invocation, with its events appended and projected.
    *
    * `firstSeq` comes from the store rather than from a counter in this class:
-   * several passes share a run id, and only the log knows where the last one
+   * several passes share a task id, and only the log knows where the last one
    * stopped. That is what keeps `seq` unbroken across a retry — and what lets a
    * resumed process continue a stream it did not start.
    */
   private async runPass(input: PassInput): Promise<PassResult> {
-    const firstSeq = await this.deps.store.runs.nextSeq(input.run.runId);
+    const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
     const generator = runChat({
       client: input.client,
       registry: input.registry,
@@ -475,15 +542,15 @@ export class TurnRunner implements TaskWorker {
       messages: input.messages,
       bindings: input.bindings,
       limits: input.limits,
-      chatId: input.run.chatId,
-      // The run's own scope, threaded to every tool: a write tool stages
+      chatId: input.chatId,
+      // The task's own scope, threaded to every tool: a write tool stages
       // against it, and re-deriving it downstream is how a host writing a
       // shared document ends up with two different answers.
-      scopeId: input.run.scopeId,
-      runId: input.run.runId,
-      attemptId: input.execution.attemptId,
+      scopeId: input.task.scopeId,
+      runId: input.task.taskId,
+      attemptId: input.ctx.attemptId,
       firstSeq,
-      signal: input.execution.signal,
+      signal: input.ctx.signal,
       ...(input.maxToolIterations === undefined
         ? {}
         : { maxToolIterations: input.maxToolIterations }),
@@ -512,9 +579,9 @@ export class TurnRunner implements TaskWorker {
     input: PassInput,
   ): Promise<void> {
     const { store } = this.deps;
-    const { state, run } = input;
-    await store.runs.appendEvents(run.runId, [event], {
-      leaseToken: input.execution.leaseToken,
+    const { state, task, chatId } = input;
+    await store.tasks.appendEvents(task.taskId, [event], {
+      leaseToken: input.ctx.leaseToken,
     });
 
     switch (event.type) {
@@ -534,8 +601,8 @@ export class TurnRunner implements TaskWorker {
         if (event.data.toolCallCount > 0) {
           const toolCalls = event.data.toolCalls ?? [];
           const record = await store.conversations.appendMessage({
-            chatId: run.chatId,
-            runId: run.runId,
+            chatId,
+            runId: task.taskId,
             role: "assistant",
             content: event.data.content,
             toolCalls,
@@ -581,8 +648,8 @@ export class TurnRunner implements TaskWorker {
         // The full payload stays on the event, where the UI can read it once.
         const slim = event.data.modelResultJson ?? event.data.resultJson;
         await store.conversations.appendMessage({
-          chatId: run.chatId,
-          runId: run.runId,
+          chatId,
+          runId: task.taskId,
           role: "tool",
           content: slim,
           toolCallId: event.data.toolCallId,
@@ -606,8 +673,8 @@ export class TurnRunner implements TaskWorker {
             },
           });
         await store.conversations.appendMessage({
-          chatId: run.chatId,
-          runId: run.runId,
+          chatId,
+          runId: task.taskId,
           role: "tool",
           content: slim,
           toolCallId: event.data.toolCallId,
@@ -621,25 +688,32 @@ export class TurnRunner implements TaskWorker {
     }
   }
 
-  /** Stamp and append a host-originated warning, continuing the run's sequence. */
+  /**
+   * Stamp and append a host-originated warning, continuing the task's sequence.
+   *
+   * Stamped with core's `createEventStamper` rather than
+   * `createTaskEventWriter`, because these warnings are emitted BETWEEN passes
+   * and must speak the same `AiRunEvent` vocabulary the passes around them do.
+   */
   private async emitWarning(
-    execution: TaskExecution,
+    ctx: TaskExecutionContext,
     code: string,
     message: string,
   ): Promise<void> {
-    const firstSeq = await this.deps.store.runs.nextSeq(execution.runId);
+    const taskId = ctx.task.taskId;
+    const firstSeq = await this.deps.store.tasks.nextSeq(taskId);
     const stamp = createEventStamper({
       firstSeq,
-      attemptId: execution.attemptId,
+      attemptId: ctx.attemptId,
     });
     const event = stamp({
       type: "run.warning",
-      runId: execution.runId,
+      runId: taskId,
       timestamp: this.deps.clock.nowIso(),
       data: { code, message },
     });
-    await this.deps.store.runs.appendEvents(execution.runId, [event], {
-      leaseToken: execution.leaseToken,
+    await this.deps.store.tasks.appendEvents(taskId, [event], {
+      leaseToken: ctx.leaseToken,
     });
   }
 
@@ -654,10 +728,11 @@ export class TurnRunner implements TaskWorker {
   /**
    * Assemble the provider-facing conversation from stored records.
    *
-   * The placeholder is skipped — it is where this run's answer is being written,
-   * and feeding a model its own empty (or half-written) reply is how a turn ends
-   * up completing someone else's sentence. `role: "system"` records are skipped
-   * too: those are UI banners the host wrote about the run, not prompt material.
+   * The placeholder is skipped — it is where this turn's answer is being
+   * written, and feeding a model its own empty (or half-written) reply is how a
+   * turn ends up completing someone else's sentence. `role: "system"` records
+   * are skipped too: those are UI banners the host wrote about the turn, not
+   * prompt material.
    */
   private async assembleMessages(
     chatId: string,
@@ -755,38 +830,55 @@ export class TurnRunner implements TaskWorker {
    * failure while recording it would replace the diagnosis with noise.
    */
   private async failQuietly(
-    runId: string,
+    taskId: string,
     attemptId: string,
     message: string,
   ): Promise<void> {
     const { store, clock, logger } = this.deps;
     try {
-      await store.runs.endAttempt({
+      await store.tasks.endAttempt({
         attemptId,
         status: "failed",
         error: message,
       });
     } catch (err) {
       logger?.warn("could not end attempt after failure", {
-        runId,
+        taskId,
         attemptId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
     try {
-      const run = await store.runs.getRun(runId);
-      if (run?.status === "running") {
-        await store.runs.transitionRun(runId, ["running"], "failed", {
+      const task = await store.tasks.getTask(taskId);
+      if (task?.status === "running") {
+        await store.tasks.transitionTask(taskId, ["running"], "failed", {
           finishedAt: clock.nowIso(),
           error: message,
         });
       }
     } catch (err) {
-      logger?.warn("could not fail run after error", {
-        runId,
+      logger?.warn("could not fail task after error", {
+        taskId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+}
+
+/**
+ * The `chat.turn` entry in an {@link ExecutorRegistry}.
+ *
+ * Deliberately thin: everything about executing a turn lives on
+ * {@link TurnRunner}, and this class exists only so the dispatcher has one
+ * uniform shape to call — the same shape a host's own executors implement.
+ */
+export class ChatTurnExecutor implements TaskExecutor {
+  readonly kind = CHAT_TURN_TASK_KIND;
+
+  constructor(private readonly runner: TurnRunner) {}
+
+  async execute(ctx: TaskExecutionContext): Promise<void> {
+    await this.runner.executeTask(ctx);
   }
 }
 
