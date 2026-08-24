@@ -245,3 +245,95 @@ describe("TaskService.submitTask", () => {
     expect(f.enqueueCalls()).toBe(0);
   });
 });
+
+describe("TaskService.cancelTask", () => {
+  /** A submitted, queued task; `parentTaskId` when it belongs to a branch. */
+  async function submit(
+    f: Fixture,
+    taskId: string,
+    parentTaskId?: string,
+  ): Promise<void> {
+    await f.service.submitTask({
+      taskId,
+      kind: "demo.echo",
+      scopeId: `scope-${taskId}`,
+      payload: {},
+      ...(parentTaskId === undefined ? {} : { parentTaskId }),
+    });
+  }
+
+  async function statusOf(f: Fixture, taskId: string): Promise<string> {
+    return (await f.store.tasks.getTask(taskId))?.status ?? "missing";
+  }
+
+  it("cancels the whole branch below a task, and leaves finished work alone", async () => {
+    const f = setup();
+    await submit(f, "task-parent");
+    await submit(f, "task-child-queued", "task-parent");
+    await submit(f, "task-child-done", "task-parent");
+    // Two levels down: the walk is breadth-first over listChildren, not a
+    // single hop, so a grandchild must go with the branch.
+    await submit(f, "task-grandchild", "task-child-queued");
+    await submit(f, "task-outsider");
+    await f.store.tasks.transitionTask(
+      "task-child-done",
+      ["queued"],
+      "running",
+    );
+    await f.store.tasks.transitionTask(
+      "task-child-done",
+      ["running"],
+      "completed",
+    );
+
+    await f.service.cancelTask("task-parent");
+
+    expect(await statusOf(f, "task-parent")).toBe("cancelled");
+    expect(await statusOf(f, "task-child-queued")).toBe("cancelled");
+    expect(await statusOf(f, "task-grandchild")).toBe("cancelled");
+    // A task that already landed keeps its outcome: rewriting it would replace
+    // what happened with what someone wanted to happen.
+    expect(await statusOf(f, "task-child-done")).toBe("completed");
+    // The cascade follows lineage only — an unrelated task is not swept up.
+    expect(await statusOf(f, "task-outsider")).toBe("queued");
+    expect(
+      (await f.store.tasks.getTask("task-parent"))?.finishedAt,
+    ).toBe(f.clock.nowIso());
+    // Nothing was running, so the queue was never asked to abort anything.
+    expect(f.taskRunner.cancelled).toEqual([]);
+  });
+
+  it("asks the queue to stop a RUNNING descendant instead of forcing it terminal", async () => {
+    const f = setup();
+    await submit(f, "task-parent");
+    await submit(f, "task-child-running", "task-parent");
+    await f.store.tasks.transitionTask(
+      "task-child-running",
+      ["queued"],
+      "running",
+    );
+
+    await f.service.cancelTask("task-parent");
+
+    expect(await statusOf(f, "task-parent")).toBe("cancelled");
+    // Still running: a row flipped to `cancelled` under a live executor would
+    // be a task the store calls finished while its worker keeps writing.
+    expect(await statusOf(f, "task-child-running")).toBe("running");
+    expect(f.taskRunner.cancelled).toEqual(["task-child-running"]);
+  });
+
+  it("is a no-op on a task that already reached a terminal state", async () => {
+    const f = setup();
+    await submit(f, "task-done");
+    await f.store.tasks.transitionTask("task-done", ["queued"], "running");
+    await f.store.tasks.transitionTask("task-done", ["running"], "completed");
+
+    await f.service.cancelTask("task-done");
+
+    expect(await statusOf(f, "task-done")).toBe("completed");
+    expect(f.taskRunner.cancelled).toEqual([]);
+    // A task nobody ever created is not an error either — the caller cancelling
+    // an id the store has forgotten has nothing to be told.
+    await f.service.cancelTask("task-never-existed");
+  });
+});

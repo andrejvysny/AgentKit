@@ -12,5 +12,9 @@ describeAssistantStoreConformance({
     // adapter instead of failing it.
     capabilities: { atomicTransactions: false },
   }),
+  createTuned: async ({ clock, aging }) => ({
+    store: new MemoryAssistantStore({ clock, ...aging }),
+    capabilities: { atomicTransactions: false },
+  }),
   test: { describe, it, expect },
 });

@@ -5,9 +5,11 @@ import {
   ExecutorNotFoundError,
   ExecutorRegistry,
   RecordNotFoundError,
+  TaskService,
   createDispatchingWorker,
   type TaskExecutionContext,
   type TaskExecutor,
+  type TaskRecord,
 } from "../src/index.js";
 import { createHarness, type TestHarness } from "./fakes.js";
 
@@ -19,6 +21,28 @@ class RecordingExecutor implements TaskExecutor {
 
   async execute(ctx: TaskExecutionContext): Promise<void> {
     this.seen.push(ctx);
+  }
+}
+
+/**
+ * Fans one child out from inside `execute`, so the wiring is exercised where an
+ * executor would actually use it rather than through a captured closure.
+ */
+class SpawningExecutor implements TaskExecutor {
+  readonly kind = "demo.fanout";
+  /** What `ctx.spawnChild` was on the dispatch — the wiring assertion. */
+  offered: boolean | undefined;
+  spawned: TaskRecord | null = null;
+
+  async execute(ctx: TaskExecutionContext): Promise<void> {
+    this.offered = ctx.spawnChild !== undefined;
+    if (!ctx.spawnChild) return;
+    this.spawned = await ctx.spawnChild({
+      taskId: "task-child",
+      kind: "demo.echo",
+      scopeId: "scope-child",
+      payload: { text: "child" },
+    });
   }
 }
 
@@ -229,5 +253,69 @@ describe("createDispatchingWorker", () => {
     // The guard still ran first: the task is `running`, so the queue's
     // settleThrown can land it failed rather than leaving it claimable.
     expect((await f.store.tasks.getTask("task-orphan"))?.status).toBe("running");
+  });
+});
+
+describe("createDispatchingWorker — spawnChild", () => {
+  it("presets the spawning task as the child's parent, and submits through the queue", async () => {
+    const f = createHarness();
+    const fanout = new SpawningExecutor();
+    const registry = new ExecutorRegistry();
+    registry.register(fanout);
+    const worker = createDispatchingWorker(registry, {
+      store: f.store,
+      clock: f.clock,
+      taskService: new TaskService({
+        store: f.store,
+        taskRunner: f.taskRunner,
+        ids: f.ids,
+        clock: f.clock,
+      }),
+    });
+
+    const seeded = await seedTask(f, "task-parent", "demo.fanout");
+    await worker.execute({
+      taskId: "task-parent",
+      ...seeded,
+      signal: new AbortController().signal,
+    });
+
+    expect(fanout.offered).toBe(true);
+    // Lineage comes from the dispatcher, not from the executor's input — an
+    // executor cannot spawn under someone else's parent, or forget its own.
+    expect(fanout.spawned?.parentTaskId).toBe("task-parent");
+    expect((await f.store.tasks.getTask("task-child"))?.parentTaskId).toBe(
+      "task-parent",
+    );
+    // A spawn is a SUBMIT: the row is written AND the queue is told, or the
+    // child would sit there until some unrelated poke woke the loop.
+    expect(f.taskRunner.enqueued.map((input) => input.taskId)).toEqual([
+      "task-child",
+    ]);
+  });
+
+  it("leaves spawnChild undefined when the dispatcher was given no TaskService", async () => {
+    const f = createHarness();
+    const fanout = new SpawningExecutor();
+    const registry = new ExecutorRegistry();
+    registry.register(fanout);
+    const worker = createDispatchingWorker(registry, {
+      store: f.store,
+      clock: f.clock,
+    });
+
+    const seeded = await seedTask(f, "task-parent-alone", "demo.fanout");
+    await worker.execute({
+      taskId: "task-parent-alone",
+      ...seeded,
+      signal: new AbortController().signal,
+    });
+
+    // Absent, not a stub: an executor that needs to fan out sees the wiring gap
+    // instead of writing children nobody will ever claim.
+    expect(fanout.offered).toBe(false);
+    expect(fanout.spawned).toBeNull();
+    expect(await f.store.tasks.getTask("task-child")).toBeNull();
+    expect(f.taskRunner.enqueued).toEqual([]);
   });
 });

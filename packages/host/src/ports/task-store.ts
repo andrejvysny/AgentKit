@@ -48,7 +48,12 @@ export type AttemptStatus =
 export const TASK_TRANSITIONS: Readonly<
   Record<TaskStatus, readonly TaskStatus[]>
 > = Object.freeze({
-  queued: Object.freeze(["running", "cancelled"] as const),
+  // `queued → failed` exists for ONE caller: the dependency cascade in
+  // `claimNext`. A task whose dependency failed or was dead-lettered can never
+  // become runnable, so the claim settles it where it stands instead of
+  // claiming it, and a task that never started still has to be able to end
+  // `failed` — see {@link evaluateTaskDependencies}.
+  queued: Object.freeze(["running", "cancelled", "failed"] as const),
   running: Object.freeze([
     "waiting_approval",
     "completed",
@@ -87,6 +92,76 @@ export function assertTaskTransition(from: TaskStatus, to: TaskStatus): void {
   }
 }
 
+/**
+ * One dependency as the queue reads it while gating a claim — the two facts
+ * that decide the gate, and nothing else, so a store can answer from a narrow
+ * projection instead of loading whole records.
+ */
+export interface TaskDependencyState {
+  taskId: string;
+  /** null when the row is gone. */
+  status: TaskStatus | null;
+  /** `deadLetteredAt` is set — the queue gave up on it, whatever its status says. */
+  deadLettered: boolean;
+}
+
+/**
+ * What a queued task's dependencies say about it right now: claim it, skip it,
+ * or end it here.
+ */
+export type TaskDependencyVerdict =
+  | { kind: "ready" }
+  /** Some dependency is still in flight; try again on a later claim. */
+  | { kind: "blocked" }
+  /**
+   * No dependency can ever complete now. The claim transitions the dependent to
+   * `to` INSTEAD of claiming it — `error` is set for `failed` and absent for
+   * `cancelled`, because a cancellation is not a failure and recording one as
+   * an error would make every "why did this fail?" dashboard lie.
+   */
+  | { kind: "settle"; to: "failed" | "cancelled"; error?: string };
+
+/**
+ * The dependency gate, shared so every adapter reaches the same verdict from
+ * the same facts — the second piece of logic this port catalog carries, for the
+ * same reason as {@link assertTaskTransition}: two stores disagreeing about
+ * when a task becomes claimable is a silent data bug, not a style difference.
+ *
+ * A BAD dependency beats a pending one, whatever the order: a task whose
+ * dependency already failed is doomed, and parking it behind a sibling that is
+ * still running only delays the news. Among several bad ones the FIRST in
+ * `dependsOn` order decides, so the verdict is a function of the record rather
+ * than of scan order.
+ *
+ * A dependency the store cannot find counts as failed. `createTask` rejects
+ * unknown ids ({@link UnknownDependencyError}), so this is unreachable by
+ * construction — but if a row ever does vanish, failing the dependent beats
+ * blocking it forever on something that can never complete.
+ */
+export function evaluateTaskDependencies(
+  dependencies: readonly TaskDependencyState[],
+): TaskDependencyVerdict {
+  let blocked = false;
+  for (const dependency of dependencies) {
+    if (
+      dependency.status === null ||
+      dependency.status === "failed" ||
+      dependency.deadLettered
+    ) {
+      return {
+        kind: "settle",
+        to: "failed",
+        error: `dependency_failed: ${dependency.taskId}`,
+      };
+    }
+    if (dependency.status === "cancelled") {
+      return { kind: "settle", to: "cancelled" };
+    }
+    if (dependency.status !== "completed") blocked = true;
+  }
+  return blocked ? { kind: "blocked" } : { kind: "ready" };
+}
+
 export interface TaskRecord {
   taskId: string;
   /**
@@ -115,6 +190,50 @@ export interface TaskRecord {
    * owns.
    */
   payload: Record<string, unknown>;
+  /**
+   * The task that spawned this one, when an executor fanned work out (see
+   * `TaskExecutionContext.spawnChild`).
+   *
+   * LINEAGE ONLY — it is not a dependency and not a lifecycle coupling. A child
+   * runs the moment the queue can claim it, whether or not the parent is still
+   * running, because the parent usually spawns children precisely so they can
+   * proceed without it. What lineage buys is the two questions a fan-out host
+   * actually asks: "what did this task set off?"
+   * ({@link TaskStore.listChildren}) and "cancel this whole branch"
+   * (`TaskService.cancelTask`). A parent that must WAIT for its children
+   * expresses that with a third task that `dependsOn` them — the continuation
+   * pattern — not by conflating the two edges.
+   */
+  parentTaskId?: string;
+  /**
+   * Task ids that must reach `completed` before this task may be claimed.
+   *
+   * IMMUTABLE AFTER CREATE, and every id must already exist when the dependent
+   * is written ({@link UnknownDependencyError} otherwise). Those two rules
+   * together are what make the graph acyclic by construction: an edge can only
+   * point at an older row, so there is no order of writes that produces a
+   * cycle, and nothing can add one later. A queue that can deadlock on
+   * committed data is a queue that needs a human at 3am; this one cannot.
+   *
+   * The gate is enforced in {@link TaskStore.claimNext} — dependency state is
+   * queue semantics, not orchestration — and a dependency that ends badly
+   * settles the dependent rather than parking it forever. See
+   * {@link evaluateTaskDependencies}.
+   */
+  dependsOn?: string[];
+  /**
+   * Last-known progress of a running task: an OVERWRITTEN snapshot ("42 of 900
+   * files"), never an append.
+   *
+   * Deliberately not an event. The event log is the durable, ordered,
+   * replayable record of what happened and it is what a UI replays after a
+   * crash — writing a heartbeat percentage into it every second would bloat
+   * that log with entries nobody will ever replay, and force every consumer to
+   * fold thousands of superseded numbers to learn one current value. Progress
+   * is the opposite kind of data: only the latest matters, and losing an
+   * intermediate value costs nothing. See {@link TaskStore.updateProgress}.
+   */
+  progress?: Record<string, unknown>;
   error?: string;
   attemptCount: number;
   /** Attempts that died without a clean end — the dead-letter trigger. */
@@ -130,6 +249,10 @@ export interface CreateTaskInput {
   payload: Record<string, unknown>;
   priority?: number;
   availableAt?: string;
+  /** Lineage — see {@link TaskRecord.parentTaskId}. Must already exist. */
+  parentTaskId?: string;
+  /** Gate — see {@link TaskRecord.dependsOn}. Every id must already exist. */
+  dependsOn?: string[];
 }
 
 /** Fields a transition may write alongside the status change, atomically. */
@@ -197,6 +320,16 @@ export interface AppendEventsOptions {
   leaseToken: string;
 }
 
+export interface UpdateProgressOptions {
+  /**
+   * The writer's proof of ownership — the SAME check `appendEvents` makes, for
+   * the same reason: a zombie worker whose lease was taken over must not
+   * overwrite the live attempt's progress with a snapshot from the run nobody
+   * is watching any more. Stale token ⇒ `LeaseLostError`.
+   */
+  leaseToken: string;
+}
+
 export interface ListEventsOptions {
   afterSeq?: number;
   limit?: number;
@@ -241,9 +374,26 @@ export interface TaskStore {
    * HTTP submit, a replayed message), and quietly replacing the row would
    * discard an in-flight task's payload, status, and attempt history while
    * leaving its events behind.
+   *
+   * MUST also reject with {@link UnknownDependencyError} when `parentTaskId` or
+   * any `dependsOn` id is not already in the store, and when `dependsOn`
+   * contains the task's own id. That check is the acyclicity proof — see
+   * {@link TaskRecord.dependsOn} — so a store that skipped it would accept a
+   * graph its own `claimNext` can never drain.
    */
   createTask(input: CreateTaskInput): Promise<TaskRecord>;
   getTask(taskId: string): Promise<TaskRecord | null>;
+
+  /**
+   * Tasks whose `parentTaskId` is `taskId` — one level, not the whole subtree.
+   *
+   * One level because the caller that needs the subtree
+   * (`TaskService.cancelTask`) is already walking breadth-first and can ask
+   * again; a store-side recursive walk would make every adapter implement a
+   * traversal to serve one consumer, and would return a snapshot that is stale
+   * by the time it is read anyway.
+   */
+  listChildren(taskId: string): Promise<TaskRecord[]>;
 
   /**
    * Compare-and-set the task's status.
@@ -302,6 +452,22 @@ export interface TaskStore {
   ): Promise<TaskEventEnvelope[]>;
 
   /**
+   * Overwrite the task's {@link TaskRecord.progress} snapshot.
+   *
+   * REPLACES rather than merges: the writer owns the whole shape, and a merge
+   * would make a field that disappeared from one snapshot linger from the last.
+   * MUST reject a stale `leaseToken` with {@link LeaseLostError}.
+   *
+   * NEVER touches the event log, and emits nothing. Progress is state, not
+   * history — see {@link TaskRecord.progress}.
+   */
+  updateProgress(
+    taskId: string,
+    progress: Record<string, unknown>,
+    opts: UpdateProgressOptions,
+  ): Promise<TaskRecord>;
+
+  /**
    * The `seq` the next appended event must carry (0 for an empty task). A retry
    * passes it to `runChat` as `firstSeq` so several provider passes produce ONE
    * unbroken sequence under one task id.
@@ -312,6 +478,18 @@ export interface TaskStore {
    * Atomically claim the highest-priority claimable task whose scope is free (and
    * whose kind passes `kinds`, when given), creating its attempt and lease.
    * Returns null when there is nothing to do.
+   *
+   * DEPENDENCIES ARE PART OF CLAIMABILITY, and this is where they are enforced:
+   * a task with an unfinished `dependsOn` entry is skipped, and the claim moves
+   * on to the next candidate in the same call.
+   *
+   * A candidate whose dependency ended BADLY is settled here too — transitioned
+   * `failed` (with `dependency_failed: <depTaskId>`) or `cancelled` per
+   * {@link evaluateTaskDependencies} — instead of being claimed, and the scan
+   * continues past it. Doing that lazily, on the claim path, is deliberate:
+   * nothing is ever re-enqueued, no background reaper has to exist, and the
+   * store stays the single truth about what is runnable. A chain settles over
+   * successive claims, each sweep resolving what the previous one unblocked.
    */
   claimNext(input: ClaimNextInput): Promise<ClaimedTask | null>;
 

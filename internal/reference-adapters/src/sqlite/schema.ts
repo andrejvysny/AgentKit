@@ -1,5 +1,5 @@
 /**
- * v2 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
+ * v3 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
  * applied idempotently (every DDL statement is `CREATE ... IF NOT EXISTS`;
  * seed rows use `INSERT OR IGNORE`) so opening the same database twice, or
  * opening a database another process already initialized, is a no-op rather
@@ -18,15 +18,19 @@
  *   detail of lease issuance, never something a caller reads directly.
  *
  * Queue state lives on `tasks` + `leases`; there is no separate queue table —
- * `claimNext` computes effective priority (base priority + an age bucket) in
- * the query itself, so there is nothing to keep in sync or let drift.
+ * `claimNext` computes effective priority (base priority plus the aging term,
+ * off unless the store was constructed with one) in the query itself, so there
+ * is nothing to keep in sync or let drift. Dependency edges live on `tasks`
+ * too, as a JSON `depends_on` array rather than an edge table: they are
+ * immutable after create and only ever read for the one task being gated, so a
+ * join table would buy nothing and cost a second write per submit.
  *
  * JSON-shaped fields (`payload`, `metadata`, `envelope`, `operations`,
  * `warnings`, `tool_calls`, `failed_ops`, `extra_headers`, `decision`, ...) are
  * stored as TEXT; the store (de)serializes them, SQLite never inspects their
  * contents.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * The DDL for {@link SCHEMA_VERSION}. There are NO migrations in this
@@ -36,7 +40,7 @@ export const SCHEMA_VERSION = 2;
  * migration scripts would be claiming a durability guarantee it does not have.
  * A host that needs upgrades in place owns that story with its own store.
  */
-export const SCHEMA_V2 = `
+export const SCHEMA_V3 = `
 CREATE TABLE IF NOT EXISTS chats (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -75,6 +79,16 @@ CREATE TABLE IF NOT EXISTS tasks (
   started_at TEXT,
   finished_at TEXT,
   payload TEXT NOT NULL,
+  -- Lineage (parent_task_id) and the claim gate (depends_on, a JSON array of
+  -- task ids) are separate edges on purpose: a child runs independently of its
+  -- parent, a dependent does not run until what it waits on completes. Neither
+  -- is a foreign key — createTask proves both point at existing rows before it
+  -- writes, and an FK would additionally block deleting an old completed task
+  -- that some finished row still names.
+  parent_task_id TEXT,
+  depends_on TEXT,
+  -- Last-known progress snapshot, overwritten by updateProgress. Never events.
+  progress TEXT,
   error TEXT,
   attempt_count INTEGER NOT NULL DEFAULT 0,
   poison_count INTEGER NOT NULL DEFAULT 0,
@@ -86,6 +100,8 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- an optional IN(...) that most deployments never pass, and a wider index would
 -- cost every write to serve a predicate that usually is not there.
 CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks(status, scope_id, available_at);
+-- listChildren's only query, and the cancel cascade walks it once per node.
+CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);
 
 CREATE TABLE IF NOT EXISTS task_attempts (
   attempt_id TEXT PRIMARY KEY,

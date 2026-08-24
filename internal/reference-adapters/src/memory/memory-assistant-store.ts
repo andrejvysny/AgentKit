@@ -35,10 +35,12 @@ import {
   LeaseLostError,
   RecordNotFoundError,
   SeqConflictError,
+  UnknownDependencyError,
   assertProposalTransition,
   assertTaskTransition,
   defaultClock,
   defaultIds,
+  evaluateTaskDependencies,
   type AppendEventsOptions,
   type AppendMessageInput,
   type ApplyOutcome,
@@ -73,21 +75,27 @@ import {
   type ProposalStore,
   type ProviderStore,
   type SettingsStore,
+  type TaskDependencyState,
   type TaskPatch,
   type TaskRecord,
   type TaskStatus,
   type TaskStore,
   type UpdateMessagePatch,
+  type UpdateProgressOptions,
 } from "@agentkit/host";
+import {
+  effectivePriority,
+  resolveTaskAging,
+  type ResolvedTaskAging,
+  type TaskAgingOptions,
+} from "../task-aging.js";
 
 /** Lease TTL {@link MemoryTaskStore.claimNext} grants the attempt it creates. */
 const DEFAULT_LEASE_TTL_MS = 30_000;
-/** Aging bucket for `claimNext`'s effective-priority formula: `priority + floor(waitMs / bucket)`. */
-const AGING_BUCKET_MS = 30_000;
 /** How long a claimed-but-unresolved outbox record stays invisible to `claimBatch`. */
 const DEFAULT_OUTBOX_CLAIM_VISIBILITY_MS = 30_000;
 
-export interface MemoryAssistantStoreOptions {
+export interface MemoryAssistantStoreOptions extends TaskAgingOptions {
   /** Defaults to {@link defaultClock} (real wall-clock). */
   clock?: Clock;
   /** Defaults to {@link defaultIds} (UUID-backed). */
@@ -205,11 +213,6 @@ export class MemoryConversationStore implements ConversationStore {
   }
 }
 
-function effectivePriority(task: TaskRecord, nowMs: number): number {
-  const waitMs = Math.max(0, nowMs - new Date(task.enqueuedAt).getTime());
-  return task.priority + Math.floor(waitMs / AGING_BUCKET_MS);
-}
-
 export class MemoryTaskStore implements TaskStore {
   readonly tasks = new Map<string, TaskRecord>();
   readonly attempts = new Map<string, AttemptRecord>();
@@ -220,11 +223,16 @@ export class MemoryTaskStore implements TaskStore {
   /** Store-global monotonic fencing counter — every `acquireLease` draws the next value. */
   private fencing = 0;
 
+  private readonly aging: ResolvedTaskAging;
+
   constructor(
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly leaseTtlMs: number = DEFAULT_LEASE_TTL_MS,
-  ) {}
+    aging: TaskAgingOptions = {},
+  ) {
+    this.aging = resolveTaskAging(aging);
+  }
 
   async createTask(input: CreateTaskInput): Promise<TaskRecord> {
     // Never overwrite: the id is the caller's idempotency key, and replacing a
@@ -233,6 +241,26 @@ export class MemoryTaskStore implements TaskStore {
       throw new DuplicateTaskError(`Task already exists: ${input.taskId}.`, {
         taskId: input.taskId,
       });
+    }
+    if (
+      input.parentTaskId !== undefined &&
+      !this.tasks.has(input.parentTaskId)
+    ) {
+      throw new UnknownDependencyError(
+        `Task ${input.taskId} names parent ${input.parentTaskId}, which does not exist.`,
+        { taskId: input.taskId, parentTaskId: input.parentTaskId },
+      );
+    }
+    for (const dependency of input.dependsOn ?? []) {
+      // Self-dependency is checked first and by identity, not by lookup: the
+      // row is not in the Map yet, so a plain existence check would report the
+      // wrong reason for a task that waits on itself.
+      if (dependency === input.taskId || !this.tasks.has(dependency)) {
+        throw new UnknownDependencyError(
+          `Task ${input.taskId} depends on ${dependency}, which does not exist.`,
+          { taskId: input.taskId, dependsOn: dependency },
+        );
+      }
     }
     const now = this.clock.nowIso();
     const task: TaskRecord = {
@@ -244,6 +272,14 @@ export class MemoryTaskStore implements TaskStore {
       enqueuedAt: now,
       availableAt: input.availableAt ?? now,
       payload: input.payload,
+      ...(input.parentTaskId === undefined
+        ? {}
+        : { parentTaskId: input.parentTaskId }),
+      // Copied, not aliased: `dependsOn` is immutable after create, and holding
+      // the caller's array would let them edit the gate after the fact.
+      ...(input.dependsOn === undefined
+        ? {}
+        : { dependsOn: [...input.dependsOn] }),
       attemptCount: 0,
       poisonCount: 0,
     };
@@ -254,6 +290,12 @@ export class MemoryTaskStore implements TaskStore {
   async getTask(taskId: string): Promise<TaskRecord | null> {
     const task = this.tasks.get(taskId);
     return task ? { ...task } : null;
+  }
+
+  async listChildren(taskId: string): Promise<TaskRecord[]> {
+    return [...this.tasks.values()]
+      .filter((task) => task.parentTaskId === taskId)
+      .map((task) => ({ ...task }));
   }
 
   async transitionTask(
@@ -412,6 +454,28 @@ export class MemoryTaskStore implements TaskStore {
     return log[log.length - 1]!.seq + 1;
   }
 
+  async updateProgress(
+    taskId: string,
+    progress: Record<string, unknown>,
+    opts: UpdateProgressOptions,
+  ): Promise<TaskRecord> {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+    // The same ownership proof `appendEvents` demands, for the same reason: a
+    // fenced-out worker must not overwrite the live attempt's snapshot.
+    const lease = this.leases.get(taskId);
+    if (!lease || lease.leaseToken !== opts.leaseToken) {
+      throw new LeaseLostError(
+        `Lease token ${opts.leaseToken} is not current for task ${taskId}.`,
+        { taskId, leaseToken: opts.leaseToken },
+      );
+    }
+    // Overwrite, and store a copy — a caller that keeps mutating the object it
+    // reported would otherwise keep editing the stored snapshot.
+    task.progress = { ...progress };
+    return { ...task };
+  }
+
   async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
     const busy = new Set(input.scopesBusy);
     const kinds = input.kinds === undefined ? null : new Set(input.kinds);
@@ -428,32 +492,49 @@ export class MemoryTaskStore implements TaskStore {
     // BOTH effective priority and enqueuedAt fall back to Map insertion
     // (creation) order — a deterministic FIFO even when timestamps collide.
     candidates.sort((a, b) => {
-      const prioA = effectivePriority(a, nowMs);
-      const prioB = effectivePriority(b, nowMs);
+      const prioA = this.effectivePriorityOf(a, nowMs);
+      const prioB = this.effectivePriorityOf(b, nowMs);
       if (prioA !== prioB) return prioB - prioA;
       return (
         new Date(a.enqueuedAt).getTime() - new Date(b.enqueuedAt).getTime()
       );
     });
-    const candidate = candidates[0]!;
-    const task = await this.transitionTask(
-      candidate.taskId,
-      ["queued"],
-      "running",
-      { startedAt: this.clock.nowIso() },
-    );
-    const attempt = await this.createAttempt({
-      attemptId: this.ids.attemptId(),
-      taskId: task.taskId,
-      ownerId: input.ownerId,
-    });
-    const lease = await this.acquireLease({
-      taskId: task.taskId,
-      attemptId: attempt.attemptId,
-      ownerId: input.ownerId,
-      ttlMs: this.leaseTtlMs,
-    });
-    return { task, attempt, lease };
+    // Walk the candidates rather than taking the head: a task at the front of
+    // the queue can be un-runnable (a dependency still in flight) or doomed (a
+    // dependency that failed), and neither may hide the claimable work behind
+    // it. See TaskStore.claimNext on why the settle happens lazily, here.
+    for (const candidate of candidates) {
+      const verdict = evaluateTaskDependencies(
+        this.dependencyStates(candidate),
+      );
+      if (verdict.kind === "blocked") continue;
+      if (verdict.kind === "settle") {
+        await this.transitionTask(candidate.taskId, ["queued"], verdict.to, {
+          finishedAt: this.clock.nowIso(),
+          ...(verdict.error === undefined ? {} : { error: verdict.error }),
+        });
+        continue;
+      }
+      const task = await this.transitionTask(
+        candidate.taskId,
+        ["queued"],
+        "running",
+        { startedAt: this.clock.nowIso() },
+      );
+      const attempt = await this.createAttempt({
+        attemptId: this.ids.attemptId(),
+        taskId: task.taskId,
+        ownerId: input.ownerId,
+      });
+      const lease = await this.acquireLease({
+        taskId: task.taskId,
+        attemptId: attempt.attemptId,
+        ownerId: input.ownerId,
+        ttlMs: this.leaseTtlMs,
+      });
+      return { task, attempt, lease };
+    }
+    return null;
   }
 
   async markDeadLettered(taskId: string, reason: string): Promise<TaskRecord> {
@@ -462,6 +543,27 @@ export class MemoryTaskStore implements TaskStore {
     task.deadLetteredAt = this.clock.nowIso();
     task.deadLetterReason = reason;
     return { ...task };
+  }
+
+  private effectivePriorityOf(task: TaskRecord, nowMs: number): number {
+    return effectivePriority(
+      task.priority,
+      new Date(task.enqueuedAt).getTime(),
+      nowMs,
+      this.aging,
+    );
+  }
+
+  /** The narrow projection {@link evaluateTaskDependencies} grades. */
+  private dependencyStates(task: TaskRecord): TaskDependencyState[] {
+    return (task.dependsOn ?? []).map((dependencyId) => {
+      const dependency = this.tasks.get(dependencyId);
+      return {
+        taskId: dependencyId,
+        status: dependency?.status ?? null,
+        deadLettered: dependency?.deadLetteredAt !== undefined,
+      };
+    });
   }
 
   private currentLeaseByToken(leaseToken: string): Lease {
@@ -797,7 +899,7 @@ export class MemoryAssistantStore implements AssistantStore {
     const clock = options.clock ?? defaultClock;
     const ids = options.ids ?? defaultIds;
     this.conversations = new MemoryConversationStore(clock, ids);
-    this.tasks = new MemoryTaskStore(clock, ids, options.leaseTtlMs);
+    this.tasks = new MemoryTaskStore(clock, ids, options.leaseTtlMs, options);
     this.proposals = new MemoryProposalStore(clock);
     this.outbox = new MemoryOutboxStore(clock, options.outboxClaimVisibilityMs);
   }

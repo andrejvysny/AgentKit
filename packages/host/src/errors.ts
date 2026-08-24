@@ -129,3 +129,21 @@ export class RecordNotFoundError extends AgentKitHostError {
     super("not_found", message, details);
   }
 }
+
+/**
+ * A task was created naming a `dependsOn` id or a `parentTaskId` the store does
+ * not have — or naming itself as its own dependency.
+ *
+ * This is what makes the dependency graph acyclic BY CONSTRUCTION: a dependency
+ * must already exist when the dependent is written, so an edge can only ever
+ * point backwards in creation order and no cycle can be expressed. The
+ * alternative — accepting the edge and detecting cycles later — means a queue
+ * that can deadlock on data it already committed, discovered by whoever is
+ * on-call. Terminal by classification: the referenced id will not appear
+ * retroactively.
+ */
+export class UnknownDependencyError extends AgentKitHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("unknown_dependency", message, details);
+  }
+}

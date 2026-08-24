@@ -45,6 +45,10 @@ import {
 } from "./support/task-runner-harness.js";
 
 const DEMO_ECHO_KIND = "demo.echo";
+/** The fan-out trio: a task that spawns leaves, the leaves, and what follows them. */
+const DEMO_FANOUT_KIND = "demo.fanout";
+const DEMO_LEAF_KIND = "demo.leaf";
+const DEMO_CONTINUATION_KIND = "demo.continuation";
 const CHAT_ID = "chat-generic";
 
 // The schema value round-tripped through JSON is the plain JSON Schema Ajv
@@ -117,6 +121,64 @@ class EchoExecutor implements TaskExecutor {
   }
 }
 
+/**
+ * The fan-out half of the subagent pattern: spawn two leaves, then a
+ * continuation that `dependsOn` both.
+ *
+ * The parent does NOT wait for its children — it returns as soon as they are
+ * submitted, and its own task completes. That is the point of expressing "and
+ * then, once they are done" as a third task with a dependency rather than as an
+ * await: the parent holds no lease, no scope and no concurrency slot while the
+ * children run, so a crash in between loses nothing and the queue is free.
+ */
+class FanOutExecutor implements TaskExecutor {
+  readonly kind = DEMO_FANOUT_KIND;
+
+  constructor(private readonly leafPayloads: Record<string, unknown>[]) {}
+
+  async execute(ctx: TaskExecutionContext): Promise<void> {
+    const spawnChild = ctx.spawnChild;
+    if (!spawnChild) {
+      throw new Error(`${DEMO_FANOUT_KIND} needs a dispatcher with a TaskService`);
+    }
+    const children = [];
+    for (const [index, payload] of this.leafPayloads.entries()) {
+      children.push(
+        await spawnChild({
+          taskId: `task-leaf-${index}`,
+          kind: DEMO_LEAF_KIND,
+          scopeId: `scope-leaf-${index}`,
+          payload,
+        }),
+      );
+    }
+    await spawnChild({
+      taskId: "task-continuation",
+      kind: DEMO_CONTINUATION_KIND,
+      scopeId: "scope-continuation",
+      payload: {},
+      dependsOn: children.map((child) => child.taskId),
+    });
+  }
+}
+
+/** Records the order work actually ran in; optionally blows up instead. */
+class OrderedExecutor implements TaskExecutor {
+  constructor(
+    readonly kind: string,
+    private readonly order: string[],
+  ) {}
+
+  async execute(ctx: TaskExecutionContext): Promise<void> {
+    this.order.push(ctx.task.taskId);
+    if (ctx.task.payload["explode"] === true) {
+      // Unrecognised by the classifier ⇒ terminal, so the leaf fails on its
+      // first attempt rather than retrying into the continuation's timeout.
+      throw new Error("leaf work exploded");
+    }
+  }
+}
+
 interface Env {
   clock: TestClock;
   store: AssistantStore;
@@ -126,6 +188,8 @@ interface Env {
   echo: EchoExecutor;
   turnRunner: TurnRunner;
   provider: MockProviderClient;
+  /** Task ids in the order the fan-out executors actually ran them. */
+  ranInOrder: string[];
   close(): void;
 }
 
@@ -134,7 +198,11 @@ interface Env {
  * one registry with an executor per kind, and one dispatching worker over all of
  * them.
  */
-function createEnv(backing: "memory" | "sqlite"): Env {
+function createEnv(
+  backing: "memory" | "sqlite",
+  /** Folded into the SECOND leaf's payload — `{ explode: true }` fails it. */
+  leafOverrides: Record<string, unknown> = {},
+): Env {
   const clock = createTestClock();
   const ids = createSequentialIds();
   const sqlite =
@@ -169,6 +237,13 @@ function createEnv(backing: "memory" | "sqlite"): Env {
   registry.register(echo);
   registry.register(new ChatTurnExecutor(turnRunner));
 
+  const ranInOrder: string[] = [];
+  registry.register(
+    new FanOutExecutor([{ text: "left" }, { text: "right", ...leafOverrides }]),
+  );
+  registry.register(new OrderedExecutor(DEMO_LEAF_KIND, ranInOrder));
+  registry.register(new OrderedExecutor(DEMO_CONTINUATION_KIND, ranInOrder));
+
   return {
     clock,
     store,
@@ -178,6 +253,7 @@ function createEnv(backing: "memory" | "sqlite"): Env {
     echo,
     turnRunner,
     provider,
+    ranInOrder,
     close: () => sqlite?.close(),
   };
 }
@@ -187,6 +263,9 @@ async function startWorker(env: Env): Promise<{ stop: () => Promise<void> }> {
     createDispatchingWorker(env.registry, {
       store: env.store,
       clock: env.clock,
+      // What turns `spawnChild` on for every executor this worker dispatches:
+      // a spawn is a submit, and a submit needs the queue.
+      taskService: env.tasks,
     }),
     { concurrency: 2, ownerId: "owner-generic" },
   );
@@ -346,6 +425,86 @@ for (const backing of ["memory", "sqlite"] as const) {
         expect(task?.finishedAt).toBeDefined();
         expect(env.echo.invocations).toBe(0);
         expect(await env.store.tasks.listEvents("task-cancel")).toEqual([]);
+      } finally {
+        await handle.stop();
+        env.close();
+      }
+    });
+
+    it("fans out two children and runs a continuation that depends on both", async () => {
+      const env = createEnv(backing);
+      const handle = await startWorker(env);
+      try {
+        await env.tasks.submitTask({
+          taskId: "task-parent",
+          kind: DEMO_FANOUT_KIND,
+          scopeId: "scope-parent",
+          payload: {},
+        });
+        await waitForTerminal(env, "task-continuation");
+
+        // Everything landed, and the parent did not have to stay alive for it.
+        expect(await statusOf(env, "task-parent")).toBe("completed");
+        expect(await statusOf(env, "task-leaf-0")).toBe("completed");
+        expect(await statusOf(env, "task-leaf-1")).toBe("completed");
+        expect(await statusOf(env, "task-continuation")).toBe("completed");
+
+        // The ordering claim: the continuation ran, and it ran LAST. Without
+        // the dependency gate the queue would happily have started it first —
+        // it is in its own scope with nothing else holding it back.
+        expect(env.ranInOrder.at(-1)).toBe("task-continuation");
+        expect(env.ranInOrder.slice(0, -1).sort()).toEqual([
+          "task-leaf-0",
+          "task-leaf-1",
+        ]);
+
+        // Lineage is recorded on every spawned task, so the whole branch is
+        // discoverable from the parent.
+        const children = await env.store.tasks.listChildren("task-parent");
+        expect(children.map((task) => task.taskId).sort()).toEqual([
+          "task-continuation",
+          "task-leaf-0",
+          "task-leaf-1",
+        ]);
+        expect(
+          (await env.store.tasks.getTask("task-continuation"))?.dependsOn,
+        ).toEqual(["task-leaf-0", "task-leaf-1"]);
+      } finally {
+        await handle.stop();
+        env.close();
+      }
+    });
+
+    it("fails the continuation without running it when one child fails", async () => {
+      const env = createEnv(backing, { explode: true });
+      const handle = await startWorker(env);
+      try {
+        await env.tasks.submitTask({
+          taskId: "task-parent",
+          kind: DEMO_FANOUT_KIND,
+          scopeId: "scope-parent",
+          payload: {},
+        });
+        await waitForTerminal(env, "task-continuation");
+
+        expect(await statusOf(env, "task-leaf-0")).toBe("completed");
+        expect(await statusOf(env, "task-leaf-1")).toBe("failed");
+
+        const continuation = await env.store.tasks.getTask("task-continuation");
+        expect(continuation?.status).toBe("failed");
+        expect(continuation?.error).toBe("dependency_failed: task-leaf-1");
+        // Settled by the claim, never dispatched: no attempt, no executor run,
+        // no events. A continuation that ran anyway would be acting on half a
+        // result.
+        expect(continuation?.attemptCount).toBe(0);
+        expect(env.ranInOrder).not.toContain("task-continuation");
+        expect(await env.store.tasks.listEvents("task-continuation")).toEqual(
+          [],
+        );
+        // The failed leaf burned exactly one attempt and was not dead-lettered.
+        expect(
+          (await env.store.tasks.getTask("task-leaf-1"))?.deadLetteredAt,
+        ).toBeUndefined();
       } finally {
         await handle.stop();
         env.close();
