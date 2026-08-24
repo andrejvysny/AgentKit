@@ -12,7 +12,8 @@ below.
   types (see [`docs/contracts.md`](contracts.md#rest-v1-surface)). Writing
   the shapes down first is deliberate: they are reviewable and validatable
   now, and the adapter that serves them — translating `@agentkit/host` calls
-  to and from HTTP, streaming `AiRunEvent`s over SSE — remains deferred.
+  to and from HTTP, streaming `AiRunEvent`s over SSE — remains deferred; see
+  [`docs/roadmap.md`](roadmap.md), P3.
 - **React / UI packages.** No frontend package exists in this monorepo.
   A consuming app (OpenPCB, a cloud-agent service, OneCAD) owns its own UI
   against the `@agentkit/host` port contracts and the `AiRunEvent` stream.
@@ -35,13 +36,18 @@ below.
 - **Memory port** (long-term/cross-session recall beyond one chat's
   message history). No `MemoryStore` port or implementation exists.
   `ConversationStore` covers one chat's messages; anything spanning chats
-  is future scope.
+  is future scope — see [`docs/roadmap.md`](roadmap.md), P6.
 - **Cloud salvage pieces**: an SSE-resume client, token-crypto helpers, and
   trusted-field injection for a multi-tenant gateway. These concepts are
   referenced in port documentation (`docs/ports.md`, `docs/architecture.md`)
   as things a durable, distributed deployment will need, but none are
-  implemented — `OutboxStore` and `RunStore.listEvents` are the ports such
+  implemented — `OutboxStore` and `TaskStore.listEvents` are the ports such
   a client would be built against.
+- **Task dependencies and subagent spawning.** `parentTaskId`/`dependsOn` on
+  `TaskRecord`, dependency-aware claimability, and a `spawn_subagent`
+  capability are designed (see [ADR 0001](adr/0001-generic-task-foundation.md),
+  "Out of scope") but not implemented — tracked as
+  [`docs/roadmap.md`](roadmap.md), P4.
 - **npm publishing.** Gated on `@agentkit` npm scope ownership being
   confirmed; see the warning in the root [README](../README.md). Every
   package's `publishConfig` is ready, but nothing is published.

@@ -10,9 +10,9 @@ internal/reference-adapters   @agentkit/reference-adapters (workspace-private; n
         ▼  depends on
 --------------------------------------------------------------
 packages/host          @agentkit/host
-  Durable orchestration: TurnRunner, port catalog
-  (RunStore/ProposalStore/...), proposal lifecycle,
-  session write policy.
+  Durable orchestration: TaskStore + kind-dispatched
+  executors, TurnRunner as the chat.turn executor, port
+  catalog, proposal lifecycle, write policy.
         │
         ▼  depends on
 --------------------------------------------------------------
@@ -74,7 +74,11 @@ calling. Its three pieces:
   `providers/presets.ts` ships defaults for five provider kinds (`openai`,
   `openrouter`, `lmstudio`, `omlx`, `openai-compatible`); the vocabulary
   itself (`AiProviderKind`) is an open string, so a host can register a
-  provider this package has never heard of.
+  provider this package has never heard of. It also maps a message's
+  provider-neutral content parts onto the wire shape OpenAI-compatible
+  servers expect — native parts for `user`/`assistant`, flattened to text
+  (with a `multimodal_flattened` warning) for `system`/`tool` — see
+  [`docs/contracts.md`](contracts.md#message-content-parts).
 - **Tool registry** — `AiToolRegistry` (`tools/registry.ts`) compiles each
   tool's `inputSchema` into an Ajv validator once, at registration, and
   reuses it on every call. `tools/validation.ts` maps Ajv errors to
@@ -96,15 +100,16 @@ survives a process restart; that is `@agentkit/host`'s job.
 to run it durably, across process restarts and retries:
 
 - **`TurnRunner`** ([`packages/host/src/turn/turn-runner.ts`](../packages/host/src/turn/turn-runner.ts))
-  — a `TaskWorker` that turns a submitted chat message into a durable run,
-  drives `runChat()`, appends every event to the run's log, projects it into
-  conversation state, and runs the chat-only / empty-response recovery
-  passes (`turn/retry.ts`).
+  — a `TaskWorker`, and (via the thin `ChatTurnExecutor` adapter) the
+  `TaskExecutor` for task kind `chat.turn`. It turns a submitted chat
+  message into a durable task, drives `runChat()`, appends every event to
+  the task's log, projects it into conversation state, and runs the
+  chat-only / empty-response recovery passes (`turn/retry.ts`).
 - **The port catalog** ([`packages/host/src/ports/`](../packages/host/src/ports/))
-  — interfaces an embedding host implements: `RunStore` (leases, fencing,
-  the event log), `ProposalStore`, `ConversationStore`, `ProviderStore`,
-  `SettingsStore`, `OutboxStore`, `TaskRunner`, `WritePolicy`,
-  `ProposalApplier`, and more. See [`docs/ports.md`](ports.md).
+  — interfaces an embedding host implements: `TaskStore` (kind, payload,
+  leases, fencing, the event log), `ProposalStore`, `ConversationStore`,
+  `ProviderStore`, `SettingsStore`, `OutboxStore`, `TaskRunner`,
+  `WritePolicy`, `ProposalApplier`, and more. See [`docs/ports.md`](ports.md).
 - **Proposals** ([`packages/host/src/proposals/`](../packages/host/src/proposals/))
   — the staged-write pipeline: `ProposalService` drives
   `pending → approved → applying → applied|failed`, action-id idempotency
@@ -133,26 +138,35 @@ embedding host or by the reference adapters under `internal/`.
    `runChat()` invocation yields — both loop-originated events and ones
    re-yielded from the provider client. `seq` starts at `RunChatInput.firstSeq`
    (default 0).
-2. **Host continues `seq` across retries.** One run id can span several
-   `runChat()` passes (a chat-only retry, an empty-response retry — see
-   `turn/retry.ts`). Before each pass, `TurnRunner.runPass` reads
-   `RunStore.nextSeq(runId)` and passes it as `firstSeq`, so every pass
-   continues the same unbroken sequence instead of restarting at 0
+2. **Host continues `seq` across retries.** One task id (its value is what
+   rides the wire as `AiRunEvent.runId`) can span several `runChat()` passes
+   (a chat-only retry, an empty-response retry — see `turn/retry.ts`).
+   Before each pass, `TurnRunner.runPass` reads `TaskStore.nextSeq(taskId)`
+   and passes it as `firstSeq`, so every pass continues the same unbroken
+   sequence instead of restarting at 0
    ([`packages/host/src/turn/turn-runner.ts`](../packages/host/src/turn/turn-runner.ts)).
-3. **`RunStore.appendEvents` is the enforcement point.** An implementation
+3. **`TaskStore.appendEvents` is the enforcement point.** An implementation
    MUST reject a stale `leaseToken` (`LeaseLostError`) and MUST reject a
    non-monotonic `seq` (`SeqConflictError`); it MUST NOT re-stamp `seq` —
-   numbering is core's job, not the store's
-   ([`packages/host/src/ports/run-store.ts`](../packages/host/src/ports/run-store.ts)).
+   numbering belongs to whichever emitter owns the pass, not the store
+   ([`packages/host/src/ports/task-store.ts`](../packages/host/src/ports/task-store.ts)).
 4. **The durable log is canonical.** `TurnRunner.projectEvent` appends to the
-   run's log *before* reflecting the event into conversation state, so a
+   task's log *before* reflecting the event into conversation state, so a
    projection failure can never erase what happened. Publishing to a live
    transport (SSE, a websocket) is a separate, retryable step through the
    `OutboxStore` port — it replays the log outward; it is not itself the
    source of truth
    ([`packages/host/src/ports/outbox-store.ts`](../packages/host/src/ports/outbox-store.ts)).
+5. **`createTaskEventWriter` numbers events outside a chat pass.** Non-chat
+   executors, and any host-originated event that is not part of a live
+   `runChat()` pass, stamp `seq`/`eventId`/`timestamp`/`contractVersion`/
+   `attemptId` through it and append under the lease
+   ([`packages/host/src/tasks/task-event-writer.ts`](../packages/host/src/tasks/task-event-writer.ts)).
+   It is explicitly barred from use **inside** a chat pass — there, core's
+   `createEventStamper` owns numbering, and two counters numbering against
+   the same log would interleave into one stream.
 
-## Run / attempt / lease model
+## Task / attempt / lease model
 
 ```
   queued            ──▶ running
@@ -167,14 +181,14 @@ embedding host or by the reference adapters under `internal/`.
   completed / failed / cancelled   (terminal — no outgoing edges)
 ```
 
-Source: `RUN_TRANSITIONS` in
-[`packages/host/src/ports/run-store.ts`](../packages/host/src/ports/run-store.ts).
-Note there is **no `running → queued` edge** — a run that started never goes
+Source: `TASK_TRANSITIONS` in
+[`packages/host/src/ports/task-store.ts`](../packages/host/src/ports/task-store.ts).
+Note there is **no `running → queued` edge** — a task that started never goes
 back to the queue. Note also that **nothing in this repository produces
 `waiting_approval`**: `TurnRunner` lets a staged write return `pending` to the
-model and completes the run. The state is reserved for hosts that park a run on
-a human decision and resume it afterwards; its transitions exist so such a host
-does not have to fork the table.
+model and completes the task. The state is reserved for hosts that park a
+task on a human decision and resume it afterwards; its transitions exist so
+such a host does not have to fork the table.
 
 `AttemptStatus` is `running → completed | failed | abandoned | cancelled`.
 `abandoned` is specifically the crash outcome: a lease expired while the
@@ -184,22 +198,68 @@ guessing success or failure.
 **Recovery**, as implemented by the reference `SingleProcessTaskRunner`
 ([`internal/reference-adapters/src/task-runner/single-process-task-runner.ts`](../internal/reference-adapters/src/task-runner/single-process-task-runner.ts)):
 
-1. `recover()` calls `RunStore.expireStaleLeases(now)`.
+1. `recover()` calls `TaskStore.expireStaleLeases(now)`.
 2. Each expired lease's attempt is ended `abandoned`.
-3. If the run's `attemptCount` has not hit `maxAttempts`, a **new attempt is
-   started on the same run** — same run id, fresh lease with a strictly
+3. If the task's `attemptCount` has not hit `maxAttempts`, a **new attempt is
+   started on the same task** — same task id, fresh lease with a strictly
    higher `fencingToken`, event `seq` picking up where the log left off.
-   Runs never transition back to `queued`; a retry is a new attempt, not a
+   Tasks never transition back to `queued`; a retry is a new attempt, not a
    re-enqueue.
-4. Once `attemptCount >= maxAttempts`, the run is marked dead-lettered
-   (`RunStore.markDeadLettered`) and finalized `failed` with a poison
+4. Once `attemptCount >= maxAttempts`, the task is marked dead-lettered
+   (`TaskStore.markDeadLettered`) and finalized `failed` with a poison
    reason — the queue stops feeding it work.
 
-Ownership and fencing: `Lease { runId, attemptId, ownerId, leaseToken,
+Ownership and fencing: `Lease { taskId, attemptId, ownerId, leaseToken,
 fencingToken, expiresAt }`. `leaseToken` proves current ownership on every
 write; `fencingToken` is monotonic across *all* leases ever issued for a
-run, so a worker that paused and woke up believing it still owns the run is
-rejected by comparison even if it manages to re-acquire.
+task, so a worker that paused and woke up believing it still owns the task
+is rejected by comparison even if it manages to re-acquire.
+
+## Task kinds and executors
+
+A task's `kind` says what work it is and which code runs it — statuses,
+attempts, and leases above are kind-agnostic; dispatch is where a kind
+becomes an executable.
+
+- **`TaskExecutor` / `TaskExecutionContext`**
+  ([`packages/host/src/tasks/task-executor.ts`](../packages/host/src/tasks/task-executor.ts))
+  — the unit of work behind one kind: `{ kind, execute(ctx) }`, where `ctx`
+  carries the already-loaded `TaskRecord` plus `attemptId`/`leaseToken`/
+  `signal`. The record is handed down rather than an id so every executor
+  works from the one fetch-and-guard the dispatcher already did, instead of
+  each re-reading the row and risking a different answer to "is this still
+  mine to run?".
+- **`ExecutorRegistry`**
+  ([`packages/host/src/tasks/executor-registry.ts`](../packages/host/src/tasks/executor-registry.ts))
+  — the kind → `TaskExecutor` table one worker process dispatches through.
+  `register` throws on a duplicate kind at boot, rather than letting the
+  later import silently win; `kinds()` lists what is registered, for a
+  deployment that filters `ClaimNextInput.kinds` so a box only claims work
+  it can run.
+- **`createDispatchingWorker(registry, deps)`** — the `TaskWorker` a host
+  hands to `TaskRunner.startWorker`: it loads the task, performs the
+  `queued → running` guard for the direct-execute path, and routes to the
+  registered executor. **An unknown kind is a terminal failure
+  (`ExecutorNotFoundError`), never a dead-letter** — dead-letter stays
+  reserved for attempts that die without a clean terminal outcome, and a
+  kind nobody registered is a cleanly-diagnosed wiring mistake instead.
+- **`TaskService`**
+  ([`packages/host/src/tasks/task-service.ts`](../packages/host/src/tasks/task-service.ts))
+  — the generic submission path: `createTask(tx, input)` composes inside a
+  host transaction and never enqueues; `dispatch(task)` is the post-commit
+  poke; `submitTask(input)` does both and is idempotent per caller-supplied
+  `taskId`. **Dispatch happens strictly after the transaction commits** —
+  enqueuing from inside the transaction callback risks the claim loop
+  claiming a row that a rollback then deletes out from under it (the
+  `bun:sqlite` join-transaction hazard on `AssistantStore.transaction`, see
+  [`docs/ports.md`](ports.md#assistantstore-aggregate)).
+- **`createTaskEventWriter`** — see item 5 of [Event flow](#event-flow)
+  above.
+- **`CHAT_TURN_TASK_KIND`**
+  ([`packages/host/src/tasks/kinds.ts`](../packages/host/src/tasks/kinds.ts))
+  — `"chat.turn"`, the kind `TurnRunner.submitMessage` creates and
+  `ChatTurnExecutor` runs. The `chat.*` and `agentkit.*` prefixes are
+  reserved for the framework; everything else belongs to the host.
 
 ## At-least-once delivery, idempotent effects
 
@@ -207,9 +267,15 @@ Nothing in this codebase claims exactly-once semantics. The stance is
 at-least-once delivery paired with idempotent effects, enforced at each
 layer that can duplicate work:
 
-- `TaskRunner.enqueue` is idempotent per `runId`
+- `TaskRunner.enqueue` is idempotent per `taskId`
   ([`packages/host/src/ports/task-runner.ts`](../packages/host/src/ports/task-runner.ts)):
-  a redelivered enqueue for a run that already left `queued` is a no-op.
+  a redelivered enqueue for a task that already left `queued` is a no-op.
+- `TaskService.submitTask` is idempotent per caller-supplied `taskId`
+  ([`packages/host/src/tasks/task-service.ts`](../packages/host/src/tasks/task-service.ts)):
+  a duplicate submit under the same id and kind re-pokes the queue and
+  returns the existing task instead of creating a second one; a minted id
+  that collides is treated as a broken `IdGenerator`, not a redelivery, and
+  rethrows.
 - `ProposalStore.recordOutcome` is idempotent per `operationId`
   ([`packages/host/src/ports/proposal-store.ts`](../packages/host/src/ports/proposal-store.ts)):
   a second call with the same id returns the first recorded outcome and

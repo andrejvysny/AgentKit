@@ -18,8 +18,9 @@
  * **Two enumerations are mirrored, not imported.** `RunStatusDto` and
  * `ProposalStatusDto` (and `RiskLevelDto`) restate unions that `@agentkit/host`
  * owns, because contracts sits *below* host and cannot depend on it. They must
- * be kept in step by hand; the compile-time cross-check lives in host's own
- * tests, and each one names its source below.
+ * be kept in step by hand; the compile-time cross-check lives in
+ * `packages/host/tests/state-machines.test.ts`, and each one names its source
+ * below.
  */
 import { Type, type Static } from "@sinclair/typebox";
 import { AiRunEventSchema, type AiRunEvent } from "./run-events.js";
@@ -106,7 +107,7 @@ export type RestOperation = keyof typeof REST_ROUTES;
 // ---------------------------------------------------------------------------
 
 /**
- * MIRROR of `RunStatus` (`packages/host/src/ports/run-store.ts`). Note that
+ * MIRROR of `TaskStatus` (`packages/host/src/ports/task-store.ts`). Note that
  * `waiting_approval` is currently producer-less in this repository — a staged
  * write returns pending to the model and the run completes — but it is part of
  * the vocabulary a client must handle, since a host that parks runs on approval
@@ -204,7 +205,7 @@ export const MessagePageDtoSchema = Type.Object({
 export type MessagePageDto = Static<typeof MessagePageDtoSchema>;
 
 /**
- * A durable run. Projection of `RunRecord`.
+ * A durable run. Projection of `TaskRecord`.
  *
  * `createdAt` is the record's `enqueuedAt` — when the turn was accepted, which
  * is what a client renders; the name is the client-facing one because "enqueued"
@@ -213,7 +214,7 @@ export type MessagePageDto = Static<typeof MessagePageDtoSchema>;
  * OMITTED, deliberately: `priority`, `availableAt`, `attemptCount`,
  * `poisonCount`, `deadLetteredAt`/`deadLetterReason` (queue bookkeeping — a
  * client cannot act on any of it, and a run that exhausted its attempts is
- * simply `failed` with an `error`), and `request` (the internal turn envelope:
+ * simply `failed` with an `error`), and `payload` (the internal turn envelope:
  * message ids and provider selection the server assembled for itself).
  */
 export const RunDtoSchema = Type.Object({
@@ -425,7 +426,7 @@ export type VersionDto = Static<typeof VersionDtoSchema>;
  *
  * `code` is the AgentKit extension member: the stable machine-readable code the
  * host errors already carry (`lease_lost`, `duplicate_action_id`,
- * `revision_conflict`, `invalid_run_transition`, …). `type`/`title` are for
+ * `revision_conflict`, `invalid_task_transition`, …). `type`/`title` are for
  * humans and documentation; a client branches on `code`.
  */
 export const ProblemDetailsDtoSchema = Type.Object({

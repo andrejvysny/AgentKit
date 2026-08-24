@@ -28,7 +28,7 @@ Redis, or similar) implementing the same ports; see
   transactions. Fencing/CAS pattern: a lease-guarded write reads the
   current lease inside the same transaction, then performs its
   `INSERT`/`UPDATE`, and rejects on mismatch; compare-and-set operations
-  (`transitionRun`, `ProposalStore.transition`) use a guarded
+  (`transitionTask`, `ProposalStore.transition`) use a guarded
   `UPDATE ... WHERE id = ? AND status = ?` and check the driver's reported
   `changes` count as the backstop against a race the initial `SELECT`
   could not see.
@@ -38,15 +38,15 @@ Redis, or similar) implementing the same ports; see
   terminal, not retried forever), dead-letter, recover. Dispatch is
   fire-and-forget: the claim loop never awaits an execution, so
   `concurrency: N` actually runs N attempts at once. Retry happens **in
-  place** — a run that started stays `running` for its whole life and gets
+  place** — a task that started stays `running` for its whole life and gets
   a new attempt (new lease, new fencing token) rather than going back to
-  `queued`, because the `RunStore` transition table has no
+  `queued`, because the `TaskStore` transition table has no
   `running → queued` edge.
 - **`ScopeLock`** (`src/task-runner/scope-lock.ts`) — in-memory, per-process
-  serialization so two runs sharing a scope (usually a chat id) do not
+  serialization so two tasks sharing a scope (usually a chat id) do not
   execute concurrently. A dispatch optimization only: correctness rests on
   the store's `claimNext` + leases, not on this lock — wiping it between two
-  claims would not let two workers claim the same run.
+  claims would not let two workers claim the same task.
 - **`error-classifier.ts`** — `classifyExecutionError`: transient / terminal
   / cancelled, from structured signals (a host error `code`, an explicit
   `retryable` flag, an HTTP status) before falling back to message
@@ -77,40 +77,46 @@ foreign async work: await the model, the applier, or another subsystem
 ## Single-process limits
 
 Documented in `single-process-task-runner.ts`'s module doc, and worth
-repeating here: cancellation of a run is delivered by aborting an in-memory
-`AbortController` this process registered. A cancel aimed at a run some
+repeating here: cancellation of a task is delivered by aborting an in-memory
+`AbortController` this process registered. A cancel aimed at a task some
 *other* process is executing does nothing — a durable, cross-process cancel
 needs a cancellation flag in the store that every worker polls, which is a
 different design with a different cost than this reference adapter takes
 on. See [`docs/non-goals.md`](../../docs/non-goals.md).
 
-## SQLite schema (v1)
+## SQLite schema (v2)
 
-Single-file DDL in `src/sqlite/schema.ts` (`SCHEMA_V1`), applied
-idempotently (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). Table-to-port
+Single-file DDL in `src/sqlite/schema.ts` (`SCHEMA_V2`), applied
+idempotently (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). No
+migrations ship in this workspace-private adapter — `PRAGMA user_version`
+guards against opening a database written by a different schema version; a
+stale dev database is recreated, not upgraded in place. Table-to-port
 mapping:
 
 | Table(s) | Port |
 |---|---|
 | `chats`, `messages` | `ConversationStore` |
-| `runs`, `run_attempts`, `leases`, `run_events` | `RunStore` |
+| `tasks`, `task_attempts`, `leases`, `task_events` | `TaskStore` |
 | `proposals`, `proposal_outcomes` | `ProposalStore` |
 | `providers`, `provider_models`, `provider_capabilities` | `ProviderStore` |
 | `settings` (single row, `id = 1`) | `SettingsStore` |
 | `outbox` | `OutboxStore` |
-| `fencing_counter` (single row) | *not a port record* — backs `RunStore.acquireLease`'s store-global monotonic fencing token. |
+| `fencing_counter` (single row) | *not a port record* — backs `TaskStore.acquireLease`'s store-global monotonic fencing token. |
 
 Notes:
 
-- Queue state lives on `runs` + `leases`; there is no separate queue table
+- Queue state lives on `tasks` + `leases`; there is no separate queue table
   — `claimNext` computes effective priority (base priority + an age bucket)
-  in the query itself, so nothing can drift out of sync.
+  in the query itself, so nothing can drift out of sync. `tasks` has no
+  `chat_id` column — a task of an arbitrary kind has no conversation, so
+  whatever a kind needs (a chat turn's `chatId` included) rides in the
+  `payload` column instead.
 - The idempotency guarantee for model-issued writes is a partial unique
   index: `UNIQUE(scope_key, action_id) WHERE action_id IS NOT NULL AND
   status NOT IN ('rejected', 'invalidated')` — see
   [`docs/ports.md`](../../docs/ports.md#proposalstore).
-- JSON-shaped fields (`request`, `metadata`, `envelope`, `operations`,
-  `warnings`, `tool_calls`, `payload`, `failed_ops`, `extra_headers`,
+- JSON-shaped fields (`payload`, `metadata`, `envelope`, `operations`,
+  `warnings`, `tool_calls`, `failed_ops`, `extra_headers`,
   `decision`, ...) are stored as `TEXT`; the store (de)serializes them,
   SQLite never inspects their contents.
 
