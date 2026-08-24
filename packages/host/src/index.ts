@@ -29,6 +29,7 @@ export * from "./policy/session-write-policy.js";
 
 // Turn execution: the durable worker over core's run loop.
 export * from "./turn/message-order.js";
+export * from "./turn/history-reconcile.js";
 export * from "./turn/emulated-tool-call.js";
 export * from "./turn/registry-staging.js";
 export * from "./turn/retry.js";

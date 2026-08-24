@@ -1,0 +1,138 @@
+# @agentkit/mcp-client
+
+Bridges [Model Context Protocol](https://modelcontextprotocol.io) servers into
+AgentKit runs: an `McpClientManager` owns the connections, and a
+`ToolSetContributor` built from it turns every connected server's tools into
+`AiTool`s that a `TurnRunner` stages like any other tool source.
+
+Built on the official `@modelcontextprotocol/sdk` (`Client`,
+`StdioClientTransport`, `StreamableHTTPClientTransport`). This package adds only
+what an agent host needs on top of it: stable tool identity, per-server failure
+isolation, and secrets that never reach a log line.
+
+## Wiring
+
+```ts
+import { McpClientManager, createMcpToolSetContributor } from "@agentkit/mcp-client";
+
+const mcp = new McpClientManager(
+  { secrets, logger, clock },
+  [
+    {
+      alias: "github",
+      transport: {
+        kind: "stdio",
+        command: "gh-mcp-server",
+        env: { GITHUB_TOKEN: "${GH_TOKEN}" },
+      },
+      secretRefs: { GH_TOKEN: "provider.github.token" },
+      toolAliases: { list_issues: "issues" },
+    },
+    {
+      alias: "docs",
+      transport: {
+        kind: "http",
+        url: "https://docs.internal/mcp",
+        headers: { Authorization: "Bearer ${DOCS_TOKEN}" },
+      },
+      secretRefs: { DOCS_TOKEN: "docs.mcp.token" },
+      resilience: { requestTimeoutMs: 15_000 },
+    },
+  ],
+);
+
+const runner = new TurnRunner({
+  /* ... */
+  contributors: [hostTools, createMcpToolSetContributor(mcp)],
+});
+
+// On shutdown — closing a stdio transport reaps the child process.
+await mcp.dispose();
+```
+
+`contribute()` connects (or reconnects) every enabled server at the start of a
+run, so a server that was down last turn comes back this turn without extra
+wiring. A server that stays down costs its own tools and nothing else.
+
+## Tool identity
+
+Each tool gets a canonical id `mcp.<serverAlias>.<effectiveToolName>`, where
+`effectiveToolName` is `toolAliases[name] ?? name`. Aliases must match
+`^[a-z][a-z0-9-]*$` and tool names `^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*$`;
+anything else is a typed error rather than a mangled name.
+
+The canonical id is the **routing key** and lands on
+`AiToolDefinition.capability`. `AiToolDefinition.name` carries a projection of
+it with dots replaced by `__` (`mcp__github__issues`), because `AiToolRegistry`
+and provider function schemas reject dots — registering the dotted form would
+get the tool silently dropped during registry staging.
+
+Collisions **fail closed** at both levels: within one server's tool batch, and
+across servers when the contribution is assembled. Neither is resolved by
+last-write-wins, because the model would then call a tool it was shown and reach
+a different implementation.
+
+`inputSchema` is passed through **verbatim** — nothing widened, nothing
+tightened, no `additionalProperties` injected. `annotations.readOnlyHint === true`
+maps to `effect: "read"`; everything else maps to `"write"`, conservatively.
+
+## Secrets
+
+`secretRefs` maps a `${placeholder}` token to a `SecretStore` ref. At connect
+time the resolved value replaces the token inside **stdio `env` values** and
+**http `headers` values** only — never in a command, an argv entry or a URL,
+where it would end up in `ps` output or a proxy log.
+
+A ref the store answers `null` for is an `mcp_secret_missing` error naming the
+placeholder and the ref, never a value. Every message built from config-derived
+text is redacted before it is thrown or logged: resolved values are replaced
+with `***`.
+
+## Resilience defaults
+
+All overridable per server via `resilience`.
+
+| Option | Default | What it governs |
+| --- | --- | --- |
+| `requestTimeoutMs` | `5000` | Deadline for one `tools/list` / `tools/call`. |
+| `connectTimeoutMs` | `5000` | Deadline for one connect attempt (transport + `initialize`). |
+| `maxConnectAttempts` | `3` | Attempts in one connect cycle before the circuit opens. |
+| `connectBackoffBaseMs` | `250` | First backoff step; doubles per attempt. |
+| `connectBackoffMaxMs` | `2000` | Backoff ceiling. No jitter. |
+| `circuitOpenMs` | `5000` | Lockout window after a failed cycle. |
+| `reconnectMaxAttempts` | `2` | Reconnect+retry rounds for one retryable request failure. |
+| `reconnectBackoffFactor` | `2` | Growth factor for the reconnect backoff. |
+
+The circuit is a **hard timed lockout**, not a half-open probe: once a cycle
+fails, `connect()` rejects immediately with `mcp_circuit_open` until the window
+elapses, and the first call afterwards runs a fresh full cycle. A failure
+retrying cannot fix (a missing secret, an unparseable URL) does *not* arm the
+lockout — the precise error stays visible.
+
+Concurrent request failures share **one** reconnect: two calls that die on the
+same dropped session produce one reconnect and both retry after it.
+
+## Errors
+
+Every failure is an `McpError` with a stable `code` and a `retryable` verdict,
+classified where the cause is known (our own timer, the transport's `onclose`,
+the SDK's JSON-RPC error code) — never by matching message text.
+
+`mcp_circuit_open`, `mcp_connect_failed`, `mcp_request_timeout`,
+`mcp_request_aborted`, `mcp_reconnect_exhausted`, `mcp_not_connected`,
+`mcp_remote_error`, `mcp_secret_missing`, `mcp_canonical_id_collision`,
+`mcp_invalid_alias`, `mcp_invalid_tool_name`, `mcp_invalid_config`,
+`mcp_invalid_canonical_id`.
+
+A tool call never throws into the run loop. Failures come back as an
+`ok: false` result whose `modelData` is `{ errorCode, errorMessage, retryable }`
+— the same shape core's own error envelope uses, so the code survives into what
+the model reads and it can treat `mcp_request_timeout` differently from
+`mcp_remote_error`. A server-reported failure (`isError: true`) uses the code
+`mcp_tool_error`.
+
+## Testing
+
+`McpClientManagerDeps.transportFactory` is injectable, so tests drive real MCP
+servers over the SDK's `InMemoryTransport` instead of spawning processes or
+opening sockets. See `tests/helpers.ts`.
