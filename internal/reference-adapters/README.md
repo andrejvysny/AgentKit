@@ -51,6 +51,14 @@ Redis, or similar) implementing the same ports; see
   / cancelled, from structured signals (a host error `code`, an explicit
   `retryable` flag, an HTTP status) before falling back to message
   heuristics. Unrecognized failures are terminal by default.
+- **`task-aging.ts`** — the priority-aging formula both stores' `claimNext`
+  use, preserved from task-system but **opt-in**: `agingBonus` defaults to
+  `0` (aging off; ordering is plain `priority DESC, enqueuedAt ASC`),
+  `agingIntervalMs` defaults to 30s, and `agingMaxBonus` defaults to
+  uncapped once a host does opt in. Passed as
+  `MemoryAssistantStoreOptions`/`SqliteAssistantStoreOptions` at
+  construction (both extend `TaskAgingOptions`), not a runtime toggle. See
+  [ADR 0003](../../docs/adr/0003-task-dependencies-and-subagents.md).
 
 Both stores pass `@agentkit/testing`'s
 `describeAssistantStoreConformance` suite — see
@@ -84,14 +92,14 @@ needs a cancellation flag in the store that every worker polls, which is a
 different design with a different cost than this reference adapter takes
 on. See [`docs/non-goals.md`](../../docs/non-goals.md).
 
-## SQLite schema (v2)
+## SQLite schema (v3)
 
-Single-file DDL in `src/sqlite/schema.ts` (`SCHEMA_V2`), applied
+Single-file DDL in `src/sqlite/schema.ts` (`SCHEMA_V3`), applied
 idempotently (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). No
 migrations ship in this workspace-private adapter — `PRAGMA user_version`
 guards against opening a database written by a different schema version; a
-stale dev database is recreated, not upgraded in place. Table-to-port
-mapping:
+stale dev database (including one written by v2) is recreated, not upgraded
+in place. Table-to-port mapping:
 
 | Table(s) | Port |
 |---|---|
@@ -106,11 +114,17 @@ mapping:
 Notes:
 
 - Queue state lives on `tasks` + `leases`; there is no separate queue table
-  — `claimNext` computes effective priority (base priority + an age bucket)
-  in the query itself, so nothing can drift out of sync. `tasks` has no
+  — `claimNext` computes effective priority (base priority plus an aging
+  term, off by default — see `task-aging.ts` below) in the query itself, so
+  nothing can drift out of sync. `tasks` has no
   `chat_id` column — a task of an arbitrary kind has no conversation, so
   whatever a kind needs (a chat turn's `chatId` included) rides in the
-  `payload` column instead.
+  `payload` column instead. `parent_task_id` (lineage) and `depends_on` (a
+  JSON array of task ids, the claim gate) are separate columns, neither a
+  foreign key — `createTask` proves both point at existing rows before it
+  writes, and an FK would additionally block deleting an old completed task
+  a finished row still names. `progress` is an overwritten JSON snapshot,
+  never appended to.
 - The idempotency guarantee for model-issued writes is a partial unique
   index: `UNIQUE(scope_key, action_id) WHERE action_id IS NOT NULL AND
   status NOT IN ('rejected', 'invalidated')` — see

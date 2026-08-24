@@ -34,7 +34,7 @@ cheapest.
    and the REST `MessageDto` are unchanged, so a multimodal turn cannot yet
    round-trip through `TurnRunner`/`ConversationStore` — the capability lands
    for direct `runChat` embedders. Widening the host record belongs to the
-   attachments phase (`docs/roadmap.md`, P5), which owes answers on storage,
+   attachments phase (`docs/roadmap.md`, P2), which owes answers on storage,
    size budgets, and replay that this phase deliberately does not fake.
 
 ## Evidence

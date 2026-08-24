@@ -19,21 +19,27 @@ that package before writing your own adapter from scratch.
 ## Modules
 
 - `ports/` — the port catalog: `AssistantStore` (aggregate),
-  `ConversationStore`, `TaskStore`, `ProposalStore`, `ProviderStore`,
+  `ConversationStore`, `TaskStore` (`parentTaskId`/`dependsOn` edges,
+  dependency-gated `claimNext`, `listChildren`, `updateProgress` —
+  see [ADR 0003](../../docs/adr/0003-task-dependencies-and-subagents.md)),
+  `ProposalStore`, `ProviderStore`,
   `SettingsStore`, `OutboxStore`, `TaskRunner`/`TaskWorker`, `WritePolicy`,
   `ProposalApplier`, `VerificationHook`, `ContextProvider`,
   `ToolSetContributor`, `SecretStore`, `AuthorizationPort`,
   `UsageAuthorizer`, `system.ts` (`Clock`/`IdGenerator`/`Logger`).
 - `tasks/` — the kind-dispatch layer over `TaskStore`/`TaskRunner`:
   `kinds.ts` (`CHAT_TURN_TASK_KIND`; `chat.*`/`agentkit.*` prefixes
-  reserved), `task-executor.ts` (`TaskExecutor`, `TaskExecutionContext`),
-  `executor-registry.ts` (`ExecutorRegistry`, `createDispatchingWorker` —
+  reserved), `task-executor.ts` (`TaskExecutor`, `TaskExecutionContext` —
+  including `spawnChild`, which presets `parentTaskId` to the spawning
+  task so lineage cannot be forged), `executor-registry.ts`
+  (`ExecutorRegistry`, `createDispatchingWorker` —
   an unregistered kind is a terminal failure, never a dead-letter),
   `task-service.ts` (`TaskService`: `createTask`/`dispatch`/`submitTask`,
   dispatch strictly post-commit, idempotent resubmit per caller-supplied
-  `taskId`), `task-event-writer.ts` (`createTaskEventWriter` — stamps and
-  appends host-side/non-chat task events; barred from inside a chat pass,
-  where core's stamper owns numbering). See
+  `taskId`; `cancelTask` — a cooperative, breadth-first cascade over
+  `parentTaskId` lineage), `task-event-writer.ts` (`createTaskEventWriter`
+  — stamps and appends host-side/non-chat task events; barred from inside
+  a chat pass, where core's stamper owns numbering). See
   [`docs/architecture.md`](../../docs/architecture.md#task-kinds-and-executors).
 - `proposals/` — `state-machine.ts` (`PROPOSAL_TRANSITIONS`),
   `proposal-service.ts` (`ProposalService`: stage/approve/reject/apply/
@@ -45,7 +51,11 @@ that package before writing your own adapter from scratch.
 - `turn/` — `turn-runner.ts` (`TurnRunner`, `ChatTurnExecutor`), `retry.ts`
   (chat-only / empty-response retry decisions), `message-order.ts`
   (`orderMessagesForProvider`), `emulated-tool-call.ts`
-  (`looksLikeEmulatedToolCall`), `registry-staging.ts` (`stageRegistry`).
+  (`looksLikeEmulatedToolCall`), `registry-staging.ts` (`stageRegistry`),
+  `history-reconcile.ts` (`reconcileOrphanToolCalls` — synthesizes an
+  in-memory `tool_result_missing` failure for a persisted tool call whose
+  result was lost to a crash between `projectEvent`'s separate writes;
+  called from `assembleMessages`, never persisted).
 - `bootstrap.ts` — `recoverOnBoot({ taskRunner, proposals })`: the startup
   pass that cleans up after a crash — `TaskRunner.recover()` first, then
   `ProposalService.reconcileInterrupted()` — before any worker claims work.
@@ -53,7 +63,7 @@ that package before writing your own adapter from scratch.
   stable machine-readable `code` (`invalid_task_transition`,
   `duplicate_task`, `executor_not_found`, `lease_lost`, `seq_conflict`,
   `duplicate_action_id`, `revision_conflict`, `not_found`,
-  `invalid_proposal_transition`).
+  `invalid_proposal_transition`, `unknown_dependency`).
 
 ## Embedding `TurnRunner`
 

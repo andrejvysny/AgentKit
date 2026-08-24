@@ -5,15 +5,6 @@ and where each piece is expected to land when it does. None of this is
 implemented in `packages/` or `internal/` today; do not import paths named
 below.
 
-- **HTTP/Hono adapter.** No HTTP layer exists in this repo — no server, no
-  router, no client. What *does* exist is the contract it would implement:
-  `packages/contracts/src/rest.ts` defines `REST_API_VERSION`, the
-  `REST_ROUTES` table, and every request/response DTO as TypeBox schemas +
-  types (see [`docs/contracts.md`](contracts.md#rest-v1-surface)). Writing
-  the shapes down first is deliberate: they are reviewable and validatable
-  now, and the adapter that serves them — translating `@agentkit/host` calls
-  to and from HTTP, streaming `AiRunEvent`s over SSE — remains deferred; see
-  [`docs/roadmap.md`](roadmap.md), P3.
 - **React / UI packages.** No frontend package exists in this monorepo.
   A consuming app (OpenPCB, a cloud-agent service, OneCAD) owns its own UI
   against the `@agentkit/host` port contracts and the `AiRunEvent` stream.
@@ -36,18 +27,14 @@ below.
 - **Memory port** (long-term/cross-session recall beyond one chat's
   message history). No `MemoryStore` port or implementation exists.
   `ConversationStore` covers one chat's messages; anything spanning chats
-  is future scope — see [`docs/roadmap.md`](roadmap.md), P6.
-- **Cloud salvage pieces**: an SSE-resume client, token-crypto helpers, and
-  trusted-field injection for a multi-tenant gateway. These concepts are
-  referenced in port documentation (`docs/ports.md`, `docs/architecture.md`)
-  as things a durable, distributed deployment will need, but none are
-  implemented — `OutboxStore` and `TaskStore.listEvents` are the ports such
-  a client would be built against.
-- **Task dependencies and subagent spawning.** `parentTaskId`/`dependsOn` on
-  `TaskRecord`, dependency-aware claimability, and a `spawn_subagent`
-  capability are designed (see [ADR 0001](adr/0001-generic-task-foundation.md),
-  "Out of scope") but not implemented — tracked as
-  [`docs/roadmap.md`](roadmap.md), P4.
+  is future scope — see [`docs/roadmap.md`](roadmap.md), P3.
+- **Cloud salvage pieces**: token-crypto helpers and trusted-field injection
+  for a multi-tenant gateway. Referenced in port documentation
+  (`docs/ports.md`, `docs/architecture.md`) as things a durable,
+  distributed, multi-tenant deployment will need, but neither is
+  implemented. (An SSE-resume client shipped as
+  `@agentkit/transport-http`'s `streamRun` — see [ADR
+  0005](adr/0005-http-transport.md) — so it is no longer listed here.)
 - **npm publishing.** Gated on `@agentkit` npm scope ownership being
   confirmed; see the warning in the root [README](../README.md). Every
   package's `publishConfig` is ready, but nothing is published.

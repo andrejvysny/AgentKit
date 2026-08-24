@@ -151,7 +151,7 @@ by newlines, dropping the rest.
 and the REST `MessageDto` are unchanged — a multimodal turn does not yet
 round-trip through `TurnRunner`/`ConversationStore`; the capability lands
 for direct `runChat()` embedders today. Widening host storage is the
-attachments phase ([`docs/roadmap.md`](roadmap.md), P5). Full rationale:
+attachments phase ([`docs/roadmap.md`](roadmap.md), P2). Full rationale:
 [ADR 0002](adr/0002-multimodal-content.md).
 
 ## The tool envelope
@@ -282,10 +282,13 @@ to a task of any kind: [ADR 0001](adr/0001-generic-task-foundation.md).
 ## REST v1 surface
 
 [`packages/contracts/src/rest.ts`](../packages/contracts/src/rest.ts) is the
-versioned HTTP surface as **types and JSON Schemas only** — there is no
-server and no client in this repository (see
-[`docs/non-goals.md`](non-goals.md)). It exists so the shapes an adapter
-will serialize are reviewable and validatable before anything serves them.
+versioned HTTP surface as **types and JSON Schemas only** — this package
+stays server-free by design, so the shapes are reviewable and validatable
+independent of any adapter. `@agentkit/transport-http` is the official
+adapter that serves it (fetch-standard handler, SSE `streamRun`; see
+[`packages/transport-http/README.md`](../packages/transport-http/README.md)
+and [ADR 0005](adr/0005-http-transport.md)); no client SDK exists yet (see
+[`docs/roadmap.md`](roadmap.md)'s Later list).
 
 - `REST_API_VERSION` (`"v1"`) is the URL-visible version, distinct from
   `CONTRACT_VERSION`: an additive DTO field bumps the contract version and

@@ -62,22 +62,33 @@ Durable lifecycle for a task of **any** kind: status (`TaskStatus`,
 `TASK_TRANSITIONS`), attempts, leases, and the event log — the product every
 UI replays and every crash recovery reads. `TaskRecord { taskId, kind,
 scopeId, status, priority, enqueuedAt, availableAt, payload, attemptCount,
-poisonCount, … }` is kind-agnostic: `kind` is an opaque string the store
+poisonCount, parentTaskId?, dependsOn?, progress?, … }` is kind-agnostic:
+`kind` is an opaque string the store
 filters and returns (see [`docs/architecture.md`](architecture.md#task-kinds-and-executors)
 for what dispatches on it), and everything specific to a kind — a chat
 turn's `chatId` included — rides in `payload`, not on the record itself.
+`parentTaskId` (lineage, set only via `TaskExecutionContext.spawnChild`) and
+`dependsOn` (the claim gate) are two distinct edges — see [Task dependencies
+and subagents](architecture.md#task-dependencies-and-subagents) and [ADR
+0003](adr/0003-task-dependencies-and-subagents.md). `progress` is a mutable,
+overwritten snapshot, never an event.
 
 **Key invariants**:
 - `createTask` MUST reject a `taskId` that already exists with
   `DuplicateTaskError`, never silently overwrite — the id is the caller's
   idempotency key (a retried submit, a redelivered message), and
   overwriting would discard a live task's payload and attempt history while
-  its event log stayed behind.
+  its event log stayed behind. It MUST also reject an unknown `parentTaskId`
+  or `dependsOn` entry (or `dependsOn` naming the task's own id) with
+  `UnknownDependencyError` — every dependency must already exist when the
+  dependent is written, which is what makes the dependency graph a DAG by
+  construction rather than by runtime cycle detection.
 - `transitionTask` is compare-and-set: it MUST reject with
   `InvalidTaskTransitionError` when the task's current status is not in the
   caller's `from` set (someone else moved it first — a lost race, not a
   retryable hiccup), and MUST reject a transition not in
-  `TASK_TRANSITIONS`.
+  `TASK_TRANSITIONS`. `TASK_TRANSITIONS` admits one `queued → failed` edge,
+  reserved for the dependency cascade below.
 - `appendEvents`/`listEvents` are typed on `TaskEventEnvelope`
   (`@agentkit/contracts`) — the kind-agnostic shape the store actually
   orders (`seq`) and dedups (`eventId`); `AiRunEvent` is the `chat.turn`
@@ -90,7 +101,21 @@ turn's `chatId` included — rides in `payload`, not on the record itself.
   in the same operation, so no other caller can claim the same task.
   `ClaimNextInput.kinds?` optionally restricts the claim to a set of kinds,
   for a deployment whose worker pools register different executor sets —
-  absent means "any kind".
+  absent means "any kind". **Dependencies are enforced here, not by a
+  separate reaper**: a task with an unfinished `dependsOn` entry is skipped;
+  a task whose dependency ended badly is settled INSTEAD of claimed —
+  `evaluateTaskDependencies` (exported beside `assertTaskTransition`, for
+  the same "every adapter reaches the same verdict" reason) reduces
+  dependency state to `ready`/`blocked`/`settle`, and a `settle` verdict
+  transitions the dependent `failed` (`dependency_failed: <id>`, via the
+  `queued → failed` edge) or `cancelled`, lazily, on the claim path.
+- `listChildren(taskId)` returns tasks whose `parentTaskId` is `taskId`, one
+  level (not the subtree) — the one caller that needs the subtree
+  (`TaskService.cancelTask`) already walks breadth-first and asks again.
+- `updateProgress(taskId, progress, opts)` REPLACES `TaskRecord.progress`
+  wholesale (never merges) and MUST reject a stale `leaseToken` with
+  `LeaseLostError`, the same check `appendEvents` makes. It never touches
+  the event log.
 
 **`waiting_approval` is currently producer-less.** No code in this repository
 moves a task into it: a staged write returns `pending` to the model and the
@@ -120,7 +145,10 @@ atomic `claimNext` under a busy scope, kind round-trip, duplicate-task
 rejection, and the `kinds` claim filter — the last of these arranged so that
 only a real filter passes it (the wanted kind is the one the priority and
 FIFO ordering would NOT have picked), plus `kinds: []` meaning "no kind is
-acceptable" rather than "any kind".
+acceptable" rather than "any kind". It also covers dependency gating and the
+failure/cancel settle verdicts, `listChildren`, `updateProgress`'s
+lease-gating, and (opt-in, see `internal/reference-adapters/src/task-aging.ts`)
+priority aging — a new adapter is graded against the same suite.
 
 ### `ProposalStore`
 
@@ -242,6 +270,16 @@ accident:
   pass, core's `createEventStamper` owns `seq` numbering in memory; a
   second writer numbering from `TaskStore.nextSeq` against the same log
   would interleave two counters into one stream.
+- `TaskExecutionContext.spawnChild` is present only when
+  `createDispatchingWorker` was given a `TaskService`, and always presets
+  `parentTaskId` to the executing task — an executor can fan work out but
+  cannot forge or omit its own lineage.
+- `TaskService.cancelTask` cascades breadth-first over `parentTaskId`
+  lineage, never `dependsOn`; a running descendant is asked to stop
+  cooperatively (`taskRunner.requestCancel`), never forced terminal. Full
+  description: [Task dependencies and
+  subagents](architecture.md#task-dependencies-and-subagents), [ADR
+  0003](adr/0003-task-dependencies-and-subagents.md).
 
 ## Policy
 
@@ -328,6 +366,12 @@ never by a hardcoded list — only the contributor that wrote a tool knows
 whether it can operate on nothing, and when *no* contributor declares the
 hook, nothing is pruned (an absent declaration means "no opinion", not
 "empty the registry").
+
+**Example implementation**: `@agentkit/mcp-client`'s
+`createMcpToolSetContributor` (`packages/mcp-client/src/contributor.ts`) —
+turns every connected MCP server's tools into `AiTool`s, failing the whole
+contribution closed on a canonical-id collision rather than silently
+dropping one. See [`packages/mcp-client/README.md`](../packages/mcp-client/README.md).
 
 ## Secrets, authorization, usage
 
