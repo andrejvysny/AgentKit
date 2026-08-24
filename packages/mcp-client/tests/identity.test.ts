@@ -102,6 +102,28 @@ describe("canonical tool identity", () => {
     }
   });
 
+  it("fails the batch when two canonical ids project onto one registry name", () => {
+    // `.` -> `__` is many-to-one, and the registry name is what the model
+    // calls. Deduping on the canonical id alone lets this pair through, and one
+    // tool then shadows the other during registry staging.
+    const build = (): unknown =>
+      buildMcpToolIdentityIndex([
+        { serverAlias: "fs", toolName: "files.read" },
+        { serverAlias: "fs", toolName: "files__read" },
+      ]);
+    expect(codeOf(build)).toBe("mcp_canonical_id_collision");
+    try {
+      build();
+    } catch (err) {
+      const message = (err as McpError).message;
+      // Both canonical ids, or the message reads as a contradiction: they are
+      // NOT the same id, and the operator has to see which two to reconcile.
+      expect(message).toContain("mcp.fs.files.read");
+      expect(message).toContain("mcp.fs.files__read");
+      expect(message).toContain("mcp__fs__files__read");
+    }
+  });
+
   it("accepts a batch whose aliases stay distinct", () => {
     const index = buildMcpToolIdentityIndex([
       { serverAlias: "gh", toolName: "list_issues", toolAlias: "issues" },

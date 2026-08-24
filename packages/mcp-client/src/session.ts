@@ -6,7 +6,7 @@ import {
   McpError as SdkMcpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import { isServerEnabled, type McpServerConfig } from "./config.js";
-import { describeCause, McpError } from "./errors.js";
+import { describeCause, McpError, redactedCause } from "./errors.js";
 import {
   buildReverseToolAliases,
   projectMcpCallResult,
@@ -135,7 +135,18 @@ export class McpSession {
     return projectMcpCallResult(this.alias, effectiveToolName, toolName, result);
   }
 
-  /** Close the session. A deliberate shutdown is not a failure, so the circuit is untouched. */
+  /**
+   * Close the session. A deliberate shutdown is not a failure, so the circuit is
+   * untouched.
+   *
+   * The resolved secret material goes with it. A closed session — a disposed
+   * manager, a server removed from the config — has no business still holding
+   * live tokens in memory for the lifetime of the process, and `openOnce`
+   * re-resolves from the store on every attempt anyway, so nothing needs them
+   * to survive. The reconnect path closes and reopens, and no request can be
+   * issued in between: `withSession` re-enters `connect()` at the top of every
+   * loop iteration.
+   */
   async close(): Promise<void> {
     this.closingDeliberately = true;
     try {
@@ -143,6 +154,7 @@ export class McpSession {
       const transport = this.transport;
       this.client = undefined;
       this.transport = undefined;
+      this.material = EMPTY_SECRET_MATERIAL;
       if (client) await swallow(() => client.close());
       else if (transport) await swallow(() => transport.close());
     } finally {
@@ -210,7 +222,7 @@ export class McpSession {
         `attempt(s): ${this.redact(describeCause(last))}`,
       {
         details: { alias: this.alias, attempts: maxConnectAttempts },
-        cause: last,
+        cause: redactedCause(last, (text) => this.redact(text)),
       },
     );
   }
@@ -240,6 +252,7 @@ export class McpSession {
         timeoutMs: this.resilience.connectTimeoutMs,
         timeoutCode: "mcp_connect_failed",
         describe: `Connecting to MCP server "${this.alias}"`,
+        redact: (text) => this.redact(text),
       },
       async (signal) => {
         const transport = await this.deps.transportFactory({
@@ -294,7 +307,8 @@ export class McpSession {
 
   /**
    * Run one request against a live session, reconnecting and retrying when the
-   * failure says the SESSION — not the request — was the problem.
+   * failure says the SESSION — not the request — was the problem, and the
+   * request cannot already have run server-side. See {@link isAutoRetryable}.
    */
   private async withSession<T>(
     operation: string,
@@ -307,6 +321,12 @@ export class McpSession {
       await this.connect();
       const client = this.client;
       const generation = this.generation;
+      // Captured, not read from `this` in the catch: a CONCURRENT caller's
+      // reconnect clears `this.material` between the two, and redacting this
+      // request's failure with an empty redactor would publish the very token
+      // the message was built from.
+      const material = this.material;
+      const redact = (text: string): string => material.redact(text);
       if (!client) {
         throw new McpError(
           "mcp_not_connected",
@@ -321,12 +341,13 @@ export class McpSession {
             ...(options?.signal === undefined ? {} : { signal: options.signal }),
             timeoutCode: "mcp_request_timeout",
             describe: `${operation} on MCP server "${this.alias}"`,
+            redact,
           },
           (signal) => fn(client, signal),
         );
       } catch (err) {
-        const failure = this.classify(err, operation);
-        if (!failure.retryable) throw failure;
+        const failure = this.classify(err, operation, redact);
+        if (!this.isAutoRetryable(failure)) throw failure;
         if (retries >= reconnectMaxAttempts) {
           // Nothing was ever retried (`reconnectMaxAttempts: 0`): report the
           // actual cause rather than a wrapper implying recovery was attempted.
@@ -338,6 +359,8 @@ export class McpSession {
               this.redact(failure.message),
             {
               details: { alias: this.alias, operation, lastCode: failure.code },
+              // `failure` is ours: its message is already redacted, and its own
+              // cause was summarized where it was classified.
               cause: failure,
             },
           );
@@ -357,6 +380,36 @@ export class McpSession {
   }
 
   /**
+   * Whether this failure may be REPLAYED after a reconnect.
+   *
+   * Deliberately narrower than {@link McpError.retryable}, and not the same
+   * question. `retryable` is advisory — "could a retry succeed?" — and belongs
+   * to the host and the model, who know whether the tool they called was safe
+   * to run twice. This gate answers "may WE re-issue it without being asked?",
+   * and only a request that never reached the server qualifies:
+   * `mcp_not_connected`, where the session was already dead.
+   *
+   * A request TIMEOUT does not qualify. Our deadline firing says nothing about
+   * whether the server ran the tool, so replaying one makes a slow-but-
+   * successful write execute again — and the model is still told it failed.
+   * `retryTimeouts` opts a server back into the old behaviour, for a host that
+   * knows that server's tools are idempotent.
+   *
+   * Residual ambiguity, stated rather than hidden: a peer that closes the
+   * transport MID-CALL also surfaces as `mcp_not_connected`, and that one is
+   * only probably unsent. It is retried because a dropped session is the case
+   * this whole reconnect path exists for; a host that cannot tolerate even that
+   * sets `reconnectMaxAttempts: 0`.
+   */
+  private isAutoRetryable(failure: McpError): boolean {
+    if (failure.code === "mcp_not_connected") return failure.retryable;
+    if (failure.code === "mcp_request_timeout") {
+      return this.resilience.retryTimeouts;
+    }
+    return false;
+  }
+
+  /**
    * Turn a thrown value into a coded failure.
    *
    * Ours pass through — their code was chosen at the point of cause. The SDK's
@@ -365,35 +418,42 @@ export class McpSession {
    * `RequestTimeout` means the SDK's deadline beat ours, and anything else is
    * the SERVER answering with an error — a real answer, and not retryable.
    */
-  private classify(err: unknown, operation: string): McpError {
+  private classify(
+    err: unknown,
+    operation: string,
+    redact: (text: string) => string,
+  ): McpError {
     if (err instanceof McpError) return err;
     if (err instanceof SdkMcpError) {
       if (err.code === ErrorCode.ConnectionClosed) {
         return new McpError(
           "mcp_not_connected",
           `MCP server "${this.alias}" closed the connection during ${operation}.`,
-          { retryable: true, cause: err },
+          { retryable: true, cause: redactedCause(err, redact) },
         );
       }
       if (err.code === ErrorCode.RequestTimeout) {
         return new McpError(
           "mcp_request_timeout",
           `${operation} on MCP server "${this.alias}" timed out.`,
-          { cause: err },
+          { cause: redactedCause(err, redact) },
         );
       }
       return new McpError(
         "mcp_remote_error",
         `MCP server "${this.alias}" returned an error for ${operation}: ` +
-          this.redact(err.message),
-        { details: { alias: this.alias, jsonRpcCode: err.code }, cause: err },
+          redact(err.message),
+        {
+          details: { alias: this.alias, jsonRpcCode: err.code },
+          cause: redactedCause(err, redact),
+        },
       );
     }
     return new McpError(
       "mcp_remote_error",
       `${operation} on MCP server "${this.alias}" failed: ` +
-        this.redact(describeCause(err)),
-      { details: { alias: this.alias }, cause: err },
+        redact(describeCause(err)),
+      { details: { alias: this.alias }, cause: redactedCause(err, redact) },
     );
   }
 

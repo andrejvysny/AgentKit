@@ -71,7 +71,9 @@ turn's `chatId` included — rides in `payload`, not on the record itself.
 `dependsOn` (the claim gate) are two distinct edges — see [Task dependencies
 and subagents](architecture.md#task-dependencies-and-subagents) and [ADR
 0003](adr/0003-task-dependencies-and-subagents.md). `progress` is a mutable,
-overwritten snapshot, never an event.
+overwritten snapshot, never an event — and it belongs to the TASK, not to an
+attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
+1's snapshot until it writes its own.
 
 **Key invariants**:
 - `createTask` MUST reject a `taskId` that already exists with
@@ -108,14 +110,22 @@ overwritten snapshot, never an event.
   the same "every adapter reaches the same verdict" reason) reduces
   dependency state to `ready`/`blocked`/`settle`, and a `settle` verdict
   transitions the dependent `failed` (`dependency_failed: <id>`, via the
-  `queued → failed` edge) or `cancelled`, lazily, on the claim path.
+  `queued → failed` edge) or `cancelled`, lazily, on the claim path. Lazily
+  means lazily: the candidate filter (`queued`, `availableAt`, `scopesBusy`,
+  `kinds`) runs BEFORE the verdict, so a doomed dependent whose scope has a
+  task running — or whose `kind` this worker does not claim — is not a
+  candidate and stays `queued` until a claim could actually have taken it.
+  Concurrent claims may also race for the same candidate; the loser of the
+  compare-and-set skips it and keeps walking, so a lost CAS is not an error
+  the caller sees.
 - `listChildren(taskId)` returns tasks whose `parentTaskId` is `taskId`, one
   level (not the subtree) — the one caller that needs the subtree
   (`TaskService.cancelTask`) already walks breadth-first and asks again.
 - `updateProgress(taskId, progress, opts)` REPLACES `TaskRecord.progress`
   wholesale (never merges) and MUST reject a stale `leaseToken` with
   `LeaseLostError`, the same check `appendEvents` makes. It never touches
-  the event log.
+  the event log, and nothing clears it between attempts — a retry starts
+  with the previous attempt's snapshot still in place until it writes one.
 
 **`waiting_approval` is currently producer-less.** No code in this repository
 moves a task into it: a staged write returns `pending` to the model and the

@@ -1198,7 +1198,40 @@ class SqliteTaskStore implements TaskStore {
     });
   }
 
+  /**
+   * Serializes {@link claimNext} against itself for this store instance.
+   *
+   * `withAsyncTx` FLATTENS a re-entrant call into the transaction already open
+   * on the connection (there are no savepoints — see {@link SqliteConnection}),
+   * and `claimNext` awaits inside its candidate walk. Two overlapping claims
+   * would therefore share ONE transaction, which makes the second caller's
+   * work hostage to the first: a rollback on the first caller's path discards
+   * the claim the second was already granted — the task row reverts to
+   * `queued` while the attempt and lease it wrote afterwards commit on their
+   * own, and a later `claimNext` hands the same task to a second worker.
+   *
+   * The narrow fix is a per-instance mutex on this one method: every call
+   * chains onto the previous one, so each gets its own `BEGIN IMMEDIATE` and
+   * its own rollback blast radius. Deliberately NOT a general queue in front
+   * of `withAsyncTx` — flattening is the intended semantics for
+   * `AssistantStore.transaction`, where the caller wants one atomic unit.
+   */
+  private claimGate: Promise<void> = Promise.resolve();
+
   async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
+    const run = this.claimGate.then(() => this.claimNextExclusive(input));
+    // The gate swallows the outcome: the next caller waits for this one to
+    // SETTLE, but must not inherit its rejection.
+    this.claimGate = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async claimNextExclusive(
+    input: ClaimNextInput,
+  ): Promise<ClaimedTask | null> {
     return this.conn.withAsyncTx(async () => {
       const nowIso = input.now.toISOString();
       const rows = this.selectClaimCandidates(
@@ -1209,24 +1242,37 @@ class SqliteTaskStore implements TaskStore {
       // Walk the ordered candidates rather than taking the first: the head of
       // the queue can be gated on a dependency still in flight, or doomed by
       // one that failed, and neither may hide the claimable work behind it.
+      //
+      // The rows are a SNAPSHOT. The mutex above keeps two `claimNext` calls
+      // apart, but nothing stops another caller settling or claiming one of
+      // these tasks between the SELECT and this row's turn — so a lost
+      // `queued`-> CAS means someone else got there first, which is the race
+      // resolving normally, not a fault: skip the row and keep walking.
       for (const row of rows) {
         const verdict = evaluateTaskDependencies(this.dependencyStates(row));
         if (verdict.kind === "blocked") continue;
         if (verdict.kind === "settle") {
           // Settled here, on the claim path, instead of by a background sweep
           // — see TaskStore.claimNext. The scan then continues past it.
-          await this.transitionTask(row.task_id, ["queued"], verdict.to, {
-            finishedAt: this.clock.nowIso(),
-            ...(verdict.error === undefined ? {} : { error: verdict.error }),
-          });
+          try {
+            await this.transitionTask(row.task_id, ["queued"], verdict.to, {
+              finishedAt: this.clock.nowIso(),
+              ...(verdict.error === undefined ? {} : { error: verdict.error }),
+            });
+          } catch (err) {
+            if (!(err instanceof InvalidTaskTransitionError)) throw err;
+          }
           continue;
         }
-        const task = await this.transitionTask(
-          row.task_id,
-          ["queued"],
-          "running",
-          { startedAt: this.clock.nowIso() },
-        );
+        let task: TaskRecord;
+        try {
+          task = await this.transitionTask(row.task_id, ["queued"], "running", {
+            startedAt: this.clock.nowIso(),
+          });
+        } catch (err) {
+          if (!(err instanceof InvalidTaskTransitionError)) throw err;
+          continue;
+        }
         const attempt = await this.createAttempt({
           attemptId: this.ids.attemptId(),
           taskId: task.taskId,
@@ -1864,7 +1910,7 @@ function assertSchemaVersion(db: Database, path: string): void {
     // A pragma every SQLite build answers came back with nothing. Whatever this
     // handle is, it is not a database this adapter can reason about — and the
     // one thing worse than refusing to open it is opening it anyway and running
-    // `SCHEMA_V2` against it, which is exactly what falling through would do.
+    // `SCHEMA_V3` against it, which is exactly what falling through would do.
     throw new AgentKitHostError(
       "sqlite_schema_version",
       `Cannot read user_version from the SQLite store at ${path}; refusing to touch this database.`,

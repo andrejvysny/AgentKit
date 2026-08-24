@@ -98,7 +98,6 @@
       "version": "0.1.0-dev",
       "dependencies": {
         "@agentkit/contracts": "workspace:*",
-        "@agentkit/core": "workspace:*",
         "@agentkit/host": "workspace:*",
       },
       "devDependencies": {

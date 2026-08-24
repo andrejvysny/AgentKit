@@ -192,22 +192,31 @@ describe("McpClientManager", () => {
 });
 
 describe("resilience", () => {
-  it("times out a slow request with mcp_request_timeout", async () => {
+  it("times out a slow request with mcp_request_timeout, running it ONCE", async () => {
+    // A timeout is an ambiguous delivery: the server may be halfway through the
+    // write. Replaying it would run the tool again while the model is told the
+    // call failed, so `mcp_request_timeout` is terminal by default however many
+    // reconnect attempts are configured.
     const pending = deferred<{ content: { type: string; text: string }[] }>();
-    const { manager } = setup(
+    let invocations = 0;
+    const { manager, harness } = setup(
       [
         {
           alias: "slow",
           transport: { kind: "stdio", command: "x" },
-          // reconnectMaxAttempts:0 so the timeout is the terminal code rather
-          // than being folded into mcp_reconnect_exhausted (see the next test).
-          resilience: { ...FAST, requestTimeoutMs: 30, reconnectMaxAttempts: 0 },
+          resilience: { ...FAST, requestTimeoutMs: 30, reconnectMaxAttempts: 2 },
         },
       ],
       {
         slow: () =>
           buildFakeServer("slow", [
-            { name: "wait", handler: () => pending.promise },
+            {
+              name: "wait",
+              handler: () => {
+                invocations += 1;
+                return pending.promise;
+              },
+            },
           ]),
       },
     );
@@ -216,24 +225,43 @@ describe("resilience", () => {
       .then(() => null)
       .catch((err: unknown) => err);
     expect((failure as McpError).code).toBe("mcp_request_timeout");
+    // Still advisory-retryable for the host and the model to act on...
     expect((failure as McpError).retryable).toBe(true);
+    // ...but the session did not act on it itself.
+    expect(invocations).toBe(1);
+    expect(harness.connects("slow")).toBe(1);
     pending.resolve({ content: [{ type: "text", text: "late" }] });
   });
 
-  it("reports mcp_reconnect_exhausted once the retries are spent", async () => {
+  it("replays a timeout only when retryTimeouts opts in, then reports mcp_reconnect_exhausted", async () => {
+    // The opt-in for a server whose tools are known idempotent. It restores the
+    // reconnect-and-re-issue loop — and with it the double execution, which is
+    // exactly why it is off by default.
     const pending = deferred<{ content: { type: string; text: string }[] }>();
+    let invocations = 0;
     const { manager, harness } = setup(
       [
         {
           alias: "slow",
           transport: { kind: "stdio", command: "x" },
-          resilience: { ...FAST, requestTimeoutMs: 20, reconnectMaxAttempts: 1 },
+          resilience: {
+            ...FAST,
+            requestTimeoutMs: 20,
+            reconnectMaxAttempts: 1,
+            retryTimeouts: true,
+          },
         },
       ],
       {
         slow: () =>
           buildFakeServer("slow", [
-            { name: "wait", handler: () => pending.promise },
+            {
+              name: "wait",
+              handler: () => {
+                invocations += 1;
+                return pending.promise;
+              },
+            },
           ]),
       },
     );
@@ -243,8 +271,9 @@ describe("resilience", () => {
       .catch((err: unknown) => err);
     expect((failure as McpError).code).toBe("mcp_reconnect_exhausted");
     expect((failure as McpError).details?.["lastCode"]).toBe("mcp_request_timeout");
-    // One initial connect plus exactly one reconnect.
+    // One initial connect plus exactly one reconnect — and one call each.
     expect(harness.connects("slow")).toBe(2);
+    expect(invocations).toBe(2);
     pending.resolve({ content: [{ type: "text", text: "late" }] });
   });
 

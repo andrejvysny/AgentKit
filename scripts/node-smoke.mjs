@@ -1,21 +1,29 @@
 /**
- * Node smoke test for the two shippable dists.
+ * Node smoke test for the shippable dists.
  *
  * Bun is this repository's primary runtime, and that is exactly why this exists:
- * `@agentkit/contracts` and `@agentkit/core` promise to be plain, portable
+ * every published `@agentkit/*` package promises to be plain, portable
  * JavaScript, and nothing about running the test suite under Bun can prove it.
  * A `bun:sqlite` import that slipped into core, a `Bun.file()` call, an
  * accidental dependency on Bun's resolver — all of it passes `bun test` and
  * breaks the first Node consumer. So: plain Node, no Bun APIs, the built `dist`
  * output rather than the source.
  *
- * Two checks, both end-to-end rather than smoke-in-name-only:
+ * Five checks, end-to-end rather than smoke-in-name-only where a package has
+ * something end-to-end to run:
  *
  *   1. Ajv (Node's, not Bun's) compiles `AiRunEventSchema` out of the contracts
  *      dist and validates a committed golden trace against it — the wire
  *      contract, exercised by the validator a real consumer would use.
  *   2. `runChat` from the core dist drives a stub provider to a terminal
  *      `completed`, stamping its events with core's own `createEventStamper`.
+ *   3. The host dist loads and its port vocabulary answers — the transition
+ *      table and the dependency gate are pure functions, so they run for real.
+ *   4. The mcp-client dist loads (which drags in the MCP SDK under Node's
+ *      resolver, not Bun's) and a manager constructs. Nothing connects: this is
+ *      about the module graph and the constructor's eager validation.
+ *   5. The transport-http dist serves `GET /v1/version` through a real
+ *      `Request`/`Response` round trip against stub deps.
  *
  * RESOLUTION NOTE: each package's `exports` deliberately points at TypeScript
  * SOURCE during development (so a bundler-resolution typecheck reads the real
@@ -23,9 +31,11 @@
  * resolve to. Node loading a dist must follow the published mapping, so this
  * script registers a resolve hook that applies `publishConfig` to workspace
  * specifiers — simulating the installed layout rather than the checkout's.
+ * Third-party specifiers (the MCP SDK) fall through to Node's own resolver,
+ * which is the point: it has to find them from the repo's `node_modules`.
  *
- * Run `bun run build:contracts && bun run build:core` first; the dists are not
- * checked in. `bun run smoke:node` from the repo root does the running part.
+ * Run `bun run build` first; the dists are not checked in. `bun run smoke:node`
+ * from the repo root does the running part.
  */
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -60,16 +70,27 @@ function publishedEntry(pkgDir) {
 
 const CONTRACTS_ENTRY = publishedEntry("contracts");
 const CORE_ENTRY = publishedEntry("core");
+const HOST_ENTRY = publishedEntry("host");
+const MCP_CLIENT_ENTRY = publishedEntry("mcp-client");
+const TRANSPORT_HTTP_ENTRY = publishedEntry("transport-http");
 
-// Apply the published mapping to the one workspace specifier the core dist
-// imports at runtime. Registered before any dynamic import below.
+// Apply the published mapping to every workspace specifier the dists import at
+// runtime. Registered before any dynamic import below.
+const WORKSPACE_ENTRIES = {
+  "@agentkit/contracts": CONTRACTS_ENTRY,
+  "@agentkit/core": CORE_ENTRY,
+  "@agentkit/host": HOST_ENTRY,
+  "@agentkit/mcp-client": MCP_CLIENT_ENTRY,
+  "@agentkit/transport-http": TRANSPORT_HTTP_ENTRY,
+};
+
 register(
   "data:text/javascript," +
     encodeURIComponent(`
+      const entries = ${JSON.stringify(WORKSPACE_ENTRIES)};
       export function resolve(specifier, context, next) {
-        if (specifier === "@agentkit/contracts") {
-          return { url: ${JSON.stringify(CONTRACTS_ENTRY)}, shortCircuit: true };
-        }
+        const mapped = entries[specifier];
+        if (mapped !== undefined) return { url: mapped, shortCircuit: true };
         return next(specifier, context);
       }
     `),
@@ -81,7 +102,7 @@ const requireFromCore = createRequire(new URL("packages/core/package.json", ROOT
 const ajvModule = requireFromCore("ajv");
 const Ajv = ajvModule.default ?? ajvModule;
 
-console.log(`node ${process.version} — smoke over the contracts + core dists`);
+console.log(`node ${process.version} — smoke over the shippable dists`);
 
 // ---------------------------------------------------------------------------
 // 1. Contracts dist: Ajv compiles the event schema, a golden trace validates
@@ -207,6 +228,102 @@ check(
   events.every((event) => validateEvent(event)),
   "every emitted event validates against AiRunEventSchema",
 );
+
+// ---------------------------------------------------------------------------
+// 3. Host dist: the port vocabulary loads and answers
+// ---------------------------------------------------------------------------
+
+const host = await import(HOST_ENTRY);
+console.log("host dist");
+check(typeof host.TurnRunner === "function", "exports TurnRunner");
+check(typeof host.TaskService === "function", "exports TaskService");
+check(typeof host.ProposalService === "function", "exports ProposalService");
+check(typeof host.AgentKitHostError === "function", "exports AgentKitHostError");
+check(typeof host.defaultClock?.nowIso === "function", "exports a working defaultClock");
+// Two pure functions the whole task system is graded against — cheap to run,
+// and a broken one would mean the dist is not the code the tests exercised.
+check(
+  host.isTaskTransitionAllowed("queued", "running") === true &&
+    host.isTaskTransitionAllowed("completed", "running") === false,
+  "task transition table answers through the dist",
+);
+check(
+  host.evaluateTaskDependencies([
+    { taskId: "a", status: "failed", deadLettered: false },
+  ]).kind === "settle",
+  "dependency gate dooms a dependent of a failed task",
+);
+
+// ---------------------------------------------------------------------------
+// 4. MCP client dist: the module graph resolves under Node, a manager builds
+// ---------------------------------------------------------------------------
+
+const mcp = await import(MCP_CLIENT_ENTRY);
+console.log("mcp-client dist");
+check(typeof mcp.McpClientManager === "function", "exports McpClientManager");
+check(typeof mcp.createMcpToolSetContributor === "function", "exports createMcpToolSetContributor");
+check(
+  mcp.buildMcpToolIdentity({ serverAlias: "gh", toolName: "list_issues" })
+    .registryName === "mcp__gh__list_issues",
+  "canonical identity projects onto a registry-legal name",
+);
+
+// Constructed, never connected: the constructor validates aliases eagerly, and
+// that is the part worth proving loads. A connect would need a real server.
+const nullSecrets = {
+  async get() {
+    return null;
+  },
+  async set() {},
+  async delete() {},
+  async listRefs() {
+    return [];
+  },
+};
+const manager = new mcp.McpClientManager({ secrets: nullSecrets }, [
+  { alias: "gh", transport: { kind: "stdio", command: "gh-mcp" } },
+]);
+check(manager.aliases().join(",") === "gh", "manager registers its configured alias");
+check(manager.connectedAliases().length === 0, "manager starts with nothing connected");
+
+// ---------------------------------------------------------------------------
+// 5. Transport-http dist: a real Request/Response round trip
+// ---------------------------------------------------------------------------
+
+const transport = await import(TRANSPORT_HTTP_ENTRY);
+console.log("transport-http dist");
+check(typeof transport.createRestHandler === "function", "exports createRestHandler");
+
+/** The narrowest deps `GET /v1/version` touches: none of them, plus `packages`. */
+const restDeps = {
+  store: {},
+  turns: {
+    async submitMessage() {
+      throw new Error("unreachable");
+    },
+  },
+  tasks: {
+    async cancelTask() {
+      throw new Error("unreachable");
+    },
+  },
+  packages: { "@agentkit/transport-http": "node-smoke" },
+};
+const handler = transport.createRestHandler(restDeps);
+const versionResponse = await handler(new Request("http://x/v1/version"));
+check(versionResponse.status === 200, `GET /v1/version answered ${versionResponse.status}`);
+const versionBody = await versionResponse.json();
+check(
+  versionBody.contractVersion === contracts.CONTRACT_VERSION,
+  `version route reports contractVersion ${versionBody.contractVersion}`,
+);
+check(
+  typeof versionBody.restApiVersion === "string" && versionBody.restApiVersion.length > 0,
+  `version route reports restApiVersion ${versionBody.restApiVersion}`,
+);
+// The negative half: routing is real, not a handler that answers everything.
+const missing = await handler(new Request("http://x/v1/nope"));
+check(missing.status === 404, `an unrouted path answered ${missing.status}`);
 
 // ---------------------------------------------------------------------------
 

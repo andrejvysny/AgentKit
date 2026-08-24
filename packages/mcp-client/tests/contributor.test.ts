@@ -263,6 +263,51 @@ describe("createMcpToolSetContributor", () => {
     expect((failure as McpError).code).toBe("mcp_canonical_id_collision");
   });
 
+  it("fails the contribution when two servers project onto one registry name", async () => {
+    // The registry name, not the canonical id, is what `AiToolRegistry` keys on
+    // — so two DISTINCT canonical ids landing on one registry name shadow each
+    // other just as badly. A well-formed `McpToolSource` cannot produce this
+    // (server aliases carry no `_` or `.`), which is exactly why the guard is
+    // here: a host-supplied source that derives `registryName` its own way must
+    // fail closed rather than contribute a set with a hidden tool in it.
+    const descriptor = (
+      serverAlias: string,
+      canonicalId: string,
+    ): McpToolDescriptor => ({
+      canonicalId,
+      registryName: "mcp__shared__files__read",
+      serverAlias,
+      toolName: "files.read",
+      effectiveToolName: "files.read",
+      description: "read",
+      inputSchema: { type: "object" },
+      effect: "read",
+    });
+    const byAlias: Record<string, string> = {
+      a: "mcp.a.files.read",
+      b: "mcp.b.files.read",
+    };
+    const source: McpToolSource = {
+      async connectAll(): Promise<McpConnectAllResult> {
+        return { connected: ["a", "b"], failed: [], skipped: [] };
+      },
+      connectedAliases: () => ["a", "b"],
+      async listTools(alias) {
+        return [descriptor(alias, byAlias[alias]!)];
+      },
+      async callTool() {
+        throw new Error("unreachable");
+      },
+    };
+    const failure = await createMcpToolSetContributor(source)
+      .contribute(CTX)
+      .then(() => null)
+      .catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(McpError);
+    expect((failure as McpError).code).toBe("mcp_canonical_id_collision");
+    expect((failure as McpError).message).toContain("mcp__shared__files__read");
+  });
+
   it("opts out of unbound pruning rather than deleting other contributors' tools", () => {
     const manager = setup(
       [{ alias: "idx", transport: { kind: "stdio", command: "x" }, resilience: FAST }],

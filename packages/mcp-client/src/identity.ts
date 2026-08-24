@@ -153,16 +153,28 @@ export function parseMcpCanonicalToolId(canonicalId: string): {
  * contributing a set where one tool shadows another. Last-write-wins here would
  * mean the model calls `mcp.gh.search` and reaches whichever tool the server
  * happened to list second.
+ *
+ * BOTH names are checked, because the canonical id is not the only namespace the
+ * batch shares. `.` -> `__` is many-to-one: `mcp.fs.files.read` and
+ * `mcp.fs.files__read` are distinct canonical ids that project onto the SAME
+ * `mcp__fs__files__read`, and the registry name is what the model actually calls.
+ * Checking only the canonical id lets that pair through, and the second tool
+ * silently displaces the first during registry staging — the exact shadowing
+ * this function exists to prevent, one namespace over.
  */
 export function buildMcpToolIdentityIndex(
   inputs: readonly McpToolIdentityInput[],
 ): Map<string, McpToolIdentity> {
   const index = new Map<string, McpToolIdentity>();
+  const byRegistryName = new Map<string, McpToolIdentity>();
   for (const input of inputs) {
     const identity = buildMcpToolIdentity(input);
-    const existing = index.get(identity.canonicalId);
+    const existing =
+      index.get(identity.canonicalId) ??
+      byRegistryName.get(identity.registryName);
     if (existing) throw canonicalCollision(identity, existing);
     index.set(identity.canonicalId, identity);
+    byRegistryName.set(identity.registryName, identity);
   }
   return index;
 }
@@ -172,17 +184,25 @@ export function canonicalCollision(
   incoming: McpToolIdentity,
   existing: McpToolIdentity,
 ): McpError {
-  return new McpError(
-    "mcp_canonical_id_collision",
-    `Canonical id "${incoming.canonicalId}" collides between ` +
-      `"${existing.serverAlias}:${existing.toolName}" and ` +
-      `"${incoming.serverAlias}:${incoming.toolName}".`,
-    {
-      details: {
-        canonicalId: incoming.canonicalId,
-        existing: `${existing.serverAlias}:${existing.toolName}`,
-        incoming: `${incoming.serverAlias}:${incoming.toolName}`,
-      },
+  const existingRef = `${existing.serverAlias}:${existing.toolName}`;
+  const incomingRef = `${incoming.serverAlias}:${incoming.toolName}`;
+  // Two DIFFERENT canonical ids can still land on one registry name (see
+  // `buildMcpToolIdentityIndex`). Same verdict, but the message has to name both
+  // ids, or it reads as a contradiction to whoever has to go fix the config.
+  const sameCanonicalId = incoming.canonicalId === existing.canonicalId;
+  const message = sameCanonicalId
+    ? `Canonical id "${incoming.canonicalId}" collides between ` +
+      `"${existingRef}" and "${incomingRef}".`
+    : `Canonical ids "${existing.canonicalId}" and "${incoming.canonicalId}" ` +
+      `both project onto registry name "${incoming.registryName}", between ` +
+      `"${existingRef}" and "${incomingRef}".`;
+  return new McpError("mcp_canonical_id_collision", message, {
+    details: {
+      canonicalId: incoming.canonicalId,
+      existingCanonicalId: existing.canonicalId,
+      registryName: incoming.registryName,
+      existing: existingRef,
+      incoming: incomingRef,
     },
-  );
+  });
 }

@@ -45,6 +45,12 @@ export type McpErrorCode =
  * request could plausibly succeed*. A circuit that is open is deliberately NOT
  * retryable — the whole point of the lockout is that the caller stops hammering
  * a server that just failed a full attempt cycle.
+ *
+ * ADVISORY, NOT A LICENCE TO REPLAY. It says a retry *could work*, never that
+ * one is *safe*: `mcp_request_timeout` is retryable and yet the server may have
+ * run the tool to completion, so re-issuing a write executes it twice. The
+ * field is for the host and the model, who know what the tool does. The
+ * session's own auto-retry gate is narrower — see `McpSession.isAutoRetryable`.
  */
 const RETRYABLE_BY_CODE: Record<McpErrorCode, boolean> = {
   mcp_circuit_open: false,
@@ -99,4 +105,31 @@ export function describeCause(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
   return String(err);
+}
+
+/**
+ * What an {@link McpError} is allowed to carry as `cause`.
+ *
+ * A summary, never the original. The value we caught came out of a transport we
+ * had just handed resolved secrets to, so an SDK or fetch error is free to echo
+ * the URL it called or the headers it sent — and hosts log `err.cause`, walk it
+ * for triage, and serialize it into crash reports. Attaching the raw object
+ * routes a live token straight into all of that, past the redaction the
+ * `message` went through. So the original is dropped at the boundary and only
+ * its `name` plus its REDACTED text travel on: enough to tell a spawn failure
+ * from a TLS failure, and nothing that can leak.
+ */
+export interface RedactedCause {
+  name: string;
+  message: string;
+}
+
+export function redactedCause(
+  err: unknown,
+  redact: (text: string) => string,
+): RedactedCause {
+  return {
+    name: err instanceof Error ? err.name : typeof err,
+    message: redact(describeCause(err)),
+  };
 }
