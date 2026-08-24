@@ -13,7 +13,11 @@ persisted event log, proposal review) is `@agentkit/host`'s job; see
 ## Modules
 
 - `providers/` — `AiProviderClient` interface, `OpenAiCompatibleClient` (SSE
-  transport against any OpenAI-compatible `/chat/completions` endpoint),
+  transport against any OpenAI-compatible `/chat/completions` endpoint;
+  maps `AiChatMessage.content`'s provider-neutral text/image parts onto
+  OpenAI-style content blocks for `user`/`assistant`, flattening to text
+  with a `multimodal_flattened` warning for `system`/`tool` — see
+  [`docs/contracts.md`](../../docs/contracts.md#message-content-parts)),
   `providers/presets.ts` (five provider-kind presets: `openai`, `openrouter`,
   `lmstudio`, `omlx`, `openai-compatible`), `providers/sse.ts` (SSE line
   parser).
@@ -26,6 +30,9 @@ persisted event log, proposal review) is `@agentkit/host`'s job; see
 - `context/` — `context/resolver.ts`: pure filter helpers over
   `AiContextBinding[]` (`findPrimary`, `findByRefId`).
 - `prompts/` — `composeSystemPrompt()`.
+- `messages/content.ts` — `messageContentToText()`: flattens a message's
+  `string | AiContentPart[]` body down to text for string-only consumers
+  (envelope parsing, probes, log rendering).
 - `events.ts` — `createEventStamper()`, the `contractVersion`/`eventId`/`seq`
   stamping every `AiRunEvent` gets on its way out of `runChat()`.
 - `ids.ts` — `newRunId`, `newEventId`, `newCallId`, `newToolEventId`,

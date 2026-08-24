@@ -22,10 +22,10 @@ Source: [`packages/host/src/ports/`](../packages/host/src/ports/).
 [`ports/assistant-store.ts`](../packages/host/src/ports/assistant-store.ts)
 
 The host's persistence, as one aggregate of six stores
-(`conversations`, `runs`, `proposals`, `providers`, `settings`, `outbox`)
+(`conversations`, `tasks`, `proposals`, `providers`, `settings`, `outbox`)
 plus `transaction<T>(fn)`. Grouped rather than injected separately because
 the operations that matter span them — submitting a turn writes a user
-message, a placeholder assistant message, and a run row together; finishing
+message, a placeholder assistant message, and a task row together; finishing
 one writes events, a message, and a status together — and those writes must
 land as one unit or not at all.
 
@@ -54,38 +54,58 @@ not the caller, so concurrent appends from a run and from a user land in a
 defined order. `updateMessage`'s `metadata` patch *replaces* the stored bag
 rather than merging — a merge would make "unset this flag" unexpressible.
 
-### `RunStore`
+### `TaskStore`
 
-[`ports/run-store.ts`](../packages/host/src/ports/run-store.ts)
+[`ports/task-store.ts`](../packages/host/src/ports/task-store.ts)
 
-Durable run lifecycle: status (`RunStatus`, `RUN_TRANSITIONS`), attempts,
-leases, and the event log — the product every UI replays and every crash
-recovery reads.
+Durable lifecycle for a task of **any** kind: status (`TaskStatus`,
+`TASK_TRANSITIONS`), attempts, leases, and the event log — the product every
+UI replays and every crash recovery reads. `TaskRecord { taskId, kind,
+scopeId, status, priority, enqueuedAt, availableAt, payload, attemptCount,
+poisonCount, … }` is kind-agnostic: `kind` is an opaque string the store
+filters and returns (see [`docs/architecture.md`](architecture.md#task-kinds-and-executors)
+for what dispatches on it), and everything specific to a kind — a chat
+turn's `chatId` included — rides in `payload`, not on the record itself.
 
 **Key invariants**:
-- `transitionRun` is compare-and-set: it MUST reject when the run's current
-  status is not in the caller's `from` set (someone else moved it first —
-  a lost race, not a retryable hiccup), and MUST reject a transition not in
-  `RUN_TRANSITIONS`.
-- `appendEvents` MUST reject a stale `leaseToken` (`LeaseLostError`) and a
-  non-monotonic `seq` (`SeqConflictError`); it MUST NOT re-stamp `seq`
-  — core owns numbering.
-- `claimNext` MUST be atomic: claiming a run creates its attempt and lease
-  in the same operation, so no other caller can claim the same run.
+- `createTask` MUST reject a `taskId` that already exists with
+  `DuplicateTaskError`, never silently overwrite — the id is the caller's
+  idempotency key (a retried submit, a redelivered message), and
+  overwriting would discard a live task's payload and attempt history while
+  its event log stayed behind.
+- `transitionTask` is compare-and-set: it MUST reject with
+  `InvalidTaskTransitionError` when the task's current status is not in the
+  caller's `from` set (someone else moved it first — a lost race, not a
+  retryable hiccup), and MUST reject a transition not in
+  `TASK_TRANSITIONS`.
+- `appendEvents`/`listEvents` are typed on `TaskEventEnvelope`
+  (`@agentkit/contracts`) — the kind-agnostic shape the store actually
+  orders (`seq`) and dedups (`eventId`); `AiRunEvent` is the `chat.turn`
+  vocabulary and structurally satisfies it. `appendEvents` MUST reject a
+  stale `leaseToken` (`LeaseLostError`) and a non-monotonic `seq`
+  (`SeqConflictError`); it MUST NOT re-stamp `seq` — the emitter owns
+  numbering (core's stamper inside a chat pass, `createTaskEventWriter`
+  elsewhere).
+- `claimNext` MUST be atomic: claiming a task creates its attempt and lease
+  in the same operation, so no other caller can claim the same task.
+  `ClaimNextInput.kinds?` optionally restricts the claim to a set of kinds,
+  for a deployment whose worker pools register different executor sets —
+  absent means "any kind".
 
 **`waiting_approval` is currently producer-less.** No code in this repository
-moves a run into it: a staged write returns `pending` to the model and the run
-completes normally (see the proposal lifecycle below). The status and its
-transitions are reserved for hosts that instead park a run on approval and
-resume it when the decision arrives — `RUN_TRANSITIONS` already admits
+moves a task into it: a staged write returns `pending` to the model and the
+task completes normally (see the proposal lifecycle below). The status and
+its transitions are reserved for hosts that instead park a task on approval
+and resume it when the decision arrives — `TASK_TRANSITIONS` already admits
 `running → waiting_approval → running | completed | failed | cancelled`.
 
-**Reference / conformance**: `MemoryRunStore` / `SqliteRunStore`
+**Reference / conformance**: `MemoryTaskStore` / `SqliteTaskStore`
 (fencing enforced via a guarded `UPDATE ... WHERE lease_token=?` plus the
 driver's reported `changes` count, in a transaction); conformance suite
 covers CAS rejection, lease renewal/expiry with a strictly higher
-`fencingToken` on re-acquire, `seq` monotonicity rejection, and atomic
-`claimNext` under a busy scope.
+`fencingToken` on re-acquire, `seq` monotonicity rejection, atomic
+`claimNext` under a busy scope, kind round-trip, duplicate-task rejection,
+and the `kinds` claim filter.
 
 ### `ProposalStore`
 
@@ -139,23 +159,33 @@ visibility-timeout queue uses.
 
 [`ports/task-runner.ts`](../packages/host/src/ports/task-runner.ts)
 
-The durable queue that turns "a run exists" into "a worker is executing
+The durable queue that turns "a task exists" into "a worker is executing
 it". Deliberately has **no `subscribe()`** — events reach consumers through
-the run event log and the outbox, both of which survive a restart; a
+the task event log and the outbox, both of which survive a restart; a
 subscription on the runner would be a second, lossier channel.
 
 **Key invariants**:
-- `enqueue` is idempotent per `runId`: a redelivered enqueue for a run that
-  is no longer `queued` is a silent no-op, never a second execution of one
-  turn.
+- `enqueue` is idempotent per `taskId`: a redelivered enqueue for a task
+  that is no longer `queued` is a silent no-op, never a second execution of
+  one task.
 - `recover()` is the startup pass: expire dead leases, end their attempts
   `abandoned`, reconcile interrupted applies by operation id, then
   re-enqueue or dead-letter — run before any worker starts claiming.
 
+`StartWorkerOptions` has no `kinds` field — the reference runner claims
+every kind and relies on every executor a process needs being registered in
+that one process's `ExecutorRegistry` (see
+[`docs/architecture.md`](architecture.md#task-kinds-and-executors)); an
+unregistered kind then fails with `ExecutorNotFoundError` rather than
+waiting for a worker that could have run it.
+`ExecutorRegistry.kinds()` is what a kind-filtering `TaskRunner` adapter
+would feed to `ClaimNextInput.kinds` so a box only claims work it can run —
+no adapter in this repository does that filtering yet.
+
 `recoverOnBoot({ taskRunner, proposals })`
 ([`packages/host/src/bootstrap.ts`](../packages/host/src/bootstrap.ts))
 is the pair of them a host actually calls at startup: `TaskRunner.recover()`
-first, then `ProposalService.reconcileInterrupted()`, so a recovered run is
+first, then `ProposalService.reconcileInterrupted()`, so a recovered task is
 picked back up only after the writes it may have left mid-apply are settled.
 Both halves are idempotent; it returns `{ proposalsReconciled }`.
 
@@ -165,8 +195,38 @@ claim/execute/heartbeat/retry/dead-letter/recover for one process, with
 fire-and-forget dispatch (never awaits an execution inside its claim loop)
 and evidence-based error classification (`error-classifier.ts`: an
 unrecognized failure is terminal by default, not blindly retried). Explicitly
-single-process: cancellation of a run another process owns is not delivered
+single-process: cancellation of a task another process owns is not delivered
 — see [`docs/non-goals.md`](non-goals.md).
+
+### Task execution
+
+[`tasks/task-executor.ts`](../packages/host/src/tasks/task-executor.ts),
+[`tasks/executor-registry.ts`](../packages/host/src/tasks/executor-registry.ts),
+[`tasks/task-service.ts`](../packages/host/src/tasks/task-service.ts),
+[`tasks/task-event-writer.ts`](../packages/host/src/tasks/task-event-writer.ts)
+
+The kind-dispatch layer built on top of `TaskStore`/`TaskRunner`: what turns
+a claimed task into a running executor and a submitted request into a
+persisted, dispatched task. Full description in
+[`docs/architecture.md`](architecture.md#task-kinds-and-executors); the
+invariants worth restating here because they are easy to violate by
+accident:
+
+**Key invariants**:
+- `createDispatchingWorker` hands each `TaskExecutor` the already-loaded,
+  already-guarded `TaskRecord` (`TaskExecutionContext.task`) — an executor
+  never re-fetches it, so there is exactly one answer in play to "is this
+  task still executable?".
+- `TaskService.dispatch` (and therefore `submitTask`) MUST run strictly
+  after the transaction that created the task has committed. Enqueuing from
+  inside the transaction callback risks the claim loop claiming a row that
+  a rollback then deletes out from under a running worker — the
+  `bun:sqlite` join-transaction hazard noted on
+  [`AssistantStore.transaction`](#assistantstore-aggregate).
+- `createTaskEventWriter` is barred from use inside a chat pass. Inside a
+  pass, core's `createEventStamper` owns `seq` numbering in memory; a
+  second writer numbering from `TaskStore.nextSeq` against the same log
+  would interleave two counters into one stream.
 
 ## Policy
 
@@ -287,7 +347,7 @@ must still be recorded, so the next authorization can refuse.
 [`ports/system.ts`](../packages/host/src/ports/system.ts)
 
 `Clock` (`now()`/`nowIso()`), `IdGenerator` (one method per entity kind —
-`runId`, `attemptId`, `eventId`, `proposalId`, `operationId`, `messageId`
+`taskId`, `attemptId`, `eventId`, `proposalId`, `operationId`, `messageId`
 — so a fake can hand out readable per-kind sequences), and `Logger`
 (structured: `fields` is a flat bag, not a formatted string). Ports rather
 than direct `Date`/`crypto`/`console` calls because the orchestrator's

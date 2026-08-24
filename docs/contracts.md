@@ -2,8 +2,9 @@
 
 `@agentkit/contracts` is the serialized surface every other package and
 every embedding host agrees on. This document covers the run-event
-vocabulary, the tool envelope, usage accounting, the generic-kind pattern,
-and the TypeBox conventions the package is built on.
+vocabulary, the tool envelope, usage accounting, message content parts, the
+task-event envelope, the generic-kind pattern, and the TypeBox conventions
+the package is built on.
 
 Source: [`packages/contracts/src/`](../packages/contracts/src/).
 
@@ -50,7 +51,7 @@ stays unbroken across host-driven retries.
 ### `CONTRACT_VERSION` policy
 
 ```ts
-export const CONTRACT_VERSION = "0.1.0";
+export const CONTRACT_VERSION = "0.2.0";
 ```
 
 ([`packages/contracts/src/version.ts`](../packages/contracts/src/version.ts))
@@ -75,6 +76,7 @@ TS type narrows it to the union below while still accepting any string.
 | `truncated` | core (`runs/run-loop.ts`) | `finish_reason=length` — the answer was cut off. |
 | `max_iterations` | core (`runs/run-loop.ts`) | `maxToolIterations` was reached without a final answer. |
 | `sse_parse` | core (`providers/openai-compatible.ts`) | Malformed SSE lines were dropped; the response is likely incomplete. |
+| `multimodal_flattened` | core (`providers/openai-compatible.ts`) | A `system`/`tool` message arrived with content parts (only `user`/`assistant` can carry them); the provider client flattened the text parts to a string and dropped the image parts rather than failing the request. See [Message content parts](#message-content-parts). |
 | `empty_response` | host (`turn/turn-runner.ts`) | The model returned no visible content and no tool calls, even after recovery passes. Not produced by core. |
 | `emulated_tool_call` | host (`turn/turn-runner.ts`, `turn/emulated-tool-call.ts`) | The model wrote a JSON-shaped tool call as text instead of calling a real tool, so nothing ran. Not produced by core. |
 
@@ -82,6 +84,57 @@ TS type narrows it to the union below while still accepting any string.
 `timeout`. These were declared in an earlier iteration as reserved for
 detectors that were never implemented; they are documented here so a
 consumer does not go looking for code that emits them.
+
+## Message content parts
+
+`AiChatMessage.content` (`packages/contracts/src/provider.ts`) widened from
+`Type.String()` to `string | AiContentPart[]` — a message body is either the
+plain string it has always been, or an ordered array of provider-neutral
+parts (`packages/contracts/src/content.ts`):
+
+```ts
+export type AiTextPart = { type: "text"; text: string };
+export type AiImagePart = {
+  type: "image";
+  source:
+    | { kind: "url"; url: string }
+    | { kind: "data"; base64: string; mediaType: string };
+  detail?: "auto" | "low" | "high";
+};
+export type AiContentPart = AiTextPart | AiImagePart;
+export type AiMessageContent = string | AiContentPart[];
+```
+
+**Provider-neutral by design.** These are not OpenAI's `image_url` blocks,
+nor Anthropic's `source` blocks — an adapter maps them onto whatever its
+provider speaks; `OpenAiCompatibleClient` (`@agentkit/core`) is the shipped
+mapping.
+
+**Closed union.** An unknown part `type` must not validate; new kinds
+(audio, file, …) are additive union members, decided when they arrive, not
+an escape hatch left open in advance.
+
+**Where parts are legal.** Meaningful on `user` and `assistant` messages
+only. `system` and `tool` messages keep string semantics — every provider
+models a system prompt as plain text, and a tool result is a serialized
+envelope by construction. A client handed parts on one of those roles
+flattens them to text and drops the non-text parts, emitting
+`multimodal_flattened` (see the warning-code table above) rather than
+failing the request — a dropped image degrades a turn, it does not break
+one.
+
+**`messageContentToText()`**
+([`packages/core/src/messages/content.ts`](../packages/core/src/messages/content.ts))
+is the string-only escape hatch for consumers that need text: a string
+passes through unchanged; a parts array reduces to its text parts, joined
+by newlines, dropping the rest.
+
+**Host persistence stays string-only this phase.** `MessageRecord.content`
+and the REST `MessageDto` are unchanged — a multimodal turn does not yet
+round-trip through `TurnRunner`/`ConversationStore`; the capability lands
+for direct `runChat()` embedders today. Widening host storage is the
+attachments phase ([`docs/roadmap.md`](roadmap.md), P5). Full rationale:
+[ADR 0002](adr/0002-multimodal-content.md).
 
 ## The tool envelope
 
@@ -182,6 +235,32 @@ EDA-specific vocabulary is hard-coded here. `AiContextBinding`'s `role`
 (`active` | `missing` | `stale`) stay closed unions, because those *are*
 framework-level concepts.
 
+## `TaskEventEnvelope`
+
+`TaskEventEnvelopeSchema`
+([`packages/contracts/src/task-events.ts`](../packages/contracts/src/task-events.ts))
+is the minimal shape a durable task-event log actually stores and orders —
+not a new event vocabulary, but the floor every vocabulary must clear:
+
+```ts
+{ type, seq, eventId, timestamp, contractVersion, attemptId? }
+```
+
+`additionalProperties` is open, so `data`, `runId`, and whatever else a
+kind's vocabulary adds ride through untouched. The store reads exactly two
+of these fields — it **orders by `seq`** and **dedups by `eventId`** — and
+nothing else, so one `TaskStore` event log can hold a chat turn's
+`AiRunEvent`s and another kind's vocabulary without knowing either.
+
+`AiRunEvent` structurally satisfies `TaskEventEnvelope`: every member
+carries all six base fields (see "The v2 base fields" above), so `chat.turn`
+events pass through `TaskStore.appendEvents`/`listEvents` unchanged and keep
+their `runId` field — its value is the task id. A non-chat executor emits
+its own vocabulary — its own `type` strings, whatever `data` its kind needs
+— stamped the same way, through `createTaskEventWriter` (`@agentkit/host`).
+Full rationale, including why the durable unit generalized from a chat run
+to a task of any kind: [ADR 0001](adr/0001-generic-task-foundation.md).
+
 ## REST v1 surface
 
 [`packages/contracts/src/rest.ts`](../packages/contracts/src/rest.ts) is the
@@ -237,6 +316,9 @@ Every wire DTO is declared once as a `<Name>Schema` TypeBox value; its
 TypeScript type is `Static<typeof <Name>Schema>` under the name the type has
 always had
 ([`packages/contracts/src/index.ts`](../packages/contracts/src/index.ts)).
+`content.ts` (message content parts) and `task-events.ts` (the durable
+task-event envelope) follow the same pattern as everything else in the
+package — no special-casing for being newer additions.
 `packages/contracts/src/schemas.ts` re-exports every schema value as one
 enumerable barrel, separate from the type-only barrel, so validation/codegen
 tooling can import runtime values without pulling in the type surface. Every

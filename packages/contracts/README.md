@@ -31,10 +31,16 @@ notion of a run loop — this package is DTOs only.
 - `json-schema` — `AiJsonSchemaObject`, `AiJsonPrimitiveType`
 - `source-ref` — `AiSourceRef<K>` (host-defined `kind`)
 - `context-binding` — `AiContextBinding<K>` (host-defined `kind`) and its role/status unions
+- `content` — `AiContentPart` (`AiTextPart` | `AiImagePart`, closed union) and
+  `AiMessageContent` (`string | AiContentPart[]`), the provider-neutral
+  multimodal message body — see `docs/contracts.md#message-content-parts`
 - `tool` — `AiToolDefinition`, `AiToolCall`, `AiToolResult`, `AiToolEnvelope`, `AiToolLimits`, `TOOL_NAME_PATTERN`
 - `provider` — `AiProviderKind`, `AiProviderConfig`, `AiProviderCapabilities`, `AiProviderModel`, `AiChatMessage`
 - `prompt` — `AiPromptPreset`, `AiPromptContextBlock`
 - `run-events` — `AiRunEvent` and its per-type variants (12 types; see `docs/contracts.md`)
+- `task-events` — `TaskEventEnvelope`, the kind-agnostic shape a durable
+  task-event log orders (`seq`) and dedups (`eventId`); `AiRunEvent`
+  structurally satisfies it — see `docs/contracts.md#taskeventenvelope`
 - `rest` — the versioned HTTP surface: `REST_API_VERSION`, the `REST_ROUTES`
   table, and the `*Dto` request/response shapes an adapter would serialize
   (`ChatDto`, `MessageDto`/`MessagePageDto`, `RunDto`, `ProposalDto`,
