@@ -2,48 +2,48 @@
   {
     "type": "run.started",
     "runId": "run-golden-chat-only",
-    "timestamp": "2026-08-18T18:41:27.351Z",
+    "timestamp": "2026-08-24T10:27:15.053Z",
     "data": {
       "model": "gpt-golden",
       "toolCount": 0
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_fce7c836-eec0-4448-bff1-0675200af6fb",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_276a23cc-9a7a-480a-a227-2ec402055df4",
     "seq": 0
   },
   {
     "type": "run.message.delta",
     "runId": "run-golden-chat-only",
-    "timestamp": "2026-08-18T18:41:27.352Z",
+    "timestamp": "2026-08-24T10:27:15.053Z",
     "data": {
       "delta": "Hello from the golden chat-only trace."
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_817ec607-c620-4da1-87ac-42ebfa1bc49e",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_5cb95e2f-836f-45d8-b3d0-e1e707c514a5",
     "seq": 1
   },
   {
     "type": "run.message.completed",
     "runId": "run-golden-chat-only",
-    "timestamp": "2026-08-18T18:41:27.352Z",
+    "timestamp": "2026-08-24T10:27:15.053Z",
     "data": {
       "content": "Hello from the golden chat-only trace.",
       "toolCallCount": 0
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_15b19599-f777-4261-9e28-75c8a3f3f7d8",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_f0006140-26ac-4cdd-b27b-2cdfe5717a67",
     "seq": 2
   },
   {
     "type": "run.completed",
     "runId": "run-golden-chat-only",
-    "timestamp": "2026-08-18T18:41:27.352Z",
+    "timestamp": "2026-08-24T10:27:15.053Z",
     "data": {
       "iterations": 1,
       "finishReason": "stop"
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_413b9988-6d12-4670-9591-f10dd3b8bc6b",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_9bdd8640-a2b7-4d11-b7cc-2e0ecf256ea7",
     "seq": 3
   }
 ]

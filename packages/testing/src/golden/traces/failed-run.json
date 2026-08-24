@@ -2,36 +2,36 @@
   {
     "type": "run.started",
     "runId": "run-golden-failed-run",
-    "timestamp": "2026-08-18T18:41:27.410Z",
+    "timestamp": "2026-08-24T10:27:15.067Z",
     "data": {
       "model": "gpt-golden",
       "toolCount": 0
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_6166b3ee-92a5-4339-af9d-9c8fa4532ebd",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_2625459d-ece7-4107-96a6-aa85d3b01971",
     "seq": 0
   },
   {
     "type": "run.message.delta",
     "runId": "run-golden-failed-run",
-    "timestamp": "2026-08-18T18:41:27.410Z",
+    "timestamp": "2026-08-24T10:27:15.067Z",
     "data": {
       "delta": "half an ans"
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_3e0cb148-e2df-4eaa-aab6-63adfc2a8a4b",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_72d2be20-6501-4ac2-8cc6-68adb18e889a",
     "seq": 1
   },
   {
     "type": "run.failed",
     "runId": "run-golden-failed-run",
-    "timestamp": "2026-08-18T18:41:27.413Z",
+    "timestamp": "2026-08-24T10:27:15.068Z",
     "data": {
       "errorMessage": "socket hang up",
       "errorCode": "provider_error"
     },
-    "contractVersion": "0.1.0",
-    "eventId": "evt_f0d0862b-2749-4e85-8885-d0890f063720",
+    "contractVersion": "0.2.0",
+    "eventId": "evt_a2962bcd-2ccb-47d8-9a7e-c088d53722f0",
     "seq": 2
   }
 ]

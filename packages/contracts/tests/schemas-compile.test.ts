@@ -52,6 +52,27 @@ describe("contract schemas", () => {
   });
 });
 
+describe("multimodal + task-event schemas reach the barrel", () => {
+  // The compile loop above only covers what is exported; this is the guard
+  // against a schema being declared and never re-exported, which would leave it
+  // uncompiled and unvalidated forever.
+  it("exports the content-part and task-envelope schemas", () => {
+    const exported = new Set(Object.keys(schemas));
+    for (const name of [
+      "AiTextPartSchema",
+      "AiImageSourceSchema",
+      "AiImagePartSchema",
+      "AiContentPartSchema",
+      "AiMessageContentSchema",
+      "TaskEventEnvelopeSchema",
+    ]) {
+      expect(exported.has(name), `${name} must be in the schema barrel`).toBe(
+        true,
+      );
+    }
+  });
+});
+
 describe("AiRunEventSchema validation", () => {
   const validate = makeAjv().compile(asJson(AiRunEventSchema));
 

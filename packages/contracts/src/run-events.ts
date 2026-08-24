@@ -201,6 +201,9 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  * - `max_iterations` — `maxToolIterations` was reached without a final answer.
  * - `sse_parse` — malformed SSE lines were dropped and the response is likely
  *   incomplete.
+ * - `multimodal_flattened` — a message on a role that cannot carry content
+ *   parts (`system`/`tool`) arrived with them; the provider client flattened the
+ *   text parts and dropped the image parts rather than failing the request.
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
  *   produce them, but hosts layering their own provider adapters on top of this
  *   contract do, so they are part of the shared vocabulary.
@@ -215,6 +218,7 @@ export type AiRunWarningCode =
   | "truncated"
   | "max_iterations"
   | "sse_parse"
+  | "multimodal_flattened"
   | "empty_response"
   | "emulated_tool_call";
 

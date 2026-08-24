@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { runChat } from "../src/runs/run-loop.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
+import { messageContentToText } from "../src/messages/content.js";
 import {
   MockProviderClient,
   type MockScriptStep,
@@ -243,7 +244,7 @@ describe("runChat — tool execution failures", () => {
     // The model gets a balanced error envelope back so it can correct itself.
     const toolMsg = result.appendedMessages.find((m) => m.role === "tool");
     expect(toolMsg?.toolCallId).toBe("c1");
-    const envelope = JSON.parse(toolMsg!.content) as {
+    const envelope = JSON.parse(messageContentToText(toolMsg!.content)) as {
       ok: boolean;
       status: string;
       data: { errorCode: string; errorMessage: string };

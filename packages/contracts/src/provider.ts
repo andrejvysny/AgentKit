@@ -1,4 +1,5 @@
 import { Type, type Static } from "@sinclair/typebox";
+import { AiMessageContentSchema } from "./content.js";
 import { AiToolCallSchema } from "./tool.js";
 
 /**
@@ -73,9 +74,17 @@ export const AiChatRoleSchema = Type.Union([
 ]);
 export type AiChatRole = Static<typeof AiChatRoleSchema>;
 
+/**
+ * One message in a conversation as it goes to a provider.
+ *
+ * `content` is {@link AiMessageContentSchema}: a plain string, or an ordered
+ * array of content parts for multimodal turns. Parts are meaningful on `user`
+ * and `assistant` messages only — a provider client handed parts on a `system`
+ * or `tool` message flattens them to text (see `./content.ts`).
+ */
 export const AiChatMessageSchema = Type.Object({
   role: AiChatRoleSchema,
-  content: Type.String(),
+  content: AiMessageContentSchema,
   name: Type.Optional(Type.String()),
   toolCallId: Type.Optional(Type.String()),
   toolCalls: Type.Optional(Type.Array(AiToolCallSchema)),

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { runChat } from "../src/runs/run-loop.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
+import { messageContentToText } from "../src/messages/content.js";
 import { MockProviderClient, CompletedOnlyProviderClient } from "@agentkit/testing";
 import { collectRun } from "./helpers.js";
 import type { AiTool } from "../src/tools/tool.js";
@@ -265,7 +266,7 @@ describe("runChat — tool-own ok and envelopes", () => {
     // Error envelope fed back to the model on the tool message.
     const toolMsg = result.appendedMessages.find((m) => m.role === "tool");
     expect(toolMsg).toBeDefined();
-    const env = JSON.parse(toolMsg!.content) as {
+    const env = JSON.parse(messageContentToText(toolMsg!.content)) as {
       ok: boolean;
       status: string;
       warnings: string[];
@@ -429,7 +430,7 @@ describe("runChat — terminal events for every requested/capped call", () => {
     const cappedMsg = result.appendedMessages.find(
       (m) => m.role === "tool" && m.toolCallId === "c2",
     );
-    const cappedEnv = JSON.parse(cappedMsg!.content) as {
+    const cappedEnv = JSON.parse(messageContentToText(cappedMsg!.content)) as {
       ok: boolean;
       status: string;
       data: { errorCode: string };
