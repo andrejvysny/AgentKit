@@ -24,6 +24,8 @@ breakdown and an ASCII diagram.
 | [`packages/core`](packages/core) — `@agentkit/core` | Pure, in-process chat-with-tools loop: provider client, Ajv-backed tool registry, `runChat()`, multimodal content-part mapping for OpenAI-compatible providers. | 0.5.0-dev |
 | [`packages/host`](packages/host) — `@agentkit/host` | Durable orchestration over `@agentkit/core`: `TaskStore` + kind-dispatched executors, `TurnRunner` as the `chat.turn` executor, proposal lifecycle, write policy. | 0.1.0-dev |
 | [`packages/testing`](packages/testing) — `@agentkit/testing` | Mocks, fixtures, golden run-event traces, and the `AssistantStore` conformance suite. | 0.1.0-dev |
+| [`packages/mcp-client`](packages/mcp-client) — `@agentkit/mcp-client` | Optional adapter: bridges MCP servers' tools into a run as a `ToolSetContributor`, on the official `@modelcontextprotocol/sdk`. | 0.1.0-dev |
+| [`packages/transport-http`](packages/transport-http) — `@agentkit/transport-http` | Optional adapter: fetch-standard REST v1 + SSE handler serving `packages/contracts/src/rest.ts`, zero framework dependencies. | 0.1.0-dev |
 | [`internal/reference-adapters`](internal/reference-adapters) — `@agentkit/reference-adapters` | Reference `AssistantStore` + `TaskRunner` implementations (in-memory, `bun:sqlite`). Workspace-private, never published — dev/test only. | 0.1.0-dev, private |
 
 ## Layers
@@ -50,8 +52,9 @@ and the loop invariants `runChat()` preserves: see
   diagram.
 - [`docs/non-goals.md`](docs/non-goals.md) — what this repository
   deliberately does not include yet, and where it will live.
-- [`docs/roadmap.md`](docs/roadmap.md) — the sequenced backlog (P2–P7 and
-  later) this deferred surface lands against.
+- [`docs/roadmap.md`](docs/roadmap.md) — the sequenced backlog (P1–P4
+  shipped, P2–P4 active, and a Later list) this deferred surface lands
+  against.
 - [`docs/adr/`](docs/adr/) — accepted architecture decision records.
 - [`PROVENANCE.md`](PROVENANCE.md) — how `packages/core` was extracted from
   `@openpcb/ai-core` and relicensed to MIT.
@@ -69,7 +72,8 @@ bun run ci        # install --frozen-lockfile && typecheck && test && build
 Other useful scripts (see [`package.json`](package.json)): `bun run
 typecheck`, `bun run build`, and per-package variants
 (`bun run test:core`, `bun run test:host`, `bun run test:contracts`,
-`bun run test:testing`, `bun run test:adapters`).
+`bun run test:testing`, `bun run test:adapters`, `bun run test:mcp-client`,
+`bun run test:transport-http`).
 
 Bun is the primary runtime, but `@agentkit/contracts` and `@agentkit/core`
 must stay Node-loadable — a `bun:` import in either passes the whole Bun

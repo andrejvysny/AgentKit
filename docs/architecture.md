@@ -1,11 +1,19 @@
 # Architecture
 
-AgentKit is three layers plus a testing layer, and a workspace-private set of
-reference implementations. Each layer only depends on the ones below it.
+AgentKit is three layers plus a testing layer, a workspace-private set of
+reference implementations, and two optional adapters beside `host` (an MCP
+client and an HTTP transport). Each layer only depends on the ones below
+it; the optional adapters depend on `host` and nothing depends on them.
 
 ```
 internal/reference-adapters   @agentkit/reference-adapters (workspace-private; not published)
   implements host's ports over bun:sqlite / in-memory Maps
+
+packages/mcp-client            @agentkit/mcp-client (optional adapter)
+  bridges MCP servers' tools into a run as a ToolSetContributor
+
+packages/transport-http        @agentkit/transport-http (optional adapter)
+  fetch-standard REST v1 + SSE handler serving contracts' REST surface
         │
         ▼  depends on
 --------------------------------------------------------------
@@ -53,11 +61,12 @@ type parameter outruns what `Static<>` can express (`AiToolResult<T>`,
 see [`docs/contracts.md`](contracts.md).
 
 It also carries the REST v1 surface (`src/rest.ts`): the route table and the
-request/response DTOs an HTTP adapter would serialize, as types and schemas
+request/response DTOs an HTTP adapter serializes, as types and schemas
 only — the DTOs are projections of the host records with the orchestrator's
 internals removed (see
-[`docs/contracts.md`](contracts.md#rest-v1-surface)). No adapter implements
-them here.
+[`docs/contracts.md`](contracts.md#rest-v1-surface)). `@agentkit/transport-http`
+is the adapter that serves them (see below); this package stays the shape,
+not the server.
 
 This package has zero runtime dependency beyond `@sinclair/typebox`. It has
 no notion of a run loop, a queue, or a database.
@@ -104,7 +113,12 @@ to run it durably, across process restarts and retries:
   `TaskExecutor` for task kind `chat.turn`. It turns a submitted chat
   message into a durable task, drives `runChat()`, appends every event to
   the task's log, projects it into conversation state, and runs the
-  chat-only / empty-response recovery passes (`turn/retry.ts`).
+  chat-only / empty-response recovery passes (`turn/retry.ts`). Before
+  handing history to a pass, `assembleMessages` reconciles any tool call a
+  prior crash left unanswered — `turn/history-reconcile.ts`'s
+  `reconcileOrphanToolCalls` synthesizes an in-memory `tool_result_missing`
+  failure for it, in-memory only, so the balanced-history invariant holds
+  across a restart the same way it holds within one run.
 - **The port catalog** ([`packages/host/src/ports/`](../packages/host/src/ports/))
   — interfaces an embedding host implements: `TaskStore` (kind, payload,
   leases, fencing, the event log), `ProposalStore`, `ConversationStore`,
@@ -129,6 +143,24 @@ to run it durably, across process restarts and retries:
 `@agentkit/host` depends on `@agentkit/core` and `@agentkit/contracts`; it
 implements no storage itself — every store is a port, implemented by the
 embedding host or by the reference adapters under `internal/`.
+
+### Optional adapters beside host
+
+Two packages depend on `@agentkit/host` without `host` depending on either —
+the same relationship `internal/reference-adapters` has, and a host is
+always free to skip both and write the equivalent itself:
+
+- **`@agentkit/mcp-client`** ([`packages/mcp-client/`](../packages/mcp-client))
+  — `McpClientManager` plus `createMcpToolSetContributor`, bridging Model
+  Context Protocol servers' tools into a run as an ordinary
+  `ToolSetContributor`. See [`packages/mcp-client/README.md`](../packages/mcp-client/README.md)
+  and [ADR 0004](adr/0004-mcp-client.md).
+- **`@agentkit/transport-http`** ([`packages/transport-http/`](../packages/transport-http))
+  — `createRestHandler`/`serveRest`, a fetch-standard, zero-dependency
+  adapter serving `packages/contracts/src/rest.ts`'s REST v1 surface (HTTP
+  + SSE) over any host that implements the port catalog below. See
+  [`packages/transport-http/README.md`](../packages/transport-http/README.md)
+  and [ADR 0005](adr/0005-http-transport.md).
 
 ## Event flow
 
@@ -171,6 +203,7 @@ embedding host or by the reference adapters under `internal/`.
 ```
   queued            ──▶ running
   queued            ──▶ cancelled
+  queued            ──▶ failed        (dependency cascade only — see below)
 
   running           ──▶ waiting_approval
   running           ──▶ completed | failed | cancelled
@@ -188,7 +221,11 @@ back to the queue. Note also that **nothing in this repository produces
 `waiting_approval`**: `TurnRunner` lets a staged write return `pending` to the
 model and completes the task. The state is reserved for hosts that park a
 task on a human decision and resume it afterwards; its transitions exist so
-such a host does not have to fork the table.
+such a host does not have to fork the table. `queued → failed` exists for
+exactly one caller — the dependency cascade in `claimNext` (see [Task
+dependencies and subagents](#task-dependencies-and-subagents) below) — a task
+that never started still has to be able to end `failed` when what it
+depended on can never complete.
 
 `AttemptStatus` is `running → completed | failed | abandoned | cancelled`.
 `abandoned` is specifically the crash outcome: a lease expired while the
@@ -228,7 +265,11 @@ becomes an executable.
   `signal`. The record is handed down rather than an id so every executor
   works from the one fetch-and-guard the dispatcher already did, instead of
   each re-reading the row and risking a different answer to "is this still
-  mine to run?".
+  mine to run?". `ctx.spawnChild?.(input)` — present only when the
+  dispatching worker was built with a `TaskService` — submits a child task
+  with `parentTaskId` preset to the executing task, so a fanning-out
+  executor cannot forge or omit its own lineage. See [Task dependencies and
+  subagents](#task-dependencies-and-subagents).
 - **`ExecutorRegistry`**
   ([`packages/host/src/tasks/executor-registry.ts`](../packages/host/src/tasks/executor-registry.ts))
   — the kind → `TaskExecutor` table one worker process dispatches through.
@@ -252,7 +293,12 @@ becomes an executable.
   enqueuing from inside the transaction callback risks the claim loop
   claiming a row that a rollback then deletes out from under it (the
   `bun:sqlite` join-transaction hazard on `AssistantStore.transaction`, see
-  [`docs/ports.md`](ports.md#assistantstore-aggregate)).
+  [`docs/ports.md`](ports.md#assistantstore-aggregate)). `cancelTask(taskId)`
+  is a breadth-first cascade over `parentTaskId` lineage: a still-`queued`
+  descendant is CAS-cancelled directly in the store, a `running`/
+  `waiting_approval` one is asked to stop via `taskRunner.requestCancel`
+  (cooperative — never forced terminal). See [Task dependencies and
+  subagents](#task-dependencies-and-subagents).
 - **`createTaskEventWriter`** — see item 5 of [Event flow](#event-flow)
   above.
 - **`CHAT_TURN_TASK_KIND`**
@@ -260,6 +306,45 @@ becomes an executable.
   — `"chat.turn"`, the kind `TurnRunner.submitMessage` creates and
   `ChatTurnExecutor` runs. The `chat.*` and `agentkit.*` prefixes are
   reserved for the framework; everything else belongs to the host.
+
+## Task dependencies and subagents
+
+`TaskRecord` carries two edges beyond `kind`/`payload`
+([`packages/host/src/ports/task-store.ts`](../packages/host/src/ports/task-store.ts)),
+deliberately distinct:
+
+- **`parentTaskId` — lineage.** Set by `TaskExecutionContext.spawnChild`
+  (never by hand), never a dependency: a child runs the moment the queue can
+  claim it, whether or not its parent is still running. Answers "what did
+  this task set off?" (`TaskStore.listChildren`, one level) and drives
+  `TaskService.cancelTask`'s cascade.
+- **`dependsOn` — the claim gate.** Task ids that must reach `completed`
+  before this task may be claimed. Immutable after create; every id must
+  already exist when the dependent is written
+  (`UnknownDependencyError` otherwise), which is what makes the graph a DAG
+  **by construction** — an edge can only ever point backward in creation
+  order, so no write order can produce a cycle.
+
+`TaskStore.claimNext` enforces the gate — dependency state is queue
+semantics, not orchestration. `evaluateTaskDependencies`, exported beside
+`assertTaskTransition` for the same reason (every adapter must reach the
+same verdict from the same facts), reduces a task's dependency states to one
+of three outcomes: `ready` (claim it), `blocked` (skip, try again on a later
+claim), or `settle` — a dependency that failed or was dead-lettered settles
+the dependent `failed` (`error: "dependency_failed: <id>"`, via the
+`queued → failed` edge above), a cancelled one settles it `cancelled` (no
+`error` — a cancellation is not a failure). Settlement happens lazily, on
+the claim path: nothing is ever re-enqueued, there is no background reaper,
+and a chain of dependents resolves over successive claim calls.
+
+`TaskRecord.progress` is a mutable, overwritten snapshot
+(`TaskStore.updateProgress`, lease-gated like `appendEvents`) — deliberately
+**not** an event: only the latest value matters, and the durable log is not
+where a heartbeat percentage belongs.
+
+Full rationale, including the alternatives rejected (eager cascade, claim-time
+cycle detection, `dependsOn`-as-re-enqueue): [ADR
+0003](adr/0003-task-dependencies-and-subagents.md).
 
 ## At-least-once delivery, idempotent effects
 

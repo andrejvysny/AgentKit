@@ -17,57 +17,42 @@ blank page or re-learn fixed bugs.
   lease/fencing store, `TaskService`, `TaskEventWriter`, envelope-typed event
   log, `ClaimNextInput.kinds`; provider-neutral content parts +
   OpenAI-compatible mapping.
+- **P2 — MCP client package (`@agentkit/mcp-client`)** (2026-08-24). ADR
+  [0004](adr/0004-mcp-client.md): official `@modelcontextprotocol/sdk`
+  `^1.30.0` for protocol, OneMind's semantics preserved on top — canonical
+  ids `mcp.<serverAlias>.<tool>`, dual-level fail-closed collisions, stdio +
+  streamable-HTTP transports with shared reconnect dedup, resilience
+  defaults (5s/5s timeouts, 3 connect attempts, 250→2000ms backoff, 5s hard
+  circuit lockout), typed `McpError`, `SecretStore`-resolved and redacted
+  secrets, verbatim schema passthrough. Orphan tool-call reconciliation
+  landed at the **host** layer (`packages/host/src/turn/history-reconcile.ts`),
+  not the MCP bridge, since the crash window it closes belongs to any tool
+  source. Not done: write-capable MCP tools do not yet flow through the
+  proposal pipeline — still open (see Later list).
+- **P3 — Transport package (`@agentkit/transport-http`)** (2026-08-24). ADR
+  [0005](adr/0005-http-transport.md): fetch-standard, zero-dependency
+  handler serving `packages/contracts/src/rest.ts`; router compiled from
+  `REST_ROUTES`; SSE `streamRun` is **replay-then-poll on a `seq` cursor**
+  (not the originally-planned outbox-subscribe — the subscribe design has an
+  unguarded replay/attach gap that the cursor design cannot have),
+  `Last-Event-ID` resume keyed on `eventId`; `Idempotency-Key` required on
+  `submitMessage`, deriving `taskId` deterministically; RFC 7807 errors with
+  a host-`code` → status table; `GET /v1/tools` and the proposal-decision
+  routes answer 501 without their optional dependency wired. WebSocket
+  transport deferred.
+- **P4 — Subagents + task dependencies** (2026-08-24). ADR
+  [0003](adr/0003-task-dependencies-and-subagents.md): `parentTaskId`
+  (lineage) and `dependsOn` (claim gate) as two distinct edges; DAG by
+  construction (a dependency must pre-exist, `UnknownDependencyError`
+  otherwise); dependency-aware claimability in `claimNext` with lazy settle
+  — a dead dependency fails or cancels its dependent on the claim path,
+  never via re-enqueue or a reaper; `TaskService.cancelTask`'s cooperative
+  BFS cascade over lineage; `TaskExecutionContext.spawnChild`; priority
+  aging (task-system's formula) now opt-in, default off, with a cap;
+  `progress` as an overwritten `TaskRecord` snapshot via `updateProgress`,
+  not an event. sqlite `SCHEMA_V3`.
 
-## P2 — MCP client package (`@agentkit/mcp-client`)
-
-Bridge MCP servers' tools into AgentKit runs as a `ToolSetContributor`.
-Reference: **OneMind** `src-ts/src/infrastructure/mcp/` +
-`domain/services/mcp/` — preserve these proven semantics:
-
-- Canonical tool ids `mcp.<serverAlias>.<tool>`; collision = fail-closed
-  typed error, never silent overwrite.
-- stdio + streamable-HTTP transports; per-connection session isolation.
-- Resilience: connect/request timeouts, bounded exponential backoff,
-  circuit breaker.
-- Orphan reconciliation: after a crash, a persisted tool-call without a
-  result gets a synthesized structured failure result so replayed provider
-  history never contains an unmatched `tool_call_id` (AgentKit's balanced-
-  history invariant extended across restarts).
-- Secrets: MCP server credentials resolve through `SecretStore` (OneMind
-  stores them plaintext — a known gap; do not copy it).
-- Write-capable MCP tools should flow through the proposal pipeline
-  (`effect: "write"` → `createProposalBuilderTool`), which OneMind does not
-  have — this is where AgentKit improves on the reference.
-
-## P3 — Transport package (`@agentkit/transport-http`)
-
-The official optional adapter serving `packages/contracts/src/rest.ts`
-(REST v1): fetch-standard handlers (usable from Bun.serve, Hono, Node), SSE
-`streamRun` replaying the durable event log then following live via
-`OutboxStore`, `Last-Event-ID` resume keyed on `eventId`, `Idempotency-Key`
-enforcement on `submitMessage`, RFC 7807 errors with host `code`s.
-References: **OpenPCB** tasks-module SSE endpoint (replay-then-subscribe,
-terminal-event close, abort cleanup) and cloud `copilot-client.ts`
-(Last-Event-ID resume, bounded reconnect); **OneMind** stream-service
-(crash-only auto-resume policy; keep the stream open across a whole tool
-chain). Core stays transport-free; a host may always implement its own
-transport against the host ports instead.
-
-## P4 — Subagents + task dependencies
-
-`parentTaskId` + `dependsOn` on `TaskRecord`; a dependent task is not
-claimable until its dependency is terminal; cascade on **failure and cancel
-both** (task-system cascaded cancel but left dependents of a *failed* parent
-stuck `waiting` forever — the bug to fix, not import). Expressed as
-claimability in `claimNext`, never re-enqueue. On top: a `spawn_subagent`
-capability — a task (usually `chat.turn`) creates child tasks and either
-waits (dependency) or streams child progress into its own log. Also the
-natural home for task-system's priority-aging formula
-(`effectivePriority = base + waitIntervals × agingBonus`, capped) and an
-`emitProgress`-style mutable progress field (progress is overwritten state,
-not an append-only event).
-
-## P5 — Conversation branching, forking, search, attachments
+## P2 — Conversation branching, forking, search, attachments
 
 - **Branching/forking** — adopt OneMind's two proven mechanisms: in-chat
   branching as a message tree (`parentMessageId`, active-path flags;
@@ -84,7 +69,7 @@ not an append-only event).
   concern). Reference budgets: OpenPCB `MENTION_LIMITS` (per-image and
   aggregate byte caps).
 
-## P6 — Long-term memory
+## P3 — Long-term memory
 
 No source repo has a local implementation (OpenPCB delegates to proprietary
 cloud tools; OneMind has none) — this is a fresh design: a `MemoryStore`
@@ -93,7 +78,7 @@ port (scoped records, recall query, retention) + framework tools
 `ContextProvider`. Design the port before any embedding/vector opinion;
 retrieval strategy is an adapter concern.
 
-## P7 — Tool governance
+## P4 — Tool governance
 
 Merge the reference repos' proven controls into the `ToolSetContributor`
 pipeline: namespaced tool ids with reserved prefixes (OneMind's
@@ -131,8 +116,21 @@ disposer pattern), and OpenPCB's manual tool-calling override
   (strip trust-sensitive fields from the advertised schema, re-inject last,
   re-validate against the canonical schema) as a generic wrapper for remote
   tool planes; relevant to MCP hardening.
-- **Client SDK + React packages** — typed REST/SSE client over P3, then
-  chat hooks/components; never a dependency of the headless framework.
+- **Client SDK + React packages** — typed REST/SSE client over
+  `@agentkit/transport-http` (shipped, see Done), then chat
+  hooks/components; never a dependency of the headless framework.
 - **Usage accounting** — aggregate `run.usage` events per chat/tenant behind
   `UsageAuthorizer`; per-provider-call dedup key (`callId`, `attempt`)
   already exists in the contract.
+- **Chat-independent tool-enumeration port** — `GET /v1/tools` answers 501
+  without it (`@agentkit/transport-http`'s `deps.toolCatalog`, see ADR
+  [0005](adr/0005-http-transport.md)): `ToolSetContributor.contribute` is a
+  per-run call taking a chat's bindings/limits/scope, and this route names
+  no chat, so listing tools needs a way to enumerate them without
+  synthesizing a fake run context.
+- **Forward-paging limit on `ConversationStore.listMessages`.**
+- **Streaming child-task progress into a parent's log.** `TaskRecord.progress`
+  (P4/ADR 0003) is a per-task overwritten snapshot today; fanning a child's
+  progress into its parent's own event log is unimplemented.
+- **WebSocket transport** — `@agentkit/transport-http` ships SSE + polling
+  submit/read only (ADR [0005](adr/0005-http-transport.md)).
