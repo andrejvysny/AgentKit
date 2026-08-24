@@ -1,5 +1,5 @@
 /**
- * v1 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
+ * v2 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
  * applied idempotently (every DDL statement is `CREATE ... IF NOT EXISTS`;
  * seed rows use `INSERT OR IGNORE`) so opening the same database twice, or
  * opening a database another process already initialized, is a no-op rather
@@ -7,26 +7,36 @@
  *
  * Table-by-table home in the port model:
  * - `chats` / `messages` → `ConversationStore`
- * - `runs` / `run_attempts` / `leases` / `run_events` → `RunStore`
+ * - `tasks` / `task_attempts` / `leases` / `task_events` → `TaskStore`
  * - `proposals` / `proposal_outcomes` → `ProposalStore`
  * - `providers` / `provider_models` / `provider_capabilities` → `ProviderStore`
  * - `settings` → `SettingsStore` (single row, id = 1)
  * - `outbox` → `OutboxStore`
  * - `fencing_counter` → NOT a port record. A single-row table backing the
- *   store-global monotonic fencing token `RunStore.acquireLease` hands out;
+ *   store-global monotonic fencing token `TaskStore.acquireLease` hands out;
  *   it has no equivalent in any port because fencing is an implementation
  *   detail of lease issuance, never something a caller reads directly.
  *
- * Queue state lives on `runs` + `leases`; there is no separate queue table —
+ * Queue state lives on `tasks` + `leases`; there is no separate queue table —
  * `claimNext` computes effective priority (base priority + an age bucket) in
  * the query itself, so there is nothing to keep in sync or let drift.
  *
- * JSON-shaped fields (`request`, `metadata`, `envelope`, `operations`,
- * `warnings`, `tool_calls`, `payload`, `failed_ops`, `extra_headers`,
- * `decision`, ...) are stored as TEXT; the store (de)serializes them, SQLite
- * never inspects their contents.
+ * JSON-shaped fields (`payload`, `metadata`, `envelope`, `operations`,
+ * `warnings`, `tool_calls`, `failed_ops`, `extra_headers`, `decision`, ...) are
+ * stored as TEXT; the store (de)serializes them, SQLite never inspects their
+ * contents.
  */
-export const SCHEMA_V1 = `
+export const SCHEMA_VERSION = 2;
+
+/**
+ * The DDL for {@link SCHEMA_VERSION}. There are NO migrations in this
+ * workspace-private adapter: {@link SqliteAssistantStore} stamps
+ * `PRAGMA user_version` on a fresh database and refuses to open one written by
+ * a different version, because a reference adapter that shipped half-tested
+ * migration scripts would be claiming a durability guarantee it does not have.
+ * A host that needs upgrades in place owns that story with its own store.
+ */
+export const SCHEMA_V2 = `
 CREATE TABLE IF NOT EXISTS chats (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -51,9 +61,12 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_chat_order ON messages(chat_id, order_key);
 
-CREATE TABLE IF NOT EXISTS runs (
-  run_id TEXT PRIMARY KEY,
-  chat_id TEXT NOT NULL,
+-- kind is what the executor registry dispatches on; there is no chat_id
+-- column, because a task of an arbitrary kind has no conversation. Whatever a
+-- kind needs (a chat turn's chatId included) rides in the payload column.
+CREATE TABLE IF NOT EXISTS tasks (
+  task_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
   scope_id TEXT NOT NULL,
   status TEXT NOT NULL,
   priority INTEGER NOT NULL DEFAULT 0,
@@ -61,18 +74,22 @@ CREATE TABLE IF NOT EXISTS runs (
   available_at TEXT NOT NULL,
   started_at TEXT,
   finished_at TEXT,
-  request TEXT NOT NULL,
+  payload TEXT NOT NULL,
   error TEXT,
   attempt_count INTEGER NOT NULL DEFAULT 0,
   poison_count INTEGER NOT NULL DEFAULT 0,
   dead_lettered_at TEXT,
   dead_letter_reason TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_runs_claim ON runs(status, scope_id, available_at);
+-- The claim index stays (status, scope_id, available_at): those three are what
+-- every claim filters on. kind is deliberately NOT in it — the kind filter is
+-- an optional IN(...) that most deployments never pass, and a wider index would
+-- cost every write to serve a predicate that usually is not there.
+CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks(status, scope_id, available_at);
 
-CREATE TABLE IF NOT EXISTS run_attempts (
+CREATE TABLE IF NOT EXISTS task_attempts (
   attempt_id TEXT PRIMARY KEY,
-  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  task_id TEXT NOT NULL REFERENCES tasks(task_id),
   attempt_number INTEGER NOT NULL,
   status TEXT NOT NULL,
   owner_id TEXT NOT NULL,
@@ -80,13 +97,13 @@ CREATE TABLE IF NOT EXISTS run_attempts (
   ended_at TEXT,
   error TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_run_attempts_run ON run_attempts(run_id);
+CREATE INDEX IF NOT EXISTS idx_task_attempts_task ON task_attempts(task_id);
 
--- One row per run (PK run_id): acquireLease always mints a fresh lease and
+-- One row per task (PK task_id): acquireLease always mints a fresh lease and
 -- replaces whatever was there, live or expired. See the module doc on
--- SqliteRunStore.acquireLease for why that is safe.
+-- SqliteTaskStore.acquireLease for why that is safe.
 CREATE TABLE IF NOT EXISTS leases (
-  run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+  task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
   attempt_id TEXT NOT NULL,
   owner_id TEXT NOT NULL,
   lease_token TEXT NOT NULL UNIQUE,
@@ -94,15 +111,15 @@ CREATE TABLE IF NOT EXISTS leases (
   expires_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS run_events (
-  run_id TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS task_events (
+  task_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   event_id TEXT NOT NULL UNIQUE,
   attempt_id TEXT,
   type TEXT NOT NULL,
   timestamp TEXT NOT NULL,
   payload TEXT NOT NULL,
-  PRIMARY KEY (run_id, seq)
+  PRIMARY KEY (task_id, seq)
 );
 
 CREATE TABLE IF NOT EXISTS outbox (
@@ -207,7 +224,7 @@ INSERT OR IGNORE INTO settings
   (id, context_size_preference, write_policy_mode, allow_raw_tool_data, metadata)
   VALUES (1, 'small', 'auto_readonly_confirm_writes', 0, '{}');
 
--- Backs RunStore.acquireLease's store-global monotonic fencing token. Not a
+-- Backs TaskStore.acquireLease's store-global monotonic fencing token. Not a
 -- port record — see the module doc comment above.
 CREATE TABLE IF NOT EXISTS fencing_counter (
   id INTEGER PRIMARY KEY CHECK (id = 1),

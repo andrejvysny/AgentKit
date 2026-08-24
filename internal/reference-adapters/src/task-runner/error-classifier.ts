@@ -40,14 +40,23 @@ export interface ExecutionErrorClassification {
  * `seq_conflict` is terminal, and deliberately so. A duplicate or gapped `seq`
  * means the writer's numbering disagrees with the log — a logic bug in the
  * caller. Retrying reproduces it, with a second helping of half-written events.
+ *
+ * `executor_not_found`, `duplicate_task` and `invalid_task_payload` are the
+ * wiring failures: a kind nobody registered, an id already taken, a payload the
+ * executor cannot read. All three reproduce identically on every attempt, and
+ * none of them is poison — the runner fails the task without dead-lettering it,
+ * because a clean diagnosis is not a queue that needs protecting.
  */
 const HOST_CODE_KINDS: Readonly<Record<string, ExecutionErrorKind>> =
   Object.freeze({
     lease_lost: "transient",
     seq_conflict: "terminal",
-    invalid_run_transition: "terminal",
+    invalid_task_transition: "terminal",
     invalid_proposal_transition: "terminal",
     duplicate_action_id: "terminal",
+    duplicate_task: "terminal",
+    executor_not_found: "terminal",
+    invalid_task_payload: "terminal",
     revision_conflict: "terminal",
     not_found: "terminal",
   });

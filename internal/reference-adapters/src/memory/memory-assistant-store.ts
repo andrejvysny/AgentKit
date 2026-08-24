@@ -16,21 +16,27 @@
  * read, or a transition — is a shallow copy, never the object living inside
  * this store's Maps. `SqliteAssistantStore` gets this for free (it rebuilds
  * every record from a freshly-read row); a Map-backed store has to do it on
- * purpose, or a caller holding an old `Lease`/`RunRecord`/... would see it
+ * purpose, or a caller holding an old `Lease`/`TaskRecord`/... would see it
  * silently mutate later when a DIFFERENT call (e.g. `renewLease` bumping
  * `expiresAt` on the same stored object) touches the same record.
  */
-import type { AiProviderCapabilities, AiProviderConfig, AiProviderModel, AiRunEvent } from "@agentkit/contracts";
+import type {
+  AiProviderCapabilities,
+  AiProviderConfig,
+  AiProviderModel,
+  TaskEventEnvelope,
+} from "@agentkit/contracts";
 import {
   ACTION_ID_RELEASING_STATUSES,
   DuplicateActionIdError,
+  DuplicateTaskError,
   InvalidProposalTransitionError,
-  InvalidRunTransitionError,
+  InvalidTaskTransitionError,
   LeaseLostError,
   RecordNotFoundError,
   SeqConflictError,
   assertProposalTransition,
-  assertRunTransition,
+  assertTaskTransition,
   defaultClock,
   defaultIds,
   type AppendEventsOptions,
@@ -43,12 +49,12 @@ import {
   type ChatRecord,
   type Clock,
   type ClaimNextInput,
-  type ClaimedRun,
+  type ClaimedTask,
   type ConversationStore,
   type CreateAttemptInput,
   type CreateChatInput,
   type CreateProposalInput,
-  type CreateRunInput,
+  type CreateTaskInput,
   type EndAttemptInput,
   type IdGenerator,
   type Lease,
@@ -66,15 +72,15 @@ import {
   type ProposalStatus,
   type ProposalStore,
   type ProviderStore,
-  type RunPatch,
-  type RunRecord,
-  type RunStatus,
-  type RunStore,
   type SettingsStore,
+  type TaskPatch,
+  type TaskRecord,
+  type TaskStatus,
+  type TaskStore,
   type UpdateMessagePatch,
 } from "@agentkit/host";
 
-/** Lease TTL {@link MemoryRunStore.claimNext} grants the attempt it creates. */
+/** Lease TTL {@link MemoryTaskStore.claimNext} grants the attempt it creates. */
 const DEFAULT_LEASE_TTL_MS = 30_000;
 /** Aging bucket for `claimNext`'s effective-priority formula: `priority + floor(waitMs / bucket)`. */
 const AGING_BUCKET_MS = 30_000;
@@ -199,18 +205,18 @@ export class MemoryConversationStore implements ConversationStore {
   }
 }
 
-function effectivePriority(run: RunRecord, nowMs: number): number {
-  const waitMs = Math.max(0, nowMs - new Date(run.enqueuedAt).getTime());
-  return run.priority + Math.floor(waitMs / AGING_BUCKET_MS);
+function effectivePriority(task: TaskRecord, nowMs: number): number {
+  const waitMs = Math.max(0, nowMs - new Date(task.enqueuedAt).getTime());
+  return task.priority + Math.floor(waitMs / AGING_BUCKET_MS);
 }
 
-export class MemoryRunStore implements RunStore {
-  readonly runs = new Map<string, RunRecord>();
+export class MemoryTaskStore implements TaskStore {
+  readonly tasks = new Map<string, TaskRecord>();
   readonly attempts = new Map<string, AttemptRecord>();
-  /** One live lease per run, keyed by runId — mirrors the sqlite `leases` PK. */
+  /** One live lease per task, keyed by taskId — mirrors the sqlite `leases` PK. */
   private readonly leases = new Map<string, Lease>();
   private readonly leasesByToken = new Map<string, string>();
-  private readonly events = new Map<string, AiRunEvent[]>();
+  private readonly events = new Map<string, TaskEventEnvelope[]>();
   /** Store-global monotonic fencing counter — every `acquireLease` draws the next value. */
   private fencing = 0;
 
@@ -220,63 +226,70 @@ export class MemoryRunStore implements RunStore {
     private readonly leaseTtlMs: number = DEFAULT_LEASE_TTL_MS,
   ) {}
 
-  async createRun(input: CreateRunInput): Promise<RunRecord> {
+  async createTask(input: CreateTaskInput): Promise<TaskRecord> {
+    // Never overwrite: the id is the caller's idempotency key, and replacing a
+    // live row would strand its attempts, its lease and its event log.
+    if (this.tasks.has(input.taskId)) {
+      throw new DuplicateTaskError(`Task already exists: ${input.taskId}.`, {
+        taskId: input.taskId,
+      });
+    }
     const now = this.clock.nowIso();
-    const run: RunRecord = {
-      runId: input.runId,
-      chatId: input.chatId,
+    const task: TaskRecord = {
+      taskId: input.taskId,
+      kind: input.kind,
       scopeId: input.scopeId,
       status: "queued",
       priority: input.priority ?? 0,
       enqueuedAt: now,
       availableAt: input.availableAt ?? now,
-      request: input.request,
+      payload: input.payload,
       attemptCount: 0,
       poisonCount: 0,
     };
-    this.runs.set(run.runId, run);
-    return { ...run };
+    this.tasks.set(task.taskId, task);
+    return { ...task };
   }
 
-  async getRun(runId: string): Promise<RunRecord | null> {
-    const run = this.runs.get(runId);
-    return run ? { ...run } : null;
+  async getTask(taskId: string): Promise<TaskRecord | null> {
+    const task = this.tasks.get(taskId);
+    return task ? { ...task } : null;
   }
 
-  async transitionRun(
-    runId: string,
-    from: RunStatus[],
-    to: RunStatus,
-    patch?: RunPatch,
-  ): Promise<RunRecord> {
-    const run = this.runs.get(runId);
-    if (!run) throw new RecordNotFoundError(`Run not found: ${runId}`);
-    if (!from.includes(run.status)) {
-      throw new InvalidRunTransitionError(
-        `Run ${runId} is ${run.status}, expected one of [${from.join(", ")}].`,
-        { runId, current: run.status, from, to },
+  async transitionTask(
+    taskId: string,
+    from: TaskStatus[],
+    to: TaskStatus,
+    patch?: TaskPatch,
+  ): Promise<TaskRecord> {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+    if (!from.includes(task.status)) {
+      throw new InvalidTaskTransitionError(
+        `Task ${taskId} is ${task.status}, expected one of [${from.join(", ")}].`,
+        { taskId, current: task.status, from, to },
       );
     }
-    assertRunTransition(run.status, to);
-    run.status = to;
-    if (patch?.startedAt !== undefined) run.startedAt = patch.startedAt;
-    if (patch?.finishedAt !== undefined) run.finishedAt = patch.finishedAt;
-    if (patch?.error !== undefined) run.error = patch.error;
-    if (patch?.availableAt !== undefined) run.availableAt = patch.availableAt;
-    if (patch?.priority !== undefined) run.priority = patch.priority;
-    if (patch?.poisonCount !== undefined) run.poisonCount = patch.poisonCount;
-    if (patch?.request !== undefined) run.request = patch.request;
-    return { ...run };
+    assertTaskTransition(task.status, to);
+    task.status = to;
+    if (patch?.startedAt !== undefined) task.startedAt = patch.startedAt;
+    if (patch?.finishedAt !== undefined) task.finishedAt = patch.finishedAt;
+    if (patch?.error !== undefined) task.error = patch.error;
+    if (patch?.availableAt !== undefined) task.availableAt = patch.availableAt;
+    if (patch?.priority !== undefined) task.priority = patch.priority;
+    if (patch?.poisonCount !== undefined) task.poisonCount = patch.poisonCount;
+    if (patch?.payload !== undefined) task.payload = patch.payload;
+    return { ...task };
   }
 
   async createAttempt(input: CreateAttemptInput): Promise<AttemptRecord> {
-    const run = this.runs.get(input.runId);
-    if (!run) throw new RecordNotFoundError(`Run not found: ${input.runId}`);
-    run.attemptCount += 1;
+    const task = this.tasks.get(input.taskId);
+    if (!task) throw new RecordNotFoundError(`Task not found: ${input.taskId}`);
+    task.attemptCount += 1;
     const attempt: AttemptRecord = {
       attemptId: input.attemptId,
-      runId: input.runId,
-      attemptNumber: run.attemptCount,
+      taskId: input.taskId,
+      attemptNumber: task.attemptCount,
       status: "running",
       ownerId: input.ownerId,
       startedAt: this.clock.nowIso(),
@@ -297,17 +310,18 @@ export class MemoryRunStore implements RunStore {
   }
 
   async acquireLease(input: AcquireLeaseInput): Promise<Lease> {
-    // `leases` is one row per run (mirrors the sqlite PK on run_id): acquiring
-    // always mints a fresh lease and replaces whatever was there, live or
-    // expired. Nothing here re-checks "is the existing lease still live" —
-    // the queued->running CAS on the run (transitionRun) plus claimNext only
-    // ever selecting queued runs is what prevents two workers from both
-    // believing they hold the current lease, not a check in this method.
-    const old = this.leases.get(input.runId);
+    // `leases` is one row per task (mirrors the sqlite PK on task_id):
+    // acquiring always mints a fresh lease and replaces whatever was there,
+    // live or expired. Nothing here re-checks "is the existing lease still
+    // live" — the queued->running CAS on the task (transitionTask) plus
+    // claimNext only ever selecting queued tasks is what prevents two workers
+    // from both believing they hold the current lease, not a check in this
+    // method.
+    const old = this.leases.get(input.taskId);
     if (old) this.leasesByToken.delete(old.leaseToken);
     this.fencing += 1;
     const lease: Lease = {
-      runId: input.runId,
+      taskId: input.taskId,
       attemptId: input.attemptId,
       ownerId: input.ownerId,
       leaseToken: `lease_${crypto.randomUUID()}`,
@@ -316,8 +330,8 @@ export class MemoryRunStore implements RunStore {
         this.clock.now().getTime() + input.ttlMs,
       ).toISOString(),
     };
-    this.leases.set(input.runId, lease);
-    this.leasesByToken.set(lease.leaseToken, input.runId);
+    this.leases.set(input.taskId, lease);
+    this.leasesByToken.set(lease.leaseToken, input.taskId);
     return { ...lease };
   }
 
@@ -331,7 +345,7 @@ export class MemoryRunStore implements RunStore {
 
   async releaseLease(leaseToken: string): Promise<void> {
     const lease = this.currentLeaseByToken(leaseToken);
-    this.leases.delete(lease.runId);
+    this.leases.delete(lease.taskId);
     this.leasesByToken.delete(lease.leaseToken);
   }
 
@@ -343,47 +357,47 @@ export class MemoryRunStore implements RunStore {
       }
     }
     for (const lease of expired) {
-      this.leases.delete(lease.runId);
+      this.leases.delete(lease.taskId);
       this.leasesByToken.delete(lease.leaseToken);
     }
     return expired.map((l) => ({ ...l }));
   }
 
   async appendEvents(
-    runId: string,
-    events: AiRunEvent[],
+    taskId: string,
+    events: TaskEventEnvelope[],
     opts: AppendEventsOptions,
   ): Promise<void> {
-    const lease = this.leases.get(runId);
+    const lease = this.leases.get(taskId);
     if (!lease || lease.leaseToken !== opts.leaseToken) {
       throw new LeaseLostError(
-        `Lease token ${opts.leaseToken} is not current for run ${runId}.`,
-        { runId, leaseToken: opts.leaseToken },
+        `Lease token ${opts.leaseToken} is not current for task ${taskId}.`,
+        { taskId, leaseToken: opts.leaseToken },
       );
     }
     if (events.length === 0) return;
-    const log = this.events.get(runId) ?? [];
+    const log = this.events.get(taskId) ?? [];
     // Validate the WHOLE batch before mutating anything — a mid-batch seq
     // conflict must leave the store exactly as it was, not half-applied.
     let last = log.length > 0 ? log[log.length - 1]!.seq : -1;
     for (const event of events) {
       if (event.seq <= last) {
         throw new SeqConflictError(
-          `Non-monotonic seq ${event.seq} for run ${runId} (last ${last}).`,
-          { runId, seq: event.seq, last },
+          `Non-monotonic seq ${event.seq} for task ${taskId} (last ${last}).`,
+          { taskId, seq: event.seq, last },
         );
       }
       last = event.seq;
     }
     log.push(...events);
-    this.events.set(runId, log);
+    this.events.set(taskId, log);
   }
 
   async listEvents(
-    runId: string,
+    taskId: string,
     opts?: ListEventsOptions,
-  ): Promise<AiRunEvent[]> {
-    let log = [...(this.events.get(runId) ?? [])];
+  ): Promise<TaskEventEnvelope[]> {
+    let log = [...(this.events.get(taskId) ?? [])];
     if (opts?.afterSeq !== undefined) {
       const after = opts.afterSeq;
       log = log.filter((e) => e.seq > after);
@@ -392,20 +406,22 @@ export class MemoryRunStore implements RunStore {
     return log;
   }
 
-  async nextSeq(runId: string): Promise<number> {
-    const log = this.events.get(runId);
+  async nextSeq(taskId: string): Promise<number> {
+    const log = this.events.get(taskId);
     if (!log || log.length === 0) return 0;
     return log[log.length - 1]!.seq + 1;
   }
 
-  async claimNext(input: ClaimNextInput): Promise<ClaimedRun | null> {
+  async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
     const busy = new Set(input.scopesBusy);
+    const kinds = input.kinds === undefined ? null : new Set(input.kinds);
     const nowMs = input.now.getTime();
-    const candidates = [...this.runs.values()].filter(
-      (run) =>
-        run.status === "queued" &&
-        !busy.has(run.scopeId) &&
-        new Date(run.availableAt).getTime() <= nowMs,
+    const candidates = [...this.tasks.values()].filter(
+      (task) =>
+        task.status === "queued" &&
+        !busy.has(task.scopeId) &&
+        (kinds === null || kinds.has(task.kind)) &&
+        new Date(task.availableAt).getTime() <= nowMs,
     );
     if (candidates.length === 0) return null;
     // Array.prototype.sort is stable (guaranteed since ES2019), so ties on
@@ -420,38 +436,38 @@ export class MemoryRunStore implements RunStore {
       );
     });
     const candidate = candidates[0]!;
-    const run = await this.transitionRun(
-      candidate.runId,
+    const task = await this.transitionTask(
+      candidate.taskId,
       ["queued"],
       "running",
       { startedAt: this.clock.nowIso() },
     );
     const attempt = await this.createAttempt({
       attemptId: this.ids.attemptId(),
-      runId: run.runId,
+      taskId: task.taskId,
       ownerId: input.ownerId,
     });
     const lease = await this.acquireLease({
-      runId: run.runId,
+      taskId: task.taskId,
       attemptId: attempt.attemptId,
       ownerId: input.ownerId,
       ttlMs: this.leaseTtlMs,
     });
-    return { run, attempt, lease };
+    return { task, attempt, lease };
   }
 
-  async markDeadLettered(runId: string, reason: string): Promise<RunRecord> {
-    const run = this.runs.get(runId);
-    if (!run) throw new RecordNotFoundError(`Run not found: ${runId}`);
-    run.deadLetteredAt = this.clock.nowIso();
-    run.deadLetterReason = reason;
-    return { ...run };
+  async markDeadLettered(taskId: string, reason: string): Promise<TaskRecord> {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+    task.deadLetteredAt = this.clock.nowIso();
+    task.deadLetterReason = reason;
+    return { ...task };
   }
 
   private currentLeaseByToken(leaseToken: string): Lease {
-    const runId = this.leasesByToken.get(leaseToken);
-    if (runId !== undefined) {
-      const lease = this.leases.get(runId);
+    const taskId = this.leasesByToken.get(leaseToken);
+    if (taskId !== undefined) {
+      const lease = this.leases.get(taskId);
       if (lease && lease.leaseToken === leaseToken) return lease;
     }
     throw new LeaseLostError(`Lease token ${leaseToken} is not current.`, {
@@ -771,7 +787,7 @@ export class MemoryOutboxStore implements OutboxStore {
  */
 export class MemoryAssistantStore implements AssistantStore {
   readonly conversations: MemoryConversationStore;
-  readonly runs: MemoryRunStore;
+  readonly tasks: MemoryTaskStore;
   readonly proposals: MemoryProposalStore;
   readonly providers = new MemoryProviderStore();
   readonly settings = new MemorySettingsStore();
@@ -781,7 +797,7 @@ export class MemoryAssistantStore implements AssistantStore {
     const clock = options.clock ?? defaultClock;
     const ids = options.ids ?? defaultIds;
     this.conversations = new MemoryConversationStore(clock, ids);
-    this.runs = new MemoryRunStore(clock, ids, options.leaseTtlMs);
+    this.tasks = new MemoryTaskStore(clock, ids, options.leaseTtlMs);
     this.proposals = new MemoryProposalStore(clock);
     this.outbox = new MemoryOutboxStore(clock, options.outboxClaimVisibilityMs);
   }

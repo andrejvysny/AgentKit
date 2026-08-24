@@ -6,18 +6,19 @@ import {
   isProposalTransitionAllowed,
 } from "../src/proposals/state-machine.js";
 import {
-  RUN_TRANSITIONS,
-  assertRunTransition,
-  isRunTransitionAllowed,
-  type RunStatus,
-} from "../src/ports/run-store.js";
+  TASK_TRANSITIONS,
+  assertTaskTransition,
+  isTaskTransitionAllowed,
+  type TaskStatus,
+} from "../src/ports/task-store.js";
 import {
   InvalidProposalTransitionError,
-  InvalidRunTransitionError,
+  InvalidTaskTransitionError,
 } from "../src/errors.js";
 import type { ProposalStatus } from "../src/ports/proposal-store.js";
+import type { RunStatusDto } from "@agentkit/contracts";
 
-const RUN_STATUSES: RunStatus[] = [
+const TASK_STATUSES: TaskStatus[] = [
   "queued",
   "running",
   "waiting_approval",
@@ -100,20 +101,20 @@ describe("PROPOSAL_TRANSITIONS — exhaustive matrix", () => {
   });
 });
 
-describe("RUN_TRANSITIONS — exhaustive matrix", () => {
+describe("TASK_TRANSITIONS — exhaustive matrix", () => {
   it("accepts every legal pair and rejects every other pair", () => {
     let legal = 0;
-    for (const from of RUN_STATUSES) {
-      for (const to of RUN_STATUSES) {
-        const allowed = RUN_TRANSITIONS[from].includes(to);
+    for (const from of TASK_STATUSES) {
+      for (const to of TASK_STATUSES) {
+        const allowed = TASK_TRANSITIONS[from].includes(to);
         if (allowed) {
           legal++;
-          expect(isRunTransitionAllowed(from, to)).toBe(true);
-          expect(() => assertRunTransition(from, to)).not.toThrow();
+          expect(isTaskTransitionAllowed(from, to)).toBe(true);
+          expect(() => assertTaskTransition(from, to)).not.toThrow();
         } else {
-          expect(isRunTransitionAllowed(from, to)).toBe(false);
-          expect(() => assertRunTransition(from, to)).toThrow(
-            InvalidRunTransitionError,
+          expect(isTaskTransitionAllowed(from, to)).toBe(false);
+          expect(() => assertTaskTransition(from, to)).toThrow(
+            InvalidTaskTransitionError,
           );
         }
       }
@@ -123,32 +124,56 @@ describe("RUN_TRANSITIONS — exhaustive matrix", () => {
   });
 
   it("declares exactly the documented edges", () => {
-    expect(RUN_TRANSITIONS.queued).toEqual(["running", "cancelled"]);
-    expect(RUN_TRANSITIONS.running).toEqual([
+    expect(TASK_TRANSITIONS.queued).toEqual(["running", "cancelled"]);
+    expect(TASK_TRANSITIONS.running).toEqual([
       "waiting_approval",
       "completed",
       "failed",
       "cancelled",
     ]);
-    expect(RUN_TRANSITIONS.waiting_approval).toEqual([
+    expect(TASK_TRANSITIONS.waiting_approval).toEqual([
       "running",
       "completed",
       "failed",
       "cancelled",
     ]);
-    for (const terminal of ["completed", "failed", "cancelled"] as RunStatus[]) {
-      expect(RUN_TRANSITIONS[terminal]).toEqual([]);
+    for (const terminal of ["completed", "failed", "cancelled"] as TaskStatus[]) {
+      expect(TASK_TRANSITIONS[terminal]).toEqual([]);
     }
   });
 
-  it("forbids same-state transitions — two workers must not both 'start' a run", () => {
-    for (const status of RUN_STATUSES) {
-      expect(isRunTransitionAllowed(status, status)).toBe(false);
+  it("forbids same-state transitions — two workers must not both 'start' a task", () => {
+    for (const status of TASK_STATUSES) {
+      expect(isTaskTransitionAllowed(status, status)).toBe(false);
     }
   });
 
   it("freezes the table", () => {
-    expect(Object.isFrozen(RUN_TRANSITIONS)).toBe(true);
-    expect(Object.isFrozen(RUN_TRANSITIONS.running)).toBe(true);
+    expect(Object.isFrozen(TASK_TRANSITIONS)).toBe(true);
+    expect(Object.isFrozen(TASK_TRANSITIONS.running)).toBe(true);
+  });
+});
+
+/**
+ * `RunStatusDto` (contracts) and {@link TaskStatus} (host) are the same
+ * enumeration written down twice: contracts sits BELOW host and cannot import
+ * it, so `rest.ts` restates the union and points at this file for the check
+ * that keeps the two honest.
+ *
+ * The check is the two assignments below, and it has to run in BOTH directions.
+ * One direction alone only proves one union is a subset of the other, so a
+ * status added on either side would slip through unnoticed — and the failure it
+ * would cause is a serialized value no client's type ever admitted.
+ */
+describe("RunStatusDto ↔ TaskStatus — the mirrored enumeration", () => {
+  it("is the same set of members in both directions, at compile time", () => {
+    const hostStatuses: TaskStatus[] = TASK_STATUSES;
+    const dtoStatuses: RunStatusDto[] = hostStatuses;
+    const backToHost: TaskStatus[] = dtoStatuses;
+    // The assignments above ARE the assertion; this keeps the test honest
+    // about having executed, and pins the member count so an addition on
+    // either side has to be made deliberately.
+    expect(backToHost).toHaveLength(6);
+    expect(new Set(backToHost).size).toBe(6);
   });
 });

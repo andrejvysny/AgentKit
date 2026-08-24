@@ -17,11 +17,11 @@ export interface Clock {
 
 /**
  * Identifier minting. Split per entity (rather than one `id()`) so a fake can
- * hand out readable, per-kind sequences (`run-1`, `op-1`) and a test asserting
+ * hand out readable, per-kind sequences (`task-1`, `op-1`) and a test asserting
  * "the operation id was reused" reads as intent, not coincidence.
  */
 export interface IdGenerator {
-  runId(): string;
+  taskId(): string;
   attemptId(): string;
   eventId(): string;
   proposalId(): string;
@@ -60,7 +60,7 @@ export const defaultClock: Clock = {
  * host layer deliberately imports nothing from `node:*`.
  */
 export const defaultIds: IdGenerator = {
-  runId: () => `run_${crypto.randomUUID()}`,
+  taskId: () => `task_${crypto.randomUUID()}`,
   attemptId: () => `att_${crypto.randomUUID()}`,
   eventId: () => `evt_${crypto.randomUUID()}`,
   proposalId: () => `prp_${crypto.randomUUID()}`,
