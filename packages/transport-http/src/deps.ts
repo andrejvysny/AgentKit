@@ -41,7 +41,7 @@ export interface ProposalOperations {
 }
 
 /**
- * SSE tuning. All three have defaults that suit a UI on a local network; a
+ * SSE tuning. All four have defaults that suit a UI on a local network; a
  * deployment behind a proxy that kills idle connections lowers
  * `heartbeatIntervalMs`, and one with a slow store raises `pollIntervalMs`.
  */
@@ -49,6 +49,10 @@ export interface RestStreamOptions {
   /**
    * How long the stream waits before asking the event log again, once it has
    * caught up. The floor on end-to-end latency for a live token.
+   *
+   * It does NOT govern a stream that is behind rather than idle: a pump parked
+   * on a full queue resumes on the consumer's next read, not on a timer, so a
+   * generous poll interval never becomes a throttle on a backlog.
    */
   pollIntervalMs?: number;
   /**
@@ -59,6 +63,18 @@ export interface RestStreamOptions {
   heartbeatIntervalMs?: number;
   /** The `retry:` hint sent first — how long a client waits before reconnecting. */
   retryHintMs?: number;
+  /**
+   * How many events one read of the log may return, and — because they are the
+   * same bound seen from the two ends of the pipe — how many frames may sit
+   * queued for a consumer that has stopped reading.
+   *
+   * It is what keeps a stream's memory a function of this number instead of a
+   * function of the run: replaying a hundred-thousand-event log used to mean
+   * materialising a hundred thousand envelopes, and at cursor 0 doing it again
+   * on every poll. The cost is one extra store round trip per full batch, paid
+   * only while there is a backlog to walk.
+   */
+  readBatchSize?: number;
 }
 
 export const DEFAULT_STREAM_OPTIONS: Required<RestStreamOptions> =
@@ -66,6 +82,7 @@ export const DEFAULT_STREAM_OPTIONS: Required<RestStreamOptions> =
     pollIntervalMs: 150,
     heartbeatIntervalMs: 15_000,
     retryHintMs: 2_000,
+    readBatchSize: 256,
   });
 
 export interface RestHandlerDeps {
@@ -116,5 +133,12 @@ export function resolveStreamOptions(
     heartbeatIntervalMs:
       options?.heartbeatIntervalMs ?? DEFAULT_STREAM_OPTIONS.heartbeatIntervalMs,
     retryHintMs: options?.retryHintMs ?? DEFAULT_STREAM_OPTIONS.retryHintMs,
+    // Clamped, not trusted: a batch size of 0 asks the store for nothing on
+    // every read, and a stream that silently delivers no events is a worse
+    // failure than one that ignores a nonsensical setting.
+    readBatchSize: Math.max(
+      1,
+      Math.floor(options?.readBatchSize ?? DEFAULT_STREAM_OPTIONS.readBatchSize),
+    ),
   };
 }

@@ -25,10 +25,30 @@
  * the task is terminal but its log holds no terminal event (a crashed attempt,
  * a task cancelled before its worker ever wrote one) — otherwise that stream
  * would poll forever against a run that will never speak again.
+ *
+ * BOTH ENDS OF THE PIPE ARE BOUNDED, and by the same number
+ * (`RestStreamOptions.readBatchSize`). Reads take a `limit`, so replaying a
+ * long log walks it a batch at a time instead of materialising it whole — and a
+ * cursor at 0 no longer re-reads the entire log on every poll. Writes wait on
+ * `controller.desiredSize`: when the consumer is behind and the queue is full,
+ * the pump PAUSES — until the stream's own `pull` says a slot opened — rather
+ * than enqueueing into a buffer nobody is draining. A slow client then costs one
+ * batch of memory instead of a whole run's worth, and it costs it in the store's
+ * pages rather than in this process' heap.
+ *
+ * Pausing is the only backpressure answer available here, because the two
+ * alternatives are both wrong for a durable log: dropping frames breaks the
+ * `seq` contiguity a resuming client checks, and reordering them is worse. The
+ * cursor advances only on a frame that was actually enqueued, so a pause is
+ * indistinguishable from a slow run — and a client that gives up mid-pause
+ * resumes from exactly the last id it saw. Heartbeats are skipped while
+ * saturated for the same reason they exist: a `: hb` proves the connection is
+ * alive, and a connection with frames still queued on it is proving that
+ * already.
  */
 import type { TaskEventEnvelope } from "@agentkit/contracts";
 import type { Logger, TaskStatus, TaskStore } from "@agentkit/host";
-import type { RestStreamOptions } from "./deps.js";
+import { DEFAULT_STREAM_OPTIONS, type RestStreamOptions } from "./deps.js";
 
 /** Run events after which nothing else is coming. */
 export const TERMINAL_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
@@ -65,21 +85,32 @@ export interface RunEventStreamInput {
 /**
  * The seq to start from, given a `Last-Event-ID` header.
  *
- * One full read of the log, because the port exposes no "find by eventId": an
- * id is a string the store dedups on, not an index. That read happens once per
- * connection, against a log a client is about to receive most of anyway.
+ * A scan of the log, because the port exposes no "find by eventId": an id is a
+ * string the store dedups on, not an index. The scan happens once per
+ * connection, against a log the client is about to receive most of anyway — but
+ * it walks in `batchSize` pages rather than loading the whole log, so the one
+ * read that precedes a stream is bounded by the same number the stream itself
+ * is. A resume against a very long run should not cost more before the first
+ * frame than the whole replay costs after it.
  */
 export async function resolveStartSeq(
   tasks: TaskStore,
   taskId: string,
   lastEventId: string | null,
+  batchSize: number = DEFAULT_STREAM_OPTIONS.readBatchSize,
 ): Promise<number> {
   if (lastEventId === null || lastEventId.trim() === "") return 0;
-  const log = await tasks.listEvents(taskId);
-  for (const event of log) {
-    if (event.eventId === lastEventId) return event.seq + 1;
+  let cursor = 0;
+  for (;;) {
+    const batch = await readAfter(tasks, taskId, cursor, batchSize);
+    for (const event of batch) {
+      if (event.eventId === lastEventId) return event.seq + 1;
+      cursor = Math.max(cursor, event.seq + 1);
+    }
+    // Short or empty means the log ended without the id: an event from another
+    // run, or from one whose log was pruned. Replay from the beginning.
+    if (batch.length === 0 || batch.length < batchSize) return 0;
   }
-  return 0;
 }
 
 /** One SSE frame carrying one event verbatim (`RunEventFrameDto`). */
@@ -95,6 +126,8 @@ export function createRunEventStream(
   let closed = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let wake: (() => void) | null = null;
+  /** Set while the pump is parked on a full queue; `pull` is what resolves it. */
+  let capacity: (() => void) | null = null;
 
   /** Stop the clock. Safe to call twice; every exit path calls it. */
   const stop = (): void => {
@@ -106,6 +139,9 @@ export function createRunEventStream(
     const pending = wake;
     wake = null;
     pending?.();
+    const parked = capacity;
+    capacity = null;
+    parked?.();
   };
 
   const onAbort = (): void => stop();
@@ -130,106 +166,176 @@ export function createRunEventStream(
       }, ms);
     });
 
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      /** False once the stream is gone; every writer checks and bails. */
-      const write = (frame: string): boolean => {
-        if (closed) return false;
-        try {
-          controller.enqueue(encoder.encode(frame));
-          return true;
-        } catch {
-          // The peer closed between our check and this enqueue. Not an error:
-          // a client hanging up mid-run is the normal end of a stream.
-          stop();
-          return false;
-        }
-      };
+  const batchLimit = options.readBatchSize;
 
-      const pump = async (): Promise<void> => {
-        // The reconnect hint goes out first, before any event, so a client that
-        // loses the connection on the very next byte already knows the policy.
-        if (!write(`retry: ${options.retryHintMs}\n\n`)) return;
-        let cursor = input.startSeq;
-        let lastWriteAt = Date.now();
+  return new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        /** Room for another frame? Null means errored — let the enqueue say so. */
+        const hasRoom = (): boolean => (controller.desiredSize ?? 1) > 0;
 
-        while (!closed) {
-          const batch = await readAfter(tasks, taskId, cursor);
-          if (batch.length > 0) {
-            for (const event of batch) {
-              if (event.seq < cursor) continue;
-              if (!write(frameFor(event))) return;
-              cursor = event.seq + 1;
-              lastWriteAt = Date.now();
-              if (TERMINAL_RUN_EVENT_TYPES.has(event.type)) return;
+        /**
+         * Park until the consumer takes something.
+         *
+         * Signalled by `pull` rather than by a timer, and the difference is not
+         * a micro-optimisation: a poll would hold the pump for a whole interval
+         * after the reader had already made room, so a long replay to a reader
+         * that runs one tick behind the writer would be rationed at one
+         * high-water mark per interval — seconds to replay what should take
+         * milliseconds. `pull` fires on the read that frees the slot.
+         */
+        const roomAvailable = (): Promise<void> =>
+          new Promise<void>((resolve) => {
+            if (closed) {
+              resolve();
+              return;
             }
-            continue;
-          }
-
-          const task = await tasks.getTask(taskId);
-          if (task === null || TERMINAL_TASK_STATUSES.has(task.status)) {
-            // One last read. The worker appends its terminal event and THEN
-            // transitions the task, so a status read that lands between the two
-            // must not close over an event already written.
-            for (const event of await readAfter(tasks, taskId, cursor)) {
-              if (event.seq < cursor) continue;
-              if (!write(frameFor(event))) return;
-              cursor = event.seq + 1;
-              if (TERMINAL_RUN_EVENT_TYPES.has(event.type)) return;
-            }
-            return;
-          }
-
-          await sleep(options.pollIntervalMs);
-          if (closed) return;
-          if (Date.now() - lastWriteAt >= options.heartbeatIntervalMs) {
-            if (!write(": hb\n\n")) return;
-            lastWriteAt = Date.now();
-          }
-        }
-      };
-
-      // NOT awaited: `start` resolving is what makes the body readable, and a
-      // stream that only becomes readable when the run ends is not a stream.
-      void pump()
-        .catch((err: unknown) => {
-          logger?.error("run event stream failed", {
-            taskId,
-            message: err instanceof Error ? err.message : String(err),
+            capacity = resolve;
           });
-        })
-        .finally(() => {
-          stop();
-          signal?.removeEventListener("abort", onAbort);
+
+        /**
+         * Enqueue one frame, waiting out a full queue first. False once the
+         * stream is gone; every writer checks and bails.
+         */
+        const write = async (frame: string): Promise<boolean> => {
+          // The pause: not a drop, not a reorder, and not an unbounded buffer.
+          // `stop` resolves the parked promise, so an abort here exits on the
+          // same tick it exits everywhere else.
+          while (!closed && !hasRoom()) await roomAvailable();
+          if (closed) return false;
           try {
-            controller.close();
+            controller.enqueue(encoder.encode(frame));
+            return true;
           } catch {
-            // Already closed — an abort and a terminal event can land together.
+            // The peer closed between our check and this enqueue. Not an error:
+            // a client hanging up mid-run is the normal end of a stream.
+            stop();
+            return false;
           }
-        });
+        };
+
+        const pump = async (): Promise<void> => {
+          // The reconnect hint goes out first, before any event, so a client
+          // that loses the connection on the very next byte already knows the
+          // policy.
+          if (!(await write(`retry: ${options.retryHintMs}\n\n`))) return;
+          let cursor = input.startSeq;
+          let lastWriteAt = Date.now();
+
+          /**
+           * Send everything the log holds from `cursor` on, a batch at a time.
+           *
+           * A batch that came back FULL is not evidence of having caught up —
+           * it is evidence of a backlog the limit truncated — so it loops
+           * straight into the next read with no sleep and no status check. Only
+           * a short batch means the log has been walked to its end.
+           */
+          const drain = async (): Promise<"closed" | "terminal" | "current"> => {
+            for (;;) {
+              const batch = await readAfter(tasks, taskId, cursor, batchLimit);
+              for (const event of batch) {
+                if (event.seq < cursor) continue;
+                if (!(await write(frameFor(event)))) return "closed";
+                cursor = event.seq + 1;
+                lastWriteAt = Date.now();
+                if (TERMINAL_RUN_EVENT_TYPES.has(event.type)) return "terminal";
+              }
+              if (batch.length === 0 || batch.length < batchLimit) {
+                return closed ? "closed" : "current";
+              }
+            }
+          };
+
+          while (!closed) {
+            if ((await drain()) !== "current") return;
+
+            const task = await tasks.getTask(taskId);
+            if (task === null || TERMINAL_TASK_STATUSES.has(task.status)) {
+              // One last read. The worker appends its terminal event and THEN
+              // transitions the task, so a status read that lands between the
+              // two must not close over an event already written.
+              await drain();
+              return;
+            }
+
+            await sleep(options.pollIntervalMs);
+            if (closed) return;
+            // Skipped while the consumer is behind: the queued frames are
+            // already proof the connection is alive, and a keepalive that has
+            // to wait its turn behind them is not keeping anything alive.
+            if (
+              Date.now() - lastWriteAt >= options.heartbeatIntervalMs &&
+              hasRoom()
+            ) {
+              if (!(await write(": hb\n\n"))) return;
+              lastWriteAt = Date.now();
+            }
+          }
+        };
+
+        // NOT awaited: `start` resolving is what makes the body readable, and a
+        // stream that only becomes readable when the run ends is not a stream.
+        void pump()
+          .catch((err: unknown) => {
+            logger?.error("run event stream failed", {
+              taskId,
+              message: err instanceof Error ? err.message : String(err),
+            });
+          })
+          .finally(() => {
+            stop();
+            signal?.removeEventListener("abort", onAbort);
+            try {
+              controller.close();
+            } catch {
+              // Already closed — an abort and a terminal event can land
+              // together.
+            }
+          });
+      },
+      /** The consumer took a chunk: whatever is parked in `write` may go on. */
+      pull() {
+        const parked = capacity;
+        capacity = null;
+        parked?.();
+      },
+      cancel() {
+        stop();
+        signal?.removeEventListener("abort", onAbort);
+      },
     },
-    cancel() {
-      stop();
-      signal?.removeEventListener("abort", onAbort);
-    },
-  });
+    // The queue is the write-side half of the same bound the reads use: at most
+    // one batch of frames may sit in front of a consumer that has stopped
+    // taking them, and `desiredSize` turns that into the signal the pump waits
+    // on. The default strategy would be a high-water mark of ONE chunk, which
+    // is not backpressure but a stall — a pump that must round-trip the event
+    // loop between every frame cannot keep a fast client fed.
+    new CountQueuingStrategy({ highWaterMark: batchLimit }),
+  );
 }
 
 /**
- * Events at or after `cursor`, in seq order.
+ * At most `limit` events at or after `cursor`, in seq order.
  *
  * `ListEventsOptions.afterSeq` is EXCLUSIVE (`seq > afterSeq`), so a cursor of
  * N asks for `afterSeq: N - 1`; at cursor 0 the option is omitted rather than
  * passed as -1, since no store's contract says anything about negative input.
+ *
+ * `limit` is read as "the first `limit` in seq order", which is the only
+ * reading that makes a paged walk of an ordered log terminate correctly — a
+ * store returning an arbitrary subset would let the cursor skip past a gap it
+ * never sent. The local sort is belt to that braces: it fixes an unordered
+ * return, but nothing can recover a page the store chose badly.
  */
 async function readAfter(
   tasks: TaskStore,
   taskId: string,
   cursor: number,
+  limit: number,
 ): Promise<TaskEventEnvelope[]> {
   const events =
     cursor <= 0
-      ? await tasks.listEvents(taskId)
-      : await tasks.listEvents(taskId, { afterSeq: cursor - 1 });
+      ? await tasks.listEvents(taskId, { limit })
+      : await tasks.listEvents(taskId, { afterSeq: cursor - 1, limit });
   return [...events].sort((a, b) => a.seq - b.seq);
 }
