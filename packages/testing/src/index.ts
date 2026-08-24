@@ -18,3 +18,9 @@ export * from "./golden/golden.js";
 // Store conformance: the shared behavioral contract every AssistantStore
 // implementation must pass (see internal/reference-adapters).
 export * from "./store-conformance.js";
+
+// Durability: the invariants a TaskStore must hold whatever a pile of
+// concurrent workers just did to it, and the seeded schedule that puts them
+// under one.
+export * from "./task-invariants.js";
+export * from "./task-schedule-driver.js";
