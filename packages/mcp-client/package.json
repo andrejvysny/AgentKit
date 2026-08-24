@@ -3,6 +3,10 @@
   "version": "0.1.0-dev",
   "description": "MCP client bridge: connects MCP servers and contributes their tools to AgentKit runs as a ToolSetContributor.",
   "license": "MIT",
+  "engines": {
+    "node": ">=20",
+    "bun": ">=1.3"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -29,7 +33,9 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "bun test tests"
+    "test": "bun test tests",
+    "prepack": "node ../../scripts/prepack-publish-config.mjs apply",
+    "postpack": "node ../../scripts/prepack-publish-config.mjs restore"
   },
   "repository": {
     "type": "git",

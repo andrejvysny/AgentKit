@@ -13,7 +13,11 @@
  * drift this table exists to prevent.
  */
 import type { ProblemDetailsDto } from "@agentkit/contracts";
-import { AgentKitHostError, type Logger } from "@agentkit/host";
+import {
+  AgentKitHostError,
+  type HostErrorCode,
+  type Logger,
+} from "@agentkit/host";
 
 /** `type` URIs are `<prefix><code>`; the code is the documented identity. */
 export const PROBLEM_TYPE_PREFIX = "https://agentkit.dev/problems/";
@@ -21,14 +25,18 @@ export const PROBLEM_TYPE_PREFIX = "https://agentkit.dev/problems/";
 export const PROBLEM_CONTENT_TYPE = "application/problem+json";
 
 /**
- * Host error code → HTTP status.
+ * Every code in the closed {@link HostErrorCode} union → HTTP status.
  *
- * The conflicts are all the same shape — "the record moved since you read it"
- * — and 409 is the only status that says so without implying the client can fix
- * its request and retry verbatim. `executor_not_found` is a deployment fault,
- * not a client one, so it is a 500 despite arriving from a named code.
+ * `satisfies Record<HostErrorCode, number>` makes this exhaustive at compile
+ * time: a code added to {@link HOST_ERROR_CODES} without a status here fails
+ * `bun run typecheck`, rather than silently falling back to 500 in
+ * production. The conflicts are all the same shape — "the record moved since
+ * you read it" — and 409 is the only status that says so without implying the
+ * client can fix its request and retry verbatim. `executor_not_found` is a
+ * deployment fault, not a client one, so it is a 500 despite arriving from a
+ * named code.
  */
-const STATUS_BY_CODE: Readonly<Record<string, number>> = Object.freeze({
+const STATUS_BY_HOST_CODE = {
   not_found: 404,
   invalid_task_transition: 409,
   invalid_proposal_transition: 409,
@@ -38,8 +46,23 @@ const STATUS_BY_CODE: Readonly<Record<string, number>> = Object.freeze({
   lease_lost: 409,
   seq_conflict: 409,
   unknown_dependency: 409,
-  invalid_decision: 400,
   executor_not_found: 500,
+} satisfies Record<HostErrorCode, number>;
+
+/**
+ * Host error code → HTTP status, including codes outside the closed
+ * {@link HostErrorCode} union.
+ *
+ * `@agentkit/host` also throws `AgentKitHostError` directly (not through a
+ * named subclass) with situational codes that are not part of that stable
+ * vocabulary — `invalid_decision` is the one this table intentionally reports
+ * as a client error rather than the generic 500 fallback below; the rest
+ * (`no_model`, `task_not_executable`, …) fall back same as any unrecognized
+ * code, unchanged from before this table was split.
+ */
+const STATUS_BY_CODE: Readonly<Record<string, number>> = Object.freeze({
+  ...STATUS_BY_HOST_CODE,
+  invalid_decision: 400,
 });
 
 const TITLE_BY_STATUS: Readonly<Record<number, string>> = Object.freeze({

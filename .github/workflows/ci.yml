@@ -25,6 +25,54 @@ jobs:
 
       - run: bun run build
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run lint
+
+  # Informational only — no threshold gate, never fails the build. Runs
+  # alongside `bun` rather than after it so it doesn't add to CI wall time.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - name: bun test --coverage
+        run: |
+          set -o pipefail
+          bun test --coverage --coverage-reporter=text --coverage-reporter=lcov \
+            | tee coverage-summary.txt
+
+      - name: publish coverage summary
+        if: always()
+        run: |
+          {
+            echo "### Coverage summary"
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage/lcov.info
+            coverage-summary.txt
+          retention-days: 14
+
   # The shippable packages promise to be plain, portable JavaScript. Nothing
   # about a green `bun test` proves that — a `bun:` import or a Bun global in
   # any published @agentkit/* package passes the whole suite and breaks the
@@ -54,6 +102,30 @@ jobs:
             packages/core/dist \
             packages/host/dist \
             packages/mcp-client/dist \
-            packages/transport-http/dist
+            packages/transport-http/dist \
+            packages/testing/dist
 
       - run: node scripts/node-smoke.mjs
+
+  # Packaging correctness one hop further out than node-smoke: actually `npm
+  # pack` + `npm install` every publishable package, not just import its dist
+  # from the checkout. Needs real npm registry access for each package's
+  # non-workspace dependencies (typebox, ajv, the MCP SDK), so it is its own
+  # job rather than a step tacked onto `bun` or `node-smoke`.
+  pack-smoke:
+    needs: bun
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run build
+
+      - run: node scripts/pack-smoke.mjs

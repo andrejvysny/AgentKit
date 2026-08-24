@@ -39,6 +39,14 @@ flow (`seq`/`eventId` stamping, lease fencing), the run/attempt/lease model,
 and the loop invariants `runChat()` preserves: see
 [`docs/architecture.md`](docs/architecture.md).
 
+## Runtime support
+
+Every package is **ESM-only** (`"type": "module"`, no CJS build) and requires
+**Node ≥20 or Bun ≥1.3** — declared as `engines` in each `package.json`. Bun
+is the primary runtime; `@agentkit/contracts` and `@agentkit/core` are also
+tested under plain Node (see `node-smoke` below), but the rest of the
+toolchain (tests, `bun run ci`) is Bun-only.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — the three layers, event
@@ -53,7 +61,7 @@ and the loop invariants `runChat()` preserves: see
 - [`docs/non-goals.md`](docs/non-goals.md) — what this repository
   deliberately does not include yet, and where it will live.
 - [`docs/roadmap.md`](docs/roadmap.md) — the sequenced backlog (P1–P4
-  shipped, P2–P4 active, and a Later list) this deferred surface lands
+  shipped, P5a–P7 active, and a Later list) this deferred surface lands
   against.
 - [`docs/adr/`](docs/adr/) — accepted architecture decision records.
 - [`PROVENANCE.md`](PROVENANCE.md) — how `packages/core` was extracted from

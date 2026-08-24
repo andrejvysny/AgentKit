@@ -3,6 +3,10 @@
   "version": "0.1.0-dev",
   "description": "Durable orchestration layer over @agentkit/core: storage ports, run/proposal state models, proposal service, and the turn runner.",
   "license": "MIT",
+  "engines": {
+    "node": ">=20",
+    "bun": ">=1.3"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -30,7 +34,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "bun test tests",
-    "dev": "tsc -p tsconfig.build.json --watch"
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "prepack": "node ../../scripts/prepack-publish-config.mjs apply",
+    "postpack": "node ../../scripts/prepack-publish-config.mjs restore"
   },
   "repository": {
     "type": "git",

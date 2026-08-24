@@ -52,7 +52,7 @@ blank page or re-learn fixed bugs.
   `progress` as an overwritten `TaskRecord` snapshot via `updateProgress`,
   not an event. sqlite `SCHEMA_V3`.
 
-## P2 — Conversation branching, forking, search, attachments
+## P5a — Conversation branching + forking
 
 - **Branching/forking** — adopt OneMind's two proven mechanisms: in-chat
   branching as a message tree (`parentMessageId`, active-path flags;
@@ -60,16 +60,22 @@ blank page or re-learn fixed bugs.
   deep copy that strips task linkage/metadata (tested independence).
   `ConversationStore` grows the tree operations; flat `orderKey` remains the
   degenerate single-branch case.
+
+## P5b — Message search + forward paging
+
 - **Search** — `searchMessages` port method with a capability flag; sqlite
   reference adapter implements SQLite FTS5 external-content + triggers +
   bm25 ranking (OneMind's implementation is the reference, including its
   FTS5 query sanitization).
-- **Attachments** — widen `MessageRecord.content`/`MessageDto` to the
-  ADR-0002 parts model plus a `FileStore` port (blob storage stays a host
-  concern). Reference budgets: OpenPCB `MENTION_LIMITS` (per-image and
-  aggregate byte caps).
+- **Forward-paging limit on `ConversationStore.listMessages`.**
 
-## P3 — Long-term memory
+## P5c — Attachments
+
+- Widen `MessageRecord.content`/`MessageDto` to the ADR-0002 parts model
+  plus a `FileStore` port (blob storage stays a host concern). Reference
+  budgets: OpenPCB `MENTION_LIMITS` (per-image and aggregate byte caps).
+
+## P6 — Long-term memory
 
 No source repo has a local implementation (OpenPCB delegates to proprietary
 cloud tools; OneMind has none) — this is a fresh design: a `MemoryStore`
@@ -78,7 +84,7 @@ port (scoped records, recall query, retention) + framework tools
 `ContextProvider`. Design the port before any embedding/vector opinion;
 retrieval strategy is an adapter concern.
 
-## P4 — Tool governance
+## P7 — Tool governance
 
 Merge the reference repos' proven controls into the `ToolSetContributor`
 pipeline: namespaced tool ids with reserved prefixes (OneMind's
@@ -88,6 +94,10 @@ structured errors with phase + retryability, contributor lifecycle
 (register/dispose for dynamically loaded plugins — OneMind's ModuleLoader
 disposer pattern), and OpenPCB's manual tool-calling override
 (`auto|on|off`) atop probed provider capabilities.
+
+Must precede the MCP server package, the remote/trusted tool bridge, and
+human approval workflows (see Later below) — all three add tool-facing
+surface that this phase's guard chain and namespacing are meant to police.
 
 ## Later (unordered, lower priority)
 
@@ -128,7 +138,6 @@ disposer pattern), and OpenPCB's manual tool-calling override
   per-run call taking a chat's bindings/limits/scope, and this route names
   no chat, so listing tools needs a way to enumerate them without
   synthesizing a fake run context.
-- **Forward-paging limit on `ConversationStore.listMessages`.**
 - **Streaming child-task progress into a parent's log.** `TaskRecord.progress`
   (P4/ADR 0003) is a per-task overwritten snapshot today; fanning a child's
   progress into its parent's own event log is unimplemented.

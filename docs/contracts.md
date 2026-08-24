@@ -151,7 +151,7 @@ by newlines, dropping the rest.
 and the REST `MessageDto` are unchanged — a multimodal turn does not yet
 round-trip through `TurnRunner`/`ConversationStore`; the capability lands
 for direct `runChat()` embedders today. Widening host storage is the
-attachments phase ([`docs/roadmap.md`](roadmap.md), P2). Full rationale:
+attachments phase ([`docs/roadmap.md`](roadmap.md), P5c). Full rationale:
 [ADR 0002](adr/0002-multimodal-content.md).
 
 ## The tool envelope
