@@ -41,6 +41,7 @@ import {
   EMULATED_TOOL_CALL_MESSAGE,
   looksLikeEmulatedToolCall,
 } from "./emulated-tool-call.js";
+import { reconcileOrphanToolCalls } from "./history-reconcile.js";
 import { orderMessagesForProvider } from "./message-order.js";
 import { stageRegistry } from "./registry-staging.js";
 import {
@@ -816,6 +817,13 @@ export class TurnRunner implements TaskWorker {
    * turn ends up completing someone else's sentence. `role: "system"` records
    * are skipped too: those are UI banners the host wrote about the turn, not
    * prompt material.
+   *
+   * The result is then balanced in BOTH directions before it leaves: a tool
+   * result whose requesting turn fell outside the window is dropped (below), and
+   * a tool call whose result never got written is answered with a synthetic
+   * failure (see {@link reconcileOrphanToolCalls}). Either imbalance is rejected
+   * outright by every provider, and both are reachable — the first from the
+   * history limit, the second from a turn that died between two writes.
    */
   private async assembleMessages(
     chatId: string,
@@ -865,7 +873,7 @@ export class TurnRunner implements TaskWorker {
         });
       }
     }
-    return messages;
+    return reconcileOrphanToolCalls(messages);
   }
 
   private async resolveProvider(
