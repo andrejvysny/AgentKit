@@ -21,8 +21,10 @@ import {
   LeaseLostError,
   RecordNotFoundError,
   SeqConflictError,
+  UnknownDependencyError,
   assertProposalTransition,
   assertTaskTransition,
+  evaluateTaskDependencies,
   type ApplyOutcome,
   type ApplyProposalInput,
   type AppendEventsOptions,
@@ -223,6 +225,26 @@ export class FakeTaskStore implements TaskStore {
         taskId: input.taskId,
       });
     }
+    // Deps must pre-exist, exactly as the real adapters demand — a fake that
+    // accepted a dangling edge would let a service test build a graph no store
+    // would ever have stored.
+    if (
+      input.parentTaskId !== undefined &&
+      !this.tasks.has(input.parentTaskId)
+    ) {
+      throw new UnknownDependencyError(
+        `Task ${input.taskId} names a parent that does not exist: ${input.parentTaskId}.`,
+        { taskId: input.taskId, parentTaskId: input.parentTaskId },
+      );
+    }
+    for (const dependency of input.dependsOn ?? []) {
+      if (dependency === input.taskId || !this.tasks.has(dependency)) {
+        throw new UnknownDependencyError(
+          `Task ${input.taskId} depends on ${dependency}, which does not exist.`,
+          { taskId: input.taskId, dependsOn: dependency },
+        );
+      }
+    }
     const now = this.clock.nowIso();
     const task: TaskRecord = {
       taskId: input.taskId,
@@ -233,6 +255,12 @@ export class FakeTaskStore implements TaskStore {
       enqueuedAt: now,
       availableAt: input.availableAt ?? now,
       payload: input.payload,
+      ...(input.parentTaskId === undefined
+        ? {}
+        : { parentTaskId: input.parentTaskId }),
+      ...(input.dependsOn === undefined
+        ? {}
+        : { dependsOn: [...input.dependsOn] }),
       attemptCount: 0,
       poisonCount: 0,
     };
@@ -242,6 +270,12 @@ export class FakeTaskStore implements TaskStore {
 
   async getTask(taskId: string): Promise<TaskRecord | null> {
     return this.tasks.get(taskId) ?? null;
+  }
+
+  async listChildren(taskId: string): Promise<TaskRecord[]> {
+    return [...this.tasks.values()].filter(
+      (task) => task.parentTaskId === taskId,
+    );
   }
 
   async transitionTask(
@@ -381,10 +415,28 @@ export class FakeTaskStore implements TaskStore {
     return log[log.length - 1]!.seq + 1;
   }
 
+  async updateProgress(
+    taskId: string,
+    progress: Record<string, unknown>,
+    opts: { leaseToken: string },
+  ): Promise<TaskRecord> {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+    const lease = this.leases.get(taskId);
+    if (!lease || lease.leaseToken !== opts.leaseToken) {
+      throw new LeaseLostError(
+        `Lease token ${opts.leaseToken} is not current for task ${taskId}.`,
+        { taskId, leaseToken: opts.leaseToken },
+      );
+    }
+    task.progress = progress;
+    return task;
+  }
+
   async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
     const busy = new Set(input.scopesBusy);
     const kinds = input.kinds === undefined ? null : new Set(input.kinds);
-    const candidate = [...this.tasks.values()]
+    const candidates = [...this.tasks.values()]
       .filter(
         (task) =>
           task.status === "queued" &&
@@ -392,20 +444,43 @@ export class FakeTaskStore implements TaskStore {
           (kinds === null || kinds.has(task.kind)) &&
           new Date(task.availableAt).getTime() <= input.now.getTime(),
       )
-      .sort((a, b) => b.priority - a.priority)[0];
-    if (!candidate) return null;
-    const attempt = await this.createAttempt({
-      attemptId: this.ids.attemptId(),
-      taskId: candidate.taskId,
-      ownerId: input.ownerId,
-    });
-    const lease = await this.acquireLease({
-      taskId: candidate.taskId,
-      attemptId: attempt.attemptId,
-      ownerId: input.ownerId,
-      ttlMs: 30_000,
-    });
-    return { task: candidate, attempt, lease };
+      .sort((a, b) => b.priority - a.priority);
+    for (const candidate of candidates) {
+      // The dependency gate is queue semantics, so the fake enforces it too —
+      // see TaskStore.claimNext. Bad dependencies settle the dependent in place
+      // and the scan moves on.
+      const verdict = evaluateTaskDependencies(
+        (candidate.dependsOn ?? []).map((dependencyId) => {
+          const dependency = this.tasks.get(dependencyId);
+          return {
+            taskId: dependencyId,
+            status: dependency?.status ?? null,
+            deadLettered: dependency?.deadLetteredAt !== undefined,
+          };
+        }),
+      );
+      if (verdict.kind === "blocked") continue;
+      if (verdict.kind === "settle") {
+        await this.transitionTask(candidate.taskId, ["queued"], verdict.to, {
+          finishedAt: this.clock.nowIso(),
+          ...(verdict.error === undefined ? {} : { error: verdict.error }),
+        });
+        continue;
+      }
+      const attempt = await this.createAttempt({
+        attemptId: this.ids.attemptId(),
+        taskId: candidate.taskId,
+        ownerId: input.ownerId,
+      });
+      const lease = await this.acquireLease({
+        taskId: candidate.taskId,
+        attemptId: attempt.attemptId,
+        ownerId: input.ownerId,
+        ttlMs: 30_000,
+      });
+      return { task: candidate, attempt, lease };
+    }
+    return null;
   }
 
   async markDeadLettered(taskId: string, reason: string): Promise<TaskRecord> {

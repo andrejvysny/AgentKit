@@ -3,7 +3,8 @@ import type { AssistantStore } from "../ports/assistant-store.js";
 import { defaultClock, type Clock, type Logger } from "../ports/system.js";
 import type { TaskExecution, TaskWorker } from "../ports/task-runner.js";
 import { loadExecutableTask } from "./load-executable-task.js";
-import type { TaskExecutor } from "./task-executor.js";
+import type { SpawnChildInput, TaskExecutor } from "./task-executor.js";
+import type { TaskService } from "./task-service.js";
 
 /**
  * The kind → executor table one worker process dispatches through.
@@ -61,6 +62,14 @@ export interface DispatchingWorkerDeps {
    */
   clock?: Clock;
   logger?: Logger;
+  /**
+   * Enables {@link TaskExecutionContext.spawnChild} for every executor this
+   * worker dispatches to. Omit it and `spawnChild` is `undefined` rather than a
+   * stub that throws or, worse, one that writes a task row nobody pokes the
+   * queue about: whether this process can submit work is a wiring fact, and an
+   * executor is better off seeing the absence than discovering it at runtime.
+   */
+  taskService?: TaskService;
 }
 
 /**
@@ -98,7 +107,22 @@ export function createDispatchingWorker(
         kind: task.kind,
         attemptId,
       });
-      await executor.execute({ task, attemptId, leaseToken, signal });
+      const taskService = deps.taskService;
+      await executor.execute({
+        task,
+        attemptId,
+        leaseToken,
+        signal,
+        // Bound to THIS task: the executor names the work, the dispatcher names
+        // the parent. An executor cannot spawn a child under someone else's
+        // lineage, and cannot forget to record its own.
+        ...(taskService === undefined
+          ? {}
+          : {
+              spawnChild: (input: SpawnChildInput) =>
+                taskService.submitTask({ ...input, parentTaskId: taskId }),
+            }),
+      });
     },
   };
 }

@@ -17,6 +17,7 @@
 // vocabulary asks every OTHER consumer to follow.
 import type {
   AssistantStore,
+  Clock,
   CreateProposalInput,
   CreateTaskInput,
 } from "@agentkit/host";
@@ -58,12 +59,56 @@ export interface AssistantStoreConformanceTestApi {
   beforeEach?: (fn: () => void | Promise<void>) => void;
 }
 
+/** A {@link Clock} a test drives by hand. */
+export interface ConformanceClock extends Clock {
+  advance(ms: number): void;
+}
+
+/**
+ * Construction knobs the queue tests need but `create()` cannot express.
+ *
+ * Aging is a function of how long a task has waited, so the only way to observe
+ * it is to control the clock the store stamps `enqueuedAt` from — two tasks
+ * created a millisecond apart carry the same age whatever `now` a claim passes.
+ * Hence the clock is part of the tuning, not an extra.
+ */
+export interface ConformanceTuning {
+  /** What the store stamps `enqueuedAt` / `availableAt` from. */
+  clock: ConformanceClock;
+  /** Aging knobs. Absent means the adapter's own defaults, i.e. aging off. */
+  aging?: {
+    agingIntervalMs?: number;
+    agingBonus?: number;
+    agingMaxBonus?: number;
+  };
+}
+
 export interface DescribeAssistantStoreConformanceOptions {
   /** Adapter name, folded into every `describe` block title. */
   name: string;
   /** Builds one fresh, isolated store per test — never shared across `it()`s. */
   create: () => Promise<AssistantStoreConformanceHarness>;
+  /**
+   * Builds a store with an injected clock and optional priority aging. Adapters
+   * that cannot be constructed that way omit it and the aging tests are skipped
+   * rather than failed — the rest of the suite still grades them.
+   */
+  createTuned?: (
+    tuning: ConformanceTuning,
+  ) => Promise<AssistantStoreConformanceHarness>;
   test: AssistantStoreConformanceTestApi;
+}
+
+/** A clock frozen at `startIso` that only moves when a test says so. */
+function createConformanceClock(startIso: string): ConformanceClock {
+  let current = new Date(startIso).getTime();
+  return {
+    now: () => new Date(current),
+    nowIso: () => new Date(current).toISOString(),
+    advance: (ms: number) => {
+      current += ms;
+    },
+  };
 }
 
 /** Catches a rejection and asserts its `code` field — see the module doc on why `code`, not `instanceof`. */
@@ -105,7 +150,7 @@ async function expectRejects(
 export function describeAssistantStoreConformance(
   options: DescribeAssistantStoreConformanceOptions,
 ): void {
-  const { name, create, test } = options;
+  const { name, create, createTuned, test } = options;
   const { describe, it, expect } = test;
 
   let counter = 0;
@@ -648,6 +693,408 @@ export function describeAssistantStoreConformance(
           scopesBusy: [scope],
         });
         expect(second).toBeNull();
+      } finally {
+        close?.();
+      }
+    });
+
+    it("rejects a task whose parent, dependency, or self-reference is unknown", async () => {
+      const { store, close } = await create();
+      try {
+        const existing = await store.tasks.createTask(makeTaskInput());
+        await expectRejectsWithCode(
+          store.tasks.createTask(makeTaskInput({ dependsOn: ["task-nobody"] })),
+          "unknown_dependency",
+          expect,
+        );
+        await expectRejectsWithCode(
+          store.tasks.createTask(makeTaskInput({ parentTaskId: "task-nobody" })),
+          "unknown_dependency",
+          expect,
+        );
+        // Depending on itself is the smallest possible cycle, and the row does
+        // not exist yet either — both readings say no.
+        const selfId = uniqueId("task");
+        await expectRejectsWithCode(
+          store.tasks.createTask(
+            makeTaskInput({ taskId: selfId, dependsOn: [selfId] }),
+          ),
+          "unknown_dependency",
+          expect,
+        );
+        // A rejected create leaves nothing behind, and the legal shape works.
+        expect(await store.tasks.getTask(selfId)).toBeNull();
+        const child = await store.tasks.createTask(
+          makeTaskInput({
+            parentTaskId: existing.taskId,
+            dependsOn: [existing.taskId],
+          }),
+        );
+        const stored = await store.tasks.getTask(child.taskId);
+        expect(stored?.parentTaskId).toBe(existing.taskId);
+        expect(stored?.dependsOn).toEqual([existing.taskId]);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("claimNext skips a dependent until its dependency completes", async () => {
+      const { store, close } = await create();
+      try {
+        const dependency = await store.tasks.createTask(makeTaskInput());
+        // Priority 10 against the dependency's 0: without the gate this task
+        // wins every claim below, so the assertions cannot pass by accident.
+        const dependent = await store.tasks.createTask(
+          makeTaskInput({ dependsOn: [dependency.taskId], priority: 10 }),
+        );
+        const first = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(first?.task.taskId).toBe(dependency.taskId);
+        // The dependency is running now — still not a reason to start the
+        // dependent, and its scope is free so nothing else is holding it back.
+        expect(
+          await store.tasks.claimNext({
+            ownerId: "worker-2",
+            now: new Date(),
+            scopesBusy: [],
+          }),
+        ).toBeNull();
+        await store.tasks.transitionTask(
+          dependency.taskId,
+          ["running"],
+          "completed",
+        );
+        const second = await store.tasks.claimNext({
+          ownerId: "worker-2",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(second?.task.taskId).toBe(dependent.taskId);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("claimNext fails a dependent whose dependency failed, and claims other work in the same call", async () => {
+      const { store, close } = await create();
+      try {
+        const dependency = await store.tasks.createTask(makeTaskInput());
+        const dependent = await store.tasks.createTask(
+          makeTaskInput({ dependsOn: [dependency.taskId], priority: 10 }),
+        );
+        const unrelated = await store.tasks.createTask(makeTaskInput());
+        await store.tasks.transitionTask(
+          dependency.taskId,
+          ["queued"],
+          "running",
+        );
+        await store.tasks.transitionTask(
+          dependency.taskId,
+          ["running"],
+          "failed",
+          { error: "boom" },
+        );
+
+        // The doomed task sorts FIRST (priority 10) and is settled rather than
+        // claimed; the scan then carries on to the work that is still runnable.
+        const claimed = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(claimed?.task.taskId).toBe(unrelated.taskId);
+
+        const settled = await store.tasks.getTask(dependent.taskId);
+        expect(settled?.status).toBe("failed");
+        expect(settled?.error).toBe(`dependency_failed: ${dependency.taskId}`);
+        expect(settled?.finishedAt).toBeDefined();
+        // Settled, not run: no attempt was ever created for it.
+        expect(settled?.attemptCount).toBe(0);
+        expect(settled?.startedAt).toBeUndefined();
+      } finally {
+        close?.();
+      }
+    });
+
+    it("claimNext cancels a dependent whose dependency was cancelled, with no error string", async () => {
+      const { store, close } = await create();
+      try {
+        const dependency = await store.tasks.createTask(makeTaskInput());
+        const dependent = await store.tasks.createTask(
+          makeTaskInput({ dependsOn: [dependency.taskId] }),
+        );
+        await store.tasks.transitionTask(
+          dependency.taskId,
+          ["queued"],
+          "cancelled",
+        );
+        expect(
+          await store.tasks.claimNext({
+            ownerId: "worker-1",
+            now: new Date(),
+            scopesBusy: [],
+          }),
+        ).toBeNull();
+        const settled = await store.tasks.getTask(dependent.taskId);
+        expect(settled?.status).toBe("cancelled");
+        // Cancellation is not a failure; recording one as an error would make
+        // every "why did this fail?" query lie.
+        expect(settled?.error).toBeUndefined();
+        expect(settled?.finishedAt).toBeDefined();
+      } finally {
+        close?.();
+      }
+    });
+
+    it("settles a whole A←B←C dependency chain over successive claims", async () => {
+      const { store, close } = await create();
+      try {
+        const a = await store.tasks.createTask(makeTaskInput());
+        const b = await store.tasks.createTask(
+          makeTaskInput({ dependsOn: [a.taskId] }),
+        );
+        const c = await store.tasks.createTask(
+          makeTaskInput({ dependsOn: [b.taskId] }),
+        );
+        await store.tasks.transitionTask(a.taskId, ["queued"], "running");
+        await store.tasks.transitionTask(a.taskId, ["running"], "failed", {
+          error: "boom",
+        });
+
+        // Lazy sweeps: every pass settles what the previous one unblocked, and
+        // no pass ever has anything to claim.
+        for (let sweep = 0; sweep < 3; sweep++) {
+          expect(
+            await store.tasks.claimNext({
+              ownerId: "worker-1",
+              now: new Date(),
+              scopesBusy: [],
+            }),
+          ).toBeNull();
+        }
+
+        const settledB = await store.tasks.getTask(b.taskId);
+        const settledC = await store.tasks.getTask(c.taskId);
+        expect(settledB?.status).toBe("failed");
+        expect(settledB?.error).toBe(`dependency_failed: ${a.taskId}`);
+        expect(settledC?.status).toBe("failed");
+        // C names B, not A: the cascade is transitive rather than a broadcast
+        // from the original failure.
+        expect(settledC?.error).toBe(`dependency_failed: ${b.taskId}`);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("fails a dependent whose dependency was dead-lettered, whatever that dependency's status says", async () => {
+      const { store, close } = await create();
+      try {
+        const dependency = await store.tasks.createTask(makeTaskInput());
+        const dependent = await store.tasks.createTask(
+          makeTaskInput({ dependsOn: [dependency.taskId] }),
+        );
+        const claimed = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(claimed?.task.taskId).toBe(dependency.taskId);
+        // Dead-lettering does not move the status: the dependency stays
+        // `running`, which on its own would read as "still in flight". The
+        // dead-letter row is what makes it hopeless.
+        await store.tasks.markDeadLettered(dependency.taskId, "poison");
+        expect(
+          await store.tasks.claimNext({
+            ownerId: "worker-2",
+            now: new Date(),
+            scopesBusy: [],
+          }),
+        ).toBeNull();
+        const settled = await store.tasks.getTask(dependent.taskId);
+        expect(settled?.status).toBe("failed");
+        expect(settled?.error).toBe(`dependency_failed: ${dependency.taskId}`);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("listChildren finds a task's children, and lineage does NOT gate them", async () => {
+      const { store, close } = await create();
+      try {
+        const parent = await store.tasks.createTask(makeTaskInput());
+        const childA = await store.tasks.createTask(
+          makeTaskInput({ parentTaskId: parent.taskId }),
+        );
+        const childB = await store.tasks.createTask(
+          makeTaskInput({ parentTaskId: parent.taskId }),
+        );
+        await store.tasks.createTask(makeTaskInput());
+
+        const children = await store.tasks.listChildren(parent.taskId);
+        expect(children.map((task) => task.taskId).sort()).toEqual(
+          [childA.taskId, childB.taskId].sort(),
+        );
+        // One level, and a childless task answers with an empty list rather
+        // than the whole subtree of anything.
+        expect(await store.tasks.listChildren(childA.taskId)).toEqual([]);
+
+        // A child is ordinary claimable work while its parent is still running:
+        // lineage is not a dependency, which is exactly why both edges exist.
+        const first = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(first?.task.taskId).toBe(parent.taskId);
+        const second = await store.tasks.claimNext({
+          ownerId: "worker-2",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(second?.task.taskId).toBe(childA.taskId);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("updateProgress overwrites the snapshot under the lease, and writes no events", async () => {
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(makeTaskInput());
+        const claimed = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        const leaseToken = claimed?.lease.leaseToken ?? "";
+        const updated = await store.tasks.updateProgress(
+          task.taskId,
+          { done: 1, total: 9 },
+          { leaseToken },
+        );
+        expect(updated.progress).toEqual({ done: 1, total: 9 });
+        expect((await store.tasks.getTask(task.taskId))?.progress).toEqual({
+          done: 1,
+          total: 9,
+        });
+
+        // REPLACES: `total` is gone because the new snapshot does not have it.
+        await store.tasks.updateProgress(
+          task.taskId,
+          { done: 2 },
+          { leaseToken },
+        );
+        expect((await store.tasks.getTask(task.taskId))?.progress).toEqual({
+          done: 2,
+        });
+
+        await expectRejectsWithCode(
+          store.tasks.updateProgress(
+            task.taskId,
+            { done: 99 },
+            { leaseToken: "lease-not-current" },
+          ),
+          "lease_lost",
+          expect,
+        );
+        // The rejected write changed nothing…
+        expect((await store.tasks.getTask(task.taskId))?.progress).toEqual({
+          done: 2,
+        });
+        // …and progress never touches the event log.
+        expect(await store.tasks.listEvents(task.taskId)).toEqual([]);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("ages a long-waiting task past a younger, higher-priority one when aging is enabled", async () => {
+      if (!createTuned) return;
+      const clock = createConformanceClock("2026-03-01T00:00:00.000Z");
+      const { store, close } = await createTuned({
+        clock,
+        aging: { agingIntervalMs: 1_000, agingBonus: 2, agingMaxBonus: 100 },
+      });
+      try {
+        const old = await store.tasks.createTask(
+          makeTaskInput({ priority: 0 }),
+        );
+        clock.advance(60_000); // 60 intervals × 2 = 120, capped at 100
+        const young = await store.tasks.createTask(
+          makeTaskInput({ priority: 10 }),
+        );
+        const claimed = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: clock.now(),
+          scopesBusy: [],
+        });
+        expect(claimed?.task.taskId).toBe(old.taskId);
+        // The younger one is still there, just second.
+        const next = await store.tasks.claimNext({
+          ownerId: "worker-2",
+          now: clock.now(),
+          scopesBusy: [],
+        });
+        expect(next?.task.taskId).toBe(young.taskId);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("caps the aging bonus so a waiting task cannot climb past the ceiling", async () => {
+      if (!createTuned) return;
+      const clock = createConformanceClock("2026-03-01T00:00:00.000Z");
+      const { store, close } = await createTuned({
+        clock,
+        // Same wait as the test above, but the ceiling stops the climb at 5.
+        aging: { agingIntervalMs: 1_000, agingBonus: 2, agingMaxBonus: 5 },
+      });
+      try {
+        await store.tasks.createTask(makeTaskInput({ priority: 0 }));
+        clock.advance(60_000);
+        const young = await store.tasks.createTask(
+          makeTaskInput({ priority: 10 }),
+        );
+        const claimed = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: clock.now(),
+          scopesBusy: [],
+        });
+        expect(claimed?.task.taskId).toBe(young.taskId);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("does NOT age by default: priority alone orders the queue", async () => {
+      if (!createTuned) return;
+      const clock = createConformanceClock("2026-03-01T00:00:00.000Z");
+      const { store, close } = await createTuned({ clock });
+      try {
+        const old = await store.tasks.createTask(
+          makeTaskInput({ priority: 0 }),
+        );
+        // An hour of waiting earns nothing: a queue whose owner never asked for
+        // aging must not have a background sweep overtake an interactive turn.
+        clock.advance(3_600_000);
+        const young = await store.tasks.createTask(
+          makeTaskInput({ priority: 10 }),
+        );
+        const claimed = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: clock.now(),
+          scopesBusy: [],
+        });
+        expect(claimed?.task.taskId).toBe(young.taskId);
+        const next = await store.tasks.claimNext({
+          ownerId: "worker-2",
+          now: clock.now(),
+          scopesBusy: [],
+        });
+        expect(next?.task.taskId).toBe(old.taskId);
       } finally {
         close?.();
       }

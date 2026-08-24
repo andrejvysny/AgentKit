@@ -41,11 +41,14 @@ export interface ExecutionErrorClassification {
  * means the writer's numbering disagrees with the log — a logic bug in the
  * caller. Retrying reproduces it, with a second helping of half-written events.
  *
- * `executor_not_found`, `duplicate_task` and `invalid_task_payload` are the
- * wiring failures: a kind nobody registered, an id already taken, a payload the
- * executor cannot read. All three reproduce identically on every attempt, and
- * none of them is poison — the runner fails the task without dead-lettering it,
- * because a clean diagnosis is not a queue that needs protecting.
+ * `executor_not_found`, `duplicate_task`, `invalid_task_payload` and
+ * `unknown_dependency` are the wiring failures: a kind nobody registered, an id
+ * already taken, a payload the executor cannot read, an edge pointing at a task
+ * that does not exist. All four reproduce identically on every attempt — a
+ * dependency id the store did not have when the submit ran will not appear on
+ * the retry — and none of them is poison: the runner fails the task without
+ * dead-lettering it, because a clean diagnosis is not a queue that needs
+ * protecting.
  */
 const HOST_CODE_KINDS: Readonly<Record<string, ExecutionErrorKind>> =
   Object.freeze({
@@ -57,6 +60,7 @@ const HOST_CODE_KINDS: Readonly<Record<string, ExecutionErrorKind>> =
     duplicate_task: "terminal",
     executor_not_found: "terminal",
     invalid_task_payload: "terminal",
+    unknown_dependency: "terminal",
     revision_conflict: "terminal",
     not_found: "terminal",
   });

@@ -1,4 +1,4 @@
-import { DuplicateTaskError } from "../errors.js";
+import { DuplicateTaskError, InvalidTaskTransitionError } from "../errors.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { Clock, IdGenerator } from "../ports/system.js";
 import type { TaskRunner } from "../ports/task-runner.js";
@@ -9,11 +9,12 @@ export interface TaskServiceDeps {
   taskRunner: TaskRunner;
   ids: IdGenerator;
   /**
-   * Not read by the methods below — the store stamps `enqueuedAt` and
-   * `availableAt` from its OWN clock, and a second "now" here could disagree
-   * with the one the row records. Taken so a host wires this service like every
-   * other one, and so a caller computing a delayed `availableAt` has the same
-   * clock the store will compare it against.
+   * Read only by {@link TaskService.cancelTask}, for the `finishedAt` it stamps
+   * on a cancelled row — the create path does NOT use it, because the store
+   * stamps `enqueuedAt` and `availableAt` from its OWN clock and a second "now"
+   * here could disagree with the one the row records. Taken so a host wires
+   * this service like every other one, and so a caller computing a delayed
+   * `availableAt` has the same clock the store will compare it against.
    */
   clock: Clock;
 }
@@ -27,6 +28,17 @@ export interface CreateTaskInputRequest {
   payload: Record<string, unknown>;
   priority?: number;
   availableAt?: string;
+  /**
+   * Lineage — see {@link TaskRecord.parentTaskId}. Usually not set by hand:
+   * `TaskExecutionContext.spawnChild` presets it to the spawning task.
+   */
+  parentTaskId?: string;
+  /**
+   * Ids that must complete before this task is claimable — see
+   * {@link TaskRecord.dependsOn}. Every one of them must already be persisted,
+   * so a continuation is submitted AFTER the tasks it waits on.
+   */
+  dependsOn?: string[];
 }
 
 /** The subset of a task {@link TaskService.dispatch} needs to poke the queue. */
@@ -73,6 +85,10 @@ export class TaskService {
       ...(input.availableAt === undefined
         ? {}
         : { availableAt: input.availableAt }),
+      ...(input.parentTaskId === undefined
+        ? {}
+        : { parentTaskId: input.parentTaskId }),
+      ...(input.dependsOn === undefined ? {} : { dependsOn: input.dependsOn }),
     });
   }
 
@@ -125,6 +141,69 @@ export class TaskService {
     }
     await this.dispatch(task);
     return task;
+  }
+
+  /**
+   * Cancel a task and, breadth-first, every task descended from it.
+   *
+   * The cascade follows `parentTaskId`, not `dependsOn`: children are work this
+   * task set off, so abandoning the parent abandons the branch. Tasks merely
+   * WAITING on the cancelled one are not touched here — they settle themselves
+   * on the next claim, because `claimNext` reads a cancelled dependency as
+   * "cancel the dependent" (see {@link evaluateTaskDependencies}). One cascade
+   * per edge type, each enforced where that edge lives.
+   *
+   * WHAT IT DOES NOT DO IS FORCE A RUNNING TASK TERMINAL. Flipping a row to
+   * `cancelled` under a worker that is still executing would produce a task the
+   * store calls finished while its executor keeps writing events and side
+   * effects — two answers to "did this run?". So a running (or approval-parked)
+   * descendant is asked to stop through the queue's own cancel path, which
+   * aborts the execution signal and lets the worker land the task itself.
+   * Cancellation of running work is cooperative by construction; this method
+   * makes the request, the executor honours it.
+   *
+   * Cancelling something already terminal is a no-op, and so is cancelling a
+   * task that finished between the read and the write — that lost CAS race
+   * means the task landed on its own outcome, which is the truer one.
+   */
+  async cancelTask(taskId: string): Promise<void> {
+    const visited = new Set<string>();
+    const frontier: string[] = [taskId];
+    while (frontier.length > 0) {
+      const current = frontier.shift()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      await this.cancelOne(current);
+      // Descend even from a task that was already terminal: a completed parent
+      // can still have queued children waiting to run.
+      for (const child of await this.deps.store.tasks.listChildren(current)) {
+        frontier.push(child.taskId);
+      }
+    }
+  }
+
+  /** One node of the {@link TaskService.cancelTask} walk. */
+  private async cancelOne(taskId: string): Promise<void> {
+    const tasks = this.deps.store.tasks;
+    const task = await tasks.getTask(taskId);
+    if (!task) return;
+    if (task.status === "running" || task.status === "waiting_approval") {
+      await this.deps.taskRunner.requestCancel(taskId);
+      return;
+    }
+    if (task.status !== "queued") return;
+    // A queued task is cancelled in the STORE, not through the runner: nobody
+    // has claimed it, so there is no execution to stop, and the row is the only
+    // thing that decides whether it ever starts.
+    try {
+      await tasks.transitionTask(taskId, ["queued"], "cancelled", {
+        finishedAt: this.deps.clock.nowIso(),
+      });
+    } catch (err) {
+      // A claim or another cancel won the race between the read above and this
+      // write. Anything else is a real store failure and must not be swallowed.
+      if (!(err instanceof InvalidTaskTransitionError)) throw err;
+    }
   }
 
   /**

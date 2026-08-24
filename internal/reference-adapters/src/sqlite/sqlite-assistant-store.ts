@@ -31,10 +31,12 @@ import {
   LeaseLostError,
   RecordNotFoundError,
   SeqConflictError,
+  UnknownDependencyError,
   assertProposalTransition,
   assertTaskTransition,
   defaultClock,
   defaultIds,
+  evaluateTaskDependencies,
   type AppendEventsOptions,
   type AppendMessageInput,
   type ApplyOutcome,
@@ -72,14 +74,21 @@ import {
   type ProviderStore,
   type RiskLevel,
   type SettingsStore,
+  type TaskDependencyState,
   type TaskPatch,
   type TaskRecord,
   type TaskStatus,
   type TaskStore,
   type UpdateMessagePatch,
+  type UpdateProgressOptions,
   type WritePolicyMode,
 } from "@agentkit/host";
-import { SCHEMA_V2, SCHEMA_VERSION } from "./schema.js";
+import {
+  resolveTaskAging,
+  type ResolvedTaskAging,
+  type TaskAgingOptions,
+} from "../task-aging.js";
+import { SCHEMA_V3, SCHEMA_VERSION } from "./schema.js";
 
 const DEFAULT_LEASE_TTL_MS = 30_000;
 const DEFAULT_OUTBOX_CLAIM_VISIBILITY_MS = 30_000;
@@ -163,6 +172,9 @@ interface TaskRow {
   started_at: string | null;
   finished_at: string | null;
   payload: string;
+  parent_task_id: string | null;
+  depends_on: string | null;
+  progress: string | null;
   error: string | null;
   attempt_count: number;
   poison_count: number;
@@ -324,6 +336,15 @@ function taskFromRow(row: TaskRow): TaskRecord {
     ...(row.started_at === null ? {} : { startedAt: row.started_at }),
     ...(row.finished_at === null ? {} : { finishedAt: row.finished_at }),
     payload: parseJson<Record<string, unknown>>(row.payload),
+    ...(row.parent_task_id === null
+      ? {}
+      : { parentTaskId: row.parent_task_id }),
+    ...(row.depends_on === null
+      ? {}
+      : { dependsOn: parseJson<string[]>(row.depends_on) }),
+    ...(row.progress === null
+      ? {}
+      : { progress: parseJson<Record<string, unknown>>(row.progress) }),
     ...(row.error === null ? {} : { error: row.error }),
     attemptCount: row.attempt_count,
     poisonCount: row.poison_count,
@@ -758,33 +779,58 @@ class SqliteConversationStore implements ConversationStore {
 // ---------------------------------------------------------------------------
 
 class SqliteTaskStore implements TaskStore {
+  private readonly aging: ResolvedTaskAging;
+
   constructor(
     private readonly conn: SqliteConnection,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly leaseTtlMs: number = DEFAULT_LEASE_TTL_MS,
-  ) {}
+    aging: TaskAgingOptions = {},
+  ) {
+    this.aging = resolveTaskAging(aging);
+  }
 
   async createTask(input: CreateTaskInput): Promise<TaskRecord> {
     const now = this.clock.nowIso();
     const availableAt = input.availableAt ?? now;
     const priority = input.priority ?? 0;
+    // Immutable after create, so the array is copied out of the caller's hands
+    // before it is serialized — and normalized to NULL when absent, which is
+    // what `taskFromRow` reads back as "no gate".
+    const dependsOn =
+      input.dependsOn === undefined ? null : [...input.dependsOn];
     try {
-      this.conn.run(
-        `INSERT INTO tasks
-           (task_id, kind, scope_id, status, priority, enqueued_at, available_at, payload, attempt_count, poison_count)
-         VALUES
-           ($taskId, $kind, $scopeId, 'queued', $priority, $now, $availableAt, $payload, 0, 0)`,
-        {
-          $taskId: input.taskId,
-          $kind: input.kind,
-          $scopeId: input.scopeId,
-          $priority: priority,
-          $now: now,
-          $availableAt: availableAt,
-          $payload: toJson(input.payload),
-        },
-      );
+      // Inside a transaction with the INSERT: the existence proof and the write
+      // that relies on it must not be separated by another connection's commit,
+      // or a concurrent delete between them would leave the dangling edge this
+      // check exists to prevent.
+      this.conn.withTx(() => {
+        this.assertDependenciesExist(
+          input.taskId,
+          input.parentTaskId,
+          dependsOn,
+        );
+        this.conn.run(
+          `INSERT INTO tasks
+             (task_id, kind, scope_id, status, priority, enqueued_at, available_at, payload,
+              parent_task_id, depends_on, attempt_count, poison_count)
+           VALUES
+             ($taskId, $kind, $scopeId, 'queued', $priority, $now, $availableAt, $payload,
+              $parentTaskId, $dependsOn, 0, 0)`,
+          {
+            $taskId: input.taskId,
+            $kind: input.kind,
+            $scopeId: input.scopeId,
+            $priority: priority,
+            $now: now,
+            $availableAt: availableAt,
+            $payload: toJson(input.payload),
+            $parentTaskId: input.parentTaskId ?? null,
+            $dependsOn: dependsOn === null ? null : toJson(dependsOn),
+          },
+        );
+      });
     } catch (err) {
       // The PK collision IS the idempotency guard doing its job; leaking the
       // raw SQLite constraint error would make every caller match on a driver
@@ -809,6 +855,10 @@ class SqliteTaskStore implements TaskStore {
       enqueuedAt: now,
       availableAt,
       payload: input.payload,
+      ...(input.parentTaskId === undefined
+        ? {}
+        : { parentTaskId: input.parentTaskId }),
+      ...(dependsOn === null ? {} : { dependsOn }),
       attemptCount: 0,
       poisonCount: 0,
     };
@@ -817,6 +867,14 @@ class SqliteTaskStore implements TaskStore {
   async getTask(taskId: string): Promise<TaskRecord | null> {
     const row = this.selectTaskRow(taskId);
     return row ? taskFromRow(row) : null;
+  }
+
+  async listChildren(taskId: string): Promise<TaskRecord[]> {
+    const rows = this.conn.all(
+      `SELECT * FROM tasks WHERE parent_task_id = $parentTaskId ORDER BY enqueued_at ASC, rowid ASC`,
+      { $parentTaskId: taskId },
+    ) as TaskRow[];
+    return rows.map(taskFromRow);
   }
 
   async transitionTask(
@@ -1110,30 +1168,79 @@ class SqliteTaskStore implements TaskStore {
     return (row.maxSeq ?? -1) + 1;
   }
 
+  async updateProgress(
+    taskId: string,
+    progress: Record<string, unknown>,
+    opts: UpdateProgressOptions,
+  ): Promise<TaskRecord> {
+    return this.conn.withTx(() => {
+      const row = this.selectTaskRow(taskId);
+      if (!row) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+      // The same ownership proof `appendEvents` demands, read inside the same
+      // transaction as the write it guards.
+      const lease = this.conn.get(
+        `SELECT lease_token FROM leases WHERE task_id = $taskId`,
+        { $taskId: taskId },
+      ) as { lease_token: string } | null;
+      if (!lease || lease.lease_token !== opts.leaseToken) {
+        throw new LeaseLostError(
+          `Lease token ${opts.leaseToken} is not current for task ${taskId}.`,
+          { taskId, leaseToken: opts.leaseToken },
+        );
+      }
+      // Plain assignment, not COALESCE: progress is an overwritten snapshot,
+      // and the whole shape belongs to the latest writer.
+      this.conn.run(`UPDATE tasks SET progress = $progress WHERE task_id = $id`, {
+        $progress: toJson(progress),
+        $id: taskId,
+      });
+      return taskFromRow(this.selectTaskRow(taskId)!);
+    });
+  }
+
   async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
     return this.conn.withAsyncTx(async () => {
       const nowIso = input.now.toISOString();
-      const row = this.selectClaimCandidate(
+      const rows = this.selectClaimCandidates(
         nowIso,
         input.scopesBusy,
         input.kinds,
       );
-      if (!row) return null;
-      const task = await this.transitionTask(row.task_id, ["queued"], "running", {
-        startedAt: this.clock.nowIso(),
-      });
-      const attempt = await this.createAttempt({
-        attemptId: this.ids.attemptId(),
-        taskId: task.taskId,
-        ownerId: input.ownerId,
-      });
-      const lease = await this.acquireLease({
-        taskId: task.taskId,
-        attemptId: attempt.attemptId,
-        ownerId: input.ownerId,
-        ttlMs: this.leaseTtlMs,
-      });
-      return { task, attempt, lease };
+      // Walk the ordered candidates rather than taking the first: the head of
+      // the queue can be gated on a dependency still in flight, or doomed by
+      // one that failed, and neither may hide the claimable work behind it.
+      for (const row of rows) {
+        const verdict = evaluateTaskDependencies(this.dependencyStates(row));
+        if (verdict.kind === "blocked") continue;
+        if (verdict.kind === "settle") {
+          // Settled here, on the claim path, instead of by a background sweep
+          // — see TaskStore.claimNext. The scan then continues past it.
+          await this.transitionTask(row.task_id, ["queued"], verdict.to, {
+            finishedAt: this.clock.nowIso(),
+            ...(verdict.error === undefined ? {} : { error: verdict.error }),
+          });
+          continue;
+        }
+        const task = await this.transitionTask(
+          row.task_id,
+          ["queued"],
+          "running",
+          { startedAt: this.clock.nowIso() },
+        );
+        const attempt = await this.createAttempt({
+          attemptId: this.ids.attemptId(),
+          taskId: task.taskId,
+          ownerId: input.ownerId,
+        });
+        const lease = await this.acquireLease({
+          taskId: task.taskId,
+          attemptId: attempt.attemptId,
+          ownerId: input.ownerId,
+          ttlMs: this.leaseTtlMs,
+        });
+        return { task, attempt, lease };
+      }
+      return null;
     });
   }
 
@@ -1160,9 +1267,25 @@ class SqliteTaskStore implements TaskStore {
 
   /**
    * The claim query: status/availableAt/scope/kind filters, ordered by
-   * effective priority (`priority + floor(waitMs / 30s)`) desc, then
-   * `enqueued_at` asc, then `rowid` asc as a final deterministic tie-break
-   * (insertion order, for when two rows share a millisecond timestamp).
+   * effective priority desc, then `enqueued_at` asc, then `rowid` asc as a
+   * final deterministic tie-break (insertion order, for when two rows share a
+   * millisecond timestamp).
+   *
+   * Effective priority is `priority + min(maxBonus, floor(waitMs / intervalMs)
+   * * bonus)` — the formula in `../task-aging.ts`, expressed in SQL so the
+   * ORDER BY sees it rather than the caller re-sorting a page of rows that was
+   * already chosen by the wrong key. With the default `bonus = 0` the term
+   * folds to zero and the ordering is plain `priority DESC, enqueued_at ASC`.
+   * The wait is computed via `julianday` (days as a float) rather than
+   * `strftime('%s')` (whole seconds), because an aging interval shorter than a
+   * second is otherwise silently rounded to "no wait at all".
+   *
+   * RETURNS EVERY CANDIDATE, ordered, not just the first — `claimNext` has to
+   * be able to walk past a task its dependencies are still gating. That is a
+   * full read of the claimable set for this worker, which is the honest cost of
+   * doing dependency gating outside SQL in a reference adapter; a store that
+   * expected a very deep queue would push the gate into the query (a
+   * `depends_on` edge table with a NOT EXISTS correlated subquery) instead.
    *
    * `$now` is the CALLER-SUPPLIED `ClaimNextInput.now`, bound once and reused
    * in both the WHERE filter and the aging expression — not SQL's own
@@ -1176,13 +1299,18 @@ class SqliteTaskStore implements TaskStore {
    * worker with an empty executor registry can claim nothing, and quietly
    * treating that as unfiltered would hand it work it cannot run.
    */
-  private selectClaimCandidate(
+  private selectClaimCandidates(
     nowIso: string,
     scopesBusy: string[],
     kinds: string[] | undefined,
-  ): TaskRow | null {
+  ): TaskRow[] {
     let sql = `SELECT * FROM tasks WHERE status = 'queued' AND available_at <= $now`;
-    const params: Params = { $now: nowIso };
+    const params: Params = {
+      $now: nowIso,
+      $agingIntervalMs: this.aging.intervalMs,
+      $agingBonus: this.aging.bonus,
+      $agingMaxBonus: this.aging.maxBonus,
+    };
     if (scopesBusy.length > 0) {
       const placeholders = scopesBusy.map((_, i) => `$busy${i}`).join(", ");
       sql += ` AND scope_id NOT IN (${placeholders})`;
@@ -1191,16 +1319,66 @@ class SqliteTaskStore implements TaskStore {
       });
     }
     if (kinds !== undefined) {
-      if (kinds.length === 0) return null;
+      if (kinds.length === 0) return [];
       const placeholders = kinds.map((_, i) => `$kind${i}`).join(", ");
       sql += ` AND kind IN (${placeholders})`;
       kinds.forEach((kind, i) => {
         params[`$kind${i}`] = kind;
       });
     }
-    sql += ` ORDER BY (priority + CAST((strftime('%s', $now) - strftime('%s', enqueued_at)) / 30 AS INTEGER)) DESC,
-             enqueued_at ASC, rowid ASC LIMIT 1`;
-    return (this.conn.get(sql, params) as TaskRow | undefined) ?? null;
+    sql += ` ORDER BY (priority + MIN($agingMaxBonus,
+               CAST(MAX(0, (julianday($now) - julianday(enqueued_at)) * 86400000.0)
+                    / $agingIntervalMs AS INTEGER) * $agingBonus)) DESC,
+             enqueued_at ASC, rowid ASC`;
+    return this.conn.all(sql, params) as TaskRow[];
+  }
+
+  /** The narrow projection {@link evaluateTaskDependencies} grades. */
+  private dependencyStates(row: TaskRow): TaskDependencyState[] {
+    if (row.depends_on === null) return [];
+    return parseJson<string[]>(row.depends_on).map((dependencyId) => {
+      const dependency = this.conn.get(
+        `SELECT status, dead_lettered_at FROM tasks WHERE task_id = $id`,
+        { $id: dependencyId },
+      ) as { status: string; dead_lettered_at: string | null } | null;
+      return {
+        taskId: dependencyId,
+        status: dependency === null ? null : (dependency.status as TaskStatus),
+        deadLettered:
+          dependency !== null && dependency.dead_lettered_at !== null,
+      };
+    });
+  }
+
+  /**
+   * Prove every edge a new task declares points at a row that already exists —
+   * the acyclicity guarantee, enforced at write time. See
+   * {@link UnknownDependencyError}.
+   */
+  private assertDependenciesExist(
+    taskId: string,
+    parentTaskId: string | undefined,
+    dependsOn: string[] | null,
+  ): void {
+    if (
+      parentTaskId !== undefined &&
+      this.selectTaskRow(parentTaskId) === null
+    ) {
+      throw new UnknownDependencyError(
+        `Task ${taskId} names parent ${parentTaskId}, which does not exist.`,
+        { taskId, parentTaskId },
+      );
+    }
+    for (const dependency of dependsOn ?? []) {
+      // Self-dependency first and by identity: the row is not written yet, so
+      // a plain existence check would report the wrong reason for it.
+      if (dependency === taskId || this.selectTaskRow(dependency) === null) {
+        throw new UnknownDependencyError(
+          `Task ${taskId} depends on ${dependency}, which does not exist.`,
+          { taskId, dependsOn: dependency },
+        );
+      }
+    }
   }
 }
 
@@ -1715,7 +1893,7 @@ function assertSchemaVersion(db: Database, path: string): void {
 // Aggregate
 // ---------------------------------------------------------------------------
 
-export interface SqliteAssistantStoreOptions {
+export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
   /** Defaults to {@link defaultClock} (real wall-clock). */
   clock?: Clock;
   /** Defaults to {@link defaultIds} (UUID-backed). */
@@ -1759,13 +1937,19 @@ export class SqliteAssistantStore implements AssistantStore {
     // Idempotent: every statement is CREATE ... IF NOT EXISTS / INSERT OR
     // IGNORE, so reopening the same file (or a file another process already
     // initialized) is a safe no-op.
-    db.exec(SCHEMA_V2);
+    db.exec(SCHEMA_V3);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
     this.conn = new SqliteConnection(db);
     const clock = options.clock ?? defaultClock;
     const ids = options.ids ?? defaultIds;
     this.conversations = new SqliteConversationStore(this.conn, clock, ids);
-    this.tasks = new SqliteTaskStore(this.conn, clock, ids, options.leaseTtlMs);
+    this.tasks = new SqliteTaskStore(
+      this.conn,
+      clock,
+      ids,
+      options.leaseTtlMs,
+      options,
+    );
     this.proposals = new SqliteProposalStore(this.conn, clock);
     this.providers = new SqliteProviderStore(this.conn);
     this.settings = new SqliteSettingsStore(this.conn);

@@ -4,6 +4,7 @@
 // implementing every @agentkit/host port. Both pass
 // @agentkit/testing's `describeAssistantStoreConformance` suite.
 
+export * from "./task-aging.js";
 export * from "./memory/memory-assistant-store.js";
 export * from "./sqlite/schema.js";
 export * from "./sqlite/sqlite-assistant-store.js";

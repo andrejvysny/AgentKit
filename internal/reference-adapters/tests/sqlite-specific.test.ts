@@ -51,7 +51,7 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
   );
 
   it(
-    "re-applies SCHEMA_V2 idempotently when the same file is opened again",
+    "re-applies SCHEMA_V3 idempotently when the same file is opened again",
     withTempDb(async (path) => {
       const first = new SqliteAssistantStore(path);
       await first.conversations.createChat({ id: "seed-chat" });
