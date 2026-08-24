@@ -1,5 +1,5 @@
 import type { Clock } from "@agentkit/host";
-import { McpError } from "./errors.js";
+import { McpError, redactedCause } from "./errors.js";
 
 /**
  * Per-server failure policy.
@@ -9,7 +9,9 @@ import { McpError } from "./errors.js";
  * fails — a server whose command does not exist must not be re-spawned on every
  * turn. *Request* resilience decides what happens when a session that WAS
  * healthy drops mid-call: reconnect once or twice and re-issue, because the
- * common case is a server that restarted, not a server that is gone.
+ * common case is a server that restarted, not a server that is gone. That
+ * replay is deliberately limited to failures the request did not survive — a
+ * `tools/call` is not assumed idempotent. See `McpSession.isAutoRetryable`.
  */
 export interface McpResilienceOptions {
   /** Deadline for one `tools/list` or `tools/call`. */
@@ -26,6 +28,16 @@ export interface McpResilienceOptions {
   /** Reconnect+retry rounds for ONE retryable request failure. */
   reconnectMaxAttempts: number;
   reconnectBackoffFactor: number;
+  /**
+   * Whether a REQUEST TIMEOUT may be replayed. Off by default.
+   *
+   * A timeout is an ambiguous delivery: our deadline fired without an answer,
+   * which says nothing about whether the server ran the tool. Auto-retrying one
+   * means a slow-but-successful write executes again — twice, or
+   * `reconnectMaxAttempts + 1` times — while the model is eventually told the
+   * call failed. Turn this on only for a server whose tools are all idempotent.
+   */
+  retryTimeouts: boolean;
 }
 
 export const DEFAULT_MCP_RESILIENCE: McpResilienceOptions = {
@@ -37,6 +49,7 @@ export const DEFAULT_MCP_RESILIENCE: McpResilienceOptions = {
   circuitOpenMs: 5_000,
   reconnectMaxAttempts: 2,
   reconnectBackoffFactor: 2,
+  retryTimeouts: false,
 };
 
 export function resolveMcpResilience(
@@ -117,6 +130,12 @@ export interface DeadlineParams {
   timeoutCode: "mcp_request_timeout" | "mcp_connect_failed";
   /** Phrase naming the operation, already redacted. */
   describe: string;
+  /**
+   * The caller's redactor. Required, not optional: whatever `fn` throws came
+   * from a transport carrying resolved secrets, and it is attached as the
+   * failure's `cause`. See {@link redactedCause}.
+   */
+  redact(text: string): string;
 }
 
 /**
@@ -153,14 +172,14 @@ export async function withDeadline<T>(
       throw new McpError(
         params.timeoutCode,
         `${params.describe} timed out after ${params.timeoutMs}ms.`,
-        { cause: err },
+        { cause: redactedCause(err, params.redact) },
       );
     }
     if (params.signal?.aborted) {
       throw new McpError(
         "mcp_request_aborted",
         `${params.describe} was cancelled.`,
-        { cause: err },
+        { cause: redactedCause(err, params.redact) },
       );
     }
     throw err;

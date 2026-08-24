@@ -100,8 +100,17 @@ All overridable per server via `resilience`.
 | `connectBackoffBaseMs` | `250` | First backoff step; doubles per attempt. |
 | `connectBackoffMaxMs` | `2000` | Backoff ceiling. No jitter. |
 | `circuitOpenMs` | `5000` | Lockout window after a failed cycle. |
-| `reconnectMaxAttempts` | `2` | Reconnect+retry rounds for one retryable request failure. |
+| `reconnectMaxAttempts` | `2` | Reconnect+retry rounds for one auto-retryable request failure. |
 | `reconnectBackoffFactor` | `2` | Growth factor for the reconnect backoff. |
+| `retryTimeouts` | `false` | Whether a request timeout may be replayed. See below. |
+
+**Only a request that never reached the server is auto-retried.** The reconnect
+loop fires on `mcp_not_connected` — the session was already dead — and on
+nothing else. A request **timeout is not** retried: our deadline firing says
+nothing about whether the server ran the tool, so replaying one would execute a
+slow-but-successful write two or three times while the model is told the call
+failed. Set `retryTimeouts: true` per server to opt back in, for a server whose
+tools are all idempotent.
 
 The circuit is a **hard timed lockout**, not a half-open probe: once a cycle
 fails, `connect()` rejects immediately with `mcp_circuit_open` until the window
@@ -116,7 +125,10 @@ same dropped session produce one reconnect and both retry after it.
 
 Every failure is an `McpError` with a stable `code` and a `retryable` verdict,
 classified where the cause is known (our own timer, the transport's `onclose`,
-the SDK's JSON-RPC error code) — never by matching message text.
+the SDK's JSON-RPC error code) — never by matching message text. `retryable` is
+**advisory**: it says a retry could succeed, not that one is safe. The host and
+the model decide, because they know what the tool does; the client's own
+auto-retry gate is the narrower set above.
 
 `mcp_circuit_open`, `mcp_connect_failed`, `mcp_request_timeout`,
 `mcp_request_aborted`, `mcp_reconnect_exhausted`, `mcp_not_connected`,

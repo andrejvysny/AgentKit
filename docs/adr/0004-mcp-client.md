@@ -143,6 +143,18 @@ handling, and preserve OneMind's semantics on top of it:
   Wiring MCP writes into the proposal pipeline (the improvement over OneMind
   the roadmap originally flagged for this phase) did not ship; it remains
   open work.
+- **A request timeout is not auto-retried.** The reconnect-and-re-issue loop
+  fires only where the request provably never reached the server
+  (`mcp_not_connected`). A timeout is an ambiguous delivery — our deadline
+  fired, the server may have run the tool to completion — so replaying one
+  would execute a slow write two or three times while the model is told the
+  call failed. `McpError.retryable` stays as an ADVISORY verdict for the host
+  and the model, who know whether the tool they called is safe to repeat; the
+  client's own gate is the narrower set. `resilience.retryTimeouts: true` opts
+  a server back in, for one whose tools are all idempotent. The cost is that a
+  genuinely slow-but-recoverable server now surfaces `mcp_request_timeout` to
+  the model instead of quietly succeeding on the second try — the right trade
+  when the alternative is a duplicated write.
 - `docs/roadmap.md`'s P2 entry moves to Done referencing this ADR.
 
 ## Out of scope (deliberate)

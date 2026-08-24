@@ -67,7 +67,13 @@ exactly this kind of coordination correctly.
    Settling happens ON THE CLAIM PATH and nothing is ever re-enqueued — a
    chain of dependents settles over successive claim calls, each sweep
    resolving what the previous one unblocked, and the store stays the single
-   writer deciding what is runnable.
+   writer deciding what is runnable. The settle is CLAIM-SHAPED, not merely
+   lazy: the candidate filter (`status = 'queued'`, `availableAt`,
+   `scopesBusy`, `kinds`) runs BEFORE any verdict is reached, so a doomed
+   dependent sitting in a scope that currently has a task running is not a
+   candidate at all and stays `queued` until that scope frees — as does one
+   whose `kind` this worker does not claim. "Settles on the next claim" means
+   the next claim that could have CLAIMED it, not the next claim call.
 4. **`queued → failed` added to `TASK_TRANSITIONS`, for exactly this one
    caller.** A task whose dependency died without ever starting still has to
    be able to end `failed` from `queued` — the dependency cascade is the
@@ -109,7 +115,12 @@ exactly this kind of coordination correctly.
    check `appendEvents` makes) REPLACES `TaskRecord.progress` wholesale and
    never touches the event log. A heartbeat percentage does not belong in
    the durable, replayed record every consumer folds through — only the
-   latest value matters, and losing an intermediate one costs nothing.
+   latest value matters, and losing an intermediate one costs nothing. It
+   lives on the TASK, not on the attempt, so it PERSISTS ACROSS ATTEMPTS:
+   nothing clears it when an attempt ends or a retry begins, and attempt 2
+   reads attempt 1's snapshot until it overwrites it. An executor that reads
+   `progress` as "what this attempt reported" is reading a stale bag; one
+   that wants a clean slate writes one when it starts.
 10. **`SCHEMA_V3`**: `parent_task_id`, `depends_on` (JSON array — not an edge
     table; edges are immutable and read only for the one task being gated,
     so a join table buys nothing and costs a write per submit), and

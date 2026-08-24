@@ -503,24 +503,41 @@ export class MemoryTaskStore implements TaskStore {
     // the queue can be un-runnable (a dependency still in flight) or doomed (a
     // dependency that failed), and neither may hide the claimable work behind
     // it. See TaskStore.claimNext on why the settle happens lazily, here.
+    //
+    // The candidate list is a SNAPSHOT, and every transition below is an
+    // `await` another caller's claimNext can interleave with — so by the time
+    // a candidate's turn comes it may already have been settled or claimed by
+    // that other caller. Losing the queued-> CAS is that race resolving
+    // normally, not a fault: skip the candidate and keep walking. Anything
+    // else still propagates.
     for (const candidate of candidates) {
       const verdict = evaluateTaskDependencies(
         this.dependencyStates(candidate),
       );
       if (verdict.kind === "blocked") continue;
       if (verdict.kind === "settle") {
-        await this.transitionTask(candidate.taskId, ["queued"], verdict.to, {
-          finishedAt: this.clock.nowIso(),
-          ...(verdict.error === undefined ? {} : { error: verdict.error }),
-        });
+        try {
+          await this.transitionTask(candidate.taskId, ["queued"], verdict.to, {
+            finishedAt: this.clock.nowIso(),
+            ...(verdict.error === undefined ? {} : { error: verdict.error }),
+          });
+        } catch (err) {
+          if (!(err instanceof InvalidTaskTransitionError)) throw err;
+        }
         continue;
       }
-      const task = await this.transitionTask(
-        candidate.taskId,
-        ["queued"],
-        "running",
-        { startedAt: this.clock.nowIso() },
-      );
+      let task: TaskRecord;
+      try {
+        task = await this.transitionTask(
+          candidate.taskId,
+          ["queued"],
+          "running",
+          { startedAt: this.clock.nowIso() },
+        );
+      } catch (err) {
+        if (!(err instanceof InvalidTaskTransitionError)) throw err;
+        continue;
+      }
       const attempt = await this.createAttempt({
         attemptId: this.ids.attemptId(),
         taskId: task.taskId,
