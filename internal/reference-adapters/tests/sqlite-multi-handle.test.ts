@@ -11,25 +11,35 @@
  * process A's memory can hold process B back. If two handles are safe together,
  * SQLite's own `BEGIN IMMEDIATE` is what makes them safe.
  *
- * ── WHAT THIS FILE FOUND ──────────────────────────────────────────────────
+ * ── WHAT THIS FILE FOUND, AND WHAT WAS DONE ABOUT IT ──────────────────────
  *
- * `BEGIN IMMEDIATE` alone is NOT enough as the adapter uses it, because the
- * adapter never sets a busy timeout. SQLite's default busy handler returns
- * immediately, so the second connection's `BEGIN IMMEDIATE` fails at once with
- * `SQLITE_BUSY` ("database is locked") and the raw driver error escapes
- * `claimNext`. Two tests below are skipped rather than deleted because they
- * describe what the port promises and the adapter does not yet deliver; the
- * accompanying report has the detail. What DOES hold — and is asserted here —
- * is that the failure is clean: the losing claim writes nothing, and the
- * surviving one is whole.
+ * `BEGIN IMMEDIATE` alone was NOT enough as the adapter used it, because the
+ * adapter set no busy timeout: SQLite's default handler gives up instantly, so
+ * the second connection's BEGIN failed with a raw `SQLITE_BUSY` escaping
+ * `claimNext` — a failure the port documents nowhere. Worse, that throw left
+ * `SqliteConnection.txDepth` raised for the life of the connection, silently
+ * disabling BEGIN/COMMIT/ROLLBACK on every later call. Both are fixed:
+ * `withTx`/`withAsyncTx` now raise the counter only once the transaction is
+ * really open, the store sets `PRAGMA busy_timeout`, and async transactions
+ * wait on the event loop instead of parking the thread. The tests that pinned
+ * those findings are un-skipped below and now assert the fixed behaviour.
  *
- * So the passing coverage is the SERIALIZED interleaving: both handles work the
- * same queue, alternately, each getting its transaction to itself. That is not
- * a weaker test of the shared state — the fencing counter, `attempt_count`, the
- * dependency gate and the claim CAS are all cross-handle in it — it is only a
- * weaker test of lock contention, which is the part that does not work yet.
+ * ── WHAT IS STILL NOT SUPPORTED ───────────────────────────────────────────
+ *
+ * A fully concurrent claim-AND-EXECUTE workload over two handles IN ONE
+ * PROCESS. `claimNext` holds its transaction across `await`s, and the other
+ * handle's SYNCHRONOUS transactions (`appendEvents`, `transitionTask`, …)
+ * cannot wait on the event loop — they can only park the thread, which is the
+ * one thread that could let the holder commit. See the skipped case at the
+ * bottom for the exact reproduction. Concurrent CLAIMS are fine (both are async
+ * and both yield), and so is the cross-PROCESS topology, where the holder runs
+ * on its own thread and `busy_timeout` does exactly the right thing — the
+ * `Bun.spawn` case covers that one.
  */
 import { describe, expect, it } from "bun:test";
+import { Database } from "bun:sqlite";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   checkTaskInvariants,
   createRng,
@@ -40,7 +50,7 @@ import {
   CONTRACT_VERSION,
   type TaskEventEnvelope,
 } from "@agentkit/contracts";
-import type { AssistantStore } from "@agentkit/host";
+import type { AssistantStore, ClaimedTask } from "@agentkit/host";
 import { SqliteAssistantStore } from "../src/index.js";
 import {
   createSqliteHarness,
@@ -255,13 +265,14 @@ describe("SqliteAssistantStore — two handles, one file", () => {
     }
   });
 
-  it("fails cleanly when two handles claim at the same instant", async () => {
-    // CHARACTERIZATION of today's behaviour, and the reason the two cases
-    // after it are skipped: the second connection's `BEGIN IMMEDIATE` cannot
-    // take the write lock and gives up immediately, because the adapter sets no
-    // busy timeout. What is asserted is the part that IS sound — the losing
-    // claim never got as far as writing, so the queue is untouched by it.
-    const scratch = createSqliteScratch("busy");
+  it("hands concurrent cross-handle claims to both callers, with no SQLITE_BUSY", async () => {
+    // WAS SKIPPED as a finding: the second connection's `BEGIN IMMEDIATE` used
+    // to fail instantly with a raw `SQLITE_BUSY` — and adding SQLite's own
+    // busy_timeout made it WORSE, because parking this thread is parking the
+    // only thread that could let the other handle commit (measured: a 5.3s
+    // stall, then the same error). Async transactions now wait on the event
+    // loop instead, so the contention resolves in single-digit milliseconds.
+    const scratch = createSqliteScratch("concurrent");
     const a = new SqliteAssistantStore(scratch.path);
     const b = new SqliteAssistantStore(scratch.path);
     try {
@@ -274,139 +285,359 @@ describe("SqliteAssistantStore — two handles, one file", () => {
         });
       }
       const now = new Date();
-      const settled = await Promise.allSettled([
-        a.tasks.claimNext({ ownerId: "handle-a", now, scopesBusy: [] }),
-        b.tasks.claimNext({ ownerId: "handle-b", now, scopesBusy: [] }),
-      ]);
+      const started = Date.now();
+      // Three claims per handle, all in flight at once: enough that several
+      // must queue behind someone else's write lock.
+      const settled = await Promise.allSettled(
+        [a, b, a, b, a, b].map((store, index) =>
+          store.tasks.claimNext({
+            ownerId: `owner-${index}`,
+            now,
+            scopesBusy: [],
+          }),
+        ),
+      );
+      const elapsed = Date.now() - started;
 
-      const rejected = settled.filter((r) => r.status === "rejected");
-      expect(rejected.length).toBe(1);
-      const reason = (rejected[0] as PromiseRejectedResult).reason as {
-        code?: string;
-      };
-      expect(reason.code).toBe("SQLITE_BUSY");
+      const rejections = settled
+        .filter((r) => r.status === "rejected")
+        .map((r) => String((r as PromiseRejectedResult).reason));
+      expect(rejections).toEqual([]);
 
       const claims = settled
-        .filter((r) => r.status === "fulfilled")
-        .map((r) => (r as PromiseFulfilledResult<unknown>).value)
-        .filter((v): v is { task: { taskId: string } } => v !== null);
-      expect(claims.length).toBe(1);
+        .map((r) => (r as PromiseFulfilledResult<ClaimedTask | null>).value)
+        .filter((claim): claim is ClaimedTask => claim !== null);
+      // Six claimable tasks, six claims, no task handed out twice.
+      expect(claims.length).toBe(6);
+      const claimedIds = claims.map((c) => c.task.taskId);
+      expect(new Set(claimedIds).size).toBe(6);
+      // The fencing counter is one row shared by both connections.
+      expect(new Set(claims.map((c) => c.lease.fencingToken)).size).toBe(6);
+      // Waiting on the event loop, not in SQLite: the parking version took the
+      // full busy timeout and then failed. A generous ceiling — the point is
+      // that no caller sat out a multi-second timeout, not the exact number.
+      expect(elapsed).toBeLessThan(1_000);
 
-      // Exactly one task moved. The loser rolled back before writing anything,
-      // so five rows are still queued with no attempts and there is one lease.
-      const attempts = dumpSqliteAttempts(scratch.path);
-      const leases = dumpSqliteLeases(scratch.path);
-      expect(attempts.length).toBe(1);
-      expect(leases.length).toBe(1);
-      expect(attempts[0]!.taskId).toBe(claims[0]!.task.taskId);
-      let queued = 0;
-      for (let i = 0; i < 6; i += 1) {
-        const task = await a.tasks.getTask(`busy-${i}`);
-        if (task?.status === "queued") {
-          queued += 1;
-          expect(task.attemptCount).toBe(0);
+      const view = await snapshotTaskInvariants({
+        reader: a.tasks,
+        taskIds: claimedIds,
+        observedLeases: claims.map((c, index) => ({
+          ...c.lease,
+          observedAt: index + 1,
+        })),
+        dumpAttempts: () => dumpSqliteAttempts(scratch.path),
+        dumpLiveLeases: () => dumpSqliteLeases(scratch.path),
+        inFlightTaskIds: new Set(claimedIds),
+      });
+      expect(
+        checkTaskInvariants(view, {
+          phase: "in-flight",
+          label: "concurrent cross-handle claims",
+        }),
+      ).toEqual([]);
+    } finally {
+      a.close();
+      b.close();
+      scratch.cleanup();
+    }
+  });
+
+  it("keeps transactions atomic on a handle that has hit SQLITE_BUSY", async () => {
+    // WAS SKIPPED as the more serious of the two findings.
+    // `SqliteConnection.withTx`/`withAsyncTx` raised `txDepth` and THEN issued
+    // `BEGIN IMMEDIATE`, outside the try/finally that lowers it. A BEGIN that
+    // threw left the counter at 1 forever, so every later call took the
+    // "already in a transaction" branch and ran with NO BEGIN, NO COMMIT and NO
+    // ROLLBACK: `transaction(fn)` silently stopped being atomic for the life of
+    // the connection. The counter is now raised only once the transaction is
+    // really open.
+    //
+    // The BUSY is forced with an OUTSIDE lock holder plus a short timeout,
+    // rather than with a second store handle — two handles now wait for each
+    // other, which is the other fix, and this test has to be able to produce a
+    // failed BEGIN on demand however that one behaves.
+    const scratch = createSqliteScratch("txdepth");
+    const store = new SqliteAssistantStore(scratch.path, { busyTimeoutMs: 25 });
+    const blocker = new Database(scratch.path);
+    try {
+      blocker.exec("PRAGMA busy_timeout = 0;");
+      blocker.exec("BEGIN IMMEDIATE");
+
+      // BOTH transaction helpers get their BEGIN refused, because both used to
+      // corrupt the counter and they raise it in different places: `withTx`
+      // around a single port method's SQL, `withAsyncTx` around
+      // `AssistantStore.transaction`.
+      const codes: (string | undefined)[] = [];
+      for (const attempt of [
+        // Synchronous: one port method's own mini-transaction.
+        () =>
+          store.tasks.createTask({
+            taskId: "never-written-sync",
+            kind: "unit",
+            scopeId: "s",
+            payload: {},
+          }),
+        // Asynchronous: the caller's own multi-write transaction.
+        () =>
+          store.transaction(async (tx) => {
+            await tx.tasks.createTask({
+              taskId: "never-written-async",
+              kind: "unit",
+              scopeId: "s",
+              payload: {},
+            });
+          }),
+      ]) {
+        try {
+          await attempt();
+          codes.push(undefined);
+        } catch (err) {
+          codes.push((err as { code?: string }).code);
         }
       }
-      expect(queued).toBe(5);
-    } finally {
-      a.close();
-      b.close();
-      scratch.cleanup();
-    }
-  });
+      // The lock really was unavailable — otherwise the rest proves nothing.
+      expect(codes).toEqual(["SQLITE_BUSY", "SQLITE_BUSY"]);
 
-  it.skip("serializes concurrent claims across handles instead of surfacing SQLITE_BUSY", async () => {
-    // FINDING — NOT A TEST GAP. `TaskStore.claimNext` documents an atomic
-    // claim that "returns null when there is nothing to do"; it does not
-    // document a driver error a caller must know to retry. Today the second
-    // connection's `BEGIN IMMEDIATE` fails instantly with SQLITE_BUSY and that
-    // raw `SQLiteError` escapes, so any host running two processes (or two
-    // handles) over one file sees claims fail under ordinary contention.
-    //
-    // The adapter sets no `PRAGMA busy_timeout`, and `bun:sqlite` defaults to
-    // none, so there is no wait-and-retry at the SQLite level. The fix is in
-    // the adapter — a busy timeout, or catching SQLITE_BUSY on the claim path
-    // and returning null / retrying — which is production source and out of
-    // scope for this landing. Un-skip when it lands: the assertion below is
-    // what the port already promises.
-    const scratch = createSqliteScratch("busy-fixed");
-    const a = new SqliteAssistantStore(scratch.path);
-    const b = new SqliteAssistantStore(scratch.path);
-    try {
-      for (let i = 0; i < 6; i += 1) {
-        await a.tasks.createTask({
-          taskId: `busy-${i}`,
-          kind: "unit",
-          scopeId: `scope-${i}`,
-          payload: {},
-        });
-      }
-      const now = new Date();
-      const claims = await Promise.all([
-        a.tasks.claimNext({ ownerId: "handle-a", now, scopesBusy: [] }),
-        b.tasks.claimNext({ ownerId: "handle-b", now, scopesBusy: [] }),
-      ]);
-      const ids = claims.filter((c) => c !== null).map((c) => c!.task.taskId);
-      expect(ids.length).toBe(2);
-      expect(new Set(ids).size).toBe(2);
-    } finally {
-      a.close();
-      b.close();
-      scratch.cleanup();
-    }
-  });
+      blocker.exec("ROLLBACK");
 
-  it.skip("keeps transactions atomic on a handle that has hit SQLITE_BUSY", async () => {
-    // FINDING, and the more serious of the two. `SqliteConnection.withTx` /
-    // `withAsyncTx` raise `txDepth` and THEN issue `BEGIN IMMEDIATE` outside
-    // the try/finally that lowers it again. When the BEGIN itself throws — which
-    // is exactly what a cross-handle SQLITE_BUSY does — the counter is never
-    // restored, so it sits at 1 for the life of that connection.
-    //
-    // From then on every `withTx`/`withAsyncTx` on that handle takes the
-    // "already in a transaction" branch and runs with NO BEGIN, NO COMMIT and NO
-    // ROLLBACK. `AssistantStore.transaction(fn)` silently stops being atomic:
-    // a throw inside `fn` leaves its writes committed. The conformance suite's
-    // "transaction() rolls back every write when fn throws" passes only because
-    // it never touches a handle that has seen a BUSY.
-    //
-    // Reproduced by the probe this test is written from: after one cross-handle
-    // BUSY, `b.transaction(tx => { createTask(...); throw })` leaves the task
-    // row behind, while the same call on the untouched handle rolls back.
-    // The fix is one line of adapter source (move the BEGIN inside the try, or
-    // lower `txDepth` when it throws) and is out of scope for this landing.
-    const scratch = createSqliteScratch("txdepth");
-    const a = new SqliteAssistantStore(scratch.path);
-    const b = new SqliteAssistantStore(scratch.path);
-    try {
-      await a.tasks.createTask({
-        taskId: "seed",
-        kind: "unit",
-        scopeId: "s",
-        payload: {},
-      });
-      const now = new Date();
-      await Promise.allSettled([
-        a.tasks.claimNext({ ownerId: "handle-a", now, scopesBusy: [] }),
-        b.tasks.claimNext({ ownerId: "handle-b", now, scopesBusy: [] }),
-      ]);
-
+      // THE ASSERTION: the handle is still transactional. Under the bug this
+      // write survived its own rollback.
       await expect(
-        b.transaction(async (tx) => {
+        store.transaction(async (tx) => {
           await tx.tasks.createTask({
             taskId: "rolled-back",
             kind: "unit",
-            scopeId: "s2",
+            scopeId: "s",
             payload: {},
           });
           throw new Error("boom");
         }),
       ).rejects.toThrow("boom");
-      expect(await b.tasks.getTask("rolled-back")).toBeNull();
+      expect(await store.tasks.getTask("rolled-back")).toBeNull();
+
+      // And still usable: the failed BEGIN did not wedge the connection either.
+      await store.tasks.createTask({
+        taskId: "after",
+        kind: "unit",
+        scopeId: "s2",
+        payload: {},
+      });
+      expect((await store.tasks.getTask("after"))?.taskId).toBe("after");
+      const claim = await store.tasks.claimNext({
+        ownerId: "owner",
+        now: new Date(),
+        scopesBusy: [],
+      });
+      expect(claim?.task.taskId).toBe("after");
     } finally {
-      a.close();
-      b.close();
+      blocker.close();
+      store.close();
       scratch.cleanup();
     }
+  });
+
+  it("shares one file with a SECOND BUN PROCESS, each task executed once", async () => {
+    // The topology `busy_timeout` is actually for: the lock holder is another
+    // OS process, running on its own thread, so parking this one is exactly the
+    // right wait — and unlike the single-process case, the holder can commit
+    // while we sleep. This is also the only case in this file where the two
+    // handles are genuinely, uncoordinatedly concurrent through a full
+    // claim-execute-land cycle.
+    const scratch = createSqliteScratch("spawn");
+    const dir = dirname(scratch.path);
+    const workerPath = join(dir, "worker.ts");
+    const readyPath = join(dir, "ready");
+    const goPath = join(dir, "go");
+    const resultPath = join(dir, "child-claims.json");
+    const storeModule = join(import.meta.dir, "..", "src", "index.js");
+
+    // A whole second worker: same store class, same file, no shared memory
+    // whatsoever — the only thing keeping it and the parent apart is SQLite.
+    writeFileSync(
+      workerPath,
+      `import { existsSync, writeFileSync } from "node:fs";
+import { SqliteAssistantStore } from ${JSON.stringify(storeModule)};
+
+const store = new SqliteAssistantStore(process.argv[2]);
+const claimed = [];
+writeFileSync(process.argv[3], "ready");
+// Barrier: the parent writes "go" once it has seen "ready", so neither side
+// can drain the queue while the other is still starting up.
+while (!existsSync(process.argv[5])) await Bun.sleep(1);
+for (let idle = 0; idle < 40; ) {
+  const claim = await store.tasks.claimNext({
+    ownerId: "child",
+    now: new Date(),
+    scopesBusy: [],
+  });
+  if (claim === null) { idle += 1; await Bun.sleep(1); continue; }
+  idle = 0;
+  // A tick of "work" per task, so both processes are in the queue at once
+  // instead of one of them finishing before the other's first claim.
+  await Bun.sleep(1);
+  claimed.push(claim.task.taskId);
+  const seq = await store.tasks.nextSeq(claim.task.taskId);
+  await store.tasks.appendEvents(
+    claim.task.taskId,
+    [{ type: "spawn.done", seq, eventId: "evt-child-" + claim.task.taskId,
+       timestamp: new Date().toISOString(), contractVersion: ${JSON.stringify(CONTRACT_VERSION)},
+       attemptId: claim.attempt.attemptId }],
+    { leaseToken: claim.lease.leaseToken },
+  );
+  await store.tasks.transitionTask(claim.task.taskId, ["running"], "completed", {
+    finishedAt: new Date().toISOString(),
+  });
+  await store.tasks.endAttempt({ attemptId: claim.attempt.attemptId, status: "completed" });
+  await store.tasks.releaseLease(claim.lease.leaseToken);
+}
+writeFileSync(process.argv[4], JSON.stringify(claimed));
+store.close();
+`,
+    );
+
+    const parent = new SqliteAssistantStore(scratch.path);
+    const taskIds: string[] = [];
+    try {
+      for (let i = 0; i < 24; i += 1) {
+        const taskId = `sp${String(i).padStart(2, "0")}`;
+        await parent.tasks.createTask({
+          taskId,
+          kind: "unit",
+          scopeId: `scope-${i}`,
+          payload: {},
+        });
+        taskIds.push(taskId);
+      }
+
+      const child = Bun.spawn({
+        cmd: [
+          "bun",
+          "run",
+          workerPath,
+          scratch.path,
+          readyPath,
+          resultPath,
+          goPath,
+        ],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      // Start together, so the two processes really do contend rather than
+      // taking turns because one of them finished first.
+      const readyBy = Date.now() + 20_000;
+      while (!existsSync(readyPath)) {
+        if (Date.now() > readyBy) throw new Error("child never signalled ready");
+        await Bun.sleep(2);
+      }
+      writeFileSync(goPath, "go");
+
+      const parentClaims: string[] = [];
+      for (let idle = 0; idle < 40; ) {
+        const claim = await parent.tasks.claimNext({
+          ownerId: "parent",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        if (claim === null) {
+          idle += 1;
+          await Bun.sleep(1);
+          continue;
+        }
+        idle = 0;
+        await Bun.sleep(1);
+        parentClaims.push(claim.task.taskId);
+        const seq = await parent.tasks.nextSeq(claim.task.taskId);
+        await parent.tasks.appendEvents(
+          claim.task.taskId,
+          [
+            {
+              type: "spawn.done",
+              seq,
+              eventId: `evt-parent-${claim.task.taskId}`,
+              timestamp: new Date().toISOString(),
+              contractVersion: CONTRACT_VERSION,
+              attemptId: claim.attempt.attemptId,
+            },
+          ],
+          { leaseToken: claim.lease.leaseToken },
+        );
+        await parent.tasks.transitionTask(
+          claim.task.taskId,
+          ["running"],
+          "completed",
+          { finishedAt: new Date().toISOString() },
+        );
+        await parent.tasks.endAttempt({
+          attemptId: claim.attempt.attemptId,
+          status: "completed",
+        });
+        await parent.tasks.releaseLease(claim.lease.leaseToken);
+      }
+
+      const exitCode = await child.exited;
+      if (exitCode !== 0) {
+        throw new Error(
+          `child exited ${exitCode}: ${await new Response(child.stderr).text()}`,
+        );
+      }
+      const childClaims = JSON.parse(
+        readFileSync(resultPath, "utf8"),
+      ) as string[];
+
+      // BOTH processes did work — otherwise this is a one-process test wearing
+      // a costume.
+      expect(parentClaims.length).toBeGreaterThan(0);
+      expect(childClaims.length).toBeGreaterThan(0);
+      // And every task was executed EXACTLY once, across both of them. No
+      // overlap is the whole claim `BEGIN IMMEDIATE` is making.
+      const all = [...parentClaims, ...childClaims];
+      expect(new Set(all).size).toBe(all.length);
+      expect(new Set(all).size).toBe(taskIds.length);
+
+      const view = await snapshotTaskInvariants({
+        reader: parent.tasks,
+        taskIds,
+        dumpAttempts: () => dumpSqliteAttempts(scratch.path),
+        dumpLiveLeases: () => dumpSqliteLeases(scratch.path),
+      });
+      expect(
+        checkTaskInvariants(view, { phase: "quiescent", label: "two processes" }),
+      ).toEqual([]);
+      for (const task of view.tasks) {
+        expect(task.status).toBe("completed");
+        expect(task.attemptCount).toBe(1);
+        // One event, written by whichever process owned the one attempt.
+        expect((view.events.get(task.taskId) ?? []).length).toBe(1);
+      }
+    } finally {
+      parent.close();
+      scratch.cleanup();
+    }
+  }, 30_000);
+
+  it.skip("runs a concurrent claim-AND-EXECUTE workload over two handles in one process", async () => {
+    // REMAINING LIMITATION, pinned rather than asserted — and NOT the one the
+    // busy-timeout work fixed. Concurrent CLAIMS are fine (the test above), and
+    // so is the cross-process topology (the `Bun.spawn` test). What still fails
+    // is both at once IN ONE PROCESS:
+    //
+    //   `SqliteTaskStore.claimNext` holds its transaction across `await`s. The
+    //   other handle's SYNCHRONOUS transactions — `appendEvents`,
+    //   `transitionTask`, `endAttempt`, every `withTx` — cannot wait on the
+    //   event loop, so their `BEGIN IMMEDIATE` parks the thread, which is the
+    //   only thread that could run the holder's continuation and commit. The
+    //   result is a stall for the whole `busy_timeout` and then SQLITE_BUSY.
+    //
+    // Reproduction: `runTaskSchedule` over `createSqliteHarness(2)` with
+    // `workers: 4, tasks: 24, steps: 40`. Seeds 1 and 1337 pass in ~30ms; SEED
+    // 7 stalls 5.3s and throws `SQLiteError: database is locked`.
+    //
+    // The fix is architectural, not a pragma: either the synchronous
+    // transaction helpers become async, or `claimNext` stops holding its
+    // transaction across `await`s (which would also close the documented
+    // `transaction()` flattening hazard). Both are adapter redesigns beyond the
+    // scope this landing was given.
+    expect(true).toBe(true);
   });
 });
