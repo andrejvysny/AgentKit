@@ -80,7 +80,9 @@ async function seed(
   return store;
 }
 
-function options(overrides: RestStreamOptions = {}): Required<RestStreamOptions> {
+function options(
+  overrides: RestStreamOptions = {},
+): Required<RestStreamOptions> {
   return { ...DEFAULT_STREAM_OPTIONS, pollIntervalMs: 2, ...overrides };
 }
 
@@ -177,8 +179,9 @@ describe("createRunEventStream", () => {
     // Documented choice: an id this run's log does not contain cannot be
     // resumed from, and a full replay is the only answer that leaves the
     // client consistent.
-    expect(await resolveStartSeq(store.tasks, TASK_ID, "evt-from-another-run"))
-      .toBe(0);
+    expect(
+      await resolveStartSeq(store.tasks, TASK_ID, "evt-from-another-run"),
+    ).toBe(0);
     expect(await resolveStartSeq(store.tasks, TASK_ID, null)).toBe(0);
   });
 
@@ -250,7 +253,9 @@ describe("createRunEventStream", () => {
     })();
     const raced = await Promise.race([
       finished,
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000)),
+      new Promise<boolean>((resolve) =>
+        setTimeout(() => resolve(false), 1_000),
+      ),
     ]);
     expect(raced).toBe(true);
   });
@@ -267,7 +272,10 @@ describe("createRunEventStream", () => {
       tasks: store.tasks,
       taskId: TASK_ID,
       startSeq: 0,
-      options: options({ pollIntervalMs: 2 }),
+      // Heartbeat pushed out of reach: on a loaded machine the append below
+      // can land >15s after the catch-up poll, and the default heartbeat would
+      // inject an id-less comment frame into the strict id sequence asserted.
+      options: options({ pollIntervalMs: 2, heartbeatIntervalMs: 3_600_000 }),
     });
     const drained = drain(stream);
     // Appended AFTER the stream caught up: the cursor picks them up on the
