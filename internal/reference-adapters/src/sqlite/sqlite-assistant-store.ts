@@ -141,7 +141,8 @@ function fromOptionalIntBool(value: number | null): boolean | undefined {
 function isConstraintError(err: unknown): boolean {
   const code = (err as { code?: string } | null)?.code;
   return (
-    code === "SQLITE_CONSTRAINT_UNIQUE" || code === "SQLITE_CONSTRAINT_PRIMARYKEY"
+    code === "SQLITE_CONSTRAINT_UNIQUE" ||
+    code === "SQLITE_CONSTRAINT_PRIMARYKEY"
   );
 }
 
@@ -472,7 +473,9 @@ function modelFromRow(row: ProviderModelRow): AiProviderModel {
       : { contextWindowTokens: row.context_window_tokens }),
     ...(row.supports_tool_calling === null
       ? {}
-      : { supportsToolCalling: fromOptionalIntBool(row.supports_tool_calling) }),
+      : {
+          supportsToolCalling: fromOptionalIntBool(row.supports_tool_calling),
+        }),
     fetchedAt: row.fetched_at,
   };
 }
@@ -596,11 +599,13 @@ class SqliteConnection {
     return params === undefined ? db.run(sql) : db.run(sql, params);
   }
 
+  // biome-ignore lint/suspicious/noExplicitAny: driver boundary — bun:sqlite rows are untyped; every call site casts to its own Row type immediately
   get(sql: string, params?: Params): any {
     const stmt = this.db.query(sql);
     return params === undefined ? stmt.get() : stmt.get(params);
   }
 
+  // biome-ignore lint/suspicious/noExplicitAny: driver boundary — see get()
   all(sql: string, params?: Params): any[] {
     const stmt = this.db.query(sql);
     return params === undefined ? stmt.all() : stmt.all(params);
@@ -666,7 +671,9 @@ class SqliteConnection {
       // A macrotask, not a microtask: the lock holder's next step may be queued
       // behind one, and a microtask-only yield would spin without ever letting
       // it run. The short backoff keeps a long wait from burning the loop.
-      await new Promise((resolve) => setTimeout(resolve, Math.min(attempt, 10)));
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(attempt, 10)),
+      );
     }
     try {
       const result = await fn();
@@ -805,7 +812,8 @@ class SqliteConversationStore implements ConversationStore {
           $content: input.content,
           $orderKey: orderKey,
           $toolCallId: input.toolCallId ?? null,
-          $toolCalls: input.toolCalls === undefined ? null : toJson(input.toolCalls),
+          $toolCalls:
+            input.toolCalls === undefined ? null : toJson(input.toolCalls),
           $modelResultJson: input.modelResultJson ?? null,
           $metadata: toJson(metadata),
           $now: now,
@@ -822,8 +830,12 @@ class SqliteConversationStore implements ConversationStore {
         role: input.role,
         content: input.content,
         orderKey,
-        ...(input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId }),
-        ...(input.toolCalls === undefined ? {} : { toolCalls: input.toolCalls }),
+        ...(input.toolCallId === undefined
+          ? {}
+          : { toolCallId: input.toolCallId }),
+        ...(input.toolCalls === undefined
+          ? {}
+          : { toolCalls: input.toolCalls }),
         ...(input.modelResultJson === undefined
           ? {}
           : { modelResultJson: input.modelResultJson }),
@@ -847,7 +859,9 @@ class SqliteConversationStore implements ConversationStore {
       const content = patch.content ?? existing.content;
       // Metadata REPLACES the stored bag, per the port contract.
       const metadataJson =
-        patch.metadata !== undefined ? toJson(patch.metadata) : existing.metadata;
+        patch.metadata !== undefined
+          ? toJson(patch.metadata)
+          : existing.metadata;
       const toolCallsJson =
         patch.toolCalls !== undefined
           ? toJson(patch.toolCalls)
@@ -1045,7 +1059,8 @@ class SqliteTaskStore implements TaskStore {
   async createAttempt(input: CreateAttemptInput): Promise<AttemptRecord> {
     return this.conn.withTx(() => {
       const task = this.selectTaskRow(input.taskId);
-      if (!task) throw new RecordNotFoundError(`Task not found: ${input.taskId}`);
+      if (!task)
+        throw new RecordNotFoundError(`Task not found: ${input.taskId}`);
       const attemptNumber = task.attempt_count + 1;
       const startedAt = this.clock.nowIso();
       this.conn.run(`UPDATE tasks SET attempt_count = $n WHERE task_id = $id`, {
@@ -1105,7 +1120,9 @@ class SqliteTaskStore implements TaskStore {
   async acquireLease(input: AcquireLeaseInput): Promise<Lease> {
     return this.conn.withTx(() => {
       // Store-global monotonic fencing token, single-row counter table.
-      this.conn.run(`UPDATE fencing_counter SET value = value + 1 WHERE id = 1`);
+      this.conn.run(
+        `UPDATE fencing_counter SET value = value + 1 WHERE id = 1`,
+      );
       const counter = this.conn.get(
         `SELECT value FROM fencing_counter WHERE id = 1`,
       ) as { value: number };
@@ -1147,9 +1164,12 @@ class SqliteTaskStore implements TaskStore {
 
   async renewLease(leaseToken: string, ttlMs: number): Promise<Lease> {
     return this.conn.withTx(() => {
-      const row = this.conn.get(`SELECT * FROM leases WHERE lease_token = $token`, {
-        $token: leaseToken,
-      }) as LeaseRow | null;
+      const row = this.conn.get(
+        `SELECT * FROM leases WHERE lease_token = $token`,
+        {
+          $token: leaseToken,
+        },
+      ) as LeaseRow | null;
       if (!row) {
         throw new LeaseLostError(`Lease token ${leaseToken} is not current.`, {
           leaseToken,
@@ -1168,9 +1188,12 @@ class SqliteTaskStore implements TaskStore {
 
   async releaseLease(leaseToken: string): Promise<void> {
     this.conn.withTx(() => {
-      const result = this.conn.run(`DELETE FROM leases WHERE lease_token = $token`, {
-        $token: leaseToken,
-      });
+      const result = this.conn.run(
+        `DELETE FROM leases WHERE lease_token = $token`,
+        {
+          $token: leaseToken,
+        },
+      );
       if (result.changes === 0) {
         throw new LeaseLostError(`Lease token ${leaseToken} is not current.`, {
           leaseToken,
@@ -1182,9 +1205,12 @@ class SqliteTaskStore implements TaskStore {
   async expireStaleLeases(now: Date): Promise<Lease[]> {
     return this.conn.withTx(() => {
       const nowIso = now.toISOString();
-      const rows = this.conn.all(`SELECT * FROM leases WHERE expires_at <= $now`, {
-        $now: nowIso,
-      }) as LeaseRow[];
+      const rows = this.conn.all(
+        `SELECT * FROM leases WHERE expires_at <= $now`,
+        {
+          $now: nowIso,
+        },
+      ) as LeaseRow[];
       if (rows.length > 0) {
         this.conn.run(`DELETE FROM leases WHERE expires_at <= $now`, {
           $now: nowIso,
@@ -1303,10 +1329,13 @@ class SqliteTaskStore implements TaskStore {
       }
       // Plain assignment, not COALESCE: progress is an overwritten snapshot,
       // and the whole shape belongs to the latest writer.
-      this.conn.run(`UPDATE tasks SET progress = $progress WHERE task_id = $id`, {
-        $progress: toJson(progress),
-        $id: taskId,
-      });
+      this.conn.run(
+        `UPDATE tasks SET progress = $progress WHERE task_id = $id`,
+        {
+          $progress: toJson(progress),
+          $id: taskId,
+        },
+      );
       return taskFromRow(this.selectTaskRow(taskId)!);
     });
   }
@@ -1650,7 +1679,8 @@ class SqliteProposalStore implements ProposalStore {
   ): Promise<ProposalRecord> {
     return this.conn.withTx(() => {
       const row = this.selectProposalRow(proposalId);
-      if (!row) throw new RecordNotFoundError(`Proposal not found: ${proposalId}`);
+      if (!row)
+        throw new RecordNotFoundError(`Proposal not found: ${proposalId}`);
       const current = row.status as ProposalStatus;
       if (!from.includes(current)) {
         throw new InvalidProposalTransitionError(
@@ -1670,7 +1700,8 @@ class SqliteProposalStore implements ProposalStore {
          WHERE id = $id AND status = $current`,
         {
           $status: to,
-          $decision: patch?.decision !== undefined ? toJson(patch.decision) : null,
+          $decision:
+            patch?.decision !== undefined ? toJson(patch.decision) : null,
           $decidedAt: patch?.decidedAt ?? null,
           $appliedAt: patch?.appliedAt ?? null,
           $operationId: patch?.operationId ?? null,
@@ -1795,8 +1826,11 @@ class SqliteProviderStore implements ProviderStore {
         $defaultModel: config.defaultModel,
         $enabled: toIntBool(config.enabled),
         $extraHeaders:
-          config.extraHeaders === undefined ? null : toJson(config.extraHeaders),
-        $metadata: config.metadata === undefined ? null : toJson(config.metadata),
+          config.extraHeaders === undefined
+            ? null
+            : toJson(config.extraHeaders),
+        $metadata:
+          config.metadata === undefined ? null : toJson(config.metadata),
       },
     );
     return config;
@@ -1804,13 +1838,18 @@ class SqliteProviderStore implements ProviderStore {
 
   async deleteProvider(providerId: string): Promise<void> {
     this.conn.withTx(() => {
-      this.conn.run(`DELETE FROM providers WHERE id = $id`, { $id: providerId });
+      this.conn.run(`DELETE FROM providers WHERE id = $id`, {
+        $id: providerId,
+      });
       this.conn.run(`DELETE FROM provider_models WHERE provider_id = $id`, {
         $id: providerId,
       });
-      this.conn.run(`DELETE FROM provider_capabilities WHERE provider_id = $id`, {
-        $id: providerId,
-      });
+      this.conn.run(
+        `DELETE FROM provider_capabilities WHERE provider_id = $id`,
+        {
+          $id: providerId,
+        },
+      );
     });
   }
 
@@ -1889,7 +1928,9 @@ class SqliteSettingsStore implements SettingsStore {
   constructor(private readonly conn: SqliteConnection) {}
 
   async getSettings(): Promise<AssistantSettings> {
-    const row = this.conn.get(`SELECT * FROM settings WHERE id = 1`) as SettingsRow;
+    const row = this.conn.get(
+      `SELECT * FROM settings WHERE id = 1`,
+    ) as SettingsRow;
     return settingsFromRow(row);
   }
 
@@ -1897,7 +1938,9 @@ class SqliteSettingsStore implements SettingsStore {
     patch: Partial<AssistantSettings>,
   ): Promise<AssistantSettings> {
     return this.conn.withTx(() => {
-      const row = this.conn.get(`SELECT * FROM settings WHERE id = 1`) as SettingsRow;
+      const row = this.conn.get(
+        `SELECT * FROM settings WHERE id = 1`,
+      ) as SettingsRow;
       const merged: AssistantSettings = { ...settingsFromRow(row), ...patch };
       this.conn.run(
         `UPDATE settings SET

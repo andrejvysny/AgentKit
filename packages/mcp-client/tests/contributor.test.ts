@@ -102,7 +102,13 @@ function setup(
 describe("createMcpToolSetContributor", () => {
   it("projects MCP tools onto AiTools, schema verbatim", async () => {
     const manager = setup(
-      [{ alias: "idx", transport: { kind: "stdio", command: "x" }, resilience: FAST }],
+      [
+        {
+          alias: "idx",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
       { idx: searchServer },
     );
     const tools = await createMcpToolSetContributor(manager).contribute(CTX);
@@ -121,7 +127,13 @@ describe("createMcpToolSetContributor", () => {
 
   it("contributes names the tool registry actually accepts", async () => {
     const manager = setup(
-      [{ alias: "idx", transport: { kind: "stdio", command: "x" }, resilience: FAST }],
+      [
+        {
+          alias: "idx",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
       { idx: searchServer },
     );
     const tools = await createMcpToolSetContributor(manager).contribute(CTX);
@@ -130,9 +142,9 @@ describe("createMcpToolSetContributor", () => {
     // here and the tool silently dropped during registry staging.
     for (const tool of tools) registry.register(tool);
     expect(registry.size()).toBe(2);
-    expect(
-      registry.validateInput("mcp__idx__search", { query: "ok" }),
-    ).toEqual([]);
+    expect(registry.validateInput("mcp__idx__search", { query: "ok" })).toEqual(
+      [],
+    );
     // The server's own constraints are enforced, because its schema was kept.
     expect(
       registry.validateInput("mcp__idx__search", { query: "NOPE" }).length,
@@ -141,7 +153,13 @@ describe("createMcpToolSetContributor", () => {
 
   it("executes a call and returns the joined text as modelData", async () => {
     const manager = setup(
-      [{ alias: "idx", transport: { kind: "stdio", command: "x" }, resilience: FAST }],
+      [
+        {
+          alias: "idx",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
       { idx: searchServer },
     );
     const [search] = await createMcpToolSetContributor(manager).contribute(CTX);
@@ -158,7 +176,13 @@ describe("createMcpToolSetContributor", () => {
 
   it("turns a server-reported tool error into a structured failure result", async () => {
     const manager = setup(
-      [{ alias: "idx", transport: { kind: "stdio", command: "x" }, resilience: FAST }],
+      [
+        {
+          alias: "idx",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
       { idx: searchServer },
     );
     const tools = await createMcpToolSetContributor(manager).contribute(CTX);
@@ -179,7 +203,11 @@ describe("createMcpToolSetContributor", () => {
         {
           alias: "slow",
           transport: { kind: "stdio", command: "x" },
-          resilience: { ...FAST, requestTimeoutMs: 30, reconnectMaxAttempts: 0 },
+          resilience: {
+            ...FAST,
+            requestTimeoutMs: 30,
+            reconnectMaxAttempts: 0,
+          },
         },
       ],
       {
@@ -201,7 +229,11 @@ describe("createMcpToolSetContributor", () => {
   it("contributes the reachable servers when another one is down", async () => {
     const manager = setup(
       [
-        { alias: "idx", transport: { kind: "stdio", command: "x" }, resilience: FAST },
+        {
+          alias: "idx",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
         {
           alias: "down",
           transport: { kind: "stdio", command: "x" },
@@ -310,9 +342,17 @@ describe("createMcpToolSetContributor", () => {
 
   it("opts out of unbound pruning rather than deleting other contributors' tools", () => {
     const manager = setup(
-      [{ alias: "idx", transport: { kind: "stdio", command: "x" }, resilience: FAST }],
+      [
+        {
+          alias: "idx",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
       { idx: searchServer },
     );
-    expect(createMcpToolSetContributor(manager).unboundToolNames).toBeUndefined();
+    expect(
+      createMcpToolSetContributor(manager).unboundToolNames,
+    ).toBeUndefined();
   });
 });

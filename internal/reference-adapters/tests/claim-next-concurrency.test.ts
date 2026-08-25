@@ -78,7 +78,9 @@ function fulfilledValues(
   // A lost CAS is the race resolving normally — the loser skips the candidate
   // and keeps walking, it does not fail the caller.
   expect(rejections).toEqual([]);
-  return settled.map((r) => (r as PromiseFulfilledResult<ClaimedTask | null>).value);
+  return settled.map(
+    (r) => (r as PromiseFulfilledResult<ClaimedTask | null>).value,
+  );
 }
 
 function describeConcurrentClaim(

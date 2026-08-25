@@ -138,7 +138,9 @@ describe("OpenAiCompatibleClient extraHeaders", () => {
       },
       fetchImpl: (async (_url: string, init?: RequestInit) => {
         seen = new Headers(init?.headers);
-        return sseResponse([{ choices: [{ delta: {}, finish_reason: "stop" }] }]);
+        return sseResponse([
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]);
       }) as unknown as typeof fetch,
     });
     for await (const _e of client.streamChat({
@@ -195,7 +197,9 @@ describe("OpenAiCompatibleClient app attribution headers", () => {
       ...options,
       fetchImpl: (async (_url: string, init?: RequestInit) => {
         seen = new Headers(init?.headers);
-        return sseResponse([{ choices: [{ delta: {}, finish_reason: "stop" }] }]);
+        return sseResponse([
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]);
       }) as unknown as typeof fetch,
     });
     for await (const _e of client.streamChat({
@@ -236,7 +240,9 @@ describe("OpenAiCompatibleClient app attribution headers", () => {
       },
       (async (_url: string, init?: RequestInit) => {
         seen = new Headers(init?.headers);
-        return sseResponse([{ choices: [{ delta: {}, finish_reason: "stop" }] }]);
+        return sseResponse([
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]);
       }) as unknown as typeof fetch,
     );
     for await (const _e of client.streamChat({

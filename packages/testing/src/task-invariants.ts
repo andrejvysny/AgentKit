@@ -364,7 +364,9 @@ function checkLeases(
   for (const lease of view.observedLeases) {
     const task = byId.get(lease.taskId);
     if (!task) {
-      say(`observed lease ${lease.leaseToken} names unknown task ${lease.taskId}`);
+      say(
+        `observed lease ${lease.leaseToken} names unknown task ${lease.taskId}`,
+      );
       continue;
     }
     // Everything below pairs a lease the driver observed against a task row
@@ -398,7 +400,9 @@ function checkLeases(
   const perTask = groupBy(live, (l) => l.taskId);
   for (const [taskId, leases] of perTask) {
     if (leases.length > 1) {
-      say(`task ${taskId} has ${leases.length} live leases; at most one may be live`);
+      say(
+        `task ${taskId} has ${leases.length} live leases; at most one may be live`,
+      );
     }
     if (phase !== "quiescent") continue;
     const task = byId.get(taskId);
@@ -531,7 +535,9 @@ function checkTaskFields(
 ): void {
   for (const task of view.tasks) {
     if (isTerminal(task.status) && task.finishedAt === undefined) {
-      say(`task ${task.taskId} is terminal (${task.status}) but has no finishedAt`);
+      say(
+        `task ${task.taskId} is terminal (${task.status}) but has no finishedAt`,
+      );
     }
     if (!isTerminal(task.status) && task.finishedAt !== undefined) {
       say(
@@ -541,12 +547,20 @@ function checkTaskFields(
     // `startedAt` and `attemptCount` are written by ONE claim, but not
     // necessarily by one atomic write (the memory adapter transitions the task
     // and then creates the attempt), so the pairing is exact only at rest.
-    if (phase === "quiescent" && task.attemptCount > 0 && task.startedAt === undefined) {
+    if (
+      phase === "quiescent" &&
+      task.attemptCount > 0 &&
+      task.startedAt === undefined
+    ) {
       say(
         `task ${task.taskId} has ${task.attemptCount} attempts but no startedAt`,
       );
     }
-    if (phase === "quiescent" && task.attemptCount === 0 && task.startedAt !== undefined) {
+    if (
+      phase === "quiescent" &&
+      task.attemptCount === 0 &&
+      task.startedAt !== undefined
+    ) {
       say(
         `task ${task.taskId} was never attempted but carries startedAt ${task.startedAt}`,
       );

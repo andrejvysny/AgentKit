@@ -46,10 +46,7 @@ import {
   snapshotTaskInvariants,
   type ObservedLease,
 } from "@agentkit/testing";
-import {
-  CONTRACT_VERSION,
-  type TaskEventEnvelope,
-} from "@agentkit/contracts";
+import { CONTRACT_VERSION, type TaskEventEnvelope } from "@agentkit/contracts";
 import type { AssistantStore, ClaimedTask } from "@agentkit/host";
 import { SqliteAssistantStore } from "../src/index.js";
 import {
@@ -527,7 +524,8 @@ store.close();
       // taking turns because one of them finished first.
       const readyBy = Date.now() + 20_000;
       while (!existsSync(readyPath)) {
-        if (Date.now() > readyBy) throw new Error("child never signalled ready");
+        if (Date.now() > readyBy)
+          throw new Error("child never signalled ready");
         await Bun.sleep(2);
       }
       writeFileSync(goPath, "go");
@@ -602,7 +600,10 @@ store.close();
         dumpLiveLeases: () => dumpSqliteLeases(scratch.path),
       });
       expect(
-        checkTaskInvariants(view, { phase: "quiescent", label: "two processes" }),
+        checkTaskInvariants(view, {
+          phase: "quiescent",
+          label: "two processes",
+        }),
       ).toEqual([]);
       for (const task of view.tasks) {
         expect(task.status).toBe("completed");

@@ -30,7 +30,9 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
     "persists data across close + reopen on the same file",
     withTempDb(async (path) => {
       const first = new SqliteAssistantStore(path);
-      const chat = await first.conversations.createChat({ title: "Persisted chat" });
+      const chat = await first.conversations.createChat({
+        title: "Persisted chat",
+      });
       const message = await first.conversations.appendMessage({
         chatId: chat.id,
         role: "user",
@@ -161,7 +163,9 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
           insertProposal("raw-2", "pending");
         } catch (err) {
           threw = true;
-          expect((err as { code?: string }).code).toBe("SQLITE_CONSTRAINT_UNIQUE");
+          expect((err as { code?: string }).code).toBe(
+            "SQLITE_CONSTRAINT_UNIQUE",
+          );
         }
         expect(threw).toBe(true);
 

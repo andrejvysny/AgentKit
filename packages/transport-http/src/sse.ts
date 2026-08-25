@@ -230,7 +230,9 @@ export function createRunEventStream(
            * straight into the next read with no sleep and no status check. Only
            * a short batch means the log has been walked to its end.
            */
-          const drain = async (): Promise<"closed" | "terminal" | "current"> => {
+          const drain = async (): Promise<
+            "closed" | "terminal" | "current"
+          > => {
             for (;;) {
               const batch = await readAfter(tasks, taskId, cursor, batchLimit);
               for (const event of batch) {

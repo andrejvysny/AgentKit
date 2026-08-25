@@ -165,7 +165,9 @@ export class MemoryConversationStore implements ConversationStore {
       role: input.role,
       content: input.content,
       orderKey,
-      ...(input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId }),
+      ...(input.toolCallId === undefined
+        ? {}
+        : { toolCallId: input.toolCallId }),
       ...(input.toolCalls === undefined ? {} : { toolCalls: input.toolCalls }),
       ...(input.modelResultJson === undefined
         ? {}
@@ -753,7 +755,8 @@ export class MemoryProposalStore implements ProposalStore {
         p.chatId === chatId &&
         (opts?.status === undefined || p.status === opts.status),
     );
-    const limited = opts?.limit !== undefined ? rows.slice(0, opts.limit) : rows;
+    const limited =
+      opts?.limit !== undefined ? rows.slice(0, opts.limit) : rows;
     return limited.map((p) => ({ ...p }));
   }
 
@@ -764,7 +767,8 @@ export class MemoryProposalStore implements ProposalStore {
     const rows = [...this.proposals.values()].filter(
       (p) => p.status === status,
     );
-    const limited = opts?.limit !== undefined ? rows.slice(0, opts.limit) : rows;
+    const limited =
+      opts?.limit !== undefined ? rows.slice(0, opts.limit) : rows;
     return limited.map((p) => ({ ...p }));
   }
 
@@ -807,7 +811,10 @@ export class MemoryProposalStore implements ProposalStore {
     // Store (and return) a copy — never the caller's own object — so a
     // caller that mutates the outcome it just built cannot corrupt the
     // recorded evidence after the fact.
-    const stored: ApplyOutcome = { ...outcome, failedOps: [...outcome.failedOps] };
+    const stored: ApplyOutcome = {
+      ...outcome,
+      failedOps: [...outcome.failedOps],
+    };
     this.outcomes.set(operationId, stored);
     return { ...stored, failedOps: [...stored.failedOps] };
   }

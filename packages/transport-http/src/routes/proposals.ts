@@ -8,7 +8,11 @@
  * the one a client should be shown.
  */
 import type { ProposalDto } from "@agentkit/contracts";
-import type { ApplyOutcome, ProposalRecord, ProposalStatus } from "@agentkit/host";
+import type {
+  ApplyOutcome,
+  ProposalRecord,
+  ProposalStatus,
+} from "@agentkit/host";
 import { jsonResponse, readJsonObject, readPositiveInt } from "../http.js";
 import { badRequest, notFound, notImplemented } from "../problem.js";
 import { proposalDto } from "../projections.js";

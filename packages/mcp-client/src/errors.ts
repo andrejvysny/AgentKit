@@ -87,8 +87,15 @@ export class McpError extends Error {
   readonly retryable: boolean;
   readonly details?: Record<string, unknown>;
 
-  constructor(code: McpErrorCode, message: string, options: McpErrorOptions = {}) {
-    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+  constructor(
+    code: McpErrorCode,
+    message: string,
+    options: McpErrorOptions = {},
+  ) {
+    super(
+      message,
+      options.cause === undefined ? undefined : { cause: options.cause },
+    );
     this.name = "McpError";
     this.code = code;
     this.retryable = options.retryable ?? RETRYABLE_BY_CODE[code];

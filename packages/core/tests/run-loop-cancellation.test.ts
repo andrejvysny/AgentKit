@@ -3,10 +3,7 @@ import { runChat } from "../src/runs/run-loop.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
 import { messageContentToText } from "../src/messages/content.js";
-import {
-  MockProviderClient,
-  type MockScriptStep,
-} from "@agentkit/testing";
+import { MockProviderClient, type MockScriptStep } from "@agentkit/testing";
 import { collectRun } from "./helpers.js";
 import type { AiTool } from "../src/tools/tool.js";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
@@ -158,7 +155,11 @@ describe("runChat — cancellation", () => {
     const assistant = result.appendedMessages.find(
       (m) => m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0,
     );
-    expect(assistant?.toolCalls?.map((tc) => tc.id)).toEqual(["c1", "c2", "c3"]);
+    expect(assistant?.toolCalls?.map((tc) => tc.id)).toEqual([
+      "c1",
+      "c2",
+      "c3",
+    ]);
     const responded = result.appendedMessages
       .filter((m) => m.role === "tool")
       .map((m) => m.toolCallId);

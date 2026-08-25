@@ -41,7 +41,9 @@ function task(over: Partial<TaskRecord> & { taskId: string }): TaskRecord {
   };
 }
 
-function attempt(over: Partial<AttemptRecord> & { attemptId: string; taskId: string }): AttemptRecord {
+function attempt(
+  over: Partial<AttemptRecord> & { attemptId: string; taskId: string },
+): AttemptRecord {
   return {
     attemptNumber: 1,
     status: "completed",
@@ -52,7 +54,9 @@ function attempt(over: Partial<AttemptRecord> & { attemptId: string; taskId: str
   };
 }
 
-function lease(over: Partial<ObservedLease> & { taskId: string; observedAt: number }): ObservedLease {
+function lease(
+  over: Partial<ObservedLease> & { taskId: string; observedAt: number },
+): ObservedLease {
   return {
     attemptId: `att-${over.taskId}-1`,
     ownerId: "worker-0",
@@ -63,7 +67,11 @@ function lease(over: Partial<ObservedLease> & { taskId: string; observedAt: numb
   };
 }
 
-function event(taskId: string, seq: number, attemptId = `att-${taskId}-1`): TaskEventEnvelope {
+function event(
+  taskId: string,
+  seq: number,
+  attemptId = `att-${taskId}-1`,
+): TaskEventEnvelope {
   return {
     type: "unit.done",
     seq,
@@ -91,7 +99,10 @@ function cleanView(): TaskInvariantView {
       ["a", ["b"]],
       ["b", []],
     ]),
-    observedLeases: [lease({ taskId: "a", observedAt: 1 }), lease({ taskId: "b", observedAt: 2 })],
+    observedLeases: [
+      lease({ taskId: "a", observedAt: 1 }),
+      lease({ taskId: "b", observedAt: 2 }),
+    ],
     attempts: [
       attempt({ attemptId: "att-a-1", taskId: "a" }),
       attempt({ attemptId: "att-b-1", taskId: "b" }),
@@ -111,12 +122,17 @@ function violationsAfter(mutate: (view: TaskInvariantView) => void): string[] {
 
 describe("checkTaskInvariants", () => {
   it("accepts a healthy view", () => {
-    expect(checkTaskInvariants(cleanView(), { phase: "quiescent" })).toEqual([]);
+    expect(checkTaskInvariants(cleanView(), { phase: "quiescent" })).toEqual(
+      [],
+    );
   });
 
   it("labels every violation when a label is given", () => {
     const found = checkTaskInvariants(
-      { ...cleanView(), tasks: [task({ taskId: "a", status: "failed", finishedAt: undefined })] },
+      {
+        ...cleanView(),
+        tasks: [task({ taskId: "a", status: "failed", finishedAt: undefined })],
+      },
       { phase: "quiescent", label: "seed 42" },
     );
     expect(found.length).toBeGreaterThan(0);
@@ -126,12 +142,31 @@ describe("checkTaskInvariants", () => {
   it("catches two attempts of one task marked running", () => {
     const found = violationsAfter((view) => {
       const attempts = [...view.attempts];
-      attempts[0] = attempt({ attemptId: "att-a-1", taskId: "a", status: "running", endedAt: undefined });
+      attempts[0] = attempt({
+        attemptId: "att-a-1",
+        taskId: "a",
+        status: "running",
+        endedAt: undefined,
+      });
       attempts.push(
-        attempt({ attemptId: "att-a-2", taskId: "a", attemptNumber: 2, status: "running", endedAt: undefined }),
+        attempt({
+          attemptId: "att-a-2",
+          taskId: "a",
+          attemptNumber: 2,
+          status: "running",
+          endedAt: undefined,
+        }),
       );
       view.attempts = attempts;
-      view.tasks = [view.tasks[0]!, task({ taskId: "a", status: "running", finishedAt: undefined, attemptCount: 2 })];
+      view.tasks = [
+        view.tasks[0]!,
+        task({
+          taskId: "a",
+          status: "running",
+          finishedAt: undefined,
+          attemptCount: 2,
+        }),
+      ];
       view.liveLeases = [{ ...lease({ taskId: "a", observedAt: 3 }) } as Lease];
     });
     expect(found.join("\n")).toContain("attempts marked running");
@@ -146,7 +181,12 @@ describe("checkTaskInvariants", () => {
         task({ taskId: "a", status: "running", finishedAt: undefined }),
       ];
       view.attempts = [
-        attempt({ attemptId: "att-a-1", taskId: "a", status: "running", endedAt: undefined }),
+        attempt({
+          attemptId: "att-a-1",
+          taskId: "a",
+          status: "running",
+          endedAt: undefined,
+        }),
         view.attempts[1]!,
       ];
     });
@@ -182,14 +222,20 @@ describe("checkTaskInvariants", () => {
 
   it("catches a gap in a task's event sequence", () => {
     const found = violationsAfter((view) => {
-      view.events = new Map(view.events).set("a", [event("a", 0), event("a", 2)]);
+      view.events = new Map(view.events).set("a", [
+        event("a", 0),
+        event("a", 2),
+      ]);
     });
     expect(found.join("\n")).toContain("not gapless from 0");
   });
 
   it("catches an event log that does not start at 0", () => {
     const found = violationsAfter((view) => {
-      view.events = new Map(view.events).set("a", [event("a", 1), event("a", 2)]);
+      view.events = new Map(view.events).set("a", [
+        event("a", 1),
+        event("a", 2),
+      ]);
     });
     expect(found.join("\n")).toContain("not gapless from 0");
   });
@@ -215,7 +261,10 @@ describe("checkTaskInvariants", () => {
 
   it("catches a terminal task with no finishedAt", () => {
     const found = violationsAfter((view) => {
-      view.tasks = [view.tasks[0]!, task({ taskId: "a", finishedAt: undefined })];
+      view.tasks = [
+        view.tasks[0]!,
+        task({ taskId: "a", finishedAt: undefined }),
+      ];
     });
     expect(found.join("\n")).toContain("has no finishedAt");
   });
@@ -279,7 +328,12 @@ describe("checkTaskInvariants", () => {
         task({ taskId: "a", status: "running", finishedAt: undefined }),
       ];
       view.attempts = [
-        attempt({ attemptId: "att-a-1", taskId: "a", status: "running", endedAt: undefined }),
+        attempt({
+          attemptId: "att-a-1",
+          taskId: "a",
+          status: "running",
+          endedAt: undefined,
+        }),
         view.attempts[1]!,
       ];
       view.liveLeases = [lease({ taskId: "a", observedAt: 1 })];
@@ -305,11 +359,24 @@ describe("checkTaskInvariants", () => {
     // that flagged them would make every dependency-failure test red.
     const found = violationsAfter((view) => {
       view.tasks = [
-        task({ taskId: "b", dependsOn: ["a"], parentTaskId: "a", status: "failed", attemptCount: 0, startedAt: undefined, error: "dependency_failed: a" }),
+        task({
+          taskId: "b",
+          dependsOn: ["a"],
+          parentTaskId: "a",
+          status: "failed",
+          attemptCount: 0,
+          startedAt: undefined,
+          error: "dependency_failed: a",
+        }),
         task({ taskId: "a", status: "failed" }),
       ];
-      view.events = new Map([["a", [event("a", 0)]], ["b", []]]);
-      view.attempts = [attempt({ attemptId: "att-a-1", taskId: "a", status: "failed" })];
+      view.events = new Map([
+        ["a", [event("a", 0)]],
+        ["b", []],
+      ]);
+      view.attempts = [
+        attempt({ attemptId: "att-a-1", taskId: "a", status: "failed" }),
+      ];
       view.observedLeases = [lease({ taskId: "a", observedAt: 1 })];
     });
     expect(found).toEqual([]);
@@ -338,7 +405,13 @@ describe("checkTaskInvariants", () => {
     const found = violationsAfter((view) => {
       view.tasks = [
         view.tasks[0]!,
-        task({ taskId: "a", status: "queued", finishedAt: undefined, attemptCount: 0, startedAt: undefined }),
+        task({
+          taskId: "a",
+          status: "queued",
+          finishedAt: undefined,
+          attemptCount: 0,
+          startedAt: undefined,
+        }),
       ];
     });
     expect(found.join("\n")).toContain("a queued task was never claimed");
@@ -451,7 +524,8 @@ describe("snapshotTaskInvariants", () => {
   it("drops a task that is not in the store", async () => {
     const view = await snapshotTaskInvariants({
       reader: {
-        getTask: async (taskId) => (taskId === "gone" ? null : task({ taskId })),
+        getTask: async (taskId) =>
+          taskId === "gone" ? null : task({ taskId }),
         listEvents: async () => [],
         listChildren: async () => [],
       },

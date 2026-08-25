@@ -451,9 +451,12 @@ export class SingleProcessTaskRunner implements TaskRunner {
       // execution is still hanging in this process. The new one owns the task
       // from here; the old one is fenced out by the lease and will write
       // nothing when it eventually settles.
-      this.logger?.warn("superseding a still-running execution after recovery", {
-        taskId: task.taskId,
-      });
+      this.logger?.warn(
+        "superseding a still-running execution after recovery",
+        {
+          taskId: task.taskId,
+        },
+      );
     }
     if (!this.scopeLock.tryAcquire(task.scopeId, task.taskId)) {
       // Should not happen: the claim passed `scopesBusy` from this same lock.
@@ -657,7 +660,11 @@ export class SingleProcessTaskRunner implements TaskRunner {
         attemptId,
         reason: classified.reason,
       });
-      await this.landIfRunning(taskId, "failed", `${classified.reason}: ${message}`);
+      await this.landIfRunning(
+        taskId,
+        "failed",
+        `${classified.reason}: ${message}`,
+      );
       return { kind: "done" };
     }
 

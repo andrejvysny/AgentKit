@@ -131,14 +131,17 @@ export function resolveStreamOptions(
     pollIntervalMs:
       options?.pollIntervalMs ?? DEFAULT_STREAM_OPTIONS.pollIntervalMs,
     heartbeatIntervalMs:
-      options?.heartbeatIntervalMs ?? DEFAULT_STREAM_OPTIONS.heartbeatIntervalMs,
+      options?.heartbeatIntervalMs ??
+      DEFAULT_STREAM_OPTIONS.heartbeatIntervalMs,
     retryHintMs: options?.retryHintMs ?? DEFAULT_STREAM_OPTIONS.retryHintMs,
     // Clamped, not trusted: a batch size of 0 asks the store for nothing on
     // every read, and a stream that silently delivers no events is a worse
     // failure than one that ignores a nonsensical setting.
     readBatchSize: Math.max(
       1,
-      Math.floor(options?.readBatchSize ?? DEFAULT_STREAM_OPTIONS.readBatchSize),
+      Math.floor(
+        options?.readBatchSize ?? DEFAULT_STREAM_OPTIONS.readBatchSize,
+      ),
     ),
   };
 }

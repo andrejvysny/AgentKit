@@ -32,7 +32,10 @@ export function jsonResponse(
 export async function readJsonObject(
   req: Request,
   instance: string,
-): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; response: Response }> {
+): Promise<
+  | { ok: true; value: Record<string, unknown> }
+  | { ok: false; response: Response }
+> {
   let text: string;
   try {
     text = await req.text();
@@ -87,7 +90,10 @@ export function readPositiveInt(
   if (raw === null) return { ok: true };
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) {
-    return { ok: false, message: `Query parameter \`${name}\` must be a positive integer.` };
+    return {
+      ok: false,
+      message: `Query parameter \`${name}\` must be a positive integer.`,
+    };
   }
   return { ok: true, value };
 }

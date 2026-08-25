@@ -89,7 +89,10 @@ export const REST_ROUTES = {
   listToolEvents: { method: "GET", path: "/v1/chats/:chatId/tool-events" },
 
   listProposals: { method: "GET", path: "/v1/chats/:chatId/proposals" },
-  approveProposal: { method: "POST", path: "/v1/proposals/:proposalId/approve" },
+  approveProposal: {
+    method: "POST",
+    path: "/v1/proposals/:proposalId/approve",
+  },
   rejectProposal: { method: "POST", path: "/v1/proposals/:proposalId/reject" },
   applyProposal: { method: "POST", path: "/v1/proposals/:proposalId/apply" },
 
@@ -432,11 +435,15 @@ export type VersionDto = Static<typeof VersionDtoSchema>;
 export const ProblemDetailsDtoSchema = Type.Object({
   type: Type.String({ description: "URI identifying the problem type." }),
   title: Type.String(),
-  status: Type.Number({ description: "HTTP status code, repeated in the body." }),
+  status: Type.Number({
+    description: "HTTP status code, repeated in the body.",
+  }),
   detail: Type.Optional(Type.String()),
   instance: Type.Optional(Type.String()),
   code: Type.Optional(
-    Type.String({ description: "Stable machine-readable AgentKit error code." }),
+    Type.String({
+      description: "Stable machine-readable AgentKit error code.",
+    }),
   ),
 });
 export type ProblemDetailsDto = Static<typeof ProblemDetailsDtoSchema>;

@@ -3,7 +3,10 @@ import { runChat } from "../src/runs/run-loop.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
 import { messageContentToText } from "../src/messages/content.js";
-import { MockProviderClient, CompletedOnlyProviderClient } from "@agentkit/testing";
+import {
+  MockProviderClient,
+  CompletedOnlyProviderClient,
+} from "@agentkit/testing";
 import { collectRun } from "./helpers.js";
 import type { AiTool } from "../src/tools/tool.js";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
@@ -116,22 +119,20 @@ describe("runChat — completed-only providers", () => {
       }),
     );
     expect(events.some((e) => e.type === "run.tool.succeeded")).toBe(true);
-    expect([...messages, ...result.appendedMessages].map((m) => m.role)).toEqual([
-      "user",
-      "assistant",
-      "tool",
-      "assistant",
-    ]);
+    expect(
+      [...messages, ...result.appendedMessages].map((m) => m.role),
+    ).toEqual(["user", "assistant", "tool", "assistant"]);
     expect(messages.map((m) => m.role)).toEqual(["user"]);
     // The provider announced nothing, so the loop synthesizes the announcement:
     // consumers keyed on run.tool.requested see the call before it runs, whether
     // or not the provider streams.
-    const requested = events.filter((e) => e.type === "run.tool.requested") as
-      | Array<
-          AiRunEvent & {
-            data: { toolCallId: string; toolName: string; argumentsJson: string };
-          }
-        >;
+    const requested = events.filter(
+      (e) => e.type === "run.tool.requested",
+    ) as Array<
+      AiRunEvent & {
+        data: { toolCallId: string; toolName: string; argumentsJson: string };
+      }
+    >;
     expect(requested.length).toBe(1);
     expect(requested[0]!.data).toEqual({
       toolCallId: "c1",
@@ -139,7 +140,9 @@ describe("runChat — completed-only providers", () => {
       argumentsJson: '{"text":"ok"}',
     });
     // ...and it precedes the running event for that call.
-    const requestedIdx = events.findIndex((e) => e.type === "run.tool.requested");
+    const requestedIdx = events.findIndex(
+      (e) => e.type === "run.tool.requested",
+    );
     const runningIdx = events.findIndex((e) => e.type === "run.tool.running");
     expect(requestedIdx).toBeGreaterThanOrEqual(0);
     expect(requestedIdx).toBeLessThan(runningIdx);
@@ -209,7 +212,9 @@ describe("runChat — completed-only providers", () => {
       .filter((e) => e.type === "run.tool.requested")
       .map((e) => (e as { data: { toolCallId: string } }).data.toolCallId);
     expect(ids).toEqual(["c1", "c2"]);
-    expect(events.filter((e) => e.type === "run.tool.succeeded").length).toBe(2);
+    expect(events.filter((e) => e.type === "run.tool.succeeded").length).toBe(
+      2,
+    );
   });
 });
 

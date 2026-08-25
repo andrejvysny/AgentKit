@@ -296,9 +296,9 @@ describe("TaskService.cancelTask", () => {
     expect(await statusOf(f, "task-child-done")).toBe("completed");
     // The cascade follows lineage only — an unrelated task is not swept up.
     expect(await statusOf(f, "task-outsider")).toBe("queued");
-    expect(
-      (await f.store.tasks.getTask("task-parent"))?.finishedAt,
-    ).toBe(f.clock.nowIso());
+    expect((await f.store.tasks.getTask("task-parent"))?.finishedAt).toBe(
+      f.clock.nowIso(),
+    );
     // Nothing was running, so the queue was never asked to abort anything.
     expect(f.taskRunner.cancelled).toEqual([]);
   });

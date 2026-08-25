@@ -28,6 +28,7 @@ export async function* parseSseStream(
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       let idx: number;
+      // biome-ignore lint/suspicious/noAssignInExpressions: the assign-and-test scan loop is the canonical incremental-parser idiom; splitting it duplicates the indexOf call
       while ((idx = buffer.indexOf("\n")) !== -1) {
         const rawLine = buffer.slice(0, idx).replace(/\r$/, "");
         buffer = buffer.slice(idx + 1);

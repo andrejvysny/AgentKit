@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { RISK_RANK, SessionWritePolicy, writeAllowanceKey } from "../src/index.js";
+import {
+  RISK_RANK,
+  SessionWritePolicy,
+  writeAllowanceKey,
+} from "../src/index.js";
 import { createTestClock } from "./fakes.js";
 
 const QUERY = {

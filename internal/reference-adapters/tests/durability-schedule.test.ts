@@ -138,7 +138,8 @@ function describeSchedule(name: string, create: () => DurabilityHarness): void {
         expect(result.undrained).toEqual([]);
         expect(result.stats.deadLettered).toBeGreaterThan(0);
         expect(
-          result.view.tasks.filter((t) => t.deadLetteredAt !== undefined).length,
+          result.view.tasks.filter((t) => t.deadLetteredAt !== undefined)
+            .length,
         ).toBe(result.stats.deadLettered);
 
         totals.claimed += result.stats.claimed;
@@ -160,20 +161,23 @@ function describeSchedule(name: string, create: () => DurabilityHarness): void {
       }
     });
 
-    it.skipIf(CUSTOM_SEED)("exercised every durable path the invariants are meant to grade", () => {
-      // Declared after the seed cases so it runs after them (bun executes an
-      // `it` in declaration order). Without this the suite could go green on a
-      // schedule that never crashed a worker, never retried, and never let a
-      // dependency settle a dependent — a green that means nothing.
-      expect(totals.claimed).toBeGreaterThan(40);
-      expect(totals.retries).toBeGreaterThan(0);
-      expect(totals.crashes).toBeGreaterThan(0);
-      expect(totals.recovered).toBeGreaterThan(0);
-      expect(totals.deadLettered).toBeGreaterThan(0);
-      expect(totals.cancelled).toBeGreaterThan(0);
-      expect(totals.settledByDependency).toBeGreaterThan(0);
-      expect(totals.multiAttempt).toBeGreaterThan(0);
-    });
+    it.skipIf(CUSTOM_SEED)(
+      "exercised every durable path the invariants are meant to grade",
+      () => {
+        // Declared after the seed cases so it runs after them (bun executes an
+        // `it` in declaration order). Without this the suite could go green on a
+        // schedule that never crashed a worker, never retried, and never let a
+        // dependency settle a dependent — a green that means nothing.
+        expect(totals.claimed).toBeGreaterThan(40);
+        expect(totals.retries).toBeGreaterThan(0);
+        expect(totals.crashes).toBeGreaterThan(0);
+        expect(totals.recovered).toBeGreaterThan(0);
+        expect(totals.deadLettered).toBeGreaterThan(0);
+        expect(totals.cancelled).toBeGreaterThan(0);
+        expect(totals.settledByDependency).toBeGreaterThan(0);
+        expect(totals.multiAttempt).toBeGreaterThan(0);
+      },
+    );
 
     it(`replays a seed identically: same schedule, same durable state`, async () => {
       // Determinism is not a nicety here — it is what makes the seed in a

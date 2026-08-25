@@ -289,9 +289,7 @@ export class ProposalService {
         // The applier reported no per-operation detail; attribute the failure to
         // the first operation rather than inventing indices for all of them.
         failedOps:
-          claimed.operations.length > 0
-            ? [{ opIndex: 0, error: message }]
-            : [],
+          claimed.operations.length > 0 ? [{ opIndex: 0, error: message }] : [],
       };
       const recorded = await proposals.recordOutcome(
         input.operationId,

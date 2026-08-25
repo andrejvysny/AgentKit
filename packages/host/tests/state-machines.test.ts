@@ -126,11 +126,7 @@ describe("TASK_TRANSITIONS — exhaustive matrix", () => {
   });
 
   it("declares exactly the documented edges", () => {
-    expect(TASK_TRANSITIONS.queued).toEqual([
-      "running",
-      "cancelled",
-      "failed",
-    ]);
+    expect(TASK_TRANSITIONS.queued).toEqual(["running", "cancelled", "failed"]);
     expect(TASK_TRANSITIONS.running).toEqual([
       "waiting_approval",
       "completed",
@@ -143,7 +139,11 @@ describe("TASK_TRANSITIONS — exhaustive matrix", () => {
       "failed",
       "cancelled",
     ]);
-    for (const terminal of ["completed", "failed", "cancelled"] as TaskStatus[]) {
+    for (const terminal of [
+      "completed",
+      "failed",
+      "cancelled",
+    ] as TaskStatus[]) {
       expect(TASK_TRANSITIONS[terminal]).toEqual([]);
     }
   });

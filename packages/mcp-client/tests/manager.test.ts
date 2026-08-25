@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
   McpClientManager,
-  McpError,
+  type McpError,
   type McpServerConfig,
 } from "../src/index.js";
 import {
@@ -29,7 +29,10 @@ afterEach(async () => {
 
 function setup(
   configs: McpServerConfig[],
-  builders: Record<string, (attempt: number) => ReturnType<typeof buildFakeServer>>,
+  builders: Record<
+    string,
+    (attempt: number) => ReturnType<typeof buildFakeServer>
+  >,
   secrets: Record<string, string> = {},
 ): { manager: McpClientManager; harness: InMemoryHarness; clock: TestClock } {
   const harness = new InMemoryHarness(builders);
@@ -76,7 +79,13 @@ const echoServer = (): ReturnType<typeof buildFakeServer> =>
 describe("McpClientManager", () => {
   it("lists tools with canonical ids and the readOnlyHint effect mapping", async () => {
     const { manager } = setup(
-      [{ alias: "echo", transport: { kind: "stdio", command: "x" }, resilience: FAST }],
+      [
+        {
+          alias: "echo",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
       { echo: echoServer },
     );
     const tools = await manager.listTools("echo");
@@ -92,7 +101,13 @@ describe("McpClientManager", () => {
 
   it("routes a call by canonical id and joins the text parts", async () => {
     const { manager } = setup(
-      [{ alias: "echo", transport: { kind: "stdio", command: "x" }, resilience: FAST }],
+      [
+        {
+          alias: "echo",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
       { echo: echoServer },
     );
     const outcome = await manager.callTool("mcp.echo.echo", { text: "hi" });
@@ -122,7 +137,13 @@ describe("McpClientManager", () => {
 
   it("reports isError without throwing — the server answered, it just said no", async () => {
     const { manager } = setup(
-      [{ alias: "echo", transport: { kind: "stdio", command: "x" }, resilience: FAST }],
+      [
+        {
+          alias: "echo",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
       { echo: echoServer },
     );
     const outcome = await manager.callTool("mcp.echo.boom", {});
@@ -133,7 +154,11 @@ describe("McpClientManager", () => {
   it("isolates a failing server in connectAll and skips disabled ones", async () => {
     const { manager } = setup(
       [
-        { alias: "good", transport: { kind: "stdio", command: "x" }, resilience: FAST },
+        {
+          alias: "good",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
         {
           alias: "bad",
           transport: { kind: "stdio", command: "x" },
@@ -164,7 +189,13 @@ describe("McpClientManager", () => {
 
   it("fails an unknown alias rather than silently contributing nothing", async () => {
     const { manager } = setup(
-      [{ alias: "echo", transport: { kind: "stdio", command: "x" }, resilience: FAST }],
+      [
+        {
+          alias: "echo",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
       { echo: echoServer },
     );
     const failure = await manager
@@ -175,12 +206,27 @@ describe("McpClientManager", () => {
   });
 
   it("dispose closes every session", async () => {
-    const harness = new InMemoryHarness({ echo: echoServer, other: echoServer });
+    const harness = new InMemoryHarness({
+      echo: echoServer,
+      other: echoServer,
+    });
     const manager = new McpClientManager(
-      { secrets: createSecretStore(), clock: createTestClock(), transportFactory: harness.factory },
+      {
+        secrets: createSecretStore(),
+        clock: createTestClock(),
+        transportFactory: harness.factory,
+      },
       [
-        { alias: "echo", transport: { kind: "stdio", command: "x" }, resilience: FAST },
-        { alias: "other", transport: { kind: "stdio", command: "x" }, resilience: FAST },
+        {
+          alias: "echo",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+        {
+          alias: "other",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
       ],
     );
     await manager.connectAll();
@@ -204,7 +250,11 @@ describe("resilience", () => {
         {
           alias: "slow",
           transport: { kind: "stdio", command: "x" },
-          resilience: { ...FAST, requestTimeoutMs: 30, reconnectMaxAttempts: 2 },
+          resilience: {
+            ...FAST,
+            requestTimeoutMs: 30,
+            reconnectMaxAttempts: 2,
+          },
         },
       ],
       {
@@ -270,7 +320,9 @@ describe("resilience", () => {
       .then(() => null)
       .catch((err: unknown) => err);
     expect((failure as McpError).code).toBe("mcp_reconnect_exhausted");
-    expect((failure as McpError).details?.["lastCode"]).toBe("mcp_request_timeout");
+    expect((failure as McpError).details?.["lastCode"]).toBe(
+      "mcp_request_timeout",
+    );
     // One initial connect plus exactly one reconnect — and one call each.
     expect(harness.connects("slow")).toBe(2);
     expect(invocations).toBe(2);
@@ -295,9 +347,13 @@ describe("resilience", () => {
       },
     );
     const controller = new AbortController();
-    const call = manager.callTool("mcp.slow.wait", {}, {
-      signal: controller.signal,
-    });
+    const call = manager.callTool(
+      "mcp.slow.wait",
+      {},
+      {
+        signal: controller.signal,
+      },
+    );
     setTimeout(() => controller.abort(), 10);
     const failure = await call.then(() => null).catch((err: unknown) => err);
     expect((failure as McpError).code).toBe("mcp_request_aborted");
@@ -321,18 +377,27 @@ describe("resilience", () => {
       },
     );
 
-    const first = await manager.connect("down").then(() => null).catch((e: unknown) => e);
+    const first = await manager
+      .connect("down")
+      .then(() => null)
+      .catch((e: unknown) => e);
     expect((first as McpError).code).toBe("mcp_connect_failed");
     expect(harness.connects("down")).toBe(3);
 
     // Locked out: the next connect must not touch the transport at all.
-    const second = await manager.connect("down").then(() => null).catch((e: unknown) => e);
+    const second = await manager
+      .connect("down")
+      .then(() => null)
+      .catch((e: unknown) => e);
     expect((second as McpError).code).toBe("mcp_circuit_open");
     expect(harness.connects("down")).toBe(3);
 
     // No half-open probe: once the window elapses, a FULL fresh cycle runs.
     clock.advance(50);
-    const third = await manager.connect("down").then(() => null).catch((e: unknown) => e);
+    const third = await manager
+      .connect("down")
+      .then(() => null)
+      .catch((e: unknown) => e);
     expect((third as McpError).code).toBe("mcp_connect_failed");
     expect(harness.connects("down")).toBe(6);
   });
@@ -354,7 +419,10 @@ describe("resilience", () => {
       { gh: echoServer },
     );
     for (const _ of [0, 1]) {
-      const failure = await manager.connect("gh").then(() => null).catch((e: unknown) => e);
+      const failure = await manager
+        .connect("gh")
+        .then(() => null)
+        .catch((e: unknown) => e);
       // Still the precise error on the second call, not mcp_circuit_open.
       expect((failure as McpError).code).toBe("mcp_secret_missing");
     }
@@ -368,7 +436,11 @@ describe("resilience", () => {
         {
           alias: "flap",
           transport: { kind: "stdio", command: "x" },
-          resilience: { ...FAST, requestTimeoutMs: 2_000, reconnectMaxAttempts: 2 },
+          resilience: {
+            ...FAST,
+            requestTimeoutMs: 2_000,
+            reconnectMaxAttempts: 2,
+          },
         },
       ],
       {
@@ -380,7 +452,9 @@ describe("resilience", () => {
                 // The first generation never answers; the replacement does.
                 attempt === 1
                   ? blocked.promise
-                  : { content: [{ type: "text", text: `served-by-${attempt}` }] },
+                  : {
+                      content: [{ type: "text", text: `served-by-${attempt}` }],
+                    },
             },
           ]),
       },

@@ -15,10 +15,7 @@
       "!**/*.md",
       "!**/*.tsbuildinfo",
       "!bun.lock",
-      "!**/coverage",
-      "!internal/reference-adapters/src",
-      "!packages/core/src/providers/sse.ts",
-      "!packages/transport-http/src/sse.ts"
+      "!**/coverage"
     ]
   },
   "formatter": {

@@ -217,7 +217,9 @@ export function request(
     method,
     ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
     headers: {
-      ...(init.body === undefined ? {} : { "content-type": "application/json" }),
+      ...(init.body === undefined
+        ? {}
+        : { "content-type": "application/json" }),
       ...(init.headers ?? {}),
     },
   });

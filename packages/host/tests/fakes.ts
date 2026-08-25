@@ -82,9 +82,7 @@ export interface TestClock extends Clock {
   set(iso: string): void;
 }
 
-export function createTestClock(
-  start = "2026-01-01T00:00:00.000Z",
-): TestClock {
+export function createTestClock(start = "2026-01-01T00:00:00.000Z"): TestClock {
   let current = new Date(start).getTime();
   return {
     now: () => new Date(current),
@@ -339,7 +337,9 @@ export class FakeTaskStore implements TaskStore {
       ownerId: input.ownerId,
       leaseToken: `lease-${this.fencing}`,
       fencingToken: this.fencing,
-      expiresAt: new Date(this.clock.now().getTime() + input.ttlMs).toISOString(),
+      expiresAt: new Date(
+        this.clock.now().getTime() + input.ttlMs,
+      ).toISOString(),
     };
     this.leases.set(input.taskId, lease);
     return lease;

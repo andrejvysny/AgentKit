@@ -34,7 +34,9 @@ describe("SingleProcessTaskRunner + TurnRunner", () => {
       heartbeatMs: 60_000,
     });
     const provider = new MockProviderClient();
-    provider.setScript([{ steps: [{ kind: "text", content: "Hello there." }] }]);
+    provider.setScript([
+      { steps: [{ kind: "text", content: "Hello there." }] },
+    ]);
 
     await store.providers.upsertProvider({
       id: "p1",
@@ -96,9 +98,9 @@ describe("SingleProcessTaskRunner + TurnRunner", () => {
         events.map((_, index) => index),
       );
       expect(events[0]?.type).toBe("run.started");
-      expect(events.some((event) => event.type === "run.message.completed")).toBe(
-        true,
-      );
+      expect(
+        events.some((event) => event.type === "run.message.completed"),
+      ).toBe(true);
 
       const attempts = [...store.tasks.attempts.values()];
       expect(attempts.length).toBe(1);

@@ -125,7 +125,9 @@ export function createProposalBuilderTool<TInput>(
             skipped: [{ id: "context", reason: "missing chatId" }],
           } satisfies WriteToolModelData,
           sources: [],
-          warnings: ["Tool executed without a chat context; nothing was staged."],
+          warnings: [
+            "Tool executed without a chat context; nothing was staged.",
+          ],
           truncated: false,
           limits: ctx.limits,
         };

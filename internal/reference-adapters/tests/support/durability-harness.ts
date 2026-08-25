@@ -36,10 +36,7 @@ import {
   type LogicalClock,
   type TaskScheduleTarget,
 } from "@agentkit/testing";
-import {
-  MemoryAssistantStore,
-  SqliteAssistantStore,
-} from "../../src/index.js";
+import { MemoryAssistantStore, SqliteAssistantStore } from "../../src/index.js";
 
 /** Logical ms a claim's lease is granted for. Small: the clock is fake. */
 export const DURABILITY_LEASE_TTL_MS = 1_000;

@@ -72,7 +72,9 @@ describe("SingleProcessTaskRunner — dispatch", () => {
     expect(harness.attemptsFor("run-1")).toEqual([
       { status: "completed", attemptNumber: 1 },
     ]);
-    const events = (await harness.store.tasks.listEvents("run-1")) as AiRunEvent[];
+    const events = (await harness.store.tasks.listEvents(
+      "run-1",
+    )) as AiRunEvent[];
     expect(events.map((event) => event.seq)).toEqual([0]);
     const run = await harness.store.tasks.getTask("run-1");
     expect(run?.finishedAt).toBeDefined();
@@ -207,7 +209,9 @@ describe("SingleProcessTaskRunner — failure taxonomy", () => {
     ]);
     // One run, one unbroken sequence: the retry never went back to `queued`
     // and never restarted the log.
-    const events = (await harness.store.tasks.listEvents("run-1")) as AiRunEvent[];
+    const events = (await harness.store.tasks.listEvents(
+      "run-1",
+    )) as AiRunEvent[];
     expect(events.map((event) => event.seq)).toEqual([0, 1]);
     const run = await harness.store.tasks.getTask("run-1");
     expect(run?.attemptCount).toBe(2);
@@ -307,7 +311,9 @@ describe("SingleProcessTaskRunner — cancellation", () => {
     expect(harness.attemptsFor("run-1")).toEqual([
       { status: "cancelled", attemptNumber: 1 },
     ]);
-    const events = (await harness.store.tasks.listEvents("run-1")) as AiRunEvent[];
+    const events = (await harness.store.tasks.listEvents(
+      "run-1",
+    )) as AiRunEvent[];
     expect(events.map((event) => event.type)).toEqual(["run.cancelled"]);
     expect(harness.worker.callsFor("run-1").length).toBe(1);
   });
@@ -388,7 +394,9 @@ describe("SingleProcessTaskRunner — recovery", () => {
       { status: "completed", attemptNumber: 2 },
     ]);
     // One run, one event stream: the recovered attempt continued the sequence.
-    const events = (await harness.store.tasks.listEvents("run-1")) as AiRunEvent[];
+    const events = (await harness.store.tasks.listEvents(
+      "run-1",
+    )) as AiRunEvent[];
     expect(events.map((e) => e.seq)).toEqual([0, 1]);
 
     harness.worker.releaseAll();

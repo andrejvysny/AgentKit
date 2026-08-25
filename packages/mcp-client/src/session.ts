@@ -82,7 +82,11 @@ export class McpSession {
   ) {
     this.alias = config.alias;
     this.resilience = resolveMcpResilience(config.resilience);
-    this.circuit = new McpCircuitBreaker(this.alias, this.resilience, deps.clock);
+    this.circuit = new McpCircuitBreaker(
+      this.alias,
+      this.resilience,
+      deps.clock,
+    );
     this.reverseAliases = buildReverseToolAliases(config);
   }
 
@@ -126,13 +130,21 @@ export class McpSession {
       `tools/call ${toolName}`,
       (client, signal) =>
         client.callTool(
-          { name: toolName, ...(args === undefined ? {} : { arguments: args }) },
+          {
+            name: toolName,
+            ...(args === undefined ? {} : { arguments: args }),
+          },
           undefined,
           { signal, timeout: this.resilience.requestTimeoutMs },
         ),
       options,
     );
-    return projectMcpCallResult(this.alias, effectiveToolName, toolName, result);
+    return projectMcpCallResult(
+      this.alias,
+      effectiveToolName,
+      toolName,
+      result,
+    );
   }
 
   /**
@@ -338,7 +350,9 @@ export class McpSession {
         return await withDeadline(
           {
             timeoutMs: this.resilience.requestTimeoutMs,
-            ...(options?.signal === undefined ? {} : { signal: options.signal }),
+            ...(options?.signal === undefined
+              ? {}
+              : { signal: options.signal }),
             timeoutCode: "mcp_request_timeout",
             describe: `${operation} on MCP server "${this.alias}"`,
             redact,
