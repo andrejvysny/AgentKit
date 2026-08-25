@@ -213,6 +213,139 @@ describe("TurnRunner.submitMessage", () => {
   });
 });
 
+describe("TurnRunner.submitMessage — branching", () => {
+  it("hangs the placeholder off the user message even on a plain linear submit", async () => {
+    const f = await setupRunner();
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hello",
+    });
+
+    const user = messagesOf(f).find((m) => m.id === submitted.userMessageId);
+    const placeholder = messagesOf(f).find(
+      (m) => m.id === submitted.assistantMessageId,
+    );
+    // A root question with its answer under it — the degenerate tree, and the
+    // shape every later turn extends.
+    expect(user?.parentMessageId).toBe(undefined);
+    expect(user?.depth).toBe(0);
+    expect(placeholder?.parentMessageId).toBe(submitted.userMessageId);
+    expect(placeholder?.depth).toBe(1);
+    expect([user?.branchIndex, placeholder?.branchIndex]).toEqual([0, 0]);
+    const path = await f.store.conversations.listMessages(f.chatId);
+    expect(path.map((m) => m.id)).toEqual([
+      submitted.userMessageId,
+      submitted.assistantMessageId,
+    ]);
+  });
+
+  it("branches the whole turn under parentMessageId and switches the path to it", async () => {
+    const f = await setupRunner();
+    f.mock.setScript([
+      { steps: [{ kind: "text", content: "first answer" }] },
+      { steps: [{ kind: "text", content: "second answer" }] },
+      { steps: [{ kind: "text", content: "revised answer" }] },
+    ]);
+    const first = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "first question",
+    });
+    await drive(f, first.runId);
+    const second = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "second question",
+    });
+    await drive(f, second.runId);
+
+    // Edit-and-regenerate: the rewritten question hangs off the answer BEFORE
+    // it, so it becomes a sibling of the question it replaces.
+    const edited = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "second question, edited",
+      parentMessageId: first.assistantMessageId,
+    });
+
+    const user = messagesOf(f).find((m) => m.id === edited.userMessageId);
+    const placeholder = messagesOf(f).find(
+      (m) => m.id === edited.assistantMessageId,
+    );
+    expect(user?.parentMessageId).toBe(first.assistantMessageId);
+    expect(user?.branchIndex).toBe(1);
+    expect(placeholder?.parentMessageId).toBe(edited.userMessageId);
+
+    // The switch is already done, before the run has executed: the replaced
+    // question and its answer are off the path.
+    const path = await f.store.conversations.listMessages(f.chatId);
+    expect(path.map((m) => m.id)).toEqual([
+      first.userMessageId,
+      first.assistantMessageId,
+      edited.userMessageId,
+      edited.assistantMessageId,
+    ]);
+  });
+
+  it("replays the NEW branch to the provider, not the answer it replaced", async () => {
+    const f = await setupRunner();
+    f.mock.setScript([
+      { steps: [{ kind: "text", content: "first answer" }] },
+      { steps: [{ kind: "text", content: "second answer" }] },
+      { steps: [{ kind: "text", content: "revised answer" }] },
+    ]);
+    const first = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "first question",
+    });
+    await drive(f, first.runId);
+    const second = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "second question",
+    });
+    await drive(f, second.runId);
+
+    const edited = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "second question, edited",
+      parentMessageId: first.assistantMessageId,
+    });
+    // SNAPSHOT the contents at call time: `runChat` appends the model's reply to
+    // the same array it was handed, so holding the reference and reading it
+    // afterwards would show this turn's own answer as part of its prompt.
+    const seen: string[][] = [];
+    const inner = f.client.inner.streamChat.bind(f.client.inner);
+    f.client.inner.streamChat = (input) => {
+      seen.push(
+        input.messages.map((m) =>
+          // Content is `string | AiContentPart[]`; this suite scripts text only,
+          // and a multimodal turn showing up here should read as odd, not crash.
+          typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+        ),
+      );
+      return inner(input);
+    };
+    await drive(f, edited.runId);
+
+    const replayed = seen[0]!;
+    // The kept prefix, then the rewrite. The abandoned branch is absent in both
+    // halves — the discarded question AND the answer that was given to it.
+    expect(replayed).toEqual([
+      "first question",
+      "first answer",
+      "second question, edited",
+    ]);
+    expect(
+      messagesOf(f).find((m) => m.id === edited.assistantMessageId)?.content,
+    ).toBe("revised answer");
+    // The replaced turn is still stored — branching hides history, it does not
+    // delete it.
+    expect(
+      messagesOf(f).find((m) => m.id === second.userMessageId)?.active,
+    ).toBe(false);
+    expect(
+      messagesOf(f).find((m) => m.id === second.assistantMessageId)?.content,
+    ).toBe("second answer");
+  });
+});
+
 describe("TurnRunner.submitMessage — idempotency key", () => {
   /** Count every enqueue, including the ones the port dedupes internally. */
   function countEnqueues(f: RunnerFixture): () => number {

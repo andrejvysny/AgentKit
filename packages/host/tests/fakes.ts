@@ -19,6 +19,14 @@ import {
   InvalidProposalTransitionError,
   InvalidTaskTransitionError,
   LeaseLostError,
+  activationSetOf,
+  activeLeafOf,
+  activePathOf,
+  forkedChatTitle,
+  forkPrefixOf,
+  nextBranchIndex,
+  planForkedMessages,
+  siblingsOf,
   RecordNotFoundError,
   SeqConflictError,
   UnknownDependencyError,
@@ -44,6 +52,7 @@ import {
   type CreateTaskInput,
   type EndAttemptInput,
   type EnqueueInput,
+  type ForkChatResult,
   type IdGenerator,
   type Lease,
   type ListEventsOptions,
@@ -148,6 +157,12 @@ export class FakeConversationStore implements ConversationStore {
   async appendMessage(input: AppendMessageInput): Promise<MessageRecord> {
     const orderKey = (this.orderKeys.get(input.chatId) ?? 0) + 1;
     this.orderKeys.set(input.chatId, orderKey);
+    const list = this.chatMessages(input.chatId);
+    const parent =
+      input.parentMessageId === undefined
+        ? activeLeafOf(list)
+        : this.requireParent(input.chatId, input.parentMessageId);
+    const parentId = parent?.id;
     const record: MessageRecord = {
       id: input.id ?? this.ids.messageId(),
       chatId: input.chatId,
@@ -162,11 +177,41 @@ export class FakeConversationStore implements ConversationStore {
       ...(input.modelResultJson === undefined
         ? {}
         : { modelResultJson: input.modelResultJson }),
+      ...(parentId === undefined ? {} : { parentMessageId: parentId }),
+      depth: parent === undefined ? 0 : parent.depth + 1,
+      branchIndex: nextBranchIndex(list, parentId),
+      active: true,
       metadata: input.metadata ?? {},
       createdAt: this.clock.nowIso(),
     };
     this.messages.push(record);
+    this.applyActivation(input.chatId, record.id);
     return record;
+  }
+
+  private chatMessages(chatId: string): MessageRecord[] {
+    return this.messages.filter((m) => m.chatId === chatId);
+  }
+
+  private requireParent(
+    chatId: string,
+    parentMessageId: string,
+  ): MessageRecord {
+    const parent = this.messages.find(
+      (m) => m.id === parentMessageId && m.chatId === chatId,
+    );
+    if (!parent) {
+      throw new RecordNotFoundError(
+        `Parent message not found in chat ${chatId}: ${parentMessageId}`,
+      );
+    }
+    return parent;
+  }
+
+  private applyActivation(chatId: string, messageId: string): void {
+    const list = this.chatMessages(chatId);
+    const active = activationSetOf(list, messageId);
+    for (const record of list) record.active = active.has(record.id);
   }
 
   async updateMessage(
@@ -192,15 +237,82 @@ export class FakeConversationStore implements ConversationStore {
     chatId: string,
     opts?: ListMessagesOptions,
   ): Promise<MessageRecord[]> {
-    let rows = this.messages
-      .filter((m) => m.chatId === chatId)
-      .sort((a, b) => a.orderKey - b.orderKey);
+    let rows = activePathOf(this.chatMessages(chatId));
     if (opts?.afterOrderKey !== undefined) {
       const after = opts.afterOrderKey;
       rows = rows.filter((m) => m.orderKey > after);
     }
     if (opts?.limit !== undefined) rows = rows.slice(-opts.limit);
     return rows;
+  }
+
+  async listSiblings(messageId: string): Promise<MessageRecord[]> {
+    const record = this.requireMessage(messageId);
+    return siblingsOf(this.chatMessages(record.chatId), record);
+  }
+
+  async activatePath(messageId: string): Promise<void> {
+    const record = this.requireMessage(messageId);
+    this.applyActivation(record.chatId, messageId);
+  }
+
+  async forkChat(
+    chatId: string,
+    fromMessageId: string,
+  ): Promise<ForkChatResult> {
+    const source = this.chats.get(chatId);
+    if (!source) throw new RecordNotFoundError(`Chat not found: ${chatId}`);
+    const prefix = forkPrefixOf(
+      this.chatMessages(chatId),
+      chatId,
+      fromMessageId,
+    );
+    const plans = planForkedMessages(prefix, () => this.ids.messageId());
+    const now = this.clock.nowIso();
+    const title = forkedChatTitle(source.title);
+    const chat: ChatRecord = {
+      id: `chat-fork-${this.chats.size + 1}`,
+      ...(title === undefined ? {} : { title }),
+      createdAt: now,
+      updatedAt: now,
+      metadata: { ...source.metadata },
+    };
+    const messages: MessageRecord[] = plans.map((plan, index) => ({
+      id: plan.id,
+      chatId: chat.id,
+      role: plan.source.role,
+      content: plan.source.content,
+      orderKey: index + 1,
+      ...(plan.source.toolCallId === undefined
+        ? {}
+        : { toolCallId: plan.source.toolCallId }),
+      ...(plan.source.toolCalls === undefined
+        ? {}
+        : { toolCalls: plan.source.toolCalls }),
+      ...(plan.source.modelResultJson === undefined
+        ? {}
+        : { modelResultJson: plan.source.modelResultJson }),
+      ...(plan.parentMessageId === undefined
+        ? {}
+        : { parentMessageId: plan.parentMessageId }),
+      depth: plan.depth,
+      branchIndex: 0,
+      active: true,
+      metadata: plan.metadata,
+      createdAt: now,
+    }));
+    this.chats.set(chat.id, chat);
+    this.messages.push(...messages);
+    this.orderKeys.set(chat.id, messages.length);
+    return { chat, messages };
+  }
+
+  private requireMessage(messageId: string): MessageRecord {
+    const record = this.messages.find((m) => m.id === messageId);
+    if (!record) {
+      throw new RecordNotFoundError(`Message not found: ${messageId}`);
+    }
+    return record;
   }
 }
 

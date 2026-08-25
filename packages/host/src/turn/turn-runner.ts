@@ -94,6 +94,20 @@ export interface SubmitMessageInput {
   metadata?: Record<string, unknown>;
   priority?: number;
   /**
+   * Submit this turn as a NEW BRANCH under the named message, instead of at the
+   * end of the conversation — the edit-and-regenerate flow.
+   *
+   * It is passed straight through to the user message's
+   * `AppendMessageInput.parentMessageId`, which is where the branch is actually
+   * made: the store creates the message active and switches the whole path to it
+   * in the same write, so by the time this turn executes, `assembleMessages`
+   * reads the NEW branch's history and the old leaf is off-path. Nothing else in
+   * this class needs to know a branch happened, and that is deliberate — a
+   * second place deciding what "the conversation so far" means is a second place
+   * that could disagree with the store.
+   */
+  parentMessageId?: string;
+  /**
    * The caller's idempotency key for this submit, used verbatim as the task id.
    *
    * Omit it and every call starts a new turn — the right default for a UI
@@ -237,6 +251,11 @@ export class TurnRunner implements TaskWorker {
           chatId: input.chatId,
           role: "user",
           content: input.content,
+          // Absent on the ordinary submit, which appends to the active leaf
+          // exactly as it always did; present, it makes this turn a branch.
+          ...(input.parentMessageId === undefined
+            ? {}
+            : { parentMessageId: input.parentMessageId }),
           metadata: input.metadata ?? {},
         });
         // The placeholder exists so the UI has a message to stream into, and so
@@ -248,6 +267,13 @@ export class TurnRunner implements TaskWorker {
           runId: taskId,
           role: "assistant",
           content: "",
+          // Named EXPLICITLY rather than left to the store's
+          // append-to-the-active-leaf default, even though the user message just
+          // written IS that leaf. Saying so costs nothing and makes the pairing
+          // structural: the answer is a child of the question it answers, and a
+          // branch submit cannot end up with its placeholder hanging off the
+          // branch it replaced.
+          parentMessageId: userMessageId,
           metadata: { placeholder: true },
         });
       });
@@ -812,6 +838,13 @@ export class TurnRunner implements TaskWorker {
    * turn ends up completing someone else's sentence. `role: "system"` records
    * are skipped too: those are UI banners the host wrote about the turn, not
    * prompt material.
+   *
+   * The records come from `listMessages`, which reports the chat's ACTIVE PATH —
+   * so a branch submit replays the branch and not the answer it replaced, with
+   * no filtering here. `orderMessagesForProvider` runs over them unchanged:
+   * `orderKey` increases with depth along any path, so ordering the active path
+   * by `orderKey` and ordering it by depth are the same order, and the
+   * run-scoped tool-call repair it performs is untouched by branching.
    *
    * The result is then balanced in BOTH directions before it leaves: a tool
    * result whose requesting turn fell outside the window is dropped (below), and

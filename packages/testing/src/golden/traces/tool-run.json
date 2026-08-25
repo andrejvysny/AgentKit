@@ -2,56 +2,56 @@
   {
     "type": "run.started",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-08-24T10:27:15.066Z",
+    "timestamp": "2026-08-25T08:42:41.215Z",
     "data": {
       "model": "gpt-golden",
       "toolCount": 1
     },
-    "contractVersion": "0.2.0",
-    "eventId": "evt_6fc34d0b-2325-4b18-bed4-85f62cf2c63c",
+    "contractVersion": "0.3.0",
+    "eventId": "evt_b322d6b7-3a1e-480e-ac25-c4451d2d6cc6",
     "seq": 0
   },
   {
     "type": "run.message.completed",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-08-24T10:27:15.066Z",
+    "timestamp": "2026-08-25T08:42:41.215Z",
     "data": {
       "content": "",
       "toolCallCount": 1
     },
-    "contractVersion": "0.2.0",
-    "eventId": "evt_eb3c5f63-7440-4f77-a6a1-86e8cc1a2252",
+    "contractVersion": "0.3.0",
+    "eventId": "evt_321df244-8e32-4359-859f-4f0eb581799e",
     "seq": 1
   },
   {
     "type": "run.tool.requested",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-08-24T10:27:15.066Z",
+    "timestamp": "2026-08-25T08:42:41.215Z",
     "data": {
       "toolCallId": "call-golden-1",
       "toolName": "echo",
       "argumentsJson": "{\"text\":\"golden\"}"
     },
-    "contractVersion": "0.2.0",
-    "eventId": "evt_b0d7d466-68ba-420c-a5e6-a8de8f449bd4",
+    "contractVersion": "0.3.0",
+    "eventId": "evt_555b8401-fc89-4d5e-9cc4-8e51e668951a",
     "seq": 2
   },
   {
     "type": "run.tool.running",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-08-24T10:27:15.066Z",
+    "timestamp": "2026-08-25T08:42:41.215Z",
     "data": {
       "toolCallId": "call-golden-1",
       "toolName": "echo"
     },
-    "contractVersion": "0.2.0",
-    "eventId": "evt_8bb5e8cd-a674-460c-b929-d2236e3d7ddc",
+    "contractVersion": "0.3.0",
+    "eventId": "evt_681f20fc-8a0b-4337-99a9-a847f27d3733",
     "seq": 3
   },
   {
     "type": "run.tool.succeeded",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-08-24T10:27:15.066Z",
+    "timestamp": "2026-08-25T08:42:41.216Z",
     "data": {
       "toolCallId": "call-golden-1",
       "toolName": "echo",
@@ -62,43 +62,43 @@
       "status": "ok",
       "modelResultJson": "{\"ok\":true,\"status\":\"ok\",\"warnings\":[],\"truncated\":false,\"data\":{\"echoed\":\"golden\"}}"
     },
-    "contractVersion": "0.2.0",
-    "eventId": "evt_38107af7-5b34-4522-a797-d59b87567367",
+    "contractVersion": "0.3.0",
+    "eventId": "evt_c33e341f-2d97-441d-b240-8cd16dc61fe8",
     "seq": 4
   },
   {
     "type": "run.message.delta",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-08-24T10:27:15.066Z",
+    "timestamp": "2026-08-25T08:42:41.216Z",
     "data": {
       "delta": "Done."
     },
-    "contractVersion": "0.2.0",
-    "eventId": "evt_f17f1a89-9787-4019-9e21-d83039328c83",
+    "contractVersion": "0.3.0",
+    "eventId": "evt_39abd42e-b3d0-4928-a4f8-81c10583028a",
     "seq": 5
   },
   {
     "type": "run.message.completed",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-08-24T10:27:15.066Z",
+    "timestamp": "2026-08-25T08:42:41.216Z",
     "data": {
       "content": "Done.",
       "toolCallCount": 0
     },
-    "contractVersion": "0.2.0",
-    "eventId": "evt_c73e7fd2-f538-4f1f-bd8e-bc53aacdaecd",
+    "contractVersion": "0.3.0",
+    "eventId": "evt_d8a2495b-a5a2-4cfa-9923-5e2ed8aa68f1",
     "seq": 6
   },
   {
     "type": "run.completed",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-08-24T10:27:15.066Z",
+    "timestamp": "2026-08-25T08:42:41.216Z",
     "data": {
       "iterations": 2,
       "finishReason": "stop"
     },
-    "contractVersion": "0.2.0",
-    "eventId": "evt_6fc1d7d3-1899-4bed-9cb5-20fd6d4f37c0",
+    "contractVersion": "0.3.0",
+    "eventId": "evt_350f6e98-270b-4f20-9a89-efedbdb929c9",
     "seq": 7
   }
 ]

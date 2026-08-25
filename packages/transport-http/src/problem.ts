@@ -35,9 +35,15 @@ export const PROBLEM_CONTENT_TYPE = "application/problem+json";
  * client can fix its request and retry verbatim. `executor_not_found` is a
  * deployment fault, not a client one, so it is a 500 despite arriving from a
  * named code.
+ *
+ * `invalid_fork_point` is a 400 and not a 409: nothing moved and nothing
+ * conflicts — the client named a message that is not a place this conversation
+ * can be forked from, and the fix is a different `fromMessageId`, which is the
+ * definition of a bad request.
  */
 const STATUS_BY_HOST_CODE = {
   not_found: 404,
+  invalid_fork_point: 400,
   invalid_task_transition: 409,
   invalid_proposal_transition: 409,
   duplicate_task: 409,

@@ -23,6 +23,7 @@ import type {
   TaskEventEnvelope,
 } from "@agentkit/contracts";
 import {
+  activationSetOf,
   AgentKitHostError,
   DuplicateActionIdError,
   DuplicateTaskError,
@@ -37,6 +38,9 @@ import {
   defaultClock,
   defaultIds,
   evaluateTaskDependencies,
+  forkedChatTitle,
+  forkPrefixOf,
+  planForkedMessages,
   type AppendEventsOptions,
   type AppendMessageInput,
   type ApplyOutcome,
@@ -55,6 +59,7 @@ import {
   type CreateProposalInput,
   type CreateTaskInput,
   type EndAttemptInput,
+  type ForkChatResult,
   type IdGenerator,
   type Lease,
   type ListChatsOptions,
@@ -88,7 +93,7 @@ import {
   type ResolvedTaskAging,
   type TaskAgingOptions,
 } from "../task-aging.js";
-import { SCHEMA_V3, SCHEMA_VERSION } from "./schema.js";
+import { SCHEMA_V4, SCHEMA_VERSION } from "./schema.js";
 
 const DEFAULT_LEASE_TTL_MS = 30_000;
 /**
@@ -184,6 +189,10 @@ interface MessageRow {
   tool_call_id: string | null;
   tool_calls: string | null;
   model_result_json: string | null;
+  parent_message_id: string | null;
+  depth: number;
+  branch_index: number;
+  active: number;
   metadata: string;
   created_at: string;
 }
@@ -345,6 +354,12 @@ function messageFromRow(row: MessageRow): MessageRecord {
     ...(row.model_result_json === null
       ? {}
       : { modelResultJson: row.model_result_json }),
+    ...(row.parent_message_id === null
+      ? {}
+      : { parentMessageId: row.parent_message_id }),
+    depth: row.depth,
+    branchIndex: row.branch_index,
+    active: fromIntBool(row.active),
     metadata: parseJson<Record<string, unknown>>(row.metadata),
     createdAt: row.created_at,
   };
@@ -783,6 +798,15 @@ class SqliteConversationStore implements ConversationStore {
     return rows.map(chatFromRow);
   }
 
+  /**
+   * Append a message and place it in the chat's tree, in ONE transaction.
+   *
+   * Everything the placement needs is read with a targeted, indexed query rather
+   * than by loading the chat: the active leaf, the sibling high-water mark, the
+   * parent row. The whole tree is only materialized when a path switch actually
+   * has to be computed, which on the append-to-the-active-leaf path — every
+   * append a non-branching caller makes — is never.
+   */
   async appendMessage(input: AppendMessageInput): Promise<MessageRecord> {
     return this.conn.withTx(() => {
       const chat = this.conn.get(`SELECT id FROM chats WHERE id = $id`, {
@@ -791,19 +815,33 @@ class SqliteConversationStore implements ConversationStore {
       if (!chat) {
         throw new RecordNotFoundError(`Chat not found: ${input.chatId}`);
       }
+      const leaf = this.activeLeafRow(input.chatId);
+      // An explicitly named parent is a structural claim and is checked as one;
+      // an absent one means "continue the conversation", which is the leaf.
+      const parent =
+        input.parentMessageId === undefined
+          ? leaf
+          : this.requireParentRow(input.chatId, input.parentMessageId);
+      const parentId = parent === null ? null : parent.id;
       const maxRow = this.conn.get(
         `SELECT COALESCE(MAX(order_key), 0) as maxKey FROM messages WHERE chat_id = $chatId`,
         { $chatId: input.chatId },
       ) as { maxKey: number };
       const orderKey = maxRow.maxKey + 1;
+      const branchRow = this.conn.get(
+        `SELECT COALESCE(MAX(branch_index) + 1, 0) as nextIndex FROM messages
+         WHERE chat_id = $chatId AND parent_message_id IS $parentId`,
+        { $chatId: input.chatId, $parentId: parentId },
+      ) as { nextIndex: number };
       const id = input.id ?? this.ids.messageId();
       const now = this.clock.nowIso();
       const metadata = input.metadata ?? {};
+      const depth = parent === null ? 0 : parent.depth + 1;
       this.conn.run(
         `INSERT INTO messages
-           (id, chat_id, run_id, role, content, order_key, tool_call_id, tool_calls, model_result_json, metadata, created_at)
+           (id, chat_id, run_id, role, content, order_key, tool_call_id, tool_calls, model_result_json, parent_message_id, depth, branch_index, active, metadata, created_at)
          VALUES
-           ($id, $chatId, $runId, $role, $content, $orderKey, $toolCallId, $toolCalls, $modelResultJson, $metadata, $now)`,
+           ($id, $chatId, $runId, $role, $content, $orderKey, $toolCallId, $toolCalls, $modelResultJson, $parentId, $depth, $branchIndex, 1, $metadata, $now)`,
         {
           $id: id,
           $chatId: input.chatId,
@@ -815,10 +853,20 @@ class SqliteConversationStore implements ConversationStore {
           $toolCalls:
             input.toolCalls === undefined ? null : toJson(input.toolCalls),
           $modelResultJson: input.modelResultJson ?? null,
+          $parentId: parentId,
+          $depth: depth,
+          $branchIndex: branchRow.nextIndex,
           $metadata: toJson(metadata),
           $now: now,
         },
       );
+      // Only a branch — an append whose parent is NOT the message the
+      // conversation currently ends at — moves the path. Hanging a new leaf off
+      // the old leaf leaves every other flag exactly as it was, and running the
+      // switch anyway would mean reading the whole chat on every streamed tool
+      // result to write the flags back unchanged.
+      const parentIsActiveLeaf = (leaf === null ? null : leaf.id) === parentId;
+      if (!parentIsActiveLeaf) this.switchActivePath(input.chatId, id);
       this.conn.run(`UPDATE chats SET updated_at = $now WHERE id = $chatId`, {
         $now: now,
         $chatId: input.chatId,
@@ -839,10 +887,71 @@ class SqliteConversationStore implements ConversationStore {
         ...(input.modelResultJson === undefined
           ? {}
           : { modelResultJson: input.modelResultJson }),
+        ...(parentId === null ? {} : { parentMessageId: parentId }),
+        depth,
+        branchIndex: branchRow.nextIndex,
+        active: true,
         metadata,
         createdAt: now,
       };
     });
+  }
+
+  /** The chat's deepest active message, or null when nothing is active. */
+  private activeLeafRow(chatId: string): MessageRecord | null {
+    const row = this.conn.get(
+      `SELECT * FROM messages WHERE chat_id = $chatId AND active = 1
+       ORDER BY depth DESC, order_key DESC LIMIT 1`,
+      { $chatId: chatId },
+    ) as MessageRow | null;
+    return row === null ? null : messageFromRow(row);
+  }
+
+  /** The named parent, proven to exist and to be in the same chat. */
+  private requireParentRow(
+    chatId: string,
+    parentMessageId: string,
+  ): MessageRecord {
+    const row = this.conn.get(
+      `SELECT * FROM messages WHERE id = $id AND chat_id = $chatId`,
+      { $id: parentMessageId, $chatId: chatId },
+    ) as MessageRow | null;
+    if (row === null) {
+      throw new RecordNotFoundError(
+        `Parent message not found in chat ${chatId}: ${parentMessageId}`,
+      );
+    }
+    return messageFromRow(row);
+  }
+
+  /** Every message in one chat — what the tree walks need and the queries cannot. */
+  private chatMessages(chatId: string): MessageRecord[] {
+    const rows = this.conn.all(
+      `SELECT * FROM messages WHERE chat_id = $chatId`,
+      { $chatId: chatId },
+    ) as MessageRow[];
+    return rows.map(messageFromRow);
+  }
+
+  /**
+   * Rewrite the chat's `active` flags so `messageId`'s path is the live one.
+   *
+   * A DIFF, not a blanket clear-then-set: the rows whose flag already agrees are
+   * left alone, so switching between two branches of a long conversation writes
+   * the handful of rows that actually changed instead of every message in the
+   * chat. Caller must already hold the transaction.
+   */
+  private switchActivePath(chatId: string, messageId: string): void {
+    const records = this.chatMessages(chatId);
+    const active = activationSetOf(records, messageId);
+    for (const record of records) {
+      const next = active.has(record.id);
+      if (next === record.active) continue;
+      this.conn.run(`UPDATE messages SET active = $active WHERE id = $id`, {
+        $active: toIntBool(next),
+        $id: record.id,
+      });
+    }
   }
 
   async updateMessage(
@@ -884,20 +993,180 @@ class SqliteConversationStore implements ConversationStore {
     });
   }
 
+  /** The chat's ACTIVE PATH, `(depth, orderKey)` ascending — see the port. */
   async listMessages(
     chatId: string,
     opts?: ListMessagesOptions,
   ): Promise<MessageRecord[]> {
-    let sql = `SELECT * FROM messages WHERE chat_id = $chatId`;
+    let sql = `SELECT * FROM messages WHERE chat_id = $chatId AND active = 1`;
     const params: Params = { $chatId: chatId };
     if (opts?.afterOrderKey !== undefined) {
       sql += ` AND order_key > $after`;
       params.$after = opts.afterOrderKey;
     }
-    sql += ` ORDER BY order_key ASC`;
+    sql += ` ORDER BY depth ASC, order_key ASC`;
     const rows = this.conn.all(sql, params) as MessageRow[];
     const mapped = rows.map(messageFromRow);
     return opts?.limit !== undefined ? mapped.slice(-opts.limit) : mapped;
+  }
+
+  /**
+   * The message's siblings, itself included, `branchIndex` ascending.
+   *
+   * Answered in SQL off `idx_messages_parent` rather than by walking a loaded
+   * tree; the ORDER BY is the same order `siblingsOf` produces, and the
+   * conformance suite grades both adapters on it so the two cannot drift.
+   * `IS $parentId` rather than `= $parentId` because a root's parent is NULL,
+   * which `=` never matches.
+   */
+  async listSiblings(messageId: string): Promise<MessageRecord[]> {
+    return this.conn.withTx(() => {
+      const record = this.requireMessage(messageId);
+      const rows = this.conn.all(
+        `SELECT * FROM messages
+         WHERE chat_id = $chatId AND parent_message_id IS $parentId
+         ORDER BY branch_index ASC, order_key ASC`,
+        {
+          $chatId: record.chatId,
+          $parentId: record.parentMessageId ?? null,
+        },
+      ) as MessageRow[];
+      return rows.map(messageFromRow);
+    });
+  }
+
+  async activatePath(messageId: string): Promise<void> {
+    this.conn.withTx(() => {
+      const record = this.requireMessage(messageId);
+      this.switchActivePath(record.chatId, messageId);
+    });
+  }
+
+  /**
+   * Copy the source chat's active-path prefix into a new chat, in ONE
+   * transaction — the chat row and every message, or neither.
+   *
+   * `withTx` (synchronous) rather than the store's async `transaction`: this is
+   * one port method's own SQL, there is nothing to await inside it, and an
+   * `await` between the BEGIN and the COMMIT is precisely what a bun:sqlite
+   * transaction cannot survive. Called from inside a host-level
+   * `store.transaction(...)` it flattens into that one instead, so a fork that
+   * an outer transaction later rolls back leaves nothing behind.
+   *
+   * Messages are inserted ROOT FIRST, which the self-FK on `parent_message_id`
+   * requires: a child inserted before its parent would be rejected by the
+   * constraint rather than by a later read.
+   */
+  async forkChat(
+    chatId: string,
+    fromMessageId: string,
+  ): Promise<ForkChatResult> {
+    return this.conn.withTx(() => {
+      const sourceRow = this.conn.get(`SELECT * FROM chats WHERE id = $id`, {
+        $id: chatId,
+      }) as ChatRow | null;
+      if (sourceRow === null) {
+        throw new RecordNotFoundError(`Chat not found: ${chatId}`);
+      }
+      const source = chatFromRow(sourceRow);
+      const prefix = forkPrefixOf(
+        this.chatMessages(chatId),
+        chatId,
+        fromMessageId,
+      );
+      const plans = planForkedMessages(prefix, () => this.ids.messageId());
+      const now = this.clock.nowIso();
+      const title = forkedChatTitle(source.title);
+      // The chat's own metadata IS copied (its labels, its owner, whatever the
+      // host keeps there); only per-MESSAGE run linkage is stripped, and a fork
+      // that lost the conversation's own bookkeeping would be a different chat
+      // rather than a copy of this one.
+      const metadata = { ...source.metadata };
+      const forkId = `chat_${crypto.randomUUID()}`;
+      this.conn.run(
+        `INSERT INTO chats (id, title, created_at, updated_at, metadata)
+         VALUES ($id, $title, $now, $now, $metadata)`,
+        {
+          $id: forkId,
+          $title: title ?? null,
+          $now: now,
+          $metadata: toJson(metadata),
+        },
+      );
+
+      const messages: MessageRecord[] = [];
+      for (const plan of plans) {
+        const orderKey = messages.length + 1;
+        this.conn.run(
+          `INSERT INTO messages
+             (id, chat_id, run_id, role, content, order_key, tool_call_id, tool_calls, model_result_json, parent_message_id, depth, branch_index, active, metadata, created_at)
+           VALUES
+             ($id, $chatId, NULL, $role, $content, $orderKey, $toolCallId, $toolCalls, $modelResultJson, $parentId, $depth, 0, 1, $metadata, $now)`,
+          {
+            $id: plan.id,
+            $chatId: forkId,
+            $role: plan.source.role,
+            $content: plan.source.content,
+            $orderKey: orderKey,
+            $toolCallId: plan.source.toolCallId ?? null,
+            $toolCalls:
+              plan.source.toolCalls === undefined
+                ? null
+                : toJson(plan.source.toolCalls),
+            $modelResultJson: plan.source.modelResultJson ?? null,
+            $parentId: plan.parentMessageId ?? null,
+            $depth: plan.depth,
+            $metadata: toJson(plan.metadata),
+            $now: now,
+          },
+        );
+        messages.push({
+          id: plan.id,
+          chatId: forkId,
+          role: plan.source.role,
+          content: plan.source.content,
+          orderKey,
+          ...(plan.source.toolCallId === undefined
+            ? {}
+            : { toolCallId: plan.source.toolCallId }),
+          ...(plan.source.toolCalls === undefined
+            ? {}
+            : { toolCalls: plan.source.toolCalls }),
+          ...(plan.source.modelResultJson === undefined
+            ? {}
+            : { modelResultJson: plan.source.modelResultJson }),
+          ...(plan.parentMessageId === undefined
+            ? {}
+            : { parentMessageId: plan.parentMessageId }),
+          depth: plan.depth,
+          branchIndex: 0,
+          active: true,
+          metadata: plan.metadata,
+          createdAt: now,
+        });
+      }
+
+      return {
+        chat: {
+          id: forkId,
+          ...(title === undefined ? {} : { title }),
+          createdAt: now,
+          updatedAt: now,
+          metadata,
+        },
+        messages,
+      };
+    });
+  }
+
+  private requireMessage(messageId: string): MessageRecord {
+    const row = this.conn.get(`SELECT * FROM messages WHERE id = $id`, {
+      $id: messageId,
+    }) as MessageRow | null;
+    if (row === null) {
+      throw new RecordNotFoundError(`Message not found: ${messageId}`);
+    }
+    return messageFromRow(row);
   }
 }
 
@@ -2066,7 +2335,7 @@ function assertSchemaVersion(db: Database, path: string): void {
     // A pragma every SQLite build answers came back with nothing. Whatever this
     // handle is, it is not a database this adapter can reason about — and the
     // one thing worse than refusing to open it is opening it anyway and running
-    // `SCHEMA_V3` against it, which is exactly what falling through would do.
+    // `SCHEMA_V4` against it, which is exactly what falling through would do.
     throw new AgentKitHostError(
       "sqlite_schema_version",
       `Cannot read user_version from the SQLite store at ${path}; refusing to touch this database.`,
@@ -2152,7 +2421,7 @@ export class SqliteAssistantStore implements AssistantStore {
     // Idempotent: every statement is CREATE ... IF NOT EXISTS / INSERT OR
     // IGNORE, so reopening the same file (or a file another process already
     // initialized) is a safe no-op.
-    db.exec(SCHEMA_V3);
+    db.exec(SCHEMA_V4);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
     this.conn = new SqliteConnection(db, busyTimeoutMs);
     const clock = options.clock ?? defaultClock;

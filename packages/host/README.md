@@ -19,7 +19,9 @@ that package before writing your own adapter from scratch.
 ## Modules
 
 - `ports/` — the port catalog: `AssistantStore` (aggregate),
-  `ConversationStore`, `TaskStore` (`parentTaskId`/`dependsOn` edges,
+  `ConversationStore` (a chat is a message TREE — `parentMessageId`/`depth`/
+  `branchIndex`, an `active` flag per message that IS the live path,
+  `listSiblings`/`activatePath`/`forkChat`), `TaskStore` (`parentTaskId`/`dependsOn` edges,
   dependency-gated `claimNext`, `listChildren`, `updateProgress` —
   see [ADR 0003](../../docs/adr/0003-task-dependencies-and-subagents.md)),
   `ProposalStore`, `ProviderStore`,
@@ -48,6 +50,11 @@ that package before writing your own adapter from scratch.
   wrapper a host's write tools are built on).
 - `policy/session-write-policy.ts` — `SessionWritePolicy`, an in-memory
   `WritePolicy`.
+- `conversation/message-tree.ts` — the tree arithmetic every `ConversationStore`
+  adapter shares (`activePathOf`, `activationSetOf`, `nextBranchIndex`,
+  `forkPrefixOf`, `planForkedMessages`). Pure and SYNCHRONOUS: adapters call it
+  inside a transaction, and a `bun:sqlite` transaction cannot survive an `await`.
+  Adapters own their queries; they do not own these answers.
 - `turn/` — `turn-runner.ts` (`TurnRunner`, `ChatTurnExecutor`), `retry.ts`
   (chat-only / empty-response retry decisions), `message-order.ts`
   (`orderMessagesForProvider`), `emulated-tool-call.ts`

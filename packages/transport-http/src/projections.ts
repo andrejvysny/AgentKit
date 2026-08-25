@@ -42,7 +42,15 @@ export function chatDto(record: ChatRecord): ChatDto {
   };
 }
 
-/** Drops `orderKey` (the page cursor carries it) and `modelResultJson`. */
+/**
+ * Drops `orderKey` (the page cursor carries it), `modelResultJson`, and `depth`.
+ *
+ * `depth` is the one branching field the contract deliberately does not publish:
+ * it is derivable from the parent chain a client already has, and a second
+ * source of truth for a message's position is a second thing that can disagree
+ * with the first. `parentMessageId`, `branchIndex` and `active` are all here,
+ * because none of them is derivable from what a client can see.
+ */
 export function messageDto(record: MessageRecord): MessageDto {
   return {
     id: record.id,
@@ -54,6 +62,11 @@ export function messageDto(record: MessageRecord): MessageDto {
     ...(record.toolCallId === undefined
       ? {}
       : { toolCallId: record.toolCallId }),
+    ...(record.parentMessageId === undefined
+      ? {}
+      : { parentMessageId: record.parentMessageId }),
+    branchIndex: record.branchIndex,
+    active: record.active,
     metadata: record.metadata,
     createdAt: record.createdAt,
   };

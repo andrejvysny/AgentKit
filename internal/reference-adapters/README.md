@@ -92,14 +92,22 @@ needs a cancellation flag in the store that every worker polls, which is a
 different design with a different cost than this reference adapter takes
 on. See [`docs/non-goals.md`](../../docs/non-goals.md).
 
-## SQLite schema (v3)
+## SQLite schema (v4)
 
-Single-file DDL in `src/sqlite/schema.ts` (`SCHEMA_V3`), applied
+Single-file DDL in `src/sqlite/schema.ts` (`SCHEMA_V4`), applied
 idempotently (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). No
 migrations ship in this workspace-private adapter — `PRAGMA user_version`
 guards against opening a database written by a different schema version; a
-stale dev database (including one written by v2) is recreated, not upgraded
-in place. Table-to-port mapping:
+stale dev database (including one written by v3) is recreated, not upgraded
+in place.
+
+v4 added conversation branching: `messages` gained `parent_message_id` (a
+self-FK), `depth`, `branch_index` and `active`, plus the two indexes those
+reads want (`(chat_id, active, depth)` for the active path, `(parent_message_id,
+branch_index)` for siblings). A chat is a tree; `active` is the per-message flag
+marking which root-to-leaf path through it the conversation currently is.
+
+Table-to-port mapping:
 
 | Table(s) | Port |
 |---|---|
