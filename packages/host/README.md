@@ -67,10 +67,13 @@ that package before writing your own adapter from scratch.
   pass that cleans up after a crash — `TaskRunner.recover()` first, then
   `ProposalService.reconcileInterrupted()` — before any worker claims work.
 - `errors.ts` — `AgentKitHostError` and its subclasses, each carrying a
-  stable machine-readable `code` (`invalid_task_transition`,
-  `duplicate_task`, `executor_not_found`, `lease_lost`, `seq_conflict`,
+  stable machine-readable `code`, closed over the `HostErrorCode` union
+  (`invalid_task_transition`, `duplicate_task`, `executor_not_found`,
+  `invalid_proposal_transition`, `lease_lost`, `seq_conflict`,
   `duplicate_action_id`, `revision_conflict`, `not_found`,
-  `invalid_proposal_transition`, `unknown_dependency`).
+  `invalid_fork_point`, `unknown_dependency`) — a new subclass with a code
+  missing from the union fails to compile. See [ADR
+  0006](../../docs/adr/0006-hardening-tranche.md).
 
 ## Embedding `TurnRunner`
 

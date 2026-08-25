@@ -49,10 +49,73 @@ key — not `createdAt`, for the same reason `AiRunEvent.seq` orders events:
 several messages can be written in one transaction within the same
 millisecond.
 
-**Key invariant**: `appendMessage` assigns the next `orderKey` in the store,
+**A chat is a tree; the active path is a per-message flag** ([ADR
+0007](adr/0007-conversation-branching-fork.md)). `parentMessageId` makes a
+chat's messages a forest (one root normally); `active` marks which
+root-to-leaf path through it the conversation currently *is* — storing the
+path as a flag on every message, rather than a pointer to a leaf or a path
+table, is what makes reading "the conversation" a single indexed read
+instead of a walk. A child's `orderKey` is always greater than its
+parent's, so `depth` and `orderKey` agree along any root-to-leaf chain —
+which is why `(depth, orderKey)` ordering and plain `orderKey` ordering are
+the same order on the active path, and `listMessages`' `afterOrderKey`
+cursor keeps paging correctly through a branched chat. A chat nobody has
+branched is the degenerate case: `branchIndex: 0` and `active: true`
+throughout, `listMessages` byte-identical to before branching existed.
+
+**Tree operations**, all invariant-preserving and never left to a caller:
+
+- `appendMessage`'s `parentMessageId` (optional) is what turns a linear
+  append into a branch: absent, the parent is the chat's active leaf
+  (every pre-branching caller, unchanged); present, it creates a new
+  branch (`branchIndex` one past the highest used among its siblings) that
+  is **active immediately, with the whole path switched to it in the same
+  write** — append-and-activate is one atomic operation, not two, so there
+  is no window in which the branch exists but nothing is active.
+- `listSiblings(messageId)` — the messages sharing a message's parent,
+  itself included, `branchIndex` ascending (a root's siblings are the
+  chat's roots).
+- `activatePath(messageId)` — makes a message's path the chat's active one,
+  atomically: its ancestors, itself, and a descent to a leaf that prefers
+  an already-active child at each step, falling back to the lowest
+  `branchIndex` when none is. That preference only has something to prefer
+  when the node being activated is already on the current active path —
+  switching *away* from a branch clears every descendant's `active` flag in
+  that same transaction, so switching back to it later does not "remember"
+  which child was showing; it falls back to the lowest `branchIndex`.
+- `forkChat(chatId, fromMessageId)` — copies the active path up to and
+  including `fromMessageId` into a **new** chat, in one transaction.
+  `fromMessageId` must be on the source chat's active path or this raises
+  `InvalidForkPointError` (`invalid_fork_point`). The copy is flattened
+  (fresh ids, `branchIndex` reset to `0`, `depth` recounted `0..n`,
+  everything active) and strips `runId` and any `metadata.placeholder:
+  true` message, while keeping `internal: true` records so the fork can
+  still replay tool calls to the provider. See ADR 0007 for the full
+  rationale, including the known follow-up (a fork's history replays in
+  source order, since stripping `runId` disables `orderMessagesForProvider`'s
+  run-scoped reordering).
+
+**Key invariants**: `appendMessage` assigns the next `orderKey` in the store,
 not the caller, so concurrent appends from a run and from a user land in a
 defined order. `updateMessage`'s `metadata` patch *replaces* the stored bag
-rather than merging — a merge would make "unset this flag" unexpressible.
+rather than merging — a merge would make "unset this flag" unexpressible;
+it never touches a message's position in the tree
+(`parentMessageId`/`depth`/`branchIndex`/`active` are immutable once
+written — branching creates a new message instead of moving one).
+`activatePath` and `forkChat` are both transactional — a half-applied
+branch switch or a partially-copied fork is not an allowed intermediate
+state a reader can observe.
+
+**Reference / conformance**: `MemoryAssistantStore` and `SqliteAssistantStore`
+(sqlite adapter: `SCHEMA_V4`, `parent_message_id`/`depth`/`branch_index`/
+`active` on `messages` — see
+[`internal/reference-adapters/README.md`](../internal/reference-adapters/README.md#sqlite-schema-v4)),
+both graded by the same conformance suite; the tree arithmetic itself
+(`activePathOf`, `activationSetOf`, `nextBranchIndex`, `forkPrefixOf`,
+`planForkedMessages`) is shared, pure, and synchronous
+(`packages/host/src/conversation/message-tree.ts`), so both adapters answer
+"what does a branch switch activate" and "what does a fork copy" identically
+by construction rather than by two hand-written walks agreeing.
 
 ### `TaskStore`
 
@@ -159,6 +222,24 @@ acceptable" rather than "any kind". It also covers dependency gating and the
 failure/cancel settle verdicts, `listChildren`, `updateProgress`'s
 lease-gating, and (opt-in, see `internal/reference-adapters/src/task-aging.ts`)
 priority aging — a new adapter is graded against the same suite.
+
+**Concurrent-durability invariants**, a second and stronger bar beside the
+conformance suite ([ADR 0006](adr/0006-hardening-tranche.md)):
+`@agentkit/testing`'s `checkTaskInvariants`/`snapshotTaskInvariants` state
+what must hold of a `TaskStore` regardless of what concurrent activity got
+it there (never two live claims for one task, fencing strictly monotonic,
+`seq` gapless), graded against a seeded, replayable random schedule
+(`runTaskSchedule`) rather than one hand-written scenario. Both reference
+adapters also support and are tested against **multiple store handles over
+one backing file/store** — two `SqliteAssistantStore` instances on one
+sqlite file, or two `MemoryTaskStore`s over the same in-memory-equivalent
+topology — a real deployment shape a single per-instance claim mutex cannot
+cover; SQLite's own transactionality (a busy-wait strategy tuned separately
+for synchronous vs. `await`-holding transactions) does the work instead.
+One gap remains, documented rather than fixed: a synchronous transaction on
+one handle cannot event-loop-wait for another handle's in-flight
+*asynchronous* claim in the same process (see ADR 0006's Consequences and
+`docs/roadmap.md`'s Later list).
 
 ### `ProposalStore`
 

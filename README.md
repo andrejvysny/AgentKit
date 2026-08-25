@@ -60,8 +60,8 @@ toolchain (tests, `bun run ci`) is Bun-only.
   diagram.
 - [`docs/non-goals.md`](docs/non-goals.md) — what this repository
   deliberately does not include yet, and where it will live.
-- [`docs/roadmap.md`](docs/roadmap.md) — the sequenced backlog (P1–P4
-  shipped, P5a–P7 active, and a Later list) this deferred surface lands
+- [`docs/roadmap.md`](docs/roadmap.md) — the sequenced backlog (P1–P5a
+  shipped, P5b–P7 active, and a Later list) this deferred surface lands
   against.
 - [`docs/adr/`](docs/adr/) — accepted architecture decision records.
 - [`PROVENANCE.md`](PROVENANCE.md) — how `packages/core` was extracted from
@@ -83,19 +83,22 @@ typecheck`, `bun run build`, and per-package variants
 `bun run test:testing`, `bun run test:adapters`, `bun run test:mcp-client`,
 `bun run test:transport-http`).
 
-Bun is the primary runtime, but `@agentkit/contracts` and `@agentkit/core`
-must stay Node-loadable — a `bun:` import in either passes the whole Bun
+Bun is the primary runtime, but every published `@agentkit/*` package must
+stay Node-loadable — a `bun:` import anywhere in one passes the whole Bun
 suite and breaks the first Node consumer. `scripts/node-smoke.mjs` runs the
-built dists under plain Node (Ajv-validating a golden event, then driving
-`runChat` with a stub provider). **Build first** — it reads `dist/`, which is
+built dists (contracts, core, host, mcp-client, transport-http, testing)
+under plain Node: Ajv-validating a golden event, driving `runChat` with a
+stub provider, loading the host port vocabulary, constructing an mcp-client
+manager, serving a request through transport-http, and round-tripping a
+golden trace through testing. **Build first** — it reads `dist/`, which is
 not checked in:
 
 ```sh
-bun run build:contracts && bun run build:core && bun run smoke:node
+bun run build && bun run smoke:node
 ```
 
 CI runs the same thing in a separate `node-smoke` job, preceded by a grep
-that fails on any `bun:` import in those two dists.
+that fails on any `bun:` import in any of those six dists.
 
 ## License
 

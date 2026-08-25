@@ -82,6 +82,26 @@ statement issued on it belongs to that one. Keep transaction callbacks free of
 foreign async work: await the model, the applier, or another subsystem
 *outside*, then pass the results in.
 
+## Multiple handles over one sqlite file
+
+Supported and tested — two `SqliteAssistantStore` instances (two worker
+processes, or two connections in one process) opened on the same path are
+two connections contending for SQLite's single write lock, which the
+per-instance claim mutex above cannot cover; `BEGIN IMMEDIATE` plus a
+busy-wait strategy does the rest. Synchronous transactions wait *inside*
+SQLite via `PRAGMA busy_timeout` (default 5000ms — right when the lock
+holder is another OS process); transactions that hold the lock across an
+`await` (`claimNext`, `AssistantStore.transaction`) instead wait on the
+**event loop**, because the holder may be this same process's *other*
+handle, and parking the thread SQLite would park is the only thread that
+could ever release that lock. Measured against a real two-handle claim: the
+thread-parking version stalled 5293ms and then failed; the event-loop
+version resolved the same contention in 4ms. One gap remains, deliberately
+unfixed: a synchronous transaction on one handle cannot event-loop-wait for
+another handle's in-flight *async* claim in the same process. See [ADR
+0006](../../docs/adr/0006-hardening-tranche.md) and `docs/roadmap.md`'s
+Later list.
+
 ## Single-process limits
 
 Documented in `single-process-task-runner.ts`'s module doc, and worth
