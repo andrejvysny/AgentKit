@@ -51,15 +51,31 @@ blank page or re-learn fixed bugs.
   aging (task-system's formula) now opt-in, default off, with a cap;
   `progress` as an overwritten `TaskRecord` snapshot via `updateProgress`,
   not an event. sqlite `SCHEMA_V3`.
-
-## P5a — Conversation branching + forking
-
-- **Branching/forking** — adopt OneMind's two proven mechanisms: in-chat
-  branching as a message tree (`parentMessageId`, active-path flags;
-  branches referenced, not copied) and chat forking as a transactional
-  deep copy that strips task linkage/metadata (tested independence).
-  `ConversationStore` grows the tree operations; flat `orderKey` remains the
-  degenerate single-branch case.
+- **Hardening tranche** (2026-08-25). ADR
+  [0006](adr/0006-hardening-tranche.md): seeded model/invariant tests over
+  `TaskStore` (`@agentkit/testing`'s `task-invariants.ts` +
+  `task-schedule-driver.ts`) closing a same-day-caught `claimNext`
+  double-claim and three more concurrency findings — exception-safe sqlite
+  `txDepth`, a dual busy-wait strategy making multi-handle sqlite a
+  supported topology (measured 5293ms-fail → 4ms fix), atomic
+  `MemoryTaskStore.claimNext` undo; SSE bounded reads + `pull`-signalled
+  backpressure; closed `HostErrorCode` union with a compiler-exhaustive
+  transport status map; Biome lint/format in CI + coverage as report;
+  claim-path perf benchmarked against a measured budget, not redesigned;
+  packaging readiness (`engines`, ESM-only policy, `pack-smoke` in CI); an
+  API-surface review across all six packages, verdict no renames.
+- **P5a — Conversation branching + forking** (2026-08-25). ADR
+  [0007](adr/0007-conversation-branching-fork.md): OneMind's two proven
+  mechanisms, ported — in-chat branching as a message tree
+  (`parentMessageId`/`depth`/`branchIndex`, a per-message `active` flag as
+  the whole path representation) with append-and-activate as one atomic
+  operation, and `forkChat` as a transactional active-path-prefix copy that
+  strips task linkage and excludes in-flight placeholders. `activatePath`
+  and `forkChat` are both transactional and tested (OneMind's equivalents
+  are neither). Branch execution stays serialized per chat — a switch never
+  cancels a task already running against the branch it left. Contract wave
+  `0.2.0` → `0.3.0` (additive DTO fields + 3 routes; goldens re-recorded).
+  sqlite `SCHEMA_V4`.
 
 ## P5b — Message search + forward paging
 
@@ -143,3 +159,13 @@ surface that this phase's guard chain and namespacing are meant to police.
   progress into its parent's own event log is unimplemented.
 - **WebSocket transport** — `@agentkit/transport-http` ships SSE + polling
   submit/read only (ADR [0005](adr/0005-http-transport.md)).
+- **Adapter claim-tx-across-awaits redesign** — the one multi-handle sqlite
+  gap ADR 0006 left as a documented skip: a synchronous transaction on one
+  handle cannot event-loop-wait for another handle's in-flight *async*
+  claim in the same process. Fix is not holding a claim transaction across
+  an `await` at all — a larger restructuring than the hardening tranche
+  took on.
+- **Branch/chat archive and delete** — deferred out of ADR 0007: OneMind has
+  an archive mechanism (refuses on the active branch; its own archive loop
+  is non-transactional, deliberately not copied here), but nothing in P5a
+  needed it. `ConversationStore` has no delete/archive operation today.

@@ -77,7 +77,13 @@ event in every committed trace against `AiRunEventSchema`.
 pass. It is framework-neutral by design: it takes `describe`/`it`/`expect`
 (and an optional `beforeEach`) as injected parameters rather than importing
 a test runner, so it works under `bun:test` or anything else with a
-Jest-style `expect` API.
+Jest-style `expect` API. It calls two conversation-tree sub-suites internally
+(split into their own files, not separately exported): `conversation-conformance.ts`'s
+`describeConversationBranching` (branch creation, `activatePath`'s
+ancestor/active-descendant walk, `listSiblings`) and `fork-conformance.ts`'s
+`describeConversationForking` (`forkChat`'s copy semantics, invalid-fork-point
+rejection, post-fork independence) — see [ADR
+0007](../../docs/adr/0007-conversation-branching-fork.md).
 
 ```ts
 import { describe, expect, it } from "bun:test";
@@ -101,6 +107,31 @@ adapters in this repository pass the suite:
 [`internal/reference-adapters/README.md`](../../internal/reference-adapters/README.md)
 and [`docs/ports.md`](../../docs/ports.md) for what the suite checks per
 port.
+
+## Durability invariant suite
+
+A second, stronger bar beside store conformance ([ADR
+0006](../../docs/adr/0006-hardening-tranche.md)): where conformance says
+"this call does this thing", `task-invariants.ts` says something that must
+hold of a `TaskStore` regardless of *what concurrent activity got it
+there* — never two live claims for one task, exactly one current lease,
+fencing strictly monotonic, event `seq` gapless per task. Framework-neutral
+like `store-conformance.ts` (no `bun:test`, no `expect`):
+`checkTaskInvariants(view, options)` returns the violations it found
+(empty = clean) for the caller's runner to assert on, over a
+`snapshotTaskInvariants(...)`-built view. Two phases (`options.phase`):
+`in-flight` runs only what survives a torn read (concurrent workers still
+committing between the dozens of awaits a full view needs), `quiescent`
+(default) adds the cross-read pairings that are only exact once nothing is
+executing.
+
+`task-schedule-driver.ts`'s `runTaskSchedule(...)` is the seeded, replayable
+schedule that grades against those invariants instead of one hand-written
+scenario: a `mulberry32`-seeded RNG (`createRng`) and a logical clock
+(`createLogicalClock` — no wall-clock timers) drive N workers over M tasks
+with dependencies, cancels, lease expiry, and retries; a failing run prints
+its seed, and that seed reproduces the exact same schedule byte-for-byte —
+turning a flaky-looking failure into a repeatable one instead of a shrug.
 
 ## License
 

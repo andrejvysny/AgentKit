@@ -51,7 +51,7 @@ stays unbroken across host-driven retries.
 ### `CONTRACT_VERSION` policy
 
 ```ts
-export const CONTRACT_VERSION = "0.2.0";
+export const CONTRACT_VERSION = "0.3.0";
 ```
 
 ([`packages/contracts/src/version.ts`](../packages/contracts/src/version.ts))
@@ -293,7 +293,7 @@ and [ADR 0005](adr/0005-http-transport.md)); no client SDK exists yet (see
 - `REST_API_VERSION` (`"v1"`) is the URL-visible version, distinct from
   `CONTRACT_VERSION`: an additive DTO field bumps the contract version and
   leaves the URL alone, because a client written against `/v1` keeps working.
-- `REST_ROUTES` is the route table as data — 17 operations keyed by name,
+- `REST_ROUTES` is the route table as data — 20 operations keyed by name,
   `{ method, path }` each, `as const satisfies Readonly<Record<string,
   RouteDef>>` — so a router, a client generator, and the documentation
   cannot drift apart by transcription. Two carry header semantics no path

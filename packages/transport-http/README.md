@@ -146,6 +146,16 @@ the stream) clears the poll timer and closes immediately; the 404 for an unknown
 run is decided *before* the stream is created, since a `text/event-stream`
 response has no status code left to say "no such run".
 
+**Bounded reads and backpressure.** Both the replay read and the pre-stream
+`Last-Event-ID` scan page the durable log via `readBatchSize` (default
+`256`) instead of reading the whole log per poll. The writer pauses on a
+saturated consumer (`CountQueuingStrategy(highWaterMark = readBatchSize)` +
+`controller.desiredSize`) and resumes on the stream's own `pull` callback,
+not a timer — so a slow reader bounds server memory without rationing replay
+to a fixed amount per interval regardless of how fast it actually drains.
+Frames are never dropped or reordered; heartbeats are skipped while
+saturated. See [ADR 0006](../../docs/adr/0006-hardening-tranche.md).
+
 ## Errors
 
 Every non-2xx body is RFC 7807 `application/problem+json`:
@@ -168,10 +178,15 @@ through untouched. The mapping:
 | --- | --- |
 | `not_found` | 404 |
 | `invalid_task_transition`, `invalid_proposal_transition`, `duplicate_task`, `duplicate_action_id`, `revision_conflict`, `lease_lost`, `seq_conflict`, `unknown_dependency` | 409 |
-| `invalid_decision`, `invalid_request`, `invalid_body`, `idempotency_key_required` | 400 |
+| `invalid_fork_point`, `invalid_decision`, `invalid_request`, `invalid_body`, `idempotency_key_required` | 400 |
 | `method_not_allowed` | 405 (with an `Allow` header) |
 | `not_implemented` | 501 |
-| anything else | 500, logged, with a generic `detail` |
+| anything else (incl. `executor_not_found`) | 500, logged, with a generic `detail` |
+
+The host-`code` → status table is `satisfies Record<HostErrorCode, number>`
+— a code added to the closed union without a status here fails
+`bun run typecheck` rather than silently falling back to 500 (see [ADR
+0006](../../docs/adr/0006-hardening-tranche.md)).
 
 A known path with the wrong verb is a 405 naming what the path *does* accept,
 not a 404 that sends a client hunting for a typo.

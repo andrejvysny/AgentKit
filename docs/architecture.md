@@ -8,6 +8,7 @@ it; the optional adapters depend on `host` and nothing depends on them.
 ```
 internal/reference-adapters   @agentkit/reference-adapters (workspace-private; not published)
   implements host's ports over bun:sqlite / in-memory Maps
+  (multiple store handles over one file/backend: supported, tested)
 
 packages/mcp-client            @agentkit/mcp-client (optional adapter)
   bridges MCP servers' tools into a run as a ToolSetContributor
@@ -35,7 +36,8 @@ packages/contracts      @agentkit/contracts
 --------------------------------------------------------------
 
 packages/testing         @agentkit/testing
-  Mocks, fixtures, golden traces, store-conformance suite.
+  Mocks, fixtures, golden traces, store-conformance suite,
+  seeded concurrent-durability invariant suite.
   Depends on contracts; core/host are peer deps (type-only
   in the package itself, real in its own tests).
 ```
@@ -345,6 +347,24 @@ where a heartbeat percentage belongs.
 Full rationale, including the alternatives rejected (eager cascade, claim-time
 cycle detection, `dependsOn`-as-re-enqueue): [ADR
 0003](adr/0003-task-dependencies-and-subagents.md).
+
+## Conversation branching and fork
+
+A chat is a **tree**, not a list: `MessageRecord` carries `parentMessageId`,
+`depth`, `branchIndex`, and a per-message `active` flag that *is* the whole
+active-path representation — no materialized path, no walk to read "the
+conversation". `ConversationStore.appendMessage`'s optional
+`parentMessageId` turns a normal append into a new branch, created active
+and switched in with the same write; `activatePath` moves the active path
+atomically; `forkChat` copies the active-path prefix up to a message into a
+brand-new chat, transactionally, stripping task linkage. A chat nobody has
+branched behaves exactly as it did before this existed. `TurnRunner`'s
+history assembly always reads the active path, so branching and forking are
+invisible to everything downstream of `assembleMessages`; branch execution
+stays serialized per chat (`scopeId` is unchanged by branching). Full
+mechanics, invariants, and the tree operations themselves:
+[`docs/ports.md`](ports.md#conversationstore) (authoritative) and [ADR
+0007](adr/0007-conversation-branching-fork.md).
 
 ## At-least-once delivery, idempotent effects
 
