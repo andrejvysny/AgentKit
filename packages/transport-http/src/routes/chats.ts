@@ -150,6 +150,24 @@ export async function submitMessage(ctx: RouteContext): Promise<Response> {
   const chat = await ctx.deps.store.conversations.getChat(chatId);
   if (chat === null) return notFound(`Chat not found: ${chatId}`, ctx.instance);
 
+  // Same reasoning one level down for a branch submit: a `parentMessageId` in
+  // ANOTHER chat is the mistake this pre-check exists for, since the store's own
+  // guard would fire mid-transaction, behind the task row. `listSiblings` is the
+  // read that answers it — it includes the message itself, and raises
+  // `not_found` (a 404) for an id nothing has.
+  const parentMessageId = validated.value.parentMessageId;
+  if (parentMessageId !== undefined) {
+    const siblings =
+      await ctx.deps.store.conversations.listSiblings(parentMessageId);
+    const parent = siblings.find((record) => record.id === parentMessageId);
+    if (parent === undefined || parent.chatId !== chatId) {
+      return notFound(
+        `Message not found in chat ${chatId}: ${parentMessageId}`,
+        ctx.instance,
+      );
+    }
+  }
+
   const taskId = await deriveIdempotentTaskId(chatId, key.trim());
   const existing = await ctx.deps.store.tasks.getTask(taskId);
 
@@ -159,6 +177,7 @@ export async function submitMessage(ctx: RouteContext): Promise<Response> {
     ...(validated.value.model === undefined
       ? {}
       : { model: validated.value.model }),
+    ...(parentMessageId === undefined ? {} : { parentMessageId }),
     ...(validated.value.metadata === undefined
       ? {}
       : { metadata: validated.value.metadata }),

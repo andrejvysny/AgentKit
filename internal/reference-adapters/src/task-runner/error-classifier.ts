@@ -49,6 +49,10 @@ export interface ExecutionErrorClassification {
  * the retry — and none of them is poison: the runner fails the task without
  * dead-lettering it, because a clean diagnosis is not a queue that needs
  * protecting.
+ *
+ * `invalid_fork_point` joins them: a message that is not on a chat's active path
+ * does not wander onto it because an attempt was retried, and the caller named
+ * the wrong point either way.
  */
 const HOST_CODE_KINDS: Readonly<Record<string, ExecutionErrorKind>> =
   Object.freeze({
@@ -63,6 +67,7 @@ const HOST_CODE_KINDS: Readonly<Record<string, ExecutionErrorKind>> =
     unknown_dependency: "terminal",
     revision_conflict: "terminal",
     not_found: "terminal",
+    invalid_fork_point: "terminal",
   });
 
 /** Socket-level failures: the request never got an answer, so ask again. */

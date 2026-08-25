@@ -13,6 +13,11 @@ function record(
     chatId: "chat-1",
     content: "",
     orderKey: seq,
+    // Tree fields at their degenerate-linear defaults: this suite is about
+    // provider ordering WITHIN a run, which branching does not touch.
+    depth: seq - 1,
+    branchIndex: 0,
+    active: true,
     metadata: {},
     createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,

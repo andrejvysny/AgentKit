@@ -1,5 +1,5 @@
 /**
- * Structural validation of the four request bodies in the contract.
+ * Structural validation of the five request bodies in the contract.
  *
  * DELIBERATELY HAND-WRITTEN, not schema-driven. The TypeBox schemas that define
  * these bodies live in `@agentkit/contracts`, and validating against them needs
@@ -7,7 +7,7 @@
  * `Value.Check` (a `@agentkit/contracts` dependency). Reaching through a
  * dependency for a transitive package is how a lockfile change becomes a
  * runtime crash in someone else's deployment, and this package is meant to be
- * addable with no new dependencies at all. Four bodies of at most three fields
+ * addable with no new dependencies at all. Five bodies of at most four fields
  * do not earn one.
  *
  * The rules are the schemas', restated: required fields must be present and of
@@ -19,6 +19,7 @@
 import type {
   ApplyProposalRequest,
   CreateChatRequest,
+  ForkChatRequest,
   ProposalDecisionRequest,
   SubmitMessageRequest,
 } from "@agentkit/contracts";
@@ -83,10 +84,23 @@ export function validateSubmitMessageRequest(
   const issue = first(
     checkRequiredString(body, "content"),
     checkOptionalString(body, "model"),
+    checkOptionalString(body, "parentMessageId"),
     checkOptionalMetadata(body, "metadata"),
   );
   if (issue !== null) return { ok: false, detail: issue };
   return { ok: true, value: body as SubmitMessageRequest };
+}
+
+export function validateForkChatRequest(
+  body: Record<string, unknown>,
+): ValidationResult<ForkChatRequest> {
+  const issue = checkRequiredString(body, "fromMessageId");
+  if (issue !== null) return { ok: false, detail: issue };
+  const value = body as ForkChatRequest;
+  if (value.fromMessageId.trim() === "") {
+    return { ok: false, detail: "`fromMessageId` must not be empty." };
+  }
+  return { ok: true, value };
 }
 
 export function validateProposalDecisionRequest(

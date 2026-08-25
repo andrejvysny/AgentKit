@@ -15,132 +15,27 @@
 // (see packages/host/src/errors.ts) rather than on `instanceof` against an
 // imported class — the same code-not-message discipline host's own error
 // vocabulary asks every OTHER consumer to follow.
-import type {
-  AssistantStore,
-  Clock,
-  CreateProposalInput,
-  CreateTaskInput,
-} from "@agentkit/host";
+import type { CreateProposalInput, CreateTaskInput } from "@agentkit/host";
+import {
+  createConformanceClock,
+  expectRejects,
+  expectRejectsWithCode,
+  type DescribeAssistantStoreConformanceOptions,
+} from "./conformance-support.js";
+import { describeConversationBranching } from "./conversation-conformance.js";
+import { describeConversationForking } from "./fork-conformance.js";
 import { createTestEventStamper } from "./stamp.js";
 
-/**
- * What `create()` hands back for one test: a fresh, isolated store plus
- * whatever this adapter cannot promise.
- */
-export interface AssistantStoreConformanceHarness {
-  store: AssistantStore;
-  /**
-   * Capabilities this adapter does NOT provide. Absent/undefined means "fully
-   * capable" — only `atomicTransactions: false` currently changes suite
-   * behavior (see {@link DescribeAssistantStoreConformanceOptions}).
-   */
-  capabilities?: {
-    /** False for an adapter whose `transaction()` cannot roll back (e.g. a plain in-memory store). */
-    atomicTransactions?: boolean;
-  };
-  /** Releases whatever `create()` opened (a db connection, a temp file handle, ...). Synchronous — mirrors `SqliteAssistantStore.close()`. */
-  close?: () => void;
-}
-
-/**
- * Minimal test-runner primitives this suite needs, injected by the caller so
- * this package never imports a specific runner.
- *
- * `expect` is typed loosely (`any` return) on purpose: every assertion below
- * uses only the near-universal Jest-style subset (`toBe`, `toEqual`,
- * `toBeNull`, `toBeDefined`, `toContain`, `toBeGreaterThan`, `.not`), and
- * giving that chain a precise type would mean importing one runner's matcher
- * types — exactly what this file exists to avoid.
- */
-export interface AssistantStoreConformanceTestApi {
-  describe: (name: string, fn: () => void) => void;
-  it: (name: string, fn: () => void | Promise<void>) => void;
-  // biome-ignore lint/suspicious/noExplicitAny: intentional, see doc comment above — a precise return type here means importing one runner's matcher types.
-  expect: (value: unknown) => any;
-  beforeEach?: (fn: () => void | Promise<void>) => void;
-}
-
-/** A {@link Clock} a test drives by hand. */
-export interface ConformanceClock extends Clock {
-  advance(ms: number): void;
-}
-
-/**
- * Construction knobs the queue tests need but `create()` cannot express.
- *
- * Aging is a function of how long a task has waited, so the only way to observe
- * it is to control the clock the store stamps `enqueuedAt` from — two tasks
- * created a millisecond apart carry the same age whatever `now` a claim passes.
- * Hence the clock is part of the tuning, not an extra.
- */
-export interface ConformanceTuning {
-  /** What the store stamps `enqueuedAt` / `availableAt` from. */
-  clock: ConformanceClock;
-  /** Aging knobs. Absent means the adapter's own defaults, i.e. aging off. */
-  aging?: {
-    agingIntervalMs?: number;
-    agingBonus?: number;
-    agingMaxBonus?: number;
-  };
-}
-
-export interface DescribeAssistantStoreConformanceOptions {
-  /** Adapter name, folded into every `describe` block title. */
-  name: string;
-  /** Builds one fresh, isolated store per test — never shared across `it()`s. */
-  create: () => Promise<AssistantStoreConformanceHarness>;
-  /**
-   * Builds a store with an injected clock and optional priority aging. Adapters
-   * that cannot be constructed that way omit it and the aging tests are skipped
-   * rather than failed — the rest of the suite still grades them.
-   */
-  createTuned?: (
-    tuning: ConformanceTuning,
-  ) => Promise<AssistantStoreConformanceHarness>;
-  test: AssistantStoreConformanceTestApi;
-}
-
-/** A clock frozen at `startIso` that only moves when a test says so. */
-function createConformanceClock(startIso: string): ConformanceClock {
-  let current = new Date(startIso).getTime();
-  return {
-    now: () => new Date(current),
-    nowIso: () => new Date(current).toISOString(),
-    advance: (ms: number) => {
-      current += ms;
-    },
-  };
-}
-
-/** Catches a rejection and asserts its `code` field — see the module doc on why `code`, not `instanceof`. */
-async function expectRejectsWithCode(
-  promise: Promise<unknown>,
-  expectedCode: string,
-  expect: AssistantStoreConformanceTestApi["expect"],
-): Promise<void> {
-  let caught: { code?: string } | undefined;
-  try {
-    await promise;
-  } catch (err) {
-    caught = err as { code?: string };
-  }
-  expect(caught).toBeDefined();
-  expect(caught?.code).toBe(expectedCode);
-}
-
-/** Catches a rejection for any reason — used for the plain-Error atomicity probe. */
-async function expectRejects(
-  promise: Promise<unknown>,
-  expect: AssistantStoreConformanceTestApi["expect"],
-): Promise<void> {
-  let threw = false;
-  try {
-    await promise;
-  } catch {
-    threw = true;
-  }
-  expect(threw).toBe(true);
-}
+// The harness/test-API/tuning types and the two rejection assertions now live in
+// `conformance-support.ts`, shared with the conversation-branching section.
+// Re-exported here because THIS is the module consumers import.
+export type {
+  AssistantStoreConformanceHarness,
+  AssistantStoreConformanceTestApi,
+  ConformanceClock,
+  ConformanceTuning,
+  DescribeAssistantStoreConformanceOptions,
+} from "./conformance-support.js";
 
 /**
  * The full store-conformance suite. Call once per adapter with a fresh
@@ -188,6 +83,12 @@ export function describeAssistantStoreConformance(
   });
 
   describe(`AssistantStore conformance — ${name}`, () => {
+    // The tree half of the conversation contract — branching, path switching,
+    // forking — lives in its own module; an adapter still opts in exactly once,
+    // through this call.
+    describeConversationBranching({ create, test });
+    describeConversationForking({ create, test });
+
     it("creates chats and appends messages with per-chat monotonic orderKey", async () => {
       const { store, close } = await create();
       try {

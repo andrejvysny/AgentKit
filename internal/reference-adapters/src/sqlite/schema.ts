@@ -1,5 +1,5 @@
 /**
- * v3 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
+ * v4 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
  * applied idempotently (every DDL statement is `CREATE ... IF NOT EXISTS`;
  * seed rows use `INSERT OR IGNORE`) so opening the same database twice, or
  * opening a database another process already initialized, is a no-op rather
@@ -30,7 +30,7 @@
  * stored as TEXT; the store (de)serializes them, SQLite never inspects their
  * contents.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * The DDL for {@link SCHEMA_VERSION}. There are NO migrations in this
@@ -40,7 +40,7 @@ export const SCHEMA_VERSION = 3;
  * migration scripts would be claiming a durability guarantee it does not have.
  * A host that needs upgrades in place owns that story with its own store.
  */
-export const SCHEMA_V3 = `
+export const SCHEMA_V4 = `
 CREATE TABLE IF NOT EXISTS chats (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -49,6 +49,16 @@ CREATE TABLE IF NOT EXISTS chats (
   metadata TEXT NOT NULL DEFAULT '{}'
 );
 
+-- A chat's messages are a TREE (parent_message_id is a self-reference), and
+-- the active column is the per-message flag marking which root-to-leaf path
+-- through it the conversation currently is. A flag, rather than a pointer to the
+-- live leaf, is what makes "read the conversation" one indexed range scan
+-- instead of a recursive walk. depth is denormalized for exactly that scan: it
+-- is derivable from the parent chain, but deriving it is the walk being avoided.
+--
+-- The self-FK is real (foreign_keys is ON), so a message can never name a parent
+-- that is not there -- including across a fork, whose copies are inserted parent
+-- first inside one transaction.
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
   chat_id TEXT NOT NULL REFERENCES chats(id),
@@ -59,11 +69,19 @@ CREATE TABLE IF NOT EXISTS messages (
   tool_call_id TEXT,
   tool_calls TEXT,
   model_result_json TEXT,
+  parent_message_id TEXT REFERENCES messages(id),
+  depth INTEGER NOT NULL DEFAULT 0,
+  branch_index INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
   metadata TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   UNIQUE (chat_id, order_key)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_chat_order ON messages(chat_id, order_key);
+-- listMessages' whole query: the active path of one chat, in path order.
+CREATE INDEX IF NOT EXISTS idx_messages_active ON messages(chat_id, active, depth);
+-- Sibling lookups, and the max(branch_index) an append reads to place itself.
+CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_message_id, branch_index);
 
 -- kind is what the executor registry dispatches on; there is no chat_id
 -- column, because a task of an arbitrary kind has no conversation. Whatever a

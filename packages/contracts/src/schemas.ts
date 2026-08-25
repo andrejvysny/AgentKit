@@ -88,6 +88,7 @@ export {
   CreateChatRequestSchema,
   SubmitMessageRequestSchema,
   SubmitMessageResponseSchema,
+  ForkChatRequestSchema,
   ProposalDecisionRequestSchema,
   ApplyProposalRequestSchema,
   VersionDtoSchema,

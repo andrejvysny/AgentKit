@@ -28,6 +28,9 @@ import type {
 } from "@agentkit/contracts";
 import {
   ACTION_ID_RELEASING_STATUSES,
+  activationSetOf,
+  activeLeafOf,
+  activePathOf,
   DuplicateActionIdError,
   DuplicateTaskError,
   InvalidProposalTransitionError,
@@ -41,6 +44,11 @@ import {
   defaultClock,
   defaultIds,
   evaluateTaskDependencies,
+  forkedChatTitle,
+  forkPrefixOf,
+  nextBranchIndex,
+  planForkedMessages,
+  siblingsOf,
   type AppendEventsOptions,
   type AppendMessageInput,
   type ApplyOutcome,
@@ -58,6 +66,7 @@ import {
   type CreateProposalInput,
   type CreateTaskInput,
   type EndAttemptInput,
+  type ForkChatResult,
   type IdGenerator,
   type Lease,
   type ListChatsOptions,
@@ -106,6 +115,22 @@ export interface MemoryAssistantStoreOptions extends TaskAgingOptions {
   outboxClaimVisibilityMs?: number;
 }
 
+/**
+ * ATOMICITY, IN A STORE WITH NO TRANSACTIONS: every method below that touches
+ * more than one record — a branching append, {@link activatePath}, and
+ * {@link forkChat} — validates and computes EVERYTHING first, then applies its
+ * mutations in one straight-line synchronous block with no `await` in it.
+ *
+ * That is enough here, and only here. These methods are `async` to satisfy the
+ * port, but a JavaScript function that never awaits runs to completion before
+ * any other task can observe it, so there is no interleaving to protect against
+ * and no half-applied path switch a concurrent `listMessages` could read. What
+ * it does NOT give is crash-consistency or rollback — a throw partway through
+ * the apply would still leave the Maps changed, which is exactly why the apply
+ * phase is the part that cannot throw, and why
+ * `capabilities.atomicTransactions: false` still tells the conformance suite the
+ * truth about this adapter.
+ */
 export class MemoryConversationStore implements ConversationStore {
   readonly chats = new Map<string, ChatRecord>();
   private readonly messagesById = new Map<string, MessageRecord>();
@@ -152,11 +177,19 @@ export class MemoryConversationStore implements ConversationStore {
   }
 
   async appendMessage(input: AppendMessageInput): Promise<MessageRecord> {
-    if (!this.chats.has(input.chatId)) {
+    const chat = this.chats.get(input.chatId);
+    if (chat === undefined) {
       throw new RecordNotFoundError(`Chat not found: ${input.chatId}`);
     }
+    const list = this.messagesByChat.get(input.chatId) ?? [];
+    // An explicitly named parent is a structural claim and is checked as one;
+    // an absent one means "continue the conversation", which is the active leaf.
+    const parent =
+      input.parentMessageId === undefined
+        ? activeLeafOf(list)
+        : this.requireParent(input.chatId, input.parentMessageId);
+    const parentId = parent?.id;
     const orderKey = (this.orderKeys.get(input.chatId) ?? 0) + 1;
-    this.orderKeys.set(input.chatId, orderKey);
     const now = this.clock.nowIso();
     const record: MessageRecord = {
       id: input.id ?? this.ids.messageId(),
@@ -172,16 +205,41 @@ export class MemoryConversationStore implements ConversationStore {
       ...(input.modelResultJson === undefined
         ? {}
         : { modelResultJson: input.modelResultJson }),
+      ...(parentId === undefined ? {} : { parentMessageId: parentId }),
+      depth: parent === undefined ? 0 : parent.depth + 1,
+      // Computed BEFORE the push, or the record would count itself as its own
+      // sibling and every append would land on index 1.
+      branchIndex: nextBranchIndex(list, parentId),
+      active: true,
       metadata: input.metadata ?? {},
       createdAt: now,
     };
+    this.orderKeys.set(input.chatId, orderKey);
     this.messagesById.set(record.id, record);
-    const list = this.messagesByChat.get(input.chatId) ?? [];
     list.push(record);
     this.messagesByChat.set(input.chatId, list);
-    const chat = this.chats.get(input.chatId);
-    if (chat) chat.updatedAt = now;
+    // Run unconditionally rather than only for a branching append. On the
+    // append-to-the-active-leaf path the new record is the leaf's only active
+    // descendant, so the computed set is the old path plus this record and every
+    // flag it writes is the flag already there — the same answer, by the same
+    // code, which is one fewer special case to get wrong.
+    applyActivation(list, record.id);
+    chat.updatedAt = now;
     return { ...record };
+  }
+
+  /** The named parent, proven to exist and to be in the same chat. */
+  private requireParent(
+    chatId: string,
+    parentMessageId: string,
+  ): MessageRecord {
+    const parent = this.messagesById.get(parentMessageId);
+    if (parent === undefined || parent.chatId !== chatId) {
+      throw new RecordNotFoundError(
+        `Parent message not found in chat ${chatId}: ${parentMessageId}`,
+      );
+    }
+    return parent;
   }
 
   async updateMessage(
@@ -199,13 +257,12 @@ export class MemoryConversationStore implements ConversationStore {
     return { ...record };
   }
 
+  /** The chat's ACTIVE PATH, `(depth, orderKey)` ascending — see the port. */
   async listMessages(
     chatId: string,
     opts?: ListMessagesOptions,
   ): Promise<MessageRecord[]> {
-    let rows = [...(this.messagesByChat.get(chatId) ?? [])].sort(
-      (a, b) => a.orderKey - b.orderKey,
-    );
+    let rows = activePathOf(this.messagesByChat.get(chatId) ?? []);
     if (opts?.afterOrderKey !== undefined) {
       const after = opts.afterOrderKey;
       rows = rows.filter((m) => m.orderKey > after);
@@ -213,6 +270,109 @@ export class MemoryConversationStore implements ConversationStore {
     if (opts?.limit !== undefined) rows = rows.slice(-opts.limit);
     return rows.map((m) => ({ ...m }));
   }
+
+  async listSiblings(messageId: string): Promise<MessageRecord[]> {
+    const record = this.requireMessage(messageId);
+    const list = this.messagesByChat.get(record.chatId) ?? [];
+    return siblingsOf(list, record).map((m) => ({ ...m }));
+  }
+
+  async activatePath(messageId: string): Promise<void> {
+    const record = this.requireMessage(messageId);
+    applyActivation(this.messagesByChat.get(record.chatId) ?? [], messageId);
+  }
+
+  /**
+   * Copy the source chat's active path prefix into a new chat.
+   *
+   * Read, validate and BUILD first; write last. The build phase is where every
+   * throw lives (`invalid_fork_point` from {@link forkPrefixOf}, a missing
+   * chat), so by the time the first Map is touched nothing is left that can
+   * fail — which is how a store with no rollback still cannot leave a
+   * half-copied chat behind.
+   */
+  async forkChat(
+    chatId: string,
+    fromMessageId: string,
+  ): Promise<ForkChatResult> {
+    const source = this.chats.get(chatId);
+    if (source === undefined) {
+      throw new RecordNotFoundError(`Chat not found: ${chatId}`);
+    }
+    const prefix = forkPrefixOf(
+      this.messagesByChat.get(chatId) ?? [],
+      chatId,
+      fromMessageId,
+    );
+    const plans = planForkedMessages(prefix, () => this.ids.messageId());
+    const now = this.clock.nowIso();
+    const title = forkedChatTitle(source.title);
+    const chat: ChatRecord = {
+      id: `chat_${crypto.randomUUID()}`,
+      ...(title === undefined ? {} : { title }),
+      createdAt: now,
+      updatedAt: now,
+      // The chat's own metadata IS copied (its labels, its owner, whatever the
+      // host keeps there); only per-MESSAGE run linkage is stripped, and a fork
+      // that lost the conversation's own bookkeeping would be a different chat
+      // rather than a copy of this one.
+      metadata: { ...source.metadata },
+    };
+    const messages: MessageRecord[] = plans.map((plan, index) => ({
+      id: plan.id,
+      chatId: chat.id,
+      role: plan.source.role,
+      content: plan.source.content,
+      orderKey: index + 1,
+      ...(plan.source.toolCallId === undefined
+        ? {}
+        : { toolCallId: plan.source.toolCallId }),
+      ...(plan.source.toolCalls === undefined
+        ? {}
+        : { toolCalls: [...plan.source.toolCalls] }),
+      ...(plan.source.modelResultJson === undefined
+        ? {}
+        : { modelResultJson: plan.source.modelResultJson }),
+      ...(plan.parentMessageId === undefined
+        ? {}
+        : { parentMessageId: plan.parentMessageId }),
+      depth: plan.depth,
+      branchIndex: 0,
+      active: true,
+      metadata: plan.metadata,
+      createdAt: now,
+    }));
+
+    this.chats.set(chat.id, chat);
+    this.messagesByChat.set(chat.id, messages);
+    for (const message of messages) this.messagesById.set(message.id, message);
+    this.orderKeys.set(chat.id, messages.length);
+    return { chat: { ...chat }, messages: messages.map((m) => ({ ...m })) };
+  }
+
+  private requireMessage(messageId: string): MessageRecord {
+    const record = this.messagesById.get(messageId);
+    if (record === undefined) {
+      throw new RecordNotFoundError(`Message not found: ${messageId}`);
+    }
+    return record;
+  }
+}
+
+/**
+ * Rewrite every `active` flag in one chat so `messageId`'s path is the live one.
+ *
+ * Mutates the stored records in place, which is safe precisely because every
+ * read path in this class hands back copies (see the class doc on SNAPSHOT
+ * RETURNS): nobody outside is holding one of these objects expecting it to stay
+ * still.
+ */
+function applyActivation(
+  records: readonly MessageRecord[],
+  messageId: string,
+): void {
+  const active = activationSetOf(records, messageId);
+  for (const record of records) record.active = active.has(record.id);
 }
 
 export class MemoryTaskStore implements TaskStore {

@@ -80,6 +80,19 @@ export const REST_ROUTES = {
   listMessages: { method: "GET", path: "/v1/chats/:chatId/messages" },
   /** Requires an `Idempotency-Key` header; see the note above. */
   submitMessage: { method: "POST", path: "/v1/chats/:chatId/messages" },
+  /** Copies the active path up to a message into a NEW chat. See {@link ForkChatRequestSchema}. */
+  forkChat: { method: "POST", path: "/v1/chats/:chatId/fork" },
+
+  /**
+   * Make a message's branch the active one, and answer with the path that
+   * became active. Rooted at `/v1/messages/:messageId` rather than nested under
+   * the chat because a message id already names exactly one chat, and a route
+   * that carried both would let a client pass a mismatched pair for the server
+   * to arbitrate.
+   */
+  activateBranch: { method: "POST", path: "/v1/messages/:messageId/activate" },
+  /** The message's siblings (same parent, INCLUDING itself), `branchIndex` ascending. */
+  listSiblings: { method: "GET", path: "/v1/messages/:messageId/siblings" },
 
   getRun: { method: "GET", path: "/v1/runs/:runId" },
   /** SSE. Resumes from `Last-Event-ID` (an `AiRunEvent.eventId`). */
@@ -177,6 +190,14 @@ export type ChatDto = Static<typeof ChatDtoSchema>;
  * `metadata` is where the host's reserved flags surface — `internal: true` marks
  * a replay-only record (the assistant turn carrying `toolCalls`, and the tool
  * results answering it), `placeholder: true` an answer still streaming.
+ *
+ * The three branching fields are OPTIONAL for one reason only: a server written
+ * against a pre-branching contract (or a degenerate store that never modelled a
+ * tree) omits them, and a client must render that conversation as the straight
+ * line it is rather than refuse it. A server that does model the tree always
+ * sends all three. `depth` is deliberately NOT published — it is derivable from
+ * the parent chain a client already has, and a second source of truth for
+ * position is a second thing that can disagree.
  */
 export const MessageDtoSchema = Type.Object({
   id: Type.String(),
@@ -191,6 +212,16 @@ export const MessageDtoSchema = Type.Object({
   content: Type.String(),
   toolCalls: Type.Optional(Type.Array(AiToolCallSchema)),
   toolCallId: Type.Optional(Type.String()),
+  /** The message this one answers. Absent on a root — and on a pre-branching server. */
+  parentMessageId: Type.Optional(Type.String()),
+  /**
+   * Position among siblings sharing this parent, ascending. `0` is the first
+   * answer written; each later regeneration of the same question gets the next
+   * index, so the number is stable for the life of the message.
+   */
+  branchIndex: Type.Optional(Type.Number()),
+  /** Whether this message is on the chat's currently active path. */
+  active: Type.Optional(Type.Boolean()),
   metadata: Type.Record(Type.String(), Type.Unknown()),
   createdAt: Type.String({ description: "ISO-8601." }),
 });
@@ -200,6 +231,14 @@ export type MessageDto = Static<typeof MessageDtoSchema>;
  * One page of messages, oldest first. `nextCursor` is opaque: it encodes the
  * store's ordering key, and a client that tried to interpret it would be reading
  * an implementation detail this contract does not promise.
+ *
+ * The page covers the chat's ACTIVE PATH — the branch currently selected, root
+ * to leaf — not every message ever written to the chat. A conversation nobody
+ * has branched has exactly one path, so this is the same page it always was;
+ * a branched one answers with the branch a reader is looking at, which is the
+ * only page that reads as a conversation. Off-path siblings are reachable
+ * through `listSiblings`, and `activateBranch` is how a client changes which
+ * path this route reports.
  */
 export const MessagePageDtoSchema = Type.Object({
   items: Type.Array(MessageDtoSchema),
@@ -376,6 +415,19 @@ export const SubmitMessageRequestSchema = Type.Object({
   content: Type.String(),
   /** Overrides the provider's default model for this turn only. */
   model: Type.Optional(Type.String()),
+  /**
+   * Submit this turn as a NEW BRANCH under the named message instead of at the
+   * end of the conversation — the edit-and-regenerate flow, where a user rewrites
+   * an earlier question and wants a different answer without losing the first one.
+   *
+   * The named message must be in this chat. The new turn is created active, and
+   * the whole active path switches to it in the same write, so the very next
+   * `listMessages` reports the new branch and the run replays THAT history to
+   * the provider. Omit it and the turn appends to the active leaf, which is what
+   * every non-branching client does and what a linear conversation has always
+   * done.
+   */
+  parentMessageId: Type.Optional(Type.String()),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 });
 export type SubmitMessageRequest = Static<typeof SubmitMessageRequestSchema>;
@@ -392,6 +444,28 @@ export const SubmitMessageResponseSchema = Type.Object({
   assistantMessageId: Type.String(),
 });
 export type SubmitMessageResponse = Static<typeof SubmitMessageResponseSchema>;
+
+/**
+ * Body of `forkChat`. The response is a {@link ChatDtoSchema} — the new chat —
+ * and its messages are read back through `listMessages` like any other chat's.
+ *
+ * `fromMessageId` must be ON the source chat's active path; anything else is
+ * rejected with code `invalid_fork_point` rather than silently reinterpreted.
+ * A fork point on a branch nobody is looking at is almost always a client that
+ * has gone stale, and copying the path the SERVER thinks is active would hand
+ * that client a conversation it never saw.
+ *
+ * What lands in the copy is the active path UP TO AND INCLUDING that message,
+ * flattened into a fresh straight line: new ids, no link to the runs that
+ * produced the originals, and an answer still streaming (a `placeholder`) left
+ * behind, because an unfinished reply is not history. Replay-only records
+ * (`internal: true`) ARE copied — a fork that dropped them would show the model
+ * tool results it never asked for on the next turn.
+ */
+export const ForkChatRequestSchema = Type.Object({
+  fromMessageId: Type.String(),
+});
+export type ForkChatRequest = Static<typeof ForkChatRequestSchema>;
 
 /** Body of `approveProposal` / `rejectProposal`. */
 export const ProposalDecisionRequestSchema = Type.Object({

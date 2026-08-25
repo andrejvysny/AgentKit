@@ -2,12 +2,12 @@
   {
     "type": "run.cancelled",
     "runId": "run-golden-cancelled-run",
-    "timestamp": "2026-08-24T10:27:15.067Z",
+    "timestamp": "2026-08-25T08:42:41.216Z",
     "data": {
       "reason": "aborted"
     },
-    "contractVersion": "0.2.0",
-    "eventId": "evt_52dc7078-2f93-4fb3-91ac-1c3ad017bf42",
+    "contractVersion": "0.3.0",
+    "eventId": "evt_7abf6b76-88f3-4f32-b3f4-1be1e13892ad",
     "seq": 0
   }
 ]

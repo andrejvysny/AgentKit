@@ -185,7 +185,25 @@ contract fails this package's compile until it is served.
 - **`GET /v1/chats/:chatId/messages`** — `?limit` (default 100) and `?cursor`.
   `nextCursor` is opaque and is the only handle on position (`MessageDto` omits
   the store's `orderKey`); a cursor this server did not issue is a 400, not a
-  silent page one.
+  silent page one. The page covers the chat's **active path**, not every message
+  ever written to it — a chat nobody has branched has exactly one path, so this
+  is unchanged for a linear conversation.
+- **`POST /v1/chats/:chatId/messages` with `parentMessageId`** — submits the turn
+  as a new branch under that message (edit-and-regenerate) instead of appending
+  to the end. A parent that is unknown or in another chat is a 404, checked
+  *before* the task row is written for the same reason the chat itself is.
+- **`POST /v1/chats/:chatId/fork`** — 201 with the new `ChatDto`. Copies the
+  active path up to `fromMessageId` (inclusive) into a fresh chat, flattened:
+  new ids, no `runId`, a still-streaming placeholder dropped, replay-only
+  (`internal`) records kept. A fork point that is unknown or off the active path
+  is **400 `invalid_fork_point`** — the request is answerable and wrong; a source
+  chat that does not exist is a 404.
+- **`POST /v1/messages/:messageId/activate`** — makes that message's branch the
+  active path and answers with the path itself (a `MessagePageDto`, no cursor),
+  so a branch switch is one round trip rather than an ack plus a re-read.
+- **`GET /v1/messages/:messageId/siblings`** — the message's siblings *including
+  itself*, `branchIndex` ascending, as a bare `MessageDto[]`. Self-inclusive
+  because "which answers exist here, and which am I reading?" is one question.
 - **`GET /v1/chats`** — `?limit`, `?before` (ISO timestamp, keyset paging), as
   `ConversationStore.listChats` defines them. The contract declares no page
   wrapper here, so the body is a bare `ChatDto[]`.
@@ -214,7 +232,7 @@ contract fails this package's compile until it is served.
   idempotency key for the side effect; the route never mints one, because a
   server-minted id would make every retry a fresh apply.
 
-Request bodies are validated structurally against the contract's four request
+Request bodies are validated structurally against the contract's five request
 schemas (required fields present and correctly typed, optional fields typed when
 present, unknown members allowed for forward compatibility). The validation is
 hand-written rather than schema-driven so this package keeps its zero-dependency
@@ -232,6 +250,11 @@ root):
 - `tests/handler.test.ts` — the routes as a client calls them: idempotent
   submit (201 then 200, identical body), validation, run projection, cancel,
   message paging, credential redaction, the 501s, `authenticate`.
+- `tests/branches.test.ts` — the three branching routes: sibling order, the path
+  a switch returns, fork 201 vs `invalid_fork_point` 400 vs `not_found` 404, and
+  the branching fields on `MessageDto`.
+- `tests/branches-e2e.test.ts` — over a real socket: ask, ask again, rewrite the
+  second question, stream the new branch, switch back, fork the prefix.
 - `tests/sse.test.ts` — replay order, `Last-Event-ID` resume, unknown-id full
   replay, terminal close (with and without a terminal event), heartbeat, abort,
   and following a log still being written.

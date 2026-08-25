@@ -19,6 +19,7 @@ import type { RestHandlerDeps } from "./deps.js";
 import { problemForError, problemResponse } from "./problem.js";
 import { matchRoute } from "./router.js";
 import type { RouteHandler } from "./routes/context.js";
+import { activateBranch, forkChat, listSiblings } from "./routes/branches.js";
 import {
   createChat,
   getChat,
@@ -49,6 +50,9 @@ const HANDLERS: Readonly<Record<RestOperation, RouteHandler>> = Object.freeze({
   getChat,
   listMessages,
   submitMessage,
+  forkChat,
+  activateBranch,
+  listSiblings,
   getRun,
   streamRun,
   cancelRun,

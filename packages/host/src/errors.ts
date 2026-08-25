@@ -146,6 +146,23 @@ export class RevisionConflictError extends NamedHostError {
   }
 }
 
+/**
+ * A chat fork was asked to start from a message that is not a legal fork point:
+ * unknown, in a different chat, or on a branch the chat is not currently showing.
+ *
+ * All three are the same mistake from the store's side — the caller named a
+ * point the conversation does not currently pass through — and all three are
+ * refused rather than reinterpreted. Forking from the nearest active ancestor
+ * instead would silently hand back a conversation the caller never asked for,
+ * and the caller has no way to notice. Terminal by classification: the fork
+ * point will not wander onto the active path on a retry.
+ */
+export class InvalidForkPointError extends NamedHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("invalid_fork_point", message, details);
+  }
+}
+
 /** A record the caller referenced by id does not exist (or is out of scope). */
 export class RecordNotFoundError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
@@ -199,6 +216,7 @@ export const HOST_ERROR_CODES = [
   "duplicate_action_id",
   "revision_conflict",
   "not_found",
+  "invalid_fork_point",
   "unknown_dependency",
 ] as const;
 
