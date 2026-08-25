@@ -136,12 +136,26 @@ export function resolveStreamOptions(
     retryHintMs: options?.retryHintMs ?? DEFAULT_STREAM_OPTIONS.retryHintMs,
     // Clamped, not trusted: a batch size of 0 asks the store for nothing on
     // every read, and a stream that silently delivers no events is a worse
-    // failure than one that ignores a nonsensical setting.
-    readBatchSize: Math.max(
-      1,
-      Math.floor(
-        options?.readBatchSize ?? DEFAULT_STREAM_OPTIONS.readBatchSize,
-      ),
-    ),
+    // failure than one that ignores a nonsensical setting. `NaN` and the
+    // infinities are checked BEFORE the clamp rather than caught by it —
+    // `Math.max(1, NaN)` is `NaN`, so a value that arrived from a parsed
+    // config string would otherwise walk straight through the guard and turn
+    // every read into a `LIMIT NaN`.
+    readBatchSize: clampBatchSize(options?.readBatchSize),
   };
+}
+
+/**
+ * A usable read batch size: the default for anything that is not a finite
+ * number, and at least one for everything else.
+ *
+ * `Infinity` falls back rather than clamping up, for the same reason `NaN`
+ * does — it is a setting nobody meant, and "read the entire log in one call"
+ * is the failure the batch size exists to prevent.
+ */
+function clampBatchSize(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_STREAM_OPTIONS.readBatchSize;
+  }
+  return Math.max(1, Math.floor(value));
 }

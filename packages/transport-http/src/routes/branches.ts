@@ -57,23 +57,22 @@ export async function forkChat(ctx: RouteContext): Promise<Response> {
  * conversation and it gets the conversation, instead of an acknowledgement plus
  * a follow-up `listMessages` whose result could already be a turn behind.
  *
- * The chat is resolved through `listSiblings` rather than a `getMessage` the
- * port does not have: siblings always include the message itself, so one call
- * both proves the id exists (an unknown one raises `not_found`, which the
- * problem mapper turns into a 404) and names the chat whose path to read back.
+ * The path comes back FROM the switch rather than from a `listMessages` after
+ * it. `activatePath` already computes the set it is about to write, so the
+ * read-back would be a second, weaker answer: it leaves the store's
+ * transaction, so a concurrent append could move the path between the write and
+ * the read and this route would report a conversation that was never the result
+ * of this call. An unknown message never reaches the projection at all —
+ * the store raises `not_found`, which the problem mapper turns into a 404, and
+ * a pre-flight existence check here would just be a second opinion about a
+ * question storage answers inside the transaction.
+ *
  * There is no cursor on the response — a branch switch returns the whole path,
  * and paging it would mean paging a conversation the client has not seen yet.
  */
 export async function activateBranch(ctx: RouteContext): Promise<Response> {
   const messageId = pathParam(ctx, "messageId");
-  const siblings = await ctx.deps.store.conversations.listSiblings(messageId);
-  const self = siblings.find((record) => record.id === messageId);
-  if (self === undefined) {
-    return notFound(`Message not found: ${messageId}`, ctx.instance);
-  }
-
-  await ctx.deps.store.conversations.activatePath(messageId);
-  const rows = await ctx.deps.store.conversations.listMessages(self.chatId);
+  const rows = await ctx.deps.store.conversations.activatePath(messageId);
   const page: MessagePageDto = { items: rows.map(messageDto) };
   return jsonResponse(page);
 }

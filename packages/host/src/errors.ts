@@ -194,8 +194,9 @@ export class UnknownDependencyError extends NamedHostError {
  *
  * This is deliberately NOT every code `AgentKitHostError` is ever constructed
  * with: other host modules throw the base class directly with situational
- * codes (`no_model`, `invalid_decision`, `task_not_executable`, …) that are
- * not part of this stable, cross-package vocabulary. Consumers outside the
+ * codes (`no_model`, `invalid_decision`, `task_not_executable`,
+ * `invalid_append`, …) that are not part of this stable, cross-package
+ * vocabulary. Consumers outside the
  * host package (`@agentkit/transport-http`'s status table) map against THIS
  * list; unrecognized codes fall back to a generic status rather than being
  * silently misclassified.

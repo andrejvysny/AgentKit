@@ -178,6 +178,98 @@ export function describeConversationForking(
       }
     });
 
+    it("forkChat stores the copy in PROVIDER order, not in the order the source was written", async () => {
+      const { store, close } = await create();
+      try {
+        const source = await store.conversations.createChat({});
+        const u1 = await store.conversations.appendMessage({
+          chatId: source.id,
+          role: "user",
+          content: "question",
+        });
+        // The visible answer is created FIRST, as an empty placeholder, the
+        // moment the user hits send — and only filled in once the turn is
+        // over. So in a real chat it carries a LOWER `orderKey` than the
+        // internal assistant turn and the tool result that produced it.
+        const answer = await store.conversations.appendMessage({
+          chatId: source.id,
+          role: "assistant",
+          content: "",
+          runId: "run-1",
+          metadata: { placeholder: true },
+        });
+        const internal = await store.conversations.appendMessage({
+          chatId: source.id,
+          role: "assistant",
+          content: "",
+          runId: "run-1",
+          toolCalls: [{ id: "call-1", name: "echo", argumentsJson: "{}" }],
+          metadata: { internal: true },
+        });
+        const toolResult = await store.conversations.appendMessage({
+          chatId: source.id,
+          role: "tool",
+          content: '{"ok":true}',
+          runId: "run-1",
+          toolCallId: "call-1",
+          modelResultJson: '{"ok":true}',
+          metadata: { internal: true, toolName: "echo" },
+        });
+        await store.conversations.updateMessage(answer.id, {
+          content: "the answer",
+          metadata: { placeholder: false },
+        });
+        expect(answer.orderKey < internal.orderKey).toBe(true);
+
+        const forked = await store.conversations.forkChat(
+          source.id,
+          toolResult.id,
+        );
+        // A fork drops `runId`, which is the ONLY thing that tells a replay how
+        // to put those three back in the order a provider accepts — so if the
+        // copy were written in source order it would replay a tool result
+        // before the turn that asked for it, forever. The repair therefore
+        // happens once, here, and the fork's STORED order is provider order.
+        expect(forked.messages.map((m) => m.role)).toEqual([
+          "user",
+          "assistant",
+          "tool",
+          "assistant",
+        ]);
+        expect(forked.messages.map((m) => m.content)).toEqual([
+          "question",
+          "",
+          '{"ok":true}',
+          "the answer",
+        ]);
+        expect(forked.messages[1]?.toolCalls).toEqual([
+          { id: "call-1", name: "echo", argumentsJson: "{}" },
+        ]);
+        // Renumbered on the repaired sequence, not on the source's: depth,
+        // orderKey and the parent chain all agree with the order above.
+        expect(forked.messages.map((m) => m.depth)).toEqual([0, 1, 2, 3]);
+        expect(forked.messages.map((m) => m.parentMessageId)).toEqual([
+          undefined,
+          forked.messages[0]?.id,
+          forked.messages[1]?.id,
+          forked.messages[2]?.id,
+        ]);
+        const keys = forked.messages.map((m) => m.orderKey);
+        expect(
+          keys.every((key, i) => i === 0 || key > (keys[i - 1] ?? 0)),
+        ).toBe(true);
+        // And that is what the fork reads back as, too.
+        expect(
+          (await store.conversations.listMessages(forked.chat.id)).map(
+            (m) => m.content,
+          ),
+        ).toEqual(["question", "", '{"ok":true}', "the answer"]);
+        expect(u1.id).not.toBe(forked.messages[0]?.id);
+      } finally {
+        close?.();
+      }
+    });
+
     it("forkChat keeps a chat with no title untitled rather than inventing one", async () => {
       const { store, close } = await create();
       try {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { AiRunEvent } from "@agentkit/contracts";
+import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
 import type { AiChatRequest, AiProviderClient, AiTool } from "@agentkit/core";
 import {
   CompletedOnlyProviderClient,
@@ -9,6 +9,7 @@ import {
   CHAT_TURN_TASK_KIND,
   DuplicateTaskError,
   LeaseLostError,
+  MISSING_TOOL_RESULT_CODE,
   TurnRunner,
   type MessageRecord,
   type ToolSetContributor,
@@ -24,6 +25,8 @@ class TestClient implements AiProviderClient {
   readonly id = "test";
   readonly kind = "openai-compatible";
   readonly toolsPerCall: number[] = [];
+  /** The history each call was handed — what a replay assertion reads. */
+  readonly messagesPerCall: AiChatMessage[][] = [];
   readonly failCalls = new Set<number>();
   calls = 0;
 
@@ -40,6 +43,7 @@ class TestClient implements AiProviderClient {
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
     this.calls += 1;
     this.toolsPerCall.push(input.tools?.length ?? 0);
+    this.messagesPerCall.push([...input.messages]);
     if (this.failCalls.has(this.calls)) {
       throw new Error("provider rejected the request");
     }
@@ -977,6 +981,151 @@ describe("TurnRunner.execute — cancellation and failure", () => {
     await drive(f, submitted.runId);
     await expect(drive(f, submitted.runId)).rejects.toThrow(
       /only queued or running/,
+    );
+  });
+});
+
+/**
+ * A branch switch that lands in the MIDDLE of a running turn.
+ *
+ * The window is real and not narrow: a turn writes its internal assistant
+ * record when the model asks for tools and each tool result when that tool
+ * returns, seconds or minutes apart, and nothing stops the user reading a
+ * different branch in between. The tool below performs the switch from inside
+ * `execute`, which puts it exactly between those two writes — deterministically,
+ * where a timer would be a race.
+ */
+describe("TurnRunner — a branch switch mid-run", () => {
+  /** A tool that switches the chat's active path, then answers normally. */
+  function switchingContributor(
+    f: () => RunnerFixture,
+    target: () => string,
+  ): ToolSetContributor {
+    const tool: AiTool<Record<string, never>, { switched: string }> = {
+      definition: {
+        name: "switcher",
+        version: "1.0.0",
+        effect: "read",
+        capability: "switch",
+        description: "Switch the chat's active branch mid-run.",
+        inputSchema: { type: "object", properties: {} },
+      },
+      async execute(ctx) {
+        const switched = target();
+        await f().store.conversations.activatePath(switched);
+        return {
+          ok: true,
+          data: { switched },
+          summary: `switched to ${switched}`,
+          sources: [],
+          warnings: [],
+          truncated: false,
+          limits: ctx.limits,
+        };
+      },
+    };
+    return { contribute: async () => [tool as AiTool] };
+  }
+
+  /**
+   * `u1` with two answers under it: the placeholder of a turn about to run, and
+   * an already-finished alternative the user can switch to. The run is left
+   * live on its own branch.
+   */
+  async function setupSwitchScenario() {
+    let fixture: RunnerFixture | undefined;
+    let altId = "";
+    const f = await setupRunner({
+      contributors: [
+        switchingContributor(
+          () => fixture as RunnerFixture,
+          () => altId,
+        ),
+      ],
+    });
+    fixture = f;
+    f.mock.setScript([
+      {
+        steps: [
+          {
+            kind: "tool_call",
+            toolCallId: "call-1",
+            name: "switcher",
+            argumentsJson: "{}",
+          },
+        ],
+      },
+      { steps: [{ kind: "text", content: "done" }] },
+    ]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "q1",
+    });
+    const alt = await f.store.conversations.appendMessage({
+      chatId: f.chatId,
+      role: "assistant",
+      content: "an answer from another branch",
+      parentMessageId: submitted.userMessageId,
+    });
+    altId = alt.id;
+    // Back onto the branch the turn is going to run on, so the switch the tool
+    // performs is a switch AWAY from it.
+    await f.store.conversations.activatePath(submitted.assistantMessageId);
+    return { f, submitted, alt };
+  }
+
+  it("leaves the run's records on the run's own branch, not on the one the user switched to", async () => {
+    const { f, submitted, alt } = await setupSwitchScenario();
+    await drive(f, submitted.runId);
+
+    // (i) The branch the user is reading is the branch they chose. A tool
+    // result from a turn this conversation never ran must not appear in it.
+    const path = await f.store.conversations.listMessages(f.chatId);
+    expect(path.map((m) => m.id)).toEqual([submitted.userMessageId, alt.id]);
+    expect(path.some((m) => m.role === "tool")).toBe(false);
+
+    // The run's records went where the run is: chained under its placeholder,
+    // and inactive because that whole branch is.
+    const internal = messagesOf(f).find(
+      (m) => m.metadata["internal"] === true && m.role === "assistant",
+    );
+    const toolResult = messagesOf(f).find((m) => m.role === "tool");
+    expect(internal?.parentMessageId).toBe(submitted.assistantMessageId);
+    expect(toolResult?.parentMessageId).toBe(internal?.id);
+    expect([internal?.active, toolResult?.active]).toEqual([false, false]);
+  });
+
+  it("replays the run's own branch balanced, with no synthetic tool failure", async () => {
+    const { f, submitted } = await setupSwitchScenario();
+    await drive(f, submitted.runId);
+
+    // (ii) Back to the branch the run wrote. Its assistant turn declared
+    // `call-1` and its tool result answered it; if the result had been migrated
+    // onto the other branch, `reconcileOrphanToolCalls` would have to invent a
+    // failure here for a tool that actually succeeded.
+    await f.store.conversations.activatePath(submitted.assistantMessageId);
+    f.mock.setScript([{ steps: [{ kind: "text", content: "and again" }] }]);
+    const second = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "q2",
+    });
+    await drive(f, second.runId);
+
+    const replayed = f.client.messagesPerCall.at(-1) ?? [];
+    const toolMessages = replayed.filter((m) => m.role === "tool");
+    expect(toolMessages.map((m) => m.toolCallId)).toEqual(["call-1"]);
+    expect(
+      toolMessages.some((m) =>
+        JSON.stringify(m.content).includes(MISSING_TOOL_RESULT_CODE),
+      ),
+    ).toBe(false);
+    // And the call still precedes the result it belongs to.
+    const declaring = replayed.findIndex((m) =>
+      (m.toolCalls ?? []).some((call) => call.id === "call-1"),
+    );
+    expect(declaring).toBeGreaterThan(-1);
+    expect(replayed.indexOf(toolMessages[0] as AiChatMessage)).toBeGreaterThan(
+      declaring,
     );
   });
 });

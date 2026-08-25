@@ -355,13 +355,19 @@ A chat is a **tree**, not a list: `MessageRecord` carries `parentMessageId`,
 active-path representation — no materialized path, no walk to read "the
 conversation". `ConversationStore.appendMessage`'s optional
 `parentMessageId` turns a normal append into a new branch, created active
-and switched in with the same write; `activatePath` moves the active path
-atomically; `forkChat` copies the active-path prefix up to a message into a
-brand-new chat, transactionally, stripping task linkage. A chat nobody has
-branched behaves exactly as it did before this existed. `TurnRunner`'s
-history assembly always reads the active path, so branching and forking are
-invisible to everything downstream of `assembleMessages`; branch execution
-stays serialized per chat (`scopeId` is unchanged by branching). Full
+and switched in with the same write; `activate: false` (with a parent) is the
+opposite — a **chain append** that inherits the parent's flag and moves
+nothing, which is how a run keeps every record of one turn on the branch that
+turn is running against even if the user switches away mid-generation;
+`activatePath` moves the active path atomically and answers with it; `forkChat`
+copies the active-path prefix up to a message into a brand-new chat,
+transactionally, stripping task linkage and re-ordering the copy into
+provider order (the fork loses `runId`, so it cannot repair that ordering
+later). A chat nobody has branched behaves exactly as it did before this
+existed. `TurnRunner`'s history assembly always reads the active path, so
+branching and forking are invisible to everything downstream of
+`assembleMessages`; branch execution stays serialized per chat (`scopeId` is
+unchanged by branching). Full
 mechanics, invariants, and the tree operations themselves:
 [`docs/ports.md`](ports.md#conversationstore) (authoritative) and [ADR
 0007](adr/0007-conversation-branching-fork.md).

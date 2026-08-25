@@ -200,7 +200,11 @@ export function describeConversationBranching(
           t.a4.id,
         ]);
 
-        await store.conversations.activatePath(t.a3.id);
+        const switched = await store.conversations.activatePath(t.a3.id);
+        // What the switch RETURNS is what the next read reports — the point of
+        // returning it at all: a caller that re-read the chat instead would be
+        // reading outside the transaction that wrote the flags.
+        expect(ids(switched)).toEqual([t.u1.id, t.a3.id, t.u3.id]);
         expect(ids(await store.conversations.listMessages(chat.id))).toEqual([
           t.u1.id,
           t.a3.id,
@@ -263,6 +267,12 @@ export function describeConversationBranching(
         const t = await buildTree(store, chat.id);
         const activeIds = async () =>
           ids(await store.conversations.listMessages(chat.id));
+        /** Switch, and prove the returned path IS the path, every time. */
+        const activate = async (messageId: string) => {
+          const returned = await store.conversations.activatePath(messageId);
+          expect(ids(returned)).toEqual(await activeIds());
+          return returned;
+        };
 
         const branchA4 = [t.u1.id, t.a1.id, t.u2.id, t.a4.id];
         const branchA2 = [t.u1.id, t.a1.id, t.u2.id, t.a2.id];
@@ -274,36 +284,151 @@ export function describeConversationBranching(
         // would answer a2 here, so this is the assertion that tells the two
         // rules apart — and the reason activating an ancestor is not a
         // destructive "reset to the first answer".
-        await store.conversations.activatePath(t.a1.id);
+        await activate(t.a1.id);
         expect(await activeIds()).toEqual(branchA4);
         // Same, from the root, where the first branch point has two children.
-        await store.conversations.activatePath(t.u1.id);
+        await activate(t.u1.id);
         expect(await activeIds()).toEqual(branchA4);
 
         // Switch to the other root branch. a3's only child was never active, so
         // the descent takes the lowest branchIndex — u3.
-        await store.conversations.activatePath(t.a3.id);
+        await activate(t.a3.id);
         expect(await activeIds()).toEqual([t.u1.id, t.a3.id, t.u3.id]);
 
         // LOWEST BRANCH INDEX. Back to a1: the switch away cleared its whole
         // subtree, so nothing under u2 is active any more and the descent falls
         // back to a2 — NOT to a4, which is where it was before. The active flag
         // is the path, not a per-node bookmark that survives leaving.
-        await store.conversations.activatePath(t.a1.id);
+        await activate(t.a1.id);
         expect(await activeIds()).toEqual(branchA2);
 
         // Naming a leaf directly is the way back to the other answer.
-        await store.conversations.activatePath(t.a4.id);
+        await activate(t.a4.id);
         expect(await activeIds()).toEqual(branchA4);
 
         // Activating a MIDDLE node re-descends from it; it does not truncate.
-        await store.conversations.activatePath(t.u2.id);
+        await activate(t.u2.id);
         expect(await activeIds()).toEqual(branchA4);
         await expectRejectsWithCode(
           store.conversations.activatePath("msg-does-not-exist"),
           "not_found",
           expect,
         );
+      } finally {
+        close?.();
+      }
+    });
+
+    it("a chain append inherits the parent's active flag and switches nothing", async () => {
+      const { store, close } = await create();
+      try {
+        const chat = await store.conversations.createChat({});
+        const t = await buildTree(store, chat.id);
+        const livePath = [t.u1.id, t.a1.id, t.u2.id, t.a4.id];
+        expect(ids(await store.conversations.listMessages(chat.id))).toEqual(
+          livePath,
+        );
+
+        // INHERIT-ACTIVE. Chained onto the current leaf: the child is active
+        // and childless, so the chat still has exactly one root-to-leaf active
+        // chain — the same one, a message longer. This is the case a run in
+        // the ordinary, nobody-touched-anything world takes, and it has to be
+        // indistinguishable from the unparented append it replaces.
+        const chained = await store.conversations.appendMessage({
+          chatId: chat.id,
+          role: "tool",
+          content: "chained onto the leaf",
+          parentMessageId: t.a4.id,
+          activate: false,
+        });
+        expect(chained.active).toBe(true);
+        expect(chained.parentMessageId).toBe(t.a4.id);
+        expect(chained.depth).toBe(t.a4.depth + 1);
+        expect(chained.branchIndex).toBe(0);
+        expect(ids(await store.conversations.listMessages(chat.id))).toEqual([
+          ...livePath,
+          chained.id,
+        ]);
+
+        // INHERIT-INACTIVE, and NO SWITCH. `a3` is on an abandoned branch. A
+        // plain branching append here would drag the whole conversation over
+        // to it; a chain append writes the record where it belongs and leaves
+        // the live path exactly where the reader put it. That difference is
+        // the entire point of the flag.
+        const offPath = await store.conversations.appendMessage({
+          chatId: chat.id,
+          role: "tool",
+          content: "chained onto an abandoned branch",
+          parentMessageId: t.a3.id,
+          activate: false,
+        });
+        expect(offPath.active).toBe(false);
+        expect(ids(await store.conversations.listMessages(chat.id))).toEqual([
+          ...livePath,
+          chained.id,
+        ]);
+        // It is really there, off-path: its parent's children now include it.
+        expect(ids(await store.conversations.listSiblings(offPath.id))).toEqual(
+          [t.u3.id, offPath.id],
+        );
+
+        // A chain append with nothing to chain OFF is refused rather than
+        // quietly falling back to the active leaf — that fallback is the race
+        // the flag exists to remove.
+        await expectRejectsWithCode(
+          store.conversations.appendMessage({
+            chatId: chat.id,
+            role: "tool",
+            content: "no parent named",
+            activate: false,
+          }),
+          "invalid_append",
+          expect,
+        );
+        expect(ids(await store.conversations.listMessages(chat.id))).toEqual([
+          ...livePath,
+          chained.id,
+        ]);
+
+        // SUPERSEDED. A chain append onto a parent that is active but has
+        // already been continued by somebody else — a bare append landing
+        // between two of a run's writes — must NOT inherit `true`: one message
+        // with two active children is not a path. It goes off-path instead,
+        // exactly as it would have if the interloper had been a branch switch.
+        const interloper = await store.conversations.appendMessage({
+          chatId: chat.id,
+          role: "user",
+          content: "someone else continued the conversation",
+        });
+        const superseded = await store.conversations.appendMessage({
+          chatId: chat.id,
+          role: "tool",
+          content: "chained onto a parent that moved on",
+          parentMessageId: chained.id,
+          activate: false,
+        });
+        expect(superseded.active).toBe(false);
+        expect(ids(await store.conversations.listMessages(chat.id))).toEqual([
+          ...livePath,
+          chained.id,
+          interloper.id,
+        ]);
+
+        // `activate: true` is the default spelled out, and still branches.
+        const branched = await store.conversations.appendMessage({
+          chatId: chat.id,
+          role: "assistant",
+          content: "an explicit activate",
+          parentMessageId: t.u2.id,
+          activate: true,
+        });
+        expect(branched.active).toBe(true);
+        expect(ids(await store.conversations.listMessages(chat.id))).toEqual([
+          t.u1.id,
+          t.a1.id,
+          t.u2.id,
+          branched.id,
+        ]);
       } finally {
         close?.();
       }
