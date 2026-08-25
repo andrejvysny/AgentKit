@@ -6,3 +6,7 @@ coverage/
 *.sqlite
 *.sqlite-*
 package.json.publishconfig-backup
+
+# Generated analysis artifacts and session-local files
+graphify-out/
+prompt.md

@@ -64,6 +64,9 @@ toolchain (tests, `bun run ci`) is Bun-only.
   shipped, P5b–P7 active, and a Later list) this deferred surface lands
   against.
 - [`docs/adr/`](docs/adr/) — accepted architecture decision records.
+- [`CHANGELOG.md`](CHANGELOG.md) — what changed per contract version, and
+  the working method (ADR gating, reference-repo extraction policy,
+  verification bar).
 - [`PROVENANCE.md`](PROVENANCE.md) — how `packages/core` was extracted from
   `@openpcb/ai-core` and relicensed to MIT.
 
