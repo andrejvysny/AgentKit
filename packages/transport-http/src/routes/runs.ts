@@ -10,17 +10,14 @@ import { jsonResponse } from "../http.js";
 import { notFound } from "../problem.js";
 import { chatIdOfTask, runDto } from "../projections.js";
 import { resolveStreamOptions } from "../deps.js";
-import {
-  createRunEventStream,
-  resolveStartSeq,
-  SSE_HEADERS,
-} from "../sse.js";
+import { createRunEventStream, resolveStartSeq, SSE_HEADERS } from "../sse.js";
 import { pathParam, type RouteContext } from "./context.js";
 
 export async function getRun(ctx: RouteContext): Promise<Response> {
   const runId = pathParam(ctx, "runId");
   const projected = await readRun(ctx, runId);
-  if (projected === null) return notFound(`Run not found: ${runId}`, ctx.instance);
+  if (projected === null)
+    return notFound(`Run not found: ${runId}`, ctx.instance);
   return jsonResponse(projected);
 }
 
@@ -51,7 +48,8 @@ export async function cancelRun(ctx: RouteContext): Promise<Response> {
 export async function streamRun(ctx: RouteContext): Promise<Response> {
   const runId = pathParam(ctx, "runId");
   const projected = await readRun(ctx, runId);
-  if (projected === null) return notFound(`Run not found: ${runId}`, ctx.instance);
+  if (projected === null)
+    return notFound(`Run not found: ${runId}`, ctx.instance);
 
   const tasks = ctx.deps.store.tasks;
   const startSeq = await resolveStartSeq(

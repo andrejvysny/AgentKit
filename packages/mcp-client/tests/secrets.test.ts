@@ -38,7 +38,9 @@ function stringsReachableFrom(
     found.push(value.name, value.message, value.stack ?? "");
     // `cause` is non-enumerable when set through the options bag, so
     // Object.values below would walk straight past it.
-    found.push(...stringsReachableFrom((value as { cause?: unknown }).cause, seen));
+    found.push(
+      ...stringsReachableFrom((value as { cause?: unknown }).cause, seen),
+    );
   }
   for (const nested of Object.values(value as Record<string, unknown>)) {
     found.push(...stringsReachableFrom(nested, seen));
@@ -89,7 +91,11 @@ describe("secret resolution", () => {
 
   it("fails with mcp_secret_missing when the store has no value", async () => {
     const store = createSecretStore();
-    const failure = await resolveMcpSecrets("gh", { GH_TOKEN: "gh.token" }, store)
+    const failure = await resolveMcpSecrets(
+      "gh",
+      { GH_TOKEN: "gh.token" },
+      store,
+    )
       .then(() => null)
       .catch((err: unknown) => err);
     expect(failure).toBeInstanceOf(McpError);

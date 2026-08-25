@@ -77,10 +77,12 @@ describe("stageRegistry", () => {
       ctx: CTX,
       hasPrimaryBinding: false,
     });
-    expect(registry.list().map((t) => t.definition.name).sort()).toEqual([
-      "a",
-      "c",
-    ]);
+    expect(
+      registry
+        .list()
+        .map((t) => t.definition.name)
+        .sort(),
+    ).toEqual(["a", "c"]);
   });
 
   it("prunes nothing when no contributor declares an opinion", async () => {

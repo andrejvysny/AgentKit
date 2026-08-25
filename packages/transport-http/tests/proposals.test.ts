@@ -149,7 +149,9 @@ describe("proposal routes", () => {
 
     const rejected = (await (
       await handler(
-        request("POST", "/v1/proposals/prp-2/reject", { body: { reason: "no" } })
+        request("POST", "/v1/proposals/prp-2/reject", {
+          body: { reason: "no" },
+        }),
       )
     ).json()) as ProposalDto;
     expect(rejected.status).toBe("rejected");

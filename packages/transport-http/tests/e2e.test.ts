@@ -9,9 +9,16 @@
  * that an SSE response is readable while the run is still writing it.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import type { MessagePageDto, SubmitMessageResponse } from "@agentkit/contracts";
+import type {
+  MessagePageDto,
+  SubmitMessageResponse,
+} from "@agentkit/contracts";
 import { serveRest } from "../src/index.js";
-import { createLiveFixture, waitFor, type LiveFixture } from "./support/fixture.js";
+import {
+  createLiveFixture,
+  waitFor,
+  type LiveFixture,
+} from "./support/fixture.js";
 
 let live: LiveFixture;
 let server: ReturnType<typeof Bun.serve>;
@@ -75,7 +82,8 @@ function parseFrame(block: string): Frame | null {
     else if (line.startsWith("event: ")) event = line.slice(7);
     else if (line.startsWith("data: ")) data = line.slice(6);
   }
-  if (id === undefined || event === undefined || data === undefined) return null;
+  if (id === undefined || event === undefined || data === undefined)
+    return null;
   return { id, event, data };
 }
 
@@ -138,9 +146,7 @@ describe("REST v1 over Bun.serve", () => {
         headers: { "last-event-id": midpoint?.id ?? "" },
       }),
     );
-    expect(resumed.map((f) => f.id)).toEqual(
-      frames.slice(2).map((f) => f.id),
-    );
+    expect(resumed.map((f) => f.id)).toEqual(frames.slice(2).map((f) => f.id));
   });
 
   it("(b) 404s a stream for a run that does not exist, as problem+json", async () => {

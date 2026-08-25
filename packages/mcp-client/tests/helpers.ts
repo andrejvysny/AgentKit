@@ -83,11 +83,15 @@ export function buildFakeServer(
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: tools.map((tool) => ({
       name: tool.name,
-      ...(tool.description === undefined ? {} : { description: tool.description }),
+      ...(tool.description === undefined
+        ? {}
+        : { description: tool.description }),
       inputSchema: (tool.inputSchema ?? { type: "object" }) as {
         type: "object";
       },
-      ...(tool.annotations === undefined ? {} : { annotations: tool.annotations }),
+      ...(tool.annotations === undefined
+        ? {}
+        : { annotations: tool.annotations }),
     })),
   }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {

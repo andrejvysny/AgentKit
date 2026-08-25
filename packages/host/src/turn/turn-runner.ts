@@ -200,9 +200,7 @@ export class TurnRunner implements TaskWorker {
    * assigns, because the task row has to be written before them (see below) and
    * its payload names them.
    */
-  async submitMessage(
-    input: SubmitMessageInput,
-  ): Promise<SubmitMessageResult> {
+  async submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult> {
     const taskId = input.taskId ?? this.deps.ids.taskId();
     const userMessageId = this.deps.ids.messageId();
     const assistantMessageId = this.deps.ids.messageId();
@@ -402,7 +400,8 @@ export class TurnRunner implements TaskWorker {
     const { task } = ctx;
     const settings = await store.settings.getSettings();
     const provider = await this.resolveProvider(request, settings);
-    const model = request.model ?? provider.defaultModel ?? settings.defaultModel;
+    const model =
+      request.model ?? provider.defaultModel ?? settings.defaultModel;
     if (!model) {
       throw new AgentKitHostError(
         "no_model",
@@ -532,11 +531,7 @@ export class TurnRunner implements TaskWorker {
 
     // Still nothing, after every recovery pass. A cancelled turn is exempt: it
     // has no answer because it was stopped, which is not the same failure.
-    if (
-      terminal !== "cancelled" &&
-      !hasContent(state) &&
-      toolCallCount === 0
-    ) {
+    if (terminal !== "cancelled" && !hasContent(state) && toolCallCount === 0) {
       await this.emitWarning(
         ctx,
         "empty_response",

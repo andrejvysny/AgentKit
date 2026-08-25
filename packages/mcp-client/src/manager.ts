@@ -1,10 +1,12 @@
-import { defaultClock, type Clock, type Logger, type SecretStore } from "@agentkit/host";
+import {
+  defaultClock,
+  type Clock,
+  type Logger,
+  type SecretStore,
+} from "@agentkit/host";
 import { isServerEnabled, type McpServerConfig } from "./config.js";
 import { describeCause, McpError } from "./errors.js";
-import {
-  normalizeServerAlias,
-  parseMcpCanonicalToolId,
-} from "./identity.js";
+import { normalizeServerAlias, parseMcpCanonicalToolId } from "./identity.js";
 import type { McpToolCallOutcome, McpToolDescriptor } from "./projection.js";
 import { McpSession } from "./session.js";
 import {
@@ -50,7 +52,8 @@ export class McpClientManager {
   constructor(deps: McpClientManagerDeps, configs: readonly McpServerConfig[]) {
     this.logger = deps.logger;
     const clock = deps.clock ?? defaultClock;
-    const transportFactory = deps.transportFactory ?? defaultMcpTransportFactory;
+    const transportFactory =
+      deps.transportFactory ?? defaultMcpTransportFactory;
     for (const config of configs) {
       // Validate eagerly: a bad alias is a wiring bug, and discovering it on the
       // first tool call of the first chat is strictly worse than at construction.

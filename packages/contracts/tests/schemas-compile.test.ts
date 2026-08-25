@@ -214,9 +214,9 @@ describe("host-defined kinds", () => {
 
     // A kind this contract has never heard of still validates — the vocabulary
     // belongs to the host, not the framework.
-    expect(
-      sourceRef({ id: "s1", kind: "invoice-line", label: "Line 7" }),
-    ).toBe(true);
+    expect(sourceRef({ id: "s1", kind: "invoice-line", label: "Line 7" })).toBe(
+      true,
+    );
     expect(
       binding({
         id: "b1",

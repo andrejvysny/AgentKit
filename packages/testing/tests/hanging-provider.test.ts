@@ -131,9 +131,7 @@ describe("HangingProviderClient", () => {
     };
     // Hanging forever on an un-cancellable stream would present as a timeout
     // with no diagnosis; the double names the wiring bug instead.
-    await expect(iterate()).rejects.toThrow(
-      "must hand the provider a signal",
-    );
+    await expect(iterate()).rejects.toThrow("must hand the provider a signal");
   });
 
   it("mints the AbortError shape a cancelled fetch reports", () => {

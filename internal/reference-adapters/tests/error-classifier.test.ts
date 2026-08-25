@@ -54,20 +54,18 @@ describe("classifyExecutionError — transient", () => {
     });
   });
 
-  it.each([
-    "ECONNRESET",
-    "ECONNREFUSED",
-    "ETIMEDOUT",
-    "EPIPE",
-  ])("treats %s as transient", (code) => {
-    const err = Object.assign(new Error(`connect ${code} 10.0.0.1:443`), {
-      code,
-    });
-    expect(classifyExecutionError(err)).toEqual({
-      kind: "transient",
-      reason: `network:${code}`,
-    });
-  });
+  it.each(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE"])(
+    "treats %s as transient",
+    (code) => {
+      const err = Object.assign(new Error(`connect ${code} 10.0.0.1:443`), {
+        code,
+      });
+      expect(classifyExecutionError(err)).toEqual({
+        kind: "transient",
+        reason: `network:${code}`,
+      });
+    },
+  );
 
   it("treats an undici-style 'fetch failed' as transient", () => {
     expect(classifyExecutionError(new Error("fetch failed")).kind).toBe(

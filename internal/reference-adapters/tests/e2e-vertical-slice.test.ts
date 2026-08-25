@@ -395,7 +395,9 @@ async function eventsOf(slice: Slice, taskId: string): Promise<AiRunEvent[]> {
 }
 
 function isTerminal(status: string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return (
+    status === "completed" || status === "failed" || status === "cancelled"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -662,8 +664,16 @@ describe("e2e vertical slice (A) — a write stages, waits, then applies once", 
       // Two proposals staged straight through the service — the crash window is
       // between "the applier ran" and "we wrote that down", which no tool call
       // can reach on purpose.
-      const landed = await stageApproveAndClaim(slice, "append_note-2_scope-A", "op-crash-landed");
-      const lost = await stageApproveAndClaim(slice, "append_note-3_scope-A", "op-crash-lost");
+      const landed = await stageApproveAndClaim(
+        slice,
+        "append_note-2_scope-A",
+        "op-crash-landed",
+      );
+      const lost = await stageApproveAndClaim(
+        slice,
+        "append_note-3_scope-A",
+        "op-crash-lost",
+      );
 
       // The applier DID run for the first one before the process died…
       slice.applier.remember("op-crash-landed", landed.id);
@@ -675,11 +685,13 @@ describe("e2e vertical slice (A) — a write stages, waits, then applies once", 
       const finalized = await slice.store.proposals.get(landed.id);
       expect(finalized?.status).toBe("applied");
       // The applier's own record is now persisted on our side too.
-      expect(await slice.store.proposals.getOutcome("op-crash-landed")).toEqual({
-        status: "applied",
-        appliedOps: 1,
-        failedOps: [],
-      });
+      expect(await slice.store.proposals.getOutcome("op-crash-landed")).toEqual(
+        {
+          status: "applied",
+          appliedOps: 1,
+          failedOps: [],
+        },
+      );
 
       const abandoned = await slice.store.proposals.get(lost.id);
       expect(abandoned?.status).toBe("failed");

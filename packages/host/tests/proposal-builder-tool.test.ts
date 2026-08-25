@@ -10,7 +10,11 @@ import {
   type ProposalToolData,
   type WriteToolModelData,
 } from "../src/index.js";
-import { createHarness, type FakeApplierOptions, type TestHarness } from "./fakes.js";
+import {
+  createHarness,
+  type FakeApplierOptions,
+  type TestHarness,
+} from "./fakes.js";
 
 const DEFINITION: AiToolDefinition = {
   name: "write_items",
@@ -42,13 +46,18 @@ interface Fixture extends TestHarness {
   builds: number;
 }
 
-function setup(options: {
-  build?: Partial<ProposalBuildResult>;
-  applier?: FakeApplierOptions;
-  policyMode?: "auto_readonly_confirm_writes" | "confirm_all_writes" | "auto_all";
-  allow?: boolean;
-  currentRevision?: (scopeKey: string) => Promise<string | null>;
-} = {}): Fixture {
+function setup(
+  options: {
+    build?: Partial<ProposalBuildResult>;
+    applier?: FakeApplierOptions;
+    policyMode?:
+      | "auto_readonly_confirm_writes"
+      | "confirm_all_writes"
+      | "auto_all";
+    allow?: boolean;
+    currentRevision?: (scopeKey: string) => Promise<string | null>;
+  } = {},
+): Fixture {
   const harness = createHarness(options.applier ?? {});
   const policy = new SessionWritePolicy({
     ...(options.policyMode === undefined ? {} : { mode: options.policyMode }),
@@ -102,9 +111,7 @@ function setup(options: {
   return fixture;
 }
 
-function modelData(result: {
-  modelData?: unknown;
-}): WriteToolModelData {
+function modelData(result: { modelData?: unknown }): WriteToolModelData {
   return result.modelData as WriteToolModelData;
 }
 
@@ -153,9 +160,9 @@ describe("createProposalBuilderTool — staging", () => {
   it("stamps the scope revision so the apply path can detect staleness", async () => {
     const f = setup({ currentRevision: async () => "rev-3" });
     await f.tool.execute(CTX, { action_id: "create_a_scope-1" });
-    expect(
-      [...f.store.proposals.proposals.values()][0]!.revisionAtCreate,
-    ).toBe("rev-3");
+    expect([...f.store.proposals.proposals.values()][0]!.revisionAtCreate).toBe(
+      "rev-3",
+    );
   });
 
   it("degrades a malformed action_id to a warning and stages anyway", async () => {
@@ -187,7 +194,14 @@ describe("createProposalBuilderTool — staging", () => {
 describe("createProposalBuilderTool — dedup by action_id", () => {
   async function stagePrior(
     f: Fixture,
-    status: "applied" | "pending" | "approved" | "applying" | "failed" | "rejected" | "invalidated",
+    status:
+      | "applied"
+      | "pending"
+      | "approved"
+      | "applying"
+      | "failed"
+      | "rejected"
+      | "invalidated",
   ): Promise<void> {
     const proposal = await f.service.stage({
       chatId: "chat-1",
@@ -382,7 +396,9 @@ describe("createProposalBuilderTool — apply results", () => {
       appliedCount: 2,
       skipped: [{ id: "op:1", reason: "target missing" }],
     });
-    expect([...f.store.proposals.proposals.values()][0]!.status).toBe("applied");
+    expect([...f.store.proposals.proposals.values()][0]!.status).toBe(
+      "applied",
+    );
   });
 
   it("turns an apply failure into a result, never a throw", async () => {
@@ -406,7 +422,10 @@ describe("createProposalBuilderTool — apply results", () => {
   it("leaves the proposal failed when the scope moved since staging", async () => {
     // What the builder believes the revision is when it stages…
     const staged = { revision: "rev-1" };
-    const f = setup({ allow: true, currentRevision: async () => staged.revision });
+    const f = setup({
+      allow: true,
+      currentRevision: async () => staged.revision,
+    });
     // …versus where the world actually is when the apply is attempted.
     f.applier.revisions.set("scope-1", "rev-2");
 

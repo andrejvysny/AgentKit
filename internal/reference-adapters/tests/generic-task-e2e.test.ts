@@ -139,7 +139,9 @@ class FanOutExecutor implements TaskExecutor {
   async execute(ctx: TaskExecutionContext): Promise<void> {
     const spawnChild = ctx.spawnChild;
     if (!spawnChild) {
-      throw new Error(`${DEMO_FANOUT_KIND} needs a dispatcher with a TaskService`);
+      throw new Error(
+        `${DEMO_FANOUT_KIND} needs a dispatcher with a TaskService`,
+      );
     }
     const children = [];
     for (const [index, payload] of this.leafPayloads.entries()) {
@@ -289,7 +291,9 @@ async function statusOf(env: Env, taskId: string): Promise<string> {
 }
 
 function isTerminal(status: string): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return (
+    status === "completed" || status === "failed" || status === "cancelled"
+  );
 }
 
 async function waitForTerminal(env: Env, taskId: string): Promise<void> {
@@ -389,9 +393,9 @@ for (const backing of ["memory", "sqlite"] as const) {
         await settle();
         expect(await statusOf(env, "task-once")).toBe("completed");
         expect(env.echo.invocations).toBe(1);
-        expect(
-          (await env.store.tasks.getTask("task-once"))?.attemptCount,
-        ).toBe(1);
+        expect((await env.store.tasks.getTask("task-once"))?.attemptCount).toBe(
+          1,
+        );
         const events = await env.store.tasks.listEvents("task-once");
         expect(events.map((event) => event.type)).toEqual([
           "demo.started",
@@ -577,9 +581,7 @@ describe("generic task e2e — two kinds, one runner", () => {
       const chatEvents = await env.store.tasks.listEvents(turn.runId);
       expectValidStream(chatEvents);
       expect(chatEvents[0]?.type).toBe("run.started");
-      const echoEvents = await env.store.tasks.listEvents(
-        "task-echo-parallel",
-      );
+      const echoEvents = await env.store.tasks.listEvents("task-echo-parallel");
       expectValidStream(echoEvents);
       expect(echoEvents[0]?.type).toBe("demo.started");
 

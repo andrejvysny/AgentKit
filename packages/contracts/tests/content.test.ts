@@ -140,7 +140,10 @@ describe("AiChatMessageSchema with multimodal content", () => {
       },
     ];
     const message: AiChatMessage = { role: "user", content: parts };
-    const stringMessage: AiChatMessage = { role: "system", content: "be terse" };
+    const stringMessage: AiChatMessage = {
+      role: "system",
+      content: "be terse",
+    };
     expect(Array.isArray(message.content)).toBe(true);
     expect(stringMessage.content).toBe("be terse");
   });

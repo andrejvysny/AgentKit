@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import Ajv from "ajv";
-import { mapValidatorErrors, parseToolArguments } from "../src/tools/validation.js";
+import {
+  mapValidatorErrors,
+  parseToolArguments,
+} from "../src/tools/validation.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import type { AiTool } from "../src/tools/tool.js";
 import type { AiJsonSchemaObject } from "@agentkit/contracts";
@@ -78,9 +81,9 @@ describe("AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage)", () => 
     } as unknown as AiJsonSchemaObject;
     const r = new AiToolRegistry();
     r.register(makeTool("set_mode", schema));
-    expect(r.validateInput("set_mode", { mode: "delete" }).length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      r.validateInput("set_mode", { mode: "delete" }).length,
+    ).toBeGreaterThan(0);
     expect(r.validateInput("set_mode", { mode: "read" })).toEqual([]);
   });
 
@@ -91,9 +94,9 @@ describe("AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage)", () => 
     };
     const r = new AiToolRegistry();
     r.register(makeTool("set_ref", schema));
-    expect(r.validateInput("set_ref", { ref: "toolong" }).length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      r.validateInput("set_ref", { ref: "toolong" }).length,
+    ).toBeGreaterThan(0);
     expect(r.validateInput("set_ref", { ref: "ok" })).toEqual([]);
   });
 
@@ -127,7 +130,9 @@ describe("AiToolRegistry.validateInput (Ajv, full JSON-Schema coverage)", () => 
     // Ajv.compile throws on a non-object schema — register() must reject it
     // rather than silently leaving a validator-less tool behind.
     expect(() =>
-      r.register(makeTool("bad_tool", undefined as unknown as AiJsonSchemaObject)),
+      r.register(
+        makeTool("bad_tool", undefined as unknown as AiJsonSchemaObject),
+      ),
     ).toThrow();
     // The tool never made it into the registry, so validateInput's unknown-tool
     // fallback (`[]`) is what a caller observes — same end result as the old

@@ -5,3 +5,4 @@ coverage/
 .DS_Store
 *.sqlite
 *.sqlite-*
+package.json.publishconfig-backup

@@ -78,7 +78,8 @@ export function projectMcpTools(
     }
     return {
       ...identity,
-      description: tool.description ?? `MCP tool ${tool.name} from ${serverAlias}`,
+      description:
+        tool.description ?? `MCP tool ${tool.name} from ${serverAlias}`,
       // Verbatim passthrough. An MCP `inputSchema` is a full draft-07 document
       // and `AiJsonSchemaObject` only models the subset a hand-authored tool
       // uses, so the cast preserves keywords the interface cannot name (`oneOf`,

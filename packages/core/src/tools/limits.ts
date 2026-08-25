@@ -1,4 +1,7 @@
-import type { AiContextSizePreference, AiToolLimits } from "@agentkit/contracts";
+import type {
+  AiContextSizePreference,
+  AiToolLimits,
+} from "@agentkit/contracts";
 
 const PROFILE_BYTES: Record<AiContextSizePreference, number> = {
   small: 16 * 1024,

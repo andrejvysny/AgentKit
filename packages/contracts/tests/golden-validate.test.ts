@@ -26,9 +26,7 @@ const asJson = (schema: TSchema): object =>
   JSON.parse(JSON.stringify(schema)) as object;
 
 describe("golden traces validate against AiRunEventSchema", () => {
-  const traceFiles = readdirSync(TRACES_DIR).filter((f) =>
-    f.endsWith(".json"),
-  );
+  const traceFiles = readdirSync(TRACES_DIR).filter((f) => f.endsWith(".json"));
 
   it("finds the committed trace files", () => {
     expect(traceFiles.length).toBeGreaterThan(0);

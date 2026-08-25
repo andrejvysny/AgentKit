@@ -95,7 +95,9 @@ describe("chats", () => {
     }
 
     const first = (await (
-      await handler(request("GET", `/v1/chats/${TEST_CHAT_ID}/messages?limit=2`))
+      await handler(
+        request("GET", `/v1/chats/${TEST_CHAT_ID}/messages?limit=2`),
+      )
     ).json()) as MessagePageDto;
     expect(first.items.map((m) => m.content)).toEqual(["one", "two"]);
     expect(first.nextCursor).toBeDefined();
@@ -345,7 +347,9 @@ describe("catalogue", () => {
       createdAt: new Date(0).toISOString(),
     });
     await expectProblem(
-      await handler(request("POST", "/v1/proposals/prp-1/approve", { body: {} })),
+      await handler(
+        request("POST", "/v1/proposals/prp-1/approve", { body: {} }),
+      ),
       501,
       "not_implemented",
     );
@@ -376,7 +380,9 @@ describe("authenticate", () => {
     });
     expect((await handler(request("GET", "/v1/version"))).status).toBe(401);
     const allowed = await handler(
-      request("GET", "/v1/version", { headers: { authorization: "Bearer ok" } }),
+      request("GET", "/v1/version", {
+        headers: { authorization: "Bearer ok" },
+      }),
     );
     expect(allowed.status).toBe(200);
   });

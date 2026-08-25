@@ -161,7 +161,10 @@ async function drive(
  * point of the generalization — so a consumer that knows which kind it is
  * looking at narrows on the way out, exactly as a host would.
  */
-async function eventsOf(f: RunnerFixture, taskId: string): Promise<AiRunEvent[]> {
+async function eventsOf(
+  f: RunnerFixture,
+  taskId: string,
+): Promise<AiRunEvent[]> {
   return (await f.store.tasks.listEvents(taskId)) as AiRunEvent[];
 }
 
@@ -293,7 +296,12 @@ describe("TurnRunner.execute — text only", () => {
   it("streams into the placeholder and completes the run", async () => {
     const f = await setupRunner();
     f.mock.setScript([
-      { steps: [{ kind: "text", content: "Hello " }, { kind: "text", content: "world" }] },
+      {
+        steps: [
+          { kind: "text", content: "Hello " },
+          { kind: "text", content: "world" },
+        ],
+      },
     ]);
     const submitted = await f.runner.submitMessage({
       chatId: f.chatId,
@@ -504,10 +512,10 @@ describe("TurnRunner.execute — tool round trip", () => {
     // The window holds the tool result but not the assistant turn that asked
     // for it, so the result is dropped rather than sent as an orphan.
     expect(replayed.some((m) => m.role === "tool")).toBe(false);
-    expect(
-      replayed.some((m) => (m.toolCalls?.length ?? 0) > 0),
-    ).toBe(false);
-    expect((await f.store.tasks.getTask(second.runId))?.status).toBe("completed");
+    expect(replayed.some((m) => (m.toolCalls?.length ?? 0) > 0)).toBe(false);
+    expect((await f.store.tasks.getTask(second.runId))?.status).toBe(
+      "completed",
+    );
     expect(
       messagesOf(f).find((m) => m.id === second.assistantMessageId)?.content,
     ).toBe("second answer");
@@ -518,7 +526,9 @@ describe("TurnRunner.execute — retries", () => {
   it("retries chat-only after a provider failure with tools staged", async () => {
     const f = await setupRunner({ contributors: [echoContributor] });
     f.client.failCalls.add(1);
-    f.mock.setScript([{ steps: [{ kind: "text", content: "chat only answer" }] }]);
+    f.mock.setScript([
+      { steps: [{ kind: "text", content: "chat only answer" }] },
+    ]);
     const submitted = await f.runner.submitMessage({
       chatId: f.chatId,
       content: "hi",
@@ -551,7 +561,9 @@ describe("TurnRunner.execute — retries", () => {
     await drive(f, submitted.runId);
 
     expect(f.client.calls).toBe(1);
-    expect((await f.store.tasks.getTask(submitted.runId))?.status).toBe("failed");
+    expect((await f.store.tasks.getTask(submitted.runId))?.status).toBe(
+      "failed",
+    );
   });
 
   it("retries once on an empty answer, then warns", async () => {
@@ -652,7 +664,8 @@ describe("TurnRunner.execute — emulated tool calls", () => {
         steps: [
           {
             kind: "text",
-            content: 'Here is what I sent:\n```json\n{"name":"echo","arguments":{}}\n```',
+            content:
+              'Here is what I sent:\n```json\n{"name":"echo","arguments":{}}\n```',
           },
         ],
       },

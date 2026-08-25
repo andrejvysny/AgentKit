@@ -235,7 +235,9 @@ describe("createRunEventStream under load", () => {
     const elapsed = Date.now() - started;
 
     expect(received.length).toBe(1_001);
-    expect(seqsOf(received)).toEqual(Array.from({ length: 1_001 }, (_, i) => i));
+    expect(seqsOf(received)).toEqual(
+      Array.from({ length: 1_001 }, (_, i) => i),
+    );
     expect(received[1_000]?.event).toBe("run.completed");
     expect(elapsed).toBeLessThan(2_000);
 
@@ -393,7 +395,9 @@ describe("createRunEventStream under load", () => {
     expect(sawHeartbeat).toBe(true);
     // The backlog came out whole before the first keepalive: nothing queued
     // behind a comment, nothing lost to one.
-    expect(seqsOf(received)).toEqual(Array.from({ length: 32 }, (_, i) => i + 8));
+    expect(seqsOf(received)).toEqual(
+      Array.from({ length: 32 }, (_, i) => i + 8),
+    );
     await frames.cancel();
   });
 
@@ -421,10 +425,7 @@ describe("createRunEventStream under load", () => {
         if ((await frames.next()) === null) return true;
       }
     })();
-    const raced = await Promise.race([
-      finished,
-      wait(1_000).then(() => false),
-    ]);
+    const raced = await Promise.race([finished, wait(1_000).then(() => false)]);
     expect(raced).toBe(true);
   });
 
@@ -453,8 +454,8 @@ describe("createRunEventStream under load", () => {
         if ((await frames.next()) === null) return true;
       }
     })();
-    expect(
-      await Promise.race([finished, wait(1_000).then(() => false)]),
-    ).toBe(true);
+    expect(await Promise.race([finished, wait(1_000).then(() => false)])).toBe(
+      true,
+    );
   });
 });

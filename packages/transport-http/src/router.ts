@@ -11,7 +11,11 @@
  * segments, no regex per route — the contract has none of those, and a matcher
  * that supports more than the table needs is a matcher with untested branches.
  */
-import { REST_ROUTES, type RestMethod, type RestOperation } from "@agentkit/contracts";
+import {
+  REST_ROUTES,
+  type RestMethod,
+  type RestOperation,
+} from "@agentkit/contracts";
 
 interface CompiledRoute {
   operation: RestOperation;

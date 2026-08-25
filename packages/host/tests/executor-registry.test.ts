@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
-  AgentKitHostError,
+  type AgentKitHostError,
   CHAT_TURN_TASK_KIND,
   ExecutorNotFoundError,
   ExecutorRegistry,
@@ -252,7 +252,9 @@ describe("createDispatchingWorker", () => {
     });
     // The guard still ran first: the task is `running`, so the queue's
     // settleThrown can land it failed rather than leaving it claimable.
-    expect((await f.store.tasks.getTask("task-orphan"))?.status).toBe("running");
+    expect((await f.store.tasks.getTask("task-orphan"))?.status).toBe(
+      "running",
+    );
   });
 });
 

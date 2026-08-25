@@ -115,7 +115,8 @@ export function classifyExecutionError(
   const record = asRecord(err);
   const message = errorMessage(err);
 
-  const code = typeof record?.["code"] === "string" ? record["code"] : undefined;
+  const code =
+    typeof record?.["code"] === "string" ? record["code"] : undefined;
   if (code !== undefined) {
     const kind = HOST_CODE_KINDS[code];
     if (kind !== undefined) return { kind, reason: code };
@@ -124,7 +125,8 @@ export function classifyExecutionError(
   // The thrower's own verdict beats every heuristic below it: a host that knows
   // its provider's failure modes is a better classifier than string matching.
   const retryable = record?.["retryable"];
-  if (retryable === true) return { kind: "transient", reason: "retryable_flag" };
+  if (retryable === true)
+    return { kind: "transient", reason: "retryable_flag" };
   if (retryable === false) {
     return { kind: "terminal", reason: "non_retryable_flag" };
   }
@@ -147,7 +149,8 @@ export function classifyExecutionError(
   if (NETWORK_MESSAGE_MARKERS.some((needle) => lowered.includes(needle))) {
     return { kind: "transient", reason: "network" };
   }
-  if (/\b5\d{2}\b/.test(message)) return { kind: "transient", reason: "http_5xx" };
+  if (/\b5\d{2}\b/.test(message))
+    return { kind: "transient", reason: "http_5xx" };
   if (/\b429\b/.test(message)) return { kind: "transient", reason: "http_429" };
   if (/\b(400|401|403|404|422)\b/.test(message)) {
     return { kind: "terminal", reason: "http_rejected" };
@@ -176,7 +179,9 @@ function isAbortError(err: unknown): boolean {
   return cause?.["name"] === "AbortError";
 }
 
-function httpStatus(record: Record<string, unknown> | undefined): number | undefined {
+function httpStatus(
+  record: Record<string, unknown> | undefined,
+): number | undefined {
   if (record === undefined) return undefined;
   for (const key of ["status", "statusCode", "httpStatus"]) {
     const value = record[key];

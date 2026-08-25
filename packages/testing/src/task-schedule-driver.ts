@@ -96,7 +96,7 @@ export function createRng(seed: number): Rng {
     next,
     int: (maxExclusive: number) => Math.floor(next() * maxExclusive),
     chance: (p: number) => next() < p,
-    pick: <T,>(items: readonly T[]): T => {
+    pick: <T>(items: readonly T[]): T => {
       if (items.length === 0) throw new Error("Rng.pick on an empty list");
       return items[Math.floor(next() * items.length)]!;
     },

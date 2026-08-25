@@ -45,21 +45,37 @@ describe("canonical tool identity", () => {
     });
     expect(identity.canonicalId).toBe("mcp.fs.files.read");
     expect(identity.registryName).toBe("mcp__fs__files__read");
-    expect(toRegistryToolName(identity.canonicalId)).toBe(identity.registryName);
+    expect(toRegistryToolName(identity.canonicalId)).toBe(
+      identity.registryName,
+    );
   });
 
   it("rejects aliases and tool names outside the grammar", () => {
-    expect(codeOf(() => buildMcpToolIdentity({ serverAlias: "GitHub", toolName: "x" })))
-      .toBe("mcp_invalid_alias");
-    expect(codeOf(() => buildMcpToolIdentity({ serverAlias: "9gh", toolName: "x" })))
-      .toBe("mcp_invalid_alias");
-    expect(codeOf(() => buildMcpToolIdentity({ serverAlias: "gh", toolName: "List" })))
-      .toBe("mcp_invalid_tool_name");
-    expect(codeOf(() => buildMcpToolIdentity({ serverAlias: "gh", toolName: "a b" })))
-      .toBe("mcp_invalid_tool_name");
     expect(
       codeOf(() =>
-        buildMcpToolIdentity({ serverAlias: "gh", toolName: "ok", toolAlias: "No!" }),
+        buildMcpToolIdentity({ serverAlias: "GitHub", toolName: "x" }),
+      ),
+    ).toBe("mcp_invalid_alias");
+    expect(
+      codeOf(() => buildMcpToolIdentity({ serverAlias: "9gh", toolName: "x" })),
+    ).toBe("mcp_invalid_alias");
+    expect(
+      codeOf(() =>
+        buildMcpToolIdentity({ serverAlias: "gh", toolName: "List" }),
+      ),
+    ).toBe("mcp_invalid_tool_name");
+    expect(
+      codeOf(() =>
+        buildMcpToolIdentity({ serverAlias: "gh", toolName: "a b" }),
+      ),
+    ).toBe("mcp_invalid_tool_name");
+    expect(
+      codeOf(() =>
+        buildMcpToolIdentity({
+          serverAlias: "gh",
+          toolName: "ok",
+          toolAlias: "No!",
+        }),
       ),
     ).toBe("mcp_invalid_tool_name");
   });

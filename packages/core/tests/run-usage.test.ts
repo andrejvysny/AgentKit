@@ -174,7 +174,10 @@ describe("OpenAiCompatibleClient usage reporting", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       });
-    const client = makeClient((async (url: string | URL, init?: RequestInit) => {
+    const client = makeClient((async (
+      url: string | URL,
+      init?: RequestInit,
+    ) => {
       if (String(url).endsWith("/models")) return json({ data: [] });
       probeBodies.push(
         JSON.parse(String(init?.body)) as Record<string, unknown>,

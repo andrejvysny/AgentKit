@@ -111,7 +111,10 @@ export function createMcpToolSetContributor(
           // One server's list failing costs that server's tools, not the run's.
           // A collision, by contrast, is re-thrown below: it is a wiring fault
           // that no amount of degrading makes safe.
-          if (err instanceof McpError && err.code === "mcp_canonical_id_collision") {
+          if (
+            err instanceof McpError &&
+            err.code === "mcp_canonical_id_collision"
+          ) {
             throw err;
           }
           logger?.warn("mcp tools/list failed", {
@@ -171,7 +174,9 @@ function createMcpTool(
         const failure =
           err instanceof McpError
             ? err
-            : new McpError("mcp_remote_error", describeCause(err), { cause: err });
+            : new McpError("mcp_remote_error", describeCause(err), {
+                cause: err,
+              });
         return bridgeFailure(ctx, descriptor, failure);
       }
     },
@@ -200,7 +205,8 @@ function success(
   return {
     ok: true,
     status: "ok",
-    summary: firstLine(outcome.text) || `${outcome.canonicalId} returned no text.`,
+    summary:
+      firstLine(outcome.text) || `${outcome.canonicalId} returned no text.`,
     // `data` keeps every content part for the UI; `modelData` is the slim thing
     // replayed into context on every later turn.
     data: outcome,

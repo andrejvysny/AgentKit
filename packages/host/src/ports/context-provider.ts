@@ -1,4 +1,7 @@
-import type { AiContextBinding, AiPromptContextBlock } from "@agentkit/contracts";
+import type {
+  AiContextBinding,
+  AiPromptContextBlock,
+} from "@agentkit/contracts";
 
 /**
  * What the host pins into a chat's context: the objects the model is working on

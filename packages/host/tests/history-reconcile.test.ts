@@ -10,9 +10,7 @@ import {
 } from "../src/index.js";
 import { createHarness } from "./fakes.js";
 
-function assistantWithCalls(
-  ...ids: string[]
-): AiChatMessage {
+function assistantWithCalls(...ids: string[]): AiChatMessage {
   return {
     role: "assistant",
     content: "",
@@ -211,7 +209,9 @@ describe("TurnRunner history assembly", () => {
 
     const messages = f.client.seen[0];
     expect(messages).toBeDefined();
-    const declared = messages!.flatMap((m) => m.toolCalls ?? []).map((c) => c.id);
+    const declared = messages!
+      .flatMap((m) => m.toolCalls ?? [])
+      .map((c) => c.id);
     const answered = messages!
       .filter((m) => m.role === "tool")
       .map((m) => m.toolCallId);

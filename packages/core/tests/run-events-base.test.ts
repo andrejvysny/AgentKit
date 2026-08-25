@@ -116,7 +116,8 @@ describe("run event base fields", () => {
     // a duplicate delivery to any consumer keyed on seq.
     const events = await runEvents();
     const provided = events.filter(
-      (e) => e.type === "run.message.completed" || e.type === "run.message.delta",
+      (e) =>
+        e.type === "run.message.completed" || e.type === "run.message.delta",
     );
     expect(provided.length).toBeGreaterThan(1);
     const seqs = provided.map((e) => e.seq);

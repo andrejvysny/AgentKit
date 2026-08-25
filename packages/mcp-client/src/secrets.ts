@@ -102,7 +102,10 @@ export function applySecretsToTransport(
     return { ...transport, env: substituteValues(transport.env, material) };
   }
   if (!transport.headers) return transport;
-  return { ...transport, headers: substituteValues(transport.headers, material) };
+  return {
+    ...transport,
+    headers: substituteValues(transport.headers, material),
+  };
 }
 
 function substituteValues(

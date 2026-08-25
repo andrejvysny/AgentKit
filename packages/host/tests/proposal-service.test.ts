@@ -10,7 +10,11 @@ import {
   type ProposalRecord,
   type StageProposalInput,
 } from "../src/index.js";
-import { createHarness, type FakeApplierOptions, type TestHarness } from "./fakes.js";
+import {
+  createHarness,
+  type FakeApplierOptions,
+  type TestHarness,
+} from "./fakes.js";
 
 interface Fixture extends TestHarness {
   service: ProposalService;
@@ -70,7 +74,11 @@ describe("ProposalService — stage → approve → apply", () => {
       proposalId: proposal.id,
       operationId: "op-A",
     });
-    expect(outcome).toEqual({ status: "applied", appliedOps: 1, failedOps: [] });
+    expect(outcome).toEqual({
+      status: "applied",
+      appliedOps: 1,
+      failedOps: [],
+    });
 
     const stored = (await f.store.proposals.get(proposal.id)) as ProposalRecord;
     expect(stored.status).toBe("applied");
@@ -291,7 +299,9 @@ describe("ProposalService — idempotency keys and staleness", () => {
 
   it("applies when the scope is unchanged, and when it has no revision at all", async () => {
     const fresh = setup({ revisions: { "scope-1": "rev-1" } });
-    const p1 = await fresh.service.stage(stageInput({ revisionAtCreate: "rev-1" }));
+    const p1 = await fresh.service.stage(
+      stageInput({ revisionAtCreate: "rev-1" }),
+    );
     await fresh.service.approve({ proposalId: p1.id, actor: "user" });
     await expect(
       fresh.service.apply({ proposalId: p1.id, operationId: "op-ok" }),
@@ -309,8 +319,12 @@ describe("ProposalService — idempotency keys and staleness", () => {
 
   it("invalidateForRevision sweeps every pending proposal in the scope", async () => {
     const f = setup();
-    const a = await f.service.stage(stageInput({ actionId: "create_a_scope-1" }));
-    const b = await f.service.stage(stageInput({ actionId: "create_b_scope-1" }));
+    const a = await f.service.stage(
+      stageInput({ actionId: "create_a_scope-1" }),
+    );
+    const b = await f.service.stage(
+      stageInput({ actionId: "create_b_scope-1" }),
+    );
     const other = await f.service.stage(stageInput({ scopeKey: "scope-2" }));
     await f.service.approve({ proposalId: b.id, actor: "user" });
 
