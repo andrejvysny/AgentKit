@@ -70,10 +70,14 @@ blank page or re-learn fixed bugs.
   (`parentMessageId`/`depth`/`branchIndex`, a per-message `active` flag as
   the whole path representation) with append-and-activate as one atomic
   operation, and `forkChat` as a transactional active-path-prefix copy that
-  strips task linkage and excludes in-flight placeholders. `activatePath`
-  and `forkChat` are both transactional and tested (OneMind's equivalents
-  are neither). Branch execution stays serialized per chat — a switch never
-  cancels a task already running against the branch it left. Contract wave
+  strips task linkage, excludes in-flight placeholders, and re-orders the copy
+  into provider order (a fork loses `runId`, so it cannot repair that later).
+  `activatePath` and `forkChat` are both transactional and tested (OneMind's
+  equivalents are neither); `activatePath` returns the path it made live.
+  Branch execution stays serialized per chat — a switch never cancels a task
+  already running against the branch it left, and every record that task
+  writes chains off the run's own last write (`activate: false`) so a
+  mid-run switch cannot migrate half a turn onto another branch. Contract wave
   `0.2.0` → `0.3.0` (additive DTO fields + 3 routes; goldens re-recorded).
   sqlite `SCHEMA_V4`.
 

@@ -73,6 +73,7 @@ function createSequentialIds(): IdGenerator {
     proposalId: () => next("prp"),
     operationId: () => next("op"),
     messageId: () => next("msg"),
+    chatId: () => next("chat"),
   };
 }
 

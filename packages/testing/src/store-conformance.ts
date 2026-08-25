@@ -24,6 +24,7 @@ import {
 } from "./conformance-support.js";
 import { describeConversationBranching } from "./conversation-conformance.js";
 import { describeConversationForking } from "./fork-conformance.js";
+import { describeConversationTreeInvariants } from "./conversation-tree-driver.js";
 import { createTestEventStamper } from "./stamp.js";
 
 // The harness/test-API/tuning types and the two rejection assertions now live in
@@ -88,6 +89,9 @@ export function describeAssistantStoreConformance(
     // through this call.
     describeConversationBranching({ create, test });
     describeConversationForking({ create, test });
+    // The named rules above, composed at random and graded on the shape
+    // invariant after every step — the failures no fixture is shaped to catch.
+    describeConversationTreeInvariants({ create, test });
 
     it("creates chats and appends messages with per-chat monotonic orderKey", async () => {
       const { store, close } = await create();

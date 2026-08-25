@@ -78,6 +78,19 @@ file:line:
    `afterOrderKey` forward-paging cursor keeps working, unmodified, through
    a branched chat: the invariant makes the tree's path ordering and the
    flat counter's ordering the same order.
+   - **Precisely: the cursor is a cursor into a PATH, not into a chat.**
+     Paging forward through the path a cursor was taken on is unchanged in
+     every respect. Paging across a *switch* is not, and cannot be:
+     activating an older branch makes the live path one whose keys are all
+     *below* a cursor taken on the branch just left, so the next page comes
+     back empty — indistinguishable, to a naive client, from "no new
+     messages". This is a property of a single monotonic counter over a
+     tree, not a defect in the cursor, and the fix is on the reader: a
+     client that can switch branches (its own switch, or another client's)
+     must detect the path changed and re-list from the start rather than
+     continue the cursor. Comparing the active leaf's id between reads is
+     the cheap way to see it. Documented on
+     `ListMessagesOptions.afterOrderKey`.
 3. **Append-and-activate is one operation, not two.**
    `AppendMessageInput.parentMessageId` is the field that turns a linear
    append into a branch: absent, the parent is the chat's current active
@@ -100,7 +113,11 @@ file:line:
    conformance-tested once, pure and synchronous, and called identically
    from both adapters — a `bun:sqlite` transaction cannot survive an
    `await`, so the walk has to be synchronous for a sqlite adapter to be
-   able to use it inside one.
+   able to use it inside one. It **returns the path it made live**, because
+   the walk has already computed it: a caller that instead re-read the chat
+   afterwards would be reading outside the transaction that wrote the flags,
+   and could report a path a concurrent append had already moved on from.
+   The `activateBranch` REST route answers with exactly that value.
    - **Descent semantics, precisely:** activating a message makes active
      its ancestors, itself, and a descent from it to a leaf that at each
      step prefers a child that is **already active**, falling back to the
@@ -148,6 +165,53 @@ file:line:
    writing its assistant message to completion, and the message may end up
    landing on a branch that is no longer active. A client watching the
    active path simply will not see it arrive unless it switches back.
+7. **A run's records CHAIN off the run's own last write, never off "the
+   active leaf" — `AppendMessageInput.activate: false`.** Decision 6 lets a
+   turn outlive the branch it started on, and that is only coherent if
+   *everything* the turn writes stays with it. A turn writes several
+   records over the life of one run — the internal assistant turn carrying
+   `tool_calls`, one tool result per call, host banners — and each was
+   originally an unparented append, i.e. "hang this off whatever the active
+   leaf is *at write time*". A branch switch between two of those writes
+   therefore split one turn across two conversations: the later records
+   surfaced on a branch that never ran them (visible in `listMessages` and
+   over REST), while the run's own branch was left with an assistant turn
+   whose `tool_calls` nobody answered — which the next replay of that
+   branch has to reconcile as a synthetic failure for a tool that actually
+   succeeded (`reconcileOrphanToolCalls`). Narrowing the window was not an
+   option; the window is the whole run. So `appendMessage` gained
+   `activate?: boolean` (default `true`, every existing caller unchanged),
+   and `activate: false` + `parentMessageId` is a **chain append**:
+   `branchIndex` assigned as usual, `active` **inherited from the parent**,
+   and **no path switch**. `TurnRunner` tracks the id it wrote last —
+   seeded with the placeholder from the task payload — and chains every
+   projected append off it.
+   - **Inheritance is a rule, not a copy of one flag**, so the invariant —
+     one root-to-*childless*-leaf active chain — holds in all three cases:
+     (a) parent is the current active leaf → `active: true`, and the new
+     record is itself childless, so it is the same chain one message longer
+     and byte-identically what the unparented append produced; (b) parent is
+     inactive (the mid-run branch switch) → `active: false`, no flag
+     anywhere changes; (c) parent is active but **already has an active
+     child** — a bare `appendMessage` from another caller landed between two
+     of the run's writes → `active: false`, because this chain was continued
+     by somebody else and inheriting `true` would give one message two
+     active children, which is not a path. Case (c) is the reason the rule
+     is "active AND still the end of the live chain" rather than
+     "`parent.active`"; the sqlite adapter answers it in the same indexed
+     query that already computes the next `branchIndex`, so it costs no
+     extra read.
+   - **`activate: false` without `parentMessageId` is rejected**
+     (`invalid_append`), not reinterpreted. The only parent an unparented
+     append could take is the active leaf, which is precisely the race the
+     flag exists to remove, so a caller meaning "continue the conversation"
+     must activate and one meaning "continue *my* chain" must name the
+     link.
+   - Graded by the conformance suite on both adapters (all three inheritance
+     cases, no-switch, and the rejection), plus a seeded random
+     walk that composes chain appends with branch appends and switches and
+     re-checks the whole shape invariant after every step
+     (`packages/testing/src/conversation-tree-driver.ts`).
 
 ## Alternatives considered
 
@@ -173,20 +237,23 @@ file:line:
 - A chat nobody has branched behaves byte-identically to before this ADR:
   `listMessages`, `afterOrderKey` paging, and `submitMessage` without
   `parentMessageId` are unchanged in shape and behavior.
-- **Known follow-up: a fork replays in source order, not run-repaired
-  order.** `orderMessagesForProvider`
-  (`packages/host/src/turn/message-order.ts`) only applies its
-  provider-legal reordering (internal assistant turn → tool results →
-  visible answer) to records that share a `runId`; stripping `runId` on
-  every copied message during a fork means that grouping condition never
-  matches on a forked chat's history, so replay falls back to plain
-  `orderKey` order — which is exactly the order the messages were written
-  in the source chat. This is **provider-legal** (a forked chat has no
-  `internal`/tool-call interleaving left to repair — those records, if
-  present, were already written in the right relative order in the source)
-  but **semantically odd**: a fork loses the mechanism that would let it
-  independently reorder its own history if it ever needed to. Revisit if a
-  fork ever needs its own run-rank repair independent of its source.
+- **A fork's STORED order is provider order — the repair happens once, at
+  copy time.** `orderMessagesForProvider`
+  (`packages/host/src/turn/message-order.ts`) applies its provider-legal
+  reordering (internal assistant turn → tool results → visible answer) only
+  to records that share a `runId`, and a fork strips `runId` from every
+  copy — so a forked chat has *nothing left to repair itself with*. The
+  source order it would otherwise inherit is **not** already correct, which
+  an earlier draft of this ADR wrongly asserted: the visible answer is
+  created FIRST, as an empty placeholder at submit time, so it carries a
+  *lower* `orderKey` than the internal assistant turn and the tool results
+  that produced it. A verbatim copy therefore replays the answer before the
+  tool call that produced it — permanently, since the fork can never
+  re-derive the grouping. `forkPrefixOf` (`message-tree.ts`) consequently
+  runs the prefix through `orderMessagesForProvider` **before** flattening,
+  so `depth`, `orderKey` and the parent chain are all assigned on the
+  repaired sequence and the copy is provider-legal by construction. Graded
+  in `fork-conformance.ts` on both adapters.
 - The sqlite reference adapter moves to `SCHEMA_V4`
   (`parent_message_id`, `depth`, `branch_index`, `active` on `messages`,
   plus the two indexes the active-path and sibling reads want); no
@@ -197,6 +264,6 @@ file:line:
 ## Out of scope (deliberate)
 
 Branch/chat archiving and deletion; concurrent generation across branches of
-one chat (`scopeId` stays chat-scoped); repairing a fork's provider-facing
-order independent of its source (the known follow-up above); message
-search and forward-paging past the active path (P5b); attachments (P5c).
+one chat (`scopeId` stays chat-scoped); a cursor that can page across a branch
+switch (see decision 2 — clients re-list instead); message search and
+forward-paging past the active path (P5b); attachments (P5c).

@@ -77,12 +77,18 @@ event in every committed trace against `AiRunEventSchema`.
 pass. It is framework-neutral by design: it takes `describe`/`it`/`expect`
 (and an optional `beforeEach`) as injected parameters rather than importing
 a test runner, so it works under `bun:test` or anything else with a
-Jest-style `expect` API. It calls two conversation-tree sub-suites internally
+Jest-style `expect` API. It calls three conversation-tree sub-suites internally
 (split into their own files, not separately exported): `conversation-conformance.ts`'s
-`describeConversationBranching` (branch creation, `activatePath`'s
-ancestor/active-descendant walk, `listSiblings`) and `fork-conformance.ts`'s
-`describeConversationForking` (`forkChat`'s copy semantics, invalid-fork-point
-rejection, post-fork independence) — see [ADR
+`describeConversationBranching` (branch creation, chain appends, `activatePath`'s
+ancestor/active-descendant walk and the path it returns, `listSiblings`),
+`fork-conformance.ts`'s `describeConversationForking` (`forkChat`'s copy
+semantics — including the provider-order repair the copy is written in —
+invalid-fork-point rejection, post-fork independence), and
+`conversation-tree-driver.ts`'s `describeConversationTreeInvariants`: five
+seeded random walks of 60 mixed append/branch/chain/switch steps that re-assert
+the whole shape invariant (one root-to-childless-leaf active chain, agreeing
+`depth` and `orderKey`, `listMessages` = that chain) after **every** step. A
+failure names the seed and the step to replay. See [ADR
 0007](../../docs/adr/0007-conversation-branching-fork.md).
 
 ```ts

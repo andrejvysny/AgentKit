@@ -24,6 +24,8 @@ import {
   activePathOf,
   forkedChatTitle,
   forkPrefixOf,
+  assertAppendActivation,
+  hasActiveChild,
   nextBranchIndex,
   planForkedMessages,
   siblingsOf,
@@ -120,6 +122,7 @@ export function createTestIds(): IdGenerator {
     proposalId: () => next("prp"),
     operationId: () => next("op"),
     messageId: () => next("msg"),
+    chatId: () => next("chat"),
   };
 }
 
@@ -155,6 +158,7 @@ export class FakeConversationStore implements ConversationStore {
   }
 
   async appendMessage(input: AppendMessageInput): Promise<MessageRecord> {
+    assertAppendActivation(input);
     const orderKey = (this.orderKeys.get(input.chatId) ?? 0) + 1;
     this.orderKeys.set(input.chatId, orderKey);
     const list = this.chatMessages(input.chatId);
@@ -163,6 +167,9 @@ export class FakeConversationStore implements ConversationStore {
         ? activeLeafOf(list)
         : this.requireParent(input.chatId, input.parentMessageId);
     const parentId = parent?.id;
+    // A chain append inherits its parent's flag and moves no path — see
+    // `AppendMessageInput.activate`.
+    const chained = input.activate === false;
     const record: MessageRecord = {
       id: input.id ?? this.ids.messageId(),
       chatId: input.chatId,
@@ -180,12 +187,18 @@ export class FakeConversationStore implements ConversationStore {
       ...(parentId === undefined ? {} : { parentMessageId: parentId }),
       depth: parent === undefined ? 0 : parent.depth + 1,
       branchIndex: nextBranchIndex(list, parentId),
-      active: true,
+      // A chain append inherits `active` only from a parent that is active AND
+      // still the end of the live chain — see the port's `activate`.
+      active: chained
+        ? parent !== undefined &&
+          parent.active &&
+          !hasActiveChild(list, parent.id)
+        : true,
       metadata: input.metadata ?? {},
       createdAt: this.clock.nowIso(),
     };
     this.messages.push(record);
-    this.applyActivation(input.chatId, record.id);
+    if (!chained) this.applyActivation(input.chatId, record.id);
     return record;
   }
 
@@ -251,9 +264,10 @@ export class FakeConversationStore implements ConversationStore {
     return siblingsOf(this.chatMessages(record.chatId), record);
   }
 
-  async activatePath(messageId: string): Promise<void> {
+  async activatePath(messageId: string): Promise<MessageRecord[]> {
     const record = this.requireMessage(messageId);
     this.applyActivation(record.chatId, messageId);
+    return activePathOf(this.chatMessages(record.chatId));
   }
 
   async forkChat(

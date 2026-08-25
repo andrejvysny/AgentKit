@@ -158,6 +158,21 @@ interface PassState {
   /** Internal assistant record awaiting its tool calls (see `projectEvent`). */
   pendingAssistantMessageId?: string;
   pendingToolCalls: AiToolCall[];
+  /**
+   * The last message THIS RUN wrote — the link every further append chains off.
+   *
+   * Seeded with the placeholder, so the run's records descend from the answer
+   * they belong to, and carried across passes because a retry continues the
+   * same conversation branch rather than starting a second one.
+   *
+   * It exists because "the chat's active leaf" is not a stable answer for the
+   * duration of a turn: a user may switch branches between two of these
+   * writes, and an append that took the leaf would put the second half of this
+   * run's records on a conversation that never ran them — while leaving this
+   * run's own branch with tool calls nobody answered. Naming the link removes
+   * the race rather than narrowing it. See `AppendMessageInput.activate`.
+   */
+  lastMessageId: string;
 }
 
 interface PassInput {
@@ -493,6 +508,7 @@ export class TurnRunner implements TaskWorker {
       streamed: false,
       toolCallIds: new Set<string>(),
       pendingToolCalls: [],
+      lastMessageId: assistantMessageId,
     };
     const basePass = {
       task,
@@ -575,13 +591,17 @@ export class TurnRunner implements TaskWorker {
         "emulated_tool_call",
         EMULATED_TOOL_CALL_MESSAGE,
       );
-      await store.conversations.appendMessage({
-        chatId,
-        runId: task.taskId,
-        role: "system",
-        content: EMULATED_TOOL_CALL_MESSAGE,
-        metadata: { banner: "emulated_tool_call" },
-      });
+      state.lastMessageId = (
+        await store.conversations.appendMessage({
+          chatId,
+          runId: task.taskId,
+          role: "system",
+          content: EMULATED_TOOL_CALL_MESSAGE,
+          parentMessageId: state.lastMessageId,
+          activate: false,
+          metadata: { banner: "emulated_tool_call" },
+        })
+      ).id;
     }
 
     // Verification runs once, and only when the turn actually did tool work —
@@ -600,13 +620,17 @@ export class TurnRunner implements TaskWorker {
         signal: ctx.signal,
       });
       if (report && report.status !== "pass") {
-        await store.conversations.appendMessage({
-          chatId,
-          runId: task.taskId,
-          role: "system",
-          content: describeDeficiencies(report.deficiencies),
-          metadata: { banner: "verification", status: report.status },
-        });
+        state.lastMessageId = (
+          await store.conversations.appendMessage({
+            chatId,
+            runId: task.taskId,
+            role: "system",
+            content: describeDeficiencies(report.deficiencies),
+            parentMessageId: state.lastMessageId,
+            activate: false,
+            metadata: { banner: "verification", status: report.status },
+          })
+        ).id;
       }
     }
 
@@ -678,6 +702,13 @@ export class TurnRunner implements TaskWorker {
    *
    * The log is written FIRST and unconditionally: it is the record of what
    * happened, and a projection failure must not be able to erase it.
+   *
+   * Every message this writes is a CHAIN append — `parentMessageId` is the id
+   * this run wrote last, `activate: false` — so the records land on the run's
+   * own branch whatever the user has been doing to the active path meanwhile.
+   * With no branch switch that is byte-identically what an unparented append
+   * produced: the run's last write IS the active leaf, so the chain and the
+   * path are the same messages. See {@link PassState.lastMessageId}.
    */
   private async projectEvent(
     event: AiRunEvent,
@@ -711,8 +742,11 @@ export class TurnRunner implements TaskWorker {
             role: "assistant",
             content: event.data.content,
             toolCalls,
+            parentMessageId: state.lastMessageId,
+            activate: false,
             metadata: { internal: true },
           });
+          state.lastMessageId = record.id;
           for (const call of toolCalls) state.toolCallIds.add(call.id);
           if (toolCalls.length === 0) {
             // A streaming provider reports the COUNT here and the calls
@@ -752,15 +786,19 @@ export class TurnRunner implements TaskWorker {
         // this record is replayed into the model's context on every later turn.
         // The full payload stays on the event, where the UI can read it once.
         const slim = event.data.modelResultJson ?? event.data.resultJson;
-        await store.conversations.appendMessage({
-          chatId,
-          runId: task.taskId,
-          role: "tool",
-          content: slim,
-          toolCallId: event.data.toolCallId,
-          modelResultJson: slim,
-          metadata: { internal: true, toolName: event.data.toolName },
-        });
+        state.lastMessageId = (
+          await store.conversations.appendMessage({
+            chatId,
+            runId: task.taskId,
+            role: "tool",
+            content: slim,
+            toolCallId: event.data.toolCallId,
+            modelResultJson: slim,
+            parentMessageId: state.lastMessageId,
+            activate: false,
+            metadata: { internal: true, toolName: event.data.toolName },
+          })
+        ).id;
         break;
       }
       case "run.tool.failed": {
@@ -777,15 +815,19 @@ export class TurnRunner implements TaskWorker {
               errorMessage: event.data.errorMessage,
             },
           });
-        await store.conversations.appendMessage({
-          chatId,
-          runId: task.taskId,
-          role: "tool",
-          content: slim,
-          toolCallId: event.data.toolCallId,
-          modelResultJson: slim,
-          metadata: { internal: true, toolName: event.data.toolName },
-        });
+        state.lastMessageId = (
+          await store.conversations.appendMessage({
+            chatId,
+            runId: task.taskId,
+            role: "tool",
+            content: slim,
+            toolCallId: event.data.toolCallId,
+            modelResultJson: slim,
+            parentMessageId: state.lastMessageId,
+            activate: false,
+            metadata: { internal: true, toolName: event.data.toolName },
+          })
+        ).id;
         break;
       }
       default:

@@ -14,8 +14,12 @@
  * `await` — so a helper that returned a promise would be a helper no adapter
  * could use where it matters.
  */
-import { InvalidForkPointError } from "../errors.js";
-import type { MessageRecord } from "../ports/conversation-store.js";
+import { AgentKitHostError, InvalidForkPointError } from "../errors.js";
+import type {
+  AppendMessageInput,
+  MessageRecord,
+} from "../ports/conversation-store.js";
+import { orderMessagesForProvider } from "../turn/message-order.js";
 
 /** `metadata` key marking an answer still streaming; never copied by a fork. */
 const PLACEHOLDER_KEY = "placeholder";
@@ -77,6 +81,30 @@ export function nextBranchIndex(
   return siblings.reduce((max, s) => Math.max(max, s.branchIndex + 1), 0);
 }
 
+/**
+ * Whether this parent already has a child on the active path.
+ *
+ * The one extra fact a CHAIN append needs (see
+ * {@link AppendMessageInput.activate}): a chain may only inherit `active: true`
+ * from a parent that is the END of the live chain. A parent that is active and
+ * already has an active child has been continued by someone else — a bare
+ * `appendMessage` from another caller landing between two of a run's writes —
+ * and inheriting there would give the chat two active children of one message,
+ * which is not a path.
+ *
+ * The sqlite adapter answers the same question in SQL, folded into the query
+ * that already computes the next `branchIndex` over the same index; this is the
+ * definition both are written against.
+ */
+export function hasActiveChild(
+  records: readonly MessageRecord[],
+  parentMessageId: string | undefined,
+): boolean {
+  return records.some(
+    (record) => record.parentMessageId === parentMessageId && record.active,
+  );
+}
+
 /** A message's siblings, itself included, in `branchIndex` order. */
 export function siblingsOf(
   records: readonly MessageRecord[],
@@ -90,9 +118,14 @@ export function siblingsOf(
  * chat's path: its ancestors, itself, and a descent from it to a leaf.
  *
  * The descent prefers a child that is ALREADY active and falls back to the
- * lowest `branchIndex` — so switching to a branch you were reading returns you
- * to where you left it, and switching to one you have never opened starts at its
- * first answer. Anything in the chat outside the returned set is inactive
+ * lowest `branchIndex`. The preference only has something to prefer when
+ * `messageId` is ALREADY on the live path — re-activating an ancestor of where
+ * the conversation is walks back down the branch it is on, rather than
+ * resetting it to that branch's first answer. It is NOT a bookmark that
+ * survives leaving: the caller clears every flag outside this set in the same
+ * transaction, so a branch switched away from has nothing marked active left,
+ * and coming back to it later descends by lowest `branchIndex` whatever was
+ * open before. Anything in the chat outside the returned set is inactive
  * afterwards; the caller writes that difference in one transaction.
  *
  * A cycle in `parentMessageId` (impossible through this port, reachable only
@@ -125,8 +158,29 @@ export function activationSetOf(
 }
 
 /**
+ * Reject an append that opted out of activating without saying what to chain
+ * off — {@link AppendMessageInput.activate}'s one illegal combination.
+ *
+ * Shared rather than re-decided per adapter for the reason everything else in
+ * this module is: "which appends are legal" is behaviour, and an adapter that
+ * quietly accepted `activate: false` with no parent would have to invent a
+ * parent to attach the record to — the active leaf, which is precisely the
+ * race the flag exists to remove.
+ */
+export function assertAppendActivation(
+  input: Pick<AppendMessageInput, "activate" | "parentMessageId">,
+): void {
+  if (input.activate === false && input.parentMessageId === undefined) {
+    throw new AgentKitHostError(
+      "invalid_append",
+      "appendMessage with activate: false must name the parentMessageId to chain off.",
+    );
+  }
+}
+
+/**
  * The active path up to and including `fromMessageId` — the messages a fork
- * copies — with a placeholder answer dropped.
+ * copies — with a placeholder answer dropped, in PROVIDER order.
  *
  * `records` is ONE chat's messages, so the two ways to be an illegal fork point
  * collapse to two honest reasons: `not_in_chat` (an id this chat does not have,
@@ -158,9 +212,20 @@ export function forkPrefixOf(
   // The placeholder filter runs AFTER the cut, not before: a fork FROM a
   // still-streaming answer is a legal request (the user forks the moment they
   // see the question they meant to ask), it just copies everything above it.
-  return path
+  const prefix = path
     .slice(0, cut + 1)
     .filter((record) => record.metadata[PLACEHOLDER_KEY] !== true);
+  // REPAIRED BEFORE COPYING, not after. A source chat stores its turns in the
+  // order they were written — the visible answer first, as an empty
+  // placeholder created at submit time, then the internal assistant turn and
+  // its tool results underneath it — and only `runId` tells a later replay how
+  // to put those three back into the order a provider accepts. A fork strips
+  // `runId` (the runs stay with the source's task log), so whatever order the
+  // copies are written in is the order the fork replays FOREVER. Doing the
+  // repair here is what makes the fork's stored order already BE provider
+  // order, instead of leaving a chat that hands the model a tool result before
+  // the turn that asked for it.
+  return orderMessagesForProvider(prefix);
 }
 
 /** One copied message, with everything the source no longer gets to decide. */

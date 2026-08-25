@@ -202,7 +202,13 @@ contract fails this package's compile until it is served.
   the store's `orderKey`); a cursor this server did not issue is a 400, not a
   silent page one. The page covers the chat's **active path**, not every message
   ever written to it — a chat nobody has branched has exactly one path, so this
-  is unchanged for a linear conversation.
+  is unchanged for a linear conversation. The cursor is a position **within one
+  path**: it pages forward correctly for as long as the chat stays on the branch
+  it was issued on, but a branch switch (this client's or another's) can make the
+  live path one whose positions are all *behind* the cursor, and the next page
+  comes back empty rather than reporting the new conversation. A client that can
+  switch branches must notice the path changed — compare the last item's `id`
+  between reads — and re-list from the start instead of continuing the cursor.
 - **`POST /v1/chats/:chatId/messages` with `parentMessageId`** — submits the turn
   as a new branch under that message (edit-and-regenerate) instead of appending
   to the end. A parent that is unknown or in another chat is a 404, checked
@@ -215,7 +221,11 @@ contract fails this package's compile until it is served.
   chat that does not exist is a 404.
 - **`POST /v1/messages/:messageId/activate`** — makes that message's branch the
   active path and answers with the path itself (a `MessagePageDto`, no cursor),
-  so a branch switch is one round trip rather than an ack plus a re-read.
+  so a branch switch is one round trip rather than an ack plus a re-read. The
+  body is what `ConversationStore.activatePath` returned from inside its own
+  transaction, not a `listMessages` after it: a read-back could report a path a
+  concurrent append had already moved on from. An unknown message is the store's
+  `not_found` → 404, with no pre-flight existence check here.
 - **`GET /v1/messages/:messageId/siblings`** — the message's siblings *including
   itself*, `branchIndex` ascending, as a bare `MessageDto[]`. Self-inclusive
   because "which answers exist here, and which am I reading?" is one question.

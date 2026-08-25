@@ -14,7 +14,11 @@ import {
   type TaskEventEnvelope,
 } from "@agentkit/contracts";
 import { MemoryAssistantStore } from "@agentkit/reference-adapters";
-import { DEFAULT_STREAM_OPTIONS, type RestStreamOptions } from "../src/deps.js";
+import {
+  DEFAULT_STREAM_OPTIONS,
+  resolveStreamOptions,
+  type RestStreamOptions,
+} from "../src/deps.js";
 import { createRunEventStream, resolveStartSeq } from "../src/sse.js";
 
 const TASK_ID = "task-stream";
@@ -294,5 +298,28 @@ describe("createRunEventStream", () => {
       "evt-3",
       "evt-4",
     ]);
+  });
+});
+
+describe("resolveStreamOptions", () => {
+  it("falls back to the default for a readBatchSize that is not a finite number", () => {
+    // The value a host parsed out of a config string and never checked.
+    // `Math.max(1, NaN)` is `NaN`, so a clamp alone would pass it straight
+    // through and every log read would ask the store for `LIMIT NaN`.
+    expect(
+      resolveStreamOptions({ readBatchSize: Number.NaN }).readBatchSize,
+    ).toBe(DEFAULT_STREAM_OPTIONS.readBatchSize);
+    expect(
+      resolveStreamOptions({ readBatchSize: Number.POSITIVE_INFINITY })
+        .readBatchSize,
+    ).toBe(DEFAULT_STREAM_OPTIONS.readBatchSize);
+    // The finite nonsense still clamps rather than falling back: a caller who
+    // asked for zero asked for a number, just not a usable one.
+    expect(resolveStreamOptions({ readBatchSize: 0 }).readBatchSize).toBe(1);
+    expect(resolveStreamOptions({ readBatchSize: -8 }).readBatchSize).toBe(1);
+    expect(resolveStreamOptions({ readBatchSize: 7.9 }).readBatchSize).toBe(7);
+    expect(resolveStreamOptions().readBatchSize).toBe(
+      DEFAULT_STREAM_OPTIONS.readBatchSize,
+    );
   });
 });

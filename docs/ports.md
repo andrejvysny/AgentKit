@@ -59,9 +59,15 @@ instead of a walk. A child's `orderKey` is always greater than its
 parent's, so `depth` and `orderKey` agree along any root-to-leaf chain —
 which is why `(depth, orderKey)` ordering and plain `orderKey` ordering are
 the same order on the active path, and `listMessages`' `afterOrderKey`
-cursor keeps paging correctly through a branched chat. A chat nobody has
-branched is the degenerate case: `branchIndex: 0` and `active: true`
-throughout, `listMessages` byte-identical to before branching existed.
+cursor keeps paging correctly **within one path**. It is a cursor into a
+path, not into a chat: after a switch to an older branch, every key on the
+live path is *below* a cursor taken on the branch just left, so the next
+page reads empty rather than reporting a different conversation. A client
+that can switch branches must notice the path changed — comparing the
+active leaf's id between reads is the cheap way — and re-list instead of
+continuing the cursor. A chat nobody has branched is the degenerate case:
+`branchIndex: 0` and `active: true` throughout, `listMessages`
+byte-identical to before branching existed.
 
 **Tree operations**, all invariant-preserving and never left to a caller:
 
@@ -72,17 +78,36 @@ throughout, `listMessages` byte-identical to before branching existed.
   is **active immediately, with the whole path switched to it in the same
   write** — append-and-activate is one atomic operation, not two, so there
   is no window in which the branch exists but nothing is active.
+- `appendMessage`'s `activate` (optional, default `true`) suppresses that
+  switch. `activate: false` **requires** `parentMessageId` and is a **chain
+  append**: `branchIndex` assigned as usual, `active` *inherited from the
+  parent*, no path switch. It exists for a run writing the records of the
+  turn it is already executing (`TurnRunner` chains every internal
+  assistant record, tool result and banner off the id it wrote last, seeded
+  with the placeholder), so a user switching branches mid-run cannot pull
+  the second half of that turn onto a conversation that never ran it — nor
+  strand the run's own branch with tool calls nobody answered. The inherited
+  flag is a rule, not a copy: `active` is true only when the parent is active
+  *and still the end of the live chain*. Chaining off the active leaf extends
+  that chain; chaining off an inactive node touches no flag anywhere; chaining
+  off an active parent that something else has already continued goes off-path,
+  because one message with two active children is not a path. `activate: false`
+  with no parent is `invalid_append`. See ADR 0007 decision 7.
 - `listSiblings(messageId)` — the messages sharing a message's parent,
   itself included, `branchIndex` ascending (a root's siblings are the
   chat's roots).
 - `activatePath(messageId)` — makes a message's path the chat's active one,
-  atomically: its ancestors, itself, and a descent to a leaf that prefers
-  an already-active child at each step, falling back to the lowest
+  atomically, and **returns that path** (what `listMessages` would answer
+  next): its ancestors, itself, and a descent to a leaf that prefers an
+  already-active child at each step, falling back to the lowest
   `branchIndex` when none is. That preference only has something to prefer
   when the node being activated is already on the current active path —
   switching *away* from a branch clears every descendant's `active` flag in
   that same transaction, so switching back to it later does not "remember"
-  which child was showing; it falls back to the lowest `branchIndex`.
+  which child was showing; it falls back to the lowest `branchIndex`. The
+  path is returned rather than re-read because the switch already computed
+  it, and a read-back would happen *outside* the transaction that wrote the
+  flags.
 - `forkChat(chatId, fromMessageId)` — copies the active path up to and
   including `fromMessageId` into a **new** chat, in one transaction.
   `fromMessageId` must be on the source chat's active path or this raises
@@ -90,10 +115,12 @@ throughout, `listMessages` byte-identical to before branching existed.
   (fresh ids, `branchIndex` reset to `0`, `depth` recounted `0..n`,
   everything active) and strips `runId` and any `metadata.placeholder:
   true` message, while keeping `internal: true` records so the fork can
-  still replay tool calls to the provider. See ADR 0007 for the full
-  rationale, including the known follow-up (a fork's history replays in
-  source order, since stripping `runId` disables `orderMessagesForProvider`'s
-  run-scoped reordering).
+  still replay tool calls to the provider. The prefix is run through
+  `orderMessagesForProvider` **before** it is flattened, so the copy's
+  stored order already *is* provider order — stripping `runId` leaves the
+  fork with no way to repair that ordering later, and a source chat writes
+  its visible answer (as an empty placeholder) *before* the internal turn
+  and tool results that produced it. See ADR 0007 for the full rationale.
 
 **Key invariants**: `appendMessage` assigns the next `orderKey` in the store,
 not the caller, so concurrent appends from a run and from a user land in a
@@ -105,6 +132,14 @@ written — branching creates a new message instead of moving one).
 `activatePath` and `forkChat` are both transactional — a half-applied
 branch switch or a partially-copied fork is not an allowed intermediate
 state a reader can observe.
+
+**Key invariant, tree side**: the active messages of a chat form exactly one
+chain from a root to a *childless* leaf, after every operation and every
+sequence of them. Graded twice: by the named branching tests, and by a seeded
+random walk (`packages/testing/src/conversation-tree-driver.ts`) that composes
+appends, branch appends, chain appends and switches at random and re-checks the
+whole shape — links, depths, rising `orderKey`, childless leaf — after every
+single step, on both reference adapters.
 
 **Reference / conformance**: `MemoryAssistantStore` and `SqliteAssistantStore`
 (sqlite adapter: `SCHEMA_V4`, `parent_message_id`/`depth`/`branch_index`/
@@ -497,8 +532,10 @@ must still be recorded, so the next authorization can refuse.
 [`ports/system.ts`](../packages/host/src/ports/system.ts)
 
 `Clock` (`now()`/`nowIso()`), `IdGenerator` (one method per entity kind —
-`taskId`, `attemptId`, `eventId`, `proposalId`, `operationId`, `messageId`
-— so a fake can hand out readable per-kind sequences), and `Logger`
+`taskId`, `attemptId`, `eventId`, `proposalId`, `operationId`, `messageId`,
+`chatId` — so a fake can hand out readable per-kind sequences, and so a
+`createChat`/`forkChat` that mints an id mints it through the same seam), and
+`Logger`
 (structured: `fields` is a flat bag, not a formatted string). Ports rather
 than direct `Date`/`crypto`/`console` calls because the orchestrator's
 correctness is defined in terms of them — lease expiry, idempotency keys,

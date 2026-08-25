@@ -32,6 +32,17 @@ export interface IdGenerator {
    */
   operationId(): string;
   messageId(): string;
+  /**
+   * A new conversation's id — minted for a `createChat` that named none, and
+   * for the chat a `forkChat` writes.
+   *
+   * Here rather than left to the adapter's own `crypto.randomUUID()` call for
+   * the same reason every other kind is: a test that cannot pin the id a fork
+   * lands on cannot assert anything about it without reading the store back
+   * first, and two adapters minting chat ids two different ways is a
+   * difference the conformance suite has no way to see.
+   */
+  chatId(): string;
 }
 
 /** Structured logging. `fields` is a flat bag, not a formatted string. */
@@ -66,4 +77,5 @@ export const defaultIds: IdGenerator = {
   proposalId: () => `prp_${crypto.randomUUID()}`,
   operationId: () => `op_${crypto.randomUUID()}`,
   messageId: () => `msg_${crypto.randomUUID()}`,
+  chatId: () => `chat_${crypto.randomUUID()}`,
 };

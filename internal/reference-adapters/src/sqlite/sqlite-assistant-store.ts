@@ -24,6 +24,8 @@ import type {
 } from "@agentkit/contracts";
 import {
   activationSetOf,
+  activePathOf,
+  assertAppendActivation,
   AgentKitHostError,
   DuplicateActionIdError,
   DuplicateTaskError,
@@ -754,7 +756,7 @@ class SqliteConversationStore implements ConversationStore {
 
   async createChat(input: CreateChatInput): Promise<ChatRecord> {
     const now = this.clock.nowIso();
-    const id = input.id ?? `chat_${crypto.randomUUID()}`;
+    const id = input.id ?? this.ids.chatId();
     const metadata = input.metadata ?? {};
     this.conn.run(
       `INSERT INTO chats (id, title, created_at, updated_at, metadata)
@@ -808,6 +810,7 @@ class SqliteConversationStore implements ConversationStore {
    * append a non-branching caller makes — is never.
    */
   async appendMessage(input: AppendMessageInput): Promise<MessageRecord> {
+    assertAppendActivation(input);
     return this.conn.withTx(() => {
       const chat = this.conn.get(`SELECT id FROM chats WHERE id = $id`, {
         $id: input.chatId,
@@ -823,16 +826,31 @@ class SqliteConversationStore implements ConversationStore {
           ? leaf
           : this.requireParentRow(input.chatId, input.parentMessageId);
       const parentId = parent === null ? null : parent.id;
+      // A CHAIN append moves no path and takes its `active` from the parent
+      // instead. `assertAppendActivation` has already proved a parent was
+      // named, so `parent` is non-null here whenever this is true.
+      const chained = input.activate === false;
       const maxRow = this.conn.get(
         `SELECT COALESCE(MAX(order_key), 0) as maxKey FROM messages WHERE chat_id = $chatId`,
         { $chatId: input.chatId },
       ) as { maxKey: number };
       const orderKey = maxRow.maxKey + 1;
+      // Both facts about this parent's children in one indexed pass over
+      // `idx_messages_parent`: the next branch index, and whether one of them
+      // is already on the live path. The second is what a CHAIN append needs —
+      // it may inherit `active: true` only from a parent that is still the END
+      // of the live chain (see `hasActiveChild` and the port's `activate`), or
+      // one message would end up with two active children.
       const branchRow = this.conn.get(
-        `SELECT COALESCE(MAX(branch_index) + 1, 0) as nextIndex FROM messages
+        `SELECT COALESCE(MAX(branch_index) + 1, 0) as nextIndex,
+                COALESCE(MAX(active), 0) as hasActiveChild
+         FROM messages
          WHERE chat_id = $chatId AND parent_message_id IS $parentId`,
         { $chatId: input.chatId, $parentId: parentId },
-      ) as { nextIndex: number };
+      ) as { nextIndex: number; hasActiveChild: number };
+      const active = chained
+        ? parent !== null && parent.active && branchRow.hasActiveChild === 0
+        : true;
       const id = input.id ?? this.ids.messageId();
       const now = this.clock.nowIso();
       const metadata = input.metadata ?? {};
@@ -841,7 +859,7 @@ class SqliteConversationStore implements ConversationStore {
         `INSERT INTO messages
            (id, chat_id, run_id, role, content, order_key, tool_call_id, tool_calls, model_result_json, parent_message_id, depth, branch_index, active, metadata, created_at)
          VALUES
-           ($id, $chatId, $runId, $role, $content, $orderKey, $toolCallId, $toolCalls, $modelResultJson, $parentId, $depth, $branchIndex, 1, $metadata, $now)`,
+           ($id, $chatId, $runId, $role, $content, $orderKey, $toolCallId, $toolCalls, $modelResultJson, $parentId, $depth, $branchIndex, $active, $metadata, $now)`,
         {
           $id: id,
           $chatId: input.chatId,
@@ -856,6 +874,7 @@ class SqliteConversationStore implements ConversationStore {
           $parentId: parentId,
           $depth: depth,
           $branchIndex: branchRow.nextIndex,
+          $active: toIntBool(active),
           $metadata: toJson(metadata),
           $now: now,
         },
@@ -866,7 +885,9 @@ class SqliteConversationStore implements ConversationStore {
       // switch anyway would mean reading the whole chat on every streamed tool
       // result to write the flags back unchanged.
       const parentIsActiveLeaf = (leaf === null ? null : leaf.id) === parentId;
-      if (!parentIsActiveLeaf) this.switchActivePath(input.chatId, id);
+      if (!chained && !parentIsActiveLeaf) {
+        this.switchActivePath(input.chatId, id);
+      }
       this.conn.run(`UPDATE chats SET updated_at = $now WHERE id = $chatId`, {
         $now: now,
         $chatId: input.chatId,
@@ -890,7 +911,7 @@ class SqliteConversationStore implements ConversationStore {
         ...(parentId === null ? {} : { parentMessageId: parentId }),
         depth,
         branchIndex: branchRow.nextIndex,
-        active: true,
+        active,
         metadata,
         createdAt: now,
       };
@@ -940,8 +961,13 @@ class SqliteConversationStore implements ConversationStore {
    * left alone, so switching between two branches of a long conversation writes
    * the handful of rows that actually changed instead of every message in the
    * chat. Caller must already hold the transaction.
+   *
+   * Returns the path it just made live. The loaded records are re-flagged in
+   * memory as they are written, so the answer is `activePathOf` over the state
+   * this call produced — the same sort `listMessages` applies, without a second
+   * query and without leaving the transaction to ask.
    */
-  private switchActivePath(chatId: string, messageId: string): void {
+  private switchActivePath(chatId: string, messageId: string): MessageRecord[] {
     const records = this.chatMessages(chatId);
     const active = activationSetOf(records, messageId);
     for (const record of records) {
@@ -951,7 +977,9 @@ class SqliteConversationStore implements ConversationStore {
         $active: toIntBool(next),
         $id: record.id,
       });
+      record.active = next;
     }
+    return activePathOf(records);
   }
 
   async updateMessage(
@@ -1035,10 +1063,10 @@ class SqliteConversationStore implements ConversationStore {
     });
   }
 
-  async activatePath(messageId: string): Promise<void> {
-    this.conn.withTx(() => {
+  async activatePath(messageId: string): Promise<MessageRecord[]> {
+    return this.conn.withTx(() => {
       const record = this.requireMessage(messageId);
-      this.switchActivePath(record.chatId, messageId);
+      return this.switchActivePath(record.chatId, messageId);
     });
   }
 
@@ -1082,7 +1110,7 @@ class SqliteConversationStore implements ConversationStore {
       // that lost the conversation's own bookkeeping would be a different chat
       // rather than a copy of this one.
       const metadata = { ...source.metadata };
-      const forkId = `chat_${crypto.randomUUID()}`;
+      const forkId = this.ids.chatId();
       this.conn.run(
         `INSERT INTO chats (id, title, created_at, updated_at, metadata)
          VALUES ($id, $title, $now, $now, $metadata)`,

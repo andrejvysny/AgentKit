@@ -46,6 +46,8 @@ import {
   evaluateTaskDependencies,
   forkedChatTitle,
   forkPrefixOf,
+  assertAppendActivation,
+  hasActiveChild,
   nextBranchIndex,
   planForkedMessages,
   siblingsOf,
@@ -145,7 +147,7 @@ export class MemoryConversationStore implements ConversationStore {
   async createChat(input: CreateChatInput): Promise<ChatRecord> {
     const now = this.clock.nowIso();
     const chat: ChatRecord = {
-      id: input.id ?? `chat_${crypto.randomUUID()}`,
+      id: input.id ?? this.ids.chatId(),
       ...(input.title === undefined ? {} : { title: input.title }),
       createdAt: now,
       updatedAt: now,
@@ -177,6 +179,7 @@ export class MemoryConversationStore implements ConversationStore {
   }
 
   async appendMessage(input: AppendMessageInput): Promise<MessageRecord> {
+    assertAppendActivation(input);
     const chat = this.chats.get(input.chatId);
     if (chat === undefined) {
       throw new RecordNotFoundError(`Chat not found: ${input.chatId}`);
@@ -189,6 +192,10 @@ export class MemoryConversationStore implements ConversationStore {
         ? activeLeafOf(list)
         : this.requireParent(input.chatId, input.parentMessageId);
     const parentId = parent?.id;
+    // A CHAIN append: place the record and stop. `assertAppendActivation` has
+    // already proved a parent was named, so the flag comes from a message the
+    // caller pointed at rather than from whichever branch happens to be live.
+    const chained = input.activate === false;
     const orderKey = (this.orderKeys.get(input.chatId) ?? 0) + 1;
     const now = this.clock.nowIso();
     const record: MessageRecord = {
@@ -210,7 +217,7 @@ export class MemoryConversationStore implements ConversationStore {
       // Computed BEFORE the push, or the record would count itself as its own
       // sibling and every append would land on index 1.
       branchIndex: nextBranchIndex(list, parentId),
-      active: true,
+      active: chained ? chainedActive(list, parent) : true,
       metadata: input.metadata ?? {},
       createdAt: now,
     };
@@ -222,8 +229,10 @@ export class MemoryConversationStore implements ConversationStore {
     // append-to-the-active-leaf path the new record is the leaf's only active
     // descendant, so the computed set is the old path plus this record and every
     // flag it writes is the flag already there — the same answer, by the same
-    // code, which is one fewer special case to get wrong.
-    applyActivation(list, record.id);
+    // code, which is one fewer special case to get wrong. A chain append is the
+    // one caller that skips it: it inherited its flag from its parent and is
+    // explicitly not asking for the path to move.
+    if (!chained) applyActivation(list, record.id);
     chat.updatedAt = now;
     return { ...record };
   }
@@ -277,9 +286,14 @@ export class MemoryConversationStore implements ConversationStore {
     return siblingsOf(list, record).map((m) => ({ ...m }));
   }
 
-  async activatePath(messageId: string): Promise<void> {
+  async activatePath(messageId: string): Promise<MessageRecord[]> {
     const record = this.requireMessage(messageId);
-    applyActivation(this.messagesByChat.get(record.chatId) ?? [], messageId);
+    const list = this.messagesByChat.get(record.chatId) ?? [];
+    applyActivation(list, messageId);
+    // Read off the flags this call just wrote, in the same synchronous block —
+    // so what the caller gets back is the path as of the switch, not as of
+    // whenever it might have re-read the chat.
+    return activePathOf(list).map((m) => ({ ...m }));
   }
 
   /**
@@ -308,7 +322,7 @@ export class MemoryConversationStore implements ConversationStore {
     const now = this.clock.nowIso();
     const title = forkedChatTitle(source.title);
     const chat: ChatRecord = {
-      id: `chat_${crypto.randomUUID()}`,
+      id: this.ids.chatId(),
       ...(title === undefined ? {} : { title }),
       createdAt: now,
       updatedAt: now,
@@ -357,6 +371,19 @@ export class MemoryConversationStore implements ConversationStore {
     }
     return record;
   }
+}
+
+/**
+ * The `active` flag a CHAIN append inherits: true only when the parent is
+ * active AND still the end of the live chain — see the port's
+ * `AppendMessageInput.activate`.
+ */
+function chainedActive(
+  records: readonly MessageRecord[],
+  parent: MessageRecord | undefined,
+): boolean {
+  if (parent === undefined || !parent.active) return false;
+  return !hasActiveChild(records, parent.id);
 }
 
 /**
