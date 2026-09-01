@@ -39,6 +39,18 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const UMBRELLA_DIR = join(ROOT, "packages", "agentkit");
 
+/**
+ * The umbrella's one peer dependency, installed alongside the tarball.
+ *
+ * `agentkit/react` imports `react`, and the umbrella declares it as an OPTIONAL
+ * peer — optional because the other eleven subpaths have nothing to do with
+ * React and an installer that only wants `agentkit/host` should not be told it
+ * is missing something. Optional also means npm will NOT install it on its own,
+ * so a consumer that wants the hooks installs React itself; this is that
+ * consumer.
+ */
+const REACT_PEER = "react@^19.2.0";
+
 function readPkg(dir) {
   return JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
 }
@@ -91,6 +103,28 @@ check(
   clientPkg.runPhase({ status: "running", events: [{ type: "run.started" }] }) === "streaming",
   "runPhase derives streaming from the log",
 );
+
+// Imported, never rendered: there is no DOM and no react-dom here, and the
+// failure this guards against is import-time anyway — a JSX-runtime import the
+// build emitted, or a specifier the umbrella rewrite mangled on its way in.
+// \`react\` itself is the peer installed alongside the tarball.
+const reactPkg = await import("agentkit/react");
+console.log("agentkit/react");
+check(typeof reactPkg.AgentKitProvider === "function", "exports AgentKitProvider");
+check(typeof reactPkg.useChat === "function", "exports useChat");
+check(
+  ["useRun", "useBranches", "useProposals", "useProviders"].every(
+    (hook) => typeof reactPkg[hook] === "function",
+  ),
+  "exports the rest of the hooks",
+);
+const changeEmitter = reactPkg.createChangeEmitter();
+let emitterCalls = 0;
+const offEmitter = changeEmitter.subscribe(reactPkg.chatTopic("c1"), () => { emitterCalls += 1; });
+changeEmitter.emit(reactPkg.chatTopic("c1"));
+offEmitter();
+changeEmitter.emit(reactPkg.chatTopic("c1"));
+check(emitterCalls === 1, "the change emitter delivers once and unsubscribes");
 
 const core = await import("agentkit/core");
 console.log("agentkit/core");
@@ -310,7 +344,7 @@ function main() {
     });
     const npmInstalled = run(
       "npm",
-      ["install", tarballPath, "--no-audit", "--no-fund"],
+      ["install", tarballPath, REACT_PEER, "--no-audit", "--no-fund"],
       { cwd: npmProjectDir },
     );
     if (!npmInstalled.ok) {
@@ -337,7 +371,9 @@ function main() {
       version: "0.0.0",
       type: "module",
     });
-    const bunAdded = run("bun", ["add", tarballPath], { cwd: bunProjectDir });
+    const bunAdded = run("bun", ["add", tarballPath, REACT_PEER], {
+      cwd: bunProjectDir,
+    });
     if (!bunAdded.ok) {
       console.error(`bun add failed:\n${bunAdded.output}`);
       process.exit(1);

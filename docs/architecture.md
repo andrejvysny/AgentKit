@@ -26,6 +26,10 @@ packages/transport-http        @agentkit/transport-http (optional adapter)
 packages/client                @agentkit/client (optional adapter)
   the other end of that surface: typed REST v1 + SSE client, auto-resuming
   run streams, derived run phases; depends on contracts alone
+
+packages/react                 @agentkit/react (optional adapter)
+  headless React hooks over that client: optimistic submit, streamed
+  deltas, branch switching, proposals, providers; react is a peer
         │
         ▼  depends on
 --------------------------------------------------------------
@@ -183,6 +187,15 @@ always free to skip both and write the equivalent itself:
   `transport-http` rather than below it — it depends on `@agentkit/contracts`
   and nothing else, uses no Node built-in, and runs in a browser. See
   [`packages/client/README.md`](../packages/client/README.md).
+- **`@agentkit/react`** ([`packages/react/`](../packages/react)) — headless
+  hooks over that client: `useChat` (optimistic pair, streamed deltas
+  applied by the same rule the host's own projector uses, then a
+  `listMessages` reconcile at the terminal event), `useRun`, `useBranches`,
+  `useProposals`, `useProviders`, and one provider component carrying the
+  client plus a dependency-free invalidation bus. It sits BESIDE `client`
+  for the same reason `client` sits beside `transport-http`: no component,
+  no styling, no query cache, `react` as a peer dependency only. See
+  [`packages/react/README.md`](../packages/react/README.md).
 
 ## Event flow
 
