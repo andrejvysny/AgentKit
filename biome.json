@@ -60,7 +60,12 @@
   },
   "overrides": [
     {
-      "includes": ["packages/mcp-client/tests/**", "scripts/tests/**"],
+      "includes": [
+        "packages/mcp-client/tests/**",
+        "packages/testing/src/mcp-config-conformance.ts",
+        "packages/transport-http/tests/management.test.ts",
+        "scripts/tests/**"
+      ],
       "linter": {
         "rules": {
           "suspicious": {

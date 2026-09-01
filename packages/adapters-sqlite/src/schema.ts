@@ -1,5 +1,5 @@
 /**
- * v6 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
+ * v7 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
  * applied idempotently (every DDL statement is `CREATE ... IF NOT EXISTS`;
  * seed rows use `INSERT OR IGNORE`) so opening the same database twice, or
  * opening a database another process already initialized, is a no-op rather
@@ -15,6 +15,12 @@
  * - `proposals` / `proposal_outcomes` → `ProposalStore`
  * - `providers` / `provider_models` / `provider_capabilities` → `ProviderStore`
  * - `settings` → `SettingsStore` (single row, id = 1)
+ * - `mcp_servers` → `McpServerConfigStore` (`@agentkit/mcp-client`), served by
+ *   {@link SqliteMcpServerConfigStore} — a STANDALONE store over this same
+ *   database, not a member of the `AssistantStore` aggregate. The table lives
+ *   here anyway because the file is one database with one `user_version`, and a
+ *   second DDL string applied by a second constructor is a second thing that
+ *   can be forgotten.
  * - `outbox` → `OutboxStore`
  * - `fencing_counter` → NOT a port record. A single-row table backing the
  *   store-global monotonic fencing token `TaskStore.acquireLease` hands out;
@@ -34,10 +40,10 @@
  * stored as TEXT; the store (de)serializes them, SQLite never inspects their
  * contents.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /**
- * The text {@link SCHEMA_V6}'s search index sees for one message row, as SQL.
+ * The text {@link SCHEMA_V7}'s search index sees for one message row, as SQL.
  *
  * The definition is `searchTextOf` in `@agentkit/host` — a string body as
  * itself, a parts body as ALL of its text parts joined by a newline — expressed
@@ -72,14 +78,19 @@ function messageSearchText(alias: string): string {
  * A host that needs upgrades in place owns that story with its own store.
  *
 
- * That refusal IS the v5 → v6 upgrade path, exactly as it was the v4 → v5 one:
- * a database stamped 5 raises `sqlite_schema_version` and is recreated. The
+ * That refusal IS the v6 → v7 upgrade path, exactly as it was the v5 → v6 one:
+ * a database stamped 6 raises `sqlite_schema_version` and is recreated. The
  * `DEFAULT` clauses on the newer columns (`chats.archived`,
  * `messages.content_format`, `settings.tool_calling_mode`) are therefore not
  * migration aids — they are what keeps the DDL re-appliable over a database
  * this build already wrote, which is the property every statement here has.
  *
- * v6 adds three things: `chats.archived` (the listing filter),
+ * v7 adds one table: `mcp_servers`, the durable half of
+ * `McpServerConfigStore`. It carries NO secret material — `secret_refs` holds
+ * {@link SecretStore} REFS, and the values behind them are injected into
+ * env/header placeholders at connect time and stored nowhere.
+ *
+ * v6 added three things: `chats.archived` (the listing filter),
  * `settings.tool_calling_mode` (the manual tool-calling override), and the FTS5
  * machinery behind `ConversationStore.searchMessages` — a view computing the
  * searchable text of every message, an EXTERNAL-CONTENT FTS5 table over that
@@ -91,7 +102,7 @@ function messageSearchText(alias: string): string {
  * searched for. Pointing FTS5 at a view costs nothing at rest and re-computes
  * the projection only when `snippet()` needs it.
  */
-export const SCHEMA_V6 = `
+export const SCHEMA_V7 = `
 CREATE TABLE IF NOT EXISTS chats (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -390,6 +401,42 @@ CREATE TABLE IF NOT EXISTS settings (
 INSERT OR IGNORE INTO settings
   (id, context_size_preference, write_policy_mode, allow_raw_tool_data, tool_calling_mode, metadata)
   VALUES (1, 'small', 'auto_readonly_confirm_writes', 0, 'auto', '{}');
+
+-- McpServerConfigStore (@agentkit/mcp-client). Standalone: nothing in the
+-- AssistantStore aggregate references it, and no other table references this
+-- one -- an MCP server config shares a transaction with nothing.
+--
+-- NO SECRET MATERIAL. secret_refs is a JSON map of placeholder token ->
+-- SecretStore REF; the values behind those refs are resolved at connect time
+-- and never written here. Same rule the McpServerConfig record itself follows:
+-- a config is listed, logged and shown in a UI.
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id TEXT PRIMARY KEY,
+  -- The tool namespace, baked into every canonical id (mcp.<alias>.<tool>) a
+  -- transcript records -- so two servers sharing one would mint the same id for
+  -- two different tools. UNIQUE is the backstop; the store checks first so the
+  -- caller gets a typed mcp_invalid_config rather than a driver error. BINARY
+  -- collation (the default) makes it case-SENSITIVE, which is what the port
+  -- specifies.
+  alias TEXT NOT NULL UNIQUE,
+  -- JSON McpTransportConfig: the stdio/http discriminated union, stored whole
+  -- rather than shredded into columns. Its shape is the mcp-client package's to
+  -- change, and a column per transport variant would make every new transport a
+  -- schema version.
+  transport TEXT NOT NULL,
+  secret_refs TEXT,
+  -- NULLABLE on purpose: McpServerConfig.enabled is OPTIONAL and absent means
+  -- "default true". A NOT NULL DEFAULT 1 would round-trip an unset field as an
+  -- explicit true, which is a different record from the one that was written.
+  enabled INTEGER,
+  tool_aliases TEXT,
+  resilience TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+-- list() orders by createdAt; the id tie-breaks so two configs written in the
+-- same millisecond still come back in a stable order.
+CREATE INDEX IF NOT EXISTS idx_mcp_servers_created ON mcp_servers(created_at, id);
 
 -- Backs TaskStore.acquireLease's store-global monotonic fencing token. Not a
 -- port record — see the module doc comment above.

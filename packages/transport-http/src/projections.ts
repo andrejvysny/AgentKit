@@ -17,20 +17,33 @@ import type {
   AiProviderConfig,
   ApplyOutcomeDto,
   ChatDto,
+  McpServerDto,
+  McpTransportDto,
   MessageDto,
+  MessageSearchHitDto,
   ProposalDecisionDto,
   ProposalDto,
+  ProviderDto,
   RunDto,
   RunStatusDto,
+  SettingsDto,
+  ToolCallingModeDto,
+  WriteAllowanceDto,
+  WritePolicyModeDto,
 } from "@agentkit/contracts";
+import { PROVIDER_SECRET_REF_KEY } from "@agentkit/host";
 import type {
   ApplyOutcome,
+  AssistantSettings,
   ChatRecord,
   MessageRecord,
+  MessageSearchHit,
   ProposalDecision,
   ProposalRecord,
   TaskRecord,
+  WriteAllowance,
 } from "@agentkit/host";
+import type { McpServerConfigLike } from "./deps.js";
 
 export function chatDto(record: ChatRecord): ChatDto {
   return {
@@ -38,6 +51,7 @@ export function chatDto(record: ChatRecord): ChatDto {
     ...(record.title === undefined ? {} : { title: record.title }),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
+    archived: record.archived,
     metadata: record.metadata,
   };
 }
@@ -179,22 +193,21 @@ function envelopeSummary(
 }
 
 /**
- * What `listProviders` publishes.
+ * What every provider route publishes.
  *
- * The contract declares no provider DTO, so this projection is the transport's
- * call — and it is a NARROWING one: `apiKey` is a credential, `extraHeaders`
- * routinely carries another, and `metadata` is where a host keeps its
- * `apiKeySecretRef`. None of the three tells a client anything it can use, and
- * all three are the kind of field that leaks once and is in a log forever.
+ * A NARROWING projection, and the narrowing is the point: `apiKey` is a
+ * credential, `extraHeaders` routinely carries another, and `metadata` is an
+ * open host-owned bag. None of the three tells a client anything it can act on,
+ * and all three are the kind of field that leaks once and is in a log forever.
+ *
+ * `apiKeySecretRef` is the one thing lifted OUT of that metadata bag, under the
+ * key `TurnRunner` already reads it by. A UI has a real question the omissions
+ * make unanswerable — is a key configured at all? — and a ref answers it while
+ * granting nothing: it is a name the host looks a value up by in its own
+ * `SecretStore`.
  */
-export type ProviderSummaryDto = Pick<
-  AiProviderConfig,
-  "id" | "label" | "kind" | "baseUrl" | "defaultModel" | "enabled"
->;
-
-export function providerSummaryDto(
-  config: AiProviderConfig,
-): ProviderSummaryDto {
+export function providerDto(config: AiProviderConfig): ProviderDto {
+  const ref = config.metadata?.[PROVIDER_SECRET_REF_KEY];
   return {
     id: config.id,
     label: config.label,
@@ -202,5 +215,94 @@ export function providerSummaryDto(
     baseUrl: config.baseUrl,
     defaultModel: config.defaultModel,
     enabled: config.enabled,
+    ...(typeof ref === "string" && ref !== "" ? { apiKeySecretRef: ref } : {}),
+  };
+}
+
+/**
+ * Nothing is dropped: every field of `AssistantSettings` is a preference a user
+ * set and can see. The projection exists anyway, rather than the record being
+ * shipped raw, so that a field added to the host record has to be added HERE
+ * before it reaches a client — which is the only place someone reviewing a diff
+ * would think to ask whether it should.
+ */
+export function settingsDto(settings: AssistantSettings): SettingsDto {
+  return {
+    ...(settings.defaultProviderId === undefined
+      ? {}
+      : { defaultProviderId: settings.defaultProviderId }),
+    ...(settings.defaultModel === undefined
+      ? {}
+      : { defaultModel: settings.defaultModel }),
+    contextSizePreference: settings.contextSizePreference,
+    writePolicyMode: settings.writePolicyMode satisfies WritePolicyModeDto,
+    allowRawToolData: settings.allowRawToolData,
+    ...(settings.maxToolIterations === undefined
+      ? {}
+      : { maxToolIterations: settings.maxToolIterations }),
+    ...(settings.toolCalling === undefined
+      ? {}
+      : { toolCalling: settings.toolCalling satisfies ToolCallingModeDto }),
+    metadata: settings.metadata,
+  };
+}
+
+/** 1:1 — a grant has no internals; `key` is the id `revokeAllowance` takes. */
+export function writeAllowanceDto(
+  allowance: WriteAllowance,
+): WriteAllowanceDto {
+  return {
+    key: allowance.key,
+    chatId: allowance.chatId,
+    toolName: allowance.toolName,
+    proposalKind: allowance.proposalKind,
+    maxRisk: allowance.maxRisk,
+    createdAt: allowance.createdAt,
+  };
+}
+
+/** A hit is a pointer plus its evidence; the message body is not published. */
+export function messageSearchHitDto(
+  hit: MessageSearchHit,
+): MessageSearchHitDto {
+  return {
+    chatId: hit.chatId,
+    messageId: hit.messageId,
+    snippet: hit.snippet,
+  };
+}
+
+/**
+ * An MCP server config, verbatim but re-shaped.
+ *
+ * Nothing is dropped, because the record carries nothing to drop: `secretRefs`
+ * maps a placeholder token to a `SecretStore` REF, and the value behind the ref
+ * is injected at connect time and stored nowhere. Publishing the map is what
+ * lets a UI show which credentials a server expects without ever holding one.
+ *
+ * `transport` and `resilience` cross this boundary as opaque values — this
+ * adapter never interprets either (see {@link McpServerConfigLike}) — and are
+ * cast to the contract's mirrored shapes on the way out. The cast is checked
+ * where it can be: the request validator rejects a transport whose `kind` is
+ * not one of the two the union declares, so nothing this package WROTE can be
+ * shaped otherwise.
+ */
+export function mcpServerDto(record: McpServerConfigLike): McpServerDto {
+  return {
+    id: record.id,
+    alias: record.alias,
+    transport: record.transport as McpTransportDto,
+    ...(record.secretRefs === undefined
+      ? {}
+      : { secretRefs: record.secretRefs }),
+    ...(record.enabled === undefined ? {} : { enabled: record.enabled }),
+    ...(record.toolAliases === undefined
+      ? {}
+      : { toolAliases: record.toolAliases }),
+    ...(record.resilience === undefined
+      ? {}
+      : { resilience: record.resilience as Record<string, unknown> }),
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
   };
 }

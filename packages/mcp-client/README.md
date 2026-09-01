@@ -94,6 +94,38 @@ placeholder and the ref, never a value. Every message built from config-derived
 text is redacted before it is thrown or logged: resolved values are replaced
 with `***`.
 
+## Persisting the server list — `McpServerConfigStore`
+
+`McpServerConfig` is a value a host can declare in a file and be done with. A
+host that lets a **user** add servers at runtime needs somewhere to put them,
+and `McpServerConfigStore` (`src/config-store.ts`) is that port:
+`create`/`update`/`delete`/`get`/`list` over `McpServerConfigRecord`
+(`McpServerConfig` plus `id`, `createdAt`, `updatedAt`).
+
+It is deliberately **not** part of `AssistantStore`. That aggregate exists so
+the writes that must land together can; an MCP server config shares a
+transaction with nothing, and a seventh member would make every adapter — and
+every hand-rolled store — implement a port most hosts never use. The reference
+implementations are standalone classes beside the assistant store:
+`MemoryMcpServerConfigStore` (`@agentkit/adapters-memory`) and
+`SqliteMcpServerConfigStore` (`@agentkit/adapters-sqlite`, over the same
+database handle or path, `mcp_servers` in `SCHEMA_V7`). Both are graded by
+`describeMcpServerConfigStoreConformance` from `@agentkit/testing`.
+
+**`alias` is unique, case-sensitively.** It is the tool namespace every
+canonical id embeds, so two servers sharing one would mint the same id for two
+different tools — which `resolveMcpToolIdentity` refuses at staging time, as a
+hard failure of the whole run, long after the record that caused it was
+written. Refusing the write (`mcp_invalid_config`) is the same rule applied
+where it can still be acted on. `id` is separate from `alias` precisely so a
+rename does not break the handle a URL or a foreign key uses. An unknown id on
+`update`/`delete` is `mcp_config_not_found`.
+
+No secret material is stored: a record carries `secretRefs`, and the values
+behind those refs are resolved at connect time and written nowhere — which is
+what lets `@agentkit/transport-http` publish the whole map over
+`/v1/mcp/servers`.
+
 ## Resilience defaults
 
 All overridable per server via `resilience`.

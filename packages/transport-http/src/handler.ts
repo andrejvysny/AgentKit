@@ -33,25 +33,45 @@ import type { RouteHandler } from "./routes/context.js";
 import { activateBranch, forkChat, listSiblings } from "./routes/branches.js";
 import {
   createChat,
+  deleteChat,
   getChat,
   listChats,
   listMessages,
+  regenerateMessage,
   submitMessage,
+  updateChat,
 } from "./routes/chats.js";
 import {
-  getVersion,
-  listModels,
-  listProviders,
-  listTools,
-} from "./routes/meta.js";
+  createMcpServer,
+  deleteMcpServer,
+  listMcpServers,
+  updateMcpServer,
+} from "./routes/mcp.js";
+import { getVersion, listTools } from "./routes/meta.js";
 import {
   applyProposal,
   approveProposal,
   listProposals,
   rejectProposal,
 } from "./routes/proposals.js";
+import {
+  createProvider,
+  deleteProvider,
+  listModels,
+  listProviders,
+  refreshProviderModels,
+  testProvider,
+  updateProvider,
+} from "./routes/providers.js";
 import { cancelRun, getRun, streamRun } from "./routes/runs.js";
+import { searchMessages } from "./routes/search.js";
+import { getSettings, updateSettings } from "./routes/settings.js";
 import { listToolEvents } from "./routes/tool-events.js";
+import {
+  grantAllowance,
+  listAllowances,
+  revokeAllowance,
+} from "./routes/write-policy.js";
 
 export type RestFetchHandler = (req: Request) => Promise<Response>;
 
@@ -59,9 +79,13 @@ const HANDLERS: Readonly<Record<RestOperation, RouteHandler>> = Object.freeze({
   createChat,
   listChats,
   getChat,
+  updateChat,
+  deleteChat,
   listMessages,
   submitMessage,
+  regenerateMessage,
   forkChat,
+  searchMessages,
   activateBranch,
   listSiblings,
   getRun,
@@ -73,7 +97,21 @@ const HANDLERS: Readonly<Record<RestOperation, RouteHandler>> = Object.freeze({
   rejectProposal,
   applyProposal,
   listProviders,
+  createProvider,
+  updateProvider,
+  deleteProvider,
   listModels,
+  refreshProviderModels,
+  testProvider,
+  getSettings,
+  updateSettings,
+  listAllowances,
+  grantAllowance,
+  revokeAllowance,
+  listMcpServers,
+  createMcpServer,
+  updateMcpServer,
+  deleteMcpServer,
   listTools,
   getVersion,
 });
@@ -168,7 +206,7 @@ export function createRestHandler(deps: RestHandlerDeps): RestFetchHandler {
         principal = outcome;
       }
 
-      const denied = await checkAuthorization(deps, match, req, principal);
+      const denied = await checkAuthorization(deps, match, req, url, principal);
       if (denied !== null) return decorate(denied(instance));
 
       return decorate(
@@ -197,10 +235,13 @@ async function checkAuthorization(
   deps: RestHandlerDeps,
   match: { operation: RestOperation; params: Readonly<Record<string, string>> },
   req: Request,
+  // Passed in for `searchMessages`, the one route whose resource is scoped by a
+  // query parameter rather than by a path segment — see `authorize.ts`.
+  url: URL,
   principal: unknown,
 ): Promise<((instance: string) => Response) | null> {
   if (deps.authorize === undefined) return null;
-  const resource = resourceForOperation(match.operation, match.params);
+  const resource = resourceForOperation(match.operation, match.params, url);
   // `null` is `getVersion` and nothing else — see `authorize.ts`.
   if (resource === null) return null;
 

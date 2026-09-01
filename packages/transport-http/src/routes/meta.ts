@@ -1,6 +1,10 @@
 /**
- * The catalogue routes: providers, their models, the tool set, and the version
- * pair a client negotiates against.
+ * The catalogue routes: the tool set, and the version pair a client negotiates
+ * against.
+ *
+ * Providers moved to `routes/providers.ts` when they grew from two reads into
+ * CRUD plus two probe routes — a module that held the version constant and the
+ * credential-handling path would be a module nobody could name.
  */
 import {
   CONTRACT_VERSION,
@@ -9,24 +13,8 @@ import {
   type VersionDto,
 } from "@agentkit/contracts";
 import { jsonResponse } from "../http.js";
-import { notFound, notImplemented } from "../problem.js";
-import { providerSummaryDto } from "../projections.js";
-import { pathParam, type RouteContext } from "./context.js";
-
-export async function listProviders(ctx: RouteContext): Promise<Response> {
-  const configs = await ctx.deps.store.providers.listProviders();
-  return jsonResponse(configs.map(providerSummaryDto));
-}
-
-export async function listModels(ctx: RouteContext): Promise<Response> {
-  const providerId = pathParam(ctx, "providerId");
-  const provider = await ctx.deps.store.providers.getProvider(providerId);
-  if (provider === null) {
-    return notFound(`Provider not found: ${providerId}`, ctx.instance);
-  }
-  const models = await ctx.deps.store.providers.listModels(providerId);
-  return jsonResponse(models);
-}
+import { notImplemented } from "../problem.js";
+import type { RouteContext } from "./context.js";
 
 /**
  * The tool catalogue — when the host can name one.

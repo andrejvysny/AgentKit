@@ -1,5 +1,5 @@
 /**
- * Structural validation of the five request bodies in the contract.
+ * Structural validation of every request body in the contract.
  *
  * DELIBERATELY HAND-WRITTEN, not schema-driven. The TypeBox schemas that define
  * these bodies live in `@agentkit/contracts`, and validating against them needs
@@ -7,8 +7,9 @@
  * `Value.Check` (a `@agentkit/contracts` dependency). Reaching through a
  * dependency for a transitive package is how a lockfile change becomes a
  * runtime crash in someone else's deployment, and this package is meant to be
- * addable with no new dependencies at all. Five bodies of at most four fields
- * do not earn one.
+ * addable with no new dependencies at all. A dozen bodies of flat, mostly
+ * optional fields still do not earn one — the checks below are the schemas'
+ * rules restated, and the cost of restating them is one function each.
  *
  * The rules are the schemas', restated: required fields must be present and of
  * the declared type, optional fields must match when present, and unknown
@@ -16,16 +17,25 @@
  * not forbid them — a client sending a field from a later contract version must
  * not be rejected by an older server).
  *
- * ONE EXCEPTION, and it is the contract's rather than this file's: a message
+ * TWO EXCEPTIONS, and both are the contract's rather than this file's: a message
  * body's content parts are a CLOSED union, so an unknown part `type` (or an
- * unknown image `source.kind`) is rejected. See {@link checkMessageContent}.
+ * unknown image `source.kind`) is rejected (see {@link checkMessageContent}),
+ * and so is an MCP server's transport (see {@link checkTransport}).
  */
 import type {
   ApplyProposalRequest,
   CreateChatRequest,
+  CreateMcpServerRequest,
+  CreateProviderRequest,
   ForkChatRequest,
+  GrantAllowanceRequest,
   ProposalDecisionRequest,
+  RegenerateMessageRequest,
   SubmitMessageRequest,
+  UpdateChatRequest,
+  UpdateMcpServerRequest,
+  UpdateProviderRequest,
+  UpdateSettingsRequest,
 } from "@agentkit/contracts";
 
 export type ValidationResult<T> =
@@ -217,4 +227,253 @@ export function validateApplyProposalRequest(
     return { ok: false, detail: "`operationId` must not be empty." };
   }
   return { ok: true, value };
+}
+
+function checkOptionalBoolean(
+  body: Record<string, unknown>,
+  field: string,
+): string | null {
+  const value = body[field];
+  if (value === undefined || typeof value === "boolean") return null;
+  return `\`${field}\` must be a boolean.`;
+}
+
+function checkOptionalNumber(
+  body: Record<string, unknown>,
+  field: string,
+): string | null {
+  const value = body[field];
+  if (value === undefined || typeof value === "number") return null;
+  return `\`${field}\` must be a number.`;
+}
+
+/** A `Record<string, string>` — the shape of every header/env/alias bag here. */
+function checkOptionalStringMap(
+  body: Record<string, unknown>,
+  field: string,
+): string | null {
+  const value = body[field];
+  if (value === undefined) return null;
+  if (!isRecord(value)) return `\`${field}\` must be an object.`;
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string") {
+      return `\`${field}.${key}\` must be a string.`;
+    }
+  }
+  return null;
+}
+
+/** A member of a closed string union, when present. */
+function checkOptionalEnum(
+  body: Record<string, unknown>,
+  field: string,
+  allowed: readonly string[],
+): string | null {
+  const value = body[field];
+  if (value === undefined) return null;
+  if (typeof value !== "string" || !allowed.includes(value)) {
+    return `\`${field}\` must be one of: ${allowed.join(", ")}.`;
+  }
+  return null;
+}
+
+/** Same, required. */
+function checkRequiredEnum(
+  body: Record<string, unknown>,
+  field: string,
+  allowed: readonly string[],
+): string | null {
+  if (body[field] === undefined) return `\`${field}\` is required.`;
+  return checkOptionalEnum(body, field, allowed);
+}
+
+/** A required string that is not blank — an id nobody can look anything up by. */
+function checkRequiredNonEmptyString(
+  body: Record<string, unknown>,
+  field: string,
+): string | null {
+  const issue = checkRequiredString(body, field);
+  if (issue !== null) return issue;
+  return (body[field] as string).trim() === ""
+    ? `\`${field}\` must not be empty.`
+    : null;
+}
+
+const RISK_LEVELS = ["low", "medium", "high", "destructive"] as const;
+const CONTEXT_SIZE_PREFERENCES = ["small", "medium", "large"] as const;
+const WRITE_POLICY_MODES = [
+  "auto_readonly_confirm_writes",
+  "confirm_all_writes",
+  "auto_all",
+] as const;
+const TOOL_CALLING_MODES = ["auto", "on", "off"] as const;
+
+export function validateUpdateChatRequest(
+  body: Record<string, unknown>,
+): ValidationResult<UpdateChatRequest> {
+  const issue = first(
+    checkOptionalString(body, "title"),
+    checkOptionalMetadata(body, "metadata"),
+    checkOptionalBoolean(body, "archived"),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return { ok: true, value: body as UpdateChatRequest };
+}
+
+export function validateRegenerateMessageRequest(
+  body: Record<string, unknown>,
+): ValidationResult<RegenerateMessageRequest> {
+  const issue = first(
+    checkOptionalString(body, "model"),
+    checkOptionalString(body, "providerId"),
+    checkOptionalMetadata(body, "metadata"),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return { ok: true, value: body as RegenerateMessageRequest };
+}
+
+export function validateCreateProviderRequest(
+  body: Record<string, unknown>,
+): ValidationResult<CreateProviderRequest> {
+  const issue = first(
+    checkOptionalString(body, "id"),
+    checkRequiredNonEmptyString(body, "label"),
+    checkRequiredNonEmptyString(body, "kind"),
+    checkRequiredNonEmptyString(body, "baseUrl"),
+    checkRequiredNonEmptyString(body, "defaultModel"),
+    checkOptionalBoolean(body, "enabled"),
+    checkOptionalString(body, "apiKey"),
+    checkOptionalStringMap(body, "extraHeaders"),
+    checkOptionalMetadata(body, "metadata"),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return { ok: true, value: body as CreateProviderRequest };
+}
+
+export function validateUpdateProviderRequest(
+  body: Record<string, unknown>,
+): ValidationResult<UpdateProviderRequest> {
+  const issue = first(
+    checkOptionalString(body, "label"),
+    checkOptionalString(body, "kind"),
+    checkOptionalString(body, "baseUrl"),
+    checkOptionalString(body, "defaultModel"),
+    checkOptionalBoolean(body, "enabled"),
+    checkOptionalString(body, "apiKey"),
+    checkOptionalStringMap(body, "extraHeaders"),
+    checkOptionalMetadata(body, "metadata"),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return { ok: true, value: body as UpdateProviderRequest };
+}
+
+/**
+ * A settings patch. Every field is optional; the three unions are CLOSED and
+ * checked, because they are the fields a wrong value silently changes behaviour
+ * with — a `writePolicyMode` of `"auto-all"` (a hyphen) would be stored, read
+ * back as a mode nothing matches, and quietly fall through to confirming every
+ * write forever.
+ */
+export function validateUpdateSettingsRequest(
+  body: Record<string, unknown>,
+): ValidationResult<UpdateSettingsRequest> {
+  const issue = first(
+    checkOptionalString(body, "defaultProviderId"),
+    checkOptionalString(body, "defaultModel"),
+    checkOptionalEnum(body, "contextSizePreference", CONTEXT_SIZE_PREFERENCES),
+    checkOptionalEnum(body, "writePolicyMode", WRITE_POLICY_MODES),
+    checkOptionalBoolean(body, "allowRawToolData"),
+    checkOptionalNumber(body, "maxToolIterations"),
+    checkOptionalEnum(body, "toolCalling", TOOL_CALLING_MODES),
+    checkOptionalMetadata(body, "metadata"),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return { ok: true, value: body as UpdateSettingsRequest };
+}
+
+export function validateGrantAllowanceRequest(
+  body: Record<string, unknown>,
+): ValidationResult<GrantAllowanceRequest> {
+  const issue = first(
+    checkRequiredNonEmptyString(body, "chatId"),
+    checkRequiredNonEmptyString(body, "toolName"),
+    checkRequiredNonEmptyString(body, "proposalKind"),
+    checkRequiredEnum(body, "maxRisk", RISK_LEVELS),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return { ok: true, value: body as GrantAllowanceRequest };
+}
+
+/**
+ * `McpTransportDtoSchema` restated — and, like the content-part union, restated
+ * as the CLOSED union it is: an unknown `kind` is rejected rather than waved
+ * through.
+ *
+ * That is the one place this module's "unknown members ride through" rule does
+ * not apply, and for the same reason it does not apply to content parts: a
+ * transport nothing can connect is a record that fails at the worst possible
+ * moment, on the first run that stages the server's tools, with nothing left in
+ * the request to blame it on.
+ */
+function checkTransport(value: unknown, required: boolean): string | null {
+  if (value === undefined) {
+    return required ? "`transport` is required." : null;
+  }
+  if (!isRecord(value)) return "`transport` must be an object.";
+  const nested = value as Record<string, unknown>;
+  switch (nested["kind"]) {
+    case "stdio": {
+      const issue = first(
+        checkRequiredNonEmptyString(nested, "command"),
+        checkOptionalStringMap(nested, "env"),
+      );
+      if (issue !== null) return `\`transport\`: ${issue}`;
+      const args = nested["args"];
+      if (args === undefined) return null;
+      if (!Array.isArray(args) || args.some((a) => typeof a !== "string")) {
+        return "`transport.args` must be an array of strings.";
+      }
+      return null;
+    }
+    case "http": {
+      const issue = first(
+        checkRequiredNonEmptyString(nested, "url"),
+        checkOptionalStringMap(nested, "headers"),
+      );
+      return issue === null ? null : `\`transport\`: ${issue}`;
+    }
+    default:
+      return '`transport.kind` must be "stdio" or "http".';
+  }
+}
+
+export function validateCreateMcpServerRequest(
+  body: Record<string, unknown>,
+): ValidationResult<CreateMcpServerRequest> {
+  const issue = first(
+    checkRequiredNonEmptyString(body, "alias"),
+    checkTransport(body["transport"], true),
+    checkOptionalStringMap(body, "secretRefs"),
+    checkOptionalBoolean(body, "enabled"),
+    checkOptionalStringMap(body, "toolAliases"),
+    checkOptionalMetadata(body, "resilience"),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return { ok: true, value: body as CreateMcpServerRequest };
+}
+
+export function validateUpdateMcpServerRequest(
+  body: Record<string, unknown>,
+): ValidationResult<UpdateMcpServerRequest> {
+  const alias = body["alias"];
+  const issue = first(
+    alias === undefined ? null : checkRequiredNonEmptyString(body, "alias"),
+    checkTransport(body["transport"], false),
+    checkOptionalStringMap(body, "secretRefs"),
+    checkOptionalBoolean(body, "enabled"),
+    checkOptionalStringMap(body, "toolAliases"),
+    checkOptionalMetadata(body, "resilience"),
+  );
+  if (issue !== null) return { ok: false, detail: issue };
+  return { ok: true, value: body as UpdateMcpServerRequest };
 }

@@ -95,9 +95,9 @@ key. With the default `agingBonus = 0` the term folds to zero and the ordering
 is plain `priority DESC, enqueued_at ASC`. See
 [ADR 0003](../../docs/adr/0003-task-dependencies-and-subagents.md).
 
-## Schema (v6)
+## Schema (v7)
 
-Single-file DDL in `src/schema.ts` (`SCHEMA_V6`), applied idempotently
+Single-file DDL in `src/schema.ts` (`SCHEMA_V7`), applied idempotently
 (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). No migrations ship — see
 "It owns its database file" above.
 
@@ -115,6 +115,19 @@ body is written verbatim, exactly as every pre-v5 row was; a
 `JSON.parse` guess, because a user message whose text happens to look like a
 parts array is a string, and a store that guessed would promote it on the
 next read.
+
+v7 adds one table, `mcp_servers` — the durable half of `McpServerConfigStore`
+(`@agentkit/mcp-client`), served by the standalone `SqliteMcpServerConfigStore`
+rather than by a seventh member of the `AssistantStore` aggregate: an MCP
+server config shares a transaction with nothing, and folding it into the
+aggregate would make every hand-rolled store implement a port most hosts never
+use. The table lives in this one DDL anyway, because the file is one database
+with one `user_version` and a second DDL string applied by a second constructor
+is a second thing that can be forgotten. `alias` is `UNIQUE` (BINARY collation,
+so case-sensitive — the alias grammar has no uppercase in it) because it is the
+tool namespace every canonical id embeds; `enabled` is nullable, since an absent
+`McpServerConfig.enabled` means "default true" and is a different record from a
+stored `true`. No secret material: `secret_refs` holds `SecretStore` **refs**.
 
 v6 added chat lifecycle and full-text search:
 
@@ -165,6 +178,7 @@ v6 added chat lifecycle and full-text search:
 | `proposals`, `proposal_outcomes` | `ProposalStore` |
 | `providers`, `provider_models`, `provider_capabilities` | `ProviderStore` |
 | `settings` (single row, `id = 1`) | `SettingsStore` |
+| `mcp_servers` | `McpServerConfigStore` (`@agentkit/mcp-client`) — served by the standalone `SqliteMcpServerConfigStore`, not by the aggregate. |
 | `outbox` | `OutboxStore` |
 | `fencing_counter` (single row) | *not a port record* — backs `TaskStore.acquireLease`'s store-global monotonic fencing token. |
 

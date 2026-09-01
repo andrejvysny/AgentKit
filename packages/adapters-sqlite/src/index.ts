@@ -9,3 +9,4 @@
 
 export * from "./schema.js";
 export * from "./sqlite-assistant-store.js";
+export * from "./sqlite-mcp-server-config-store.js";

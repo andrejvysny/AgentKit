@@ -5,6 +5,7 @@
 // contributors. Everything else here is the vocabulary those two speak.
 
 export * from "./config.js";
+export * from "./config-store.js";
 export * from "./errors.js";
 export * from "./identity.js";
 export * from "./resilience.js";

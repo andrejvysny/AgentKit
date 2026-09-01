@@ -10,6 +10,7 @@
  * the three methods this adapter actually calls costs a dozen lines and keeps
  * the seam a seam.
  */
+import type { ModelDto } from "@agentkit/contracts";
 import type {
   ApplyOutcome,
   ApplyProposalRequest,
@@ -18,16 +19,28 @@ import type {
   AuthorizationPort,
   Logger,
   ProposalRecord,
+  RegenerateMessageInput,
   RejectProposalInput,
+  SecretStore,
   SubmitMessageInput,
   SubmitMessageResult,
   ToolCatalog,
+  WriteAllowance,
+  WriteAllowanceInput,
 } from "@agentkit/host";
 import type { RestCorsOptions } from "./cors.js";
 
-/** `TurnRunner`, narrowed to the one call `submitMessage` makes. */
+/** `TurnRunner`, narrowed to the two calls that start a run. */
 export interface TurnSubmitter {
   submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult>;
+  /**
+   * Required, not optional, unlike the service deps below: `regenerateMessage`
+   * is a route in the contract, and a `TurnRunner` has always had somewhere to
+   * put this. A host that hands over a hand-rolled submitter is hand-rolling a
+   * turn runner, and "re-answer the same question" is not a capability it can
+   * meaningfully lack while claiming to run turns.
+   */
+  regenerate(input: RegenerateMessageInput): Promise<SubmitMessageResult>;
 }
 
 /** `TaskService`, narrowed to the one call `cancelRun` makes. */
@@ -40,6 +53,85 @@ export interface ProposalOperations {
   approve(input: ApproveProposalInput): Promise<ProposalRecord>;
   reject(input: RejectProposalInput): Promise<ProposalRecord>;
   apply(input: ApplyProposalRequest): Promise<ApplyOutcome>;
+}
+
+/** `ConversationService`, narrowed to the one call `deleteChat` makes. */
+export interface ConversationOperations {
+  deleteChat(chatId: string): Promise<void>;
+}
+
+/**
+ * The two provider operations this adapter CANNOT perform itself.
+ *
+ * Both of them talk to somebody else's server: refreshing a catalogue is a
+ * `GET /models` against the provider, and testing a connection is a probe with
+ * the provider's credential injected. This package has no provider client, no
+ * `SecretStore` resolution path and no opinion about what "reachable" means for
+ * an endpoint it has never heard of — a host has all three, in the same
+ * `providerFactory` its `TurnRunner` already uses.
+ *
+ * Absent, both routes answer 501: the routes exist in the contract and another
+ * deployment of the same version serves them.
+ */
+export interface ProviderOperations {
+  /** Probe the catalogue and REPLACE the stored one; answers with what it wrote. */
+  refreshModels(providerId: string): Promise<ModelDto[]>;
+  /**
+   * Reachability + credentials. A failure is a RESULT, not a throw: `ok: false`
+   * with a sayable `error` is what a settings pane renders, and an exception
+   * would turn "this endpoint is down" into a 500.
+   */
+  testConnection(providerId: string): Promise<{ ok: boolean; error?: string }>;
+}
+
+/**
+ * `WritePolicy`, narrowed to the three allowance routes.
+ *
+ * Every method is CHAT-SCOPED, because the port is: `SessionWritePolicy` holds
+ * grants per `(chat, tool, kind)` and offers no unscoped listing. That is why
+ * `listAllowances` and `revokeAllowance` take a `?chatId=` query rather than
+ * standing alone — widening the port to serve a prettier URL would let one
+ * chat's UI enumerate (and revoke) another's consent.
+ */
+export interface WritePolicyOperations {
+  list(chatId: string): WriteAllowance[];
+  allow(input: WriteAllowanceInput): WriteAllowance;
+  revoke(chatId: string, key: string): void;
+}
+
+/**
+ * One stored MCP server config, as this adapter sees it.
+ *
+ * A STRUCTURAL restatement of `McpServerConfigRecord`
+ * (`@agentkit/mcp-client`), not an import of it: taking the dependency would
+ * make every host that wires this transport install the MCP bridge — and its
+ * SDK — to serve four CRUD routes it may not use. `transport` and `resilience`
+ * are `unknown` here because this adapter never interprets either; the request
+ * validator checks the transport union's shape at the boundary, and the store
+ * on the other side has the real types.
+ */
+export interface McpServerConfigLike {
+  id: string;
+  alias: string;
+  transport: unknown;
+  secretRefs?: Record<string, string>;
+  enabled?: boolean;
+  toolAliases?: Record<string, string>;
+  resilience?: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `McpServerConfigStore` (`@agentkit/mcp-client`), structurally. */
+export interface McpServerConfigOperations {
+  list(): Promise<McpServerConfigLike[]>;
+  get(id: string): Promise<McpServerConfigLike | null>;
+  create(record: McpServerConfigLike): Promise<McpServerConfigLike>;
+  update(
+    id: string,
+    patch: Partial<McpServerConfigLike>,
+  ): Promise<McpServerConfigLike>;
+  delete(id: string): Promise<void>;
 }
 
 /**
@@ -98,6 +190,47 @@ export interface RestHandlerDeps {
    * route exists in the contract and this deployment simply cannot serve it.
    */
   proposals?: ProposalOperations;
+  /**
+   * Absent on a host that does not let a client delete conversations.
+   * `deleteChat` answers 501 without it, and `updateChat` still works — a
+   * rename goes straight to `ConversationStore`, while a delete spans three
+   * stores and is a policy decision (`chat_busy`) only the service makes.
+   */
+  conversations?: ConversationOperations;
+  /**
+   * Probing a provider: `refreshProviderModels` and `testProvider`. Absent,
+   * both answer 501 — this package cannot talk to a provider, and inventing a
+   * client here would be a second place that decides what a request to someone
+   * else's endpoint looks like. See {@link ProviderOperations}.
+   */
+  providerOps?: ProviderOperations;
+  /**
+   * Where a write-only `apiKey` on `createProvider`/`updateProvider` is put.
+   *
+   * Absent, a request CARRYING a key answers 501 rather than storing it: the
+   * only other options are to write the credential into the provider config
+   * (where `listProviders` and every log line would find it) or to accept the
+   * request and silently drop the key, and a provider that quietly has no
+   * credential fails later, somewhere else. A request with no `apiKey` needs no
+   * secret store and works exactly as it would with one.
+   */
+  secrets?: SecretStore;
+  /**
+   * The standing-write-grant routes, over the host's own `WritePolicy` — e.g.
+   * `SessionWritePolicy`. Absent, all three answer 501.
+   *
+   * Wiring it exposes consent to an HTTP client, which is a decision worth
+   * making deliberately: `SessionWritePolicy` deliberately keeps grants in
+   * memory for the life of the process, and a route that grants one is a route
+   * that can be called by anything `authenticate` lets through.
+   */
+  writePolicy?: WritePolicyOperations;
+  /**
+   * The MCP server-config CRUD routes, over an `McpServerConfigStore`
+   * (`@agentkit/mcp-client`). Absent, all four answer 501 — a host that
+   * declares its MCP servers in a config file has nothing for them to write to.
+   */
+  mcpConfigs?: McpServerConfigOperations;
   /**
    * What `listTools` advertises — the host's {@link ToolCatalog} port.
    *

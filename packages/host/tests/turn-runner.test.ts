@@ -466,6 +466,182 @@ describe("TurnRunner.submitMessage — idempotency key", () => {
   });
 });
 
+describe("TurnRunner.regenerate", () => {
+  /** Ask once, answer once — the shape every regenerate below branches on. */
+  async function askOnce(
+    f: RunnerFixture,
+  ): Promise<{ userMessageId: string; assistantMessageId: string }> {
+    const first = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "why is the sky blue?",
+    });
+    await drive(f, first.runId);
+    return first;
+  }
+
+  it("appends a NEW BRANCH under the same question and leaves the old answer in the tree", async () => {
+    const f = await setupRunner();
+    f.mock.setScript([
+      { steps: [{ kind: "text", content: "first answer" }] },
+      { steps: [{ kind: "text", content: "second answer" }] },
+    ]);
+    const first = await askOnce(f);
+
+    const again = await f.runner.regenerate({
+      chatId: f.chatId,
+      messageId: first.assistantMessageId,
+    });
+
+    // The question is not rewritten and not copied: the new run answers the
+    // message that was already there, which is what the result reports.
+    expect(again.userMessageId).toBe(first.userMessageId);
+    expect(again.assistantMessageId).not.toBe(first.assistantMessageId);
+
+    const placeholder = messagesOf(f).find(
+      (m) => m.id === again.assistantMessageId,
+    );
+    expect(placeholder?.parentMessageId).toBe(first.userMessageId);
+    expect(placeholder?.metadata["placeholder"]).toBe(true);
+    expect(placeholder?.runId).toBe(again.runId);
+    // The next index under that parent, and the live one.
+    expect(placeholder?.branchIndex).toBe(1);
+    expect(placeholder?.active).toBe(true);
+
+    // The answer it replaces is untouched — same id, same index, same text —
+    // and simply off the path, so activating it back is a branch switch.
+    const old = messagesOf(f).find((m) => m.id === first.assistantMessageId);
+    expect(old?.branchIndex).toBe(0);
+    expect(old?.content).toBe("first answer");
+    expect(old?.active).toBe(false);
+
+    const path = await f.store.conversations.listMessages(f.chatId);
+    expect(path.map((m) => m.id)).toEqual([
+      first.userMessageId,
+      again.assistantMessageId,
+    ]);
+    const siblings = await f.store.conversations.listSiblings(
+      first.assistantMessageId,
+    );
+    expect(siblings.map((m) => m.id)).toEqual([
+      first.assistantMessageId,
+      again.assistantMessageId,
+    ]);
+  });
+
+  it("runs the new branch to completion, replaying the SAME history the first answer saw", async () => {
+    const f = await setupRunner();
+    f.mock.setScript([
+      { steps: [{ kind: "text", content: "first answer" }] },
+      { steps: [{ kind: "text", content: "second answer" }] },
+    ]);
+    const first = await askOnce(f);
+    const again = await f.runner.regenerate({
+      chatId: f.chatId,
+      messageId: first.assistantMessageId,
+    });
+    await drive(f, again.runId);
+
+    const fresh = messagesOf(f).find((m) => m.id === again.assistantMessageId);
+    expect(fresh?.content).toBe("second answer");
+    expect(fresh?.metadata["placeholder"]).toBe(false);
+    expect((await f.store.tasks.getTask(again.runId))?.status).toBe(
+      "completed",
+    );
+
+    // The pass was handed the question and nothing else: the old answer is
+    // off-path, so it never reaches the provider — otherwise the model would
+    // be asked to improve on an answer it is supposed to be replacing.
+    const replayed = f.client.messagesPerCall[1] ?? [];
+    expect(replayed.map((m) => m.role)).toEqual(["user"]);
+    expect(replayed[0]?.content).toBe("why is the sky blue?");
+  });
+
+  it("is idempotent per taskId: the second call writes nothing and answers with the first's ids", async () => {
+    const f = await setupRunner();
+    const first = await askOnce(f);
+    const input = {
+      chatId: f.chatId,
+      messageId: first.assistantMessageId,
+      taskId: "regen-idem",
+    };
+
+    const once = await f.runner.regenerate(input);
+    const twice = await f.runner.regenerate(input);
+
+    expect(twice).toEqual(once);
+    expect(once.runId).toBe("regen-idem");
+    // Two tasks in the store: the original turn and exactly one regenerate.
+    expect(f.store.tasks.tasks.size).toBe(2);
+    // Three messages: question, first answer, one new placeholder.
+    expect(messagesOf(f)).toHaveLength(3);
+    expect(
+      (await f.store.conversations.listSiblings(first.assistantMessageId))
+        .length,
+    ).toBe(2);
+  });
+
+  it("refuses a target that answered no question", async () => {
+    const f = await setupRunner();
+    const first = await askOnce(f);
+
+    // A question, not an answer.
+    await expect(
+      f.runner.regenerate({
+        chatId: f.chatId,
+        messageId: first.userMessageId,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_regenerate" });
+
+    // A replay-only assistant record: branching under its parent would strand
+    // the tool results answering it on a path nothing replays.
+    const internal = await f.store.conversations.appendMessage({
+      chatId: f.chatId,
+      role: "assistant",
+      content: "",
+      parentMessageId: first.assistantMessageId,
+      activate: false,
+      metadata: { internal: true },
+    });
+    await expect(
+      f.runner.regenerate({ chatId: f.chatId, messageId: internal.id }),
+    ).rejects.toMatchObject({ code: "invalid_regenerate" });
+
+    // A root assistant message has nothing above it to ask again.
+    const orphan = await f.store.conversations.appendMessage({
+      chatId: "chat-orphan",
+      role: "assistant",
+      content: "unprompted",
+    });
+    expect(orphan.parentMessageId).toBe(undefined);
+    await expect(
+      f.runner.regenerate({ chatId: "chat-orphan", messageId: orphan.id }),
+    ).rejects.toMatchObject({ code: "invalid_regenerate" });
+
+    // Nothing above wrote a task or a placeholder.
+    expect(f.store.tasks.tasks.size).toBe(1);
+  });
+
+  it("refuses an unknown message, and one belonging to another chat", async () => {
+    const f = await setupRunner();
+    const first = await askOnce(f);
+    await f.store.conversations.createChat({ id: "chat-2" });
+
+    await expect(
+      f.runner.regenerate({ chatId: f.chatId, messageId: "no-such-message" }),
+    ).rejects.toMatchObject({ code: "not_found" });
+
+    // The id exists, but not in the chat the caller named — a mismatched pair,
+    // and running it would write this chat's answer into that one's history.
+    await expect(
+      f.runner.regenerate({
+        chatId: "chat-2",
+        messageId: first.assistantMessageId,
+      }),
+    ).rejects.toMatchObject({ code: "not_found" });
+    expect(f.store.tasks.tasks.size).toBe(1);
+  });
+});
+
 describe("TurnRunner.execute — text only", () => {
   it("streams into the placeholder and completes the run", async () => {
     const f = await setupRunner();

@@ -18,7 +18,25 @@
 /** Prefix so an id in a log line says where it came from. */
 export const IDEMPOTENT_TASK_ID_PREFIX = "task_ik_";
 
-/** The header `submitMessage` requires; see `REST_ROUTES.submitMessage`. */
+/**
+ * The same, for `regenerateMessage`.
+ *
+ * A DIFFERENT PREFIX is what keeps the two operations from colliding, and it is
+ * the prefix rather than the hashed string that does the work. A regenerate
+ * hashes `<chatId>:<messageId>:<key>` and a submit hashes `<chatId>:<key>`, so a
+ * caller that submitted with the key `"<messageId>:<key>"` would otherwise hash
+ * to the same digest as a regenerate of that message — and land on the run
+ * belonging to a turn it never made. Domain-separating at the id, rather than
+ * inside the hash, also leaves the submit derivation byte-identical to what it
+ * has always been: changing it would strand every in-flight idempotency key
+ * across a deploy.
+ */
+export const REGENERATE_TASK_ID_PREFIX = "task_rk_";
+
+/**
+ * The header `submitMessage` and `regenerateMessage` require; see
+ * `REST_ROUTES`' note on the two.
+ */
 export const IDEMPOTENCY_KEY_HEADER = "idempotency-key";
 
 /**
@@ -37,6 +55,26 @@ export async function deriveIdempotentTaskId(
   const bytes = new TextEncoder().encode(`${chatId}:${idempotencyKey}`);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return `${IDEMPOTENT_TASK_ID_PREFIX}${toHex(new Uint8Array(digest))}`;
+}
+
+/**
+ * The deterministic task id for `(chatId, messageId, idempotencyKey)`.
+ *
+ * The message id is in the key because "regenerate" names a target: two
+ * regenerates of two different answers are two different runs even under one
+ * client-side key, and hashing only the chat would fold them into one and hand
+ * the second caller the first one's branch.
+ */
+export async function deriveRegenerateTaskId(
+  chatId: string,
+  messageId: string,
+  idempotencyKey: string,
+): Promise<string> {
+  const bytes = new TextEncoder().encode(
+    `${chatId}:${messageId}:${idempotencyKey}`,
+  );
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return `${REGENERATE_TASK_ID_PREFIX}${toHex(new Uint8Array(digest))}`;
 }
 
 function toHex(bytes: Uint8Array): string {

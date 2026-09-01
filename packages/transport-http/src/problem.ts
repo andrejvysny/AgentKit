@@ -39,7 +39,10 @@ export const PROBLEM_CONTENT_TYPE = "application/problem+json";
  * `invalid_fork_point` is a 400 and not a 409: nothing moved and nothing
  * conflicts — the client named a message that is not a place this conversation
  * can be forked from, and the fix is a different `fromMessageId`, which is the
- * definition of a bad request.
+ * definition of a bad request. `invalid_regenerate` is a 400 for exactly the
+ * same reason: the named message is not an answer that can be re-answered (a
+ * question, a replay-only record, a root), and its role and parentage will not
+ * be different on a retry.
  *
  * `usage_denied` is a 429 and not a 403: the request was well-formed and the
  * caller was entitled to make it — a budget said not now. 429 is the one status
@@ -56,6 +59,7 @@ export const PROBLEM_CONTENT_TYPE = "application/problem+json";
 const STATUS_BY_HOST_CODE = {
   not_found: 404,
   invalid_fork_point: 400,
+  invalid_regenerate: 400,
   invalid_import: 400,
   chat_busy: 409,
   invalid_task_transition: 409,
@@ -150,6 +154,25 @@ export function badRequest(
   instance: string,
 ): Response {
   return problemResponse({ status: 400, code, detail, instance });
+}
+
+/**
+ * The 409 a create that would overwrite an existing record answers with —
+ * `duplicate_provider`, `duplicate_alias`.
+ *
+ * Transport-level, like {@link notImplemented} and {@link forbidden}: the
+ * uniqueness these routes enforce is checked HERE, ahead of a store whose
+ * `upsert` would happily replace the row (providers) or whose typed refusal
+ * belongs to a package this one does not import (MCP aliases). No
+ * `AgentKitHostError` was thrown, and inventing one to carry it would put a
+ * code in the host's closed union that the host never throws.
+ */
+export function conflict(
+  code: string,
+  detail: string,
+  instance: string,
+): Response {
+  return problemResponse({ status: 409, code, detail, instance });
 }
 
 /**

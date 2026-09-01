@@ -7,3 +7,4 @@
 // deploy against that one without changing a call site.
 
 export * from "./memory-assistant-store.js";
+export * from "./memory-mcp-server-config-store.js";
