@@ -333,8 +333,12 @@ stays server-free by design, so the shapes are reviewable and validatable
 independent of any adapter. `@agentkit/transport-http` is the official
 adapter that serves it (fetch-standard handler, SSE `streamRun`; see
 [`packages/transport-http/README.md`](../packages/transport-http/README.md)
-and [ADR 0005](adr/0005-http-transport.md)); no client SDK exists yet (see
-[`docs/roadmap.md`](roadmap.md)'s Later list).
+and [ADR 0005](adr/0005-http-transport.md)); `@agentkit/client` is the
+official typed client calling it, and `@agentkit/react` is headless React
+hooks over that client (see
+[`packages/client/README.md`](../packages/client/README.md),
+[`packages/react/README.md`](../packages/react/README.md), and [ADR
+0013](adr/0013-serving-surfaces.md)).
 
 - `REST_API_VERSION` (`"v1"`) is the URL-visible version, distinct from
   `CONTRACT_VERSION`: an additive DTO field bumps the contract version and

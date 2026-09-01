@@ -5,9 +5,14 @@ and where each piece is expected to land when it does. None of this is
 implemented in `packages/` today; do not import paths named
 below.
 
-- **React / UI packages.** No frontend package exists in this monorepo.
-  A consuming app (OpenPCB, a cloud-agent service, OneCAD) owns its own UI
-  against the `@agentkit/host` port contracts and the `AiRunEvent` stream.
+- **Styled UI / component library.** `@agentkit/react` ships (ADR
+  [0013](adr/0013-serving-surfaces.md)) — but headless hooks only (`useChat`,
+  `useRun`, `useBranches`, `useProposals`, `useProviders`, one provider
+  component): no message list, no bubble, no composer, no spinner, no class
+  name, no CSS import. A consuming app (OpenPCB, a cloud-agent service,
+  OneCAD) still owns its own visual design and component tree, built either
+  on those hooks or directly against `@agentkit/client` / the
+  `@agentkit/host` port contracts and the `AiRunEvent` stream.
 - **OpenPCB compatibility wrapper.** No shim maps `@openpcb/ai-core`'s old
   API onto `@agentkit/core`. OpenPCB's own migration to this package is a
   separate, future change in the OpenPCB repository — this session made
@@ -38,19 +43,18 @@ below.
   0005](adr/0005-http-transport.md) — so it is no longer listed here.)
 - **npm publishing.** Gated on `@agentkit` npm scope ownership being
   confirmed; see the warning in the root [README](../README.md). Every
-  package's `publishConfig` is ready, but nothing is published.
+  package's `publishConfig` is ready, but nothing is published to the
+  registry. This is narrower than it was: the umbrella `agentkit` package
+  (ADR [0008](adr/0008-distribution-and-adapters-as-products.md)) makes
+  GitHub-tag installation (`"agentkit":
+  "github:andrejvysny/AgentKit#vX.Y.Z"`) a complete, working distribution
+  story on its own — adoption is not blocked on npm publish, only publishing
+  itself is.
 - **AI SDK spike** (evaluating Vercel's `ai` SDK or similar as a provider
   transport). Deferred pending live provider endpoints to test against;
   `@agentkit/core` keeps its hand-rolled `OpenAiCompatibleClient` for now,
   with `stream_options.include_usage` added to close the usage-reporting
   gap that motivated the spike.
-- **Multi-pass correction harness.** `VerificationHook` exists and
-  `TurnRunner` invokes it exactly once, after a run that made tool calls
-  (see [`docs/ports.md`](ports.md#verification)) — but nothing feeds a
-  `DeficiencyReport` back into the model for a bounded number of correction
-  passes. A single verification invocation is implemented; the harness that
-  would loop on it, with its own cost and stopping condition, is future
-  work.
 - **Durable cross-process cancellation.** The reference `TaskRunner`
   (`SingleProcessTaskRunner`) delivers `requestCancel` by aborting an
   in-memory `AbortController` this process registered for the run; a cancel

@@ -1,9 +1,10 @@
 # Architecture
 
 AgentKit is three layers plus a testing layer, a set of reference adapter
-packages implementing `host`'s ports, and two optional adapters beside `host`
-(an MCP client and an HTTP transport). Each layer only depends on the ones
-below it; the adapters depend on `host` and nothing depends on them.
+packages implementing `host`'s ports, and a set of optional adapters beside
+`host` (an MCP client, an MCP server, an HTTP transport, and a client +
+React pair). Each layer only depends on the ones below it; the adapters
+depend on `host` and nothing depends on them.
 
 ```
 packages/adapters-memory       @agentkit/adapters-memory (reference adapter)
@@ -22,6 +23,9 @@ packages/mcp-client            @agentkit/mcp-client (optional adapter)
 
 packages/transport-http        @agentkit/transport-http (optional adapter)
   fetch-standard REST v1 + SSE handler serving contracts' REST surface
+
+packages/mcp-server            @agentkit/mcp-server (optional adapter)
+  exposes a host's ToolCatalog AS an MCP server over streamable HTTP
 
 packages/client                @agentkit/client (optional adapter)
   the other end of that surface: typed REST v1 + SSE client, auto-resuming
@@ -164,9 +168,10 @@ embedding host or by the reference adapter packages
 
 ### Optional adapters beside host
 
-Two packages depend on `@agentkit/host` without `host` depending on either —
-the same relationship the reference adapters have, and a host is
-always free to skip both and write the equivalent itself:
+Five packages depend on `@agentkit/host` (or, for `client`/`react`, on
+`@agentkit/contracts` alone) without `host` depending on any of them — the
+same relationship the reference adapters have, and a host is always free to
+skip any of them and write the equivalent itself:
 
 - **`@agentkit/mcp-client`** ([`packages/mcp-client/`](../packages/mcp-client))
   — `McpClientManager` plus `createMcpToolSetContributor`, bridging Model
@@ -179,6 +184,15 @@ always free to skip both and write the equivalent itself:
   + SSE) over any host that implements the port catalog below. See
   [`packages/transport-http/README.md`](../packages/transport-http/README.md)
   and [ADR 0005](adr/0005-http-transport.md).
+- **`@agentkit/mcp-server`** ([`packages/mcp-server/`](../packages/mcp-server))
+  — the inverse direction from `mcp-client`: exposes a host's `ToolCatalog`
+  ([ADR 0011](adr/0011-tool-governance.md)) **as** an MCP server over
+  streamable HTTP, so an external MCP client (an IDE, another agent) can
+  drive this host's tools. Constant-time bearer auth, a DNS-rebinding
+  Host/Origin guard, sessions keyed on a server-minted id bound to the
+  opening principal, write-tool filtering on both `tools/list` and
+  `tools/call`. See [`packages/mcp-server/README.md`](../packages/mcp-server/README.md)
+  and [ADR 0013](adr/0013-serving-surfaces.md).
 - **`@agentkit/client`** ([`packages/client/`](../packages/client)) —
   `createAgentKitClient`, the calling end of that same surface: one typed
   method per `REST_ROUTES` operation, `streamRun` as an async iterable that
