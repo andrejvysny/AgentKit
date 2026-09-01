@@ -37,6 +37,10 @@
       "types": "./dist/transport-http/index.d.ts",
       "import": "./dist/transport-http/index.js"
     },
+    "./mcp-server": {
+      "types": "./dist/mcp-server/index.d.ts",
+      "import": "./dist/mcp-server/index.js"
+    },
     "./adapters-memory": {
       "types": "./dist/adapters-memory/index.d.ts",
       "import": "./dist/adapters-memory/index.js"

@@ -3,7 +3,7 @@
 AgentKit ships as **one** installable package, `agentkit`, with subpath
 imports (`agentkit/host`, `agentkit/adapters-sqlite`, …) backed by an
 umbrella package (`packages/agentkit`) whose `dist/` is assembled from the
-nine `@agentkit/*` source packages by `scripts/build-umbrella.mjs`. See
+ten `@agentkit/*` source packages by `scripts/build-umbrella.mjs`. See
 [`packages/agentkit/README.md`](packages/agentkit/README.md) for the
 subpath table.
 

@@ -23,6 +23,7 @@
     "@agentkit/core": "workspace:*",
     "@agentkit/host": "workspace:*",
     "@agentkit/mcp-client": "workspace:*",
+    "@agentkit/mcp-server": "workspace:*",
     "@agentkit/runner-local": "workspace:*",
     "@agentkit/transport-http": "workspace:*"
   },
