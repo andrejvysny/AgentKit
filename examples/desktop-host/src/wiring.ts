@@ -26,6 +26,9 @@
  * 10. `taskRunner.startWorker(...)` — start claiming.
  * 11. `RestHandlerDeps` — what `@agentkit/transport-http` needs to serve the
  *     contract; `main.ts` hands this straight to `serveRest`.
+ * 12. The optional MCP SERVER (`@agentkit/mcp-server`) over the same
+ *     contributors, mounted by `main.ts` at `/mcp` — only when
+ *     `AGENTKIT_MCP_SERVER_TOKEN` is set.
  */
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -62,6 +65,11 @@ import {
   McpClientManager,
   createMcpToolSetContributor,
 } from "@agentkit/mcp-client";
+import {
+  createMcpServerHandler,
+  createStagedToolSource,
+  type McpServerHandler,
+} from "@agentkit/mcp-server";
 import { SingleProcessTaskRunner } from "@agentkit/runner-local";
 import type { RestHandlerDeps } from "@agentkit/transport-http";
 import { createExampleToolSetContributor } from "./tools.js";
@@ -76,7 +84,11 @@ export interface WiringEnv {
   AGENTKIT_API_KEY?: string;
   AGENTKIT_MCP_COMMAND?: string;
   AGENTKIT_MCP_ARGS?: string;
+  AGENTKIT_MCP_SERVER_TOKEN?: string;
 }
+
+/** The header an MCP client sets to pin its session to one chat. See step 12. */
+export const MCP_CHAT_HEADER = "x-agentkit-chat";
 
 /** Where `main.ts` binds when nothing says otherwise. See {@link resolveBindHost}. */
 export const DEFAULT_BIND_HOST = "127.0.0.1";
@@ -133,6 +145,13 @@ export interface App {
   proposals: ProposalService;
   taskRunner: SingleProcessTaskRunner;
   mcpEnabled: boolean;
+  /**
+   * The MCP SERVER handler, present only when `AGENTKIT_MCP_SERVER_TOKEN` is
+   * set. `main.ts` mounts it at `/mcp`; `undefined` means the route is not
+   * served at all, which is the right answer for a host with no token — an
+   * unauthenticated MCP endpoint is tool execution left open.
+   */
+  mcpServer?: McpServerHandler;
   /** What `serveRest`/`createRestHandler` need. */
   deps: RestHandlerDeps;
   /**
@@ -346,6 +365,37 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     },
   };
 
+  // 12. The MCP SERVER — the same tools, offered to an outside MCP client
+  // (Claude Desktop, an IDE) instead of to this host's own runs. Off unless a
+  // token is set: there is no unauthenticated mode, and there should not be
+  // one, because what it hands out is tool execution against this host.
+  //
+  // `createStagedToolSource` takes the SAME `contributors` array the
+  // `TurnRunner` above got, so an MCP client and a chat turn see one tool set.
+  // `writesEnabled` is left at its `false` default — this example ships no
+  // write tools anyway, and turning it on is a decision that belongs where
+  // someone can see it.
+  const mcpServerToken = env.AGENTKIT_MCP_SERVER_TOKEN?.trim();
+  const mcpServer = mcpServerToken
+    ? createMcpServerHandler({
+        tools: createStagedToolSource({
+          contributors,
+          clock,
+          ids,
+          ...(logger === undefined ? {} : { logger }),
+        }),
+        auth: { bearerToken: mcpServerToken },
+        serverInfo: { name: "agentkit-example-desktop-host", version: "0.1.0" },
+        // Resolved ONCE per session, from the initialize request's headers —
+        // never from a message body and never from the client's announced name.
+        sessionScope: (headers) => {
+          const chatId = headers.get(MCP_CHAT_HEADER);
+          return chatId === null ? {} : { chatId };
+        },
+        ...(logger === undefined ? {} : { logger }),
+      })
+    : undefined;
+
   return {
     store,
     dbPath,
@@ -354,9 +404,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     proposals,
     taskRunner,
     mcpEnabled: mcp !== undefined,
+    ...(mcpServer === undefined ? {} : { mcpServer }),
     deps,
     async stop(): Promise<void> {
       await handle.stop();
+      if (mcpServer) await mcpServer.dispose();
       // Contributors first, then the transports they were built over: a
       // contributor's `dispose` may still need the connection `mcp.dispose()`
       // is about to tear down. Both are idempotent, so a second SIGINT is safe.
