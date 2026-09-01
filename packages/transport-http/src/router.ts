@@ -93,6 +93,43 @@ function matchSegments(
   return params;
 }
 
+/**
+ * A `basePath` option in the one form the rest of this package uses: either the
+ * empty string (no prefix) or a leading slash with no trailing one.
+ *
+ * `""`, `"/"`, and whitespace all normalize to "no prefix" rather than to a
+ * prefix that matches nothing — those are the three ways a config file spells
+ * "unset", and a handler that answered 404 to every request because
+ * `BASE_PATH=""` was exported is a fault that looks like a routing bug.
+ */
+export function normalizeBasePath(basePath: string | undefined): string {
+  if (basePath === undefined) return "";
+  const trimmed = basePath.trim().replace(/\/+$/, "");
+  if (trimmed === "") return "";
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+/**
+ * The path to route on, with the mount prefix removed — or `null` when the
+ * request is not under the prefix at all.
+ *
+ * `null` is the caller's cue to answer the ordinary 404: a request outside the
+ * mount is a request for a route this handler does not serve, which is exactly
+ * what "no route" means. `/api` with a base of `/api` strips to `/`, so the
+ * mount root itself 404s like any other unrouted path rather than matching the
+ * first route by accident.
+ */
+export function stripBasePath(
+  pathname: string,
+  basePath: string,
+): string | null {
+  if (basePath === "") return pathname;
+  if (pathname === basePath) return "/";
+  return pathname.startsWith(`${basePath}/`)
+    ? pathname.slice(basePath.length)
+    : null;
+}
+
 /** A malformed percent-escape is passed through rather than thrown on. */
 function safeDecode(segment: string): string {
   try {
