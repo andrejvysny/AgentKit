@@ -6,6 +6,7 @@ export * from "./system.js";
 export * from "./assistant-store.js";
 export * from "./conversation-store.js";
 export * from "./task-store.js";
+export * from "./task-aging.js";
 export * from "./proposal-store.js";
 export * from "./provider-store.js";
 export * from "./settings-store.js";

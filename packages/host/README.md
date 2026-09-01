@@ -12,9 +12,11 @@ services built on top of them (`TurnRunner`, `ProposalService`,
 full port catalog and [`docs/architecture.md`](../../docs/architecture.md)
 for how this layer fits between `@agentkit/core` and a storage backend.
 
-Two complete reference implementations of every port exist in
-`internal/reference-adapters` (workspace-private, not published) — read
-that package before writing your own adapter from scratch.
+Two complete reference implementations of every storage port ship as their
+own packages — [`@agentkit/adapters-memory`](../adapters-memory) (Map-backed)
+and [`@agentkit/adapters-sqlite`](../adapters-sqlite) (`bun:sqlite`, Bun
+only) — alongside [`@agentkit/runner-local`](../runner-local) for the
+`TaskRunner` port. Read one before writing your own adapter from scratch.
 
 ## Modules
 
@@ -82,7 +84,7 @@ reference `SingleProcessTaskRunner`) claims `chat.turn` tasks and calls
 `turnRunner.execute(execution)`. The full wiring, exercised end-to-end
 against real (non-mocked) `TurnRunner` + `SingleProcessTaskRunner` +
 `MemoryAssistantStore` code, with only the provider faked, lives at
-[`internal/reference-adapters/tests/task-runner-integration.test.ts`](../../internal/reference-adapters/tests/task-runner-integration.test.ts).
+[`packages/runner-local/tests/task-runner-integration.test.ts`](../runner-local/tests/task-runner-integration.test.ts).
 The sketch:
 
 ```ts
@@ -92,7 +94,8 @@ import {
   defaultIds,
   recoverOnBoot,
 } from "@agentkit/host";
-import { MemoryAssistantStore, SingleProcessTaskRunner } from "@agentkit/reference-adapters";
+import { MemoryAssistantStore } from "@agentkit/adapters-memory";
+import { SingleProcessTaskRunner } from "@agentkit/runner-local";
 
 const store = new MemoryAssistantStore();
 const taskRunner = new SingleProcessTaskRunner({ store });
@@ -139,10 +142,10 @@ reconnecting mid-retry still sees one unbroken sequence (see
 Implementing `AssistantStore` for your own backend (Postgres, Redis, a
 managed service):
 
-1. **Start from a reference adapter.** `internal/reference-adapters/src/`
-   has a complete `MemoryAssistantStore` and `SqliteAssistantStore` — both
-   pass the conformance suite below, and are the shortest path to seeing
-   every port method implemented once.
+1. **Start from a reference adapter.** `packages/adapters-memory/src/` and
+   `packages/adapters-sqlite/src/` have a complete `MemoryAssistantStore` and
+   `SqliteAssistantStore` — both pass the conformance suite below, and are the
+   shortest path to seeing every port method implemented once.
 2. **Run `describeAssistantStoreConformance`** from `@agentkit/testing`
    against your adapter as you build it, not after. It asserts the
    invariants ports document but cannot enforce by type alone: transition

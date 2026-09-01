@@ -3,10 +3,12 @@
 `@agentkit/host` defines no storage or execution of its own — it defines
 interfaces ("ports") an embedding host implements, plus the record types and
 frozen transition tables those interfaces are defined in terms of. Two
-complete implementations exist for local development and tests:
-`internal/reference-adapters`'s `MemoryAssistantStore` (Map-backed) and
-`SqliteAssistantStore` (`bun:sqlite`-backed) — see that package's
-[README](../internal/reference-adapters/README.md). Both pass
+complete implementations ship as their own packages:
+[`@agentkit/adapters-memory`](../packages/adapters-memory)'s
+`MemoryAssistantStore` (Map-backed, for tests and local dev) and
+[`@agentkit/adapters-sqlite`](../packages/adapters-sqlite)'s
+`SqliteAssistantStore` (`bun:sqlite`-backed, the durable store for a
+single-process host). Both pass
 `@agentkit/testing`'s `describeAssistantStoreConformance(factory)` suite
 ([`packages/testing/src/store-conformance.ts`](../packages/testing/src/store-conformance.ts)),
 the shared behavioral contract every `AssistantStore` implementation must
@@ -34,9 +36,10 @@ or rolls all of it back on a throw. An adapter that cannot roll back (a
 plain in-memory store) must declare `capabilities.atomicTransactions: false`
 to the conformance harness rather than silently pass a weaker guarantee.
 
-**Reference / conformance**: `MemoryAssistantStore` and
+**Reference / conformance**: `MemoryAssistantStore` in
+[`packages/adapters-memory/src/`](../packages/adapters-memory/src/) and
 `SqliteAssistantStore` in
-[`internal/reference-adapters/src/`](../internal/reference-adapters/src/);
+[`packages/adapters-sqlite/src/`](../packages/adapters-sqlite/src/);
 conformance suite in
 [`packages/testing/src/store-conformance.ts`](../packages/testing/src/store-conformance.ts).
 
@@ -144,7 +147,7 @@ single step, on both reference adapters.
 **Reference / conformance**: `MemoryAssistantStore` and `SqliteAssistantStore`
 (sqlite adapter: `SCHEMA_V4`, `parent_message_id`/`depth`/`branch_index`/
 `active` on `messages` — see
-[`internal/reference-adapters/README.md`](../internal/reference-adapters/README.md#sqlite-schema-v4)),
+[`packages/adapters-sqlite/README.md`](../packages/adapters-sqlite/README.md#schema-v4)),
 both graded by the same conformance suite; the tree arithmetic itself
 (`activePathOf`, `activationSetOf`, `nextBranchIndex`, `forkPrefixOf`,
 `planForkedMessages`) is shared, pure, and synchronous
@@ -255,7 +258,7 @@ only a real filter passes it (the wanted kind is the one the priority and
 FIFO ordering would NOT have picked), plus `kinds: []` meaning "no kind is
 acceptable" rather than "any kind". It also covers dependency gating and the
 failure/cancel settle verdicts, `listChildren`, `updateProgress`'s
-lease-gating, and (opt-in, see `internal/reference-adapters/src/task-aging.ts`)
+lease-gating, and (opt-in, see `packages/host/src/ports/task-aging.ts`)
 priority aging — a new adapter is graded against the same suite.
 
 **Concurrent-durability invariants**, a second and stronger bar beside the
@@ -358,14 +361,20 @@ first, then `ProposalService.reconcileInterrupted()`, so a recovered task is
 picked back up only after the writes it may have left mid-apply are settled.
 Both halves are idempotent; it returns `{ proposalsReconciled }`.
 
-**Reference**: `SingleProcessTaskRunner`
-([`internal/reference-adapters/src/task-runner/single-process-task-runner.ts`](../internal/reference-adapters/src/task-runner/single-process-task-runner.ts)) —
+**Reference / conformance**: `SingleProcessTaskRunner`
+([`packages/runner-local/src/single-process-task-runner.ts`](../packages/runner-local/src/single-process-task-runner.ts)) —
 claim/execute/heartbeat/retry/dead-letter/recover for one process, with
-fire-and-forget dispatch (never awaits an execution inside its claim loop)
-and evidence-based error classification (`error-classifier.ts`: an
-unrecognized failure is terminal by default, not blindly retried). Explicitly
-single-process: cancellation of a task another process owns is not delivered
-— see [`docs/non-goals.md`](non-goals.md).
+fire-and-forget dispatch (never awaits an execution inside its claim loop),
+evidence-based error classification (`error-classifier.ts`: an unrecognized
+failure is terminal by default, not blindly retried), and an exponential,
+jittered delay between attempts of one task. Explicitly single-process:
+cancellation of a task another process owns is not delivered — see
+[`docs/non-goals.md`](non-goals.md). The port's own behavioral contract is
+`@agentkit/testing`'s `describeTaskRunnerConformance(options)`
+([`packages/testing/src/task-runner-conformance.ts`](../packages/testing/src/task-runner-conformance.ts)):
+enqueue idempotency, recovery from an expired lease, cancellation reaching a
+running worker, and the concurrency budget — run against both reference
+stores.
 
 ### Task execution
 

@@ -9,7 +9,7 @@
  * breaks the first Node consumer. So: plain Node, no Bun APIs, the built `dist`
  * output rather than the source.
  *
- * Six checks, end-to-end rather than smoke-in-name-only where a package has
+ * Eight checks, end-to-end rather than smoke-in-name-only where a package has
  * something end-to-end to run:
  *
  *   1. Ajv (Node's, not Bun's) compiles `AiRunEventSchema` out of the contracts
@@ -19,12 +19,23 @@
  *      `completed`, stamping its events with core's own `createEventStamper`.
  *   3. The host dist loads and its port vocabulary answers — the transition
  *      table and the dependency gate are pure functions, so they run for real.
- *   4. The mcp-client dist loads (which drags in the MCP SDK under Node's
+ *   4. The adapters-memory dist runs a real chat + a real queue round trip:
+ *      a chat and a message are written and read back, a task is created and
+ *      then CLAIMED, which is the store's most invariant-dense operation
+ *      (attempt row, lease, fencing token, status transition, all under Node).
+ *   5. The runner-local dist drives that store end-to-end: a
+ *      `SingleProcessTaskRunner` claims the queued task, hands it to a worker,
+ *      and the task lands `completed`. This is the one check with real timers
+ *      in it — the claim loop is a `setTimeout` loop, and a runner that only
+ *      ever ran under Bun's event loop is exactly the kind of thing that
+ *      breaks here. adapters-sqlite has no check because it is Bun-only by
+ *      construction (`bun:sqlite`); see its README.
+ *   6. The mcp-client dist loads (which drags in the MCP SDK under Node's
  *      resolver, not Bun's) and a manager constructs. Nothing connects: this is
  *      about the module graph and the constructor's eager validation.
- *   5. The transport-http dist serves `GET /v1/version` through a real
+ *   7. The transport-http dist serves `GET /v1/version` through a real
  *      `Request`/`Response` round trip against stub deps.
- *   6. The testing dist loads and a golden trace round-trips through it —
+ *   8. The testing dist loads and a golden trace round-trips through it —
  *      this is the JSON-import path that needs `with { type: "json" }" to
  *      even load under Node (see `packages/testing/src/golden/golden.ts`).
  *
@@ -74,6 +85,8 @@ function publishedEntry(pkgDir) {
 const CONTRACTS_ENTRY = publishedEntry("contracts");
 const CORE_ENTRY = publishedEntry("core");
 const HOST_ENTRY = publishedEntry("host");
+const ADAPTERS_MEMORY_ENTRY = publishedEntry("adapters-memory");
+const RUNNER_LOCAL_ENTRY = publishedEntry("runner-local");
 const MCP_CLIENT_ENTRY = publishedEntry("mcp-client");
 const TRANSPORT_HTTP_ENTRY = publishedEntry("transport-http");
 const TESTING_ENTRY = publishedEntry("testing");
@@ -84,6 +97,8 @@ const WORKSPACE_ENTRIES = {
   "@agentkit/contracts": CONTRACTS_ENTRY,
   "@agentkit/core": CORE_ENTRY,
   "@agentkit/host": HOST_ENTRY,
+  "@agentkit/adapters-memory": ADAPTERS_MEMORY_ENTRY,
+  "@agentkit/runner-local": RUNNER_LOCAL_ENTRY,
   "@agentkit/mcp-client": MCP_CLIENT_ENTRY,
   "@agentkit/transport-http": TRANSPORT_HTTP_ENTRY,
   "@agentkit/testing": TESTING_ENTRY,
@@ -280,7 +295,114 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-// 4. MCP client dist: the module graph resolves under Node, a manager builds
+// 4. adapters-memory dist: a real conversation write and a real claim
+// ---------------------------------------------------------------------------
+
+const adaptersMemory = await import(ADAPTERS_MEMORY_ENTRY);
+console.log("adapters-memory dist");
+check(
+  typeof adaptersMemory.MemoryAssistantStore === "function",
+  "exports MemoryAssistantStore",
+);
+
+const memoryStore = new adaptersMemory.MemoryAssistantStore();
+const smokeChat = await memoryStore.conversations.createChat({
+  title: "node smoke",
+});
+await memoryStore.conversations.appendMessage({
+  chatId: smokeChat.id,
+  role: "user",
+  content: "hi",
+});
+const smokeMessages = await memoryStore.conversations.listMessages(
+  smokeChat.id,
+);
+check(
+  smokeMessages.length === 1 && smokeMessages[0].orderKey === 1,
+  "a message round-trips through the memory conversation store",
+);
+
+await memoryStore.tasks.createTask({
+  taskId: "node-smoke-task",
+  kind: "node.smoke",
+  scopeId: smokeChat.id,
+  payload: {},
+});
+// The store's most invariant-dense call: it must transition the task, write an
+// attempt row, and mint a lease with a fencing token, atomically.
+const smokeClaim = await memoryStore.tasks.claimNext({
+  ownerId: "node-smoke",
+  now: new Date(),
+  scopesBusy: [],
+});
+check(
+  smokeClaim?.task.taskId === "node-smoke-task" &&
+    smokeClaim?.task.status === "running" &&
+    typeof smokeClaim?.lease.leaseToken === "string" &&
+    smokeClaim?.attempt.attemptNumber === 1,
+  "claimNext hands back a running task with an attempt and a lease",
+);
+await memoryStore.tasks.releaseLease(smokeClaim.lease.leaseToken);
+await memoryStore.tasks.endAttempt({
+  attemptId: smokeClaim.attempt.attemptId,
+  status: "abandoned",
+});
+
+// ---------------------------------------------------------------------------
+// 5. runner-local dist: the claim loop actually drives a task to completed
+// ---------------------------------------------------------------------------
+
+const runnerLocal = await import(RUNNER_LOCAL_ENTRY);
+console.log("runner-local dist");
+check(
+  typeof runnerLocal.SingleProcessTaskRunner === "function",
+  "exports SingleProcessTaskRunner",
+);
+check(
+  runnerLocal.classifyExecutionError(new Error("ECONNRESET")).kind ===
+    "transient",
+  "classifyExecutionError reads a transient failure through the dist",
+);
+
+const runnerStore = new adaptersMemory.MemoryAssistantStore();
+await runnerStore.tasks.createTask({
+  taskId: "node-smoke-run",
+  kind: "node.smoke",
+  scopeId: "node-smoke-scope",
+  payload: {},
+});
+const runner = new runnerLocal.SingleProcessTaskRunner({
+  store: runnerStore,
+  pollMs: 5,
+});
+/** Lands the task the way a real executor does: transition, then end the attempt. */
+const smokeWorker = {
+  async execute({ taskId, attemptId }) {
+    await runnerStore.tasks.transitionTask(taskId, ["running"], "completed", {
+      finishedAt: new Date().toISOString(),
+    });
+    await runnerStore.tasks.endAttempt({ attemptId, status: "completed" });
+  },
+};
+const handle = await runner.startWorker(smokeWorker, { concurrency: 1 });
+await runner.enqueue({
+  taskId: "node-smoke-run",
+  scopeId: "node-smoke-scope",
+});
+let ranTask = null;
+for (const deadline = Date.now() + 5_000; Date.now() < deadline; ) {
+  ranTask = await runnerStore.tasks.getTask("node-smoke-run");
+  if (ranTask?.status === "completed") break;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+}
+await handle.stop();
+check(
+  ranTask?.status === "completed",
+  `the runner drove a queued task to "${ranTask?.status}" under Node`,
+);
+
+// ---------------------------------------------------------------------------
+// 6. MCP client dist: the module graph resolves under Node, a manager builds
 // ---------------------------------------------------------------------------
 
 const mcp = await import(MCP_CLIENT_ENTRY);
@@ -321,7 +443,7 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-// 5. Transport-http dist: a real Request/Response round trip
+// 7. Transport-http dist: a real Request/Response round trip
 // ---------------------------------------------------------------------------
 
 const transport = await import(TRANSPORT_HTTP_ENTRY);
@@ -367,7 +489,7 @@ const missing = await handler(new Request("http://x/v1/nope"));
 check(missing.status === 404, `an unrouted path answered ${missing.status}`);
 
 // ---------------------------------------------------------------------------
-// 6. Testing dist: a golden trace loads and validates — this is the exact
+// 8. Testing dist: a golden trace loads and validates — this is the exact
 //    path that broke before `golden.ts`'s JSON imports carried
 //    `with { type: "json" }`. Node throws ERR_IMPORT_ATTRIBUTE_MISSING on a
 //    bare JSON import; bun does not need the attribute, so `bun test` alone

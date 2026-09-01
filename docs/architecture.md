@@ -1,14 +1,21 @@
 # Architecture
 
-AgentKit is three layers plus a testing layer, a workspace-private set of
-reference implementations, and two optional adapters beside `host` (an MCP
-client and an HTTP transport). Each layer only depends on the ones below
-it; the optional adapters depend on `host` and nothing depends on them.
+AgentKit is three layers plus a testing layer, a set of reference adapter
+packages implementing `host`'s ports, and two optional adapters beside `host`
+(an MCP client and an HTTP transport). Each layer only depends on the ones
+below it; the adapters depend on `host` and nothing depends on them.
 
 ```
-internal/reference-adapters   @agentkit/reference-adapters (workspace-private; not published)
-  implements host's ports over bun:sqlite / in-memory Maps
-  (multiple store handles over one file/backend: supported, tested)
+packages/adapters-memory       @agentkit/adapters-memory (reference adapter)
+  every host storage port over in-memory Maps; tests and local dev
+
+packages/adapters-sqlite       @agentkit/adapters-sqlite (reference adapter, Bun only)
+  every host storage port over bun:sqlite; the durable store for a
+  single-process host (multiple handles over one file: supported, tested)
+
+packages/runner-local          @agentkit/runner-local (reference adapter)
+  the TaskRunner port for one process: claim, execute, heartbeat,
+  classified retry with backoff, dead-letter, recover
 
 packages/mcp-client            @agentkit/mcp-client (optional adapter)
   bridges MCP servers' tools into a run as a ToolSetContributor
@@ -144,12 +151,13 @@ to run it durably, across process restarts and retries:
 
 `@agentkit/host` depends on `@agentkit/core` and `@agentkit/contracts`; it
 implements no storage itself — every store is a port, implemented by the
-embedding host or by the reference adapters under `internal/`.
+embedding host or by the reference adapter packages
+(`@agentkit/adapters-memory`, `@agentkit/adapters-sqlite`).
 
 ### Optional adapters beside host
 
 Two packages depend on `@agentkit/host` without `host` depending on either —
-the same relationship `internal/reference-adapters` has, and a host is
+the same relationship the reference adapters have, and a host is
 always free to skip both and write the equivalent itself:
 
 - **`@agentkit/mcp-client`** ([`packages/mcp-client/`](../packages/mcp-client))
@@ -235,7 +243,7 @@ attempt was still `running`, so recovery ends it that way rather than
 guessing success or failure.
 
 **Recovery**, as implemented by the reference `SingleProcessTaskRunner`
-([`internal/reference-adapters/src/task-runner/single-process-task-runner.ts`](../internal/reference-adapters/src/task-runner/single-process-task-runner.ts)):
+([`packages/runner-local/src/single-process-task-runner.ts`](../packages/runner-local/src/single-process-task-runner.ts)):
 
 1. `recover()` calls `TaskStore.expireStaleLeases(now)`.
 2. Each expired lease's attempt is ended `abandoned`.

@@ -89,12 +89,10 @@ import {
   type UpdateMessagePatch,
   type UpdateProgressOptions,
   type WritePolicyMode,
-} from "@agentkit/host";
-import {
   resolveTaskAging,
   type ResolvedTaskAging,
   type TaskAgingOptions,
-} from "../task-aging.js";
+} from "@agentkit/host";
 import { SCHEMA_V4, SCHEMA_VERSION } from "./schema.js";
 
 const DEFAULT_LEASE_TTL_MS = 30_000;
@@ -1757,7 +1755,8 @@ class SqliteTaskStore implements TaskStore {
    * millisecond timestamp).
    *
    * Effective priority is `priority + min(maxBonus, floor(waitMs / intervalMs)
-   * * bonus)` — the formula in `../task-aging.ts`, expressed in SQL so the
+   * * bonus)` — the formula in `@agentkit/host`'s `ports/task-aging.ts`,
+   * expressed in SQL so the
    * ORDER BY sees it rather than the caller re-sorting a page of rows that was
    * already chosen by the wrong key. With the default `bonus = 0` the term
    * folds to zero and the ordering is plain `priority DESC, enqueued_at ASC`.

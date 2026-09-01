@@ -18,7 +18,7 @@ import {
   type ApplyProposalInput,
   type ProposalApplier,
 } from "@agentkit/host";
-import { MemoryAssistantStore } from "@agentkit/reference-adapters";
+import { MemoryAssistantStore } from "@agentkit/adapters-memory";
 import { MockProviderClient } from "@agentkit/testing";
 import { createRestHandler, type RestFetchHandler } from "../src/index.js";
 import { InertTaskRunner, request } from "./support/fixture.js";

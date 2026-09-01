@@ -93,13 +93,11 @@ import {
   type TaskStore,
   type UpdateMessagePatch,
   type UpdateProgressOptions,
-} from "@agentkit/host";
-import {
   effectivePriority,
   resolveTaskAging,
   type ResolvedTaskAging,
   type TaskAgingOptions,
-} from "../task-aging.js";
+} from "@agentkit/host";
 
 /** Lease TTL {@link MemoryTaskStore.claimNext} grants the attempt it creates. */
 const DEFAULT_LEASE_TTL_MS = 30_000;

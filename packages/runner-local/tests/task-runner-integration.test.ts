@@ -20,7 +20,8 @@ import {
   defaultIds,
 } from "@agentkit/host";
 import { MockProviderClient } from "@agentkit/testing";
-import { MemoryAssistantStore, SingleProcessTaskRunner } from "../src/index.js";
+import { MemoryAssistantStore } from "@agentkit/adapters-memory";
+import { SingleProcessTaskRunner } from "../src/index.js";
 import { createTestClock, waitFor } from "./support/task-runner-harness.js";
 
 describe("SingleProcessTaskRunner + TurnRunner", () => {

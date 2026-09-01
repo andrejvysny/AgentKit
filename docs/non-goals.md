@@ -2,7 +2,7 @@
 
 Deferred surface — work this repository deliberately does not include yet,
 and where each piece is expected to land when it does. None of this is
-implemented in `packages/` or `internal/` today; do not import paths named
+implemented in `packages/` today; do not import paths named
 below.
 
 - **React / UI packages.** No frontend package exists in this monorepo.
@@ -12,9 +12,10 @@ below.
   API onto `@agentkit/core`. OpenPCB's own migration to this package is a
   separate, future change in the OpenPCB repository — this session made
   **no commits** to OpenPCB or task-system, reference-reading only.
-- **Cloud-agent Redis/Postgres adapters.** `internal/reference-adapters`
-  ships only an in-memory store and a `bun:sqlite` store, both
-  single-process (see `internal/reference-adapters/README.md`). A
+- **Cloud-agent Redis/Postgres adapters.** The reference adapters ship only
+  an in-memory store (`@agentkit/adapters-memory`) and a `bun:sqlite` store
+  (`@agentkit/adapters-sqlite`), both single-process — as is
+  `@agentkit/runner-local` (see their READMEs). A
   distributed deployment needs its own `AssistantStore`/`TaskRunner`
   implementation over a networked backend — the port interfaces in
   `packages/host/src/ports/` are what such an adapter implements against.

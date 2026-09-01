@@ -1,10 +1,9 @@
 {
-  "name": "@agentkit/transport-http",
+  "name": "@agentkit/adapters-sqlite",
   "version": "0.1.0-dev",
-  "description": "Optional fetch-standard HTTP + SSE adapter serving the AgentKit REST v1 contract over any host.",
+  "description": "bun:sqlite AssistantStore for @agentkit/host: durable, transactional, lease-fenced storage for a single-process host. Bun-only.",
   "license": "MIT",
   "engines": {
-    "node": ">=20",
     "bun": ">=1.3"
   },
   "type": "module",
@@ -34,13 +33,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "bun test tests",
+    "dev": "tsc -p tsconfig.build.json --watch",
     "prepack": "node ../../scripts/prepack-publish-config.mjs apply",
     "postpack": "node ../../scripts/prepack-publish-config.mjs restore"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/andrejvysny/AgentKit.git",
-    "directory": "packages/transport-http"
+    "directory": "packages/adapters-sqlite"
   },
   "dependencies": {
     "@agentkit/contracts": "workspace:*",
@@ -48,7 +48,6 @@
   },
   "devDependencies": {
     "@agentkit/adapters-memory": "workspace:*",
-    "@agentkit/runner-local": "workspace:*",
     "@agentkit/testing": "workspace:*",
     "@types/bun": "^1.3.5",
     "typescript": "^5.8.3"

@@ -15,7 +15,7 @@ import type { AiRunEvent } from "@agentkit/contracts";
 import { CHAT_TURN_TASK_KIND } from "@agentkit/host";
 import type { Clock, TaskExecution, TaskWorker } from "@agentkit/host";
 import { createTestEventStamper } from "@agentkit/testing";
-import { MemoryAssistantStore } from "../../src/index.js";
+import { MemoryAssistantStore } from "@agentkit/adapters-memory";
 import { SingleProcessTaskRunner } from "../../src/index.js";
 
 /** A clock that starts fixed and only moves when a test says so. */
@@ -247,6 +247,13 @@ export interface HarnessOptions {
   heartbeatMs?: number;
   pollMs?: number;
   maxAttempts?: number;
+  /**
+   * Retry backoff. Defaults to NO delay, because the clock above is frozen: a
+   * suite about retry *semantics* would otherwise wait forever for a deadline
+   * only a test can advance the clock past. The one suite that is about the
+   * delay itself passes its own.
+   */
+  retryBackoff?: { baseMs?: number; maxMs?: number; jitterRatio?: number };
 }
 
 export function createHarness(options: HarnessOptions = {}): Harness {
@@ -272,6 +279,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     ...(options.maxAttempts === undefined
       ? {}
       : { maxAttempts: options.maxAttempts }),
+    retryBackoff: options.retryBackoff ?? { baseMs: 0, jitterRatio: 0 },
   });
   return {
     clock,

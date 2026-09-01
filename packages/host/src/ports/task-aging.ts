@@ -1,6 +1,14 @@
 /**
- * Priority aging for the reference adapters' `claimNext` — the starvation
- * valve, and OFF unless a host asks for it.
+ * Priority aging for a `TaskStore`'s `claimNext` — the starvation valve, and
+ * OFF unless a host asks for it.
+ *
+ * It lives in the port package rather than in an adapter because it is part of
+ * the queue's OBSERVABLE contract: two stores that age differently answer
+ * `claimNext` differently for the same rows, and the conformance suite grades
+ * them against one formula. Adapters (`@agentkit/adapters-memory`,
+ * `@agentkit/adapters-sqlite`) accept {@link TaskAgingOptions} at construction
+ * and implement it — the memory store through {@link effectivePriority} in its
+ * comparator, the sqlite store by expressing the same formula in its ORDER BY.
  *
  * THE FORMULA IS PRESERVED FROM task-system, the predecessor runtime this
  * workspace salvages ideas from: a task's effective priority is its base

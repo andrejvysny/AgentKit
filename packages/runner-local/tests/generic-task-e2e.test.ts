@@ -32,11 +32,9 @@ import {
   type TaskExecutor,
 } from "@agentkit/host";
 import { MockProviderClient } from "@agentkit/testing";
-import {
-  MemoryAssistantStore,
-  SingleProcessTaskRunner,
-  SqliteAssistantStore,
-} from "../src/index.js";
+import { MemoryAssistantStore } from "@agentkit/adapters-memory";
+import { SqliteAssistantStore } from "@agentkit/adapters-sqlite";
+import { SingleProcessTaskRunner } from "../src/index.js";
 import {
   createTestClock,
   settle,

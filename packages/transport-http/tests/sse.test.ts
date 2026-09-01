@@ -13,7 +13,7 @@ import {
   type AiRunEvent,
   type TaskEventEnvelope,
 } from "@agentkit/contracts";
-import { MemoryAssistantStore } from "@agentkit/reference-adapters";
+import { MemoryAssistantStore } from "@agentkit/adapters-memory";
 import {
   DEFAULT_STREAM_OPTIONS,
   resolveStreamOptions,

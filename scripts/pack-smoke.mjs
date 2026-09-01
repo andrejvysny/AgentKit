@@ -76,10 +76,22 @@ const PACKAGES = [
   "contracts",
   "core",
   "host",
+  "adapters-memory",
+  "adapters-sqlite",
+  "runner-local",
   "testing",
   "mcp-client",
   "transport-http",
 ];
+
+/**
+ * Packages the consumer check script does NOT import. `npm pack` + `npm
+ * install` still cover them — the packed `exports` must point into `dist/` and
+ * the tarball must install — but `@agentkit/adapters-sqlite` is built on
+ * `bun:sqlite` and declares `engines.bun` only, so importing it from a plain
+ * `node check.mjs` would fail by design rather than find a bug.
+ */
+const NOT_NODE_IMPORTABLE = new Set(["@agentkit/adapters-sqlite"]);
 
 function readPkg(dir) {
   return JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
@@ -222,6 +234,9 @@ function main() {
         process.exit(1);
       }
       console.log(`  ok   packed exports point at ${entry}`);
+      if (NOT_NODE_IMPORTABLE.has(pkg.name)) {
+        console.log("  note installed but not imported below — Bun-only");
+      }
     }
 
     console.log(
@@ -310,6 +325,36 @@ check(
   host.isTaskTransitionAllowed("queued", "running") === true,
   "task transition table answers",
 );
+
+const adaptersMemory = await import("@agentkit/adapters-memory");
+console.log("@agentkit/adapters-memory");
+const store = new adaptersMemory.MemoryAssistantStore();
+await store.tasks.createTask({ taskId: "pack-smoke", kind: "pack.smoke", scopeId: "pack-scope", payload: {} });
+const claim = await store.tasks.claimNext({ ownerId: "pack-smoke", now: new Date(), scopesBusy: [] });
+check(claim?.task.status === "running" && typeof claim?.lease.leaseToken === "string", "claimNext hands back a running task with a lease");
+
+const runnerLocal = await import("@agentkit/runner-local");
+console.log("@agentkit/runner-local");
+const runner = new runnerLocal.SingleProcessTaskRunner({ store, pollMs: 5 });
+await store.tasks.releaseLease(claim.lease.leaseToken);
+await store.tasks.endAttempt({ attemptId: claim.attempt.attemptId, status: "completed" });
+await store.tasks.transitionTask("pack-smoke", ["running"], "completed", { finishedAt: new Date().toISOString() });
+await store.tasks.createTask({ taskId: "pack-smoke-run", kind: "pack.smoke", scopeId: "pack-scope-2", payload: {} });
+const handle = await runner.startWorker({
+  async execute({ taskId, attemptId }) {
+    await store.tasks.transitionTask(taskId, ["running"], "completed", { finishedAt: new Date().toISOString() });
+    await store.tasks.endAttempt({ attemptId, status: "completed" });
+  },
+}, { concurrency: 1 });
+await runner.enqueue({ taskId: "pack-smoke-run", scopeId: "pack-scope-2" });
+let ran = null;
+for (const deadline = Date.now() + 5000; Date.now() < deadline; ) {
+  ran = await store.tasks.getTask("pack-smoke-run");
+  if (ran?.status === "completed") break;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+}
+await handle.stop();
+check(ran?.status === "completed", \`the runner drove a queued task to "\${ran?.status}"\`);
 
 const testing = await import("@agentkit/testing");
 console.log("@agentkit/testing");

@@ -26,7 +26,7 @@ import {
   defaultIds,
   type ListEventsOptions,
 } from "@agentkit/host";
-import { MemoryTaskStore } from "@agentkit/reference-adapters";
+import { MemoryTaskStore } from "@agentkit/adapters-memory";
 import { DEFAULT_STREAM_OPTIONS, type RestStreamOptions } from "../src/deps.js";
 import { createRunEventStream, resolveStartSeq } from "../src/sse.js";
 
