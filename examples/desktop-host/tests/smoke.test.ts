@@ -192,6 +192,15 @@ describe("examples/desktop-host — HTTP smoke", () => {
     const version = await fetch(`${origin}/v1/version`);
     expect(version.status).toBe(200);
 
+    // GET /v1/tools answers 200 now that this example wires a `ToolCatalog`
+    // (it reported 501 for as long as there was no chat-independent port), and
+    // what it advertises is what the contributors actually stage.
+    const tools = await fetch(`${origin}/v1/tools`);
+    expect(tools.status).toBe(200);
+    expect(
+      ((await tools.json()) as { name: string }[]).map((t) => t.name).sort(),
+    ).toEqual(["example_echo", "example_now"]);
+
     const created = await postJson(`${origin}/v1/chats`, {});
     expect(created.status).toBe(201);
     const chat = (await created.json()) as ChatDto;

@@ -89,12 +89,20 @@ function createNowTool(
  * Tools are contributed per run (see `ToolSetContributor`'s doc comment), not
  * registered once at boot — this contributor has no per-run state to build, so
  * it always returns the same two tools.
+ *
+ * `namespace` is required and is this contributor's OWN token: it is attribution
+ * and reservation, not a prefix — the tools keep the names `example_echo` and
+ * `example_now`, and nothing renames them to `example__…`. What it buys is that
+ * AgentKit's reserved namespaces (`agentkit`, `chat`, `mcp`) are refused here,
+ * and that a second contributor offering an `example_echo` of its own fails
+ * staging loudly instead of shadowing this one.
  */
 export function createExampleToolSetContributor(
   clock: Clock,
 ): ToolSetContributor {
   const tools = [echoTool, createNowTool(clock)] as unknown as AiTool[];
   return {
+    namespace: "example",
     async contribute(_ctx: ToolContributionContext): Promise<AiTool[]> {
       return tools;
     },

@@ -17,6 +17,15 @@ type FailedEvent = AiRunEvent & {
 const failedEvents = (events: AiRunEvent[]): FailedEvent[] =>
   events.filter((e) => e.type === "run.tool.failed") as FailedEvent[];
 
+/** The structured half of the error envelope a failed call feeds the model. */
+function envelopeData(message: AiChatMessage): Record<string, unknown> {
+  return (
+    JSON.parse(messageContentToText(message.content)) as {
+      data: Record<string, unknown>;
+    }
+  ).data;
+}
+
 function toolCallStep(
   toolCallId: string,
   name: string,
@@ -216,6 +225,53 @@ describe("runChat — tool execution failures", () => {
     expect(client.callCount).toBe(2);
     const toolMsg = result.appendedMessages.find((m) => m.role === "tool");
     expect(toolMsg?.toolCallId).toBe("c1");
+    // A plain throw carries no retry promise, so the envelope must not invent
+    // one — `retryable: false` unless the error itself says otherwise.
+    expect(envelopeData(toolMsg!)).toMatchObject({
+      errorCode: "exec_failed",
+      phase: "execution",
+      retryable: false,
+    });
+  });
+
+  it("carries a thrown error's own retryable flag into the envelope", async () => {
+    const client = new MockProviderClient();
+    client.setScript([
+      { steps: [toolCallStep("c1", "flaky", "{}")] },
+      { steps: [{ kind: "text", content: "will try later" }] },
+    ]);
+    const flaky: AiTool<Record<string, never>, unknown> = {
+      definition: {
+        name: "flaky",
+        version: "1",
+        effect: "read",
+        capability: "test",
+        description: "throws something transient",
+        inputSchema: { type: "object", properties: {} },
+      },
+      execute(): Promise<never> {
+        throw Object.assign(new Error("upstream 503"), { retryable: true });
+      },
+    };
+    const registry = new AiToolRegistry();
+    registry.register(flaky as unknown as AiTool);
+
+    const { result } = await collectRun(
+      runChat({
+        client,
+        registry,
+        model: "m",
+        messages: [{ role: "user", content: "go" }],
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
+
+    const toolMsg = result.appendedMessages.find((m) => m.role === "tool");
+    expect(envelopeData(toolMsg!)).toMatchObject({
+      errorCode: "exec_failed",
+      phase: "execution",
+      retryable: true,
+    });
   });
 
   it("reports unparseable arguments as bad_args and feeds the error back", async () => {

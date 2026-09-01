@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type {
   AiChatMessage,
   AiContentPart,
+  AiProviderCapabilities,
   AiRunEvent,
 } from "@agentkit/contracts";
 import type { AiChatRequest, AiProviderClient, AiTool } from "@agentkit/core";
@@ -14,11 +15,14 @@ import {
   DuplicateTaskError,
   LeaseLostError,
   MISSING_TOOL_RESULT_CODE,
+  TOOL_GUARD_REFUSED_CODE,
   TurnRunner,
+  type AssistantSettings,
   type AttachmentBudgets,
   type AttachmentResolver,
   type MessageRecord,
   type ResolvedAttachment,
+  type ToolGuard,
   type ToolSetContributor,
   type VerificationHook,
 } from "../src/index.js";
@@ -32,6 +36,8 @@ class TestClient implements AiProviderClient {
   readonly id = "test";
   readonly kind = "openai-compatible";
   readonly toolsPerCall: number[] = [];
+  /** The tool NAMES each call advertised — what the model could actually see. */
+  readonly toolNamesPerCall: string[][] = [];
   /** The history each call was handed — what a replay assertion reads. */
   readonly messagesPerCall: AiChatMessage[][] = [];
   readonly failCalls = new Set<number>();
@@ -50,6 +56,7 @@ class TestClient implements AiProviderClient {
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
     this.calls += 1;
     this.toolsPerCall.push(input.tools?.length ?? 0);
+    this.toolNamesPerCall.push((input.tools ?? []).map((t) => t.name));
     this.messagesPerCall.push([...input.messages]);
     if (this.failCalls.has(this.calls)) {
       throw new Error("provider rejected the request");
@@ -88,6 +95,7 @@ const echoTool: AiTool<{ text?: string }, { echoed: string; verbose: string }> =
   };
 
 const echoContributor: ToolSetContributor = {
+  namespace: "test",
   contribute: async () => [echoTool as AiTool],
 };
 
@@ -107,6 +115,11 @@ async function setupRunner(
     historyLimit?: number;
     attachments?: AttachmentResolver;
     attachmentBudgets?: AttachmentBudgets;
+    toolGuards?: ToolGuard[];
+    /** Applied to the settings row before the turn runs. */
+    settings?: Partial<AssistantSettings>;
+    /** Stored as the provider's PROBED capabilities. */
+    capabilities?: AiProviderCapabilities;
   } = {},
 ): Promise<RunnerFixture> {
   const harness = createHarness();
@@ -120,7 +133,13 @@ async function setupRunner(
     defaultModel: "m1",
     enabled: true,
   });
-  await harness.store.settings.updateSettings({ defaultProviderId: "p1" });
+  if (options.capabilities !== undefined) {
+    await harness.store.providers.saveCapabilities("p1", options.capabilities);
+  }
+  await harness.store.settings.updateSettings({
+    defaultProviderId: "p1",
+    ...options.settings,
+  });
   const chat = await harness.store.conversations.createChat({ id: "chat-1" });
   const runner = new TurnRunner({
     store: harness.store,
@@ -129,6 +148,9 @@ async function setupRunner(
     contributors: options.contributors ?? [],
     clock: harness.clock,
     ids: harness.ids,
+    ...(options.toolGuards === undefined
+      ? {}
+      : { toolGuards: options.toolGuards }),
     ...(options.verification === undefined
       ? {}
       : { verification: options.verification }),
@@ -1044,7 +1066,7 @@ describe("TurnRunner — a branch switch mid-run", () => {
         };
       },
     };
-    return { contribute: async () => [tool as AiTool] };
+    return { namespace: "test", contribute: async () => [tool as AiTool] };
   }
 
   /**
@@ -1453,5 +1475,263 @@ describe("TurnRunner — attachment resolution", () => {
     // unbudgeted, and the resolver is never asked anything.
     expect(userContentSeenByProvider(f)).toEqual(inlined);
     expect(attachments.calls).toEqual([]);
+  });
+});
+
+describe("TurnRunner — tool guards", () => {
+  /** `echo` plus a second tool, so "hidden" is distinguishable from "empty". */
+  const twoToolContributor: ToolSetContributor = {
+    namespace: "test",
+    contribute: async () => [
+      echoTool as AiTool,
+      {
+        ...(echoTool as AiTool),
+        definition: { ...echoTool.definition, name: "secret" },
+      },
+    ],
+  };
+
+  it("never advertises a tool a guard hides", async () => {
+    const f = await setupRunner({
+      contributors: [twoToolContributor],
+      toolGuards: [{ isVisible: (ctx) => ctx.tool.name !== "secret" }],
+    });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "hi" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hello",
+    });
+    await drive(f, submitted.runId);
+
+    // The provider's own view: what the model was actually shown.
+    expect(f.client.toolNamesPerCall[0]).toEqual(["echo"]);
+  });
+
+  it("sees the contributor's namespace on the guard context", async () => {
+    const namespaces: string[] = [];
+    const f = await setupRunner({
+      contributors: [echoContributor],
+      toolGuards: [
+        {
+          isVisible: (ctx) => {
+            namespaces.push(ctx.namespace);
+            return true;
+          },
+        },
+      ],
+    });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "hi" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hello",
+    });
+    await drive(f, submitted.runId);
+    expect(namespaces).toEqual(["test"]);
+  });
+
+  it("fails one call — not the run — when a guard refuses at execution", async () => {
+    const f = await setupRunner({
+      contributors: [echoContributor],
+      toolGuards: [
+        {
+          canExecute: () => ({ allowed: false, reason: "writes are paused" }),
+        },
+      ],
+    });
+    f.mock.setScript([
+      {
+        steps: [
+          {
+            kind: "tool_call",
+            toolCallId: "call-1",
+            name: "echo",
+            argumentsJson: '{"text":"hi"}',
+          },
+        ],
+      },
+      { steps: [{ kind: "text", content: "understood" }] },
+    ]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "use the tool",
+    });
+    await drive(f, submitted.runId);
+
+    // The tool WAS advertised (canExecute is not isVisible) and was called.
+    expect(f.client.toolNamesPerCall[0]).toEqual(["echo"]);
+
+    const events = await eventsOf(f, submitted.runId);
+    const failed = events.find((e) => e.type === "run.tool.failed") as
+      | (AiRunEvent & { data: { errorMessage: string } })
+      | undefined;
+    expect(failed?.data.errorMessage).toBe("writes are paused");
+    expect(events.some((e) => e.type === "run.tool.succeeded")).toBe(false);
+
+    // The run completed, and the tool message is there to balance the call.
+    expect((await f.store.tasks.getTask(submitted.runId))?.status).toBe(
+      "completed",
+    );
+    const toolRecord = messagesOf(f).find((m) => m.role === "tool");
+    expect(toolRecord?.toolCallId).toBe("call-1");
+    const envelope = JSON.parse(toolRecord?.content as string) as {
+      ok: boolean;
+      status: string;
+      data: Record<string, unknown>;
+    };
+    expect(envelope.ok).toBe(false);
+    expect(envelope.status).toBe("error");
+    expect(envelope.data).toEqual({
+      errorCode: TOOL_GUARD_REFUSED_CODE,
+      errorMessage: "writes are paused",
+      phase: "guard",
+      retryable: false,
+    });
+    expectOneSequence(events, submitted.runId);
+    expect(
+      messagesOf(f).find((m) => m.id === submitted.assistantMessageId)?.content,
+    ).toBe("understood");
+  });
+});
+
+describe("TurnRunner — the toolCalling override", () => {
+  const CHAT_ONLY: AiProviderCapabilities = {
+    streaming: true,
+    toolCalling: false,
+    modelList: true,
+  };
+
+  async function runOneTurn(f: RunnerFixture): Promise<void> {
+    f.mock.setScript([{ steps: [{ kind: "text", content: "hi" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hello",
+    });
+    await drive(f, submitted.runId);
+  }
+
+  it("auto follows the probe: tools when it says yes", async () => {
+    const f = await setupRunner({
+      contributors: [echoContributor],
+      settings: { toolCalling: "auto" },
+    });
+    await runOneTurn(f);
+    expect(f.client.toolNamesPerCall[0]).toEqual(["echo"]);
+  });
+
+  it("auto follows the probe: no tools when it says no", async () => {
+    const f = await setupRunner({
+      contributors: [echoContributor],
+      settings: { toolCalling: "auto" },
+      capabilities: CHAT_ONLY,
+    });
+    await runOneTurn(f);
+    expect(f.client.toolNamesPerCall[0]).toEqual([]);
+  });
+
+  it("defaults to auto when the setting was never written", async () => {
+    const f = await setupRunner({ contributors: [echoContributor] });
+    await runOneTurn(f);
+    expect(f.client.toolNamesPerCall[0]).toEqual(["echo"]);
+  });
+
+  it("off stages nothing even on a tool-capable provider", async () => {
+    const f = await setupRunner({
+      contributors: [echoContributor],
+      settings: { toolCalling: "off" },
+    });
+    await runOneTurn(f);
+    expect(f.client.toolNamesPerCall[0]).toEqual([]);
+  });
+
+  it("on stages tools despite a probe that says unsupported", async () => {
+    const f = await setupRunner({
+      contributors: [echoContributor],
+      settings: { toolCalling: "on" },
+      capabilities: CHAT_ONLY,
+    });
+    await runOneTurn(f);
+    expect(f.client.toolNamesPerCall[0]).toEqual(["echo"]);
+  });
+
+  it("off does not ask the contributors at all", async () => {
+    let asked = 0;
+    const counting: ToolSetContributor = {
+      namespace: "test",
+      contribute: async () => {
+        asked += 1;
+        return [echoTool as AiTool];
+      },
+    };
+    const f = await setupRunner({
+      contributors: [counting],
+      settings: { toolCalling: "off" },
+    });
+    await runOneTurn(f);
+    expect(asked).toBe(0);
+  });
+});
+
+describe("TurnRunner.disposeContributors", () => {
+  function disposable(namespace: string, log: string[]): ToolSetContributor {
+    return {
+      namespace,
+      contribute: async () => [],
+      dispose: () => {
+        log.push(namespace);
+      },
+    };
+  }
+
+  it("disposes every contributor exactly once, and is idempotent", async () => {
+    const log: string[] = [];
+    const f = await setupRunner({
+      contributors: [disposable("one", log), disposable("two", log)],
+    });
+    await f.runner.disposeContributors();
+    expect(log).toEqual(["one", "two"]);
+    // A second signal must not close anything twice.
+    await f.runner.disposeContributors();
+    expect(log).toEqual(["one", "two"]);
+  });
+
+  it("skips a contributor with no dispose hook", async () => {
+    const log: string[] = [];
+    const f = await setupRunner({
+      contributors: [echoContributor, disposable("two", log)],
+    });
+    await f.runner.disposeContributors();
+    expect(log).toEqual(["two"]);
+  });
+
+  it("keeps going — and logs — when one contributor's dispose throws", async () => {
+    const log: string[] = [];
+    const warnings: string[] = [];
+    const harness = createHarness();
+    const runner = new TurnRunner({
+      store: harness.store,
+      taskRunner: harness.taskRunner,
+      providerFactory: () => new MockProviderClient(),
+      contributors: [
+        {
+          namespace: "bad",
+          contribute: async () => [],
+          dispose: () => {
+            throw new Error("socket already gone");
+          },
+        },
+        disposable("good", log),
+      ],
+      clock: harness.clock,
+      ids: harness.ids,
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: (message) => warnings.push(message),
+        error: () => {},
+      },
+    });
+    await runner.disposeContributors();
+    expect(log).toEqual(["good"]);
+    expect(warnings).toEqual(["tool contributor dispose failed"]);
   });
 });
