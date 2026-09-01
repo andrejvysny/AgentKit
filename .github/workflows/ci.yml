@@ -104,6 +104,7 @@ jobs:
           ! grep -rE "require\(['\"]bun|from ['\"]bun:" \
             packages/contracts/dist \
             packages/client/dist \
+            packages/react/dist \
             packages/core/dist \
             packages/host/dist \
             packages/adapters-memory/dist \
@@ -139,7 +140,7 @@ jobs:
       - run: node scripts/pack-smoke.mjs
 
   # The single-install distribution model this repo ships: `agentkit`, the
-  # umbrella package assembled by `scripts/build-umbrella.mjs` from the ten
+  # umbrella package assembled by `scripts/build-umbrella.mjs` from the twelve
   # packages' dists, actually installs and works under both npm and bun.
   # Needs real npm/bun registry access for agentkit's real, non-workspace
   # dependencies (typebox, ajv, the MCP SDK), so it is its own job rather
