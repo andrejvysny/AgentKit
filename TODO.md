@@ -3,7 +3,7 @@
 ## Phase A — library-ready
 - [x] A1 adapters promotion: `packages/adapters-memory`, `packages/adapters-sqlite`, `packages/runner-local`; `task-aging` → host; retry backoff; TaskRunner conformance; delete `internal/`
 - [x] A2 umbrella package `agentkit` + build/smoke scripts + release workflow + DEVELOPING.md
-- [ ] A3 `examples/desktop-host` composition root + HTTP smoke (+ `ollama` preset)
+- [x] A3 `examples/desktop-host` composition root + HTTP smoke (+ `ollama` preset)
 - [x] A4 wire `UsageAuthorizer` (TurnRunner) + `AuthorizationPort` (transport); `basePath`; CORS
 - [ ] Phase A verifier (fresh context) + fixes
 

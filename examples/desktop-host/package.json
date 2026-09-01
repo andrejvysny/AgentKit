@@ -1,0 +1,34 @@
+{
+  "name": "@agentkit/example-desktop-host",
+  "version": "0.1.0-dev",
+  "private": true,
+  "description": "Composition root: SqliteAssistantStore + SingleProcessTaskRunner + an OpenAI-compatible provider + two sample tools + the REST/SSE transport, wired into one runnable AgentKit host and served over HTTP.",
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.3"
+  },
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "test": "bun test tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andrejvysny/AgentKit.git",
+    "directory": "examples/desktop-host"
+  },
+  "dependencies": {
+    "@agentkit/adapters-sqlite": "workspace:*",
+    "@agentkit/contracts": "workspace:*",
+    "@agentkit/core": "workspace:*",
+    "@agentkit/host": "workspace:*",
+    "@agentkit/mcp-client": "workspace:*",
+    "@agentkit/runner-local": "workspace:*",
+    "@agentkit/transport-http": "workspace:*"
+  },
+  "devDependencies": {
+    "@agentkit/testing": "workspace:*",
+    "@types/bun": "^1.3.5",
+    "typescript": "^5.8.3"
+  }
+}

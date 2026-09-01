@@ -1,0 +1,326 @@
+/**
+ * The composition itself, factored out of `main.ts` so a test can build the
+ * exact same object graph over a temp-dir sqlite file and a scripted provider,
+ * ask for port 0, and drive it over real HTTP — see `../tests/smoke.test.ts`.
+ *
+ * Read this file as the wiring recipe every embedding follows, in order:
+ *
+ *  1. Ambient ports — `Clock`/`IdGenerator` (`system.ts`'s defaults) and a
+ *     `SecretStore` for provider API keys.
+ *  2. Storage — one `AssistantStore` behind every port (`@agentkit/adapters-sqlite`
+ *     here; swap in your own backend by implementing the ports in
+ *     `packages/host/src/ports/`).
+ *  3. Provider config — read from the store if one exists, seeded from env on
+ *     first boot otherwise.
+ *  4. Tools — a `ToolSetContributor` per source (the two sample tools below;
+ *     optionally an MCP bridge).
+ *  5. The write pipeline — `SessionWritePolicy` + `ProposalService`. This
+ *     example ships no write tools, so nothing is ever staged, but
+ *     `recoverOnBoot` (step 9) needs a `ProposalService` to reconcile against.
+ *  6. `SingleProcessTaskRunner` — the queue. Built before `TurnRunner` (next
+ *     step), which takes it as a dependency.
+ *  7. `TurnRunner` — the durable worker over `@agentkit/core`'s run loop.
+ *  8. `ExecutorRegistry` + `ChatTurnExecutor`, dispatched through
+ *     `createDispatchingWorker`.
+ *  9. `recoverOnBoot` — clean up after the last crash, BEFORE claiming work.
+ * 10. `taskRunner.startWorker(...)` — start claiming.
+ * 11. `RestHandlerDeps` — what `@agentkit/transport-http` needs to serve the
+ *     contract; `main.ts` hands this straight to `serveRest`.
+ */
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { SqliteAssistantStore } from "@agentkit/adapters-sqlite";
+import type { AiProviderConfig } from "@agentkit/contracts";
+import {
+  OpenAiCompatibleClient,
+  getPresetByKind,
+  type AiProviderClient,
+} from "@agentkit/core";
+import {
+  ChatTurnExecutor,
+  ExecutorRegistry,
+  PROVIDER_SECRET_REF_KEY,
+  ProposalService,
+  SessionWritePolicy,
+  TaskService,
+  TurnRunner,
+  createDispatchingWorker,
+  defaultClock,
+  defaultIds,
+  recoverOnBoot,
+  type ApplyOutcome,
+  type ApplyProposalInput,
+  type Clock,
+  type IdGenerator,
+  type Logger,
+  type ProposalApplier,
+  type SecretStore,
+  type ToolSetContributor,
+} from "@agentkit/host";
+import {
+  McpClientManager,
+  createMcpToolSetContributor,
+} from "@agentkit/mcp-client";
+import { SingleProcessTaskRunner } from "@agentkit/runner-local";
+import type { RestHandlerDeps } from "@agentkit/transport-http";
+import { createExampleToolSetContributor } from "./tools.js";
+
+/** The env vars this recipe reads. All optional — see ../README.md. */
+export interface WiringEnv {
+  AGENTKIT_DB?: string;
+  AGENTKIT_PROVIDER_KIND?: string;
+  AGENTKIT_BASE_URL?: string;
+  AGENTKIT_MODEL?: string;
+  AGENTKIT_API_KEY?: string;
+  AGENTKIT_MCP_COMMAND?: string;
+  AGENTKIT_MCP_ARGS?: string;
+}
+
+export interface BuildAppOptions {
+  /** Defaults to `env.AGENTKIT_DB ?? "./agentkit.sqlite"`. */
+  dbPath?: string;
+  /**
+   * Defaults to an `OpenAiCompatibleClient` built from the resolved provider
+   * config. A test overrides this with a `MockProviderClient` so the whole
+   * stack runs with no network access.
+   */
+  providerFactory?: (config: AiProviderConfig) => AiProviderClient;
+  /** Defaults to a process-lifetime, in-memory store — see `InMemorySecretStore`. */
+  secrets?: SecretStore;
+  clock?: Clock;
+  ids?: IdGenerator;
+  logger?: Logger;
+  /** Defaults to `process.env`. A test passes `{}` so nothing real is read. */
+  env?: WiringEnv;
+}
+
+export interface App {
+  store: SqliteAssistantStore;
+  dbPath: string;
+  turnRunner: TurnRunner;
+  taskService: TaskService;
+  proposals: ProposalService;
+  taskRunner: SingleProcessTaskRunner;
+  mcpEnabled: boolean;
+  /** What `serveRest`/`createRestHandler` need. */
+  deps: RestHandlerDeps;
+  /** Stops the worker, disposes MCP connections (if any), and closes the DB. */
+  stop(): Promise<void>;
+}
+
+/**
+ * A `SecretStore` for one process's lifetime: values never touch disk, and are
+ * gone the moment this object is. This is what lets `AGENTKIT_API_KEY` reach
+ * the provider client without ever being written into `AiProviderConfig` —
+ * `upsertProvider` below stores a `ref` under `metadata[PROVIDER_SECRET_REF_KEY]`
+ * and `TurnRunner` resolves it through this port, once, right before building
+ * the client (see `packages/host/src/turn/turn-runner.ts`'s `withSecret`).
+ *
+ * A real desktop host swaps this for the OS keychain / an encrypted file —
+ * anything implementing the four methods below.
+ */
+export class InMemorySecretStore implements SecretStore {
+  private readonly values = new Map<string, string>();
+
+  async get(ref: string): Promise<string | null> {
+    return this.values.get(ref) ?? null;
+  }
+
+  async set(ref: string, value: string): Promise<void> {
+    this.values.set(ref, value);
+  }
+
+  async delete(ref: string): Promise<void> {
+    this.values.delete(ref);
+  }
+
+  async listRefs(): Promise<string[]> {
+    return [...this.values.keys()];
+  }
+}
+
+/**
+ * Satisfies `ProposalService` (which `recoverOnBoot` requires) without a real
+ * write tool to back it. This example contributes no write tools, so no
+ * proposal is ever staged and `apply` is never actually called — a host that
+ * adds a `createProposalBuilderTool` write tool (see
+ * `packages/runner-local/tests/e2e-vertical-slice.test.ts` for the pattern)
+ * replaces this with one that performs the write.
+ */
+class NoopProposalApplier implements ProposalApplier {
+  async apply(_input: ApplyProposalInput): Promise<ApplyOutcome> {
+    throw new Error(
+      "This example ships no write tools; ProposalApplier.apply should never be reached.",
+    );
+  }
+
+  async getOutcome(_operationId: string): Promise<ApplyOutcome | null> {
+    return null;
+  }
+}
+
+const DEFAULT_PROVIDER_ID = "default";
+const DEFAULT_PROVIDER_KIND = "openai-compatible";
+const API_KEY_SECRET_REF = "provider.default.apiKey";
+
+/**
+ * On first boot only: if no provider is configured yet, seed one from env
+ * (falling back to the kind's preset defaults from `@agentkit/core`, then to a
+ * bare `openai-compatible` localhost guess). A later boot leaves whatever is
+ * already in the store alone — this is a bootstrap convenience, not a sync.
+ */
+async function seedProviderIfEmpty(
+  store: SqliteAssistantStore,
+  secrets: SecretStore,
+  env: WiringEnv,
+): Promise<void> {
+  const existing = await store.providers.listProviders();
+  if (existing.length > 0) return;
+
+  const kind = env.AGENTKIT_PROVIDER_KIND ?? DEFAULT_PROVIDER_KIND;
+  const preset = getPresetByKind(kind);
+  const baseUrl =
+    env.AGENTKIT_BASE_URL ??
+    preset?.defaultBaseUrl ??
+    "http://127.0.0.1:8000/v1";
+  const defaultModel =
+    env.AGENTKIT_MODEL ?? preset?.defaultModel ?? "local-model";
+
+  const metadata: Record<string, unknown> = {};
+  if (env.AGENTKIT_API_KEY) {
+    // The key itself never touches `AiProviderConfig` — only its ref does.
+    await secrets.set(API_KEY_SECRET_REF, env.AGENTKIT_API_KEY);
+    metadata[PROVIDER_SECRET_REF_KEY] = API_KEY_SECRET_REF;
+  }
+
+  await store.providers.upsertProvider({
+    id: DEFAULT_PROVIDER_ID,
+    label: preset?.label ?? kind,
+    kind,
+    baseUrl,
+    defaultModel,
+    enabled: true,
+    metadata,
+  });
+  await store.settings.updateSettings({
+    defaultProviderId: DEFAULT_PROVIDER_ID,
+  });
+}
+
+export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
+  const env = options.env ?? (process.env as WiringEnv);
+  const clock = options.clock ?? defaultClock;
+  const ids = options.ids ?? defaultIds;
+  const secrets = options.secrets ?? new InMemorySecretStore();
+  const logger = options.logger;
+  // (1. Ambient ports: `clock`/`ids`/`secrets` above.)
+
+  // 2. Storage. `SqliteAssistantStore` owns its own file — no directory, no
+  // schema migration, nothing else to run first.
+  const dbPath = options.dbPath ?? env.AGENTKIT_DB ?? "./agentkit.sqlite";
+  if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
+  const store = new SqliteAssistantStore(dbPath, { clock, ids });
+
+  // 3. Provider config: seed on first boot, then always read from the store —
+  // never carry the resolved config around as free-floating state.
+  await seedProviderIfEmpty(store, secrets, env);
+
+  // 4. Tools. `createExampleToolSetContributor` is this file's `example_echo` /
+  // `example_now` pair; an MCP bridge is added only when configured.
+  const contributors: ToolSetContributor[] = [
+    createExampleToolSetContributor(clock),
+  ];
+  let mcp: McpClientManager | undefined;
+  if (env.AGENTKIT_MCP_COMMAND) {
+    mcp = new McpClientManager({ secrets, logger, clock }, [
+      {
+        alias: "local",
+        transport: {
+          kind: "stdio",
+          command: env.AGENTKIT_MCP_COMMAND,
+          args: (env.AGENTKIT_MCP_ARGS ?? "").split(" ").filter(Boolean),
+        },
+      },
+    ]);
+    contributors.push(createMcpToolSetContributor(mcp));
+  }
+
+  // 5. The write pipeline. No write tools here, so nothing is ever staged —
+  // `ProposalService` exists only so `recoverOnBoot` (step 9) has one.
+  const policy = new SessionWritePolicy({ clock });
+  const proposals = new ProposalService({
+    store,
+    applier: new NoopProposalApplier(),
+    policy,
+    clock,
+    ids,
+    logger,
+  });
+
+  // 6. The queue. Built before `TurnRunner` (next), which takes it as a dep —
+  // `SingleProcessTaskRunner` itself needs nothing back: the worker it will
+  // dispatch to is handed to `startWorker` later (step 10), not at
+  // construction.
+  const taskRunner = new SingleProcessTaskRunner({ store, clock, logger });
+
+  // 7. The durable worker over core's run loop.
+  const providerFactory =
+    options.providerFactory ??
+    ((config: AiProviderConfig) => OpenAiCompatibleClient.fromConfig(config));
+  const turnRunner = new TurnRunner({
+    store,
+    taskRunner,
+    providerFactory,
+    secrets,
+    contributors,
+    clock,
+    ids,
+    logger,
+  });
+  const taskService = new TaskService({ store, taskRunner, ids, clock });
+
+  // 8. `TurnRunner` implements `TaskWorker` on its own, but this host also
+  // wants `spawnChild` wired for every executor — so it dispatches through
+  // the registry instead of handing `turnRunner` to `startWorker` directly.
+  const registry = new ExecutorRegistry();
+  registry.register(new ChatTurnExecutor(turnRunner));
+
+  // 9. Clean up after the last crash BEFORE claiming anything.
+  await recoverOnBoot({ taskRunner, proposals, logger });
+
+  // 10. Start claiming.
+  const handle = await taskRunner.startWorker(
+    createDispatchingWorker(registry, { store, clock, logger, taskService }),
+    { concurrency: 2, ownerId: "example-desktop-host" },
+  );
+
+  // 11. What the transport needs. `basePath` and `cors` are the two options
+  // README.md's port checklist calls out explicitly.
+  const deps: RestHandlerDeps = {
+    store,
+    turns: turnRunner,
+    tasks: taskService,
+    proposals,
+    packages: { "@agentkit/example-desktop-host": "0.1.0-dev" },
+    basePath: "/api/agentkit",
+    cors: {
+      origins: ["http://localhost:5173", "http://127.0.0.1:5173"],
+    },
+  };
+
+  return {
+    store,
+    dbPath,
+    turnRunner,
+    taskService,
+    proposals,
+    taskRunner,
+    mcpEnabled: mcp !== undefined,
+    deps,
+    async stop(): Promise<void> {
+      await handle.stop();
+      if (mcp) await mcp.dispose();
+      store.close();
+    },
+  };
+}
