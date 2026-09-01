@@ -27,7 +27,8 @@
 
 ## Phase E — playbooks + docs
 - [ ] `docs/migration/openpcb.md`, `docs/migration/onemind.md`
-- [ ] ADRs 0008–0013, CHANGELOG 0.4.0, docs sync, memory update
+- [x] ADRs 0008–0013, CHANGELOG 0.4.0, docs sync (roadmap/non-goals/architecture/ports/contracts/README)
+- [ ] memory update
 
 ## Phase F — polish (go/no-go after E)
 - [ ] `chat.title` executor, token-budget windowing

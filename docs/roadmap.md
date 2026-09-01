@@ -80,59 +80,106 @@ blank page or re-learn fixed bugs.
   mid-run switch cannot migrate half a turn onto another branch. Contract wave
   `0.2.0` → `0.3.0` (additive DTO fields + 3 routes; goldens re-recorded).
   sqlite `SCHEMA_V4`.
-
-## P5b — Message search + forward paging
-
-- **Search** — `searchMessages` port method with a capability flag; sqlite
-  reference adapter implements SQLite FTS5 external-content + triggers +
-  bm25 ranking (OneMind's implementation is the reference, including its
-  FTS5 query sanitization).
-- **Forward-paging limit on `ConversationStore.listMessages`.**
-
-## P5c — Attachments
-
-- Widen `MessageRecord.content`/`MessageDto` to the ADR-0002 parts model
-  plus a `FileStore` port (blob storage stays a host concern). Reference
-  budgets: OpenPCB `MENTION_LIMITS` (per-image and aggregate byte caps).
+- **Distribution + adapters as products** (2026-09-01). ADR
+  [0008](adr/0008-distribution-and-adapters-as-products.md): the `agentkit`
+  umbrella package (twelve subpath exports, specifier-rewrite build, no
+  bundler, committed-dist release branches via `git subtree split`, lockstep
+  version, GitHub-tag install); `internal/reference-adapters` promoted to
+  published `@agentkit/adapters-memory`/`adapters-sqlite`/`runner-local`,
+  with sqlite's stance changed to the production `AssistantStore` for a
+  single-process host; exponential jittered retry backoff;
+  `describeTaskRunnerConformance`. Two CRITICAL recovery fixes (landed-gated
+  lease release + `pendingRedispatch`, post-backoff lease-fencing re-check).
+- **P5b — Message search + forward paging** (2026-09-01), shipped as part of
+  ADR [0010](adr/0010-chat-lifecycle-search-import.md): `searchMessages` port
+  method behind a `capabilities.search` flag; sqlite implements FTS5
+  external-content + triggers + bm25 ranking (OneMind's implementation is the
+  reference, including its query sanitizer), indexing **all** of a message's
+  text parts; memory implements substring matching. `listMessages` gains
+  backward paging (`beforeOrderKey`).
+- **P5c — Attachments** (2026-09-01), shipped as ADR
+  [0009](adr/0009-content-parts-attachment-resolver.md): `MessageRecord`/
+  `MessageDto` widened to the ADR-0002 parts model, a third image source
+  (`{ kind: "ref" }`), and a new `AttachmentResolver` port (`resolve(ref, {
+  chatId })`) resolved per pass under budgets borrowed from OpenPCB's
+  `MENTION_LIMITS`. **Attachment blob storage itself stays a host
+  concern** — this phase ships the parts model, the `ref` indirection, and
+  resolution/budget machinery, not a bundled file store. `CONTRACT_VERSION`
+  `0.3.0` → `0.4.0`.
+- **P7 — Tool governance** (2026-09-01). ADR
+  [0011](adr/0011-tool-governance.md): namespaced tool ids with reserved
+  prefixes (`agentkit`/`chat`/`mcp`), cross-contributor collisions fail
+  staging closed, a `ToolGuard` chain on visibility and executability
+  (fail-closed per tool on a thrown guard), contributor lifecycle
+  (`dispose()`), structured tool errors (`phase`/`retryable`), OpenPCB's
+  manual tool-calling override (`auto|on|off`) atop probed provider
+  capabilities, and a `ToolCatalog` port serving `GET /v1/tools` (previously
+  a deliberate 501). This closed the gate the phase was defined to close —
+  see the three items it unblocked, below.
+- **Chat lifecycle, search, transactional import** (2026-09-01). ADR
+  [0010](adr/0010-chat-lifecycle-search-import.md): `updateChat`/
+  `deleteChat`/`ChatRecord.archived`, `listChats` `includeArchived`/`ids`,
+  `importConversation` (the id-preserving, transactional history-migration
+  primitive), and the decision that the host's canonical status vocabulary
+  does not grow to express consumer UI states (`streaming`/`waiting`/
+  `paused`/`pending` stay client-derived). `TaskStore.deleteByScope` enforces
+  `chat_busy` atomically, in-store — closing a check-then-act-across-an-await
+  hazard a verifier found, now a named hazard class in `docs/ports.md`.
+- **Multi-pass verification harness** (2026-09-01), shipped as ADR
+  [0012](adr/0012-multi-pass-correction-harness.md), unblocked by P7:
+  `TurnRunnerDeps.correction` feeds `VerificationHook` deficiencies back for
+  bounded passes, minimal re-context, shrink-or-stall stopping, fail-closed
+  on an unavailable verifier, durable `run.verification` events. Ports
+  OpenPCB's `runCorrectionHarness` semantics. Required a fix to
+  `orderMessagesForProvider` (group by tool-call linkage, not record kind) to
+  keep a multi-tool-pass run provider-legal.
+- **MCP server package** (2026-09-01), shipped as `@agentkit/mcp-server`,
+  part of ADR [0013](adr/0013-serving-surfaces.md), unblocked by P7:
+  exposes a host's `ToolCatalog` as an MCP server over streamable HTTP.
+  Reference: OpenPCB `assistant/backend/mcp/` (constant-time bearer auth,
+  DNS-rebinding origin guard, session-per-client keyed on a server-minted
+  header, tool projection reusing `AiToolDefinition` verbatim,
+  `modelData`/`summary` as MCP results, write-tool filtering on both
+  `tools/list` and `tools/call`). Hardened the next day: sessions bound to a
+  fingerprint of the `Authorization` header that opened them, plus an
+  LRU session cap and idle-TTL reaping.
+- **Custom turn executors** (2026-09-01): `RunProjector`
+  (`packages/host/src/turn/projection.ts`) extracted from `TurnRunner`, and
+  `SubmitMessageInput.kind`/`RegenerateMessageInput.kind` let a host route a
+  turn to its own `TaskExecutor` that does not call `runChat` at all (a
+  delegated cloud chat, a replayed run) while driving the same projection
+  into conversation state. See
+  [`docs/architecture.md`](architecture.md#custom-turn-executors).
+- **Client SDK + React packages** (2026-09-01), shipped as
+  `@agentkit/client` + `@agentkit/react`, ADR
+  [0013](adr/0013-serving-surfaces.md): a typed REST v1 + SSE client
+  (compile-exhaustive against `REST_ROUTES`, auto-resuming `streamRun`,
+  `runPhase()` derivation) and headless React hooks (`useChat`, `useRun`,
+  `useBranches`, `useProposals`, `useProviders`) over it — no components, no
+  styling; never a dependency of the headless framework. Revises
+  `docs/non-goals.md`'s "React / UI packages" entry.
 
 ## P6 — Long-term memory
 
-No source repo has a local implementation (OpenPCB delegates to proprietary
-cloud tools; OneMind has none) — this is a fresh design: a `MemoryStore`
-port (scoped records, recall query, retention) + framework tools
-(`memory_record`, `memory_search`) + optional prompt-block injection through
-`ContextProvider`. Design the port before any embedding/vector opinion;
-retrieval strategy is an adapter concern.
+The next open phase. No source repo has a local implementation (OpenPCB
+delegates to proprietary cloud tools; OneMind has none) — this is a fresh
+design: a `MemoryStore` port (scoped records, recall query, retention) +
+framework tools (`memory_record`, `memory_search`) + optional prompt-block
+injection through `ContextProvider`. Design the port before any
+embedding/vector opinion; retrieval strategy is an adapter concern.
 
-## P7 — Tool governance
+## Phase F — polish (deferred)
 
-Merge the reference repos' proven controls into the `ToolSetContributor`
-pipeline: namespaced tool ids with reserved prefixes (OneMind's
-`core.*` rule; AgentKit reserves `agentkit.*`/`chat.*`/`mcp.*`), a guard
-chain on visibility and executability (OneMind's `ToolGuard`), per-tool
-structured errors with phase + retryability, contributor lifecycle
-(register/dispose for dynamically loaded plugins — OneMind's ModuleLoader
-disposer pattern), and OpenPCB's manual tool-calling override
-(`auto|on|off`) atop probed provider capabilities.
+Neither target consumer needs these for parity; opt-in once P6 (or adoption
+itself) creates real pressure for them.
 
-Must precede the MCP server package, the remote/trusted tool bridge, and
-human approval workflows (see Later below) — all three add tool-facing
-surface that this phase's guard chain and namespacing are meant to police.
+- **`chat.title` executor** — spawn a title-generation task after a chat's
+  first completed turn.
+- **Token-budget history windowing** in `assembleMessages` — a character
+  estimate, never splitting a tool call/result pair.
 
 ## Later (unordered, lower priority)
 
-- **MCP server package** — expose an AgentKit host as an MCP server.
-  Reference: OpenPCB `assistant/backend/mcp/` (constant-time bearer auth,
-  DNS-rebinding origin guard, session-per-client keyed on a stable header —
-  never the client-announced name, tool projection reusing
-  `AiToolDefinition` verbatim, `modelData`/`summary` as MCP results,
-  write-tool filtering when writes are disabled).
-- **Multi-pass verification harness** — feed `VerificationHook` deficiencies
-  back for bounded correction passes. Reference: OpenPCB
-  `runCorrectionHarness` — minimal re-context (not full history), a
-  shrink-or-stall stopping rule on the failing-check set, max-pass cap,
-  fail-closed checks ("verification unavailable is not a pass"), deficiency
-  write-back message.
 - **Human approval workflows** — the first producer of `waiting_approval`
   (park a run on a decision, resume after); the transition table already
   admits it.
@@ -146,18 +193,9 @@ surface that this phase's guard chain and namespacing are meant to police.
   (strip trust-sensitive fields from the advertised schema, re-inject last,
   re-validate against the canonical schema) as a generic wrapper for remote
   tool planes; relevant to MCP hardening.
-- **Client SDK + React packages** — typed REST/SSE client over
-  `@agentkit/transport-http` (shipped, see Done), then chat
-  hooks/components; never a dependency of the headless framework.
 - **Usage accounting** — aggregate `run.usage` events per chat/tenant behind
   `UsageAuthorizer`; per-provider-call dedup key (`callId`, `attempt`)
   already exists in the contract.
-- **Chat-independent tool-enumeration port** — `GET /v1/tools` answers 501
-  without it (`@agentkit/transport-http`'s `deps.toolCatalog`, see ADR
-  [0005](adr/0005-http-transport.md)): `ToolSetContributor.contribute` is a
-  per-run call taking a chat's bindings/limits/scope, and this route names
-  no chat, so listing tools needs a way to enumerate them without
-  synthesizing a fake run context.
 - **Streaming child-task progress into a parent's log.** `TaskRecord.progress`
   (P4/ADR 0003) is a per-task overwritten snapshot today; fanning a child's
   progress into its parent's own event log is unimplemented.
@@ -169,7 +207,70 @@ surface that this phase's guard chain and namespacing are meant to police.
   claim in the same process. Fix is not holding a claim transaction across
   an `await` at all — a larger restructuring than the hardening tranche
   took on.
-- **Branch/chat archive and delete** — deferred out of ADR 0007: OneMind has
-  an archive mechanism (refuses on the active branch; its own archive loop
-  is non-transactional, deliberately not copied here), but nothing in P5a
-  needed it. `ConversationStore` has no delete/archive operation today.
+- **Branch-level archive and delete.** ADR 0007 deferred archive/delete
+  entirely; that is now half-resolved — a whole **chat** can be archived
+  (`updateChat({ archived })`) and deleted (`deleteChat`, ADR 0010) — but a
+  single **branch** within a chat still has neither operation. OneMind's own
+  branch-archive mechanism (refuses on the active branch; its own archive
+  loop is non-transactional) remains deliberately not copied.
+- **MCP config types toward `@agentkit/contracts`.** `McpServerConfigStore`
+  and its DTOs live in `@agentkit/mcp-client` today, which is why
+  `@agentkit/adapters-memory` and `@agentkit/adapters-sqlite` both carry a
+  `workspace:*` dependency on `@agentkit/mcp-client` purely for its config
+  shapes — an adapter below `host` depending sideways on an optional adapter
+  beside it. Moving the config types to `contracts` would let both storage
+  adapters depend on it alone, the same way every other port's DTOs do.
+- **`deleteProvider`'s secret-ordering should mirror the create/update
+  fix.** `cd6e419` fixed create/update to write the provider config row
+  before writing its `SecretStore` secret, so a crash between the two leaves
+  a harmless, recoverable state rather than an orphaned live credential.
+  `deleteProvider` (`packages/transport-http/src/routes/providers.ts`) still
+  deletes the config row **first** and the secret **second** — a crash
+  between those two awaits leaves exactly the orphaned-secret state the
+  route's own docstring names as "the worst combination a credential can
+  have." The order should invert: delete the secret first, then the config.
+- **`sse.ts`'s heartbeat reads `Date.now()` directly**, four call sites in
+  `packages/transport-http/src/sse.ts`, rather than through the injected
+  `Clock` port every other time-dependent decision in this codebase goes
+  through (lease expiry, idempotency, ordering) — makes the heartbeat
+  interval untestable without a real timer.
+- **`mcp-server`'s unknown-vs-wrong-principal 404s are timing-distinguishable.**
+  Both cases return the identical 404 body (ADR 0013), but the
+  wrong-principal path does a constant-time fingerprint comparison the
+  unknown-session path never reaches — a caller that can measure response
+  latency can tell "no such session" from "that session exists, but it is
+  not yours." Recorded here rather than fixed in the same wave.
+- **`openAgentKitDatabase` can leak a handle on a throw path.**
+  `packages/adapters-sqlite/src/sqlite-assistant-store.ts`'s
+  `openAgentKitDatabase` opens a `bun:sqlite` handle and then runs schema
+  setup against it; a throw partway through schema setup does not appear to
+  close the handle it already opened before propagating.
+- **`WriteAllowanceDto.chatId` is redundant** now that all three allowance
+  routes are nested under `/v1/chats/:chatId/write-policy/allowances`
+  (moved there so `AuthorizationPort` can authorize them per chat) — the DTO
+  still carries `chatId` as a field even though the path already names it.
+- **FTS5's `rowid` keying is a real VACUUM hazard, not just a documented
+  caveat.** `messages` has a `TEXT` primary key, so its `rowid` is SQLite's
+  own auto-assigned one, and `VACUUM` may renumber it — after which the FTS5
+  external-content index's postings point at the wrong messages entirely.
+  `packages/adapters-sqlite/README.md` documents the caveat ("do not run
+  `VACUUM` against a live AgentKit database file") and a manual rebuild
+  recipe; the proper fix is `content_rowid` over a stable **integer**
+  primary key `messages` does not have today, not a documentation caveat a
+  future operator has to already know to look for.
+- **`message-tree.ts`'s root sentinel is a literal NUL byte.**
+  `ROOT_PARENT_KEY = "\x00root"` in
+  `packages/host/src/conversation/message-tree.ts` embeds an actual `NUL`
+  byte in the source file so no real id can collide with it — correct, but
+  it makes the file behave oddly under plain-text `grep`/`rg` and some
+  editors. A `"\u0000root"` escape is functionally identical and grep-safe;
+  a one-line change, not attempted in this wave.
+- **Memory-vs-sqlite search semantics are not aligned.** `searchMessages`'
+  memory implementation is case-insensitive substring matching ranked by
+  occurrence count; sqlite's is tokenized FTS5 with `bm25` ranking and a
+  query sanitizer. Both satisfy the port's conformance suite, but a query
+  that substring-matches in one can rank differently — or not match at all —
+  in the other (tokenization boundaries, punctuation, partial-word matches).
+  Not a bug in either adapter individually; an open question of how closely
+  the two should be made to agree, or whether `capabilities.search` should
+  say more than "search exists."

@@ -62,6 +62,16 @@ flow (`seq`/`eventId` stamping, lease fencing), the run/attempt/lease model,
 and the loop invariants `runChat()` preserves: see
 [`docs/architecture.md`](docs/architecture.md).
 
+## Example embedding
+
+[`examples/desktop-host`](examples/desktop-host) is the canonical
+single-process composition root: `@agentkit/adapters-sqlite` +
+`@agentkit/runner-local` + `TurnRunner` + a sample tool contributor +
+`SessionWritePolicy` + `recoverOnBoot` + `serveRest` (`basePath` + CORS),
+driven end to end by an HTTP smoke test. It is a workspace-private example,
+not a published package — read it as the reference wiring, not as
+something to depend on.
+
 ## Runtime support
 
 Every package is **ESM-only** (`"type": "module"`, no CJS build) and requires
@@ -83,13 +93,20 @@ toolchain (tests, `bun run ci`) is Bun-only.
   diagram.
 - [`docs/non-goals.md`](docs/non-goals.md) — what this repository
   deliberately does not include yet, and where it will live.
-- [`docs/roadmap.md`](docs/roadmap.md) — the sequenced backlog (P1–P5a
-  shipped, P5b–P7 active, and a Later list) this deferred surface lands
-  against.
+- [`docs/roadmap.md`](docs/roadmap.md) — the sequenced backlog (P1–P5a, P5b,
+  P5c, P7, and the distribution/serving-surface work all shipped; P6
+  long-term memory is the next open phase; a Later list) this deferred
+  surface lands against.
 - [`docs/adr/`](docs/adr/) — accepted architecture decision records.
 - [`CHANGELOG.md`](CHANGELOG.md) — what changed per contract version, and
   the working method (ADR gating, reference-repo extraction policy,
   verification bar).
+- [`docs/migration/`](docs/migration/) — playbooks for migrating an existing
+  embedding (OpenPCB, OneMind) onto AgentKit: delete/keep-and-adapt lists,
+  port mappings, and data-migration notes.
+- [`DEVELOPING.md`](DEVELOPING.md) — installing and iterating on the
+  `agentkit` umbrella package (GitHub-tag install, `npm link`, the release
+  ritual).
 - [`PROVENANCE.md`](PROVENANCE.md) — how `packages/core` was extracted from
   `@openpcb/ai-core` and relicensed to MIT.
 
