@@ -7,7 +7,11 @@ import {
   type ToolContributionContext,
   type ToolSetContributor,
 } from "../ports/tool-contributor.js";
-import type { ToolGuard, ToolGuardContext } from "../ports/tool-guard.js";
+import type {
+  ToolGuard,
+  ToolGuardContext,
+  ToolGuardVerdict,
+} from "../ports/tool-guard.js";
 
 export interface StageRegistryInput {
   contributors: readonly ToolSetContributor[];
@@ -40,6 +44,9 @@ export interface StagedToolSet {
 
 /** The `errorCode` a guard refusal reports to the model. */
 export const TOOL_GUARD_REFUSED_CODE = "tool_guard_refused";
+
+/** The reason reported when a `canExecute` guard threw instead of answering. */
+export const TOOL_GUARD_ERROR_MESSAGE = "guard error";
 
 /**
  * Collect every contributor's tools into the registry for one run.
@@ -133,7 +140,7 @@ export async function stageRegistry(
       namespace,
       tool: tool.definition,
     };
-    if (!(await isVisible(guards, guardCtx))) continue;
+    if (!(await isVisible(guards, guardCtx, input.ctx))) continue;
     try {
       registry.register(guarded(tool, guards, guardCtx));
       namespaces.set(tool.definition.name, namespace);
@@ -178,20 +185,45 @@ function assertNamespace(contributor: ToolSetContributor): void {
   }
 }
 
-/** AND across guards; a guard with no `isVisible` has no opinion on visibility. */
+/**
+ * AND across guards; a guard with no `isVisible` has no opinion on visibility.
+ *
+ * A guard that THROWS hides the tool. A policy hook that cannot answer has not
+ * said "allow" — it has said nothing — and the safe reading of nothing, for a
+ * hook whose entire job is to keep a tool away from the model, is to keep it
+ * away. Failing closed is scoped to the ONE tool being judged: a guard broken
+ * for every tool empties the registry, which is loud, while a guard broken for
+ * one leaves the rest of the run working. The warning is what makes the
+ * difference visible, so a misconfigured guard does not read as a tool that
+ * quietly stopped existing.
+ */
 async function isVisible(
   guards: readonly ToolGuard[],
   ctx: ToolGuardContext,
+  contribution: ToolContributionContext,
 ): Promise<boolean> {
   for (const guard of guards) {
     if (guard.isVisible === undefined) continue;
-    if (!(await guard.isVisible(ctx))) return false;
+    try {
+      if (!(await guard.isVisible(ctx))) return false;
+    } catch (err) {
+      contribution.logger?.warn("tool hidden: guard isVisible threw", {
+        tool: ctx.tool.name,
+        namespace: ctx.namespace,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
   return true;
 }
 
 /**
  * Wrap a tool so every call passes the guard chain first.
+ *
+ * FAILS CLOSED, per call and per tool: a `canExecute` that throws becomes a
+ * refusal carrying {@link TOOL_GUARD_ERROR_MESSAGE}, not an allow and not a run
+ * failure. The rest of the turn — and every other tool — carries on.
  *
  * The wrapper returns an `ok: false` RESULT rather than throwing: a refusal is a
  * normal outcome of a call the model was allowed to make, and the run loop's
@@ -213,7 +245,17 @@ function guarded(
     definition: tool.definition,
     async execute(ctx, args): Promise<AiToolResult<unknown>> {
       for (const guard of gates) {
-        const verdict = await guard.canExecute!(guardCtx);
+        // A guard that throws REFUSES. Same reading as `isVisible`: a policy
+        // hook that could not answer has not allowed anything. The reason is a
+        // fixed string rather than the thrown message — the reason is fed to
+        // the model verbatim, and a stack trace or a connection string from a
+        // broken guard is not something to hand it.
+        let verdict: ToolGuardVerdict;
+        try {
+          verdict = await guard.canExecute!(guardCtx);
+        } catch {
+          verdict = { allowed: false, reason: TOOL_GUARD_ERROR_MESSAGE };
+        }
         if (!verdict.allowed) {
           const data: AiToolErrorData = {
             errorCode: TOOL_GUARD_REFUSED_CODE,

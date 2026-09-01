@@ -17,6 +17,7 @@ import type {
   ApproveProposalInput,
   AssistantStore,
   AuthorizationPort,
+  Clock,
   Logger,
   ProposalRecord,
   RegenerateMessageInput,
@@ -89,9 +90,10 @@ export interface ProviderOperations {
  *
  * Every method is CHAT-SCOPED, because the port is: `SessionWritePolicy` holds
  * grants per `(chat, tool, kind)` and offers no unscoped listing. That is why
- * `listAllowances` and `revokeAllowance` take a `?chatId=` query rather than
- * standing alone — widening the port to serve a prettier URL would let one
- * chat's UI enumerate (and revoke) another's consent.
+ * all three routes are nested under `/v1/chats/:chatId` rather than standing
+ * alone — widening the port to serve a prettier URL would let one chat's UI
+ * enumerate (and revoke) another's consent, and a chat that is not in the path
+ * is a chat an `AuthorizationPort` cannot gate on.
  */
 export interface WritePolicyOperations {
   list(chatId: string): WriteAllowance[];
@@ -284,7 +286,35 @@ export interface RestHandlerDeps {
    * header and `OPTIONS` answers 405 as it always did.
    */
   cors?: RestCorsOptions;
+  /**
+   * Largest request body this handler will accept, in bytes. **Absent — the
+   * default — there is no cap at all.**
+   *
+   * Off by default because a limit that is right for one deployment is wrong
+   * for the next: a submit carrying an inline image is legitimately megabytes,
+   * and a handler that guessed a ceiling would reject real turns on a host that
+   * never asked it to. A served deployment should set one here or, better,
+   * enforce it in the proxy in front of the handler, which can refuse the
+   * upload before the bytes are on this process's heap.
+   *
+   * Enforced from `Content-Length` when the request declares one — the refusal
+   * then costs nothing — and by measuring the body when it does not. Over the
+   * limit is a **413** `body_too_large` problem, in the same shape as every
+   * other error on this surface.
+   */
+  maxBodyBytes?: number;
   logger?: Logger;
+  /**
+   * Where the two timestamps `createMcpServer` mints come from. Defaults to
+   * `defaultClock`.
+   *
+   * A port rather than a `new Date()` for the same reason the host layer has
+   * one: a test that cannot pin "now" cannot assert what a record was stamped
+   * with, and a deployment whose records must agree with the host's own clock
+   * has nowhere to say so otherwise. Every other timestamp on this surface is
+   * the host's already — this is the one the adapter writes itself.
+   */
+  clock?: Clock;
   streaming?: RestStreamOptions;
 }
 

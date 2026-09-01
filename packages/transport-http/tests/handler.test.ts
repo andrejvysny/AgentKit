@@ -16,6 +16,7 @@ import type {
   VersionDto,
 } from "@agentkit/contracts";
 import { CONTRACT_VERSION, REST_API_VERSION } from "@agentkit/contracts";
+import type { SubmitMessageInput } from "@agentkit/host";
 import {
   createHandlerFixture,
   request,
@@ -454,6 +455,134 @@ describe("catalogue", () => {
     // The write's host-shaped body never crosses the wire.
     expect(Object.keys(proposals[0] ?? {})).not.toContain("operations");
     expect(Object.keys(proposals[0] ?? {})).not.toContain("envelope");
+  });
+});
+
+describe("submitMessage — provider override", () => {
+  it("(r0) threads `providerId` through to the host's submit input", async () => {
+    const inputs: SubmitMessageInput[] = [];
+    const { handler } = await createHandlerFixture({
+      turns: {
+        async submitMessage(input) {
+          inputs.push(input);
+          return {
+            chatId: input.chatId,
+            runId: "run-1",
+            userMessageId: "user-1",
+            assistantMessageId: "assistant-1",
+          };
+        },
+        async regenerate() {
+          throw new Error("not used here");
+        },
+      },
+    });
+
+    const res = await handler(
+      request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+        body: { content: "Hi", providerId: "p-other", model: "m9" },
+        headers: { "idempotency-key": "key-provider" },
+      }),
+    );
+    expect(res.status).toBe(201);
+    expect(inputs[0]?.providerId).toBe("p-other");
+    expect(inputs[0]?.model).toBe("m9");
+
+    // Absent, it is omitted rather than sent as `undefined` — the host reads
+    // "no override", not "an override nobody named".
+    await handler(
+      request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+        body: { content: "Hi" },
+        headers: { "idempotency-key": "key-no-provider" },
+      }),
+    );
+    expect(inputs[1]).not.toHaveProperty("providerId");
+  });
+
+  it("(r0b) 400s a `providerId` that is not a string", async () => {
+    const { handler } = await createHandlerFixture();
+    await expectProblem(
+      await handler(
+        request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+          body: { content: "Hi", providerId: 7 },
+          headers: { "idempotency-key": "key-bad-provider" },
+        }),
+      ),
+      400,
+      "invalid_request",
+    );
+  });
+});
+
+describe("maxBodyBytes", () => {
+  const big = { content: "x".repeat(500) };
+
+  it("(r) 413s a body over the cap and serves one under it", async () => {
+    const { handler } = await createHandlerFixture({ maxBodyBytes: 200 });
+
+    await expectProblem(
+      await handler(
+        request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+          body: big,
+          headers: { "idempotency-key": "key-big" },
+        }),
+      ),
+      413,
+      "body_too_large",
+    );
+
+    const small = await handler(
+      request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+        body: { content: "Hi" },
+        headers: { "idempotency-key": "key-small" },
+      }),
+    );
+    expect(small.status).toBe(201);
+  });
+
+  it("(r2) measures a body that declares no Content-Length, and leaves it readable", async () => {
+    const { handler, store } = await createHandlerFixture({
+      maxBodyBytes: 200,
+    });
+    const streamed = (body: unknown): Request =>
+      new Request(`http://rest.test/v1/chats/${TEST_CHAT_ID}/messages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": `key-stream-${JSON.stringify(body).length}`,
+        },
+        // A ReadableStream body carries no Content-Length, so the cap has to
+        // measure it rather than read a header.
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(JSON.stringify(body)));
+            controller.close();
+          },
+        }),
+        // Required by Node/undici for a streaming request body.
+        duplex: "half",
+      } as RequestInit);
+
+    await expectProblem(await handler(streamed(big)), 413, "body_too_large");
+
+    const ok = await handler(streamed({ content: "streamed hello" }));
+    expect(ok.status).toBe(201);
+    // Re-wrapping the request did not cost the route its body.
+    const stored = await store.conversations.listMessages(TEST_CHAT_ID);
+    expect(
+      stored.some((m) => JSON.stringify(m.content).includes("streamed hello")),
+    ).toBe(true);
+  });
+
+  it("(r3) is off by default: no cap, no 413", async () => {
+    const { handler } = await createHandlerFixture();
+    const res = await handler(
+      request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+        body: big,
+        headers: { "idempotency-key": "key-uncapped" },
+      }),
+    );
+    expect(res.status).toBe(201);
   });
 });
 

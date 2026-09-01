@@ -272,13 +272,53 @@ export function messageSearchHitDto(
   };
 }
 
+/** What a redacted `env`/`headers` value reads as on the wire. */
+export const REDACTED = "***";
+
 /**
- * An MCP server config, verbatim but re-shaped.
+ * The transport, with every `env` and `headers` VALUE replaced by
+ * {@link REDACTED} and every key kept.
  *
- * Nothing is dropped, because the record carries nothing to drop: `secretRefs`
- * maps a placeholder token to a `SecretStore` REF, and the value behind the ref
- * is injected at connect time and stored nowhere. Publishing the map is what
- * lets a UI show which credentials a server expects without ever holding one.
+ * `secretRefs` exists so a credential can be named without being carried, but
+ * nothing forces a client to use it: `env: { GITHUB_TOKEN: "ghp_live…" }` is a
+ * perfectly valid `createMcpServer` body, and once it is stored, an unredacted
+ * projection publishes that token to everything that can call
+ * `GET /v1/mcp/servers`. The keys are what a settings pane renders — "this
+ * server expects `GITHUB_TOKEN`" — and the values are the part that must not
+ * travel back out.
+ *
+ * The cost is that a client cannot round-trip a transport it read: see the
+ * PATCH note in this package's README. Keys, `kind`, `command`, `args` and
+ * `url` are untouched, because none of them is a place a credential belongs and
+ * all of them are what a UI shows.
+ */
+function redactTransport(transport: unknown): McpTransportDto {
+  if (transport === null || typeof transport !== "object") {
+    return transport as McpTransportDto;
+  }
+  const copy: Record<string, unknown> = {
+    ...(transport as Record<string, unknown>),
+  };
+  for (const field of ["env", "headers"]) {
+    const bag = copy[field];
+    if (bag === null || typeof bag !== "object" || Array.isArray(bag)) continue;
+    copy[field] = Object.fromEntries(
+      Object.keys(bag as Record<string, unknown>).map((key) => [key, REDACTED]),
+    );
+  }
+  return copy as McpTransportDto;
+}
+
+/**
+ * An MCP server config, re-shaped — and with the transport's secret-shaped
+ * values redacted.
+ *
+ * `secretRefs` is published WHOLE, because it carries nothing to drop: it maps
+ * a placeholder token to a `SecretStore` REF, and the value behind the ref is
+ * injected at connect time and stored nowhere. `transport.env` and
+ * `transport.headers` are the opposite case — a client is free to put a literal
+ * token in either, and this projection is the last place before the wire that
+ * can decline to publish it. See {@link redactTransport}.
  *
  * `transport` and `resilience` cross this boundary as opaque values — this
  * adapter never interprets either (see {@link McpServerConfigLike}) — and are
@@ -291,7 +331,7 @@ export function mcpServerDto(record: McpServerConfigLike): McpServerDto {
   return {
     id: record.id,
     alias: record.alias,
-    transport: record.transport as McpTransportDto,
+    transport: redactTransport(record.transport),
     ...(record.secretRefs === undefined
       ? {}
       : { secretRefs: record.secretRefs }),

@@ -66,18 +66,24 @@ const provider = (params: RouteParams): AuthorizationResource => ({
 const settings = (): AuthorizationResource => ({ kind: "settings" });
 
 /**
- * The write policy itself, not the chat a grant is about.
+ * The write policy of ONE CHAT — `kind: "policy"`, `id` the chat.
  *
- * `revokeAllowance` carries the allowance key in the path and its chat in a
- * `?chatId=` query, and the resource is the POLICY either way: consent is a
- * property of the policy a host wired, and an authorizer that saw
- * `{ kind: "chat", id: <an allowance key> }` would look up a chat that does not
- * exist. A host that gates grants per conversation reads the query itself, the
- * same way one that scopes on conversations resolves message → chat.
+ * All three allowance routes are nested under `/v1/chats/:chatId`, so the chat
+ * whose consent is at stake is always in the path, and an authorizer can gate a
+ * grant per conversation without reading a body it is never handed. The `kind`
+ * stays `policy` rather than `chat` because that is what the request is about:
+ * a host that answers "may this subject touch that chat?" and a host that
+ * answers "may this subject grant standing writes in it?" are answering two
+ * different questions, and collapsing them would make the second one
+ * unaskable.
+ *
+ * `revokeAllowance` also carries an `allowanceId`, which is deliberately NOT
+ * the id here: an authorizer handed a key it has never seen can decide
+ * nothing, and the chat is the scope that consent actually belongs to.
  */
 const policy = (params: RouteParams): AuthorizationResource => ({
   kind: "policy",
-  ...(params["allowanceId"] === undefined ? {} : { id: params["allowanceId"] }),
+  ...(params["chatId"] === undefined ? {} : { id: params["chatId"] }),
 });
 
 const mcpConfig = (params: RouteParams): AuthorizationResource => ({
@@ -108,9 +114,10 @@ const searchScope = (_params: RouteParams, url: URL): AuthorizationResource => {
 /**
  * Route → resource.
  *
- * The `kind` is always the kind of the id the PATH actually carries, never the
- * kind of the thing the route reads. Two consequences worth spelling out,
- * because both are places an obvious-looking mapping would be a bug:
+ * The `kind` is the kind of the RESOURCE the route is about, and the `id` comes
+ * from the path — never from a body, and (except for `searchMessages`) never
+ * from the query. Two consequences worth spelling out, because both are places
+ * an obvious-looking mapping would be a bug:
  *
  * - `activateBranch` and `listSiblings` are rooted at `/v1/messages/:messageId`
  *   and carry no chat id. They are `kind: "message"`, not `kind: "chat"` with a
@@ -123,11 +130,12 @@ const searchScope = (_params: RouteParams, url: URL): AuthorizationResource => {
  *   reason: `{ kind: "run", id: <a chat id> }` would be a lie the host cannot
  *   detect.
  *
- * Two routes carry TWO ids or NONE, and both are called out where they are
+ * Three routes carry TWO ids or NONE, and each is called out where it is
  * defined: `regenerateMessage` names a chat and a message and is authorized as
- * the chat it writes to, and `searchMessages` takes its scope from `?chatId=`
- * because there is no path id to take it from. Everything else is the single id
- * its path carries.
+ * the chat it writes to; `revokeAllowance` names a chat and an allowance key
+ * and is authorized as the chat's POLICY; and `searchMessages` takes its scope
+ * from `?chatId=` because there is no path id to take it from. Everything else
+ * is the single id its path carries.
  *
  * `getVersion` is the one route that is never authorized. It reads two
  * constants and the host's own `packages` map — no store, no user data — and it

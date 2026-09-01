@@ -15,9 +15,15 @@ import type {
   TestProviderResponse,
   UpdateProviderRequest,
 } from "@agentkit/contracts";
-import { PROVIDER_SECRET_REF_KEY } from "@agentkit/host";
+import { PROVIDER_SECRET_REF_KEY, type SecretStore } from "@agentkit/host";
 import { jsonResponse, readJsonObject } from "../http.js";
-import { badRequest, conflict, notFound, notImplemented } from "../problem.js";
+import {
+  badRequest,
+  conflict,
+  notFound,
+  notImplemented,
+  problemResponse,
+} from "../problem.js";
 import { providerDto } from "../projections.js";
 import { pathParam, type RouteContext } from "./context.js";
 import {
@@ -69,7 +75,7 @@ export async function createProvider(ctx: RouteContext): Promise<Response> {
     );
   }
 
-  const secret = await storeApiKey(ctx, providerId, request.apiKey);
+  const secret = planApiKey(ctx, providerId, request.apiKey);
   if (secret.kind === "unavailable") return secret.response;
 
   const config: AiProviderConfig = {
@@ -85,6 +91,8 @@ export async function createProvider(ctx: RouteContext): Promise<Response> {
     metadata: withSecretRef(request.metadata, secret.ref),
   };
   const stored = await ctx.deps.store.providers.upsertProvider(config);
+  const written = await writeApiKey(ctx, secret);
+  if (written !== null) return written;
   return jsonResponse(providerDto(stored), 201);
 }
 
@@ -102,12 +110,14 @@ export async function updateProvider(ctx: RouteContext): Promise<Response> {
     return notFound(`Provider not found: ${providerId}`, ctx.instance);
   }
 
-  const secret = await storeApiKey(ctx, providerId, validated.value.apiKey);
+  const secret = planApiKey(ctx, providerId, validated.value.apiKey);
   if (secret.kind === "unavailable") return secret.response;
 
   const stored = await ctx.deps.store.providers.upsertProvider(
     mergeProvider(existing, validated.value, secret.ref),
   );
+  const written = await writeApiKey(ctx, secret);
+  if (written !== null) return written;
   return jsonResponse(providerDto(stored));
 }
 
@@ -200,23 +210,34 @@ export async function testProvider(ctx: RouteContext): Promise<Response> {
 }
 
 /**
- * Put the request's `apiKey` in the secret store, and answer with the ref to
- * record — or with the 501 that says this deployment cannot hold one.
+ * What {@link planApiKey} decided. `ref` is `undefined` on the two plans that
+ * write nothing, so a caller can fold it into the config unconditionally.
+ */
+type ApiKeyPlan =
+  | { kind: "none"; ref?: undefined }
+  | { kind: "unavailable"; ref?: undefined; response: Response }
+  | { kind: "write"; ref: string; apiKey: string; secrets: SecretStore };
+
+/**
+ * What to do about the request's `apiKey`, decided BEFORE anything is written:
+ * nothing, the ref to record plus the key to file under it, or the 501 that
+ * says this deployment cannot hold one.
  *
  * The refusal is deliberate and is the whole reason this returns a union. The
  * only alternatives to it are writing the key into the provider config (where
  * `listProviders` and every log line would find it) or accepting the request
  * and dropping the key on the floor, and a provider that quietly has no
  * credential fails later, somewhere else, as a puzzling 401 from a vendor.
+ *
+ * Planning is split from {@link writeApiKey} so the CONFIG is persisted first
+ * and the secret second — see there for why that order.
  */
-async function storeApiKey(
+function planApiKey(
   ctx: RouteContext,
   providerId: string,
   apiKey: string | undefined,
-): Promise<
-  { kind: "ok"; ref?: string } | { kind: "unavailable"; response: Response }
-> {
-  if (apiKey === undefined) return { kind: "ok" };
+): ApiKeyPlan {
+  if (apiKey === undefined) return { kind: "none" };
   if (ctx.deps.secrets === undefined) {
     return {
       kind: "unavailable",
@@ -226,9 +247,49 @@ async function storeApiKey(
       ),
     };
   }
-  const ref = providerSecretRef(providerId);
-  await ctx.deps.secrets.set(ref, apiKey);
-  return { kind: "ok", ref };
+  return {
+    kind: "write",
+    ref: providerSecretRef(providerId),
+    apiKey,
+    secrets: ctx.deps.secrets,
+  };
+}
+
+/**
+ * File the planned key under its ref. `null` when there was nothing to write or
+ * the write succeeded; a 500 when the secret store refused.
+ *
+ * CALLED AFTER THE CONFIG IS PERSISTED, and the order is the point. The ref is
+ * derived from the provider id, so a config pointing at a ref the store does
+ * not hold is recoverable: the next `PATCH` carrying an `apiKey` writes the
+ * same ref and the provider works. The reverse failure is not — a secret
+ * written for a config that never landed is a live credential under a ref
+ * nothing names, unreachable through this API and impossible to notice, which
+ * is the worst state a key can be in. So the recoverable failure is the one
+ * this route is willing to leave behind.
+ */
+async function writeApiKey(
+  ctx: RouteContext,
+  plan: ApiKeyPlan,
+): Promise<Response | null> {
+  if (plan.kind !== "write") return null;
+  try {
+    await plan.secrets.set(plan.ref, plan.apiKey);
+    return null;
+  } catch (err) {
+    ctx.deps.logger?.error("provider credential write failed", {
+      instance: ctx.instance,
+      ref: plan.ref,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return problemResponse({
+      status: 500,
+      code: "secret_write_failed",
+      detail:
+        "The provider was saved, but its credential could not be stored. Re-send the `apiKey` to retry; the ref is derived from the provider id, so a retry overwrites rather than orphans.",
+      instance: ctx.instance,
+    });
+  }
 }
 
 /** The metadata bag to store, with the secret ref folded in when there is one. */

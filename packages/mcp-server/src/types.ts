@@ -1,5 +1,5 @@
 import type { AiToolEnvelope } from "@agentkit/contracts";
-import type { Logger, ToolCatalog } from "@agentkit/host";
+import type { Clock, Logger, ToolCatalog } from "@agentkit/host";
 
 /**
  * The scope one MCP session works in.
@@ -100,6 +100,35 @@ export interface McpServerHandlerOptions {
   sessionScope?(
     headers: Headers,
   ): McpSessionScope | Promise<McpSessionScope> | undefined;
+  /**
+   * How many sessions may be live at once. Defaults to
+   * {@link DEFAULT_MAX_SESSIONS} (64).
+   *
+   * A session holds a `Server`, a transport, and every SSE stream the client
+   * opened on it, and nothing about the protocol obliges a client to ever send
+   * the DELETE that ends one — so an unbounded map is a memory leak any
+   * authenticated caller can drive by reconnecting. At the cap, the session
+   * that has gone longest without a request is closed to make room: the
+   * alternative, refusing the new one, lets a stale session lock a live client
+   * out.
+   */
+  maxSessions?: number;
+  /**
+   * How long a session may go without a request before it is closed. Defaults
+   * to {@link DEFAULT_SESSION_IDLE_TTL_MS} (30 minutes).
+   *
+   * Reaped LAZILY — on the next request the handler serves, not on a timer. A
+   * handler that armed an interval would keep an event loop alive for as long
+   * as the process runs, in a package whose whole shape is "a function that
+   * takes a `Request`"; a host that wants eager cleanup calls `dispose()`.
+   */
+  sessionIdleTtlMs?: number;
+  /**
+   * Source of the timestamps {@link maxSessions} and {@link sessionIdleTtlMs}
+   * compare. Defaults to `@agentkit/host`'s `defaultClock`; injected in tests
+   * so an idle-TTL assertion is about a fake clock rather than about waiting.
+   */
+  clock?: Clock;
   logger?: Logger;
 }
 
@@ -120,6 +149,15 @@ export const DEFAULT_ALLOWED_HOSTS: readonly string[] = Object.freeze([
   "127.0.0.1",
   "[::1]",
 ]);
+
+/** Live-session cap — see {@link McpServerHandlerOptions.maxSessions}. */
+export const DEFAULT_MAX_SESSIONS = 64;
+
+/**
+ * Idle session lifetime — see
+ * {@link McpServerHandlerOptions.sessionIdleTtlMs}.
+ */
+export const DEFAULT_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 
 /** What the server calls itself when the host does not say. */
 export const DEFAULT_SERVER_INFO = {

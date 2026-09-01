@@ -175,6 +175,16 @@ SELECT m.rowid AS rowid, ${messageSearchText("m")} AS body FROM messages AS m;
 -- postings, never a second copy of the text. snippet() re-reads the body
 -- through the view when a hit needs one.
 --
+-- THE INDEX IS KEYED BY messages.rowid, SO DO NOT VACUUM A LIVE STORE FILE.
+-- messages has a TEXT primary key, so its rowid is SQLite's own, and SQLite
+-- documents that VACUUM MAY RENUMBER the rowids of a table with no INTEGER
+-- PRIMARY KEY (lang_vacuum.html). A renumbering rewrites the content table
+-- without telling FTS5, so every posting silently starts naming a different
+-- message -- wrong hits and snippets cut from bodies that never held the term,
+-- with nothing that raises and no later write that repairs it. Rebuilding means
+-- recreating the database, or re-running the backfill at the bottom of this
+-- block by hand. See the VACUUM caveat in this package's README.
+--
 -- unicode61 with diacritic folding is the tokenizer a chat search wants: it
 -- splits on punctuation and case, and makes "resume" find "résumé". No stemmer
 -- -- an English-only stemmer applied to whatever language a user's chat happens

@@ -13,6 +13,7 @@
  * config file has nothing for these routes to write to.
  */
 import type { McpServerDto } from "@agentkit/contracts";
+import { defaultClock } from "@agentkit/host";
 import { jsonResponse, readJsonObject } from "../http.js";
 import { badRequest, conflict, notFound, notImplemented } from "../problem.js";
 import { mcpServerDto } from "../projections.js";
@@ -91,7 +92,9 @@ export async function createMcpServer(ctx: RouteContext): Promise<Response> {
 
   // The server mints identity and both timestamps — the store takes the record
   // verbatim so an importer can preserve ids, and this route is not an import.
-  const now = new Date().toISOString();
+  // Through the injected clock, not `new Date()`: a host that pins time pins
+  // this too, and a test can assert the stamp instead of parsing it back.
+  const now = (ctx.deps.clock ?? defaultClock).nowIso();
   const created = await resolved.store.create({
     id: `mcp_${crypto.randomUUID()}`,
     alias: request.alias,

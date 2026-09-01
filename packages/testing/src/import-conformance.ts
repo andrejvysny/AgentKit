@@ -8,12 +8,19 @@
 // the existing invariant holds over it. A second, subtly weaker check written
 // next door would be the bug.
 //
-// FRAMEWORK-NEUTRAL, same rules as the rest of this package: no runner import,
-// every `@agentkit/host` import is `import type`, and error assertions match on
-// the `code` string rather than on `instanceof`.
+// FRAMEWORK-NEUTRAL, same rules as the rest of this package: no runner import
+// and error assertions match on the `code` string rather than on `instanceof`.
+// The one VALUE imported from `@agentkit/host` is `orderMessagesForProvider`,
+// and deliberately so: the point of round-tripping tool linkage through an
+// import is that the host's own replay ordering can still use it, and a
+// re-implementation of that function here would grade a copy of the rule
+// instead of the rule. `@agentkit/host` is a peer dependency of this package
+// and a real dependency of every adapter that runs this suite.
+import { orderMessagesForProvider } from "@agentkit/host";
 import type {
   ImportConversationInput,
   ImportMessageInput,
+  MessageRecord,
 } from "@agentkit/host";
 import {
   expectRejectsWithCode,
@@ -162,6 +169,84 @@ export function describeConversationImport(
         const active = path[1];
         expect(active?.metadata).toEqual({ retry: 1 });
         expect(path[2]?.metadata).toEqual({ internal: true });
+      } finally {
+        close?.();
+      }
+    });
+
+    it("round-trips tool linkage VERBATIM, so an imported run still replays in provider order", async () => {
+      const { store, close } = await create();
+      try {
+        const toolCalls = [
+          {
+            id: "call-1",
+            name: "weather.lookup",
+            argumentsJson: '{"city":"Brno"}',
+          },
+        ];
+        const chat = await store.conversations.importConversation({
+          chat: { id: "chat-tool-linkage" },
+          messages: [
+            { id: "tl-u1", role: "user", content: "weather?", active: true },
+            // The turn that ASKED — replay-only, and useless to a provider
+            // without the ids it declared.
+            {
+              id: "tl-a1",
+              role: "assistant",
+              content: "",
+              parentMessageId: "tl-u1",
+              active: true,
+              internal: true,
+              toolCalls,
+            },
+            // The result ANSWERING it: linked by id, not by adjacency.
+            {
+              id: "tl-t1",
+              role: "tool",
+              content: '{"tempC":21,"source":"…"}',
+              parentMessageId: "tl-a1",
+              active: true,
+              internal: true,
+              toolCallId: "call-1",
+              modelResultJson: '{"tempC":21}',
+            },
+            {
+              id: "tl-a2",
+              role: "assistant",
+              content: "21°C and clear.",
+              parentMessageId: "tl-t1",
+              active: true,
+            },
+          ],
+        });
+
+        const path = await store.conversations.listMessages(chat.id);
+        expect(path.map((m) => m.id)).toEqual([
+          "tl-u1",
+          "tl-a1",
+          "tl-t1",
+          "tl-a2",
+        ]);
+        const byId = new Map(path.map((m) => [m.id, m] as const));
+        // Verbatim: the store persists these three and derives nothing from
+        // them.
+        expect(byId.get("tl-a1")?.toolCalls).toEqual(toolCalls);
+        expect(byId.get("tl-t1")?.toolCallId).toBe("call-1");
+        expect(byId.get("tl-t1")?.modelResultJson).toBe('{"tempC":21}');
+        // And invents none of them for the messages that carry none.
+        expect(byId.get("tl-u1")?.toolCalls).toBe(undefined);
+        expect(byId.get("tl-u1")?.toolCallId).toBe(undefined);
+        expect(byId.get("tl-a2")?.modelResultJson).toBe(undefined);
+
+        // THE POINT OF PERSISTING IT. The host's own replay ordering groups an
+        // internal assistant turn with the results answering the ids IT
+        // declared — so an import that dropped the linkage would migrate a
+        // conversation whose every replay hands the provider a tool result with
+        // no preceding `tool_calls`, which providers reject outright.
+        const ordered: MessageRecord[] = orderMessagesForProvider(path);
+        const assistantAt = ordered.findIndex((m) => m.id === "tl-a1");
+        expect(assistantAt).toBeGreaterThan(-1);
+        expect(ordered[assistantAt + 1]?.id).toBe("tl-t1");
       } finally {
         close?.();
       }

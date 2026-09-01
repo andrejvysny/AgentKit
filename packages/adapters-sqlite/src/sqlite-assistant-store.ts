@@ -30,6 +30,7 @@ import {
   assertAppendActivation,
   assertListMessagesCursors,
   AgentKitHostError,
+  ChatBusyError,
   DEFAULT_SEARCH_LIMIT,
   DuplicateActionIdError,
   DuplicateTaskError,
@@ -1456,7 +1457,7 @@ class SqliteConversationStore implements ConversationStore {
           `INSERT INTO messages
              (id, chat_id, run_id, role, content, content_format, order_key, tool_call_id, tool_calls, model_result_json, parent_message_id, depth, branch_index, active, metadata, created_at)
            VALUES
-             ($id, $chatId, NULL, $role, $content, $contentFormat, $orderKey, NULL, NULL, NULL, $parentId, $depth, $branchIndex, $active, $metadata, $createdAt)`,
+             ($id, $chatId, NULL, $role, $content, $contentFormat, $orderKey, $toolCallId, $toolCalls, $modelResultJson, $parentId, $depth, $branchIndex, $active, $metadata, $createdAt)`,
           {
             $id: plan.input.id,
             $chatId: input.chat.id,
@@ -1464,6 +1465,15 @@ class SqliteConversationStore implements ConversationStore {
             $content: encoded.content,
             $contentFormat: encoded.format,
             $orderKey: plan.orderKey,
+            // Tool linkage, verbatim — the import's only way to preserve which
+            // assistant turn a tool result answers, and so the only way a
+            // migrated conversation can be put back into provider order.
+            $toolCallId: plan.input.toolCallId ?? null,
+            $toolCalls:
+              plan.input.toolCalls === undefined
+                ? null
+                : toJson(plan.input.toolCalls),
+            $modelResultJson: plan.input.modelResultJson ?? null,
             $parentId: plan.parentMessageId ?? null,
             $depth: plan.depth,
             $branchIndex: plan.branchIndex,
@@ -1546,6 +1556,53 @@ class SqliteConversationStore implements ConversationStore {
 // ---------------------------------------------------------------------------
 // TaskStore
 // ---------------------------------------------------------------------------
+
+/**
+ * The statuses that make a scope undeletable — the same two
+ * `ConversationService.deleteChat` refuses on, restated here because the STORE
+ * owns the guarantee (see `TaskStore.deleteByScope`) and a store cannot import
+ * a service's private constant.
+ *
+ * Typed as `TaskStatus[]` on purpose: a status renamed out of the union fails
+ * to compile here rather than turning this guard into a filter that matches
+ * nothing.
+ */
+const BUSY_TASK_STATUSES: readonly TaskStatus[] = Object.freeze([
+  "running",
+  "waiting_approval",
+]);
+
+/**
+ * {@link BUSY_TASK_STATUSES} as an SQL `IN` list, built from the same constant
+ * so the two cannot drift. Interpolated rather than bound because these are
+ * this module's own compile-time literals, never caller input.
+ */
+const BUSY_TASK_STATUS_SQL = BUSY_TASK_STATUSES.map(
+  (status) => `'${status}'`,
+).join(", ");
+
+/**
+ * Refuse a scope delete while anything in it is live, naming what is holding it.
+ *
+ * The message and `details` shape are deliberately byte-identical to the ones
+ * `ConversationService.deleteChat` raises from its own fast-path check: a
+ * caller (or a transport mapping `chat_busy` to a 409) must not be able to tell
+ * which of the two layers refused.
+ */
+function assertScopeNotBusy(
+  scopeId: string,
+  busy: readonly { task_id: string; status: string }[],
+): void {
+  if (busy.length === 0) return;
+  throw new ChatBusyError(
+    `Chat ${scopeId} has ${busy.length} task(s) still running or awaiting approval; cancel or await them before deleting.`,
+    {
+      chatId: scopeId,
+      taskIds: busy.map((row) => row.task_id),
+      statuses: busy.map((row) => row.status),
+    },
+  );
+}
 
 class SqliteTaskStore implements TaskStore {
   private readonly aging: ResolvedTaskAging;
@@ -1656,7 +1713,18 @@ class SqliteTaskStore implements TaskStore {
 
   /**
    * Delete a scope's tasks with everything hanging off them, in ONE
-   * transaction.
+   * transaction — unless something in the scope is still live, in which case
+   * NOTHING is deleted and {@link ChatBusyError} is raised.
+   *
+   * THE BUSY CHECK IS THE FIRST STATEMENT OF THAT SAME TRANSACTION, and there
+   * is no `await` between it and the deletes. That is the whole point of the
+   * guard living here rather than only in `ConversationService.deleteChat`: the
+   * service's check runs inside an async transaction, and a concurrent
+   * `claimNext` on this connection FLATTENS into it (see
+   * {@link SqliteConnection}) — so a task can go `queued → running` between the
+   * service's check and this call. Nothing can run between statements of a
+   * synchronous `withTx` body, so a check made here holds for the deletes that
+   * follow it. See `TaskStore.deleteByScope`.
    *
    * Children before parents, because `task_attempts` and `leases` carry real
    * foreign keys to `tasks` and SQLite is not going to let a task row leave
@@ -1669,6 +1737,17 @@ class SqliteTaskStore implements TaskStore {
     return this.conn.withTx(() => {
       const scoped = `SELECT task_id FROM tasks WHERE scope_id = $scopeId`;
       const params: Params = { $scopeId: scopeId };
+      // Same ordering as `listByScope`, so the ids and statuses this refusal
+      // names are the ones the caller's own pre-check would have listed.
+      assertScopeNotBusy(
+        scopeId,
+        this.conn.all(
+          `SELECT task_id, status FROM tasks
+            WHERE scope_id = $scopeId AND status IN (${BUSY_TASK_STATUS_SQL})
+            ORDER BY enqueued_at ASC, rowid ASC`,
+          params,
+        ) as { task_id: string; status: string }[],
+      );
       this.conn.run(
         `DELETE FROM task_events WHERE task_id IN (${scoped})`,
         params,
@@ -2819,23 +2898,60 @@ function assertSchemaVersion(db: Database, path: string): void {
  * statement in it is `CREATE ... IF NOT EXISTS` or `INSERT OR IGNORE` — so
  * opening a file this build (or another process running it) already
  * initialized is a no-op.
+ *
+ * ONE TRANSACTION FOR THE VERSION CHECK, THE DDL AND THE FTS BACKFILL. `exec`
+ * of a multi-statement string runs each statement in its OWN implicit
+ * transaction, and this sequence is a check-then-act twice over: the version
+ * check decides whether to stamp `user_version`, and the DDL's trailing
+ * backfill is guarded by `WHERE NOT EXISTS (SELECT 1 FROM
+ * message_search_docsize)`. Two openers of one file — two processes, or one
+ * process and a worker — are otherwise free to interleave inside that sequence
+ * and both decide the index is empty, double-indexing every message in it.
+ * `BEGIN IMMEDIATE` holds the write lock across the whole thing, so no
+ * decision here can be separated from the act it authorises by somebody else's
+ * commit. The same discipline `TaskStore.deleteByScope` follows for its busy
+ * check, and for the same reason: a check-then-act is not atomic just because
+ * each of its statements is.
  */
 export function openAgentKitDatabase(
   path: string | ":memory:",
   busyTimeoutMs: number = DEFAULT_BUSY_TIMEOUT_MS,
 ): Database {
   const db = new Database(path);
-  if (path !== ":memory:") {
-    db.exec("PRAGMA journal_mode = WAL;");
-  }
   // Several handles over one file are supported; this is half of what makes
   // them wait for each other rather than fail on each other (the other half
   // is `SqliteConnection.beginImmediateAsync` — see that class's doc).
+  //
+  // FIRST, BEFORE ANY OTHER STATEMENT, and that ordering is load-bearing: it
+  // used to be set after the journal-mode pragma below, which left that pragma
+  // — a statement that takes an EXCLUSIVE lock — running with SQLite's default
+  // busy handler, the one that gives up instantly. Measured: six processes
+  // opening one file at once, and five of them died with a raw
+  // `SQLiteError: database is locked` out of a function that documents no such
+  // failure. A busy timeout that is set after the statement that needed it is
+  // not a busy timeout.
   db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
+  if (path !== ":memory:") {
+    // Outside the transaction below, and it has to be: SQLite refuses to change
+    // the journal mode inside one.
+    db.exec("PRAGMA journal_mode = WAL;");
+  }
   db.exec("PRAGMA foreign_keys = ON;");
-  assertSchemaVersion(db, path);
-  db.exec(SCHEMA_V7);
-  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    assertSchemaVersion(db, path);
+    db.exec(SCHEMA_V7);
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+    db.exec("COMMIT");
+  } catch (err) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Nothing open to roll back — the BEGIN is the only thing that could
+      // have left one, and whatever ended it did so before this point.
+    }
+    throw err;
+  }
   return db;
 }
 

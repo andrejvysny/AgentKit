@@ -180,6 +180,9 @@ export async function submitMessage(ctx: RouteContext): Promise<Response> {
     ...(validated.value.model === undefined
       ? {}
       : { model: validated.value.model }),
+    ...(validated.value.providerId === undefined
+      ? {}
+      : { providerId: validated.value.providerId }),
     ...(parentMessageId === undefined ? {} : { parentMessageId }),
     ...(validated.value.metadata === undefined
       ? {}

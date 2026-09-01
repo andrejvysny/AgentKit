@@ -9,7 +9,8 @@ import {
   type CallToolResult,
   type ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { resolveAuth } from "./auth.js";
+import { defaultClock } from "@agentkit/host";
+import { authFingerprint, resolveAuth, timingSafeEqualString } from "./auth.js";
 import { checkRebindingGuard } from "./guard.js";
 import {
   projectEnvelope,
@@ -18,7 +19,9 @@ import {
 } from "./projection.js";
 import {
   DEFAULT_ALLOWED_HOSTS,
+  DEFAULT_MAX_SESSIONS,
   DEFAULT_SERVER_INFO,
+  DEFAULT_SESSION_IDLE_TTL_MS,
   type McpServerHandler,
   type McpServerHandlerOptions,
   type McpSessionScope,
@@ -29,6 +32,14 @@ interface SessionEntry {
   server: Server;
   transport: WebStandardStreamableHTTPServerTransport;
   scope: McpSessionScope | undefined;
+  /**
+   * The principal this session belongs to — see {@link authFingerprint}. Fixed
+   * at initialize; every later request must present the same one.
+   */
+  fingerprint: string;
+  /** Epoch ms of the last request served on this session; drives both the
+   * idle TTL and the eviction order. */
+  lastUsedAt: number;
 }
 
 /**
@@ -61,7 +72,12 @@ interface SessionEntry {
  *     life. The client's announced `clientInfo.name` is NOT an input to it, and
  *     no message body can change it afterwards: a scope a caller can restate per
  *     call is a scope a caller can borrow.
- *  5. **Write filtering, on BOTH paths.** With `writesEnabled` false (the
+ *  5. **The session belongs to the principal that opened it.** A fingerprint
+ *     of the `Authorization` header is taken at initialize and re-checked, in
+ *     constant time, on every later request. A leaked `Mcp-Session-Id` alone
+ *     therefore buys nothing: a caller holding a different (still valid) token
+ *     gets the same 404 an invented id gets, on GET, POST and DELETE alike.
+ *  6. **Write filtering, on BOTH paths.** With `writesEnabled` false (the
  *     default), `effect: "write"` tools are absent from `tools/list` AND refused
  *     by `tools/call`. Hiding alone would only stop a client that had not looked
  *     before.
@@ -75,6 +91,10 @@ export function createMcpServerHandler(
   const allowedHosts = options.allowedHosts ?? [...DEFAULT_ALLOWED_HOSTS];
   const allowedOrigins = options.allowedOrigins;
   const serverInfo = options.serverInfo ?? { ...DEFAULT_SERVER_INFO };
+  const maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+  const sessionIdleTtlMs =
+    options.sessionIdleTtlMs ?? DEFAULT_SESSION_IDLE_TTL_MS;
+  const clock = options.clock ?? defaultClock;
   const logger = options.logger;
 
   const sessions = new Map<string, SessionEntry>();
@@ -176,7 +196,76 @@ export function createMcpServerHandler(
     }
   }
 
+  /**
+   * Drop one session and end everything it holds open.
+   *
+   * `Server.close()` closes the transport under it, which closes every SSE
+   * stream that session's client is still reading — the map entry alone is not
+   * what keeps a dead session expensive. Fire-and-forget because the callers
+   * are housekeeping on somebody else's request: a slow or throwing close must
+   * not delay, or fail, the request that happened to trigger the sweep.
+   */
+  function closeSession(
+    sessionId: string,
+    entry: SessionEntry,
+    reason: "expired" | "evicted",
+  ): void {
+    sessions.delete(sessionId);
+    logger?.debug("mcp session closed", { sessionId, reason });
+    void entry.server.close().catch((err) => {
+      logger?.warn("mcp session failed to close", {
+        sessionId,
+        reason,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  /**
+   * Close every session idle longer than `sessionIdleTtlMs`.
+   *
+   * LAZY, on the request path: no timer is ever armed, so mounting this handler
+   * does not keep an event loop alive. The cost is that a stale session lingers
+   * until the next request arrives — which is when it starts mattering.
+   */
+  function reapIdleSessions(): void {
+    const cutoff = clock.now().getTime() - sessionIdleTtlMs;
+    for (const [sessionId, entry] of sessions) {
+      if (entry.lastUsedAt < cutoff) closeSession(sessionId, entry, "expired");
+    }
+  }
+
+  /**
+   * Make room for one more session by closing the least recently used ones.
+   *
+   * Evicting the OLDEST IDLE rather than refusing the newcomer: a client that
+   * walked away holding a session must not be able to lock a live one out, and
+   * nothing in MCP obliges a client to send the DELETE that would free it. The
+   * loop is written to stop when the map is empty so a `maxSessions` of 0
+   * cannot spin.
+   */
+  function evictForCapacity(): void {
+    while (sessions.size >= maxSessions) {
+      let oldestId: string | undefined;
+      let oldestUsedAt = Number.POSITIVE_INFINITY;
+      for (const [sessionId, entry] of sessions) {
+        if (entry.lastUsedAt < oldestUsedAt) {
+          oldestUsedAt = entry.lastUsedAt;
+          oldestId = sessionId;
+        }
+      }
+      if (oldestId === undefined) return;
+      const victim = sessions.get(oldestId);
+      if (victim === undefined) return;
+      closeSession(oldestId, victim, "evicted");
+    }
+  }
+
   async function openSession(headers: Headers): Promise<SessionEntry> {
+    // Taken from the request that INITIALIZES the session, before the session
+    // exists, for the same reason the scope is: it is what the caller proved
+    // with, not something a later message can restate.
+    const fingerprint = await authFingerprint(headers.get("authorization"));
     const scope = (await options.sessionScope?.(headers)) ?? undefined;
     const server = buildServer(scope);
     const transport = new WebStandardStreamableHTTPServerTransport({
@@ -189,6 +278,10 @@ export function createMcpServerHandler(
           void server.close();
           return;
         }
+        // At the moment of insertion, not before it: two initializes racing
+        // each other would both pass a check made earlier and leave the map one
+        // over the cap.
+        evictForCapacity();
         sessions.set(sessionId, entry);
         logger?.debug("mcp session opened", { sessionId });
       },
@@ -197,7 +290,13 @@ export function createMcpServerHandler(
         logger?.debug("mcp session closed", { sessionId });
       },
     });
-    const entry: SessionEntry = { server, transport, scope };
+    const entry: SessionEntry = {
+      server,
+      transport,
+      scope,
+      fingerprint,
+      lastUsedAt: clock.now().getTime(),
+    };
     // A transport that dies for any other reason (stream error, dispose) must
     // not leave a dangling map entry that later requests would route into.
     transport.onclose = () => {
@@ -233,12 +332,30 @@ export function createMcpServerHandler(
         return new Response(null, { status: 403 });
       }
 
+      // Housekeeping runs after auth, on a request that has already proved it
+      // may be here, and before any session lookup — so an expired session is
+      // gone by the time it could be routed into.
+      reapIdleSessions();
+
       const sessionId = request.headers.get("mcp-session-id");
       if (sessionId !== null) {
         const entry = sessions.get(sessionId);
         if (entry === undefined) {
           return jsonRpcError(404, -32001, "Session not found");
         }
+        // A session id is a routing key, not a credential. Being authenticated
+        // is not enough: this must be the SAME principal that opened it, or a
+        // leaked id would hand one caller another's pinned scope — and, on
+        // DELETE, another's session. The refusal is byte-identical to the
+        // unknown-id one above: confirming that the session exists but is not
+        // yours is confirming that it exists.
+        const presented = await authFingerprint(
+          request.headers.get("authorization"),
+        );
+        if (!(await timingSafeEqualString(entry.fingerprint, presented))) {
+          return jsonRpcError(404, -32001, "Session not found");
+        }
+        entry.lastUsedAt = clock.now().getTime();
         return entry.transport.handleRequest(request);
       }
 

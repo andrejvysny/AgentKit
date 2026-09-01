@@ -160,8 +160,17 @@ Leaving `AGENTKIT_MCP_SERVER_TOKEN` unset does not serve the route at all.
 | Sample tools | this example's own `ToolSetContributor` | `src/tools.ts` |
 | MCP bridge (optional) | `@agentkit/mcp-client` | `src/wiring.ts` |
 | MCP server (optional) | `@agentkit/mcp-server` | `src/wiring.ts` (built) / `src/main.ts` (mounted at `/mcp`) |
+| Tool guards | `@agentkit/host` (`ToolGuard`) — one `toolGuards` array, shared | `src/wiring.ts` |
 | Turn execution | `@agentkit/host` (`TurnRunner`, `ChatTurnExecutor`) | `src/wiring.ts` |
 | HTTP + SSE | `@agentkit/transport-http` (`serveRest`) | `src/main.ts` |
+
+Three places stage the same contributors — `TurnRunner`, the `GET /v1/tools`
+catalogue, and the MCP server's tool source — so `src/wiring.ts` defines
+`toolGuards` ONCE and passes that same array to all three. The array is empty
+here (this example has no policy to enforce); the point is the single source. A
+host that guards the runner but not the catalogue advertises tools its own turns
+refuse, and one that guards neither the MCP source hands an outside client a
+tool set its chats do not have.
 
 ## Tests
 

@@ -10,6 +10,7 @@ import {
   authHeaders,
   CHAT_HEADER,
   connectClient,
+  createTestClock,
   demoContributor,
   echoTool,
   readRpcResponse,
@@ -425,5 +426,201 @@ describe("dispose", () => {
 
     // Idempotent: a second signal must not throw.
     await handler.dispose();
+  });
+});
+
+/** A raw `initialize` POST body — no SDK client, so the test owns the headers. */
+const INIT_BODY = JSON.stringify({
+  jsonrpc: "2.0",
+  id: 1,
+  method: "initialize",
+  params: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "raw", version: "1.0.0" },
+  },
+});
+
+/** Open a session over raw fetch and return the id the server minted. */
+async function initSession(
+  handler: McpServerHandler,
+  headers: Record<string, string> = authHeaders(),
+): Promise<string> {
+  const response = await handler.fetch(
+    new Request("http://localhost/mcp", {
+      method: "POST",
+      headers: {
+        host: "localhost",
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        ...headers,
+      },
+      body: INIT_BODY,
+    }),
+  );
+  expect(response.status).toBe(200);
+  const sessionId = response.headers.get("mcp-session-id");
+  if (sessionId === null) throw new Error("initialize returned no session id");
+  return sessionId;
+}
+
+/** One `tools/list` on an existing session, as a raw request. */
+function listToolsRaw(
+  handler: McpServerHandler,
+  sessionId: string,
+  headers: Record<string, string> = authHeaders(),
+): Promise<Response> {
+  return handler.fetch(
+    new Request("http://localhost/mcp", {
+      method: "POST",
+      headers: {
+        host: "localhost",
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-session-id": sessionId,
+        ...headers,
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+    }),
+  );
+}
+
+describe("session binding", () => {
+  /** Two tokens that are both valid — the point is that they are different principals. */
+  const TOKEN_A = "principal-a-token-000";
+  const TOKEN_B = "principal-b-token-111";
+  const twoPrincipals = {
+    auth: {
+      verify: (header: string | null) =>
+        header === `Bearer ${TOKEN_A}` || header === `Bearer ${TOKEN_B}`,
+    },
+  };
+  const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+
+  it("lets the principal that opened the session keep using it", async () => {
+    const handler = build(twoPrincipals);
+    const sessionId = await initSession(handler, bearer(TOKEN_A));
+    const response = await listToolsRaw(handler, sessionId, bearer(TOKEN_A));
+    expect(response.status).toBe(200);
+    const rpc = await readRpcResponse(response);
+    expect(
+      (rpc["result"] as { tools: unknown[] }).tools.length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("answers a different principal on a leaked session id with 404", async () => {
+    const handler = build(twoPrincipals);
+    const sessionId = await initSession(handler, bearer(TOKEN_A));
+
+    // B authenticated fine — it just is not whose session this is. The refusal
+    // is the unknown-id one, so it does not confirm the id exists.
+    const stolen = await listToolsRaw(handler, sessionId, bearer(TOKEN_B));
+    expect(stolen.status).toBe(404);
+    const invented = await listToolsRaw(
+      handler,
+      "not-a-session",
+      bearer(TOKEN_B),
+    );
+    expect(invented.status).toBe(404);
+    expect(await stolen.text()).toBe(await invented.text());
+  });
+
+  it("refuses a DELETE from another principal and leaves the session alive", async () => {
+    const handler = build(twoPrincipals);
+    const sessionId = await initSession(handler, bearer(TOKEN_A));
+
+    const deleted = await handler.fetch(
+      new Request("http://localhost/mcp", {
+        method: "DELETE",
+        headers: {
+          host: "localhost",
+          "mcp-session-id": sessionId,
+          ...bearer(TOKEN_B),
+        },
+      }),
+    );
+    expect(deleted.status).toBe(404);
+
+    // The owner still has it: the refusal cost B nothing and A nothing.
+    expect(
+      (await listToolsRaw(handler, sessionId, bearer(TOKEN_A))).status,
+    ).toBe(200);
+  });
+
+  it("binds an unauthenticated-header session to the absent header", async () => {
+    // A `verify` that accepts everything, including no header at all: the
+    // fingerprint of the empty string is a fingerprint like any other.
+    const handler = build({ auth: { verify: () => true } });
+    const sessionId = await initSession(handler, {});
+    expect((await listToolsRaw(handler, sessionId, {})).status).toBe(200);
+    // ...and a caller who now presents one is a different principal.
+    expect(
+      (await listToolsRaw(handler, sessionId, bearer(TOKEN_A))).status,
+    ).toBe(404);
+  });
+});
+
+describe("session limits", () => {
+  it("evicts the oldest idle session at maxSessions and closes its transport", async () => {
+    const clock = createTestClock();
+    const handler = build({ maxSessions: 2, clock });
+
+    const first = await initSession(handler);
+    // A standalone SSE stream on the victim: the eviction has to CLOSE the
+    // transport, not just forget the map entry, and an ended stream is the
+    // only observable difference between the two.
+    const stream = await handler.fetch(
+      new Request("http://localhost/mcp", {
+        method: "GET",
+        headers: {
+          ...authHeaders(),
+          host: "localhost",
+          accept: "text/event-stream",
+          "mcp-session-id": first,
+        },
+      }),
+    );
+    expect(stream.status).toBe(200);
+    if (stream.body === null) throw new Error("no SSE body");
+    const reader = stream.body.getReader();
+
+    clock.advance(1_000);
+    const second = await initSession(handler);
+    clock.advance(1_000);
+    const third = await initSession(handler);
+
+    expect((await listToolsRaw(handler, first)).status).toBe(404);
+    expect((await listToolsRaw(handler, second)).status).toBe(200);
+    expect((await listToolsRaw(handler, third)).status).toBe(200);
+
+    const streamEnded = await Promise.race([
+      reader.read().then((chunk) => chunk.done),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 500);
+      }),
+    ]);
+    expect(streamEnded).toBe(true);
+    await reader.cancel();
+  });
+
+  it("reaps a session idle past sessionIdleTtlMs on the next request", async () => {
+    const clock = createTestClock();
+    const handler = build({ maxSessions: 2, sessionIdleTtlMs: 60_000, clock });
+
+    const first = await initSession(handler);
+    const second = await initSession(handler);
+    expect((await listToolsRaw(handler, first)).status).toBe(200);
+
+    clock.advance(60_001);
+    // Lazily: this very request is what sweeps them.
+    expect((await listToolsRaw(handler, first)).status).toBe(404);
+    expect((await listToolsRaw(handler, second)).status).toBe(404);
+
+    // And they no longer occupy a slot — two fresh sessions fit under the cap
+    // of two and neither evicts the other.
+    const third = await initSession(handler);
+    const fourth = await initSession(handler);
+    expect((await listToolsRaw(handler, third)).status).toBe(200);
+    expect((await listToolsRaw(handler, fourth)).status).toBe(200);
   });
 });

@@ -335,27 +335,32 @@ export function createAgentKitClient(options: AgentKitClientOptions) {
     updateSettings: (body: UpdateSettingsRequest, opts?: RequestOptions) =>
       transport.json<SettingsDto>("updateSettings", { body, options: opts }),
 
-    /** `chatId` is required: an allowance belongs to exactly one conversation. */
+    /** An allowance belongs to exactly one conversation, and names it in the path. */
     listAllowances: (params: { chatId: string }, opts?: RequestOptions) =>
       transport.json<WriteAllowanceListResponse>("listAllowances", {
-        query: params,
+        path: params,
         options: opts,
       }),
 
-    grantAllowance: (body: GrantAllowanceRequest, opts?: RequestOptions) =>
+    /** The chat is the path; the body says only what is being granted. */
+    grantAllowance: (
+      params: { chatId: string },
+      body: GrantAllowanceRequest,
+      opts?: RequestOptions,
+    ) =>
       transport.json<WriteAllowanceDto>("grantAllowance", {
+        path: params,
         body,
         options: opts,
       }),
 
-    /** `chatId` is required here too — a grant is revoked by the chat that owns it. */
+    /** A grant is revoked by the chat that owns it — both ids are in the path. */
     revokeAllowance: (
-      params: { allowanceId: string; chatId: string },
+      params: { chatId: string; allowanceId: string },
       opts?: RequestOptions,
     ) =>
       transport.empty("revokeAllowance", {
-        path: { allowanceId: params.allowanceId },
-        query: { chatId: params.chatId },
+        path: params,
         options: opts,
       }),
 

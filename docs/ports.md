@@ -211,15 +211,16 @@ is where a delete that *means something* lives. `deleteChat(chatId)` runs one
 `store.transaction`: read the chat, read `TaskStore.listByScope(chatId)`, refuse
 with `ChatBusyError` (`chat_busy`, HTTP 409) if any task is `running` or
 `waiting_approval`, then `conversations.deleteChat` + `tasks.deleteByScope` +
-`proposals.deleteByChat`. The check and the deletes share one transaction
-because a task read outside it could go `running` in between, which would make
-the refusal a race. `queued` is deliberately not a busy status — nothing has
-been spent on it, and refusing would make a chat undeletable for as long as
-anything sat behind it. Force-cancelling live runs is a *different* operation
-with different consequences, so it is the caller's explicit call, never a side
-effect of a delete. The scope is the chat id, which is the convention
-`TurnRunner` writes with. `archiveChat`/`unarchiveChat` are thin, deliberately
-logic-free wrappers over `updateChat({ archived })`.
+`proposals.deleteByChat`. That check is a **fast path**, not the guarantee: the
+guarantee belongs to `TaskStore.deleteByScope`, which re-checks and refuses on
+its own (see [TaskStore](#taskstore) below and the hazard note there). `queued`
+is deliberately not a busy status — nothing has been spent on it, and refusing
+would make a chat undeletable for as long as anything sat behind it.
+Force-cancelling live runs is a *different* operation with different
+consequences, so it is the caller's explicit call, never a side effect of a
+delete. The scope is the chat id, which is the convention `TurnRunner` writes
+with. `archiveChat`/`unarchiveChat` are thin, deliberately logic-free wrappers
+over `updateChat({ archived })`.
 
 **Reference / conformance**: `MemoryAssistantStore` and `SqliteAssistantStore`
 (sqlite adapter: `SCHEMA_V7`, `parent_message_id`/`depth`/`branch_index`/
@@ -307,15 +308,34 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
   would owe every adapter statuses, kinds, ordering and paging to serve one
   consumer.
 - `deleteByScope(scopeId)` deletes a scope's tasks with their attempts, leases
-  and event log, and returns the number of **tasks** removed. Unconditional by
-  design: whether live work may be discarded is policy, and this port cannot
-  answer it — the caller decides (and `ConversationService.deleteChat` refuses
-  outright while anything is `running` or `waiting_approval`).
+  and event log, and returns the number of **tasks** removed. It **refuses**
+  with `ChatBusyError` (`chat_busy`) — deleting nothing at all — when any task
+  in the scope is `running` or `waiting_approval`. **The store owns that
+  guarantee**: an implementation MUST make the check and the deletes one
+  synchronous statement or transaction with no `await` between them.
+  `ConversationService.deleteChat` still checks first, but only as a fast path
+  so it can refuse before it has deleted the conversation. `queued` is not live
+  — nothing has been spent on it — and force-cancelling what is live is the
+  caller's explicit, separate call.
 - `updateProgress(taskId, progress, opts)` REPLACES `TaskRecord.progress`
   wholesale (never merges) and MUST reject a stale `leaseToken` with
   `LeaseLostError`, the same check `appendEvents` makes. It never touches
   the event log, and nothing clears it between attempts — a retry starts
   with the previous attempt's snapshot still in place until it writes one.
+
+> **Hazard class: check-then-act across an `await` inside a transaction.**
+> In a single-event-loop host, a concurrent store call **flattens into an
+> in-flight async transaction** rather than opening its own (that is the
+> documented semantics of `AssistantStore.transaction`, and of
+> `SqliteConnection`'s `txDepth`). So an invariant checked before an `await`
+> and acted on after it is *not* atomic, however well-wrapped the transaction
+> is: a verifier drove exactly this against `ConversationService.deleteChat`
+> and got a `claimNext` claiming a task the committed transaction had deleted.
+> Any invariant of that shape must be enforced by a **single synchronous
+> statement or transaction inside the adapter** — which is why the busy check
+> now lives in `deleteByScope` and is pinned there by the shared conformance
+> suite (`packages/testing/src/chat-lifecycle-conformance.ts`), for both
+> reference adapters.
 
 **`waiting_approval` is currently producer-less.** No code in this repository
 moves a task into it: a staged write returns `pending` to the model and the
@@ -659,6 +679,22 @@ pass produces — are **chain appends** (`activate: false`,
 `parentMessageId` = the run's own last write), so a mid-run branch switch
 cannot migrate them onto a conversation that never ran them.
 
+**The write-back is persisted but never replayed.** It carries
+`metadata.correctionPass`, and `assembleMessages` skips every record that has
+it. The stored history has to say why the model changed its answer, but the
+write-back was an instruction aimed at one pass of one run ("fix these three
+items now, by calling your tools") — replaying it on a later turn would hand
+the model a dangling order about deficiencies that are already gone. The
+harness's own passes are unaffected: they build their three messages directly.
+
+**A correction pass calls tools, on the same run id.** So one run can leave
+behind SEVERAL tool-calling assistant turns, and the provider order for them is
+per-tool-call-linkage, not per-kind: each internal assistant is replayed
+immediately followed by the results for its own ids
+(`orderMessagesForProvider`). Bucketing every assistant ahead of every tool
+result would replay two tool-call turns back to back with the first unanswered,
+which providers reject outright.
+
 **Answer replacement.** A correction pass starts the visible answer over, as
 the recovery passes do: the corrected text replaces the one the verifier
 rejected rather than being glued to the end of it. A pass that fixes things
@@ -680,16 +716,23 @@ deleted or go stale between one turn and the next.
 
 [`ports/attachment-resolver.ts`](../packages/host/src/ports/attachment-resolver.ts)
 
-`resolve(ref) → { mediaType, base64 } | null`. Turns the `ref` image sources
-in stored messages into bytes a provider can be shown. **The blob storage is
-the host's** — a file, a row, an S3 key, a content-addressed cache — and the
-ref is opaque: AgentKit never parses one, derives a path from one, or mints
-one.
+`resolve(ref, { chatId }) → { mediaType, base64 } | null`. Turns the `ref`
+image sources in stored messages into bytes a provider can be shown. **The
+blob storage is the host's** — a file, a row, an S3 key, a content-addressed
+cache — and the ref is opaque: AgentKit never parses one, derives a path from
+one, or mints one.
+
+**`resolve` is an authorization question, not a lookup.** A ref is whatever
+string a client put in a message part, so the question is not "do these bytes
+exist" but "may THIS chat see them" — which is why the chat is passed with it.
+A multi-tenant resolver that ignores the context and looks the ref up globally
+hands one tenant's attachments to anyone who can guess a ref.
 
 `null` is a normal answer, not an error path: an attachment can be deleted,
-expired, or belong to a workspace the caller lost access to, and every one of
-those is a conversation that must still run. Throw only for a genuine fault
-(storage down), where failing the turn is honest.
+expired, or belong to a workspace the caller lost access to — or simply not be
+resolvable *for this chat* — and every one of those is a conversation that must
+still run. Throw only for a genuine fault (storage down), where failing the
+turn is honest.
 
 **Resolution is in-memory and per pass.** `TurnRunner` resolves after
 `assembleMessages` and before `runChat`, for every pass including retries; the
@@ -781,11 +824,22 @@ different moments:
   `errorCode: "tool_guard_refused"`, `phase: "guard"` and the reason; it
   never throws, so the run completes and the `tool_call_id` stays balanced.
 
+**A guard that throws fails closed, per tool.** An `isVisible` that throws
+hides that one tool (with a `Logger.warn`); a `canExecute` that throws refuses
+that one call, reported to the model as `phase: "guard"` with the fixed reason
+`"guard error"` — the thrown message is deliberately *not* forwarded, since a
+guard's reason reaches the model verbatim. Scoping the failure to the tool
+being judged means a guard broken for one tool costs one tool, while a guard
+broken for all of them empties the registry, which is loud.
+
 **Key invariant**: guards compose with **AND**, an absent hook is "no
 opinion" (not "allow"), and order is not significant — every guard is asked
 and the first refusal wins. `ToolGuardContext` carries the owning
 `namespace`, the `AiToolDefinition`, the run's `bindings`, and `chatId` when
-there is one.
+there is one. **`bindings` is a staging-time snapshot**, even inside
+`canExecute`: the context object is built once, when the registry is staged,
+and handed to every later call. A call-time guard whose verdict turns on state
+that moves within a run must re-read that state itself.
 
 **Optional.** Unwired, nothing is asked and every contributed tool is staged
 and callable, exactly as before the port existed.

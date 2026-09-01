@@ -617,6 +617,141 @@ store.close();
     }
   }, 30_000);
 
+  it("opens the same file from several processes at once while the FTS index needs a backfill", async () => {
+    // Two findings meet here, and the file has to be in the ONE state that
+    // exercises both: `messages` full while the FTS index is empty, which is
+    // the only state in which the DDL's guarded backfill actually inserts.
+    //
+    // WHAT FAILED, measured: of six processes opening one such file at once,
+    // FIVE died with a raw `SQLiteError: database is locked` out of
+    // `openAgentKitDatabase` — a function that documents no such failure. The
+    // cause was statement ORDER, not the lock itself: `PRAGMA busy_timeout` was
+    // set AFTER `PRAGMA journal_mode = WAL`, so the journal-mode switch — which
+    // takes an exclusive lock — ran under SQLite's default busy handler, the
+    // one that gives up instantly. The timeout is now the first statement of
+    // the open, so that switch waits like everything else.
+    //
+    // WHAT IS ALSO ASSERTED, and cannot be provoked from a test: the version
+    // check and the guarded backfill are a check-then-act pair, and `exec` runs
+    // each statement of a multi-statement string in its own implicit
+    // transaction. Two openers interleaving there could both decide the index
+    // was empty and index every message twice. The whole sequence now runs
+    // inside one `BEGIN IMMEDIATE`; the count assertions below are what would
+    // notice if it stopped.
+    const scratch = createSqliteScratch("open-race");
+    const dir = dirname(scratch.path);
+    const workerPath = join(dir, "open-worker.ts");
+    const goPath = join(dir, "open-go");
+    const storeModule = join(import.meta.dir, "..", "src", "index.js");
+    const MESSAGE_COUNT = 3_000;
+    const OPENERS = 8;
+
+    // Enough messages that the backfill is not over before the other openers
+    // have looked at the guard.
+    const seed = new SqliteAssistantStore(scratch.path);
+    try {
+      const chat = await seed.conversations.createChat({});
+      await seed.transaction(async (tx) => {
+        for (let i = 0; i < MESSAGE_COUNT; i += 1) {
+          await tx.conversations.appendMessage({
+            chatId: chat.id,
+            role: "user",
+            content: `magnetometer sample ${i}, lorem ipsum dolor sit amet`,
+          });
+        }
+      });
+    } finally {
+      seed.close();
+    }
+
+    // THE ONE STATE IN WHICH THE BACKFILL ACTUALLY INSERTS: `messages` full and
+    // the index empty. A fresh file cannot reach it (there is nothing to
+    // index), which is exactly why a "two openers on a fresh file" test would
+    // assert nothing — the guarded statement would be a no-op on both.
+    const wipe = new Database(scratch.path);
+    wipe.exec(
+      "INSERT INTO message_search(message_search) VALUES('delete-all')",
+    );
+    expect(
+      (
+        wipe
+          .query("SELECT COUNT(*) AS count FROM message_search_docsize")
+          .get() as { count: number }
+      ).count,
+    ).toBe(0);
+    wipe.close();
+
+    writeFileSync(
+      workerPath,
+      `import { existsSync } from "node:fs";
+import { openAgentKitDatabase } from ${JSON.stringify(storeModule)};
+
+const [, , path, go] = process.argv;
+// Barrier: every worker is already running by the time any of them opens, so
+// they really do contend instead of taking turns.
+while (!existsSync(go)) await Bun.sleep(0);
+const db = openAgentKitDatabase(path);
+db.close();
+`,
+    );
+
+    const children = Array.from({ length: OPENERS }, () =>
+      Bun.spawn({
+        cmd: ["bun", "run", workerPath, scratch.path, goPath],
+        stdout: "pipe",
+        stderr: "pipe",
+      }),
+    );
+    try {
+      // A moment for every child to reach the barrier — none of them can open
+      // before the file below exists.
+      await Bun.sleep(300);
+      writeFileSync(goPath, "go");
+      // A fifth contender, in THIS process, racing the four.
+      const inProcess = new SqliteAssistantStore(scratch.path);
+      inProcess.close();
+
+      const failures: string[] = [];
+      for (const child of children) {
+        const code = await child.exited;
+        if (code !== 0) {
+          failures.push(await new Response(child.stderr).text());
+        }
+      }
+      // Opening is not allowed to fail because someone else was opening. Under
+      // the bug this list carried several `SQLITE_BUSY`s.
+      expect(failures).toEqual([]);
+
+      const check = new Database(scratch.path);
+      try {
+        // Indexed EXACTLY once. Two openers that both ran the backfill would
+        // leave two postings per message — a search returning every hit twice,
+        // from an index nothing would ever say was wrong.
+        expect(
+          (
+            check
+              .query("SELECT COUNT(*) AS count FROM message_search_docsize")
+              .get() as { count: number }
+          ).count,
+        ).toBe(MESSAGE_COUNT);
+        expect(
+          (
+            check
+              .query(
+                "SELECT COUNT(*) AS count FROM message_search WHERE message_search MATCH 'magnetometer'",
+              )
+              .get() as { count: number }
+          ).count,
+        ).toBe(MESSAGE_COUNT);
+      } finally {
+        check.close();
+      }
+    } finally {
+      for (const child of children) child.kill();
+      scratch.cleanup();
+    }
+  }, 30_000);
+
   it.skip("runs a concurrent claim-AND-EXECUTE workload over two handles in one process", async () => {
     // REMAINING LIMITATION, pinned rather than asserted — and NOT the one the
     // busy-timeout work fixed. Concurrent CLAIMS are fine (the test above), and

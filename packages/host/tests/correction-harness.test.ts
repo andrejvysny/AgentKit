@@ -27,6 +27,8 @@ class RecordingClient implements AiProviderClient {
   readonly id = "test";
   readonly kind = "openai-compatible";
   readonly messagesPerCall: AiChatMessage[][] = [];
+  /** How many tools each call was offered — 0 once a chat degrades to chat-only. */
+  readonly toolCountsPerCall: number[] = [];
   calls = 0;
 
   constructor(readonly inner: AiProviderClient) {}
@@ -42,6 +44,7 @@ class RecordingClient implements AiProviderClient {
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
     this.calls += 1;
     this.messagesPerCall.push([...input.messages]);
+    this.toolCountsPerCall.push(input.tools?.length ?? 0);
     yield* this.inner.streamChat(input);
   }
 }
@@ -584,5 +587,241 @@ describe("TurnRunner without the correction harness", () => {
     expect(f.client.calls).toBe(2);
     expect((await f.store.tasks.getTask(runId))?.status).toBe("completed");
     expect(messagesOf(f).some((m) => m.role === "system")).toBe(false);
+  });
+});
+
+/**
+ * A turn that calls one tool and then answers, followed by correction passes
+ * that CALL A TOOL OF THEIR OWN before answering, then `later` plain turns.
+ *
+ * This is the shape the harness produces in the field — its write-back tells the
+ * model to "fix each of these now by calling your tools" — and it is the shape
+ * that puts TWO tool-calling assistant turns under ONE run id.
+ */
+function scriptToolThenToolCorrections(
+  mock: MockProviderClient,
+  corrections: string[],
+  later: string[] = [],
+): void {
+  mock.setScript([
+    {
+      steps: [
+        {
+          kind: "tool_call",
+          toolCallId: "call-1",
+          name: "echo",
+          argumentsJson: '{"text":"hi"}',
+        },
+      ],
+    },
+    { steps: [{ kind: "text", content: "all set" }] },
+    ...corrections.flatMap((content, index) => [
+      {
+        steps: [
+          {
+            kind: "tool_call" as const,
+            toolCallId: `fix-${index + 1}`,
+            name: "echo",
+            argumentsJson: '{"text":"fixing"}',
+          },
+        ],
+      },
+      { steps: [{ kind: "text" as const, content }] },
+    ]),
+    ...later.map((content) => ({
+      steps: [{ kind: "text" as const, content }],
+    })),
+  ]);
+}
+
+/**
+ * Assert the one shape every provider enforces on a replayed history: an
+ * assistant turn declaring `tool_calls` is followed IMMEDIATELY by exactly the
+ * results for its own ids, in declaration order — so no two tool-calling
+ * assistant turns can sit back to back, and no tool result can precede the turn
+ * that asked for it.
+ */
+function assertProviderLegal(messages: readonly AiChatMessage[]): void {
+  const declared = new Set<string>();
+  for (const [index, message] of messages.entries()) {
+    if (message.role === "tool") {
+      // A result may only answer a call already declared above it.
+      expect({
+        at: index,
+        id: message.toolCallId,
+        declaredAbove: declared.has(String(message.toolCallId)),
+      }).toEqual({ at: index, id: message.toolCallId, declaredAbove: true });
+      continue;
+    }
+    const calls = message.toolCalls ?? [];
+    if (message.role !== "assistant" || calls.length === 0) continue;
+    for (const call of calls) declared.add(call.id);
+    const expected = calls.map((call) => call.id);
+    const actual = messages
+      .slice(index + 1, index + 1 + expected.length)
+      .map((next) =>
+        next.role === "tool" ? next.toolCallId : `<${next.role}>`,
+      );
+    expect({ at: index, follows: actual }).toEqual({
+      at: index,
+      follows: expected,
+    });
+  }
+}
+
+/** The provider history the LAST turn replayed, before any recovery pass. */
+function replayOf(f: Fixture, callIndex: number): AiChatMessage[] {
+  return f.client.messagesPerCall[callIndex] ?? [];
+}
+
+async function submit(f: Fixture, content: string): Promise<string> {
+  const submitted = await f.runner.submitMessage({ chatId: f.chatId, content });
+  await drive(f, submitted.runId);
+  return submitted.runId;
+}
+
+/** A record shaped as the provider message a replay of the fork would send. */
+function asChatMessage(record: MessageRecord): AiChatMessage {
+  return {
+    role: record.role as AiChatMessage["role"],
+    content: String(record.content),
+    ...(record.toolCalls === undefined ? {} : { toolCalls: record.toolCalls }),
+    ...(record.toolCallId === undefined
+      ? {}
+      : { toolCallId: record.toolCallId }),
+  } as AiChatMessage;
+}
+
+describe("provider history after a multi-pass run", () => {
+  it("replays each tool-calling pass next to its own results", async () => {
+    const verification = new ScriptedVerification([partial(["a", "b"]), clean]);
+    const f = await setup({ verification, correction: { maxPasses: 3 } });
+    scriptToolThenToolCorrections(f.mock, ["fixed"], ["second answer"]);
+    await submit(f, "go");
+    // A SECOND turn is where the defect surfaces: the first turn assembles a
+    // history that has none of its own records in it yet.
+    await submit(f, "and again");
+
+    // Call 4 is the second turn's own pass — the one handed the stored history.
+    const replay = replayOf(f, 4);
+    expect(f.client.calls).toBe(5);
+    assertProviderLegal(replay);
+    // Both passes really are in there: a legality check over a history that
+    // quietly lost the second pass would pass for the wrong reason.
+    const withCalls = replay.filter(
+      (m) => m.role === "assistant" && (m.toolCalls ?? []).length > 0,
+    );
+    expect(withCalls.map((m) => (m.toolCalls ?? []).map((c) => c.id))).toEqual([
+      ["call-1"],
+      ["fix-1"],
+    ]);
+    expect(
+      replay.filter((m) => m.role === "tool").map((m) => m.toolCallId),
+    ).toEqual(["call-1", "fix-1"]);
+    // The chat never degraded to chat-only, which is what a rejected history
+    // costs: the second turn was still offered its tools.
+    expect(f.client.toolCountsPerCall[4]).toBeGreaterThan(0);
+  });
+
+  it("stays legal across three tool-calling correction passes", async () => {
+    const verification = new ScriptedVerification([
+      partial(["a", "b", "c"]),
+      partial(["a", "b"]),
+      partial(["a"]),
+      clean,
+    ]);
+    const f = await setup({ verification, correction: { maxPasses: 3 } });
+    scriptToolThenToolCorrections(
+      f.mock,
+      ["one", "two", "three"],
+      ["second answer"],
+    );
+    await submit(f, "go");
+    await submit(f, "and again");
+
+    const replay = replayOf(f, 8);
+    assertProviderLegal(replay);
+    expect(
+      replay.filter((m) => m.role === "tool").map((m) => m.toolCallId),
+    ).toEqual(["call-1", "fix-1", "fix-2", "fix-3"]);
+  });
+
+  it("keeps a fork of a corrected run provider-legal", async () => {
+    const verification = new ScriptedVerification([partial(["a", "b"]), clean]);
+    const f = await setup({ verification, correction: { maxPasses: 3 } });
+    scriptToolThenToolCorrections(f.mock, ["fixed"]);
+    await submit(f, "go");
+
+    const leaf = (await f.store.conversations.listMessages(f.chatId)).at(-1);
+    expect(leaf).toBeDefined();
+    const fork = await f.store.conversations.forkChat(
+      f.chatId,
+      String(leaf?.id),
+    );
+    // The fork's STORED order is what it replays forever: `runId` does not
+    // survive the copy, so nothing can repair the order afterwards.
+    assertProviderLegal(fork.messages.map(asChatMessage));
+    expect(
+      fork.messages
+        .filter((m) => m.role === "tool" || (m.toolCalls ?? []).length > 0)
+        .map((m) => m.toolCallId ?? (m.toolCalls ?? []).map((c) => c.id)[0]),
+    ).toEqual(["call-1", "call-1", "fix-1", "fix-1"]);
+  });
+
+  it("does not replay the correction write-back on a later turn", async () => {
+    const verification = new ScriptedVerification([
+      partial(["two items still unlinked"]),
+      clean,
+    ]);
+    const f = await setup({ verification, correction: { maxPasses: 3 } });
+    scriptToolThenToolCorrections(f.mock, ["fixed"], ["second answer"]);
+    const runId = await submit(f, "go");
+    await submit(f, "and again");
+
+    const replay = replayOf(f, 4);
+    expect(
+      replay.some((m) =>
+        String(m.content).includes("two items still unlinked"),
+      ),
+    ).toBe(false);
+    expect(
+      replay.some((m) => String(m.content).includes("Fix each of these now")),
+    ).toBe(false);
+    // Still on the record, though — the audit trail is why it is written.
+    const stored = messagesOf(f).filter(
+      (m) => m.runId === runId && m.metadata["correctionPass"] !== undefined,
+    );
+    expect(stored.length).toBe(1);
+    expect(String(stored[0]?.content)).toContain("two items still unlinked");
+  });
+});
+
+describe("multi-pass ordering meets orphan reconciliation", () => {
+  it("answers a correction pass's lost tool result next to ITS OWN call", async () => {
+    const verification = new ScriptedVerification([partial(["a", "b"]), clean]);
+    const f = await setup({ verification, correction: { maxPasses: 3 } });
+    scriptToolThenToolCorrections(f.mock, ["fixed"], ["second answer"]);
+    await submit(f, "go");
+
+    // The crash `reconcileOrphanToolCalls` exists for: the projection wrote the
+    // correction pass's assistant turn and died before the result. Drop the
+    // record the same way, from the leaf, so nothing is chained off it.
+    const store = f.store.conversations;
+    const lost = store.messages.findIndex((m) => m.toolCallId === "fix-1");
+    expect(lost).toBeGreaterThan(-1);
+    store.messages.splice(lost, 1);
+
+    await submit(f, "and again");
+    const replay = replayOf(f, 4);
+    assertProviderLegal(replay);
+    // The synthetic answer sits under the call it answers — the SECOND pass's —
+    // not appended after the first pass's real result.
+    const synthetic = replay.find((m) => m.toolCallId === "fix-1");
+    expect(String(synthetic?.content)).toContain("tool_result_missing");
+    expect(replay.indexOf(synthetic as AiChatMessage)).toBe(
+      replay.findIndex((m) =>
+        (m.toolCalls ?? []).some((c) => c.id === "fix-1"),
+      ) + 1,
+    );
   });
 });

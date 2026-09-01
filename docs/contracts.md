@@ -231,6 +231,7 @@ producer actually knows them — absent means "unrecorded", never "false":
 | --- | --- | --- |
 | `AiToolRegistry` input-schema validation (`schema_invalid`) | `validation` | `false` — the same arguments fail the same way; the model must write different ones |
 | `ToolGuard.canExecute` refusal (`tool_guard_refused`) | `guard` | `false` — a decision, not a fault |
+| `ToolGuard.canExecute` THREW (`tool_guard_refused`, message `"guard error"`) | `guard` | `false` — the guard failed closed; the thrown message is deliberately not forwarded, since a guard's reason reaches the model verbatim |
 | A tool's `execute` threw (`exec_failed`) | `execution` | the error's own `retryable` property, default `false` |
 | Everything else (`tool_missing`, `bad_args`, `tool_call_cap`, `cancelled`) | absent | absent |
 
@@ -373,17 +374,20 @@ an unwired dependency answers **501**, never 404).
 | `listModels` / `refreshProviderModels` | `GET /v1/providers/:providerId/models` / `POST .../models/refresh` |
 | `testProvider` | `POST /v1/providers/:providerId/test` |
 | `getSettings` / `updateSettings` | `GET` / `PATCH` `/v1/settings` |
-| `listAllowances` / `grantAllowance` | `GET` / `POST` `/v1/write-policy/allowances` |
-| `revokeAllowance` | `DELETE /v1/write-policy/allowances/:allowanceId` |
+| `listAllowances` / `grantAllowance` | `GET` / `POST` `/v1/chats/:chatId/write-policy/allowances` |
+| `revokeAllowance` | `DELETE /v1/chats/:chatId/write-policy/allowances/:allowanceId` |
 | `listMcpServers` / `createMcpServer` | `GET` / `POST` `/v1/mcp/servers` |
 | `updateMcpServer` / `deleteMcpServer` | `PATCH` / `DELETE` `/v1/mcp/servers/:serverId` |
 | `listTools` / `getVersion` | `GET` `/v1/tools` / `/v1/version` |
 
-Two of them are shaped by a port rather than by taste. `listAllowances` and
-`revokeAllowance` take a **required `?chatId=`** because `WritePolicy` holds
-grants per `(chat, tool, kind)` and offers no unscoped listing — widening the
-port to serve a prettier URL would let one chat's UI enumerate and revoke
-another's consent. And `regenerateMessage` answers with the same
+Two entries are shaped by something other than taste. All three allowance
+routes are **nested under the chat** because `WritePolicy` holds grants per
+`(chat, tool, kind)` and offers no unscoped listing — widening the port to serve
+a prettier URL would let one chat's UI enumerate and revoke another's consent —
+and because the chat has to be somewhere an authorizer can read it: an
+`AuthorizationPort` is handed the path and the URL, never the body, so
+`GrantAllowanceRequest` carries no `chatId` and the path carries it instead. And
+`regenerateMessage` answers with the same
 `SubmitMessageResponse` a submit does, whose `userMessageId` names the question
 that was **already there**: a regenerate re-answers rather than re-asks, and
 the old answer stays in the tree at its own `branchIndex`, off the active path,

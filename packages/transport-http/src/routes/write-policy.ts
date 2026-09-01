@@ -2,14 +2,13 @@
  * Standing write grants — the "don't ask me again for this tool in this chat"
  * half of the proposal pipeline.
  *
- * All three routes are CHAT-SCOPED, and two of them take that chat from a
- * `?chatId=` query rather than from the path. That is the port's shape showing
- * through, not a URL nobody thought about: `WritePolicy` holds grants per
- * `(chat, tool, kind)` and offers no unscoped listing, and `revoke` takes the
- * chat alongside the key precisely so one chat cannot revoke another's consent
- * by guessing a key. A route that dropped the chat would have to widen the port
- * to serve a prettier path, and the thing it would widen is the boundary around
- * a user's "yes".
+ * All three routes are NESTED UNDER THE CHAT (`/v1/chats/:chatId/…`), and that
+ * is the port's shape and the authorizer's requirement agreeing with each
+ * other. `WritePolicy` holds grants per `(chat, tool, kind)` and offers no
+ * unscoped listing, and `revoke` takes the chat alongside the key precisely so
+ * one chat cannot revoke another's consent by guessing a key — while an
+ * `AuthorizationPort` is handed the path and the URL and never the body, so a
+ * chat carried anywhere else could not be gated per conversation at all.
  *
  * **501 without `deps.writePolicy`.** Wiring it is a deliberate decision:
  * `SessionWritePolicy` keeps grants in memory for the life of the process
@@ -27,24 +26,6 @@ import { writeAllowanceDto } from "../projections.js";
 import { pathParam, type RouteContext } from "./context.js";
 import { validateGrantAllowanceRequest } from "../validate.js";
 
-/** The `?chatId=` every allowance route needs, or the 400 that says so. */
-function requiredChatId(
-  ctx: RouteContext,
-): { ok: true; chatId: string } | { ok: false; response: Response } {
-  const chatId = ctx.url.searchParams.get("chatId");
-  if (chatId === null || chatId.trim() === "") {
-    return {
-      ok: false,
-      response: badRequest(
-        "invalid_request",
-        "Query parameter `chatId` is required: a write allowance belongs to one chat.",
-        ctx.instance,
-      ),
-    };
-  }
-  return { ok: true, chatId };
-}
-
 /** The 501 all three share. */
 function noPolicy(ctx: RouteContext): Response {
   return notImplemented(
@@ -56,10 +37,8 @@ function noPolicy(ctx: RouteContext): Response {
 export async function listAllowances(ctx: RouteContext): Promise<Response> {
   const policy = ctx.deps.writePolicy;
   if (policy === undefined) return noPolicy(ctx);
-  const chat = requiredChatId(ctx);
-  if (!chat.ok) return chat.response;
   const allowances: WriteAllowanceDto[] = policy
-    .list(chat.chatId)
+    .list(pathParam(ctx, "chatId"))
     .map(writeAllowanceDto);
   const body: WriteAllowanceListResponse = { allowances };
   return jsonResponse(body);
@@ -67,6 +46,11 @@ export async function listAllowances(ctx: RouteContext): Promise<Response> {
 
 /**
  * Grant one, or re-state it. 201 with the allowance.
+ *
+ * The chat comes from the PATH, and the body carries only what the grant is
+ * about — a `chatId` in the body would be the one field deciding whose consent
+ * this is, and the one field the authorizer that ran before this handler never
+ * saw.
  *
  * Always a 201, never a 200-on-replay: `WritePolicy.allow` is an upsert keyed
  * on `(chat, tool, kind)`, so re-granting overwrites the ceiling rather than
@@ -83,7 +67,10 @@ export async function grantAllowance(ctx: RouteContext): Promise<Response> {
   if (!validated.ok) {
     return badRequest("invalid_request", validated.detail, ctx.instance);
   }
-  const granted = policy.allow(validated.value);
+  const granted = policy.allow({
+    chatId: pathParam(ctx, "chatId"),
+    ...validated.value,
+  });
   return jsonResponse(writeAllowanceDto(granted), 201);
 }
 
@@ -93,13 +80,13 @@ export async function grantAllowance(ctx: RouteContext): Promise<Response> {
  * The port's `revoke` is silent about a key it does not hold, and this route
  * stays silent with it: "there is no such grant" and "the grant is gone" are
  * the same state from a client's side, and a 404 would only tell a caller
- * something about a chat's consent that it could not otherwise read.
+ * something about a chat's consent that it could not otherwise read. A key
+ * belonging to ANOTHER chat is that same silence — the path names the chat, and
+ * the port refuses to cross it.
  */
 export async function revokeAllowance(ctx: RouteContext): Promise<Response> {
   const policy = ctx.deps.writePolicy;
   if (policy === undefined) return noPolicy(ctx);
-  const chat = requiredChatId(ctx);
-  if (!chat.ok) return chat.response;
-  policy.revoke(chat.chatId, pathParam(ctx, "allowanceId"));
+  policy.revoke(pathParam(ctx, "chatId"), pathParam(ctx, "allowanceId"));
   return new Response(null, { status: 204 });
 }

@@ -3,6 +3,7 @@ import { resolveToolLimits, type AiTool } from "@agentkit/core";
 import {
   type AgentKitHostError,
   stageRegistry,
+  TOOL_GUARD_ERROR_MESSAGE,
   TOOL_GUARD_REFUSED_CODE,
   type ToolContributionContext,
   type ToolGuard,
@@ -372,5 +373,120 @@ describe("stageRegistry — guards", () => {
     expect((await call()).ok).toBe(true);
     allowed = false;
     expect((await call()).ok).toBe(false);
+  });
+});
+
+describe("stageRegistry — a guard that throws fails closed", () => {
+  it("hides only the tool whose isVisible threw, and warns", async () => {
+    const warnings: { message: string; fields?: Record<string, unknown> }[] =
+      [];
+    const staged = await stageRegistry({
+      contributors: [contributor("alpha", [tool("a"), tool("b")])],
+      ctx: {
+        ...CTX,
+        logger: {
+          debug: () => {},
+          info: () => {},
+          warn: (message, fields) => warnings.push({ message, fields }),
+          error: () => {},
+        },
+      },
+      hasPrimaryBinding: true,
+      guards: [
+        {
+          isVisible: (ctx) => {
+            if (ctx.tool.name === "a") throw new Error("policy store is down");
+            return true;
+          },
+        },
+      ],
+    });
+
+    // Fail-open here would advertise a tool the policy never approved.
+    expect(staged.registry.listDefinitions().map((t) => t.name)).toEqual(["b"]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.fields).toMatchObject({
+      tool: "a",
+      namespace: "alpha",
+      error: "policy store is down",
+    });
+  });
+
+  it("hides a tool whose isVisible rejects, with no logger wired", async () => {
+    const staged = await stageRegistry({
+      contributors: [contributor("alpha", [tool("a")])],
+      ctx: CTX,
+      hasPrimaryBinding: true,
+      guards: [
+        { isVisible: async () => Promise.reject(new Error("async boom")) },
+      ],
+    });
+    expect(staged.registry.size()).toBe(0);
+  });
+
+  it("turns a canExecute that throws into a guard refusal, not an allow", async () => {
+    let ran = false;
+    const spy: AiTool = {
+      ...tool("a"),
+      async execute(ctx) {
+        ran = true;
+        return {
+          ok: true,
+          data: {},
+          sources: [],
+          warnings: [],
+          truncated: false,
+          limits: ctx.limits,
+        };
+      },
+    };
+    const staged = await stageRegistry({
+      contributors: [contributor("alpha", [spy])],
+      ctx: CTX,
+      hasPrimaryBinding: true,
+      guards: [
+        {
+          canExecute: () => {
+            throw new Error("connection string: postgres://secret@host/db");
+          },
+        },
+      ],
+    });
+    const result = await staged.registry
+      .get("a")!
+      .execute({ runId: "run-1", bindings: [], limits: CTX.limits }, {});
+
+    expect(ran).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.modelData).toEqual({
+      errorCode: TOOL_GUARD_REFUSED_CODE,
+      errorMessage: TOOL_GUARD_ERROR_MESSAGE,
+      phase: "guard",
+      retryable: false,
+    });
+    // The thrown text never reaches the model: a guard reason is fed verbatim.
+    expect(JSON.stringify(result)).not.toContain("postgres://");
+  });
+
+  it("keeps the run going: another tool still executes after a guard threw", async () => {
+    const staged = await stageRegistry({
+      contributors: [contributor("alpha", [tool("a"), tool("b")])],
+      ctx: CTX,
+      hasPrimaryBinding: true,
+      guards: [
+        {
+          canExecute: (ctx) => {
+            if (ctx.tool.name === "a") throw new Error("boom");
+            return { allowed: true };
+          },
+        },
+      ],
+    });
+    const call = (name: string) =>
+      staged.registry
+        .get(name)!
+        .execute({ runId: "run-1", bindings: [], limits: CTX.limits }, {});
+    expect((await call("a")).ok).toBe(false);
+    expect((await call("b")).ok).toBe(true);
   });
 });

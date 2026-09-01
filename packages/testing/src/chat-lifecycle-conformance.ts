@@ -11,7 +11,12 @@
 // FRAMEWORK-NEUTRAL, same rules as the rest of this package: no runner import,
 // every `@agentkit/host` import is `import type`, and error assertions match on
 // the `code` string rather than on `instanceof`.
-import type { AssistantStore, CreateTaskInput } from "@agentkit/host";
+import type {
+  AssistantStore,
+  ClaimedTask,
+  CreateTaskInput,
+  TaskStatus,
+} from "@agentkit/host";
 import {
   expectRejectsWithCode,
   type AssistantStoreConformanceHarness,
@@ -382,6 +387,131 @@ export function describeChatLifecycle(options: ChatLifecycleOptions): void {
           scopesBusy: [],
         });
         expect(next?.task.taskId).toBe("task-c");
+      } finally {
+        close?.();
+      }
+    });
+
+    // The busy guard belongs to the STORE, not to `ConversationService`. The
+    // service checks first, but its check runs before an `await` inside an
+    // async transaction — and a concurrent store call FLATTENS into that
+    // transaction rather than opening its own, so a task can go
+    // `queued → running` in the gap. Only a check the adapter makes in the same
+    // synchronous unit as the deletes can be the guarantee, which is why it is
+    // graded here, against every adapter. See `TaskStore.deleteByScope`.
+    for (const busyStatus of ["running", "waiting_approval"] as TaskStatus[]) {
+      it(`deleteByScope REFUSES with chat_busy while a task in the scope is ${busyStatus}, and deletes NOTHING`, async () => {
+        const { store, close } = await create();
+        try {
+          const doomed = "chat-busy";
+          await store.tasks.createTask(taskInScope(doomed, "task-live"));
+          // A perfectly deletable task beside it: the refusal is all-or-nothing,
+          // not "everything except the live one".
+          await store.tasks.createTask(taskInScope(doomed, "task-queued"));
+          await store.tasks.createTask(taskInScope("chat-kept", "task-c"));
+
+          await store.tasks.transitionTask("task-live", ["queued"], "running", {
+            startedAt: new Date().toISOString(),
+          });
+          if (busyStatus === "waiting_approval") {
+            await store.tasks.transitionTask(
+              "task-live",
+              ["running"],
+              "waiting_approval",
+            );
+          }
+
+          await expectRejectsWithCode(
+            store.tasks.deleteByScope(doomed),
+            "chat_busy",
+            expect,
+          );
+
+          // Nothing left the store: not the live task, and not its queued
+          // neighbour either.
+          expect(
+            [
+              ...(await store.tasks.listByScope(doomed)).map((t) => t.taskId),
+            ].sort(),
+          ).toEqual(["task-live", "task-queued"]);
+          expect((await store.tasks.getTask("task-live"))?.status).toBe(
+            busyStatus,
+          );
+
+          // The refusal NAMES what is holding it, so a UI can point at the run
+          // to cancel or wait for instead of saying "busy, try again".
+          let details: { taskIds?: unknown; statuses?: unknown } | undefined;
+          try {
+            await store.tasks.deleteByScope(doomed);
+          } catch (err) {
+            details = (
+              err as { details?: { taskIds?: unknown; statuses?: unknown } }
+            ).details;
+          }
+          expect(details?.taskIds).toEqual(["task-live"]);
+          expect(details?.statuses).toEqual([busyStatus]);
+
+          // And the scope is deletable again the moment the work ends — the
+          // refusal is a "not yet", not a permanent one.
+          await store.tasks.transitionTask(
+            "task-live",
+            [busyStatus],
+            "completed",
+            { finishedAt: new Date().toISOString() },
+          );
+          expect(await store.tasks.deleteByScope(doomed)).toBe(2);
+          expect((await store.tasks.getTask("task-c"))?.taskId).toBe("task-c");
+        } finally {
+          close?.();
+        }
+      });
+    }
+
+    it("deleteByScope refuses a task a CONCURRENT claim took mid-delete, so nothing is ever claimed AND deleted", async () => {
+      const { store, close } = await create();
+      try {
+        const doomed = "chat-raced";
+        await store.tasks.createTask(taskInScope(doomed, "task-raced"));
+
+        // A holder, because the assignment happens inside a callback and a
+        // plain `let` would be narrowed to `null` at every use site below.
+        const claimed: { value: ClaimedTask | null } = { value: null };
+        let deleted: number | undefined;
+        let refusal: { code?: string } | undefined;
+        try {
+          deleted = await store.transaction(async (tx) => {
+            // The caller's fast-path check, exactly as
+            // `ConversationService.deleteChat` makes it: nothing live, so the
+            // delete may proceed.
+            expect(
+              (await tx.tasks.listByScope(doomed)).map((t) => t.status),
+            ).toEqual(["queued"]);
+            // THE INTERLEAVING, forced rather than hoped for: a worker claims
+            // the task between that check and the delete below. The call is
+            // made on the STORE, not on `tx`, and it still lands inside this
+            // transaction — flattening is what makes the check above unable to
+            // be the guarantee.
+            claimed.value = await store.tasks.claimNext({
+              ownerId: "worker-1",
+              now: new Date(),
+              scopesBusy: [],
+            });
+            return await tx.tasks.deleteByScope(doomed);
+          });
+        } catch (err) {
+          refusal = err as { code?: string };
+        }
+
+        // The race really was driven — the claim is awaited to completion
+        // before the delete is even called, so it cannot have lost.
+        expect(claimed.value?.task.taskId).toBe("task-raced");
+
+        // THE HEADLINE: claimed AND deleted is the state that must not exist.
+        // A worker holding a lease on a row that is gone will write its events,
+        // its attempt end and its transition into a task nothing can name.
+        expect((await store.tasks.getTask("task-raced")) !== null).toBe(true);
+        expect(refusal?.code).toBe("chat_busy");
+        expect(deleted).toBe(undefined);
       } finally {
         close?.();
       }

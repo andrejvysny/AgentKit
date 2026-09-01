@@ -280,6 +280,65 @@ describe("provider CRUD", () => {
     );
   });
 
+  it("(h2) persists the CONFIG before the secret, and 500s when the secret write fails", async () => {
+    // A store that cannot hold a key. The two failures are not symmetric: a
+    // config naming a ref the store lacks is fixed by re-sending the `apiKey`
+    // (the ref is derived from the provider id, so the retry overwrites), while
+    // a secret written for a config that never landed is a live credential
+    // under a ref nothing names.
+    const secrets = {
+      async get() {
+        return null;
+      },
+      async set() {
+        throw new Error("secret store is down");
+      },
+      async delete() {},
+      async listRefs() {
+        return [];
+      },
+    };
+
+    const created = await createHandlerFixture({ secrets });
+    const res = await created.handler(
+      request("POST", "/v1/providers", {
+        body: {
+          id: "p-half",
+          label: "Half",
+          kind: "openai-compatible",
+          baseUrl: "http://localhost:9",
+          defaultModel: "m1",
+          apiKey: SECRET,
+        },
+      }),
+    );
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toBe("application/problem+json");
+    expect((await res.json()) as Record<string, unknown>).toMatchObject({
+      code: "secret_write_failed",
+    });
+    // The recoverable half landed: the provider is there, pointing at the ref a
+    // retry will fill.
+    const stored = await created.store.providers.getProvider("p-half");
+    expect(stored?.label).toBe("Half");
+    expect(stored?.metadata?.["apiKeySecretRef"]).toBe(
+      "provider/p-half/api-key",
+    );
+    expect(stored?.apiKey).toBeUndefined();
+
+    // Same order on the update path.
+    const patched = await createHandlerFixture({ secrets });
+    const patch = await patched.handler(
+      request("PATCH", "/v1/providers/p1", {
+        body: { label: "Renamed", apiKey: SECRET },
+      }),
+    );
+    expect(patch.status).toBe(500);
+    const after = await patched.store.providers.getProvider("p1");
+    expect(after?.label).toBe("Renamed");
+    expect(after?.metadata?.["apiKeySecretRef"]).toBe("provider/p1/api-key");
+  });
+
   it("(i) 409s a create over an existing id instead of overwriting it", async () => {
     const f = await createHandlerFixture();
     await expectProblem(
@@ -458,20 +517,20 @@ describe("write-policy allowances", () => {
   it("(o) 501s all three without a policy", async () => {
     const { handler } = await createHandlerFixture();
     await expectProblem(
-      await handler(request("GET", "/v1/write-policy/allowances?chatId=c1")),
+      await handler(request("GET", "/v1/chats/c1/write-policy/allowances")),
       501,
       "not_implemented",
     );
     await expectProblem(
       await handler(
-        request("POST", "/v1/write-policy/allowances", { body: {} }),
+        request("POST", "/v1/chats/c1/write-policy/allowances", { body: {} }),
       ),
       501,
       "not_implemented",
     );
     await expectProblem(
       await handler(
-        request("DELETE", "/v1/write-policy/allowances/k?chatId=c1"),
+        request("DELETE", "/v1/chats/c1/write-policy/allowances/k"),
       ),
       501,
       "not_implemented",
@@ -483,9 +542,8 @@ describe("write-policy allowances", () => {
     const { handler } = await createHandlerFixture({ writePolicy });
 
     const granted = await handler(
-      request("POST", "/v1/write-policy/allowances", {
+      request("POST", `/v1/chats/${TEST_CHAT_ID}/write-policy/allowances`, {
         body: {
-          chatId: TEST_CHAT_ID,
           toolName: "notes_append",
           proposalKind: "notes.append",
           maxRisk: "medium",
@@ -518,14 +576,14 @@ describe("write-policy allowances", () => {
 
     const listed = (await (
       await handler(
-        request("GET", `/v1/write-policy/allowances?chatId=${TEST_CHAT_ID}`),
+        request("GET", `/v1/chats/${TEST_CHAT_ID}/write-policy/allowances`),
       )
     ).json()) as WriteAllowanceListResponse;
     expect(listed.allowances.map((a) => a.key)).toEqual([allowance.key]);
 
     // Another chat sees none of it — consent does not travel.
     const otherChat = (await (
-      await handler(request("GET", "/v1/write-policy/allowances?chatId=other"))
+      await handler(request("GET", "/v1/chats/other/write-policy/allowances"))
     ).json()) as WriteAllowanceListResponse;
     expect(otherChat.allowances).toEqual([]);
 
@@ -533,7 +591,7 @@ describe("write-policy allowances", () => {
     const wrongChat = await handler(
       request(
         "DELETE",
-        `/v1/write-policy/allowances/${encodeURIComponent(allowance.key)}?chatId=other`,
+        `/v1/chats/other/write-policy/allowances/${encodeURIComponent(allowance.key)}`,
       ),
     );
     expect(wrongChat.status).toBe(204);
@@ -542,36 +600,86 @@ describe("write-policy allowances", () => {
     const revoked = await handler(
       request(
         "DELETE",
-        `/v1/write-policy/allowances/${encodeURIComponent(allowance.key)}?chatId=${TEST_CHAT_ID}`,
+        `/v1/chats/${TEST_CHAT_ID}/write-policy/allowances/${encodeURIComponent(allowance.key)}`,
       ),
     );
     expect(revoked.status).toBe(204);
     expect(writePolicy.list(TEST_CHAT_ID)).toEqual([]);
   });
 
-  it("(q) 400s a listing or a revoke with no chatId, and a grant missing a field", async () => {
+  it("(q) 400s a grant missing a field, and 404s the chatless paths the routes no longer have", async () => {
     const { handler } = await createHandlerFixture({
       writePolicy: new SessionWritePolicy(),
     });
     await expectProblem(
-      await handler(request("GET", "/v1/write-policy/allowances")),
-      400,
-      "invalid_request",
-    );
-    await expectProblem(
-      await handler(request("DELETE", "/v1/write-policy/allowances/k")),
-      400,
-      "invalid_request",
-    );
-    await expectProblem(
       await handler(
-        request("POST", "/v1/write-policy/allowances", {
-          body: { chatId: TEST_CHAT_ID, toolName: "t", proposalKind: "k" },
+        request("POST", `/v1/chats/${TEST_CHAT_ID}/write-policy/allowances`, {
+          body: { toolName: "t", proposalKind: "k" },
         }),
       ),
       400,
       "invalid_request",
     );
+    // The chat is a PATH parameter now, so the old policy-rooted URLs are not
+    // routes at all — there is no shape of this request whose chat the
+    // authorizer cannot see.
+    expect(
+      (await handler(request("GET", "/v1/write-policy/allowances"))).status,
+    ).toBe(404);
+    expect(
+      (await handler(request("DELETE", "/v1/write-policy/allowances/k")))
+        .status,
+    ).toBe(404);
+  });
+
+  it("(q2) authorizes every allowance route as the CHAT's policy", async () => {
+    const asked: { action: string; resource: unknown }[] = [];
+    const { handler } = await createHandlerFixture({
+      writePolicy: new SessionWritePolicy(),
+      authorize: {
+        async authorize({ action, resource }) {
+          asked.push({ action, resource });
+          return { allowed: resource.id === TEST_CHAT_ID };
+        },
+      },
+    });
+
+    const listed = await handler(
+      request("GET", `/v1/chats/${TEST_CHAT_ID}/write-policy/allowances`),
+    );
+    expect(listed.status).toBe(200);
+
+    // The grant's chat is the path's, and it is the id the port was handed —
+    // which is the whole reason it moved out of the body.
+    const granted = await handler(
+      request("POST", `/v1/chats/${TEST_CHAT_ID}/write-policy/allowances`, {
+        body: { toolName: "t", proposalKind: "k", maxRisk: "low" },
+      }),
+    );
+    expect(granted.status).toBe(201);
+
+    const revoked = await handler(
+      request(
+        "DELETE",
+        `/v1/chats/${TEST_CHAT_ID}/write-policy/allowances/whatever`,
+      ),
+    );
+    expect(revoked.status).toBe(204);
+
+    expect(asked).toEqual([
+      { action: "read", resource: { kind: "policy", id: TEST_CHAT_ID } },
+      { action: "write", resource: { kind: "policy", id: TEST_CHAT_ID } },
+      { action: "write", resource: { kind: "policy", id: TEST_CHAT_ID } },
+    ]);
+
+    // Another chat's grant is refused on the id the path carried, not waved
+    // through because the decision had nothing to read.
+    const forbidden = await handler(
+      request("POST", "/v1/chats/other/write-policy/allowances", {
+        body: { toolName: "t", proposalKind: "k", maxRisk: "low" },
+      }),
+    );
+    expect(forbidden.status).toBe(403);
   });
 });
 
@@ -612,7 +720,12 @@ describe("MCP server configs", () => {
     expect(res.status).toBe(201);
     const created = (await res.json()) as McpServerDto;
     expect(created.alias).toBe("notes");
-    expect(created.transport).toEqual(STDIO);
+    // Keys travel, values do not: `env` and `headers` are where a client is
+    // free to put a literal token, so the projection redacts every value.
+    expect(created.transport).toEqual({
+      ...STDIO,
+      env: { NOTES_TOKEN: "***" },
+    });
     // Refs travel; the values behind them are resolved at connect time and are
     // not in the record at all, which is why the map can be published whole.
     expect(created.secretRefs).toEqual({ token: "secret/notes-token" });
@@ -641,6 +754,96 @@ describe("MCP server configs", () => {
     );
     expect(deleted.status).toBe(204);
     expect(await mcpConfigs.list()).toEqual([]);
+  });
+
+  it("(s2) redacts a LITERAL env value and a header, and keeps the stored record whole", async () => {
+    const mcpConfigs = new MemoryMcpServerConfigStore();
+    const { handler } = await createHandlerFixture({ mcpConfigs });
+
+    const created = (await (
+      await handler(
+        request("POST", "/v1/mcp/servers", {
+          body: {
+            alias: "gh",
+            transport: {
+              kind: "http",
+              url: "https://mcp.example/gh",
+              headers: {
+                authorization: "Bearer ghp-live-never-publish-me",
+                "x-trace": "on",
+              },
+            },
+          },
+        }),
+      )
+    ).json()) as McpServerDto;
+
+    const asRead = await handler(request("GET", "/v1/mcp/servers"));
+    const text = await asRead.text();
+    expect(text).not.toContain("ghp-live-never-publish-me");
+    const listed = JSON.parse(text) as McpServerDto[];
+    expect(listed[0]?.transport).toEqual({
+      kind: "http",
+      url: "https://mcp.example/gh",
+      // Every value, not just the one that looks like a credential — a header
+      // this projection had to judge is a header it would eventually misjudge.
+      headers: { authorization: "***", "x-trace": "***" },
+    });
+
+    // The STORE still holds the real values; only the wire is redacted, which
+    // is what keeps the server able to connect.
+    const stored = await mcpConfigs.get(created.id);
+    expect(stored?.transport).toEqual({
+      kind: "http",
+      url: "https://mcp.example/gh",
+      headers: {
+        authorization: "Bearer ghp-live-never-publish-me",
+        "x-trace": "on",
+      },
+    });
+
+    // PATCH IS FIELD-LEVEL: an absent `transport` keeps the stored one, values
+    // included, so a client that only wants to disable a server need not
+    // resend anything it cannot read back.
+    await handler(
+      request("PATCH", `/v1/mcp/servers/${created.id}`, {
+        body: { enabled: false },
+      }),
+    );
+    expect((await mcpConfigs.get(created.id))?.transport).toMatchObject({
+      headers: { authorization: "Bearer ghp-live-never-publish-me" },
+    });
+
+    // A PRESENT `transport` replaces wholesale — so a client that resends what
+    // it read stores the redaction verbatim. That is the cost, and it is why
+    // full values must be resupplied on a transport patch.
+    await handler(
+      request("PATCH", `/v1/mcp/servers/${created.id}`, {
+        body: { transport: listed[0]?.transport },
+      }),
+    );
+    expect((await mcpConfigs.get(created.id))?.transport).toMatchObject({
+      headers: { authorization: "***" },
+    });
+  });
+
+  it("(s3) stamps both timestamps from the INJECTED clock", async () => {
+    const fixed = "2031-04-05T06:07:08.000Z";
+    const mcpConfigs = new MemoryMcpServerConfigStore();
+    const { handler } = await createHandlerFixture({
+      mcpConfigs,
+      clock: { now: () => new Date(fixed), nowIso: () => fixed },
+    });
+
+    const created = (await (
+      await handler(
+        request("POST", "/v1/mcp/servers", {
+          body: { alias: "notes", transport: STDIO },
+        }),
+      )
+    ).json()) as McpServerDto;
+    expect(created.createdAt).toBe(fixed);
+    expect(created.updatedAt).toBe(fixed);
   });
 
   it("(t) 409s a duplicate alias on create and on rename", async () => {

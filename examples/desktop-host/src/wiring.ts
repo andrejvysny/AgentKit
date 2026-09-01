@@ -47,6 +47,7 @@ import {
   SessionWritePolicy,
   TaskService,
   TurnRunner,
+  type ToolGuard,
   createContributorToolCatalog,
   createDispatchingWorker,
   defaultClock,
@@ -298,6 +299,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     contributors.push(createMcpToolSetContributor(mcp));
   }
 
+  // The guard chain, defined ONCE and shared by all three consumers below.
+  // Empty here — this example has no policy to enforce — but the single array
+  // is the point: `TurnRunner`, `createContributorToolCatalog` and
+  // `createStagedToolSource` each stage the same contributors, and a host that
+  // passed guards to one of them and forgot another would advertise (or hand an
+  // MCP client) a tool its own turns refuse to run.
+  const toolGuards: ToolGuard[] = [];
+
   // 5. The write pipeline. No write tools here, so nothing is ever staged —
   // `ProposalService` exists only so `recoverOnBoot` (step 9) has one.
   const policy = new SessionWritePolicy({ clock });
@@ -326,6 +335,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     providerFactory,
     secrets,
     contributors,
+    toolGuards,
     clock,
     ids,
     logger,
@@ -357,7 +367,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     // `GET /v1/tools` answers 200 because of this line: the catalogue stages
     // the SAME contributors a turn does, so what the route advertises and what
     // a run receives cannot drift. Leave it out and the route reports 501.
-    toolCatalog: createContributorToolCatalog({ contributors, logger }),
+    toolCatalog: createContributorToolCatalog({
+      contributors,
+      guards: toolGuards,
+      logger,
+    }),
     packages: { "@agentkit/example-desktop-host": "0.1.0-dev" },
     basePath: "/api/agentkit",
     cors: {
@@ -370,8 +384,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
   // token is set: there is no unauthenticated mode, and there should not be
   // one, because what it hands out is tool execution against this host.
   //
-  // `createStagedToolSource` takes the SAME `contributors` array the
-  // `TurnRunner` above got, so an MCP client and a chat turn see one tool set.
+  // `createStagedToolSource` takes the SAME `contributors` array AND the same
+  // `toolGuards` the `TurnRunner` above got, so an MCP client and a chat turn
+  // see one tool set under one policy.
   // `writesEnabled` is left at its `false` default — this example ships no
   // write tools anyway, and turning it on is a decision that belongs where
   // someone can see it.
@@ -380,6 +395,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     ? createMcpServerHandler({
         tools: createStagedToolSource({
           contributors,
+          guards: toolGuards,
           clock,
           ids,
           ...(logger === undefined ? {} : { logger }),

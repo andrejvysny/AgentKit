@@ -19,6 +19,7 @@ import {
   TurnRunner,
   type AssistantSettings,
   type AttachmentBudgets,
+  type AttachmentResolveContext,
   type AttachmentResolver,
   type MessageRecord,
   type ResolvedAttachment,
@@ -578,6 +579,35 @@ describe("TurnRunner.regenerate", () => {
       (await f.store.conversations.listSiblings(first.assistantMessageId))
         .length,
     ).toBe(2);
+  });
+
+  it("refuses a reused taskId that names a DIFFERENT message to regenerate", async () => {
+    const f = await setupRunner();
+    const first = await askOnce(f);
+    const second = await askOnce(f);
+    const taskId = "regen-collision";
+
+    await f.runner.regenerate({
+      chatId: f.chatId,
+      messageId: first.assistantMessageId,
+      taskId,
+    });
+
+    // Same key, same chat, same kind — a different question. Answering with
+    // the first regenerate's ids would point the caller at a branch under a
+    // message this call never named.
+    await expect(
+      f.runner.regenerate({
+        chatId: f.chatId,
+        messageId: second.assistantMessageId,
+        taskId,
+      }),
+    ).rejects.toMatchObject({ code: "duplicate_task" });
+    // And it wrote nothing: no branch under the second answer.
+    expect(
+      (await f.store.conversations.listSiblings(second.assistantMessageId))
+        .length,
+    ).toBe(1);
   });
 
   it("refuses a target that answered no question", async () => {
@@ -1355,11 +1385,22 @@ describe("TurnRunner — a branch switch mid-run", () => {
  */
 class TestAttachmentResolver implements AttachmentResolver {
   readonly calls: string[] = [];
+  /** The scope each call was given — what a multi-tenant host authorizes on. */
+  readonly contexts: AttachmentResolveContext[] = [];
+  /** Refs this resolver will only answer for a matching `ctx.chatId`. */
+  scopedTo: string | undefined;
   constructor(
     private readonly table: Record<string, ResolvedAttachment> = {},
   ) {}
-  async resolve(ref: string): Promise<ResolvedAttachment | null> {
+  async resolve(
+    ref: string,
+    ctx: AttachmentResolveContext,
+  ): Promise<ResolvedAttachment | null> {
     this.calls.push(ref);
+    this.contexts.push(ctx);
+    if (this.scopedTo !== undefined && ctx.chatId !== this.scopedTo) {
+      return null;
+    }
     return this.table[ref] ?? null;
   }
 }
@@ -1447,6 +1488,47 @@ describe("TurnRunner — attachment resolution", () => {
     expect(
       await warningsOf(f, submitted.runId, "attachment_unresolved"),
     ).toEqual([]);
+  });
+
+  it("hands the resolver the chat the ref was referenced from", async () => {
+    const attachments = new TestAttachmentResolver({
+      "blob:cat": png("aGVsbG8="),
+    });
+    const f = await setupRunner({ attachments });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "a cat" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: bodyWithRefs("blob:cat"),
+    });
+    await drive(f, submitted.runId);
+
+    // Without the chat, a multi-tenant resolver has nothing to authorize on:
+    // a ref is whatever string a client put in a message part.
+    expect(attachments.contexts).toEqual([{ chatId: f.chatId }]);
+  });
+
+  it("drops a ref the resolver refuses for THIS chat", async () => {
+    const attachments = new TestAttachmentResolver({
+      "blob:someone-elses": png("aGVsbG8="),
+    });
+    // The bytes exist — they just do not belong to the chat asking for them.
+    attachments.scopedTo = "some-other-chat";
+    const f = await setupRunner({ attachments });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "cannot see it" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: bodyWithRefs("blob:someone-elses"),
+    });
+    await drive(f, submitted.runId);
+
+    expect(imagePartsSeenByProvider(f)).toEqual([]);
+    const warnings = await warningsOf(
+      f,
+      submitted.runId,
+      "attachment_unresolved",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("blob:someone-elses");
   });
 
   it("drops an unresolvable ref, warns attachment_unresolved, and answers anyway", async () => {
