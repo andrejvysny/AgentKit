@@ -76,6 +76,22 @@ const contracts = await import("agentkit/contracts");
 console.log("agentkit/contracts");
 check(typeof contracts.CONTRACT_VERSION === "string", "exports CONTRACT_VERSION");
 
+const clientPkg = await import("agentkit/client");
+console.log("agentkit/client");
+check(typeof clientPkg.createAgentKitClient === "function", "exports createAgentKitClient");
+check(typeof clientPkg.runPhase === "function", "exports runPhase");
+const restClient = clientPkg.createAgentKitClient({ baseUrl: "http://127.0.0.1:1/api/" });
+check(restClient.baseUrl === "http://127.0.0.1:1/api", "normalises the base URL");
+check(typeof restClient.streamRun === "function", "has a streamRun method");
+check(
+  Object.keys(contracts.REST_ROUTES).every((op) => typeof restClient[op] === "function"),
+  \`has a method for every one of the \${Object.keys(contracts.REST_ROUTES).length} contract routes\`,
+);
+check(
+  clientPkg.runPhase({ status: "running", events: [{ type: "run.started" }] }) === "streaming",
+  "runPhase derives streaming from the log",
+);
+
 const core = await import("agentkit/core");
 console.log("agentkit/core");
 check(typeof core.runChat === "function", "exports runChat");
