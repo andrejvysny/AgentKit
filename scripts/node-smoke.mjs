@@ -9,7 +9,7 @@
  * breaks the first Node consumer. So: plain Node, no Bun APIs, the built `dist`
  * output rather than the source.
  *
- * Ten checks, end-to-end rather than smoke-in-name-only where a package has
+ * Eleven checks, end-to-end rather than smoke-in-name-only where a package has
  * something end-to-end to run:
  *
  *   1. Ajv (Node's, not Bun's) compiles `AiRunEventSchema` out of the contracts
@@ -20,6 +20,11 @@
  *      is the module graph (a `node:` import that slipped into a package meant
  *      to run in a browser too) and the `REST_ROUTES` value import, both of
  *      which a bare construction exercises.
+ *   1c. The react dist LOADS under plain Node and its hooks are all there —
+ *      no render, because what breaks a hooks package under Node is the module
+ *      (an emitted JSX-runtime import, a leaked `react-dom` specifier, a
+ *      browser global read at module scope), not the render. Its dependency-free
+ *      change emitter is exercised for real.
  *   2. `runChat` from the core dist drives a stub provider to a terminal
  *      `completed`, stamping its events with core's own `createEventStamper`.
  *   3. The host dist loads and its port vocabulary answers — the transition
@@ -94,6 +99,7 @@ function publishedEntry(pkgDir) {
 
 const CONTRACTS_ENTRY = publishedEntry("contracts");
 const CLIENT_ENTRY = publishedEntry("client");
+const REACT_ENTRY = publishedEntry("react");
 const CORE_ENTRY = publishedEntry("core");
 const HOST_ENTRY = publishedEntry("host");
 const ADAPTERS_MEMORY_ENTRY = publishedEntry("adapters-memory");
@@ -108,6 +114,7 @@ const TESTING_ENTRY = publishedEntry("testing");
 const WORKSPACE_ENTRIES = {
   "@agentkit/contracts": CONTRACTS_ENTRY,
   "@agentkit/client": CLIENT_ENTRY,
+  "@agentkit/react": REACT_ENTRY,
   "@agentkit/core": CORE_ENTRY,
   "@agentkit/host": HOST_ENTRY,
   "@agentkit/adapters-memory": ADAPTERS_MEMORY_ENTRY,
@@ -246,6 +253,45 @@ check(
     clientPkg.isTerminalRunEvent({ type: "run.verification" }) === false,
   "isTerminalRunEvent answers through the dist",
 );
+
+// ---------------------------------------------------------------------------
+// 1c. React dist: LOADS under plain Node, and that is the whole check
+//
+//     Not a render. There is no DOM here and no react-dom installed for this
+//     script, and neither is the failure this guards against: what breaks a
+//     hooks package under Node is the MODULE, not the render — a JSX runtime
+//     the build emitted an import for, a `react-dom` specifier that leaked into
+//     src, a browser global read at module scope. All three are import-time,
+//     and all three would pass `bun test` and fail the first `next build`.
+// ---------------------------------------------------------------------------
+
+const reactPkg = await import(REACT_ENTRY);
+console.log("react dist");
+check(
+  typeof reactPkg.AgentKitProvider === "function",
+  "exports AgentKitProvider",
+);
+for (const hook of [
+  "useChat",
+  "useRun",
+  "useBranches",
+  "useProposals",
+  "useProviders",
+  "useAgentKitClient",
+]) {
+  check(typeof reactPkg[hook] === "function", `exports ${hook}`);
+}
+// The emitter is the one piece with no React in it, so it is the one piece
+// this script can actually EXERCISE rather than merely load.
+const emitter = reactPkg.createChangeEmitter();
+let emitterCalls = 0;
+const unsubscribe = emitter.subscribe(reactPkg.chatTopic("c1"), () => {
+  emitterCalls += 1;
+});
+emitter.emit(reactPkg.chatTopic("c1"));
+unsubscribe();
+emitter.emit(reactPkg.chatTopic("c1"));
+check(emitterCalls === 1, "the change emitter delivers once and unsubscribes");
 
 // ---------------------------------------------------------------------------
 // 2. Core dist: runChat drives a stub provider to a terminal completed
