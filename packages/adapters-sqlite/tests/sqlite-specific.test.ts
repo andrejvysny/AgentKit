@@ -15,7 +15,7 @@ function withTempDb(
   fn: (path: string) => void | Promise<void>,
 ): () => Promise<void> {
   return async () => {
-    const dir = mkdtempSync(join(tmpdir(), "agentkit-reference-adapters-"));
+    const dir = mkdtempSync(join(tmpdir(), "agentkit-adapters-sqlite-"));
     const path = join(dir, "store.sqlite");
     try {
       await fn(path);

@@ -49,7 +49,8 @@ import {
   type WriteToolModelData,
 } from "@agentkit/host";
 import { HangingProviderClient, MockProviderClient } from "@agentkit/testing";
-import { SingleProcessTaskRunner, SqliteAssistantStore } from "../src/index.js";
+import { SqliteAssistantStore } from "@agentkit/adapters-sqlite";
+import { SingleProcessTaskRunner } from "../src/index.js";
 import {
   createTestClock,
   waitFor,

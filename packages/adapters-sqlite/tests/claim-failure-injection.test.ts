@@ -57,7 +57,8 @@ import {
   type Clock,
   type IdGenerator,
 } from "@agentkit/host";
-import { MemoryAssistantStore, SqliteAssistantStore } from "../src/index.js";
+import { MemoryAssistantStore } from "@agentkit/adapters-memory";
+import { SqliteAssistantStore } from "../src/index.js";
 import {
   createSqliteScratch,
   dumpSqliteAttempts,

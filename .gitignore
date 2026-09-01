@@ -10,3 +10,6 @@ package.json.publishconfig-backup
 # Generated analysis artifacts and session-local files
 graphify-out/
 prompt.md
+
+# Agent worktrees (local session artifacts)
+.claude/worktrees/

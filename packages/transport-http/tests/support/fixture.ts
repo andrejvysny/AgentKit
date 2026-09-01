@@ -23,10 +23,8 @@ import {
   type TaskWorker,
   type WorkerHandle,
 } from "@agentkit/host";
-import {
-  MemoryAssistantStore,
-  SingleProcessTaskRunner,
-} from "@agentkit/reference-adapters";
+import { MemoryAssistantStore } from "@agentkit/adapters-memory";
+import { SingleProcessTaskRunner } from "@agentkit/runner-local";
 import { MockProviderClient } from "@agentkit/testing";
 import {
   createRestHandler,

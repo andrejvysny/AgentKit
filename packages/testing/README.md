@@ -108,11 +108,23 @@ describeAssistantStoreConformance({
 an adapter whose `transaction()` cannot roll back, and a `close` callback
 for one that opens a real resource (a db connection, a temp file). Two
 adapters in this repository pass the suite:
-`internal/reference-adapters`'s `MemoryAssistantStore` and
-`SqliteAssistantStore` — see
-[`internal/reference-adapters/README.md`](../../internal/reference-adapters/README.md)
+`@agentkit/adapters-memory`'s `MemoryAssistantStore` and
+`@agentkit/adapters-sqlite`'s `SqliteAssistantStore` — see their READMEs
 and [`docs/ports.md`](../../docs/ports.md) for what the suite checks per
 port.
+
+## TaskRunner conformance suite
+
+`describeTaskRunnerConformance(options)` is the same idea for the other half
+of the host's runtime: the four promises the `TaskRunner` port makes that a
+store cannot make for it — `enqueue` idempotency per task id, `recover()`
+abandoning an expired lease and either re-attempting or dead-lettering,
+`requestCancel` reaching a running worker's `AbortSignal`, and
+`startWorker`'s concurrency budget. Same injected-primitives shape as the
+store suite (`test: { describe, it, expect }`, no runner import here), and
+everything is observed THROUGH THE STORE, so a runner with a completely
+different internal design is still gradeable. `@agentkit/runner-local` runs
+it against both reference stores.
 
 ## Durability invariant suite
 

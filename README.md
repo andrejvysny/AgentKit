@@ -23,15 +23,17 @@ breakdown and an ASCII diagram.
 | [`packages/contracts`](packages/contracts) — `@agentkit/contracts` | Wire DTOs and JSON Schemas (TypeBox): run events, tool/provider/prompt shapes, source refs, context bindings, multimodal message content parts, the task-event envelope, and the REST v1 route table + DTOs. | 0.1.0-dev |
 | [`packages/core`](packages/core) — `@agentkit/core` | Pure, in-process chat-with-tools loop: provider client, Ajv-backed tool registry, `runChat()`, multimodal content-part mapping for OpenAI-compatible providers. | 0.5.0-dev |
 | [`packages/host`](packages/host) — `@agentkit/host` | Durable orchestration over `@agentkit/core`: `TaskStore` + kind-dispatched executors, `TurnRunner` as the `chat.turn` executor, proposal lifecycle, write policy. | 0.1.0-dev |
-| [`packages/testing`](packages/testing) — `@agentkit/testing` | Mocks, fixtures, golden run-event traces, and the `AssistantStore` conformance suite. | 0.1.0-dev |
+| [`packages/testing`](packages/testing) — `@agentkit/testing` | Mocks, fixtures, golden run-event traces, and the `AssistantStore` + `TaskRunner` conformance suites. | 0.1.0-dev |
+| [`packages/adapters-memory`](packages/adapters-memory) — `@agentkit/adapters-memory` | Map-backed `AssistantStore` for tests and local development. No durability, no rollback. | 0.1.0-dev |
+| [`packages/adapters-sqlite`](packages/adapters-sqlite) — `@agentkit/adapters-sqlite` | Durable `AssistantStore` over `bun:sqlite` — the production store for a single-process host. **Bun only.** | 0.1.0-dev |
+| [`packages/runner-local`](packages/runner-local) — `@agentkit/runner-local` | Single-process `TaskRunner`: claim, execute, heartbeat, classified retry with backoff, dead-letter, recover. | 0.1.0-dev |
 | [`packages/mcp-client`](packages/mcp-client) — `@agentkit/mcp-client` | Optional adapter: bridges MCP servers' tools into a run as a `ToolSetContributor`, on the official `@modelcontextprotocol/sdk`. | 0.1.0-dev |
 | [`packages/transport-http`](packages/transport-http) — `@agentkit/transport-http` | Optional adapter: fetch-standard REST v1 + SSE handler serving `packages/contracts/src/rest.ts`, zero framework dependencies. | 0.1.0-dev |
-| [`internal/reference-adapters`](internal/reference-adapters) — `@agentkit/reference-adapters` | Reference `AssistantStore` + `TaskRunner` implementations (in-memory, `bun:sqlite`). Workspace-private, never published — dev/test only. | 0.1.0-dev, private |
 
 ## Layers
 
 ```
-internal/reference-adapters  →  @agentkit/host  →  @agentkit/core  →  @agentkit/contracts
+adapters-memory / adapters-sqlite / runner-local  →  @agentkit/host  →  @agentkit/core  →  @agentkit/contracts
 ```
 
 Each package depends only on the ones to its right. Full diagram, the event
@@ -72,7 +74,7 @@ toolchain (tests, `bun run ci`) is Bun-only.
 
 ## Development
 
-This is a Bun workspaces monorepo (`packages/*`, `internal/*`).
+This is a Bun workspaces monorepo (`packages/*`).
 
 ```sh
 bun install
@@ -83,25 +85,30 @@ bun run ci        # install --frozen-lockfile && typecheck && test && build
 Other useful scripts (see [`package.json`](package.json)): `bun run
 typecheck`, `bun run build`, and per-package variants
 (`bun run test:core`, `bun run test:host`, `bun run test:contracts`,
-`bun run test:testing`, `bun run test:adapters`, `bun run test:mcp-client`,
-`bun run test:transport-http`).
+`bun run test:testing`, `bun run test:adapters-memory`,
+`bun run test:adapters-sqlite`, `bun run test:runner-local`,
+`bun run test:mcp-client`, `bun run test:transport-http`).
 
 Bun is the primary runtime, but every published `@agentkit/*` package must
 stay Node-loadable — a `bun:` import anywhere in one passes the whole Bun
 suite and breaks the first Node consumer. `scripts/node-smoke.mjs` runs the
-built dists (contracts, core, host, mcp-client, transport-http, testing)
-under plain Node: Ajv-validating a golden event, driving `runChat` with a
-stub provider, loading the host port vocabulary, constructing an mcp-client
+built dists (contracts, core, host, adapters-memory, runner-local,
+mcp-client, transport-http, testing) under plain Node: Ajv-validating a
+golden event, driving `runChat` with a stub provider, loading the host port
+vocabulary, claiming a task out of the in-memory store, driving that task to
+`completed` through the local runner's claim loop, constructing an mcp-client
 manager, serving a request through transport-http, and round-tripping a
-golden trace through testing. **Build first** — it reads `dist/`, which is
-not checked in:
+golden trace through testing. `@agentkit/adapters-sqlite` is the one
+exception, Bun-only by construction (`bun:sqlite`) — see its
+[README](packages/adapters-sqlite/README.md). **Build first** — it reads
+`dist/`, which is not checked in:
 
 ```sh
 bun run build && bun run smoke:node
 ```
 
 CI runs the same thing in a separate `node-smoke` job, preceded by a grep
-that fails on any `bun:` import in any of those six dists.
+that fails on any `bun:` import in any of those eight dists.
 
 ## License
 

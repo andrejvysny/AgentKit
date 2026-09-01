@@ -12,6 +12,7 @@
       "!**/dist",
       "!**/node_modules",
       "!graphify-out",
+      "!.claude",
       "!**/*.md",
       "!**/*.tsbuildinfo",
       "!bun.lock",

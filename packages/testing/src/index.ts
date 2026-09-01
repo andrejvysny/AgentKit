@@ -16,8 +16,14 @@ export * from "./fixtures.js";
 export * from "./golden/golden.js";
 
 // Store conformance: the shared behavioral contract every AssistantStore
-// implementation must pass (see internal/reference-adapters).
+// implementation must pass (see @agentkit/adapters-memory and
+// @agentkit/adapters-sqlite, which both pass it).
 export * from "./store-conformance.js";
+
+// Runner conformance: the same idea for the other half of the host's runtime —
+// the four promises the TaskRunner port makes that a store cannot make for it.
+// @agentkit/runner-local runs it against both reference stores.
+export * from "./task-runner-conformance.js";
 
 // Durability: the invariants a TaskStore must hold whatever a pile of
 // concurrent workers just did to it, and the seeded schedule that puts them

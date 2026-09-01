@@ -16,7 +16,7 @@
  * "5k queued" describes them.
  *
  * WHY THIS QUERY CAN BE SLOW — read `selectClaimCandidates` in
- * `internal/reference-adapters/src/sqlite/sqlite-assistant-store.ts` first.
+ * `packages/adapters-sqlite/src/sqlite-assistant-store.ts` first.
  * Two things make it non-obvious that claimNext stays fast as the queue
  * grows:
  *
@@ -77,7 +77,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteAssistantStore } from "../internal/reference-adapters/src/index.js";
+import { SqliteAssistantStore } from "../packages/adapters-sqlite/src/index.js";
 import type {
   AssistantStore,
   ClaimNextInput,

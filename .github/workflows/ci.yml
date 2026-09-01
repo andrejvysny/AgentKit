@@ -95,12 +95,18 @@ jobs:
 
       - run: bun run build
 
+      # @agentkit/adapters-sqlite is deliberately absent: it is built ON
+      # `bun:sqlite` and declares `engines.bun` only, so grepping it for a
+      # `bun:` import would fail by design. Every OTHER published package is
+      # listed here and must stay plain, portable JavaScript.
       - name: shippable dists import nothing from bun
         run: |
           ! grep -rE "require\(['\"]bun|from ['\"]bun:" \
             packages/contracts/dist \
             packages/core/dist \
             packages/host/dist \
+            packages/adapters-memory/dist \
+            packages/runner-local/dist \
             packages/mcp-client/dist \
             packages/transport-http/dist \
             packages/testing/dist

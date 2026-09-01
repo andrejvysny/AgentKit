@@ -13,7 +13,8 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantStore, ClaimedTask, IdGenerator } from "@agentkit/host";
 import { defaultIds } from "@agentkit/host";
-import { MemoryAssistantStore, SqliteAssistantStore } from "../src/index.js";
+import { MemoryAssistantStore } from "@agentkit/adapters-memory";
+import { SqliteAssistantStore } from "../src/index.js";
 
 /**
  * A queue whose head is doomed, whose middle is claimable, and whose tail is

@@ -17,8 +17,12 @@
  *    whole queue serialized behind a bug that looked like a loop. Here the claim
  *    loop NEVER awaits an execution; it starts one, keeps claiming until the
  *    concurrency budget is spent, and sleeps.
- * 2. RETRY IS CLASSIFIED. See {@link classifyExecutionError} — unknown failures
- *    are terminal, not retried forever.
+ * 2. RETRY IS CLASSIFIED, AND BACKED OFF. See {@link classifyExecutionError} —
+ *    unknown failures are terminal, not retried forever — and
+ *    {@link RetryBackoffOptions}: a transient failure waits an exponentially
+ *    growing, jittered delay before its next attempt, instead of starting one
+ *    on the next poll cycle and spending the whole budget while the provider is
+ *    still down.
  * 3. RETRY HAPPENS IN PLACE. {@link TASK_TRANSITIONS} has no `running → queued`
  *    edge, on purpose: a task that has started is not "waiting to start" again,
  *    and pretending otherwise would make it claimable by a second worker while
@@ -60,9 +64,39 @@ const DEFAULT_HEARTBEAT_MS = 10_000;
 const DEFAULT_POLL_MS = 100;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_CONCURRENCY = 2;
+const DEFAULT_RETRY_BASE_MS = 1_000;
+const DEFAULT_RETRY_MAX_MS = 30_000;
+const DEFAULT_RETRY_JITTER_RATIO = 0.2;
 
 /** Dead-letter reason for a task whose attempts died without ever landing. */
 const POISON_REASON = "poison: attempts exhausted without a terminal outcome";
+
+/**
+ * How long a transient failure waits before its next attempt.
+ *
+ * `delay = min(baseMs * 2^(attemptCount - 1), maxMs)`, then spread by
+ * `± jitterRatio`. Without the backoff a retry started on the very next poll
+ * cycle, which turns the one failure mode retries exist for — a provider that
+ * is briefly unavailable — into three requests in ~200ms, arriving while it is
+ * still down and burning the whole attempt budget before it can recover.
+ * Without the jitter, N tasks that failed on the same outage retry in lockstep
+ * forever.
+ */
+export interface RetryBackoffOptions {
+  /** Delay before the SECOND attempt; doubles per attempt after that. Default 1s. */
+  baseMs?: number;
+  /** Ceiling on the delay, however many attempts have failed. Default 30s. */
+  maxMs?: number;
+  /** Fraction of the delay to spread it by, ±. Default 0.2. `0` is exact — what a test wants. */
+  jitterRatio?: number;
+}
+
+/** {@link RetryBackoffOptions} with every default filled in. */
+interface ResolvedRetryBackoff {
+  baseMs: number;
+  maxMs: number;
+  jitterRatio: number;
+}
 
 export interface SingleProcessTaskRunnerDeps {
   store: AssistantStore;
@@ -77,6 +111,8 @@ export interface SingleProcessTaskRunnerDeps {
   pollMs?: number;
   /** Attempts per task before it is dead-lettered. Default 3. */
   maxAttempts?: number;
+  /** Exponential delay between attempts of one task. See {@link RetryBackoffOptions}. */
+  retryBackoff?: RetryBackoffOptions;
 }
 
 /** What one {@link SingleProcessTaskRunner.recover} pass did. */
@@ -119,9 +155,21 @@ export class SingleProcessTaskRunner implements TaskRunner {
   private readonly heartbeatMs: number;
   private readonly pollMs: number;
   private readonly maxAttempts: number;
+  private readonly retryBackoff: ResolvedRetryBackoff;
 
   /** taskId → the execution this process is running for it. */
   private readonly active = new Map<string, ActiveExecution>();
+  /**
+   * taskId → the clock instant its next attempt may start.
+   *
+   * Runner-internal, deliberately: nothing about a backoff belongs in the
+   * store. A task mid-backoff is still `running`, still leased by this process
+   * and still holding its scope, so no other claimant can see it and there is
+   * nothing for a restart to read — a crash during the wait is recovered
+   * exactly like a crash during the attempt, by `recover()` finding the expired
+   * lease. Measured against the INJECTED clock, so a test drives it.
+   */
+  private readonly retryAt = new Map<string, number>();
   /** Every un-settled execution promise, so `stop()` can wait them out. */
   private readonly inFlight = new Set<Promise<void>>();
 
@@ -143,6 +191,14 @@ export class SingleProcessTaskRunner implements TaskRunner {
     this.heartbeatMs = deps.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
     this.pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
     this.maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+    this.retryBackoff = {
+      baseMs: Math.max(0, deps.retryBackoff?.baseMs ?? DEFAULT_RETRY_BASE_MS),
+      maxMs: Math.max(0, deps.retryBackoff?.maxMs ?? DEFAULT_RETRY_MAX_MS),
+      jitterRatio: Math.max(
+        0,
+        deps.retryBackoff?.jitterRatio ?? DEFAULT_RETRY_JITTER_RATIO,
+      ),
+    };
   }
 
   // ───────────────────────────── TaskRunner ──────────────────────────────
@@ -593,7 +649,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
     }
 
     return threw
-      ? await this.settleThrown(taskId, attemptId, entry, thrown)
+      ? await this.settleThrown(taskId, attemptId, lease, entry, thrown)
       : await this.settleResolved(taskId, attemptId, entry);
   }
 
@@ -628,6 +684,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
   private async settleThrown(
     taskId: string,
     attemptId: string,
+    lease: Lease,
     entry: ActiveExecution,
     err: unknown,
   ): Promise<AttemptOutcome> {
@@ -700,16 +757,103 @@ export class SingleProcessTaskRunner implements TaskRunner {
       return { kind: "done" };
     }
 
+    const delayMs = this.retryDelayMs(task.attemptCount);
     this.logger?.info("retrying task in place", {
       taskId,
       attempt: task.attemptCount + 1,
       reason: classified.reason,
+      delayMs,
     });
+    await this.waitForRetry(taskId, delayMs, lease, entry);
+    // The wait is the one place a retry can be overtaken: `stop()` may have
+    // arrived while we slept. Re-ask rather than starting an attempt for a
+    // worker that is gone — the live lease expires and `recover()` continues
+    // the task, exactly as it would have without the delay.
+    if (this.stopped || !this.worker) {
+      this.logger?.info("retry deferred to recovery: the worker stopped", {
+        taskId,
+        attempts: task.attemptCount,
+      });
+      return { kind: "done" };
+    }
+
     const next = await this.startAttempt(taskId);
     return {
       kind: "retry",
       next: { attemptId: next.attempt.attemptId, lease: next.lease },
     };
+  }
+
+  // ─────────────────────────────── backoff ───────────────────────────────
+
+  /**
+   * `min(baseMs * 2^(attemptCount - 1), maxMs)`, spread by ± `jitterRatio`.
+   *
+   * `attemptCount` is the store's count of attempts made SO FAR, so the first
+   * failure (count 1) waits `baseMs`, the second `2 × baseMs`, and so on.
+   */
+  private retryDelayMs(attemptCount: number): number {
+    const { baseMs, maxMs, jitterRatio } = this.retryBackoff;
+    if (baseMs === 0) return 0;
+    const exponent = Math.max(0, attemptCount - 1);
+    const capped = Math.min(baseMs * 2 ** exponent, maxMs);
+    if (jitterRatio === 0) return capped;
+    const spread = capped * jitterRatio * (Math.random() * 2 - 1);
+    return Math.max(0, capped + spread);
+  }
+
+  /**
+   * Hold the attempt chain until `delayMs` has passed ON THE INJECTED CLOCK.
+   *
+   * Waiting HERE rather than handing the task back to the claim loop is forced
+   * by the same invariant as the retry itself (class doc, point 3): the task
+   * never returns to `queued`, so the claim loop cannot see it, and releasing
+   * its scope for the duration would let a second task in the same scope start
+   * alongside one that is still `running`. So the execution keeps its scope
+   * lock and its concurrency slot, and {@link retryAt} is polled — on the
+   * runner's own `pollMs` cadence, which also keeps `stop()` responsive rather
+   * than making it wait out a 30-second backoff.
+   *
+   * The lease is heartbeated throughout. A backoff can outlast the lease TTL,
+   * and an expired lease is the one signal another owner's `recover()` acts on
+   * — it would end this attempt `abandoned` and re-dispatch a task this
+   * process is about to retry.
+   *
+   * A cancel that lands mid-wait skips the rest of it: the next attempt starts
+   * with an already-aborted signal and lands the task `cancelled`, which is
+   * what it did before there was a delay to skip.
+   */
+  private async waitForRetry(
+    taskId: string,
+    delayMs: number,
+    lease: Lease,
+    entry: ActiveExecution,
+  ): Promise<void> {
+    if (delayMs <= 0) return;
+    const deadline = this.clock.now().getTime() + delayMs;
+    this.retryAt.set(taskId, deadline);
+    const heartbeat = setInterval(() => {
+      void this.renewLease(taskId, lease.leaseToken, entry);
+    }, this.heartbeatMs);
+    (heartbeat as unknown as { unref?: () => void }).unref?.();
+    try {
+      while (!this.stopped && !entry.cancelRequested) {
+        const remaining = deadline - this.clock.now().getTime();
+        if (remaining <= 0) break;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, Math.min(remaining, this.pollMs));
+          (timer as unknown as { unref?: () => void }).unref?.();
+        });
+      }
+    } finally {
+      clearInterval(heartbeat);
+      this.retryAt.delete(taskId);
+    }
+  }
+
+  /** The clock instant `taskId`'s next attempt may start, if it is backing off. */
+  retryDeadline(taskId: string): number | undefined {
+    return this.retryAt.get(taskId);
   }
 
   // ────────────────────────────── store ops ──────────────────────────────

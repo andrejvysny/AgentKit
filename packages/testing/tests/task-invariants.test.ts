@@ -3,7 +3,7 @@
  *
  * A grader nobody grades is a green light with no bulb behind it: if
  * `checkTaskInvariants` quietly returned `[]` for everything, the randomized
- * schedule and the fault-injection suite over in `internal/reference-adapters`
+ * schedule and the fault-injection suite over in `@agentkit/adapters-sqlite`
  * would both pass forever and prove nothing. So every invariant it claims to
  * enforce gets a view here that breaks exactly that one — the same mutation the
  * adapters are being watched for, applied by hand — plus a clean baseline the
