@@ -51,7 +51,7 @@ stays unbroken across host-driven retries.
 ### `CONTRACT_VERSION` policy
 
 ```ts
-export const CONTRACT_VERSION = "0.3.0";
+export const CONTRACT_VERSION = "0.4.0";
 ```
 
 ([`packages/contracts/src/version.ts`](../packages/contracts/src/version.ts))
@@ -78,6 +78,8 @@ TS type narrows it to the union below while still accepting any string.
 | `max_iterations` | core (`runs/run-loop.ts`) | `maxToolIterations` was reached without a final answer. |
 | `sse_parse` | core (`providers/openai-compatible.ts`) | Malformed SSE lines were dropped; the response is likely incomplete. |
 | `multimodal_flattened` | core (`providers/openai-compatible.ts`) | A `system`/`tool` message arrived with content parts (only `user`/`assistant` can carry them); the provider client flattened the text parts to a string and dropped the image parts rather than failing the request. **At most one per run** — see [Message content parts](#message-content-parts). |
+| `attachment_unresolved` | host (`turn/turn-runner.ts`) | An image part carried a `ref` source the host could not turn into bytes for this pass — no `AttachmentResolver` is wired, or the resolver answered `null`. The part was dropped from what the provider was shown; the stored message keeps the ref. One warning per dropped part. |
+| `attachment_budget_exceeded` | host (`turn/turn-runner.ts`) | A `ref` image resolved, but sending it would have blown the pass's attachment budget (per-image bytes, total bytes, or image count). Dropped from the pass, kept in the store. One warning per dropped part; the message names the ref and the cap it hit. |
 | `empty_response` | host (`turn/turn-runner.ts`) | The model returned no visible content and no tool calls, even after recovery passes. Not produced by core. |
 | `emulated_tool_call` | host (`turn/turn-runner.ts`, `turn/emulated-tool-call.ts`) | The model wrote a JSON-shaped tool call as text instead of calling a real tool, so nothing ran. Not produced by core. |
 
@@ -99,7 +101,8 @@ export type AiImagePart = {
   type: "image";
   source:
     | { kind: "url"; url: string }
-    | { kind: "data"; base64: string; mediaType: string };
+    | { kind: "data"; base64: string; mediaType: string }
+    | { kind: "ref"; ref: string };
   detail?: "auto" | "low" | "high";
 };
 export type AiContentPart = AiTextPart | AiImagePart;
@@ -147,12 +150,26 @@ is the string-only escape hatch for consumers that need text: a string
 passes through unchanged; a parts array reduces to its text parts, joined
 by newlines, dropping the rest.
 
-**Host persistence stays string-only this phase.** `MessageRecord.content`
-and the REST `MessageDto` are unchanged — a multimodal turn does not yet
-round-trip through `TurnRunner`/`ConversationStore`; the capability lands
-for direct `runChat()` embedders today. Widening host storage is the
-attachments phase ([`docs/roadmap.md`](roadmap.md), P5c). Full rationale:
-[ADR 0002](adr/0002-multimodal-content.md).
+**Three image sources, and one of them never reaches a provider.** `url` and
+`data` are wire values an adapter serializes directly. `ref` is an opaque
+handle into the HOST's own blob storage: the store persists the handle, and
+`TurnRunner` resolves it to a `data` source in memory, per provider pass,
+under byte budgets — see `AttachmentResolver` in
+[`docs/ports.md`](ports.md#attachmentresolver). Storing the handle instead of
+the bytes is what keeps a conversation with a 4 MB screenshot in it cheap to
+append to, to fork, and to page through, and what lets the same message be
+re-resolved (or refused) on a later turn. A `ref` that reaches a provider
+client is a host bug; the client drops the part rather than inventing a URL,
+having already been told about it by `attachment_unresolved`.
+
+**Host persistence carries parts end to end.** `MessageRecord.content`,
+`AppendMessageInput.content`, `SubmitMessageInput.content`, the REST
+`MessageDto.content` and `SubmitMessageRequest.content` are all
+`string | AiContentPart[]`; both reference store adapters round-trip parts
+losslessly (the sqlite one with a `content_format` column beside `content`).
+The REST projection passes content through unchanged, refs included — a client
+that understands the host's refs renders them, one that does not skips the
+part. Full rationale: [ADR 0002](adr/0002-multimodal-content.md).
 
 ## The tool envelope
 

@@ -15,6 +15,10 @@
  * members ride through (every schema here is a plain `Type.Object`, which does
  * not forbid them — a client sending a field from a later contract version must
  * not be rejected by an older server).
+ *
+ * ONE EXCEPTION, and it is the contract's rather than this file's: a message
+ * body's content parts are a CLOSED union, so an unknown part `type` (or an
+ * unknown image `source.kind`) is rejected. See {@link checkMessageContent}.
  */
 import type {
   ApplyProposalRequest,
@@ -67,6 +71,98 @@ function first(...issues: (string | null)[]): string | null {
   return null;
 }
 
+/**
+ * `AiMessageContentSchema` restated, by the same hand-written rule this module
+ * uses everywhere else (see the header: the schemas live in
+ * `@agentkit/contracts`, the validator that would check them against it does
+ * not, and this package takes no dependency to get one).
+ *
+ * Restated FAITHFULLY, which for content parts means restating the part union's
+ * closedness too: an unknown `type` is rejected, not waved through. That is the
+ * one place the "unknown members ride through" rule above does not apply, and it
+ * is the contract's own decision — `AiContentPartSchema` is deliberately closed
+ * (`packages/contracts/src/content.ts`), because a server that accepted a part
+ * it cannot render would persist content no provider will ever be shown.
+ *
+ * The media-type pattern is checked for the same reason the contract carries it:
+ * a `;` or `,` smuggled into a `data` source's media type ends the field early
+ * in the `data:` URL an adapter builds, and the provider decodes something the
+ * caller never sent.
+ */
+const MEDIA_TYPE_RE =
+  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/;
+
+const IMAGE_DETAILS = new Set(["auto", "low", "high"]);
+
+/** `null` when the part is valid; otherwise why it is not. */
+function checkContentPart(part: unknown, index: number): string | null {
+  const at = `\`content[${index}]\``;
+  if (!isRecord(part)) return `${at} must be an object.`;
+  const type = part["type"];
+  if (type === "text") {
+    return typeof part["text"] === "string"
+      ? null
+      : `${at}.text must be a string.`;
+  }
+  if (type !== "image") {
+    return `${at}.type must be "text" or "image".`;
+  }
+  const source = part["source"];
+  if (!isRecord(source)) return `${at}.source must be an object.`;
+  const detail = part["detail"];
+  if (detail !== undefined && !IMAGE_DETAILS.has(detail as string)) {
+    return `${at}.detail must be "auto", "low" or "high".`;
+  }
+  switch (source["kind"]) {
+    case "url":
+      return typeof source["url"] === "string"
+        ? null
+        : `${at}.source.url must be a string.`;
+    case "data":
+      if (typeof source["base64"] !== "string") {
+        return `${at}.source.base64 must be a string.`;
+      }
+      if (typeof source["mediaType"] !== "string") {
+        return `${at}.source.mediaType must be a string.`;
+      }
+      return MEDIA_TYPE_RE.test(source["mediaType"])
+        ? null
+        : `${at}.source.mediaType is not a bare type/subtype media type.`;
+    case "ref":
+      return typeof source["ref"] === "string"
+        ? null
+        : `${at}.source.ref must be a string.`;
+    default:
+      return `${at}.source.kind must be "url", "data" or "ref".`;
+  }
+}
+
+/**
+ * A message body: a string, or a non-empty array of content parts.
+ *
+ * Empty-array rejection is the schema's (`minItems: 1`), and it is not
+ * pedantry — `content: []` is not "a message with no body", it is a caller bug;
+ * the empty body is the empty STRING, and providers reject the array form
+ * outright. Catching it here turns a failed run into a 400.
+ */
+function checkMessageContent(body: Record<string, unknown>): string | null {
+  const value = body["content"];
+  if (typeof value === "string") return null;
+  if (!Array.isArray(value)) {
+    return value === undefined
+      ? "`content` is required."
+      : "`content` must be a string or an array of content parts.";
+  }
+  if (value.length === 0) {
+    return "`content` must not be an empty array; an empty body is the empty string.";
+  }
+  for (const [index, part] of value.entries()) {
+    const issue = checkContentPart(part, index);
+    if (issue !== null) return issue;
+  }
+  return null;
+}
+
 export function validateCreateChatRequest(
   body: Record<string, unknown>,
 ): ValidationResult<CreateChatRequest> {
@@ -82,7 +178,7 @@ export function validateSubmitMessageRequest(
   body: Record<string, unknown>,
 ): ValidationResult<SubmitMessageRequest> {
   const issue = first(
-    checkRequiredString(body, "content"),
+    checkMessageContent(body),
     checkOptionalString(body, "model"),
     checkOptionalString(body, "parentMessageId"),
     checkOptionalMetadata(body, "metadata"),

@@ -1,5 +1,5 @@
 /**
- * v4 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
+ * v5 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
  * applied idempotently (every DDL statement is `CREATE ... IF NOT EXISTS`;
  * seed rows use `INSERT OR IGNORE`) so opening the same database twice, or
  * opening a database another process already initialized, is a no-op rather
@@ -30,7 +30,7 @@
  * stored as TEXT; the store (de)serializes them, SQLite never inspects their
  * contents.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * The DDL for {@link SCHEMA_VERSION}. There are NO migrations in this
@@ -39,8 +39,14 @@ export const SCHEMA_VERSION = 4;
  * a different version, because a reference adapter that shipped half-tested
  * migration scripts would be claiming a durability guarantee it does not have.
  * A host that needs upgrades in place owns that story with its own store.
+ *
+ * That refusal IS the v4 → v5 upgrade path, exactly as it was the v3 → v4 one:
+ * a database stamped 4 raises `sqlite_schema_version` and is recreated. The
+ * `DEFAULT 'text'` on the new `messages.content_format` column is therefore not
+ * a migration aid — it is what keeps the DDL re-appliable over a database this
+ * build already wrote, which is the property every statement here has.
  */
-export const SCHEMA_V4 = `
+export const SCHEMA_V5 = `
 CREATE TABLE IF NOT EXISTS chats (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -64,7 +70,22 @@ CREATE TABLE IF NOT EXISTS messages (
   chat_id TEXT NOT NULL REFERENCES chats(id),
   run_id TEXT,
   role TEXT NOT NULL,
+  -- content holds the message body; content_format says how to read it.
+  -- 'text' -- the column IS the string, byte for byte, exactly as every row
+  -- written before v5 was. 'parts' -- the column is a JSON array of
+  -- AiContentPart (@agentkit/contracts), serialized by the store and never
+  -- inspected by SQLite.
+  --
+  -- A format column rather than "try JSON.parse and fall back": a user message
+  -- whose text happens to be a JSON array of part-shaped objects is a STRING,
+  -- and a store that guessed would silently promote it to parts on the next
+  -- read. One byte of bookkeeping removes the ambiguity permanently.
+  --
+  -- B2 (full-text search) indexes the text of a message: for 'text' rows that is
+  -- this column, for 'parts' rows it is the concatenated text parts, and the
+  -- trigger/virtual-table pair that maintains it hangs off this table.
   content TEXT NOT NULL,
+  content_format TEXT NOT NULL DEFAULT 'text',
   order_key INTEGER NOT NULL,
   tool_call_id TEXT,
   tool_calls TEXT,

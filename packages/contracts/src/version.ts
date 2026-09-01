@@ -7,4 +7,4 @@
  * a new optional field, a new warning code, a new event type — never bump
  * either.
  */
-export const CONTRACT_VERSION = "0.3.0";
+export const CONTRACT_VERSION = "0.4.0";

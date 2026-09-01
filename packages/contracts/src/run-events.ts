@@ -204,6 +204,15 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  * - `multimodal_flattened` — a message on a role that cannot carry content
  *   parts (`system`/`tool`) arrived with them; the provider client flattened the
  *   text parts and dropped the image parts rather than failing the request.
+ * - `attachment_unresolved` — an image part carried a `ref` source (see
+ *   `AiImageSourceSchema`) that the host could not turn into bytes for this
+ *   pass: no resolver is wired, or the resolver answered "gone". The part was
+ *   dropped from what the provider was shown; the STORED message keeps the ref,
+ *   so a later turn can try again.
+ * - `attachment_budget_exceeded` — a `ref` image resolved, but sending it would
+ *   have blown the pass's attachment budget (this image's own byte cap, the
+ *   run's total bytes, or its image count). Dropped from the pass, kept in the
+ *   store, same as above.
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
  *   produce them, but hosts layering their own provider adapters on top of this
  *   contract do, so they are part of the shared vocabulary.
@@ -219,6 +228,8 @@ export type AiRunWarningCode =
   | "max_iterations"
   | "sse_parse"
   | "multimodal_flattened"
+  | "attachment_unresolved"
+  | "attachment_budget_exceeded"
   | "empty_response"
   | "emulated_tool_call";
 

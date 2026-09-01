@@ -441,11 +441,19 @@ function expectOneUnbrokenStream(
   expect(terminals[0]?.eventId).toBe(events[events.length - 1]?.eventId);
 }
 
-/** The slim envelope a `role: "tool"` record carries, with its `modelData`. */
+/**
+ * The slim envelope a `role: "tool"` record carries, with its `modelData`.
+ *
+ * `MessageRecord.content` is `string | AiContentPart[]`, but a tool result is a
+ * serialized envelope by construction — so the string-ness is asserted here
+ * rather than cast away, and a tool record that somehow arrived as parts fails
+ * loudly instead of parsing as `"[object Object]"`.
+ */
 function envelopeOf(
   record: MessageRecord,
 ): AiToolEnvelope & { data: WriteToolModelData } {
-  return JSON.parse(record.content) as AiToolEnvelope & {
+  expect(typeof record.content).toBe("string");
+  return JSON.parse(record.content as string) as AiToolEnvelope & {
     data: WriteToolModelData;
   };
 }
@@ -516,7 +524,7 @@ describe("e2e vertical slice (A) — a write stages, waits, then applies once", 
       const tool = toolRecord(messages);
       expect(tool.toolCallId).toBe(TOOL_CALL_ID);
       expect(tool.metadata["toolName"]).toBe(NOTES_APPEND.name);
-      expect(tool.modelResultJson).toBe(tool.content);
+      expect(tool.modelResultJson).toBe(tool.content as string);
       const envelope = envelopeOf(tool);
       expect(envelope.ok).toBe(true);
       expect(envelope.status).toBe("ok");
