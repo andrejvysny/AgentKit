@@ -135,3 +135,29 @@ jobs:
       - run: bun run build
 
       - run: node scripts/pack-smoke.mjs
+
+  # The single-install distribution model this repo ships: `agentkit`, the
+  # umbrella package assembled by `scripts/build-umbrella.mjs` from the nine
+  # packages' dists, actually installs and works under both npm and bun.
+  # Needs real npm/bun registry access for agentkit's real, non-workspace
+  # dependencies (typebox, ajv, the MCP SDK), so it is its own job rather
+  # than a step tacked onto `bun`, `node-smoke`, or `pack-smoke`.
+  umbrella-smoke:
+    needs: bun
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run build
+
+      - run: bun run build:umbrella
+
+      - run: bun run smoke:umbrella

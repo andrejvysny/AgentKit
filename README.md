@@ -16,6 +16,24 @@ breakdown and an ASCII diagram.
 > `publishConfig` ready for that day; none of them are on the registry
 > today.
 
+## Installing
+
+Consumers install AgentKit as **one package**, `agentkit`, via a GitHub tag
+— no npm registry publish required:
+
+```jsonc
+"dependencies": {
+  "agentkit": "github:andrejvysny/AgentKit#v0.4.0"
+}
+```
+
+`npm install` / `bun install` then works with subpath imports
+(`agentkit/core`, `agentkit/host`, `agentkit/adapters-sqlite`, …) backed by
+a committed `dist/` — no build step for the consumer. See
+[`packages/agentkit/README.md`](packages/agentkit/README.md) for the full
+subpath table and [`DEVELOPING.md`](DEVELOPING.md) for local-iteration
+workflows and the release ritual.
+
 ## Packages
 
 | Package | Description | Status |
