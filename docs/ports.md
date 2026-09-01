@@ -223,8 +223,8 @@ logic-free wrappers over `updateChat({ archived })`.
 
 **Reference / conformance**: `MemoryAssistantStore` and `SqliteAssistantStore`
 (sqlite adapter: `SCHEMA_V6`, `parent_message_id`/`depth`/`branch_index`/
-`active` on `messages`, `chats.archived`, and the FTS5 view/table/trigger set
-behind `searchMessages` — see
+`active` on `messages`, `chats.archived`, `settings.tool_calling_mode`, and
+the FTS5 view/table/trigger set behind `searchMessages` — see
 [`packages/adapters-sqlite/README.md`](../packages/adapters-sqlite/README.md#schema-v6)),
 both graded by the same conformance suite; the tree arithmetic itself
 (`activePathOf`, `activationSetOf`, `nextBranchIndex`, `forkPrefixOf`,
@@ -410,7 +410,12 @@ rejection, key reuse after release, and outcome idempotency.
 `ProviderStore` persists configured providers, their model catalogs, and
 probed capabilities (`replaceModels` is a wholesale replace, not a merge —
 a refresh is a snapshot). `SettingsStore` is one row of assistant-wide
-settings. `OutboxStore` is the transactional-outbox pattern: a run's events
+settings; `toolCalling` (`"auto" | "on" | "off"`, default `"auto"`) is the
+manual override on top of `ProviderStore`'s **probed** `toolCalling`
+capability — `on` stages tools even when the probe said unsupported (probing
+is a heuristic against someone else's server, and a wrong `false` would
+otherwise leave a capable model permanently toolless), `off` stages none at
+all and never calls the contributors. `OutboxStore` is the transactional-outbox pattern: a run's events
 are written to the run log in the same transaction as the state they
 describe, and publishing them outward (SSE, a websocket, a message bus) is
 a separate, retryable step keyed on `claimBatch`/`markPublished`/
@@ -633,19 +638,98 @@ A source of tools for a run, contributed per run rather than registered
 once at boot — which tools exist depends on what the chat is bound to and
 what the user is allowed to do, both of which change between turns.
 
-**Key invariant**: `unboundToolNames()` (optional) declares which of a
-contributor's tools stay available when the chat has no primary binding.
-`turn/registry-staging.ts`'s `stageRegistry` prunes by this hook alone,
-never by a hardcoded list — only the contributor that wrote a tool knows
-whether it can operate on nothing, and when *no* contributor declares the
-hook, nothing is pruned (an absent declaration means "no opinion", not
-"empty the registry").
+**`namespace` is required** — a bare `^[a-z][a-z0-9_-]*$` token. It is
+attribution and reservation, **not a prefix**: tool names are never
+rewritten (`TOOL_NAME_PATTERN` forbids dots, and a mechanical `ns__` rename
+would change the name every existing tool is called by). What it buys is
+that `agentkit`, `chat` and `mcp` are **reserved** — refused at staging
+unless the contributor also sets the framework-internal `privileged: true`
+(only `@agentkit/mcp-client` does, for `mcp`) — and that every staged tool
+records its owner, so a `ToolGuard`, the `ToolCatalog`, and a collision
+error can all name it.
+
+**Key invariant (fail closed on collisions)**: a tool name offered by two
+*different* contributors fails the whole staging with `tool_name_collision`,
+naming both namespaces. One of them quietly winning would mean the model is
+shown one description and reaches the other implementation, with the
+arguments it wrote for the first. A duplicate *within* one contributor stays
+lenient (logged, that one tool dropped): there is no ambiguity of ownership
+to fail over.
+
+**Key invariant (unbound pruning)**: `unboundToolNames()` (optional)
+declares which of a contributor's tools stay available when the chat has no
+primary binding. `turn/registry-staging.ts`'s `stageRegistry` prunes by this
+hook alone, never by a hardcoded list — only the contributor that wrote a
+tool knows whether it can operate on nothing, and when *no* contributor
+declares the hook, nothing is pruned (an absent declaration means "no
+opinion", not "empty the registry").
+
+**`dispose()`** (optional) releases what the contributor holds open.
+`TurnRunner.disposeContributors()` calls it once per contributor at
+shutdown; it is idempotent (a second signal is a no-op) and a throw is
+logged, not rethrown — a shutdown that gives up halfway leaks more than the
+error it reported.
+
+**`ctx.chatId` is optional**, and absent in exactly one place: `ToolCatalog`,
+which enumerates tools for `GET /v1/tools` and names no conversation. A
+contributor that cannot answer without a chat returns nothing there.
 
 **Example implementation**: `@agentkit/mcp-client`'s
 `createMcpToolSetContributor` (`packages/mcp-client/src/contributor.ts`) —
-turns every connected MCP server's tools into `AiTool`s, failing the whole
-contribution closed on a canonical-id collision rather than silently
-dropping one. See [`packages/mcp-client/README.md`](../packages/mcp-client/README.md).
+namespace `mcp`, `privileged: true`, turns every connected MCP server's tools
+into `AiTool`s, failing the whole contribution closed on a canonical-id
+collision rather than silently dropping one. See
+[`packages/mcp-client/README.md`](../packages/mcp-client/README.md).
+
+### `ToolGuard`
+
+[`ports/tool-guard.ts`](../packages/host/src/ports/tool-guard.ts)
+
+Visibility and executability policy over whatever the contributors offered,
+wired as `TurnRunnerDeps.toolGuards`. Two hooks, both optional, checked at
+different moments:
+
+- `isVisible(ctx)` runs at **registry staging**. A tool it hides is never
+  advertised — not in the registry, never in the provider request, so the
+  model cannot call it. This is the hook for "this deployment does not have
+  that feature": an advertised-but-always-refused tool spends context on
+  every turn and invites the model to keep trying.
+- `canExecute(ctx)` runs at **call time**, on a tool that *was* advertised —
+  the hook for state that moves within a run (a lock taken, a budget spent, a
+  binding gone stale). A refusal becomes an `ok: false` tool result carrying
+  `errorCode: "tool_guard_refused"`, `phase: "guard"` and the reason; it
+  never throws, so the run completes and the `tool_call_id` stays balanced.
+
+**Key invariant**: guards compose with **AND**, an absent hook is "no
+opinion" (not "allow"), and order is not significant — every guard is asked
+and the first refusal wins. `ToolGuardContext` carries the owning
+`namespace`, the `AiToolDefinition`, the run's `bindings`, and `chatId` when
+there is one.
+
+**Optional.** Unwired, nothing is asked and every contributed tool is staged
+and callable, exactly as before the port existed.
+
+### `ToolCatalog`
+
+[`ports/tool-catalog.ts`](../packages/host/src/ports/tool-catalog.ts)
+
+Enumerate tools **without running a turn** — what `GET /v1/tools` needs and
+what it answered 501 without. `listTools({ chatId })` reports what that
+chat's next turn would be handed; `listTools()` reports the chat-independent
+set (no bindings, so the unbound rules apply). Entries are
+`{ namespace, definition }` — **definitions only**: handing out
+`AiTool.execute` here would put a second, unguarded, unlogged call path next
+to the run loop's.
+
+**Key invariant**: the default implementation
+(`createContributorToolCatalog`, `tools/contributor-tool-catalog.ts`)
+answers by running the **same** `stageRegistry` the turn runner does, so
+namespace checks, guards and unbound pruning all apply and the catalogue
+cannot drift from what a run actually receives. A second enumeration path
+that disagreed would be worse than the 501, because it looks authoritative.
+It does not call `ContextProvider.refresh`: listing is a read, and
+re-validating every binding because a UI opened a tool picker would make an
+enumeration as expensive as a turn.
 
 ## Secrets, authorization, usage
 

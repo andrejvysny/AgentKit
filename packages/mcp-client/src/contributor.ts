@@ -78,6 +78,11 @@ interface McpToolErrorData {
  * WHOLE run into unbound pruning (registry staging filters every contributor's
  * tools against the union of declared names), so a bridge that knows nothing
  * about the host's bindings would be silently deleting the host's own tools.
+ *
+ * The namespace is `mcp`, which is RESERVED: this bridge owns the `mcp.*`
+ * canonical ids and the `mcp__…` registry names, so it sets `privileged` to
+ * claim it. That flag is the framework's own, not an extension point — a host
+ * bridging tools of its own picks a namespace of its own.
  */
 export function createMcpToolSetContributor(
   manager: McpToolSource,
@@ -86,6 +91,8 @@ export function createMcpToolSetContributor(
   const connectOnContribute = options.connectOnContribute !== false;
 
   return {
+    namespace: "mcp",
+    privileged: true,
     async contribute(ctx: ToolContributionContext): Promise<AiTool[]> {
       const logger = ctx.logger ?? options.logger;
       if (connectOnContribute) {

@@ -37,6 +37,8 @@ export {
   AiToolLimitsSchema,
   AiToolResultSchema,
   AiToolEnvelopeSchema,
+  AiToolErrorPhaseSchema,
+  AiToolErrorDataSchema,
 } from "./tool.js";
 
 export {

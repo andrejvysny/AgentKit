@@ -71,13 +71,16 @@ function messageSearchText(alias: string): string {
  * migration scripts would be claiming a durability guarantee it does not have.
  * A host that needs upgrades in place owns that story with its own store.
  *
+
  * That refusal IS the v5 → v6 upgrade path, exactly as it was the v4 → v5 one:
  * a database stamped 5 raises `sqlite_schema_version` and is recreated. The
- * `DEFAULT 0` on the new `chats.archived` column is therefore not a migration
- * aid — it is what keeps the DDL re-appliable over a database this build
- * already wrote, which is the property every statement here has.
+ * `DEFAULT` clauses on the newer columns (`chats.archived`,
+ * `messages.content_format`, `settings.tool_calling_mode`) are therefore not
+ * migration aids — they are what keeps the DDL re-appliable over a database
+ * this build already wrote, which is the property every statement here has.
  *
- * v6 adds two things: `chats.archived` (the listing filter), and the FTS5
+ * v6 adds three things: `chats.archived` (the listing filter),
+ * `settings.tool_calling_mode` (the manual tool-calling override), and the FTS5
  * machinery behind `ConversationStore.searchMessages` — a view computing the
  * searchable text of every message, an EXTERNAL-CONTENT FTS5 table over that
  * view, three triggers keeping the two in step, and a guarded backfill.
@@ -378,11 +381,15 @@ CREATE TABLE IF NOT EXISTS settings (
   write_policy_mode TEXT NOT NULL,
   allow_raw_tool_data INTEGER NOT NULL,
   max_tool_iterations INTEGER,
+  -- 'auto' | 'on' | 'off'. Named _mode because provider_capabilities already
+  -- has a BOOLEAN tool_calling (what was probed); this is what the operator
+  -- decided on top of it.
+  tool_calling_mode TEXT NOT NULL DEFAULT 'auto',
   metadata TEXT NOT NULL DEFAULT '{}'
 );
 INSERT OR IGNORE INTO settings
-  (id, context_size_preference, write_policy_mode, allow_raw_tool_data, metadata)
-  VALUES (1, 'small', 'auto_readonly_confirm_writes', 0, '{}');
+  (id, context_size_preference, write_policy_mode, allow_raw_tool_data, tool_calling_mode, metadata)
+  VALUES (1, 'small', 'auto_readonly_confirm_writes', 0, 'auto', '{}');
 
 -- Backs TaskStore.acquireLease's store-global monotonic fencing token. Not a
 -- port record — see the module doc comment above.

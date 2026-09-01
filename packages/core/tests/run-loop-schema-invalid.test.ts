@@ -95,7 +95,12 @@ describe("runChat — schema_invalid arguments", () => {
       status: string;
       warnings: string[];
       truncated: boolean;
-      data: { errorCode: string; errorMessage: string };
+      data: {
+        errorCode: string;
+        errorMessage: string;
+        phase?: string;
+        retryable?: boolean;
+      };
     };
     expect(env.ok).toBe(false);
     expect(env.status).toBe("error");
@@ -103,5 +108,10 @@ describe("runChat — schema_invalid arguments", () => {
     expect(env.truncated).toBe(false);
     expect(env.data.errorCode).toBe("schema_invalid");
     expect(env.data.errorMessage).toContain("strict");
+    // The stage is named so the model can tell "you wrote the wrong arguments"
+    // from "it broke" — and `retryable: false` because THESE arguments will
+    // fail the same way every time.
+    expect(env.data.phase).toBe("validation");
+    expect(env.data.retryable).toBe(false);
   });
 });
