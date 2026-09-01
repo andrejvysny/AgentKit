@@ -1,0 +1,57 @@
+{
+  "name": "@agentkit/client",
+  "version": "0.1.0-dev",
+  "description": "Typed REST v1 + SSE client for the AgentKit contract: every operation, auto-resuming run streams, derived run phases. Browser and Node.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20",
+    "bun": ">=1.3"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    },
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "bun test tests",
+    "prepack": "node ../../scripts/prepack-publish-config.mjs apply",
+    "postpack": "node ../../scripts/prepack-publish-config.mjs restore"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andrejvysny/AgentKit.git",
+    "directory": "packages/client"
+  },
+  "dependencies": {
+    "@agentkit/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@agentkit/adapters-memory": "workspace:*",
+    "@agentkit/host": "workspace:*",
+    "@agentkit/runner-local": "workspace:*",
+    "@agentkit/testing": "workspace:*",
+    "@agentkit/transport-http": "workspace:*",
+    "@types/bun": "^1.3.5",
+    "typescript": "^5.8.3"
+  }
+}

@@ -21,7 +21,7 @@
 - [ ] Phase C verifier + fixes
 
 ## Phase D — client + react
-- [ ] D1 `packages/client`
+- [x] D1 `packages/client`
 - [ ] D2 `packages/react`
 - [ ] Phase D verifier + fixes
 
