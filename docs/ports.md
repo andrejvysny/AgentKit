@@ -518,6 +518,30 @@ uses is resolved from a `ref` only at the moment a client is built
 which answers "may this apply without confirmation?" A desktop host wires a
 permissive implementation; a multi-tenant service does not.
 
+**Where it is enforced**: in the transport, **per route**.
+`@agentkit/transport-http`'s handler consults it once per request, after
+`deps.authenticate` has produced the principal and after the route has been
+resolved, and before the route handler runs — so a refusal costs no store
+read and no host call. The `subject` is the principal (an object verbatim,
+anything else under `metadata.principal`), the `action` is `read` for `GET`
+and `write` for every other method, and the `resource` comes from the route
+table in
+[`transport-http/src/authorize.ts`](../packages/transport-http/src/authorize.ts),
+which is `satisfies Record<RestOperation, …>` so a route added to
+`REST_ROUTES` cannot ship without one. `GET /v1/version` is the single
+exemption. A refusal is a `403` problem with code `forbidden`, carrying the
+decision's `reason` as its `detail`.
+
+Nothing else in this repository calls the port. In particular the host layer
+does not: `TurnRunner`, `TaskService` and `ProposalService` are reached
+through a transport or by a host's own code, and a second consultation point
+inside them could disagree with the first.
+
+**A host that does not wire it gets no authorization at all** — `deps.authorize`
+is optional and absent means every routed request proceeds. That is the
+intended default for a single-user desktop embedding; a multi-tenant service
+must supply the port (or filter in front of the handler).
+
 ### `UsageAuthorizer`
 
 [`ports/usage-authorizer.ts`](../packages/host/src/ports/usage-authorizer.ts)
@@ -526,6 +550,33 @@ Spend control around provider calls: `authorize()` before, `record()`
 after. Two methods rather than one because the interesting failure is
 between them — a run authorized on an estimate and then far over budget
 must still be recorded, so the next authorization can refuse.
+
+**Where it is enforced**: in `TurnRunner`, **per provider pass**.
+`authorize()` is called at the top of `runPass` — the one place a provider
+call is made — so the first pass and every recovery pass (chat-only retry,
+empty-response retry) are each asked, because each of them bills again. The
+request carries the run id, the chat id, the resolved provider id and model,
+and `estimatedPromptTokens`: the assembled prompt's characters divided by
+four, a rule of thumb rather than a tokenizer result, which is why the port
+documents the field as best-effort and optional.
+
+A refusal never reaches the provider. The runner writes a `run.failed` event
+carrying `errorCode: "usage_denied"` (and the decision's `reason` in its
+message) onto the task's durable log, then throws `UsageDeniedError`, which
+lands the task `failed` through the same failure path any other thrown error
+does. `@agentkit/transport-http` maps that code to **429**, not 403 —
+`UsageAuthorizationDecision.retryAfterMs` exists because a refilling quota
+says yes later.
+
+`record()` is called for every `run.usage` event the provider emits, after
+that event is durable, with the provider's own numbers (never the estimate).
+Every usage event is reported, including the non-final ones a streaming
+provider sends mid-call: a recorder that only saw `finalForCall` would lose
+the accounting for a call that died before it settled.
+
+**A host that does not wire it gets no spend control** — `TurnRunnerDeps.usage`
+is optional, and absent the runner asks nothing, records nothing, and behaves
+exactly as it did before the port was enforced.
 
 ## System seams
 

@@ -15,7 +15,10 @@ export * from "./deps.js";
 
 // The pieces a host may want to reuse or test against directly.
 export * from "./router.js";
+export * from "./authorize.js";
+export * from "./cors.js";
 export * from "./problem.js";
+export type { RouteContext, RouteHandler } from "./routes/context.js";
 export * from "./sse.js";
 export * from "./idempotency.js";
 export * from "./cursor.js";
