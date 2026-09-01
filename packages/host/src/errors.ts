@@ -200,6 +200,25 @@ export class InvalidImportError extends NamedHostError {
 }
 
 /**
+ * A regenerate named a message that is not a re-answerable one: unknown in this
+ * chat, not an `assistant` record, a replay-only (`internal: true`) record, or a
+ * root with no question above it.
+ *
+ * Refused rather than reinterpreted, for the same reason
+ * {@link InvalidForkPointError} is: "regenerate" means "answer the question this
+ * message answered again", and a message that answered no question leaves
+ * nothing to re-ask. Picking the nearest assistant ancestor instead would hand
+ * back a branch under a question the caller never named, and the caller has no
+ * way to notice. Terminal by classification: the target's role and parentage do
+ * not change on a retry.
+ */
+export class InvalidRegenerateError extends NamedHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("invalid_regenerate", message, details);
+  }
+}
+
+/**
  * The {@link UsageAuthorizer} refused a provider call before it was made.
  *
  * Raised by `TurnRunner` on the pass that was refused, so the model is never
@@ -271,6 +290,7 @@ export const HOST_ERROR_CODES = [
   "revision_conflict",
   "not_found",
   "invalid_fork_point",
+  "invalid_regenerate",
   "chat_busy",
   "invalid_import",
   "unknown_dependency",

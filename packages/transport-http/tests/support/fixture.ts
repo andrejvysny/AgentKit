@@ -191,6 +191,31 @@ async function seedHostState(store: MemoryAssistantStore): Promise<void> {
   await store.conversations.createChat({ id: TEST_CHAT_ID });
 }
 
+/**
+ * A `SecretStore` in a Map — the smallest thing that answers the question the
+ * provider routes ask of it, and the only way to assert that a key went in
+ * HERE and nowhere else.
+ */
+export class MemorySecretStore {
+  readonly values = new Map<string, string>();
+
+  async get(ref: string): Promise<string | null> {
+    return this.values.get(ref) ?? null;
+  }
+
+  async set(ref: string, value: string): Promise<void> {
+    this.values.set(ref, value);
+  }
+
+  async delete(ref: string): Promise<void> {
+    this.values.delete(ref);
+  }
+
+  async listRefs(): Promise<string[]> {
+    return [...this.values.keys()];
+  }
+}
+
 /** Poll until `predicate` holds, or fail loudly about what never happened. */
 export async function waitFor(
   predicate: () => Promise<boolean>,

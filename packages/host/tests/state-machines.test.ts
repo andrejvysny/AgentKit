@@ -16,7 +16,13 @@ import {
   InvalidTaskTransitionError,
 } from "../src/errors.js";
 import type { ProposalStatus } from "../src/ports/proposal-store.js";
-import type { RunStatusDto } from "@agentkit/contracts";
+import type { ToolCallingMode } from "../src/ports/settings-store.js";
+import type { WritePolicyMode } from "../src/ports/write-policy.js";
+import type {
+  RunStatusDto,
+  ToolCallingModeDto,
+  WritePolicyModeDto,
+} from "@agentkit/contracts";
 
 const TASK_STATUSES: TaskStatus[] = [
   "queued",
@@ -181,5 +187,31 @@ describe("RunStatusDto ↔ TaskStatus — the mirrored enumeration", () => {
     // either side has to be made deliberately.
     expect(backToHost).toHaveLength(6);
     expect(new Set(backToHost).size).toBe(6);
+  });
+});
+
+/**
+ * The other two host unions `rest.ts` restates, checked the same way and for
+ * the same reason: contracts cannot import host, so the only thing keeping the
+ * copies honest is a bidirectional assignment that stops compiling the moment
+ * either side gains a member.
+ */
+describe("WritePolicyModeDto / ToolCallingModeDto ↔ host — the mirrored enumerations", () => {
+  it("write policy modes are the same set in both directions", () => {
+    const hostModes: WritePolicyMode[] = [
+      "auto_readonly_confirm_writes",
+      "confirm_all_writes",
+      "auto_all",
+    ];
+    const dtoModes: WritePolicyModeDto[] = hostModes;
+    const backToHost: WritePolicyMode[] = dtoModes;
+    expect(new Set(backToHost).size).toBe(3);
+  });
+
+  it("tool-calling modes are the same set in both directions", () => {
+    const hostModes: ToolCallingMode[] = ["auto", "on", "off"];
+    const dtoModes: ToolCallingModeDto[] = hostModes;
+    const backToHost: ToolCallingMode[] = dtoModes;
+    expect(new Set(backToHost).size).toBe(3);
   });
 });

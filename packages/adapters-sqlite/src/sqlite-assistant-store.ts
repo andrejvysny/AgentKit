@@ -107,7 +107,7 @@ import {
   type ResolvedTaskAging,
   type TaskAgingOptions,
 } from "@agentkit/host";
-import { SCHEMA_V6, SCHEMA_VERSION } from "./schema.js";
+import { SCHEMA_V7, SCHEMA_VERSION } from "./schema.js";
 
 const DEFAULT_LEASE_TTL_MS = 30_000;
 /** Mirrors the `settings.tool_calling_mode` DDL default. */
@@ -2780,7 +2780,7 @@ function assertSchemaVersion(db: Database, path: string): void {
     // A pragma every SQLite build answers came back with nothing. Whatever this
     // handle is, it is not a database this adapter can reason about — and the
     // one thing worse than refusing to open it is opening it anyway and running
-    // `SCHEMA_V6` against it, which is exactly what falling through would do.
+    // `SCHEMA_V7` against it, which is exactly what falling through would do.
     throw new AgentKitHostError(
       "sqlite_schema_version",
       `Cannot read user_version from the SQLite store at ${path}; refusing to touch this database.`,
@@ -2803,6 +2803,40 @@ function assertSchemaVersion(db: Database, path: string): void {
       `This workspace-private reference adapter ships no migrations — delete and recreate the dev database.`,
     { path, found: version, expected: SCHEMA_VERSION },
   );
+}
+
+/**
+ * Open (or adopt) a database file carrying THIS build's schema, with the
+ * pragmas every store over it depends on.
+ *
+ * Factored out of {@link SqliteAssistantStore}'s constructor because it is no
+ * longer the only store over this file: {@link SqliteMcpServerConfigStore} is
+ * constructible from a path too, and a second hand-written copy of the
+ * open-assert-apply-stamp sequence is how one of them ends up skipping the
+ * version check on the day the sequence changes.
+ *
+ * Applying `SCHEMA_V7` unconditionally is safe by construction — every
+ * statement in it is `CREATE ... IF NOT EXISTS` or `INSERT OR IGNORE` — so
+ * opening a file this build (or another process running it) already
+ * initialized is a no-op.
+ */
+export function openAgentKitDatabase(
+  path: string | ":memory:",
+  busyTimeoutMs: number = DEFAULT_BUSY_TIMEOUT_MS,
+): Database {
+  const db = new Database(path);
+  if (path !== ":memory:") {
+    db.exec("PRAGMA journal_mode = WAL;");
+  }
+  // Several handles over one file are supported; this is half of what makes
+  // them wait for each other rather than fail on each other (the other half
+  // is `SqliteConnection.beginImmediateAsync` — see that class's doc).
+  db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
+  db.exec("PRAGMA foreign_keys = ON;");
+  assertSchemaVersion(db, path);
+  db.exec(SCHEMA_V7);
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+  return db;
 }
 
 // ---------------------------------------------------------------------------
@@ -2852,22 +2886,8 @@ export class SqliteAssistantStore implements AssistantStore {
     path: string | ":memory:",
     options: SqliteAssistantStoreOptions = {},
   ) {
-    const db = new Database(path);
     const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
-    if (path !== ":memory:") {
-      db.exec("PRAGMA journal_mode = WAL;");
-    }
-    // Several handles over one file are supported; this is half of what makes
-    // them wait for each other rather than fail on each other (the other half
-    // is `SqliteConnection.beginImmediateAsync` — see that class's doc).
-    db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
-    db.exec("PRAGMA foreign_keys = ON;");
-    assertSchemaVersion(db, path);
-    // Idempotent: every statement is CREATE ... IF NOT EXISTS / INSERT OR
-    // IGNORE, so reopening the same file (or a file another process already
-    // initialized) is a safe no-op.
-    db.exec(SCHEMA_V6);
-    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+    const db = openAgentKitDatabase(path, busyTimeoutMs);
     this.conn = new SqliteConnection(db, busyTimeoutMs);
     const clock = options.clock ?? defaultClock;
     const ids = options.ids ?? defaultIds;
@@ -2891,6 +2911,21 @@ export class SqliteAssistantStore implements AssistantStore {
 
   async transaction<T>(fn: (tx: AssistantStore) => Promise<T>): Promise<T> {
     return this.conn.withAsyncTx(() => fn(this));
+  }
+
+  /**
+   * The open handle, for a store over the SAME database that is not part of
+   * this aggregate — {@link SqliteMcpServerConfigStore} is the one this exists
+   * for.
+   *
+   * Sharing the handle rather than opening a second one is the point: one
+   * connection means one write lock and one transaction depth, so a config
+   * write issued while `transaction()` is open flattens into it instead of
+   * deadlocking against it. A caller that takes this must NOT close it — the
+   * aggregate owns the connection's lifetime, through {@link close}.
+   */
+  get database(): Database {
+    return this.conn.db;
   }
 
   /** Closes the underlying connection. Safe to call once; further use throws. */

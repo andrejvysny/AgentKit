@@ -45,7 +45,8 @@
   },
   "dependencies": {
     "@agentkit/contracts": "workspace:*",
-    "@agentkit/host": "workspace:*"
+    "@agentkit/host": "workspace:*",
+    "@agentkit/mcp-client": "workspace:*"
   },
   "devDependencies": {
     "@agentkit/testing": "workspace:*",

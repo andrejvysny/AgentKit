@@ -25,12 +25,17 @@ import type { RouteParams } from "./router.js";
 export type RestAction = "read" | "write";
 
 /**
- * Builds the resource one request is about, from that route's path parameters.
+ * Builds the resource one request is about, from that route's path parameters
+ * — and, for the one route whose subject is in the query string, from the URL.
  *
  * `null` means the route is never authorized — see {@link getVersion} below.
+ *
+ * Almost every entry below ignores the second argument, which is why it is a
+ * positional parameter rather than a named field: a one-argument function still
+ * satisfies this type, so adding the URL cost the table nothing.
  */
 export type RouteResource =
-  | ((params: RouteParams) => AuthorizationResource)
+  | ((params: RouteParams, url: URL) => AuthorizationResource)
   | null;
 
 const chat = (params: RouteParams): AuthorizationResource => ({
@@ -58,6 +63,48 @@ const provider = (params: RouteParams): AuthorizationResource => ({
   ...(params["providerId"] === undefined ? {} : { id: params["providerId"] }),
 });
 
+const settings = (): AuthorizationResource => ({ kind: "settings" });
+
+/**
+ * The write policy itself, not the chat a grant is about.
+ *
+ * `revokeAllowance` carries the allowance key in the path and its chat in a
+ * `?chatId=` query, and the resource is the POLICY either way: consent is a
+ * property of the policy a host wired, and an authorizer that saw
+ * `{ kind: "chat", id: <an allowance key> }` would look up a chat that does not
+ * exist. A host that gates grants per conversation reads the query itself, the
+ * same way one that scopes on conversations resolves message → chat.
+ */
+const policy = (params: RouteParams): AuthorizationResource => ({
+  kind: "policy",
+  ...(params["allowanceId"] === undefined ? {} : { id: params["allowanceId"] }),
+});
+
+const mcpConfig = (params: RouteParams): AuthorizationResource => ({
+  kind: "mcp_config",
+  ...(params["serverId"] === undefined ? {} : { id: params["serverId"] }),
+});
+
+/**
+ * `searchMessages` — the one route whose subject is in the QUERY STRING.
+ *
+ * `?chatId=` scopes the search to one conversation, and when it is there the
+ * request is about that chat and must be authorized as one. Without it the
+ * search spans every chat in the store, and the honest resource is the
+ * unscoped `{ kind: "chat" }` — an authorizer that denies it denies exactly the
+ * cross-conversation search, which is the decision it should be making. Reading
+ * the id from the path is impossible here, and inventing a scope would be
+ * worse: a host that only ever expects scoped searches must be able to see that
+ * an unscoped one arrived.
+ */
+const searchScope = (_params: RouteParams, url: URL): AuthorizationResource => {
+  const chatId = url.searchParams.get("chatId");
+  return {
+    kind: "chat",
+    ...(chatId === null || chatId === "" ? {} : { id: chatId }),
+  };
+};
+
 /**
  * Route → resource.
  *
@@ -76,6 +123,12 @@ const provider = (params: RouteParams): AuthorizationResource => ({
  *   reason: `{ kind: "run", id: <a chat id> }` would be a lie the host cannot
  *   detect.
  *
+ * Two routes carry TWO ids or NONE, and both are called out where they are
+ * defined: `regenerateMessage` names a chat and a message and is authorized as
+ * the chat it writes to, and `searchMessages` takes its scope from `?chatId=`
+ * because there is no path id to take it from. Everything else is the single id
+ * its path carries.
+ *
  * `getVersion` is the one route that is never authorized. It reads two
  * constants and the host's own `packages` map — no store, no user data — and it
  * is what a client calls to discover whether it can talk to this server at all.
@@ -86,9 +139,18 @@ export const RESOURCE_BY_OPERATION = {
   createChat: chat,
   listChats: chat,
   getChat: chat,
+  updateChat: chat,
+  deleteChat: chat,
   listMessages: chat,
   submitMessage: chat,
+  // `chat`, not `message`, even though the path carries both ids: a regenerate
+  // WRITES to the conversation — a new branch, a new run — and the message id
+  // names a position inside it rather than the thing being touched. The rule
+  // above still holds, because the chat id is one of the ids the path carries;
+  // the choice here is which of the two the request is ABOUT.
+  regenerateMessage: chat,
   forkChat: chat,
+  searchMessages: searchScope,
 
   activateBranch: message,
   listSiblings: message,
@@ -105,7 +167,25 @@ export const RESOURCE_BY_OPERATION = {
   applyProposal: proposal,
 
   listProviders: provider,
+  createProvider: provider,
+  updateProvider: provider,
+  deleteProvider: provider,
   listModels: provider,
+  refreshProviderModels: provider,
+  testProvider: provider,
+
+  getSettings: settings,
+  updateSettings: settings,
+
+  listAllowances: policy,
+  grantAllowance: policy,
+  revokeAllowance: policy,
+
+  listMcpServers: mcpConfig,
+  createMcpServer: mcpConfig,
+  updateMcpServer: mcpConfig,
+  deleteMcpServer: mcpConfig,
+
   listTools: () => ({ kind: "tools" }),
 
   getVersion: null,
@@ -115,9 +195,10 @@ export const RESOURCE_BY_OPERATION = {
 export function resourceForOperation(
   operation: RestOperation,
   params: RouteParams,
+  url: URL,
 ): AuthorizationResource | null {
   const resolve: RouteResource = RESOURCE_BY_OPERATION[operation];
-  return resolve === null ? null : resolve(params);
+  return resolve === null ? null : resolve(params, url);
 }
 
 /**

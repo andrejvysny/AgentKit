@@ -20,6 +20,11 @@ export * from "./golden/golden.js";
 // @agentkit/adapters-sqlite, which both pass it).
 export * from "./store-conformance.js";
 
+// MCP server-config conformance: the same idea for the standalone
+// McpServerConfigStore port (@agentkit/mcp-client), which is NOT part of the
+// AssistantStore aggregate and so cannot be graded through its harness.
+export * from "./mcp-config-conformance.js";
+
 // Runner conformance: the same idea for the other half of the host's runtime —
 // the four promises the TaskRunner port makes that a store cannot make for it.
 // @agentkit/runner-local runs it against both reference stores.

@@ -33,6 +33,7 @@
       "dependencies": {
         "@agentkit/contracts": "workspace:*",
         "@agentkit/host": "workspace:*",
+        "@agentkit/mcp-client": "workspace:*",
       },
       "devDependencies": {
         "@agentkit/testing": "workspace:*",
@@ -46,6 +47,7 @@
       "dependencies": {
         "@agentkit/contracts": "workspace:*",
         "@agentkit/host": "workspace:*",
+        "@agentkit/mcp-client": "workspace:*",
       },
       "devDependencies": {
         "@agentkit/adapters-memory": "workspace:*",
@@ -142,12 +144,14 @@
       "devDependencies": {
         "@agentkit/core": "workspace:*",
         "@agentkit/host": "workspace:*",
+        "@agentkit/mcp-client": "workspace:*",
         "@types/bun": "^1.3.5",
         "typescript": "^5.8.3",
       },
       "peerDependencies": {
         "@agentkit/core": "workspace:*",
         "@agentkit/host": "workspace:*",
+        "@agentkit/mcp-client": "workspace:*",
       },
     },
     "packages/transport-http": {

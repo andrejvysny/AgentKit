@@ -15,18 +15,26 @@
  * public contract, and none of them mean anything to a client. Every omission is
  * called out on the DTO that makes it.
  *
- * **Two enumerations are mirrored, not imported.** `RunStatusDto` and
- * `ProposalStatusDto` (and `RiskLevelDto`) restate unions that `@agentkit/host`
- * owns, because contracts sits *below* host and cannot depend on it. They must
- * be kept in step by hand; the compile-time cross-check lives in
+ * **Some enumerations are mirrored, not imported.** `RunStatusDto`,
+ * `ProposalStatusDto`, `RiskLevelDto`, `WritePolicyModeDto` and
+ * `ToolCallingModeDto` restate unions that `@agentkit/host` owns, and
+ * `McpTransportDto` restates one `@agentkit/mcp-client` owns, because contracts
+ * sits *below* both and cannot depend on either. They must be kept in step by
+ * hand; the compile-time cross-check for the host ones lives in
  * `packages/host/tests/state-machines.test.ts`, and each one names its source
  * below.
  */
 import { Type, type Static } from "@sinclair/typebox";
 import { AiContentPartSchema } from "./content.js";
+import {
+  AiProviderKindSchema,
+  AiProviderModelSchema,
+  type AiProviderModel,
+} from "./provider.js";
 import { AiRunEventSchema, type AiRunEvent } from "./run-events.js";
 import { AiSourceRefSchema } from "./source-ref.js";
 import {
+  AiContextSizePreferenceSchema,
   AiToolCallSchema,
   AiToolDefinitionSchema,
   AiToolStatusSchema,
@@ -64,10 +72,11 @@ export interface RouteDef {
  *
  * Two routes carry header semantics no path can express:
  *
- * - **`submitMessage`** REQUIRES an `Idempotency-Key` header. Submitting a turn
- *   creates a run and two messages; a client that retries a timed-out POST
- *   without a key duplicates the turn, and no amount of server-side cleverness
- *   can tell that retry apart from a user who really did send twice.
+ * - **`submitMessage`** and **`regenerateMessage`** REQUIRE an
+ *   `Idempotency-Key` header. Each creates a run and at least one message; a
+ *   client that retries a timed-out POST without a key duplicates the turn, and
+ *   no amount of server-side cleverness can tell that retry apart from a user
+ *   who really did send twice. They are the only two routes that require it.
  * - **`streamRun`** is Server-Sent Events, and resumes on `Last-Event-ID`: the
  *   value is an `AiRunEvent.eventId`, and the server replays everything after
  *   that event from the run's durable log. This is why `eventId` and `seq` are
@@ -77,12 +86,39 @@ export const REST_ROUTES = {
   createChat: { method: "POST", path: "/v1/chats" },
   listChats: { method: "GET", path: "/v1/chats" },
   getChat: { method: "GET", path: "/v1/chats/:chatId" },
+  /** Rename, re-tag or (un)archive. See {@link UpdateChatRequestSchema}. */
+  updateChat: { method: "PATCH", path: "/v1/chats/:chatId" },
+  /**
+   * The chat, its messages (every branch), its runs and its proposals — 204 on
+   * success, `chat_busy` (409) while a run in the chat is still live.
+   */
+  deleteChat: { method: "DELETE", path: "/v1/chats/:chatId" },
 
   listMessages: { method: "GET", path: "/v1/chats/:chatId/messages" },
   /** Requires an `Idempotency-Key` header; see the note above. */
   submitMessage: { method: "POST", path: "/v1/chats/:chatId/messages" },
+  /**
+   * Answer the same question again, as a new branch beside the answer it
+   * already has. Requires an `Idempotency-Key` header, like `submitMessage`,
+   * and answers with the same {@link SubmitMessageResponseSchema}.
+   */
+  regenerateMessage: {
+    method: "POST",
+    path: "/v1/chats/:chatId/messages/:messageId/regenerate",
+  },
   /** Copies the active path up to a message into a NEW chat. See {@link ForkChatRequestSchema}. */
   forkChat: { method: "POST", path: "/v1/chats/:chatId/fork" },
+
+  /**
+   * Full-text search over message bodies: `?q=` (required), `?chatId=` to scope
+   * to one conversation, `?limit=`.
+   *
+   * Rooted at `/v1/search` rather than nested under a chat because the
+   * unscoped search — "where did I see that?" across every conversation — is
+   * the one this route mainly exists for, and a chat-nested path could not
+   * express it.
+   */
+  searchMessages: { method: "GET", path: "/v1/search" },
 
   /**
    * Make a message's branch the active one, and answer with the path that
@@ -111,7 +147,39 @@ export const REST_ROUTES = {
   applyProposal: { method: "POST", path: "/v1/proposals/:proposalId/apply" },
 
   listProviders: { method: "GET", path: "/v1/providers" },
+  createProvider: { method: "POST", path: "/v1/providers" },
+  updateProvider: { method: "PATCH", path: "/v1/providers/:providerId" },
+  deleteProvider: { method: "DELETE", path: "/v1/providers/:providerId" },
   listModels: { method: "GET", path: "/v1/providers/:providerId/models" },
+  /**
+   * Re-probe the provider's catalogue and replace it. A WRITE, not a cached
+   * read: it costs a request to someone else's server, so it is a POST a client
+   * asks for rather than something `listModels` does on a stale timestamp.
+   */
+  refreshProviderModels: {
+    method: "POST",
+    path: "/v1/providers/:providerId/models/refresh",
+  },
+  /** Probe the endpoint's reachability and credentials. See {@link TestProviderResponseSchema}. */
+  testProvider: { method: "POST", path: "/v1/providers/:providerId/test" },
+
+  getSettings: { method: "GET", path: "/v1/settings" },
+  updateSettings: { method: "PATCH", path: "/v1/settings" },
+
+  /** Standing write grants for one chat: `?chatId=` is REQUIRED. */
+  listAllowances: { method: "GET", path: "/v1/write-policy/allowances" },
+  grantAllowance: { method: "POST", path: "/v1/write-policy/allowances" },
+  /** `?chatId=` is REQUIRED — a grant is revoked by the chat that owns it. */
+  revokeAllowance: {
+    method: "DELETE",
+    path: "/v1/write-policy/allowances/:allowanceId",
+  },
+
+  listMcpServers: { method: "GET", path: "/v1/mcp/servers" },
+  createMcpServer: { method: "POST", path: "/v1/mcp/servers" },
+  updateMcpServer: { method: "PATCH", path: "/v1/mcp/servers/:serverId" },
+  deleteMcpServer: { method: "DELETE", path: "/v1/mcp/servers/:serverId" },
+
   listTools: { method: "GET", path: "/v1/tools" },
   getVersion: { method: "GET", path: "/v1/version" },
 } as const satisfies Readonly<Record<string, RouteDef>>;
@@ -165,6 +233,22 @@ export const RiskLevelDtoSchema = Type.Union([
 ]);
 export type RiskLevelDto = Static<typeof RiskLevelDtoSchema>;
 
+/** MIRROR of `WritePolicyMode` (`packages/host/src/ports/write-policy.ts`). */
+export const WritePolicyModeDtoSchema = Type.Union([
+  Type.Literal("auto_readonly_confirm_writes"),
+  Type.Literal("confirm_all_writes"),
+  Type.Literal("auto_all"),
+]);
+export type WritePolicyModeDto = Static<typeof WritePolicyModeDtoSchema>;
+
+/** MIRROR of `ToolCallingMode` (`packages/host/src/ports/settings-store.ts`). */
+export const ToolCallingModeDtoSchema = Type.Union([
+  Type.Literal("auto"),
+  Type.Literal("on"),
+  Type.Literal("off"),
+]);
+export type ToolCallingModeDto = Static<typeof ToolCallingModeDtoSchema>;
+
 // ---------------------------------------------------------------------------
 // Resource DTOs
 // ---------------------------------------------------------------------------
@@ -175,6 +259,16 @@ export const ChatDtoSchema = Type.Object({
   title: Type.Optional(Type.String()),
   createdAt: Type.String({ description: "ISO-8601." }),
   updatedAt: Type.String({ description: "ISO-8601." }),
+  /**
+   * Hidden from the default `listChats` listing, and otherwise an ordinary
+   * chat: it still answers `getChat`, still accepts turns.
+   *
+   * REQUIRED rather than optional, unlike the branching fields on
+   * `MessageDto`: every chat has an archived state, a server that models no
+   * archiving sends `false`, and a client rendering a tri-state checkbox off an
+   * absent boolean is a bug waiting for the first pre-archiving server.
+   */
+  archived: Type.Boolean(),
   metadata: Type.Record(Type.String(), Type.Unknown()),
 });
 export type ChatDto = Static<typeof ChatDtoSchema>;
@@ -410,6 +504,178 @@ export type ToolEventDto = Static<typeof ToolEventDtoSchema>;
 export const ToolDefinitionDtoSchema = AiToolDefinitionSchema;
 export type ToolDefinitionDto = AiToolDefinition;
 
+/**
+ * One message matching `searchMessages`. Projection of `MessageSearchHit`.
+ *
+ * `snippet` is a window around the match with the matched terms wrapped in
+ * `[`/`]` and elided text standing in as `…` — the markers are fixed by the
+ * host port so a client can strip or style them without asking which store is
+ * underneath. Deliberately not HTML: a store does not know what its caller
+ * renders into.
+ *
+ * The message BODY is not here, and neither is its role or its chat's title. A
+ * hit is a pointer plus its evidence; a client that wants the message reads the
+ * conversation it names.
+ */
+export const MessageSearchHitDtoSchema = Type.Object({
+  chatId: Type.String(),
+  messageId: Type.String(),
+  snippet: Type.String(),
+});
+export type MessageSearchHitDto = Static<typeof MessageSearchHitDtoSchema>;
+
+/** What `searchMessages` answers: best match first. */
+export const MessageSearchResponseSchema = Type.Object({
+  hits: Type.Array(MessageSearchHitDtoSchema),
+});
+export type MessageSearchResponse = Static<typeof MessageSearchResponseSchema>;
+
+/**
+ * A configured provider. Projection of `AiProviderConfig`, and a NARROWING one.
+ *
+ * OMITTED, deliberately and permanently: `apiKey` (the credential itself),
+ * `extraHeaders` (which routinely carries another one), and `metadata` (an
+ * open host-owned bag). None of the three tells a client anything it can act
+ * on, and all three are the kind of field that leaks once and is in a log
+ * forever.
+ *
+ * `apiKeySecretRef` is the one thing lifted OUT of that metadata bag, because
+ * a UI has a real question the omissions make unanswerable: is a key
+ * configured at all? A ref is a name, not a secret — it is what a host looks
+ * the value up by in its own `SecretStore`, and knowing it grants nothing.
+ */
+export const ProviderDtoSchema = Type.Object({
+  id: Type.String(),
+  label: Type.String(),
+  kind: AiProviderKindSchema,
+  baseUrl: Type.String(),
+  defaultModel: Type.String(),
+  enabled: Type.Boolean(),
+  /** Present when a credential is stored for this provider. NEVER the key. */
+  apiKeySecretRef: Type.Optional(Type.String()),
+});
+export type ProviderDto = Static<typeof ProviderDtoSchema>;
+
+/**
+ * One model in a provider's catalogue. Identical to `AiProviderModel` — the
+ * record a host stores and the row a client lists are the same document, and
+ * forking them would let a UI describe a model the runner cannot select.
+ */
+export const ModelDtoSchema = AiProviderModelSchema;
+export type ModelDto = AiProviderModel;
+
+/**
+ * Assistant-wide settings. Projection of `AssistantSettings` — one row, the
+ * knobs a settings pane owns, not per-chat state.
+ *
+ * Nothing is omitted: every field here is a preference a user set and can see.
+ * `writePolicyMode` and `toolCalling` are the two mirrored unions
+ * ({@link WritePolicyModeDtoSchema}, {@link ToolCallingModeDtoSchema}).
+ */
+export const SettingsDtoSchema = Type.Object({
+  defaultProviderId: Type.Optional(Type.String()),
+  defaultModel: Type.Optional(Type.String()),
+  contextSizePreference: AiContextSizePreferenceSchema,
+  writePolicyMode: WritePolicyModeDtoSchema,
+  allowRawToolData: Type.Boolean(),
+  maxToolIterations: Type.Optional(Type.Number()),
+  toolCalling: Type.Optional(ToolCallingModeDtoSchema),
+  metadata: Type.Record(Type.String(), Type.Unknown()),
+});
+export type SettingsDto = Static<typeof SettingsDtoSchema>;
+
+/**
+ * A standing "yes" for one `(chat, tool, proposal kind)`, up to a risk ceiling.
+ * Projection of `WriteAllowance`.
+ *
+ * `key` is the id: `revokeAllowance` takes it in the path, and it is stable for
+ * the life of the grant. The ceiling is what keeps the grant honest — an
+ * allowance at rank N covers everything at rank ≤ N and nothing above it, so a
+ * model cannot escalate by re-labelling its own proposal.
+ */
+export const WriteAllowanceDtoSchema = Type.Object({
+  key: Type.String(),
+  chatId: Type.String(),
+  toolName: Type.String(),
+  proposalKind: Type.String(),
+  maxRisk: RiskLevelDtoSchema,
+  createdAt: Type.String({ description: "ISO-8601." }),
+});
+export type WriteAllowanceDto = Static<typeof WriteAllowanceDtoSchema>;
+
+/** What `listAllowances` answers, for one chat. */
+export const WriteAllowanceListResponseSchema = Type.Object({
+  allowances: Type.Array(WriteAllowanceDtoSchema),
+});
+export type WriteAllowanceListResponse = Static<
+  typeof WriteAllowanceListResponseSchema
+>;
+
+/**
+ * How to reach one MCP server. MIRROR of `McpTransportConfig`
+ * (`packages/mcp-client/src/config.ts`) — contracts sits below that package and
+ * cannot import from it, so the union is restated and kept in step by hand,
+ * exactly as `RunStatusDto` restates `TaskStatus`.
+ *
+ * A CLOSED union: an unknown `kind` is rejected rather than stored, because a
+ * transport nothing can connect is a record that fails at the worst possible
+ * moment — the first run that stages its tools.
+ *
+ * `env` and `headers` values may contain `${placeholder}` tokens that
+ * `secretRefs` resolves at connect time. The tokens are what travel; the values
+ * behind them never do.
+ */
+export const McpStdioTransportDtoSchema = Type.Object({
+  kind: Type.Literal("stdio"),
+  command: Type.String(),
+  args: Type.Optional(Type.Array(Type.String())),
+  env: Type.Optional(Type.Record(Type.String(), Type.String())),
+});
+export const McpHttpTransportDtoSchema = Type.Object({
+  kind: Type.Literal("http"),
+  url: Type.String(),
+  headers: Type.Optional(Type.Record(Type.String(), Type.String())),
+});
+export const McpTransportDtoSchema = Type.Union([
+  McpStdioTransportDtoSchema,
+  McpHttpTransportDtoSchema,
+]);
+export type McpTransportDto = Static<typeof McpTransportDtoSchema>;
+
+/**
+ * One configured MCP server. Projection of `McpServerConfigRecord`.
+ *
+ * NO SECRET MATERIAL, by construction rather than by omission: the record
+ * itself carries none. `secretRefs` maps a `${placeholder}` token to a
+ * `SecretStore` REF, and the value behind the ref is injected into the env or
+ * header at connect time and stored nowhere. Publishing the map is what lets a
+ * UI show which credentials a server expects without ever holding one.
+ *
+ * `alias` is the tool NAMESPACE — it is baked into every canonical tool id
+ * (`mcp.<alias>.<tool>`) a transcript records — which is why it is unique and
+ * why `id` exists separately: a rename must not break the handle a URL uses.
+ *
+ * `resilience` is an open record rather than a typed one for the same reason
+ * the transport union is mirrored: `McpResilienceOptions` belongs to
+ * `@agentkit/mcp-client`, a package this one sits below, and its knobs are
+ * tuning rather than contract.
+ */
+export const McpServerDtoSchema = Type.Object({
+  id: Type.String(),
+  alias: Type.String({ description: "Tool namespace; `^[a-z][a-z0-9-]*$`." }),
+  transport: McpTransportDtoSchema,
+  /** `${placeholder}` token → SecretStore ref. Refs only, never values. */
+  secretRefs: Type.Optional(Type.Record(Type.String(), Type.String())),
+  /** Absent means the default, `true`. A disabled server contributes nothing. */
+  enabled: Type.Optional(Type.Boolean()),
+  /** Server tool name → the name the canonical id should use instead. */
+  toolAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+  resilience: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  createdAt: Type.String({ description: "ISO-8601." }),
+  updatedAt: Type.String({ description: "ISO-8601." }),
+});
+export type McpServerDto = Static<typeof McpServerDtoSchema>;
+
 // ---------------------------------------------------------------------------
 // Request / response bodies
 // ---------------------------------------------------------------------------
@@ -507,6 +773,163 @@ export const ApplyProposalRequestSchema = Type.Object({
   operationId: Type.String(),
 });
 export type ApplyProposalRequest = Static<typeof ApplyProposalRequestSchema>;
+
+/**
+ * Body of `updateChat`. Every field is optional; sending none is a no-op that
+ * still answers with the chat, so a client can use it as a touch.
+ *
+ * `metadata` REPLACES the stored bag rather than merging into it — the host
+ * port's rule, restated: a merge makes "unset this flag" unexpressible, and a
+ * caller that wanted one already has the record it read to build it from.
+ */
+export const UpdateChatRequestSchema = Type.Object({
+  title: Type.Optional(Type.String()),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  archived: Type.Optional(Type.Boolean()),
+});
+export type UpdateChatRequest = Static<typeof UpdateChatRequestSchema>;
+
+/**
+ * Body of `regenerateMessage`. Carry an `Idempotency-Key` header with it.
+ *
+ * There is no `content`: that is the whole difference between this and a branch
+ * `submitMessage`. The question is the one already in the chat — the target
+ * message's parent — and it is not rewritten, not copied and not deleted. The
+ * old answer keeps its id and its `branchIndex` and simply stops being active,
+ * so a user who prefers it switches back with `activateBranch`.
+ *
+ * `metadata` decorates the new placeholder. The host's reserved `placeholder`
+ * flag is written over anything sent here — a client cannot talk the server out
+ * of marking an unfinished answer unfinished.
+ */
+export const RegenerateMessageRequestSchema = Type.Object({
+  /** Overrides the provider's default model for this attempt only. */
+  model: Type.Optional(Type.String()),
+  /** Answer with a DIFFERENT provider than the one that answered first. */
+  providerId: Type.Optional(Type.String()),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+});
+export type RegenerateMessageRequest = Static<
+  typeof RegenerateMessageRequestSchema
+>;
+
+/**
+ * Body of `createProvider`. The server mints the `id` when one is not given.
+ *
+ * `apiKey` is WRITE-ONLY and never comes back: the server hands it to its
+ * `SecretStore` under a ref and records the REF on the config, so the key
+ * itself exists in exactly one place that was built to hold one. It is also the
+ * reason this is a body field rather than a header — a credential in a URL or a
+ * custom header ends up in an access log, and this one ends up in a store.
+ *
+ * `extraHeaders` is accepted and, like the key, never published back: it is
+ * where a gateway's own token routinely lives.
+ */
+export const CreateProviderRequestSchema = Type.Object({
+  id: Type.Optional(Type.String()),
+  label: Type.String(),
+  kind: AiProviderKindSchema,
+  baseUrl: Type.String(),
+  defaultModel: Type.String(),
+  enabled: Type.Optional(Type.Boolean()),
+  /** WRITE-ONLY. Stored through the host's `SecretStore`; never returned. */
+  apiKey: Type.Optional(Type.String()),
+  extraHeaders: Type.Optional(Type.Record(Type.String(), Type.String())),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+});
+export type CreateProviderRequest = Static<typeof CreateProviderRequestSchema>;
+
+/**
+ * Body of `updateProvider`: the same fields, all optional, applied over the
+ * stored config. `id` is absent — a provider's id is the handle other records
+ * point at, and renaming it would be a create plus a delete wearing one verb.
+ */
+export const UpdateProviderRequestSchema = Type.Object({
+  label: Type.Optional(Type.String()),
+  kind: Type.Optional(AiProviderKindSchema),
+  baseUrl: Type.Optional(Type.String()),
+  defaultModel: Type.Optional(Type.String()),
+  enabled: Type.Optional(Type.Boolean()),
+  /** WRITE-ONLY, as on create. Sending it replaces the stored credential. */
+  apiKey: Type.Optional(Type.String()),
+  extraHeaders: Type.Optional(Type.Record(Type.String(), Type.String())),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+});
+export type UpdateProviderRequest = Static<typeof UpdateProviderRequestSchema>;
+
+/**
+ * What `testProvider` answers. `ok: false` is a 200, not a 4xx: the REQUEST
+ * succeeded — the server probed the endpoint and is reporting what it found —
+ * and an HTTP error would make "the provider is unreachable" indistinguishable
+ * from "your test request was malformed".
+ */
+export const TestProviderResponseSchema = Type.Object({
+  ok: Type.Boolean(),
+  /** Why the probe failed, when it did. Safe to show; never a credential. */
+  error: Type.Optional(Type.String()),
+});
+export type TestProviderResponse = Static<typeof TestProviderResponseSchema>;
+
+/**
+ * Body of `updateSettings`: a partial {@link SettingsDtoSchema}, applied over
+ * the single settings row, answering with the row as it now stands.
+ *
+ * `metadata` REPLACES, same rule as everywhere else in this contract.
+ */
+export const UpdateSettingsRequestSchema = Type.Partial(SettingsDtoSchema);
+export type UpdateSettingsRequest = Static<typeof UpdateSettingsRequestSchema>;
+
+/**
+ * Body of `grantAllowance` — a standing "yes" for one `(chat, tool, kind)` up
+ * to `maxRisk`.
+ *
+ * The chat is in the BODY rather than the path because the route is rooted at
+ * the policy, not at a conversation: a grant is a statement about the policy's
+ * contents, and `listAllowances`/`revokeAllowance` name their chat the same way
+ * (a `?chatId=` query) for the same reason.
+ */
+export const GrantAllowanceRequestSchema = Type.Object({
+  chatId: Type.String(),
+  toolName: Type.String(),
+  proposalKind: Type.String(),
+  maxRisk: RiskLevelDtoSchema,
+});
+export type GrantAllowanceRequest = Static<typeof GrantAllowanceRequestSchema>;
+
+/**
+ * Body of `createMcpServer`. The server mints `id`, `createdAt` and
+ * `updatedAt`; the client owns everything else.
+ *
+ * `alias` must be unique — it is the tool namespace, and two servers sharing one
+ * would mint the same canonical id for two different tools. A duplicate is
+ * refused (409 `duplicate_alias`) rather than accepted and discovered at the
+ * first run that stages both servers' tools.
+ */
+export const CreateMcpServerRequestSchema = Type.Object({
+  alias: Type.String(),
+  transport: McpTransportDtoSchema,
+  secretRefs: Type.Optional(Type.Record(Type.String(), Type.String())),
+  enabled: Type.Optional(Type.Boolean()),
+  toolAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+  resilience: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+});
+export type CreateMcpServerRequest = Static<
+  typeof CreateMcpServerRequestSchema
+>;
+
+/**
+ * Body of `updateMcpServer`: the same fields, all optional.
+ *
+ * FIELD-LEVEL REPLACE — a present `env`, `headers`, `secretRefs` or
+ * `toolAliases` replaces the stored bag wholesale, because a merge makes
+ * "remove this variable" unexpressible.
+ */
+export const UpdateMcpServerRequestSchema = Type.Partial(
+  CreateMcpServerRequestSchema,
+);
+export type UpdateMcpServerRequest = Static<
+  typeof UpdateMcpServerRequestSchema
+>;
 
 /**
  * What `getVersion` answers. Both versions are reported because they move

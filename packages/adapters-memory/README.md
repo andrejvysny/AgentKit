@@ -39,6 +39,20 @@ const chat = await store.conversations.createChat({ title: "Hello" });
   Maps. A caller holding an old `Lease`/`TaskRecord` never watches it mutate
   under them because some *other* call touched the same record.
 
+## `MemoryMcpServerConfigStore`
+
+A second, **standalone** store in the same package: the Map-backed
+`McpServerConfigStore` from `@agentkit/mcp-client`, graded by
+`describeMcpServerConfigStoreConformance`. Constructed beside
+`MemoryAssistantStore`, not inside it — an MCP server config shares a
+transaction with nothing, so folding it into the aggregate would force every
+`AssistantStore` implementation to grow a port most of them never use.
+
+The snapshot rule above applies here too, and here it has to be a **deep** copy:
+a config's `env`, `headers`, `secretRefs`, `toolAliases` and `resilience` are
+all nested objects, so a shallow copy would hand out the very bags the store
+keeps.
+
 ## Priority aging
 
 `MemoryAssistantStoreOptions` extends `TaskAgingOptions` from

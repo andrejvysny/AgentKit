@@ -35,6 +35,8 @@ export type McpErrorCode =
   | "mcp_invalid_tool_name"
   /** The server config itself is unusable (duplicate alias, bad url, ...). */
   | "mcp_invalid_config"
+  /** A {@link McpServerConfigStore} lookup by id found nothing. */
+  | "mcp_config_not_found"
   /** A canonical id that is not `mcp.<alias>.<tool>`. */
   | "mcp_invalid_canonical_id";
 
@@ -65,6 +67,7 @@ const RETRYABLE_BY_CODE: Record<McpErrorCode, boolean> = {
   mcp_invalid_alias: false,
   mcp_invalid_tool_name: false,
   mcp_invalid_config: false,
+  mcp_config_not_found: false,
   mcp_invalid_canonical_id: false,
 };
 

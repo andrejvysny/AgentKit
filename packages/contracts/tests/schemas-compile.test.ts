@@ -334,6 +334,22 @@ describe("REST v1 surface", () => {
       "ForkChatRequestSchema",
       "ProposalDecisionRequestSchema",
       "ApplyProposalRequestSchema",
+      "UpdateChatRequestSchema",
+      "RegenerateMessageRequestSchema",
+      "MessageSearchHitDtoSchema",
+      "MessageSearchResponseSchema",
+      "ProviderDtoSchema",
+      "ModelDtoSchema",
+      "SettingsDtoSchema",
+      "WriteAllowanceDtoSchema",
+      "McpServerDtoSchema",
+      "CreateProviderRequestSchema",
+      "UpdateProviderRequestSchema",
+      "TestProviderResponseSchema",
+      "UpdateSettingsRequestSchema",
+      "GrantAllowanceRequestSchema",
+      "CreateMcpServerRequestSchema",
+      "UpdateMcpServerRequestSchema",
       "VersionDtoSchema",
       "ProblemDetailsDtoSchema",
       "RunEventFrameDtoSchema",
@@ -347,7 +363,7 @@ describe("REST v1 surface", () => {
   it("declares a route table whose paths all sit under the API version", () => {
     expect(REST_API_VERSION).toBe("v1");
     const routes = Object.entries(REST_ROUTES);
-    expect(routes.length).toBe(20);
+    expect(routes.length).toBe(38);
     for (const [name, route] of routes) {
       expect(route.path.startsWith(`/${REST_API_VERSION}/`), name).toBe(true);
       expect(["GET", "POST", "PATCH", "DELETE"]).toContain(route.method);

@@ -335,15 +335,63 @@ and [ADR 0005](adr/0005-http-transport.md)); no client SDK exists yet (see
 - `REST_API_VERSION` (`"v1"`) is the URL-visible version, distinct from
   `CONTRACT_VERSION`: an additive DTO field bumps the contract version and
   leaves the URL alone, because a client written against `/v1` keeps working.
-- `REST_ROUTES` is the route table as data — 20 operations keyed by name,
+- `REST_ROUTES` is the route table as data — 38 operations keyed by name,
   `{ method, path }` each, `as const satisfies Readonly<Record<string,
   RouteDef>>` — so a router, a client generator, and the documentation
-  cannot drift apart by transcription. Two carry header semantics no path
-  expresses: `submitMessage` requires an `Idempotency-Key` (it creates a run
-  and two messages, and a retried POST without one duplicates the turn), and
+  cannot drift apart by transcription. Three carry header semantics no path
+  expresses: `submitMessage` and `regenerateMessage` require an
+  `Idempotency-Key` (each creates a run and at least one message, and a retried
+  POST without one duplicates the turn) — they are the only two that do — and
   `streamRun` is SSE resuming from `Last-Event-ID`, whose value is an
-  `AiRunEvent.eventId` — which is why `eventId` and `seq` are required base
+  `AiRunEvent.eventId`, which is why `eventId` and `seq` are required base
   fields rather than decoration.
+
+The surface is grouped as follows. Everything past the conversation block is
+**management**: the routes a settings pane and a chat sidebar need, and the
+reason the adapter's optional dependencies exist (see
+[`packages/transport-http/README.md`](../packages/transport-http/README.md) —
+an unwired dependency answers **501**, never 404).
+
+| Operation | Method + path |
+|---|---|
+| `createChat` / `listChats` | `POST` / `GET` `/v1/chats` |
+| `getChat` / `updateChat` / `deleteChat` | `GET` / `PATCH` / `DELETE` `/v1/chats/:chatId` |
+| `listMessages` / `submitMessage` | `GET` / `POST` `/v1/chats/:chatId/messages` |
+| `regenerateMessage` | `POST /v1/chats/:chatId/messages/:messageId/regenerate` |
+| `forkChat` | `POST /v1/chats/:chatId/fork` |
+| `searchMessages` | `GET /v1/search?q=&chatId=&limit=` |
+| `activateBranch` / `listSiblings` | `POST` `/v1/messages/:messageId/activate` / `GET` `.../siblings` |
+| `getRun` / `streamRun` / `cancelRun` | `GET` `/v1/runs/:runId` / `.../stream` / `POST .../cancel` |
+| `listToolEvents` | `GET /v1/chats/:chatId/tool-events` |
+| `listProposals` | `GET /v1/chats/:chatId/proposals` |
+| `approveProposal` / `rejectProposal` / `applyProposal` | `POST /v1/proposals/:proposalId/{approve,reject,apply}` |
+| `listProviders` / `createProvider` | `GET` / `POST` `/v1/providers` |
+| `updateProvider` / `deleteProvider` | `PATCH` / `DELETE` `/v1/providers/:providerId` |
+| `listModels` / `refreshProviderModels` | `GET /v1/providers/:providerId/models` / `POST .../models/refresh` |
+| `testProvider` | `POST /v1/providers/:providerId/test` |
+| `getSettings` / `updateSettings` | `GET` / `PATCH` `/v1/settings` |
+| `listAllowances` / `grantAllowance` | `GET` / `POST` `/v1/write-policy/allowances` |
+| `revokeAllowance` | `DELETE /v1/write-policy/allowances/:allowanceId` |
+| `listMcpServers` / `createMcpServer` | `GET` / `POST` `/v1/mcp/servers` |
+| `updateMcpServer` / `deleteMcpServer` | `PATCH` / `DELETE` `/v1/mcp/servers/:serverId` |
+| `listTools` / `getVersion` | `GET` `/v1/tools` / `/v1/version` |
+
+Two of them are shaped by a port rather than by taste. `listAllowances` and
+`revokeAllowance` take a **required `?chatId=`** because `WritePolicy` holds
+grants per `(chat, tool, kind)` and offers no unscoped listing — widening the
+port to serve a prettier URL would let one chat's UI enumerate and revoke
+another's consent. And `regenerateMessage` answers with the same
+`SubmitMessageResponse` a submit does, whose `userMessageId` names the question
+that was **already there**: a regenerate re-answers rather than re-asks, and
+the old answer stays in the tree at its own `branchIndex`, off the active path,
+reachable through `listSiblings` and restorable through `activateBranch`.
+
+Two request fields are **write-only** and never come back: `CreateProviderRequest`
+/ `UpdateProviderRequest`'s `apiKey` (stored through the host's `SecretStore`;
+`ProviderDto` publishes the `apiKeySecretRef` instead, so a UI can answer "is a
+key configured?" without ever holding one) and `extraHeaders` (which routinely
+carries another credential). `McpServerDto`, by contrast, publishes its
+`secretRefs` map whole — the record carries refs, never values.
 
 **DTOs are projections of host records, not copies.** Each one mirrors a
 record in [`packages/host/src/ports/`](../packages/host/src/ports/) with the
@@ -355,10 +403,16 @@ system can recover from a crash; publishing them would freeze private
 mechanics into a public contract. Every omission is documented on the DTO
 that makes it.
 
-Three unions are **mirrored rather than imported** — `RunStatusDto`,
-`ProposalStatusDto`, `RiskLevelDto` — because contracts sits below host and
-cannot depend on it. They restate `RunStatus`, `ProposalStatus`, and
-`RiskLevel` verbatim and must be kept in step by hand.
+Six unions are **mirrored rather than imported** — `RunStatusDto`,
+`ProposalStatusDto`, `RiskLevelDto`, `WritePolicyModeDto`,
+`ToolCallingModeDto` and `McpTransportDto` — because contracts sits below both
+host and `@agentkit/mcp-client` and cannot depend on either. They restate
+`RunStatus`, `ProposalStatus`, `RiskLevel`, `WritePolicyMode`,
+`ToolCallingMode` and `McpTransportConfig` verbatim and must be kept in step by
+hand; `RunStatusDto`, `WritePolicyModeDto` and `ToolCallingModeDto` are
+cross-checked at compile time in
+`packages/host/tests/state-machines.test.ts` (a bidirectional assignment that
+stops compiling the moment either side gains a member).
 
 Where a DTO carries something this package already defines, it embeds the
 existing schema by reference rather than re-declaring it: `MessageDto` embeds

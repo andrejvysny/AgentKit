@@ -180,6 +180,11 @@ describe("resourceForOperation — over the whole route table", () => {
 
   const operations = Object.keys(REST_ROUTES) as RestOperation[];
 
+  /** The URL the table is walked with; only `searchMessages` reads it. */
+  function urlFor(path: string): URL {
+    return new URL(`http://rest.test${concretePath(path)}`);
+  }
+
   it("covers every operation in the contract (sanity: the table is not empty)", () => {
     expect(operations.length).toBeGreaterThan(15);
   });
@@ -194,7 +199,11 @@ describe("resourceForOperation — over the whole route table", () => {
       }
       expect(match.operation).toBe(operation);
 
-      const resource = resourceForOperation(operation, match.params);
+      const resource = resourceForOperation(
+        operation,
+        match.params,
+        urlFor(def.path),
+      );
 
       // `getVersion` is the one deliberate exemption; everything else must name
       // a resource kind, and must carry the path's id when the path has one.
@@ -205,12 +214,15 @@ describe("resourceForOperation — over the whole route table", () => {
       expect(resource).not.toBeNull();
       expect(resource?.kind.length).toBeGreaterThan(0);
 
-      const paramNames = Object.keys(match.params);
-      if (paramNames.length === 0) {
+      // The id must come FROM THE PATH — not be invented, and not be a
+      // constant. A route with two params (`regenerateMessage`) picks one of
+      // them and says which in `authorize.ts`; a route with none must carry no
+      // id at all, since there is nothing for one to have come from.
+      const pathIds = Object.values(match.params);
+      if (pathIds.length === 0) {
         expect(resource?.id).toBeUndefined();
       } else {
-        expect(paramNames.length).toBe(1);
-        expect(resource?.id).toBe(`id-${paramNames[0]}`);
+        expect(pathIds).toContain(resource?.id ?? "");
       }
     });
   }
@@ -223,7 +235,8 @@ describe("resourceForOperation — over the whole route table", () => {
         if (match.kind !== "matched") throw new Error(operation);
         return [
           operation,
-          resourceForOperation(operation, match.params)?.kind ?? null,
+          resourceForOperation(operation, match.params, urlFor(def.path))
+            ?.kind ?? null,
         ];
       }),
     );
@@ -232,9 +245,13 @@ describe("resourceForOperation — over the whole route table", () => {
       createChat: "chat",
       listChats: "chat",
       getChat: "chat",
+      updateChat: "chat",
+      deleteChat: "chat",
       listMessages: "chat",
       submitMessage: "chat",
+      regenerateMessage: "chat",
       forkChat: "chat",
+      searchMessages: "chat",
       activateBranch: "message",
       listSiblings: "message",
       getRun: "run",
@@ -246,9 +263,50 @@ describe("resourceForOperation — over the whole route table", () => {
       rejectProposal: "proposal",
       applyProposal: "proposal",
       listProviders: "provider",
+      createProvider: "provider",
+      updateProvider: "provider",
+      deleteProvider: "provider",
       listModels: "provider",
+      refreshProviderModels: "provider",
+      testProvider: "provider",
+      getSettings: "settings",
+      updateSettings: "settings",
+      listAllowances: "policy",
+      grantAllowance: "policy",
+      revokeAllowance: "policy",
+      listMcpServers: "mcp_config",
+      createMcpServer: "mcp_config",
+      updateMcpServer: "mcp_config",
+      deleteMcpServer: "mcp_config",
       listTools: "tools",
       getVersion: null,
     });
+  });
+
+  it("scopes a search on `?chatId=`, and leaves it unscoped without one", () => {
+    const scoped = resourceForOperation(
+      "searchMessages",
+      {},
+      new URL("http://rest.test/v1/search?q=zebra&chatId=chat-7"),
+    );
+    expect(scoped).toEqual({ kind: "chat", id: "chat-7" });
+
+    // An unscoped search really does span every chat, and the resource says so
+    // rather than inventing a scope the authorizer would wave through.
+    const unscoped = resourceForOperation(
+      "searchMessages",
+      {},
+      new URL("http://rest.test/v1/search?q=zebra"),
+    );
+    expect(unscoped).toEqual({ kind: "chat" });
+  });
+
+  it("authorizes a regenerate as the CHAT it writes to, not the message it names", () => {
+    const resource = resourceForOperation(
+      "regenerateMessage",
+      { chatId: "chat-1", messageId: "msg-9" },
+      new URL("http://rest.test/v1/chats/chat-1/messages/msg-9/regenerate"),
+    );
+    expect(resource).toEqual({ kind: "chat", id: "chat-1" });
   });
 });

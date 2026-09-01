@@ -20,6 +20,7 @@ import {
 import {
   AgentKitHostError,
   DuplicateTaskError,
+  InvalidRegenerateError,
   RecordNotFoundError,
   UsageDeniedError,
 } from "../errors.js";
@@ -259,8 +260,48 @@ export interface SubmitMessageInput {
 export interface SubmitMessageResult {
   chatId: string;
   runId: string;
+  /**
+   * The question this turn answers. A submit mints it; a
+   * {@link TurnRunner.regenerate} names the one that was already there — see
+   * {@link RegenerateMessageInput}.
+   */
   userMessageId: string;
   assistantMessageId: string;
+}
+
+/**
+ * Answer an existing question again, as a NEW BRANCH beside the answer it
+ * already has.
+ *
+ * The counterpart to a branch submit: that one rewrites the question, this one
+ * keeps it and re-rolls the answer. Nothing is edited and nothing is deleted —
+ * the old answer stays in the tree at its own `branchIndex`, off the active
+ * path, exactly where {@link ConversationStore.listSiblings} will report it.
+ */
+export interface RegenerateMessageInput {
+  chatId: string;
+  /**
+   * The assistant message to re-answer. Must be IN this chat, `role:
+   * "assistant"`, not a replay-only (`internal: true`) record, and must have a
+   * parent — anything else raises {@link RecordNotFoundError} or
+   * {@link InvalidRegenerateError} rather than being reinterpreted.
+   *
+   * Its PARENT is what the new branch hangs off, which is why a root is
+   * refused: a message with nothing above it answers no question, so there is
+   * nothing to ask again.
+   */
+  messageId: string;
+  model?: string;
+  providerId?: string;
+  /** Metadata for the new placeholder, merged over `{ placeholder: true }`. */
+  metadata?: Record<string, unknown>;
+  priority?: number;
+  /**
+   * The caller's idempotency key, used verbatim as the task id — same contract
+   * as {@link SubmitMessageInput.taskId}: resubmitting one writes nothing and
+   * returns the ids of the regenerate that already exists.
+   */
+  taskId?: string;
 }
 
 /**
@@ -496,7 +537,7 @@ export class TurnRunner implements TaskWorker {
    */
   private async resubmitted(
     err: unknown,
-    input: SubmitMessageInput,
+    input: { chatId: string; taskId?: string },
     taskId: string,
   ): Promise<SubmitMessageResult | null> {
     if (!(err instanceof DuplicateTaskError) || input.taskId === undefined) {
@@ -518,6 +559,148 @@ export class TurnRunner implements TaskWorker {
       userMessageId: payload.userMessageId,
       assistantMessageId: payload.assistantMessageId,
     };
+  }
+
+  /**
+   * Re-answer a question that already has an answer, as a NEW BRANCH beside it.
+   *
+   * Mechanically {@link TurnRunner.submitMessage} minus the user message: one
+   * transaction writes the task and an empty assistant placeholder, the
+   * placeholder hangs off the TARGET'S PARENT (so the store gives it the next
+   * `branchIndex` and switches the active path to it in the same write), and
+   * the queue is poked afterwards. Idempotent per caller-supplied `taskId` by
+   * the same route the submit is.
+   *
+   * Nothing about the old answer changes — it keeps its id, its index and its
+   * place in the tree, and simply stops being active. That is the whole reason
+   * the placeholder is appended rather than the old record rewritten: a
+   * regenerate a user dislikes must be undoable by activating the branch they
+   * had before, and a rewrite has nothing left to go back to.
+   *
+   * The turn itself needs no notion that this happened. By the time the task
+   * executes, the active path ends at the parent question, so `assembleMessages`
+   * replays exactly the history the original answer saw — and the answer it
+   * skips (`record.id === assistantMessageId`) is the new placeholder, not the
+   * old sibling, which is off-path and never read.
+   */
+  async regenerate(
+    input: RegenerateMessageInput,
+  ): Promise<SubmitMessageResult> {
+    const parentMessageId = await this.regenerateParentOf(input);
+    const taskId = input.taskId ?? this.deps.ids.taskId();
+    const assistantMessageId = this.deps.ids.messageId();
+    const payload: TurnRequest = {
+      chatId: input.chatId,
+      ...(input.model === undefined ? {} : { model: input.model }),
+      ...(input.providerId === undefined
+        ? {}
+        : { providerId: input.providerId }),
+      assistantMessageId,
+      // The question this run answers. It is not a message this call created —
+      // that is the difference between a regenerate and a submit — but it is
+      // what `resubmitted` reads to answer a redelivery, and what the caller
+      // renders the new branch under.
+      userMessageId: parentMessageId,
+    };
+
+    try {
+      await this.deps.store.transaction(async (tx) => {
+        // Task first, for the reason spelled out in `submitMessage`: it is the
+        // only write here that can reject, and on a redelivered `taskId` it
+        // must reject before the placeholder lands — otherwise a store whose
+        // `transaction` is only a logical grouping leaves an orphan branch in
+        // the chat, ACTIVE, for every retried request.
+        await tx.tasks.createTask({
+          taskId,
+          kind: CHAT_TURN_TASK_KIND,
+          scopeId: input.chatId,
+          payload: payload as unknown as Record<string, unknown>,
+          ...(input.priority === undefined ? {} : { priority: input.priority }),
+        });
+        await tx.conversations.appendMessage({
+          id: assistantMessageId,
+          chatId: input.chatId,
+          runId: taskId,
+          role: "assistant",
+          content: "",
+          // Naming the parent is what makes this a branch: the store assigns
+          // the next `branchIndex` under it and activates the new path in the
+          // same write. `activate` is left at its default — a regenerate IS a
+          // request to look at the new answer.
+          parentMessageId,
+          // `placeholder` last, so a caller's metadata can decorate the record
+          // but cannot unset the flag the run projects onto.
+          metadata: { ...(input.metadata ?? {}), placeholder: true },
+        });
+      });
+    } catch (err) {
+      const existing = await this.resubmitted(err, input, taskId);
+      if (existing === null) throw err;
+      await this.deps.taskRunner.enqueue({ taskId, scopeId: input.chatId });
+      return existing;
+    }
+
+    await this.deps.taskRunner.enqueue({ taskId, scopeId: input.chatId });
+    return {
+      chatId: input.chatId,
+      runId: taskId,
+      userMessageId: parentMessageId,
+      assistantMessageId,
+    };
+  }
+
+  /**
+   * The message a regenerate branches under, or a refusal naming why there
+   * isn't one.
+   *
+   * `listSiblings` is the lookup because the conversation port has no
+   * `getMessage`: it is self-inclusive, so the target comes back among its own
+   * siblings, and it already raises `not_found` for an id nothing has.
+   *
+   * The four checks are all "is this a message that answered a question?", and
+   * each is refused rather than repaired:
+   *
+   * - another chat's message — the caller named a pair that does not go
+   *   together, and running the turn in `input.chatId` would write this chat's
+   *   answer into that one's history;
+   * - a `user`/`tool`/`system` record — regenerating a question, or a tool
+   *   result, is not an operation this class has;
+   * - an `internal: true` record — the replay-only assistant turn that carries
+   *   `toolCalls`. Branching under its parent would strand the tool results
+   *   answering it on a path nothing will replay;
+   * - a root — nothing above it to re-ask.
+   */
+  private async regenerateParentOf(
+    input: RegenerateMessageInput,
+  ): Promise<string> {
+    const siblings = await this.deps.store.conversations.listSiblings(
+      input.messageId,
+    );
+    const target = siblings.find((record) => record.id === input.messageId);
+    if (target === undefined || target.chatId !== input.chatId) {
+      throw new RecordNotFoundError(
+        `Message not found in chat ${input.chatId}: ${input.messageId}`,
+        { chatId: input.chatId, messageId: input.messageId },
+      );
+    }
+    if (target.role !== "assistant" || target.metadata["internal"] === true) {
+      throw new InvalidRegenerateError(
+        `Message ${input.messageId} is not a regeneratable answer; only a visible assistant message can be re-answered.`,
+        {
+          chatId: input.chatId,
+          messageId: input.messageId,
+          role: target.role,
+          internal: target.metadata["internal"] === true,
+        },
+      );
+    }
+    if (target.parentMessageId === undefined) {
+      throw new InvalidRegenerateError(
+        `Message ${input.messageId} is a root and answers no question; there is nothing to ask again.`,
+        { chatId: input.chatId, messageId: input.messageId },
+      );
+    }
+    return target.parentMessageId;
   }
 
   /** Ask the queue to stop a turn; the worker's signal is what actually aborts. */
