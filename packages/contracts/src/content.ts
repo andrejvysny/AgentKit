@@ -41,7 +41,21 @@ export type AiTextPart = Static<typeof AiTextPartSchema>;
 /**
  * Where the bytes of an image part come from. `url` points at something the
  * provider fetches; `data` inlines base64 the caller already holds, so a host
- * can attach a screenshot it never published anywhere.
+ * can attach a screenshot it never published anywhere; `ref` names bytes the
+ * HOST holds and has not inlined.
+ *
+ * **`ref` is the only source a provider never sees.** `url` and `data` are wire
+ * values — an adapter serializes them directly. A `ref` is an opaque handle into
+ * the host's own blob storage, and it is the host that turns it into a `data`
+ * source (per provider pass, in memory, under byte budgets) before a request is
+ * built; see `AttachmentResolver` in `@agentkit/host`. Storing the handle rather
+ * than the bytes is what keeps a conversation replayable without carrying
+ * megabytes of base64 through every append, every fork and every `listMessages`
+ * page — and what lets the same stored message be re-resolved at a different
+ * fidelity, or refused, on a later turn.
+ *
+ * A `ref` that reaches a provider client is therefore a host bug, not a wire
+ * shape: the client drops the part rather than inventing a URL for it.
  */
 export const AiImageSourceSchema = Type.Union([
   Type.Object({
@@ -57,6 +71,18 @@ export const AiImageSourceSchema = Type.Union([
     mediaType: Type.String({
       description: 'IANA media type of the payload, e.g. "image/png".',
       pattern: MEDIA_TYPE_PATTERN,
+    }),
+  }),
+  Type.Object({
+    kind: Type.Literal("ref"),
+    /**
+     * Opaque to everything but the host that minted it. Deliberately untyped
+     * beyond "a string": a content hash, a row id, a path — the contract has no
+     * business constraining a namespace only one side can interpret.
+     */
+    ref: Type.String({
+      description:
+        "Host-resolved attachment handle. Never sent to a provider as-is.",
     }),
   }),
 ]);

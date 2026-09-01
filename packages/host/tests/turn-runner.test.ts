@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
+import type {
+  AiChatMessage,
+  AiContentPart,
+  AiRunEvent,
+} from "@agentkit/contracts";
 import type { AiChatRequest, AiProviderClient, AiTool } from "@agentkit/core";
 import {
   CompletedOnlyProviderClient,
@@ -11,7 +15,10 @@ import {
   LeaseLostError,
   MISSING_TOOL_RESULT_CODE,
   TurnRunner,
+  type AttachmentBudgets,
+  type AttachmentResolver,
   type MessageRecord,
+  type ResolvedAttachment,
   type ToolSetContributor,
   type VerificationHook,
 } from "../src/index.js";
@@ -98,6 +105,8 @@ async function setupRunner(
     /** Provider client to drive instead of the default streaming mock. */
     inner?: AiProviderClient;
     historyLimit?: number;
+    attachments?: AttachmentResolver;
+    attachmentBudgets?: AttachmentBudgets;
   } = {},
 ): Promise<RunnerFixture> {
   const harness = createHarness();
@@ -126,6 +135,12 @@ async function setupRunner(
     ...(options.historyLimit === undefined
       ? {}
       : { historyLimit: options.historyLimit }),
+    ...(options.attachments === undefined
+      ? {}
+      : { attachments: options.attachments }),
+    ...(options.attachmentBudgets === undefined
+      ? {}
+      : { attachmentBudgets: options.attachmentBudgets }),
   });
   return { ...harness, runner, client, mock, chatId: chat.id };
 }
@@ -523,7 +538,12 @@ describe("TurnRunner.execute — tool round trip", () => {
     const toolRecord = records.find((m) => m.role === "tool");
     expect(toolRecord?.toolCallId).toBe("call-1");
     expect(toolRecord?.metadata["toolName"]).toBe("echo");
-    const envelope = JSON.parse(toolRecord?.content ?? "{}") as {
+    // A tool record's body is a serialized envelope — a STRING, never parts.
+    // Asserting that before parsing is the point: `MessageRecord.content` is a
+    // union now, and a tool result that arrived as parts would be a bug this
+    // test must not paper over with a cast.
+    expect(typeof toolRecord?.content).toBe("string");
+    const envelope = JSON.parse(toolRecord?.content as string) as {
       data: Record<string, unknown>;
     };
     expect(envelope.data).toEqual({ echoed: "hi" });
@@ -1127,5 +1147,311 @@ describe("TurnRunner — a branch switch mid-run", () => {
     expect(replayed.indexOf(toolMessages[0] as AiChatMessage)).toBeGreaterThan(
       declaring,
     );
+  });
+});
+
+/**
+ * A resolver that counts its calls and answers from a fixed table — the two
+ * things every attachment behaviour below is defined by. `null` for an unknown
+ * ref is the port's own "there are no bytes for this", not an error path.
+ */
+class TestAttachmentResolver implements AttachmentResolver {
+  readonly calls: string[] = [];
+  constructor(
+    private readonly table: Record<string, ResolvedAttachment> = {},
+  ) {}
+  async resolve(ref: string): Promise<ResolvedAttachment | null> {
+    this.calls.push(ref);
+    return this.table[ref] ?? null;
+  }
+}
+
+/** Base64 whose DECODED length is `bytes` (four characters per three bytes). */
+function base64OfBytes(bytes: number): string {
+  return "A".repeat(Math.ceil((bytes * 4) / 3));
+}
+
+function png(base64: string): ResolvedAttachment {
+  return { mediaType: "image/png", base64 };
+}
+
+/** A user body: some words, then one image part per ref, in order. */
+function bodyWithRefs(...refs: string[]): AiContentPart[] {
+  return [
+    { type: "text", text: "what is in these?" },
+    ...refs.map(
+      (ref): AiContentPart => ({
+        type: "image",
+        source: { kind: "ref", ref },
+      }),
+    ),
+  ];
+}
+
+/** The user message as the provider was handed it on the last call. */
+function userContentSeenByProvider(f: RunnerFixture): AiChatMessage["content"] {
+  const sent = f.client.messagesPerCall.at(-1) ?? [];
+  const user = sent.find((message) => message.role === "user");
+  expect(user).toBeDefined();
+  return user?.content ?? "";
+}
+
+/** The image parts of what the provider was shown, refs already resolved. */
+function imagePartsSeenByProvider(f: RunnerFixture): AiContentPart[] {
+  const content = userContentSeenByProvider(f);
+  return typeof content === "string"
+    ? []
+    : content.filter((part) => part.type === "image");
+}
+
+/** The messages of every `run.warning` on the log carrying `code`. */
+async function warningsOf(
+  f: RunnerFixture,
+  runId: string,
+  code: string,
+): Promise<string[]> {
+  const events = await eventsOf(f, runId);
+  return events
+    .filter((event) => event.type === "run.warning" && event.data.code === code)
+    .map((event) => (event.type === "run.warning" ? event.data.message : ""));
+}
+
+describe("TurnRunner — attachment resolution", () => {
+  it("resolves a ref image for the provider while the stored message keeps the ref", async () => {
+    const attachments = new TestAttachmentResolver({
+      "blob:cat": png("aGVsbG8="),
+    });
+    const f = await setupRunner({ attachments });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "a cat" }] }]);
+    const body = bodyWithRefs("blob:cat");
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: body,
+    });
+    await drive(f, submitted.runId);
+
+    // What the PROVIDER saw: inline data, in the same position, with the text
+    // part around it untouched.
+    expect(userContentSeenByProvider(f)).toEqual([
+      { type: "text", text: "what is in these?" },
+      {
+        type: "image",
+        source: { kind: "data", base64: "aGVsbG8=", mediaType: "image/png" },
+      },
+    ]);
+    expect(attachments.calls).toEqual(["blob:cat"]);
+
+    // What the STORE holds: the ref, unchanged. Re-read from the store rather
+    // than trusted from the submit — a runner that rewrote the record mid-pass
+    // would leave the object already in hand looking correct.
+    const stored = messagesOf(f).find((m) => m.id === submitted.userMessageId);
+    expect(stored?.content).toEqual(body);
+    expect(
+      await warningsOf(f, submitted.runId, "attachment_unresolved"),
+    ).toEqual([]);
+  });
+
+  it("drops an unresolvable ref, warns attachment_unresolved, and answers anyway", async () => {
+    const attachments = new TestAttachmentResolver({
+      "blob:here": png("aGVsbG8="),
+    });
+    const f = await setupRunner({ attachments });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "one of two" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: bodyWithRefs("blob:here", "blob:gone"),
+    });
+    await drive(f, submitted.runId);
+
+    // The surviving image is still there; only the missing one is gone.
+    expect(imagePartsSeenByProvider(f)).toEqual([
+      {
+        type: "image",
+        source: { kind: "data", base64: "aGVsbG8=", mediaType: "image/png" },
+      },
+    ]);
+    const warnings = await warningsOf(
+      f,
+      submitted.runId,
+      "attachment_unresolved",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("blob:gone");
+
+    // Dropped for the provider, kept in the store — a later turn can try again.
+    const stored = messagesOf(f).find((m) => m.id === submitted.userMessageId);
+    expect(stored?.content).toEqual(bodyWithRefs("blob:here", "blob:gone"));
+    const task = await f.store.tasks.getTask(submitted.runId);
+    expect(task?.status).toBe("completed");
+  });
+
+  it("drops a ref over the PER-IMAGE byte budget and warns attachment_budget_exceeded", async () => {
+    const attachments = new TestAttachmentResolver({
+      "blob:small": png(base64OfBytes(90)),
+      "blob:huge": png(base64OfBytes(400)),
+    });
+    // The per-image cap is the only one in play: the two images together are
+    // far inside the total, and two is far inside the count.
+    const f = await setupRunner({
+      attachments,
+      attachmentBudgets: {
+        maxBytesPerImage: 100,
+        maxTotalBytes: 100_000,
+        maxImages: 10,
+      },
+    });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "ok" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: bodyWithRefs("blob:small", "blob:huge"),
+    });
+    await drive(f, submitted.runId);
+
+    expect(imagePartsSeenByProvider(f)).toHaveLength(1);
+    const warnings = await warningsOf(
+      f,
+      submitted.runId,
+      "attachment_budget_exceeded",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("blob:huge");
+    expect(warnings[0]).toContain("per-image");
+  });
+
+  it("drops a ref that would exceed the AGGREGATE byte budget and warns attachment_budget_exceeded", async () => {
+    const attachments = new TestAttachmentResolver({
+      "blob:a": png(base64OfBytes(60)),
+      "blob:b": png(base64OfBytes(60)),
+    });
+    // Each image is under the per-image cap and the pair is inside the count
+    // budget; only their SUM breaks a rule.
+    const f = await setupRunner({
+      attachments,
+      attachmentBudgets: {
+        maxBytesPerImage: 100,
+        maxTotalBytes: 100,
+        maxImages: 10,
+      },
+    });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "ok" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: bodyWithRefs("blob:a", "blob:b"),
+    });
+    await drive(f, submitted.runId);
+
+    // The first fits, the second does not — spend is charged in the MESSAGE's
+    // order, not in whatever order the resolver happens to answer.
+    expect(imagePartsSeenByProvider(f)).toHaveLength(1);
+    const warnings = await warningsOf(
+      f,
+      submitted.runId,
+      "attachment_budget_exceeded",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("blob:b");
+    expect(warnings[0]).toContain("total budget");
+  });
+
+  it("drops a ref past the IMAGE-COUNT budget and warns attachment_budget_exceeded", async () => {
+    const attachments = new TestAttachmentResolver({
+      "blob:a": png(base64OfBytes(9)),
+      "blob:b": png(base64OfBytes(9)),
+    });
+    // Tiny images, generous byte budgets: the count is the only cap that bites.
+    const f = await setupRunner({
+      attachments,
+      attachmentBudgets: {
+        maxBytesPerImage: 100_000,
+        maxTotalBytes: 100_000,
+        maxImages: 1,
+      },
+    });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "ok" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: bodyWithRefs("blob:a", "blob:b"),
+    });
+    await drive(f, submitted.runId);
+
+    expect(imagePartsSeenByProvider(f)).toHaveLength(1);
+    const warnings = await warningsOf(
+      f,
+      submitted.runId,
+      "attachment_budget_exceeded",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("blob:b");
+    expect(warnings[0]).toContain("1 image(s)");
+  });
+
+  it("resolves a ref appearing twice in one pass exactly once", async () => {
+    const attachments = new TestAttachmentResolver({
+      "blob:same": png("aGVsbG8="),
+    });
+    const f = await setupRunner({ attachments });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "twice" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: bodyWithRefs("blob:same", "blob:same"),
+    });
+    await drive(f, submitted.runId);
+
+    // One fetch, two images: it is a cache, not a deduplicator — the model
+    // still sees the picture in both positions the message put it in.
+    expect(attachments.calls).toEqual(["blob:same"]);
+    expect(imagePartsSeenByProvider(f)).toHaveLength(2);
+  });
+
+  it("warns and still completes when a refs message meets no resolver at all", async () => {
+    const f = await setupRunner();
+    f.mock.setScript([{ steps: [{ kind: "text", content: "no pictures" }] }]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: bodyWithRefs("blob:orphan"),
+    });
+    await drive(f, submitted.runId);
+
+    // Every image gone, the words kept, the turn finished.
+    expect(userContentSeenByProvider(f)).toEqual([
+      { type: "text", text: "what is in these?" },
+    ]);
+    const warnings = await warningsOf(
+      f,
+      submitted.runId,
+      "attachment_unresolved",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("blob:orphan");
+    const task = await f.store.tasks.getTask(submitted.runId);
+    expect(task?.status).toBe("completed");
+
+    // The warning joined the run's ONE sequence. It is stamped between passes
+    // by the same stamper the passes use, so a gap or a repeat here would break
+    // every consumer that resumes a stream on `seq`.
+    expectOneSequence(await eventsOf(f, submitted.runId), submitted.runId);
+  });
+
+  it("leaves a history with no refs completely alone", async () => {
+    const attachments = new TestAttachmentResolver({});
+    const f = await setupRunner({ attachments });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "plain" }] }]);
+    const inlined: AiContentPart[] = [
+      { type: "text", text: "look" },
+      {
+        type: "image",
+        source: { kind: "data", base64: "aGVsbG8=", mediaType: "image/png" },
+      },
+    ];
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: inlined,
+    });
+    await drive(f, submitted.runId);
+
+    // A caller's own inline images are NOT this port's business: untouched,
+    // unbudgeted, and the resolver is never asked anything.
+    expect(userContentSeenByProvider(f)).toEqual(inlined);
+    expect(attachments.calls).toEqual([]);
   });
 });

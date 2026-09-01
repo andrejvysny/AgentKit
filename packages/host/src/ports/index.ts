@@ -16,6 +16,7 @@ export * from "./authorization.js";
 export * from "./usage-authorizer.js";
 export * from "./verification.js";
 export * from "./context-provider.js";
+export * from "./attachment-resolver.js";
 export * from "./tool-contributor.js";
 export * from "./task-runner.js";
 export * from "./write-policy.js";

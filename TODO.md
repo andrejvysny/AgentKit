@@ -8,7 +8,7 @@
 - [x] Phase A verifier (fresh context) ran — 2 CRITICAL (runner recovery/fencing) + 4 IMPORTANT; fix batch in flight
 
 ## Phase B — contract 0.4.0
-- [ ] B1 content parts at persistence + `AttachmentResolver` + budgets; goldens re-recorded once
+- [x] B1 content parts at persistence + `AttachmentResolver` + budgets; goldens re-recorded once
 - [ ] B2 chat ops (update/delete/archive/ids), `importConversation`, `searchMessages` (FTS5), `beforeOrderKey`, `deleteByScope`, `ConversationService.deleteChat`
 - [ ] B3 `TurnRunner.regenerate`, `McpServerConfigStore`, new REST routes (chat/regenerate/search/providers/settings/allowances/mcp configs)
 - [ ] Phase B verifier + fixes

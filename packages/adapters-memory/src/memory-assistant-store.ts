@@ -21,6 +21,8 @@
  * `expiresAt` on the same stored object) touches the same record.
  */
 import type {
+  AiContentPart,
+  AiMessageContent,
   AiProviderCapabilities,
   AiProviderConfig,
   AiProviderModel,
@@ -116,6 +118,39 @@ export interface MemoryAssistantStoreOptions extends TaskAgingOptions {
 }
 
 /**
+ * A message body copied deeply enough that nothing a caller does to it can reach
+ * this store's Maps — and nothing this store does can reach a body a caller
+ * already holds.
+ *
+ * A string needs no copy (immutable). A parts array does: the SNAPSHOT RETURNS
+ * rule at the top of this file is a SHALLOW copy of the record, which would hand
+ * out the very array object the store keeps — so a caller appending a part, or
+ * rewriting a `source`, would silently edit history. `SqliteAssistantStore` gets
+ * this for free by rebuilding parts from JSON on every read; a Map-backed store
+ * has to mean it.
+ *
+ * Two levels is exactly enough, and not by luck: a part is `{ type, text }` or
+ * `{ type, source, detail? }`, and `source` is the only nested object the CLOSED
+ * part union can hold (`packages/contracts/src/content.ts`). A part kind with
+ * deeper structure is an additive change to that union — and to this function.
+ */
+function copyMessageContent(content: AiMessageContent): AiMessageContent {
+  if (typeof content === "string") return content;
+  return content.map(copyContentPart);
+}
+
+function copyContentPart(part: AiContentPart): AiContentPart {
+  return part.type === "text"
+    ? { ...part }
+    : { ...part, source: { ...part.source } };
+}
+
+/** The snapshot copy of a message record: shallow, plus a real content copy. */
+function copyMessage(record: MessageRecord): MessageRecord {
+  return { ...record, content: copyMessageContent(record.content) };
+}
+
+/**
  * ATOMICITY, IN A STORE WITH NO TRANSACTIONS: every method below that touches
  * more than one record — a branching append, {@link activatePath}, and
  * {@link forkChat} — validates and computes EVERYTHING first, then applies its
@@ -201,7 +236,9 @@ export class MemoryConversationStore implements ConversationStore {
       chatId: input.chatId,
       ...(input.runId === undefined ? {} : { runId: input.runId }),
       role: input.role,
-      content: input.content,
+      // Copied on the way IN as well as out: the caller keeps its own array,
+      // and a submit that reused one across two appends must not alias them.
+      content: copyMessageContent(input.content),
       orderKey,
       ...(input.toolCallId === undefined
         ? {}
@@ -232,7 +269,7 @@ export class MemoryConversationStore implements ConversationStore {
     // explicitly not asking for the path to move.
     if (!chained) applyActivation(list, record.id);
     chat.updatedAt = now;
-    return { ...record };
+    return copyMessage(record);
   }
 
   /** The named parent, proven to exist and to be in the same chat. */
@@ -257,11 +294,13 @@ export class MemoryConversationStore implements ConversationStore {
     if (!record) {
       throw new RecordNotFoundError(`Message not found: ${messageId}`);
     }
-    if (patch.content !== undefined) record.content = patch.content;
+    if (patch.content !== undefined) {
+      record.content = copyMessageContent(patch.content);
+    }
     // Metadata REPLACES the stored bag, per the port contract.
     if (patch.metadata !== undefined) record.metadata = patch.metadata;
     if (patch.toolCalls !== undefined) record.toolCalls = patch.toolCalls;
-    return { ...record };
+    return copyMessage(record);
   }
 
   /** The chat's ACTIVE PATH, `(depth, orderKey)` ascending — see the port. */
@@ -275,13 +314,13 @@ export class MemoryConversationStore implements ConversationStore {
       rows = rows.filter((m) => m.orderKey > after);
     }
     if (opts?.limit !== undefined) rows = rows.slice(-opts.limit);
-    return rows.map((m) => ({ ...m }));
+    return rows.map(copyMessage);
   }
 
   async listSiblings(messageId: string): Promise<MessageRecord[]> {
     const record = this.requireMessage(messageId);
     const list = this.messagesByChat.get(record.chatId) ?? [];
-    return siblingsOf(list, record).map((m) => ({ ...m }));
+    return siblingsOf(list, record).map(copyMessage);
   }
 
   async activatePath(messageId: string): Promise<MessageRecord[]> {
@@ -291,7 +330,7 @@ export class MemoryConversationStore implements ConversationStore {
     // Read off the flags this call just wrote, in the same synchronous block —
     // so what the caller gets back is the path as of the switch, not as of
     // whenever it might have re-read the chat.
-    return activePathOf(list).map((m) => ({ ...m }));
+    return activePathOf(list).map(copyMessage);
   }
 
   /**
@@ -334,7 +373,7 @@ export class MemoryConversationStore implements ConversationStore {
       id: plan.id,
       chatId: chat.id,
       role: plan.source.role,
-      content: plan.source.content,
+      content: copyMessageContent(plan.source.content),
       orderKey: index + 1,
       ...(plan.source.toolCallId === undefined
         ? {}
@@ -359,7 +398,7 @@ export class MemoryConversationStore implements ConversationStore {
     this.messagesByChat.set(chat.id, messages);
     for (const message of messages) this.messagesById.set(message.id, message);
     this.orderKeys.set(chat.id, messages.length);
-    return { chat: { ...chat }, messages: messages.map((m) => ({ ...m })) };
+    return { chat: { ...chat }, messages: messages.map(copyMessage) };
   }
 
   private requireMessage(messageId: string): MessageRecord {

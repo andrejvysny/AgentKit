@@ -10,12 +10,37 @@
 // FRAMEWORK-NEUTRAL, same rules as the rest of this package: no runner import,
 // every `@agentkit/host` import is `import type`, and error assertions match on
 // the `code` string rather than on `instanceof`.
+import type { AiContentPart } from "@agentkit/contracts";
 import type { AssistantStore, MessageRecord } from "@agentkit/host";
 import {
   expectRejectsWithCode,
   type AssistantStoreConformanceHarness,
   type AssistantStoreConformanceTestApi,
 } from "./conformance-support.js";
+
+/**
+ * A parts body that exercises every branch a store's content codec has: a text
+ * part, an image the caller inlined, and an image that names a HOST attachment
+ * (`kind: "ref"`) instead of carrying its bytes. The ref is the one a store is
+ * most likely to get wrong, because it is the one nothing else in the record
+ * looks like — and it is precisely the one that must survive, since `TurnRunner`
+ * re-resolves it on every provider pass and can only do that if the store gave
+ * it back.
+ *
+ * A fresh object every call: these tests deliberately mutate the body they pass
+ * in, to prove the store did not keep a reference to it.
+ */
+function multimodalBody(): AiContentPart[] {
+  return [
+    { type: "text", text: "what is in this picture?" },
+    {
+      type: "image",
+      source: { kind: "data", base64: "aGVsbG8=", mediaType: "image/png" },
+      detail: "high",
+    },
+    { type: "image", source: { kind: "ref", ref: "blob:sha256-abc123" } },
+  ];
+}
 
 export interface ConversationBranchingOptions {
   create: () => Promise<AssistantStoreConformanceHarness>;
@@ -429,6 +454,96 @@ export function describeConversationBranching(
           t.u2.id,
           branched.id,
         ]);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("round-trips content parts byte-exact through append, list, siblings and a chain append", async () => {
+      const { store, close } = await create();
+      try {
+        const chat = await store.conversations.createChat({});
+        const parts = multimodalBody();
+        const appended = await store.conversations.appendMessage({
+          chatId: chat.id,
+          role: "user",
+          content: parts,
+        });
+        // The append's own return value is a record like any other, so it is
+        // held to the same standard as a re-read: an adapter that only
+        // serialized on the way to storage would pass one and fail the other.
+        expect(appended.content).toEqual(parts);
+
+        const [listed] = await store.conversations.listMessages(chat.id);
+        expect(listed?.content).toEqual(parts);
+        const [sibling] = await store.conversations.listSiblings(appended.id);
+        expect(sibling?.content).toEqual(parts);
+        expect(
+          (await store.conversations.activatePath(appended.id))[0]?.content,
+        ).toEqual(parts);
+
+        // A chain append is the run's own write path, and it must carry parts
+        // as faithfully as the submit path does.
+        const chained = await store.conversations.appendMessage({
+          chatId: chat.id,
+          role: "assistant",
+          content: parts,
+          parentMessageId: appended.id,
+          activate: false,
+        });
+        expect(chained.content).toEqual(parts);
+        const path = await store.conversations.listMessages(chat.id);
+        expect(path.map((record) => record.content)).toEqual([parts, parts]);
+
+        // NOTHING the caller does to the array it handed in, and nothing it
+        // does to an array handed back, may reach the store. A shallow record
+        // copy over a shared array is the failure this catches.
+        parts.push({ type: "text", text: "mutated after the append" });
+        const afterAppendMutation = await store.conversations.listMessages(
+          chat.id,
+        );
+        const firstListed = afterAppendMutation[0]?.content as AiContentPart[];
+        expect(firstListed).toHaveLength(3);
+        firstListed.push({ type: "text", text: "mutated after the read" });
+        const afterReadMutation = await store.conversations.listMessages(
+          chat.id,
+        );
+        expect(afterReadMutation[0]?.content).toHaveLength(3);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("keeps a string body a string — no parts wrapper anywhere on the round trip", async () => {
+      const { store, close } = await create();
+      try {
+        const chat = await store.conversations.createChat({});
+        // Text that a store guessing at its own column would misread as parts.
+        const tricky = '[{"type":"text","text":"not actually parts"}]';
+        const appended = await store.conversations.appendMessage({
+          chatId: chat.id,
+          role: "user",
+          content: tricky,
+        });
+        expect(appended.content).toBe(tricky);
+
+        const [listed] = await store.conversations.listMessages(chat.id);
+        expect(typeof listed?.content).toBe("string");
+        expect(listed?.content).toBe(tricky);
+
+        // And an update keeps it a string, including one that lands on a row
+        // whose body USED to be parts.
+        const parted = await store.conversations.appendMessage({
+          chatId: chat.id,
+          role: "assistant",
+          content: multimodalBody(),
+        });
+        const updated = await store.conversations.updateMessage(parted.id, {
+          content: tricky,
+        });
+        expect(updated.content).toBe(tricky);
+        const reread = await store.conversations.listMessages(chat.id);
+        expect(reread[reread.length - 1]?.content).toBe(tricky);
       } finally {
         close?.();
       }

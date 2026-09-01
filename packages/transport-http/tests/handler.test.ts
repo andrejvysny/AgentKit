@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import type {
+  AiContentPart,
   ChatDto,
   MessagePageDto,
   RunDto,
@@ -179,6 +180,80 @@ describe("submitMessage", () => {
     const two = (await (await send("key-b")).json()) as SubmitMessageResponse;
     expect(one.runId).not.toBe(two.runId);
     expect(one.runId.startsWith("task_ik_")).toBe(true);
+  });
+
+  it("accepts a content-parts body, stores it, and projects it back unchanged", async () => {
+    const { handler, store } = await createHandlerFixture();
+    const content: AiContentPart[] = [
+      { type: "text", text: "what is on this board?" },
+      { type: "image", source: { kind: "ref", ref: "blob:sha256-abc" } },
+      {
+        type: "image",
+        source: { kind: "data", base64: "aGVsbG8=", mediaType: "image/png" },
+        detail: "high",
+      },
+    ];
+    const res = await handler(
+      request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+        body: { content },
+        headers: { "idempotency-key": "key-parts" },
+      }),
+    );
+    expect(res.status).toBe(201);
+
+    // Stored as parts, not flattened on the way in.
+    const stored = await store.conversations.listMessages(TEST_CHAT_ID);
+    expect(stored.find((m) => m.role === "user")?.content).toEqual(content);
+
+    // And projected back verbatim — the ref included. A transport that resolved
+    // refs here would inline the host's blobs into every page of the chat.
+    const page = (await (
+      await handler(request("GET", `/v1/chats/${TEST_CHAT_ID}/messages`))
+    ).json()) as MessagePageDto;
+    expect(page.items.find((m) => m.role === "user")?.content).toEqual(content);
+  });
+
+  it("rejects a malformed content-parts body without creating anything", async () => {
+    const { handler, store } = await createHandlerFixture();
+    const send = (content: unknown): Promise<Response> =>
+      handler(
+        request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+          body: { content },
+          headers: { "idempotency-key": `key-${Math.random()}` },
+        }),
+      );
+
+    // The part union is CLOSED: an unknown type is a 400, not content the
+    // server persists and no provider can ever be shown.
+    await expectProblem(
+      await send([{ type: "audio", url: "https://example.test/a.mp3" }]),
+      400,
+      "invalid_request",
+    );
+    await expectProblem(
+      await send([{ type: "image", source: { kind: "elsewhere" } }]),
+      400,
+      "invalid_request",
+    );
+    // A media type that would break out of the `data:` URL an adapter builds.
+    await expectProblem(
+      await send([
+        {
+          type: "image",
+          source: {
+            kind: "data",
+            base64: "aGVsbG8=",
+            mediaType: "image/png;x=1,y",
+          },
+        },
+      ]),
+      400,
+      "invalid_request",
+    );
+    // The empty body is the empty STRING; `[]` is a caller bug.
+    await expectProblem(await send([]), 400, "invalid_request");
+
+    expect(await store.conversations.listMessages(TEST_CHAT_ID)).toEqual([]);
   });
 
   it("(h) validates the body before creating anything", async () => {
