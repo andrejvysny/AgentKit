@@ -163,6 +163,23 @@ export class InvalidForkPointError extends NamedHostError {
   }
 }
 
+/**
+ * The {@link UsageAuthorizer} refused a provider call before it was made.
+ *
+ * Raised by `TurnRunner` on the pass that was refused, so the model is never
+ * reached: the whole point of asking before spending is that a "no" costs
+ * nothing. Terminal for THIS attempt and reported as such — the run fails with
+ * a `run.failed` event carrying `errorCode: "usage_denied"` — but not
+ * necessarily terminal for the caller: `UsageAuthorizationDecision.retryAfterMs`
+ * exists precisely because a refilling quota says yes later, and the transport
+ * maps this to a 429 rather than a 4xx that tells a client to stop asking.
+ */
+export class UsageDeniedError extends NamedHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("usage_denied", message, details);
+  }
+}
+
 /** A record the caller referenced by id does not exist (or is out of scope). */
 export class RecordNotFoundError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
@@ -219,6 +236,7 @@ export const HOST_ERROR_CODES = [
   "not_found",
   "invalid_fork_point",
   "unknown_dependency",
+  "usage_denied",
 ] as const;
 
 export type HostErrorCode = (typeof HOST_ERROR_CODES)[number];

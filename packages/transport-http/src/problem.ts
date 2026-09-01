@@ -40,6 +40,12 @@ export const PROBLEM_CONTENT_TYPE = "application/problem+json";
  * conflicts — the client named a message that is not a place this conversation
  * can be forked from, and the fix is a different `fromMessageId`, which is the
  * definition of a bad request.
+ *
+ * `usage_denied` is a 429 and not a 403: the request was well-formed and the
+ * caller was entitled to make it — a budget said not now. 429 is the one status
+ * that means "ask again later", which is what
+ * `UsageAuthorizationDecision.retryAfterMs` is for; a 403 would tell a client to
+ * stop asking about a quota that refills.
  */
 const STATUS_BY_HOST_CODE = {
   not_found: 404,
@@ -52,6 +58,7 @@ const STATUS_BY_HOST_CODE = {
   lease_lost: 409,
   seq_conflict: 409,
   unknown_dependency: 409,
+  usage_denied: 429,
   executor_not_found: 500,
 } satisfies Record<HostErrorCode, number>;
 
@@ -78,6 +85,7 @@ const TITLE_BY_STATUS: Readonly<Record<number, string>> = Object.freeze({
   404: "Not Found",
   405: "Method Not Allowed",
   409: "Conflict",
+  429: "Too Many Requests",
   500: "Internal Server Error",
   501: "Not Implemented",
 });
@@ -134,6 +142,27 @@ export function badRequest(
   instance: string,
 ): Response {
   return problemResponse({ status: 400, code, detail, instance });
+}
+
+/**
+ * The 403 an {@link AuthorizationPort} refusal becomes.
+ *
+ * A transport-level code, like `not_implemented` and `method_not_allowed`: the
+ * decision is made here, by this adapter, before any host call — no
+ * `AgentKitHostError` was thrown and none should be invented to carry it. The
+ * port's `reason` is passed through as the `detail` because the port documents
+ * it as something to say out loud; a host that does not want its reasons
+ * published leaves `reason` off, and the generic detail below is what a client
+ * sees.
+ *
+ * 403 and not 404: hiding a resource's existence from someone who may not touch
+ * it is a decision only the host can make, and it makes it by returning its own
+ * `Response` from `authenticate` (or by refusing with no reason). An adapter
+ * that silently downgraded every denial to a 404 would take that choice away
+ * and make a real missing resource indistinguishable from a permissions bug.
+ */
+export function forbidden(detail: string, instance: string): Response {
+  return problemResponse({ status: 403, code: "forbidden", detail, instance });
 }
 
 /**

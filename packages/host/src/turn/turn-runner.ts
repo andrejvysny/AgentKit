@@ -9,14 +9,17 @@ import type {
 import {
   AiToolRegistry,
   createEventStamper,
+  messageContentToText,
   resolveToolLimits,
   runChat,
   type AiProviderClient,
+  type AiRunEventDraft,
 } from "@agentkit/core";
 import {
   AgentKitHostError,
   DuplicateTaskError,
   RecordNotFoundError,
+  UsageDeniedError,
 } from "../errors.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { ContextProvider } from "../ports/context-provider.js";
@@ -28,6 +31,7 @@ import type {
   TaskWorker,
 } from "../ports/task-runner.js";
 import type { ToolSetContributor } from "../ports/tool-contributor.js";
+import type { UsageAuthorizer } from "../ports/usage-authorizer.js";
 import type { AssistantSettings } from "../ports/settings-store.js";
 import type { TaskRecord, TaskStatus } from "../ports/task-store.js";
 import type { VerificationHook } from "../ports/verification.js";
@@ -77,6 +81,17 @@ export interface TurnRunnerDeps {
   contributors: ToolSetContributor[];
   context?: ContextProvider;
   verification?: VerificationHook;
+  /**
+   * Spend control. Absent — the default — nothing is asked and nothing is
+   * recorded, and this class behaves exactly as it did before the port existed;
+   * a host that does not wire it gets no enforcement, which is the whole point
+   * of the port being optional rather than of it being ignored.
+   *
+   * Wired, `authorize()` is consulted before EVERY provider pass (the first one
+   * and each recovery pass — a retry bills again, so it must be asked again),
+   * and `record()` is called for every `run.usage` event the provider emits.
+   */
+  usage?: UsageAuthorizer;
   /** Overrides the limits derived from settings + provider capabilities. */
   limits?: AiToolLimits;
   clock: Clock;
@@ -181,6 +196,8 @@ interface PassInput {
   chatId: string;
   ctx: TaskExecutionContext;
   client: AiProviderClient;
+  /** The resolved provider's id — what the usage port bills against. */
+  providerId: string;
   model: string;
   messages: AiChatMessage[];
   registry: AiToolRegistry;
@@ -515,6 +532,7 @@ export class TurnRunner implements TaskWorker {
       chatId,
       ctx,
       client,
+      providerId: provider.id,
       model,
       bindings,
       limits,
@@ -661,8 +679,14 @@ export class TurnRunner implements TaskWorker {
    * several passes share a task id, and only the log knows where the last one
    * stopped. That is what keeps `seq` unbroken across a retry — and what lets a
    * resumed process continue a stream it did not start.
+   *
+   * The spend check is the first thing in here, ahead of even reading the
+   * sequence: this method is the ONE place a provider call is made, so gating it
+   * here is what makes "every pass is authorized" true by construction rather
+   * than by remembering to add a check to each of the three call sites.
    */
   private async runPass(input: PassInput): Promise<PassResult> {
+    await this.authorizeUsage(input);
     const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
     const generator = runChat({
       client: input.client,
@@ -695,6 +719,59 @@ export class TurnRunner implements TaskWorker {
       }
       await this.projectEvent(next.value, input);
     }
+  }
+
+  /**
+   * Ask the {@link UsageAuthorizer} whether this pass may call the provider, and
+   * end the run if the answer is no.
+   *
+   * A refusal is recorded before it is thrown: a `run.failed` event carrying
+   * `errorCode: "usage_denied"` goes into the task's durable log, so a client
+   * already following the SSE stream learns WHY its turn stopped instead of
+   * watching the stream close on a status change it has to go and read. The
+   * throw then lands the task through `executeTask`'s existing failure path —
+   * one place decides what a failed turn looks like.
+   *
+   * The estimate is deliberately crude (assembled content chars / 4) and
+   * deliberately optional on the port: a real token count needs the provider's
+   * own tokenizer, which is not something this layer has, and a host with a
+   * better one is free to ignore the number. What the port is actually being
+   * asked is "is there budget left at all", and that question does not need the
+   * estimate to be right to be worth asking.
+   */
+  private async authorizeUsage(input: PassInput): Promise<void> {
+    const usage = this.deps.usage;
+    if (usage === undefined) return;
+
+    const decision = await usage.authorize({
+      runId: input.task.taskId,
+      chatId: input.chatId,
+      providerId: input.providerId,
+      model: input.model,
+      estimatedPromptTokens: estimatePromptTokens(input.messages),
+    });
+    if (decision.allowed) return;
+
+    const reason = decision.reason ?? "no reason given";
+    const error = new UsageDeniedError(
+      `Usage authorizer refused a provider call for task ${input.task.taskId}: ${reason}`,
+      {
+        taskId: input.task.taskId,
+        chatId: input.chatId,
+        providerId: input.providerId,
+        model: input.model,
+        ...(decision.retryAfterMs === undefined
+          ? {}
+          : { retryAfterMs: decision.retryAfterMs }),
+      },
+    );
+    await this.appendHostEvent(input.ctx, {
+      type: "run.failed",
+      runId: input.task.taskId,
+      timestamp: this.deps.clock.nowIso(),
+      data: { errorMessage: error.message, errorCode: "usage_denied" },
+    });
+    throw error;
   }
 
   /**
@@ -764,6 +841,34 @@ export class TurnRunner implements TaskWorker {
             content: state.content,
           });
         }
+        break;
+      }
+      case "run.usage": {
+        // Reported to the spend port AFTER the event is durable, and with the
+        // provider's own numbers rather than the estimate the pass was
+        // authorized on — the gap between the two is the whole reason
+        // `UsageAuthorizer` has a second method. Every usage event is reported,
+        // including the non-final ones a streaming provider emits mid-call: a
+        // recorder that only saw `finalForCall` would lose the accounting for a
+        // call that died before it settled, which is exactly the call a budget
+        // most needs to know about.
+        await this.deps.usage?.record({
+          runId: task.taskId,
+          callId: event.data.callId,
+          attempt: event.data.attempt,
+          providerId: input.providerId,
+          model: event.data.model,
+          ...(event.data.promptTokens === undefined
+            ? {}
+            : { promptTokens: event.data.promptTokens }),
+          ...(event.data.completionTokens === undefined
+            ? {}
+            : { completionTokens: event.data.completionTokens }),
+          ...(event.data.totalTokens === undefined
+            ? {}
+            : { totalTokens: event.data.totalTokens }),
+          at: event.timestamp,
+        });
         break;
       }
       case "run.tool.requested": {
@@ -847,19 +952,33 @@ export class TurnRunner implements TaskWorker {
     code: string,
     message: string,
   ): Promise<void> {
+    await this.appendHostEvent(ctx, {
+      type: "run.warning",
+      runId: ctx.task.taskId,
+      timestamp: this.deps.clock.nowIso(),
+      data: { code, message },
+    });
+  }
+
+  /**
+   * Stamp one host-originated event onto the task's log, continuing its `seq`.
+   *
+   * Shared by the between-pass warnings and the usage refusal so there is one
+   * answer to "where does the next seq come from" — two copies of this that
+   * disagreed would put a gap or a repeat in the very sequence a consumer uses
+   * to detect gaps and repeats.
+   */
+  private async appendHostEvent(
+    ctx: TaskExecutionContext,
+    draft: AiRunEventDraft,
+  ): Promise<void> {
     const taskId = ctx.task.taskId;
     const firstSeq = await this.deps.store.tasks.nextSeq(taskId);
     const stamp = createEventStamper({
       firstSeq,
       attemptId: ctx.attemptId,
     });
-    const event = stamp({
-      type: "run.warning",
-      runId: taskId,
-      timestamp: this.deps.clock.nowIso(),
-      data: { code, message },
-    });
-    await this.deps.store.tasks.appendEvents(taskId, [event], {
+    await this.deps.store.tasks.appendEvents(taskId, [stamp(draft)], {
       leaseToken: ctx.leaseToken,
     });
   }
@@ -1050,6 +1169,27 @@ function isPresent(value: unknown): value is string {
 
 function hasContent(state: PassState): boolean {
   return state.content.trim().length > 0;
+}
+
+/**
+ * A prompt-size estimate for {@link UsageAuthorizer.authorize}: the assembled
+ * conversation's characters, divided by four.
+ *
+ * Four characters per token is the rule of thumb, not a measurement — a real
+ * count needs the provider's tokenizer, which this layer deliberately does not
+ * carry (it would mean shipping a tokenizer per provider, kept in step with each
+ * one's releases, to compute a number the port documents as best-effort). Image
+ * and other non-text parts contribute nothing, via `messageContentToText`: their
+ * token cost is provider-specific and guessing it would be a worse number than
+ * admitting it is missing. `estimatedPromptTokens` is optional on the port
+ * precisely so a host with a better estimate can ignore this one.
+ */
+function estimatePromptTokens(messages: readonly AiChatMessage[]): number {
+  let chars = 0;
+  for (const message of messages) {
+    chars += messageContentToText(message.content).length;
+  }
+  return Math.ceil(chars / 4);
 }
 
 function describeDeficiencies(deficiencies: string[]): string {
