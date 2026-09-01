@@ -197,12 +197,14 @@ the full `data` otherwise. The full `data` always stays available in the
 `run.tool.succeeded` event's `resultJson`, so a UI or a later audit can read
 it — the model just never has to spend context on it.
 
-The same slim/full split holds at persistence: `TurnRunner.projectEvent`
+The same slim/full split holds at persistence: the run projection
 persists `event.data.modelResultJson ?? event.data.resultJson` as the
 `role: "tool"` message's content (what gets replayed into the model's
 context on every later turn), while the full payload stays only on the
 event log
-([`packages/host/src/turn/turn-runner.ts`](../packages/host/src/turn/turn-runner.ts)).
+([`packages/host/src/turn/projection.ts`](../packages/host/src/turn/projection.ts))
+— for a host's own turn executor as much as for `chat.turn`, since both
+drive the same projector.
 
 `status: "partial"` survives even when `ok: false` — see the "partial wins"
 invariant in [`docs/architecture.md`](architecture.md#loop-invariants).

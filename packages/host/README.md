@@ -66,13 +66,19 @@ only) — alongside [`@agentkit/runner-local`](../runner-local) for the
   `forkPrefixOf`, `planForkedMessages`). Pure and SYNCHRONOUS: adapters call it
   inside a transaction, and a `bun:sqlite` transaction cannot survive an `await`.
   Adapters own their queries; they do not own these answers.
-- `turn/` — `turn-runner.ts` (`TurnRunner`, `ChatTurnExecutor`), `retry.ts`
+- `turn/` — `turn-runner.ts` (`TurnRunner`, `ChatTurnExecutor`),
+  `projection.ts` (`createRunProjector`, `createRunEventFeed`,
+  `RunProjector`/`RunProjectionState`/`RunProjectionContext` — the
+  event → conversation projection `TurnRunner` uses, exported so a host
+  executor of its own kind produces the identical conversation; see
+  [Custom turn executors](../../docs/architecture.md#custom-turn-executors)),
+  `retry.ts`
   (chat-only / empty-response retry decisions), `message-order.ts`
   (`orderMessagesForProvider`), `emulated-tool-call.ts`
   (`looksLikeEmulatedToolCall`), `registry-staging.ts` (`stageRegistry`),
   `history-reconcile.ts` (`reconcileOrphanToolCalls` — synthesizes an
   in-memory `tool_result_missing` failure for a persisted tool call whose
-  result was lost to a crash between `projectEvent`'s separate writes;
+  result was lost to a crash between the projection's separate writes;
   called from `assembleMessages`, never persisted).
 - `bootstrap.ts` — `recoverOnBoot({ taskRunner, proposals })`: the startup
   pass that cleans up after a crash — `TaskRunner.recover()` first, then
@@ -155,6 +161,18 @@ stay inside one task id (its value is `SubmitMessageResult.runId`): each
 pass reads `TaskStore.nextSeq(taskId)` as its `firstSeq`, so a consumer
 reconnecting mid-retry still sees one unbroken sequence (see
 [`docs/architecture.md`](../../docs/architecture.md#event-flow)).
+
+A turn that does NOT come from `runChat` — a chat delegated to a server, a
+replay, a bridge to a provider this package has no client for — is a host
+executor on its own kind, not a fork of `TurnRunner`. Submit with
+`submitMessage({ kind: "assistant.cloud-chat", ... })` (or `regenerate`,
+same field), register a `TaskExecutor` for that kind, and drive
+`createRunProjector` with the `AiRunEvent`s you map from wherever they come
+from: the placeholder, the internal tool records, the chain appends and the
+usage reporting are the same code `chat.turn` runs. An unknown kind is the
+dispatcher's `ExecutorNotFoundError` at claim time, never a submit-time
+refusal. See [Custom turn
+executors](../../docs/architecture.md#custom-turn-executors).
 
 ## Port implementation checklist
 

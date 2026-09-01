@@ -43,4 +43,5 @@ export * from "./turn/emulated-tool-call.js";
 export * from "./turn/registry-staging.js";
 export * from "./turn/correction-harness.js";
 export * from "./turn/retry.js";
+export * from "./turn/projection.js";
 export * from "./turn/turn-runner.js";
