@@ -29,10 +29,12 @@ only) — alongside [`@agentkit/runner-local`](../runner-local) for the
   `ProposalStore`, `ProviderStore`,
   `SettingsStore`, `OutboxStore`, `TaskRunner`/`TaskWorker`, `WritePolicy`,
   `ProposalApplier`, `VerificationHook`, `ContextProvider`,
-  `AttachmentResolver` (`resolve(ref)` → bytes for an image part whose
-  source is a host attachment handle; resolved per provider pass, never
-  written back to the message), `ToolSetContributor` (namespaced, disposable),
-  `ToolGuard` (visibility at staging / executability at call time),
+  `AttachmentResolver` (`resolve(ref, { chatId })` → bytes for an image part
+  whose source is a host attachment handle; resolved per provider pass, never
+  written back to the message — and an authorization question, since refs come
+  from the client), `ToolSetContributor` (namespaced, disposable),
+  `ToolGuard` (visibility at staging / executability at call time; a guard that
+  throws fails closed on that one tool),
   `ToolCatalog` (chat-independent enumeration), `SecretStore`,
   `AuthorizationPort`, `UsageAuthorizer`, `system.ts`
   (`Clock`/`IdGenerator`/`Logger`).
@@ -74,7 +76,10 @@ only) — alongside [`@agentkit/runner-local`](../runner-local) for the
   [Custom turn executors](../../docs/architecture.md#custom-turn-executors)),
   `retry.ts`
   (chat-only / empty-response retry decisions), `message-order.ts`
-  (`orderMessagesForProvider`), `emulated-tool-call.ts`
+  (`orderMessagesForProvider` — provider-legal replay order, grouped by TOOL
+  CALL LINKAGE so a run with several tool-calling passes, as the correction
+  harness produces, replays each assistant next to its own results),
+  `emulated-tool-call.ts`
   (`looksLikeEmulatedToolCall`), `registry-staging.ts` (`stageRegistry`),
   `history-reconcile.ts` (`reconcileOrphanToolCalls` — synthesizes an
   in-memory `tool_result_missing` failure for a persisted tool call whose

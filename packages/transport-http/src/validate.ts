@@ -190,6 +190,7 @@ export function validateSubmitMessageRequest(
   const issue = first(
     checkMessageContent(body),
     checkOptionalString(body, "model"),
+    checkOptionalString(body, "providerId"),
     checkOptionalString(body, "parentMessageId"),
     checkOptionalMetadata(body, "metadata"),
   );
@@ -394,8 +395,10 @@ export function validateUpdateSettingsRequest(
 export function validateGrantAllowanceRequest(
   body: Record<string, unknown>,
 ): ValidationResult<GrantAllowanceRequest> {
+  // No `chatId`: the chat is a path parameter on all three allowance routes,
+  // and a body that also carried one would be a second answer to a question the
+  // URL has already settled — and the only one the authorizer never saw.
   const issue = first(
-    checkRequiredNonEmptyString(body, "chatId"),
     checkRequiredNonEmptyString(body, "toolName"),
     checkRequiredNonEmptyString(body, "proposalKind"),
     checkRequiredEnum(body, "maxRisk", RISK_LEVELS),

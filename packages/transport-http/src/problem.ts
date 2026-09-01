@@ -97,6 +97,7 @@ const TITLE_BY_STATUS: Readonly<Record<number, string>> = Object.freeze({
   404: "Not Found",
   405: "Method Not Allowed",
   409: "Conflict",
+  413: "Content Too Large",
   429: "Too Many Requests",
   500: "Internal Server Error",
   501: "Not Implemented",

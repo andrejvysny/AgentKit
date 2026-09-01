@@ -25,6 +25,12 @@ export interface ResolvedAttachment {
   base64: string;
 }
 
+/** Who is asking. Everything a resolver needs to scope the lookup. */
+export interface AttachmentResolveContext {
+  /** The conversation the referencing message belongs to. */
+  chatId: string;
+}
+
 export interface AttachmentResolver {
   /**
    * The bytes behind a reference, or `null` when there are none to be had.
@@ -37,8 +43,20 @@ export interface AttachmentResolver {
    * a storage backend that is down — where failing the turn is the honest
    * outcome.
    *
+   * TREAT THIS AS AN AUTHORIZATION QUESTION, not a lookup. A ref arrives from an
+   * untrusted client: it is whatever string a caller put in a message part, and
+   * AgentKit neither mints nor parses it. So the question a resolver answers is
+   * not "do these bytes exist" but "may THIS chat see them" — `null` means NOT
+   * RESOLVABLE FOR THIS CHAT, which is also the honest answer for a ref that
+   * belongs to another tenant, another user, or another workspace. A resolver
+   * that ignores {@link ctx} and looks the ref up globally hands one chat's
+   * attachments to anyone who can guess a ref.
+   *
    * Called at most once per distinct ref per provider pass; the caller caches
    * within a pass and never across one.
    */
-  resolve(ref: string): Promise<ResolvedAttachment | null>;
+  resolve(
+    ref: string,
+    ctx: AttachmentResolveContext,
+  ): Promise<ResolvedAttachment | null>;
 }

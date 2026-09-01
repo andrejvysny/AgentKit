@@ -34,6 +34,7 @@ import {
   activeLeafOf,
   activePathOf,
   assertListMessagesCursors,
+  ChatBusyError,
   DEFAULT_SEARCH_LIMIT,
   DuplicateActionIdError,
   DuplicateTaskError,
@@ -512,6 +513,19 @@ export class MemoryConversationStore implements ConversationStore {
       role: plan.input.role,
       content: copyMessageContent(plan.input.content),
       orderKey: plan.orderKey,
+      // Tool linkage, verbatim — the import's only way to preserve which
+      // assistant turn a tool result answers. `toolCalls` is COPIED for the
+      // same reason `content` is: the caller's array must not become this
+      // store's history.
+      ...(plan.input.toolCallId === undefined
+        ? {}
+        : { toolCallId: plan.input.toolCallId }),
+      ...(plan.input.toolCalls === undefined
+        ? {}
+        : { toolCalls: [...plan.input.toolCalls] }),
+      ...(plan.input.modelResultJson === undefined
+        ? {}
+        : { modelResultJson: plan.input.modelResultJson }),
       ...(plan.parentMessageId === undefined
         ? {}
         : { parentMessageId: plan.parentMessageId }),
@@ -653,6 +667,45 @@ function countOccurrences(haystack: string, needle: string): number {
   }
 }
 
+/**
+ * The statuses that make a scope undeletable — the same two
+ * `ConversationService.deleteChat` refuses on, restated here because the STORE
+ * owns the guarantee (see `TaskStore.deleteByScope`) and a store cannot import
+ * a service's private constant.
+ *
+ * Typed as `TaskStatus[]` on purpose: a status renamed out of the union fails
+ * to compile here rather than turning this guard into a filter that matches
+ * nothing.
+ */
+const BUSY_TASK_STATUSES: readonly TaskStatus[] = Object.freeze([
+  "running",
+  "waiting_approval",
+]);
+
+/**
+ * Refuse a scope delete while anything in it is live, naming what is holding it.
+ *
+ * The message and `details` shape are deliberately byte-identical to the ones
+ * `ConversationService.deleteChat` raises from its own fast-path check: a
+ * caller (or a transport mapping `chat_busy` to a 409) must not be able to tell
+ * which of the two layers refused.
+ */
+function assertScopeNotBusy(
+  scopeId: string,
+  tasks: readonly TaskRecord[],
+): void {
+  const busy = tasks.filter((task) => BUSY_TASK_STATUSES.includes(task.status));
+  if (busy.length === 0) return;
+  throw new ChatBusyError(
+    `Chat ${scopeId} has ${busy.length} task(s) still running or awaiting approval; cancel or await them before deleting.`,
+    {
+      chatId: scopeId,
+      taskIds: busy.map((task) => task.taskId),
+      statuses: busy.map((task) => task.status),
+    },
+  );
+}
+
 export class MemoryTaskStore implements TaskStore {
   readonly tasks = new Map<string, TaskRecord>();
   readonly attempts = new Map<string, AttemptRecord>();
@@ -745,7 +798,18 @@ export class MemoryTaskStore implements TaskStore {
   }
 
   /**
-   * Drop every task in a scope with its attempts, its lease and its events.
+   * Drop every task in a scope with its attempts, its lease and its events —
+   * unless something in the scope is still live, in which case NOTHING is
+   * dropped and {@link ChatBusyError} is raised.
+   *
+   * THE CHECK AND THE DELETES ARE ONE SYNCHRONOUS RUN, with no `await` between
+   * them, and that is the whole point of the guard living here rather than only
+   * in `ConversationService.deleteChat`. The service's check runs inside an
+   * async transaction, and a concurrent `claimNext` on this same store FLATTENS
+   * into that transaction — so a task can go `queued → running` between the
+   * service's check and this call. Nothing can run between the two halves of a
+   * synchronous method body, so a check made here holds for the deletes that
+   * follow it. See `TaskStore.deleteByScope`.
    *
    * The token index is cleared alongside the lease it points at: a lease token
    * left behind would keep resolving to a task that no longer exists, and the
@@ -756,6 +820,7 @@ export class MemoryTaskStore implements TaskStore {
     const doomed = [...this.tasks.values()].filter(
       (task) => task.scopeId === scopeId,
     );
+    assertScopeNotBusy(scopeId, doomed);
     for (const task of doomed) {
       for (const [attemptId, attempt] of this.attempts) {
         if (attempt.taskId === task.taskId) this.attempts.delete(attemptId);

@@ -416,12 +416,31 @@ export interface TaskStore {
    * Delete every task in a scope — with its attempts, its lease and its event
    * log — and return how many TASKS were removed.
    *
-   * Unconditional by design: it deletes a `running` task as readily as a
-   * finished one, because deciding whether live work may be discarded is a
-   * policy question and this port has no way to answer it. The caller makes
-   * that call — `ConversationService.deleteChat` refuses outright while
-   * anything is `running` or `waiting_approval` — and this method then does
-   * exactly what it was told, in one transaction.
+   * REFUSES with {@link ChatBusyError} (`chat_busy`) when ANY task in the scope
+   * is `running` or `waiting_approval`, and then deletes nothing at all. THE
+   * STORE OWNS THIS GUARANTEE, and an implementation MUST make the check and
+   * the deletes ONE synchronous statement or transaction with no `await`
+   * between them.
+   *
+   * WHY THE STORE AND NOT THE CALLER. `ConversationService.deleteChat` still
+   * checks first — it wants to refuse before it has deleted the conversation —
+   * but its check cannot be the guarantee. It reads the scope and then deletes
+   * inside one async transaction, and in a single-event-loop host a CONCURRENT
+   * store call (a worker's `claimNext`) FLATTENS into that in-flight
+   * transaction rather than opening its own. So a task can go `queued →
+   * running` between the service's read and this call, and the service would
+   * then delete work a worker had just been handed. That hazard is a CLASS, not
+   * a quirk of this method: any check-then-act invariant that spans an `await`
+   * inside a transaction is not actually atomic, and every invariant of that
+   * shape has to be enforced by a single synchronous statement or transaction
+   * inside the adapter — which is what this method does.
+   *
+   * `queued` is deliberately NOT live: nothing has been spent on it, and
+   * refusing on one would make a chat undeletable for as long as anything sat
+   * merely enqueued behind it. Force-cancelling what IS live is a different
+   * operation with different consequences (it ends a provider call mid-flight),
+   * so this method refuses instead of inventing it; the caller cancels
+   * explicitly and deletes after.
    *
    * The event log goes with the tasks: it is the record of what those attempts
    * did, and orphaning it would leave rows nothing can ever name again.

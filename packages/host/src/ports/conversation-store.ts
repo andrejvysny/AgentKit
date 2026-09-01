@@ -384,8 +384,8 @@ export interface ImportChatInput {
 /**
  * One message of an import, in CREATION ORDER.
  *
- * The caller supplies identity, the tree links and the `active` flags; the
- * STORE assigns `orderKey`, `depth` and `branchIndex`. That split is the whole
+ * The caller supplies identity, the tree links, the `active` flags and the tool
+ * linkage; the STORE assigns `orderKey`, `depth` and `branchIndex`. That split is the whole
  * design: those three are derived facts with rules
  * (`packages/host/src/conversation/message-tree.ts`) that every append in this
  * port already obeys, and letting an import name them would let it write a chat
@@ -396,6 +396,28 @@ export interface ImportMessageInput {
   id: string;
   role: MessageRecord["role"];
   content: AiMessageContent;
+  /**
+   * Tool linkage, carried through the import VERBATIM — a store writes these
+   * three exactly as given and derives nothing from them.
+   *
+   * Optional, and absent on the overwhelming majority of an import's messages;
+   * present on the two kinds that are useless without it. A `role: "tool"`
+   * record answers a specific call (`toolCallId`), and the internal assistant
+   * turn that asked for it declares the ids it is waiting on (`toolCalls`).
+   * That pairing is the ONLY thing `orderMessagesForProvider` has to work
+   * with — it groups an assistant turn with its own results by matching ids,
+   * not by kind — so an import that dropped it would migrate a conversation
+   * whose every replay hands the provider a tool result with no preceding
+   * `tool_calls`, which providers reject outright. Unlike `orderKey`/`depth`/
+   * `branchIndex`, none of the three is derivable from the payload's shape:
+   * they are facts about what the model said, and only the caller has them.
+   *
+   * `modelResultJson` is the slim model-facing envelope a replay sends in place
+   * of the full tool payload; see {@link MessageRecord.modelResultJson}.
+   */
+  toolCallId?: string;
+  toolCalls?: AiToolCall[];
+  modelResultJson?: string;
   /** Absent or `null` makes a root. Must name a message EARLIER in the list. */
   parentMessageId?: string | null;
   /** Whether this message is on the imported chat's active path. */
@@ -578,7 +600,10 @@ export interface ConversationStore {
    * a time, cannot express an inactive branch that was never the live path, and
    * leaves a half-written conversation behind when it fails in the middle.
    *
-   * WHAT THE CALLER OWNS: identity, the parent links, and the `active` flags.
+   * WHAT THE CALLER OWNS: identity, the parent links, the `active` flags, and
+   * the tool linkage (`toolCallId` / `toolCalls` / `modelResultJson`), which is
+   * persisted VERBATIM so a migrated conversation still replays in an order a
+   * provider accepts.
    * WHAT THE STORE OWNS: `orderKey` (creation order, `1..n`), `depth`, and
    * `branchIndex` (per the same sibling rules every append follows). See
    * {@link ImportMessageInput}.
@@ -627,6 +652,28 @@ export interface ConversationStore {
    * - A query that is empty once the store has sanitized it returns `[]` rather
    *   than raising: search boxes emit punctuation, and a 500 from a stray `*`
    *   is a worse answer than no results.
+   *
+   * EVERYTHING ELSE IS ADAPTER-DEFINED, and deliberately so. The one matching
+   * rule this port guarantees is that **a message containing the whole query
+   * term is returned, and ranks above messages that match less of it** — that
+   * is what the conformance suite pins (`search-conformance.ts`), and it is the
+   * most any two honest implementations of "full-text search" can be held to.
+   * Beyond it the reference adapters already disagree, in ways a caller must
+   * not build on:
+   *
+   * - **sqlite** is FTS5: the query is tokenized and the tokens are AND-ed, so
+   *   `"quartz beacon"` finds a message carrying both words ANYWHERE in it, in
+   *   either order, and ranking is bm25.
+   * - **memory** is a case-insensitive SUBSTRING scan for the whole trimmed
+   *   query, ranked by how many times it occurs, so `"quartz beacon"` finds
+   *   only a message with that exact phrase in it.
+   *
+   * Stemming, prefix and phrase syntax, stop words, ranking function, and how
+   * many hits a term must appear in to be worth returning are all the store's
+   * own business. A host that needs a specific query language should own the
+   * index rather than push its dialect through this port — and a conformance
+   * test that pinned one adapter's dialect would be pinning a bug for every
+   * other one.
    */
   searchMessages?(
     query: string,

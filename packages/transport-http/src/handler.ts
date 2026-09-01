@@ -119,7 +119,8 @@ const HANDLERS: Readonly<Record<RestOperation, RouteHandler>> = Object.freeze({
 export function createRestHandler(deps: RestHandlerDeps): RestFetchHandler {
   const basePath = normalizeBasePath(deps.basePath);
 
-  return async (req: Request): Promise<Response> => {
+  return async (request: Request): Promise<Response> => {
+    let req = request;
     const url = new URL(req.url);
     // The FULL request path, prefix included: `instance` is what the client saw
     // itself ask for, and reporting the stripped path would send whoever reads
@@ -193,6 +194,13 @@ export function createRestHandler(deps: RestHandlerDeps): RestFetchHandler {
     }
 
     try {
+      // Before authentication, and before a single byte reaches a route: a body
+      // this handler has already decided it will not read is a body it should
+      // not spend anything on.
+      const bounded = await enforceBodyLimit(req, deps.maxBodyBytes, instance);
+      if (!bounded.ok) return decorate(bounded.response);
+      req = bounded.req;
+
       let principal: unknown;
       if (deps.authenticate !== undefined) {
         const outcome = await deps.authenticate(req);
@@ -256,6 +264,61 @@ async function checkAuthorization(
   const detail =
     decision.reason ?? `Not allowed to ${action} this ${resource.kind}.`;
   return (instance: string) => forbidden(detail, instance);
+}
+
+/**
+ * `deps.maxBodyBytes`, enforced — or passed straight through when there is no
+ * cap, which is the default.
+ *
+ * Two paths, because there are two kinds of request. One that DECLARES a
+ * `Content-Length` over the limit is refused on the header alone, so an
+ * oversized upload is rejected before its bytes are read. One that declares
+ * nothing (a chunked body) has to be measured, so it is buffered here and the
+ * request is rebuilt around the bytes — a route downstream still calls
+ * `req.text()` and sees exactly what was sent.
+ *
+ * A declared length at or under the limit is trusted rather than re-measured:
+ * re-reading every body to catch a lying `Content-Length` would move the cost
+ * of the cap onto every honest request, and a deployment that cannot trust its
+ * clients that far wants the limit in the proxy, which is where this option's
+ * documentation sends it.
+ */
+async function enforceBodyLimit(
+  req: Request,
+  maxBodyBytes: number | undefined,
+  instance: string,
+): Promise<{ ok: true; req: Request } | { ok: false; response: Response }> {
+  if (maxBodyBytes === undefined) return { ok: true, req };
+
+  const declared = Number(req.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBodyBytes) {
+    return { ok: false, response: tooLarge(maxBodyBytes, instance) };
+  }
+  if (req.body === null || req.headers.has("content-length")) {
+    return { ok: true, req };
+  }
+
+  const bytes = await req.arrayBuffer();
+  if (bytes.byteLength > maxBodyBytes) {
+    return { ok: false, response: tooLarge(maxBodyBytes, instance) };
+  }
+  return {
+    ok: true,
+    req: new Request(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: bytes,
+    }),
+  };
+}
+
+function tooLarge(maxBodyBytes: number, instance: string): Response {
+  return problemResponse({
+    status: 413,
+    code: "body_too_large",
+    detail: `Request body exceeds the configured limit of ${maxBodyBytes} bytes.`,
+    instance,
+  });
 }
 
 /** The 404 an unrouted path — or one outside `basePath` — answers with. */

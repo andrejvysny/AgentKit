@@ -59,14 +59,23 @@ export class ConversationService {
    * it here would mean a delete button that silently cancels. The caller
    * cancels explicitly (`TaskService.cancelTask`) and deletes after, or waits.
    *
-   * ONE TRANSACTION for the check and all three deletes, which is what makes
-   * the refusal mean something: a task read outside the transaction could go
-   * `running` between the read and the delete, and the whole guarantee would be
-   * a race. Every await inside is a call on `tx` — the store's own methods,
-   * which flatten into this transaction rather than opening their own (see
-   * {@link AssistantStore.transaction}). No foreign async work happens in here,
-   * because over `bun:sqlite` awaiting anything else would let a concurrent
-   * store call join this transaction and roll back with it.
+   * THE CHECK HERE IS A FAST PATH, NOT THE GUARANTEE. `TaskStore.deleteByScope`
+   * makes the same refusal, atomically, and that is where the invariant
+   * actually lives. The reason is that this method cannot enforce it: the
+   * `listByScope` read and the `deleteByScope` write are separated by an
+   * `await`, and the store methods called on `tx` FLATTEN into this transaction
+   * rather than opening their own (see {@link AssistantStore.transaction}) — so
+   * a concurrent `claimNext` from a worker joins it too, and can move a task
+   * `queued → running` in the gap. A check-then-act invariant that spans an
+   * await inside a transaction is not atomic no matter how carefully the body
+   * is written; only a single synchronous statement or transaction inside the
+   * adapter is. This check survives because it refuses BEFORE the conversation
+   * is deleted, which is the better error for the overwhelmingly common case;
+   * the race is closed underneath it.
+   *
+   * All three deletes still share one transaction, and no foreign async work
+   * happens in here: over `bun:sqlite`, awaiting anything else would let an
+   * unrelated store call join this transaction and roll back with it.
    *
    * THE SCOPE IS THE CHAT ID. That is the convention `TurnRunner` writes with
    * (`scopeId: input.chatId`, so two turns in one conversation cannot run at

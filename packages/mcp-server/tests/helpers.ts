@@ -1,5 +1,5 @@
 import type { AiTool } from "@agentkit/core";
-import type { ToolSetContributor } from "@agentkit/host";
+import type { Clock, ToolSetContributor } from "@agentkit/host";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { McpServerHandler } from "../src/index.js";
@@ -228,4 +228,20 @@ export function textBlock(
     );
   }
   return block.text;
+}
+
+/** A clock that starts fixed and only moves when a test says so. */
+export interface TestClock extends Clock {
+  advance(ms: number): void;
+}
+
+export function createTestClock(start = "2026-01-01T00:00:00.000Z"): TestClock {
+  let current = new Date(start).getTime();
+  return {
+    now: () => new Date(current),
+    nowIso: () => new Date(current).toISOString(),
+    advance: (ms: number) => {
+      current += ms;
+    },
+  };
 }

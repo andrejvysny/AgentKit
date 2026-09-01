@@ -71,6 +71,8 @@ them under a prefix, set `basePath` (below) rather than rewriting `req.url`.
 | `authorize` | no | `AuthorizationPort` — consulted per route; a refusal is 403 |
 | `basePath` | no | Mount prefix, e.g. `"/api/agentkit"`; stripped before routing |
 | `cors` | no | `{ origins, allowHeaders?, exposeHeaders?, maxAgeSeconds? }` |
+| `maxBodyBytes` | no | Largest accepted request body; **absent means no cap** |
+| `clock` | no | `Clock` (`@agentkit/host`) for the timestamps `createMcpServer` mints; defaults to `defaultClock` |
 | `logger` | no | `Logger`; 5xx and stream failures are logged |
 | `streaming` | no | `{ pollIntervalMs, heartbeatIntervalMs, retryHintMs }` — 150 / 15000 / 2000 |
 
@@ -156,8 +158,8 @@ const deps = {
 | `GET,POST /v1/providers` | `{ kind: "provider" }` |
 | `PATCH,DELETE /v1/providers/:providerId`, `.../models`, `.../models/refresh`, `.../test` | `{ kind: "provider", id: providerId }` |
 | `GET,PATCH /v1/settings` | `{ kind: "settings" }` |
-| `GET,POST /v1/write-policy/allowances` | `{ kind: "policy" }` |
-| `DELETE /v1/write-policy/allowances/:allowanceId` | `{ kind: "policy", id: allowanceId }` |
+| `GET,POST /v1/chats/:chatId/write-policy/allowances` | `{ kind: "policy", id: chatId }` |
+| `DELETE /v1/chats/:chatId/write-policy/allowances/:allowanceId` | `{ kind: "policy", id: chatId }` |
 | `GET,POST /v1/mcp/servers` | `{ kind: "mcp_config" }` |
 | `PATCH,DELETE /v1/mcp/servers/:serverId` | `{ kind: "mcp_config", id: serverId }` |
 | `GET /v1/tools` | `{ kind: "tools" }` |
@@ -168,16 +170,20 @@ the route reads. The places that matters: the `/v1/messages/:messageId` routes
 carry no chat id and are `message`, not `chat` with a message id in `id` (an
 authorizer looking that up as a chat would deny a legitimate request);
 `tool-events` derives its answer from runs but *names* a chat, so it is
-authorized as one; and the allowance routes are the **policy**, not the chat a
-grant is about — an authorizer handed `{ kind: "chat", id: <an allowance key> }`
-would look up a chat that does not exist. A host that scopes on conversations
-resolves message → chat itself — it is the only side that can.
+authorized as one; and the allowance routes are the **policy of one chat** —
+`kind: "policy"` with the chat as the `id`, because "may this subject touch that
+chat?" and "may this subject grant standing writes in it?" are two different
+questions and a host must be able to answer them separately. A host that scopes
+on conversations resolves message → chat itself — it is the only side that can.
 
-Two routes are exceptions to "one id from the path", and both are called out in
+Three routes are exceptions to "one id from the path", and each is called out in
 `src/authorize.ts`. `regenerateMessage` carries a chat id **and** a message id,
 and is authorized as the chat it writes to: it creates a branch and a run there,
 and the message id names a position inside the conversation rather than the
-thing being touched. `searchMessages` carries no path id at all, and takes its
+thing being touched. `revokeAllowance` carries a chat id **and** an allowance
+key, and is authorized as the chat's policy: a key an authorizer has never seen
+lets it decide nothing, and the chat is the scope consent belongs to.
+`searchMessages` carries no path id at all, and takes its
 scope from `?chatId=` — with one it is that chat, without one it is the honest
 unscoped `{ kind: "chat" }`, so an authorizer that denies it denies exactly the
 cross-conversation search, which is the decision it should be making.
@@ -258,6 +264,37 @@ createRestHandler({
   credentialled cross-origin requests make CSRF reachable and forbid `*`
   outright; a host that wants them should say so at its own edge rather than get
   them from a transport package's options bag.
+
+## Body size, and what a served deployment owes this handler
+
+**There is no body-size cap by default.** `createRestHandler` will read whatever
+a client sends: a request body is `await req.text()`-ed by the route that needs
+it, and nothing in this package decides how large "too large" is. That is right
+for the embedding this adapter was written for — a desktop host on
+`127.0.0.1`, where the only client is the app's own window and a submit
+carrying an inline image is legitimately megabytes — and wrong for anything
+reachable by someone you have not met.
+
+**If you serve this on a network, put a limit in front of the handler.** A
+reverse proxy is the right place for it: nginx's `client_max_body_size`,
+Caddy's `request_body max_size`, an ALB or API Gateway payload limit, a Hono
+`bodyLimit()` middleware ahead of `app.all("/v1/*", …)`. All of them refuse the
+upload before the bytes reach this process, which is the difference that
+matters under load.
+
+`maxBodyBytes` is the in-handler version, for a deployment that has no proxy to
+put it in:
+
+```ts
+createRestHandler({ ...deps, maxBodyBytes: 5 * 1024 * 1024 });
+```
+
+Over the limit is a **413** with code `body_too_large`, in the same
+`application/problem+json` shape as every other error here, refused before
+`authenticate` runs. A request that declares a `Content-Length` over the limit
+is rejected on the header alone; one that declares none (a chunked body) is
+measured, which means buffering it — so this option bounds memory, it does not
+avoid spending it. Absent, nothing is capped.
 
 ## Idempotency on `submitMessage` and `regenerateMessage`
 
@@ -384,6 +421,7 @@ through untouched. The mapping:
 | `invalid_fork_point`, `invalid_regenerate`, `invalid_decision`, `invalid_request`, `invalid_body`, `idempotency_key_required` | 400 |
 | `forbidden` | 403 (`deps.authorize` refused) |
 | `method_not_allowed` | 405 (with an `Allow` header) |
+| `body_too_large` | 413 (only when `deps.maxBodyBytes` is set) |
 | `usage_denied` | 429 (`UsageAuthorizer` refused a provider call) |
 | `not_implemented` | 501 |
 | anything else (incl. `executor_not_found`) | 500, logged, with a generic `detail` |
@@ -393,10 +431,16 @@ The host-`code` → status table is `satisfies Record<HostErrorCode, number>`
 `bun run typecheck` rather than silently falling back to 500 (see [ADR
 0006](../../docs/adr/0006-hardening-tranche.md)).
 
-`forbidden`, `not_implemented`, `duplicate_provider` and `duplicate_alias` are
-**transport-level** codes: this adapter decides them, no `AgentKitHostError` was
-thrown, and inventing one to carry them would put a code in the host's closed
-union that the host never throws. The two `duplicate_*` codes are checked
+`forbidden`, `not_implemented`, `body_too_large`, `secret_write_failed`,
+`duplicate_provider` and `duplicate_alias` are **transport-level** codes: this
+adapter decides them, no `AgentKitHostError` was thrown, and inventing one to
+carry them would put a code in the host's closed union that the host never
+throws. `secret_write_failed` is the 500 a `createProvider`/`updateProvider`
+answers when the config was persisted and `deps.secrets` then refused the key:
+the config is written FIRST, on purpose, because a config naming a ref the store
+lacks is repaired by re-sending the `apiKey` (the ref is derived from the
+provider id, so a retry overwrites) while a secret written for a config that
+never landed is a live credential under a ref nothing names. The two `duplicate_*` codes are checked
 *ahead* of the store — `upsertProvider` would happily replace the row, and an
 `McpServerConfigStore`'s own refusal is an `McpError` from a package this
 adapter deliberately does not import, so it would arrive as an unrecognized
@@ -505,19 +549,30 @@ contract fails this package's compile until it is served.
   closed unions (`contextSizePreference`, `writePolicyMode`, `toolCalling`) are
   validated rather than passed through: a `writePolicyMode` nothing matches
   would be stored and then silently confirm every write forever.
-- **`/v1/write-policy/allowances`** — **501 without `deps.writePolicy`.**
-  `?chatId=` is **required** on the listing and the revoke, because the port is
-  chat-scoped (see the `deps` section). A grant is always **201** — `allow` is
-  an upsert keyed on `(chat, tool, kind)`, so re-granting changes the ceiling
-  rather than creating a second grant, and there is no side effect to duplicate.
-  A revoke is **204** whether or not the key was there, and a revoke naming the
-  wrong chat does nothing.
+- **`/v1/chats/:chatId/write-policy/allowances`** — **501 without
+  `deps.writePolicy`.** All three routes are **nested under the chat**: the port
+  is chat-scoped (see the `deps` section), and a chat carried in a query or a
+  body is a chat `authorize` cannot gate on — it is handed the path and the URL,
+  never the body. `GrantAllowanceRequest` therefore carries no `chatId`. A grant
+  is always **201** — `allow` is an upsert keyed on `(chat, tool, kind)`, so
+  re-granting changes the ceiling rather than creating a second grant, and there
+  is no side effect to duplicate. A revoke is **204** whether or not the key was
+  there, and a revoke naming the wrong chat does nothing.
 - **`/v1/mcp/servers`** — **501 without `deps.mcpConfigs`.** `alias` is unique
   (**409 `duplicate_alias`**) because it is the tool namespace every canonical
   id embeds; re-stating a record's own alias in a PATCH is not a collision. The
   transport union is closed, so an unknown `kind` is a 400. `secretRefs` is
   published whole — the record carries `SecretStore` refs, never values, which
-  is exactly why it can be.
+  is exactly why it can be. **`transport.env` and `transport.headers` are
+  REDACTED on the way out**: keys are preserved, every value reads back as
+  `"***"`. Nothing stops a client putting a literal token in either (that is
+  what `secretRefs` exists to avoid), and an unredacted projection would publish
+  it to everything that can call `GET /v1/mcp/servers`. **A client must resupply
+  full values whenever it PATCHes `transport`.** The patch is *field-level*: an
+  absent `transport` keeps the stored one, values and all, so disabling a server
+  or renaming its alias needs nothing resent — but a **present** `transport`
+  replaces the stored object wholesale, so a form that echoes back what it read
+  would store the literal `"***"`.
 - **`GET /v1/tools`** — **501 unless `deps.toolCatalog` is supplied.**
   `ToolSetContributor.contribute` is a per-*run* call taking the chat's bindings,
   limits and scope, and this route names no chat; synthesizing a run context
@@ -554,8 +609,10 @@ root):
 - `tests/router.test.ts` — every contract route resolves; params decode; 404 vs
   405 + `Allow`.
 - `tests/handler.test.ts` — the routes as a client calls them: idempotent
-  submit (201 then 200, identical body), validation, run projection, cancel,
-  message paging, credential redaction, the 501s, `authenticate`.
+  submit (201 then 200, identical body), the `providerId` override reaching the
+  host's submit input, validation, run projection, cancel, message paging,
+  credential redaction, the 501s, `maxBodyBytes` (413 over, served under, off by
+  default), `authenticate`.
 - `tests/authorize.test.ts` — the `AuthorizationPort` per route: 403 shape,
   subject/action/resource, the `getVersion` exemption, and a table-driven walk
   of `REST_ROUTES` asserting every route resolves to a resource.
@@ -574,8 +631,11 @@ root):
 - `tests/management.test.ts` — the management surface: chat patch/delete
   (including `chat_busy`), search (scoped, unscoped, 501), provider CRUD with
   the write-only `apiKey` asserted against the raw response bytes, settings
-  patching and its closed unions, write-policy allowances, and MCP config CRUD
-  with the duplicate-alias 409 — plus the 501 for every optional dependency.
+  patching and its closed unions, the config-before-secret write order (and the
+  500 when the secret store refuses), chat-scoped write-policy allowances with
+  the resource each one authorizes as, and MCP config CRUD with the
+  duplicate-alias 409, the redacted `transport.env`/`headers`, and the injected
+  clock — plus the 501 for every optional dependency.
 - `tests/branches-e2e.test.ts` — over a real socket: ask, ask again, rewrite the
   second question, stream the new branch, switch back, fork the prefix.
 - `tests/sse.test.ts` — replay order, `Last-Event-ID` resume, unknown-id full

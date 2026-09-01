@@ -202,6 +202,42 @@ Notes:
   stored as `TEXT`; the store (de)serializes them, SQLite never inspects their
   contents.
 
+## VACUUM caveat
+
+**Do not run `VACUUM` against a live AgentKit database file.**
+
+`message_search` is an **external-content** FTS5 table
+(`content='message_search_source'`, `content_rowid='rowid'`), so every posting
+in it is keyed by a `messages.rowid`. `messages` has a `TEXT` primary key and
+therefore no `INTEGER PRIMARY KEY` column, which puts it squarely in the case
+SQLite warns about: *"if [a] table does not have an INTEGER PRIMARY KEY column,
+then the VACUUM command may change the rowids of entries"*
+([sqlite.org/lang_vacuum.html](https://www.sqlite.org/lang_vacuum.html)).
+Renumbering rewrites the content table without telling FTS5, so the index goes
+on pointing at rowids that now belong to *other* messages: `searchMessages`
+starts returning the wrong message for a hit, and `snippet()` cuts a window out
+of a body that never contained the term. Nothing raises, and no later write
+repairs it — the triggers only maintain rows that change *after* the fact.
+
+Nothing in this adapter emits `VACUUM`; this caveat is about a DBA, a backup
+script, or a "compact the database" button reaching for the file. If one has
+already run, the index has to be rebuilt from the content table — in dev, by
+deleting and recreating the database (this adapter's answer to schema drift
+too), or by re-running the DDL's own backfill against the file:
+
+```sql
+INSERT INTO message_search(message_search) VALUES('delete-all');
+INSERT INTO message_search(rowid, body)
+  SELECT source.rowid, source.body FROM message_search_source AS source;
+```
+
+Note that FTS5's own `VALUES('rebuild')` command does **not** work here under
+`bun:sqlite`: rebuilding re-reads the content source from inside the fts5
+extension, where the JSON functions the view depends on are not resolvable, and
+it fails with `no such table: main.json_each`. The two statements above do the
+same job through the ordinary SQL path, which is why the schema's backfill is
+written that way in the first place.
+
 ## License
 
 MIT

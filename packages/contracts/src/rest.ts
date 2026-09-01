@@ -166,13 +166,27 @@ export const REST_ROUTES = {
   getSettings: { method: "GET", path: "/v1/settings" },
   updateSettings: { method: "PATCH", path: "/v1/settings" },
 
-  /** Standing write grants for one chat: `?chatId=` is REQUIRED. */
-  listAllowances: { method: "GET", path: "/v1/write-policy/allowances" },
-  grantAllowance: { method: "POST", path: "/v1/write-policy/allowances" },
-  /** `?chatId=` is REQUIRED — a grant is revoked by the chat that owns it. */
+  /**
+   * Standing write grants for one chat.
+   *
+   * All three are NESTED UNDER THE CHAT rather than rooted at the policy: a
+   * grant is one conversation's "yes", and a route whose chat lives in a query
+   * (or, worse, in the request body) cannot be authorized per chat — an
+   * `AuthorizationPort` is handed the path and the URL, and never the body.
+   * See `authorize.ts` in `@agentkit/transport-http`.
+   */
+  listAllowances: {
+    method: "GET",
+    path: "/v1/chats/:chatId/write-policy/allowances",
+  },
+  grantAllowance: {
+    method: "POST",
+    path: "/v1/chats/:chatId/write-policy/allowances",
+  },
+  /** The chat is in the path — a grant is revoked by the chat that owns it. */
   revokeAllowance: {
     method: "DELETE",
-    path: "/v1/write-policy/allowances/:allowanceId",
+    path: "/v1/chats/:chatId/write-policy/allowances/:allowanceId",
   },
 
   listMcpServers: { method: "GET", path: "/v1/mcp/servers" },
@@ -705,6 +719,13 @@ export const SubmitMessageRequestSchema = Type.Object({
   /** Overrides the provider's default model for this turn only. */
   model: Type.Optional(Type.String()),
   /**
+   * Answer with a NAMED provider rather than the configured default, for this
+   * turn only — the same field, with the same meaning, that
+   * {@link RegenerateMessageRequestSchema} carries. A client that can re-answer
+   * a question with another provider can ask one that way too.
+   */
+  providerId: Type.Optional(Type.String()),
+  /**
    * Submit this turn as a NEW BRANCH under the named message instead of at the
    * end of the conversation — the edit-and-regenerate flow, where a user rewrites
    * an earlier question and wants a different answer without losing the first one.
@@ -883,13 +904,14 @@ export type UpdateSettingsRequest = Static<typeof UpdateSettingsRequestSchema>;
  * Body of `grantAllowance` — a standing "yes" for one `(chat, tool, kind)` up
  * to `maxRisk`.
  *
- * The chat is in the BODY rather than the path because the route is rooted at
- * the policy, not at a conversation: a grant is a statement about the policy's
- * contents, and `listAllowances`/`revokeAllowance` name their chat the same way
- * (a `?chatId=` query) for the same reason.
+ * NO `chatId`: the chat is a PATH parameter
+ * (`/v1/chats/:chatId/write-policy/allowances`), the same one
+ * `listAllowances` and `revokeAllowance` take. A chat carried in the body could
+ * not be authorized — an `AuthorizationPort` sees the path and the URL, never
+ * the body — so the one field that decides whose consent is being granted would
+ * be the one field no authorizer could read.
  */
 export const GrantAllowanceRequestSchema = Type.Object({
-  chatId: Type.String(),
   toolName: Type.String(),
   proposalKind: Type.String(),
   maxRisk: RiskLevelDtoSchema,

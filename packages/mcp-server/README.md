@@ -39,6 +39,10 @@ const mcp = createMcpServerHandler({
     return chatId === null ? {} : { chatId };
   },
   writesEnabled: false, // default; see "Writes" below
+  // Session lifetime — both defaults shown; see "Session lifetime" below.
+  maxSessions: 64,
+  sessionIdleTtlMs: 30 * 60 * 1000,
+  clock,                // optional; only the two settings above read it
   logger,
 });
 
@@ -108,8 +112,40 @@ answer is closed over for the session's whole life. Two things are deliberately
 scope a caller can restate per call is a scope a caller can borrow. Sessions
 are keyed on the MCP `Mcp-Session-Id` header, which the server mints.
 
+**A session belongs to the principal that opened it.** At `initialize` the
+handler fingerprints the request's raw `Authorization` header (SHA-256; the
+empty string when there is none) and stores the digest, not the header. Every
+later request on that session id — GET, POST and DELETE alike — must present
+the same fingerprint, compared in constant time. A caller who authenticates
+with a *different* valid token and presents a leaked `Mcp-Session-Id` gets a
+`404` byte-identical to the one an invented id gets: a `401`/`403` there would
+confirm the session exists, and the DELETE it would otherwise be allowed to
+send would end someone else's session.
+
 **Bind loopback.** Even with a token, publishing this to a LAN publishes tool
 execution to a LAN.
+
+## Session lifetime
+
+Nothing in MCP obliges a client to send the `DELETE` that ends a session, and a
+session holds a `Server`, a transport and every SSE stream its client opened —
+so the map is bounded on two axes.
+
+- **`maxSessions`** (default **64**). At the cap, opening a new session closes
+  the one that has gone longest without a request, and closes its transport
+  with it — so its open streams end rather than lingering. Evicting the oldest
+  idle rather than refusing the newcomer is deliberate: a client that walked
+  away must not be able to lock a live one out.
+- **`sessionIdleTtlMs`** (default **30 minutes**). A session idle longer than
+  this is closed. Reaped **lazily**, on the next request the handler serves —
+  no timer is armed, because a package whose whole shape is "a function that
+  takes a `Request`" should not keep an event loop alive. A host that wants
+  eager cleanup calls `dispose()`.
+
+Both compare timestamps from `clock` (default `@agentkit/host`'s
+`defaultClock`), which is injectable so an idle-TTL test is about a fake clock
+rather than about waiting. An evicted or expired session id answers `404`, the
+same as an unknown one.
 
 ## Tool projection
 

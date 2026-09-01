@@ -112,14 +112,12 @@ const DRIVERS = {
   updateSettings: (c) => c.updateSettings({ allowRawToolData: true }),
   listAllowances: (c) => c.listAllowances({ chatId: "c-1" }),
   grantAllowance: (c) =>
-    c.grantAllowance({
-      chatId: "c-1",
-      toolName: "t",
-      proposalKind: "k",
-      maxRisk: "low",
-    }),
+    c.grantAllowance(
+      { chatId: "c-1" },
+      { toolName: "t", proposalKind: "k", maxRisk: "low" },
+    ),
   revokeAllowance: (c) =>
-    c.revokeAllowance({ allowanceId: "al-1", chatId: "c-1" }),
+    c.revokeAllowance({ chatId: "c-1", allowanceId: "al-1" }),
   listMcpServers: (c) => c.listMcpServers(),
   createMcpServer: (c) =>
     c.createMcpServer({
@@ -216,15 +214,34 @@ describe("headers and query parameters", () => {
     await client.listMessages({ chatId: "c-1", limit: 10, cursor: "cur" });
     await client.searchMessages({ q: "a b", chatId: "c-1", limit: 5 });
     await client.listProposals({ chatId: "c-1", status: "pending" });
-    await client.listAllowances({ chatId: "c-1" });
-    await client.revokeAllowance({ allowanceId: "al-1", chatId: "c-1" });
 
     expect(calls[0]!.url.search).toBe("?limit=25&before=2026-01-01");
     expect(calls[1]!.url.search).toBe("?limit=10&cursor=cur");
     expect(calls[2]!.url.searchParams.get("q")).toBe("a b");
     expect(calls[3]!.url.searchParams.get("status")).toBe("pending");
-    expect(calls[4]!.url.search).toBe("?chatId=c-1");
-    expect(calls[5]!.url.search).toBe("?chatId=c-1");
+  });
+
+  test("the allowance routes carry their chat in the PATH, not a query", async () => {
+    const { client, calls } = recordingClient();
+    await client.listAllowances({ chatId: "c-1" });
+    await client.grantAllowance(
+      { chatId: "c-1" },
+      { toolName: "t", proposalKind: "k", maxRisk: "low" },
+    );
+    await client.revokeAllowance({ chatId: "c-1", allowanceId: "al-1" });
+
+    for (const call of calls) {
+      expect(call.url.search).toBe("");
+      expect(call.url.pathname.startsWith("/v1/chats/c-1/write-policy/")).toBe(
+        true,
+      );
+    }
+    // And the grant body no longer names the chat a second time.
+    expect(JSON.parse(calls[1]!.body ?? "{}")).toEqual({
+      toolName: "t",
+      proposalKind: "k",
+      maxRisk: "low",
+    });
   });
 
   test("an absent optional query parameter is omitted, not sent as undefined", async () => {

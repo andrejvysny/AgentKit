@@ -90,3 +90,25 @@ export function resolveAuth(
   }
   return (header) => auth.verify(header);
 }
+
+/**
+ * The fingerprint an MCP session is bound to: SHA-256 of the RAW
+ * `Authorization` header, rendered as hex — of the empty string when the
+ * request carries no header at all.
+ *
+ * The RAW header, not the parsed token, because {@link McpServerAuth.verify}
+ * hosts may put anything in there (a JWT, a scheme this package does not
+ * know), and the binding must be to whatever the caller actually proved with.
+ * A digest rather than the header itself so a live session map is not a place
+ * credentials sit in memory for the session's whole life.
+ *
+ * Compare two of these with {@link timingSafeEqualString} — never with `===`.
+ */
+export async function authFingerprint(
+  authorizationHeader: string | null,
+): Promise<string> {
+  const digest = await sha256(authorizationHeader ?? "");
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}

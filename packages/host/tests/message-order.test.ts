@@ -142,3 +142,162 @@ describe("orderMessagesForProvider", () => {
     expect(orderMessagesForProvider([])).toEqual([]);
   });
 });
+
+/**
+ * What a run with TWO tool-calling passes leaves behind — the shape the
+ * correction harness produces, since its write-back tells the model to call its
+ * tools again on the SAME run id.
+ */
+function twoPassRecords(runId: string): MessageRecord[] {
+  return [
+    record({ id: "user", role: "user", orderKey: 1 }),
+    record({
+      id: "visible",
+      role: "assistant",
+      runId,
+      orderKey: 2,
+      content: "corrected answer",
+    }),
+    record({
+      id: "pass1-assistant",
+      role: "assistant",
+      runId,
+      orderKey: 3,
+      metadata: { internal: true },
+      toolCalls: [{ id: "call-1", name: "echo", argumentsJson: "{}" }],
+    }),
+    record({
+      id: "pass1-tool",
+      role: "tool",
+      runId,
+      orderKey: 4,
+      toolCallId: "call-1",
+      metadata: { internal: true, toolName: "echo" },
+    }),
+    record({
+      id: "write-back",
+      role: "user",
+      runId,
+      orderKey: 5,
+      metadata: { internal: true, correctionPass: 1 },
+    }),
+    record({
+      id: "pass2-assistant",
+      role: "assistant",
+      runId,
+      orderKey: 6,
+      metadata: { internal: true },
+      toolCalls: [{ id: "call-2", name: "echo", argumentsJson: "{}" }],
+    }),
+    record({
+      id: "pass2-tool",
+      role: "tool",
+      runId,
+      orderKey: 7,
+      toolCallId: "call-2",
+      metadata: { internal: true, toolName: "echo" },
+    }),
+  ];
+}
+
+describe("orderMessagesForProvider — a run with two tool-calling passes", () => {
+  it("keeps each pass next to its own tool results", () => {
+    // Bucketing by KIND would give assistant, assistant, tool, tool: two
+    // tool-calling turns back to back, the first one unanswered, which every
+    // provider rejects outright.
+    expect(
+      orderMessagesForProvider(twoPassRecords("run-1")).map((r) => r.id),
+    ).toEqual([
+      "user",
+      "pass1-assistant",
+      "pass1-tool",
+      "pass2-assistant",
+      "pass2-tool",
+      "visible",
+      "write-back",
+    ]);
+  });
+
+  it("groups by linkage, not by adjacency, when results land out of order", () => {
+    const records = twoPassRecords("run-1");
+    // The second pass's result written before the first pass's — a projection
+    // that fell behind, or an import that named its own order.
+    const swapped = [
+      ...records.filter((r) => r.id !== "pass2-tool"),
+      {
+        ...(records.find((r) => r.id === "pass2-tool") as MessageRecord),
+        orderKey: 3.5,
+      },
+    ];
+    expect(orderMessagesForProvider(swapped).map((r) => r.id)).toEqual([
+      "user",
+      "pass1-assistant",
+      "pass1-tool",
+      "pass2-assistant",
+      "pass2-tool",
+      "visible",
+      "write-back",
+    ]);
+  });
+
+  it("leaves a result no turn in the run declared ahead of the answer", () => {
+    const records = [
+      ...twoPassRecords("run-1"),
+      record({
+        id: "orphan-tool",
+        role: "tool",
+        runId: "run-1",
+        orderKey: 8,
+        toolCallId: "call-99",
+        metadata: { internal: true },
+      }),
+    ];
+    // Nothing claims it, so it keeps chat order — still ahead of the visible
+    // answer, where the caller drops it as the orphan it is.
+    expect(orderMessagesForProvider(records).map((r) => r.id)).toEqual([
+      "user",
+      "pass1-assistant",
+      "pass1-tool",
+      "pass2-assistant",
+      "pass2-tool",
+      "orphan-tool",
+      "visible",
+      "write-back",
+    ]);
+  });
+
+  it("does not let a second turn re-claim the first turn's results", () => {
+    // A malformed run that declared the same id twice: one result, one owner.
+    const records = [
+      record({
+        id: "a1",
+        role: "assistant",
+        runId: "r",
+        orderKey: 1,
+        metadata: { internal: true },
+        toolCalls: [{ id: "dup", name: "echo", argumentsJson: "{}" }],
+      }),
+      record({
+        id: "a2",
+        role: "assistant",
+        runId: "r",
+        orderKey: 2,
+        metadata: { internal: true },
+        toolCalls: [{ id: "dup", name: "echo", argumentsJson: "{}" }],
+      }),
+      record({
+        id: "t",
+        role: "tool",
+        runId: "r",
+        orderKey: 3,
+        toolCallId: "dup",
+        metadata: { internal: true },
+      }),
+    ];
+    expect(orderMessagesForProvider(records).map((r) => r.id)).toEqual([
+      "a1",
+      "t",
+      "a2",
+    ]);
+  });
+});

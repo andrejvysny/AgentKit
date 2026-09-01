@@ -594,11 +594,25 @@ export class TurnRunner implements TaskWorker {
    *   which is a turn in another chat, is an id collision between two unrelated
    *   callers — same reasoning, louder failure mode;
    * - a payload missing either message id cannot answer the caller at all, and
-   *   a turn row without them did not come from this method.
+   *   a turn row without them did not come from this method;
+   * - and, where the caller can name the question it is re-answering (a
+   *   regenerate, which branches under an EXISTING message), a payload naming a
+   *   different one is two different regenerates that reused one `taskId`, not
+   *   a redelivery.
    */
   private async resubmitted(
     err: unknown,
-    input: { chatId: string; taskId?: string; kind: string },
+    input: {
+      chatId: string;
+      taskId?: string;
+      kind: string;
+      /**
+       * The question the caller means to re-answer, when it HAS one. A submit
+       * mints its user message here and so cannot check it; a regenerate does
+       * not, and must — see the `userMessageId` clause below.
+       */
+      expectUserMessageId?: string;
+    },
     taskId: string,
   ): Promise<SubmitMessageResult | null> {
     if (!(err instanceof DuplicateTaskError) || input.taskId === undefined) {
@@ -611,6 +625,17 @@ export class TurnRunner implements TaskWorker {
       payload.chatId !== input.chatId ||
       typeof payload.userMessageId !== "string" ||
       typeof payload.assistantMessageId !== "string"
+    ) {
+      return null;
+    }
+    // Same task id, same chat, same kind — but a DIFFERENT question. Two
+    // regenerates that reused one caller-supplied `taskId` against different
+    // messages are not a redelivery of each other, and answering the second
+    // with the first one's run would point the caller at a branch under a
+    // message it never named.
+    if (
+      input.expectUserMessageId !== undefined &&
+      payload.userMessageId !== input.expectUserMessageId
     ) {
       return null;
     }
@@ -696,7 +721,11 @@ export class TurnRunner implements TaskWorker {
         });
       });
     } catch (err) {
-      const existing = await this.resubmitted(err, { ...input, kind }, taskId);
+      const existing = await this.resubmitted(
+        err,
+        { ...input, kind, expectUserMessageId: parentMessageId },
+        taskId,
+      );
       if (existing === null) throw err;
       await this.deps.taskRunner.enqueue({ taskId, scopeId: input.chatId });
       return existing;
@@ -1490,7 +1519,12 @@ export class TurnRunner implements TaskWorker {
           );
           continue;
         }
-        if (!cache.has(ref)) cache.set(ref, await resolver.resolve(ref));
+        if (!cache.has(ref)) {
+          // The chat is passed so a multi-tenant host can SCOPE the lookup:
+          // refs come from the client, so "may this chat see it" is the actual
+          // question — see {@link AttachmentResolver.resolve}.
+          cache.set(ref, await resolver.resolve(ref, { chatId: input.chatId }));
+        }
         const attachment = cache.get(ref) ?? null;
         if (attachment === null) {
           await this.emitWarning(
@@ -1599,14 +1633,15 @@ export class TurnRunner implements TaskWorker {
    * written, and feeding a model its own empty (or half-written) reply is how a
    * turn ends up completing someone else's sentence. `role: "system"` records
    * are skipped too: those are UI banners the host wrote about the turn, not
-   * prompt material.
+   * prompt material — as are the correction harness's write-backs, which were
+   * instructions to one pass of one run and not standing orders (below).
    *
    * The records come from `listMessages`, which reports the chat's ACTIVE PATH —
    * so a branch submit replays the branch and not the answer it replaced, with
-   * no filtering here. `orderMessagesForProvider` runs over them unchanged:
-   * `orderKey` increases with depth along any path, so ordering the active path
-   * by `orderKey` and ordering it by depth are the same order, and the
-   * run-scoped tool-call repair it performs is untouched by branching.
+   * no branch filtering needed here. `orderMessagesForProvider` runs over them
+   * unchanged: `orderKey` increases with depth along any path, so ordering the
+   * active path by `orderKey` and ordering it by depth are the same order, and
+   * the run-scoped tool-call linkage it restores is untouched by branching.
    *
    * The result is then balanced in BOTH directions before it leaves: a tool
    * result whose requesting turn fell outside the window is dropped (below), and
@@ -1636,6 +1671,14 @@ export class TurnRunner implements TaskWorker {
     const declaredToolCallIds = new Set<string>();
     for (const record of ordered) {
       if (record.id === assistantMessageId) continue;
+      // A correction write-back is an instruction the harness aimed at ONE pass
+      // of ONE run ("fix these three items now, by calling your tools"). It is
+      // persisted for the audit trail — the stored history has to say why the
+      // model changed its answer — but replaying it here would hand every later
+      // turn a dangling order about deficiencies that were already addressed,
+      // with nothing left in view to address. The harness's own passes are
+      // unaffected: they build their messages directly, not from this history.
+      if (record.metadata["correctionPass"] !== undefined) continue;
       if (record.role === "user") {
         messages.push({ role: "user", content: record.content });
       } else if (record.role === "assistant") {

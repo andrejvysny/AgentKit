@@ -4,7 +4,18 @@ import type { AiContextBinding, AiToolDefinition } from "@agentkit/contracts";
 export interface ToolGuardContext {
   /** Absent when the question is chat-independent (`ToolCatalog.listTools()`). */
   chatId?: string;
-  /** The run's resolved bindings — empty when there is no chat. */
+  /**
+   * The run's resolved bindings — empty when there is no chat.
+   *
+   * A STAGING-TIME SNAPSHOT, even in `canExecute`. The context object is built
+   * once, when the registry is staged, and the same one is handed to every
+   * later call: it is what the run was bound to when its tool set was decided,
+   * not what it is bound to now. That is the right input for `isVisible`, which
+   * IS a staging-time question. A `canExecute` guard whose verdict turns on
+   * state that moves within a run — a binding swapped, a lock taken, a budget
+   * spent — must re-read that state itself, from whatever owns it; reading it
+   * here would be reading a photograph.
+   */
   bindings: readonly AiContextBinding[];
   /** The namespace of the contributor that offered {@link tool}. */
   namespace: string;
@@ -39,9 +50,22 @@ export type ToolGuardVerdict =
  * so a guard must not depend on running before or after another one.
  */
 export interface ToolGuard {
-  /** False hides the tool from the staged registry entirely. */
+  /**
+   * False hides the tool from the staged registry entirely.
+   *
+   * THROWING ALSO HIDES IT (with a warning on the host's logger): a hook that
+   * could not answer has not allowed anything. The failure is scoped to the one
+   * tool being judged, so a guard broken for a single tool costs that tool and
+   * not the run's whole tool set.
+   */
   isVisible?(ctx: ToolGuardContext): boolean | Promise<boolean>;
-  /** A refusal fails this one call, with the reason shown to the model. */
+  /**
+   * A refusal fails this one call, with the reason shown to the model.
+   *
+   * THROWING IS A REFUSAL, reported to the model as `phase: "guard"` with the
+   * fixed reason `"guard error"` — the thrown message is deliberately not
+   * forwarded, because a guard's reason goes to the model verbatim.
+   */
   canExecute?(
     ctx: ToolGuardContext,
   ): ToolGuardVerdict | Promise<ToolGuardVerdict>;
