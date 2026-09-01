@@ -10,7 +10,6 @@
  * the three methods this adapter actually calls costs a dozen lines and keeps
  * the seam a seam.
  */
-import type { AiToolDefinition } from "@agentkit/contracts";
 import type {
   ApplyOutcome,
   ApplyProposalRequest,
@@ -22,6 +21,7 @@ import type {
   RejectProposalInput,
   SubmitMessageInput,
   SubmitMessageResult,
+  ToolCatalog,
 } from "@agentkit/host";
 import type { RestCorsOptions } from "./cors.js";
 
@@ -99,16 +99,17 @@ export interface RestHandlerDeps {
    */
   proposals?: ProposalOperations;
   /**
-   * What `listTools` advertises.
+   * What `listTools` advertises — the host's {@link ToolCatalog} port.
    *
-   * Optional because `ToolSetContributor.contribute` is a per-RUN call — it
-   * takes bindings, limits and a scope, all of which belong to a conversation
-   * — and `GET /v1/tools` names no conversation. A host that can enumerate a
-   * static catalogue passes one here; one that cannot leaves it out and the
-   * route answers 501 rather than inventing a fake run context and advertising
-   * tools no turn would actually get.
+   * Still optional: `ToolSetContributor.contribute` is a per-RUN call (bindings,
+   * limits, scope — all of which belong to a conversation) and `GET /v1/tools`
+   * names no conversation, so a host that cannot enumerate without one leaves
+   * this out and the route answers 501 rather than inventing a run context. A
+   * host that can wires `createContributorToolCatalog` from `@agentkit/host`,
+   * which answers by staging the real contributors through the real staging
+   * path (namespaces, guards and unbound pruning included).
    */
-  toolCatalog?(): Promise<AiToolDefinition[]>;
+  toolCatalog?: ToolCatalog;
   /** Reported by `getVersion` as `packages`, for an identifiable build. */
   packages?: Record<string, string>;
   /**

@@ -56,7 +56,7 @@ them under a prefix, set `basePath` (below) rather than rewriting `req.url`.
 | `turns` | yes | Anything with `submitMessage` (i.e. `TurnRunner`) |
 | `tasks` | yes | Anything with `cancelTask` (i.e. `TaskService`) |
 | `proposals` | no | Anything with `approve`/`reject`/`apply` (i.e. `ProposalService`) |
-| `toolCatalog` | no | `() => Promise<AiToolDefinition[]>` backing `GET /v1/tools` |
+| `toolCatalog` | no | `ToolCatalog` (`@agentkit/host`) backing `GET /v1/tools` |
 | `packages` | no | Reported as `VersionDto.packages` |
 | `authenticate` | no | `(req) => Promise<unknown \| Response>`; a `Response` short-circuits |
 | `authorize` | no | `AuthorizationPort` — consulted per route; a refusal is 403 |
@@ -399,7 +399,14 @@ contract fails this package's compile until it is served.
 - **`GET /v1/tools`** — **501 unless `deps.toolCatalog` is supplied.**
   `ToolSetContributor.contribute` is a per-*run* call taking the chat's bindings,
   limits and scope, and this route names no chat; synthesizing a run context
-  would advertise a tool set no actual turn receives.
+  would advertise a tool set no actual turn receives. The `ToolCatalog` port is
+  the honest version of the question: this route calls `listTools()` with **no
+  scope**, which is the port's chat-independent set (no bindings, unbound rules).
+  A host wires `createContributorToolCatalog({ contributors, context?, guards? })`
+  from `@agentkit/host`, which answers by staging the real contributors through
+  the real staging path, so the catalogue cannot drift from what a turn gets.
+  Entries are `{ namespace, definition }`; the route publishes the `definition`
+  only — `namespace` is host-side attribution, not part of `ToolDefinitionDto`.
 - **`POST /v1/proposals/:id/{approve,reject,apply}`** — **501 unless
   `deps.proposals` is supplied.** A decision arriving over HTTP is recorded as
   `actor: "user"` and never as `"policy"` (which must carry the `policyId` that

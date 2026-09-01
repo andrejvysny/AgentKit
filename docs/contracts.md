@@ -206,6 +206,31 @@ event log
 `status: "partial"` survives even when `ok: false` — see the "partial wins"
 invariant in [`docs/architecture.md`](architecture.md#loop-invariants).
 
+### The error side of the envelope
+
+A failed call's `envelope.data` is `AiToolErrorData`:
+
+```ts
+{ errorCode, errorMessage, phase?, retryable? }
+```
+
+| Field | What it says |
+| --- | --- |
+| `errorCode` | Machine-readable cause — `tool_missing`, `bad_args`, `schema_invalid`, `exec_failed`, `tool_call_cap`, `cancelled`, `tool_guard_refused`, or a tool's own code. |
+| `errorMessage` | The human/model-facing explanation; also the envelope's `summary`. |
+| `phase?` | `"validation" \| "guard" \| "execution"` — WHERE it died: the argument schema, the guard chain, or the tool's own body. |
+| `retryable?` | Whether another attempt could plausibly succeed. Advice for whoever is deciding; nothing in this repository retries a tool call by itself. |
+
+Both new fields are **optional and additive**, and are set only where the
+producer actually knows them — absent means "unrecorded", never "false":
+
+| Failure | `phase` | `retryable` |
+| --- | --- | --- |
+| `AiToolRegistry` input-schema validation (`schema_invalid`) | `validation` | `false` — the same arguments fail the same way; the model must write different ones |
+| `ToolGuard.canExecute` refusal (`tool_guard_refused`) | `guard` | `false` — a decision, not a fault |
+| A tool's `execute` threw (`exec_failed`) | `execution` | the error's own `retryable` property, default `false` |
+| Everything else (`tool_missing`, `bad_args`, `tool_call_cap`, `cancelled`) | absent | absent |
+
 ## `run.usage` — per-call delta semantics
 
 Token accounting is reported **per provider call**, not once per run — a run

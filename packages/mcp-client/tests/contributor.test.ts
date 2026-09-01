@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { AiToolRegistry, resolveToolLimits } from "@agentkit/core";
-import type { ToolContributionContext } from "@agentkit/host";
+import { stageRegistry, type ToolContributionContext } from "@agentkit/host";
 import {
   createMcpToolSetContributor,
   McpClientManager,
@@ -354,5 +354,40 @@ describe("createMcpToolSetContributor", () => {
     expect(
       createMcpToolSetContributor(manager).unboundToolNames,
     ).toBeUndefined();
+  });
+
+  it("claims the reserved mcp namespace, and staging accepts it", async () => {
+    const manager = setup(
+      [
+        {
+          alias: "idx",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
+      { idx: searchServer },
+    );
+    const contributor = createMcpToolSetContributor(manager);
+    expect(contributor.namespace).toBe("mcp");
+    expect(contributor.privileged).toBe(true);
+
+    // The privilege is what makes it pass: the same namespace without the flag
+    // is refused, which is the whole point of reserving it.
+    const staged = await stageRegistry({
+      contributors: [contributor],
+      ctx: CTX,
+      hasPrimaryBinding: true,
+    });
+    expect(staged.registry.size()).toBeGreaterThan(0);
+    for (const namespace of staged.namespaces.values()) {
+      expect(namespace).toBe("mcp");
+    }
+    await expect(
+      stageRegistry({
+        contributors: [{ ...contributor, privileged: false }],
+        ctx: CTX,
+        hasPrimaryBinding: true,
+      }),
+    ).rejects.toThrow(/reserved/i);
   });
 });

@@ -44,6 +44,7 @@ import {
   SessionWritePolicy,
   TaskService,
   TurnRunner,
+  createContributorToolCatalog,
   createDispatchingWorker,
   defaultClock,
   defaultIds,
@@ -134,7 +135,10 @@ export interface App {
   mcpEnabled: boolean;
   /** What `serveRest`/`createRestHandler` need. */
   deps: RestHandlerDeps;
-  /** Stops the worker, disposes MCP connections (if any), and closes the DB. */
+  /**
+   * Stops the worker, disposes the tool contributors and the MCP connections
+   * (if any), and closes the DB. Idempotent — a repeated signal is safe.
+   */
   stop(): Promise<void>;
 }
 
@@ -331,6 +335,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     turns: turnRunner,
     tasks: taskService,
     proposals,
+    // `GET /v1/tools` answers 200 because of this line: the catalogue stages
+    // the SAME contributors a turn does, so what the route advertises and what
+    // a run receives cannot drift. Leave it out and the route reports 501.
+    toolCatalog: createContributorToolCatalog({ contributors, logger }),
     packages: { "@agentkit/example-desktop-host": "0.1.0-dev" },
     basePath: "/api/agentkit",
     cors: {
@@ -349,6 +357,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     deps,
     async stop(): Promise<void> {
       await handle.stop();
+      // Contributors first, then the transports they were built over: a
+      // contributor's `dispose` may still need the connection `mcp.dispose()`
+      // is about to tear down. Both are idempotent, so a second SIGINT is safe.
+      await turnRunner.disposeContributors();
       if (mcp) await mcp.dispose();
       store.close();
     },

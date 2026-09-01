@@ -18,6 +18,8 @@ export * from "./verification.js";
 export * from "./context-provider.js";
 export * from "./attachment-resolver.js";
 export * from "./tool-contributor.js";
+export * from "./tool-guard.js";
+export * from "./tool-catalog.js";
 export * from "./task-runner.js";
 export * from "./write-policy.js";
 export * from "./proposal-applier.js";

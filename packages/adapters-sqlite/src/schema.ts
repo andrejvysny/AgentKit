@@ -30,7 +30,7 @@
  * stored as TEXT; the store (de)serializes them, SQLite never inspects their
  * contents.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /**
  * The DDL for {@link SCHEMA_VERSION}. There are NO migrations in this
@@ -40,13 +40,14 @@ export const SCHEMA_VERSION = 5;
  * migration scripts would be claiming a durability guarantee it does not have.
  * A host that needs upgrades in place owns that story with its own store.
  *
- * That refusal IS the v4 → v5 upgrade path, exactly as it was the v3 → v4 one:
- * a database stamped 4 raises `sqlite_schema_version` and is recreated. The
- * `DEFAULT 'text'` on the new `messages.content_format` column is therefore not
- * a migration aid — it is what keeps the DDL re-appliable over a database this
- * build already wrote, which is the property every statement here has.
+ * That refusal IS the v5 → v6 upgrade path, exactly as it was the v4 → v5 one:
+ * a database stamped 5 raises `sqlite_schema_version` and is recreated. The
+ * `DEFAULT` clauses on the newer columns (`messages.content_format`,
+ * `settings.tool_calling_mode`) are therefore not migration aids — they are what
+ * keeps the DDL re-appliable over a database this build already wrote, which is
+ * the property every statement here has.
  */
-export const SCHEMA_V5 = `
+export const SCHEMA_V6 = `
 CREATE TABLE IF NOT EXISTS chats (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -273,11 +274,15 @@ CREATE TABLE IF NOT EXISTS settings (
   write_policy_mode TEXT NOT NULL,
   allow_raw_tool_data INTEGER NOT NULL,
   max_tool_iterations INTEGER,
+  -- 'auto' | 'on' | 'off'. Named _mode because provider_capabilities already
+  -- has a BOOLEAN tool_calling (what was probed); this is what the operator
+  -- decided on top of it.
+  tool_calling_mode TEXT NOT NULL DEFAULT 'auto',
   metadata TEXT NOT NULL DEFAULT '{}'
 );
 INSERT OR IGNORE INTO settings
-  (id, context_size_preference, write_policy_mode, allow_raw_tool_data, metadata)
-  VALUES (1, 'small', 'auto_readonly_confirm_writes', 0, '{}');
+  (id, context_size_preference, write_policy_mode, allow_raw_tool_data, tool_calling_mode, metadata)
+  VALUES (1, 'small', 'auto_readonly_confirm_writes', 0, 'auto', '{}');
 
 -- Backs TaskStore.acquireLease's store-global monotonic fencing token. Not a
 -- port record — see the module doc comment above.

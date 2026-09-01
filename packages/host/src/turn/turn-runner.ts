@@ -37,6 +37,7 @@ import type {
   TaskWorker,
 } from "../ports/task-runner.js";
 import type { ToolSetContributor } from "../ports/tool-contributor.js";
+import type { ToolGuard } from "../ports/tool-guard.js";
 import type { UsageAuthorizer } from "../ports/usage-authorizer.js";
 import type { AssistantSettings } from "../ports/settings-store.js";
 import type { TaskRecord, TaskStatus } from "../ports/task-store.js";
@@ -171,6 +172,12 @@ export interface TurnRunnerDeps {
   providerFactory(config: AiProviderConfig): AiProviderClient;
   secrets?: SecretStore;
   contributors: ToolSetContributor[];
+  /**
+   * Visibility/executability policy applied to every contributed tool. Absent —
+   * the default — nothing is asked and every contributed tool is staged and
+   * callable, exactly as before the port existed. See {@link ToolGuard}.
+   */
+  toolGuards?: ToolGuard[];
   context?: ContextProvider;
   verification?: VerificationHook;
   /**
@@ -346,7 +353,39 @@ interface PassResult {
  * mid-retry still sees one unbroken, gap-detectable stream.
  */
 export class TurnRunner implements TaskWorker {
+  /**
+   * Whether {@link disposeContributors} has already run. A host wires the call
+   * into a signal handler, and a signal can arrive twice.
+   */
+  private contributorsDisposed = false;
+
   constructor(private readonly deps: TurnRunnerDeps) {}
+
+  /**
+   * Release every contributor that holds something open — the shutdown half of
+   * `ToolSetContributor`'s lifecycle.
+   *
+   * Idempotent by design: a second call does nothing, because the natural place
+   * to wire this is a SIGINT/SIGTERM handler and the second Ctrl-C must not
+   * close a client connection twice. A contributor that throws is logged and
+   * skipped rather than allowed to strand the ones after it — shutdown that
+   * gives up halfway leaks more than the error it reported.
+   */
+  async disposeContributors(): Promise<void> {
+    if (this.contributorsDisposed) return;
+    this.contributorsDisposed = true;
+    for (const contributor of this.deps.contributors) {
+      if (contributor.dispose === undefined) continue;
+      try {
+        await contributor.dispose();
+      } catch (err) {
+        this.deps.logger?.warn("tool contributor dispose failed", {
+          namespace: contributor.namespace,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
 
   /**
    * Record a turn and hand it to the queue. Never waits on the model: the task
@@ -597,24 +636,34 @@ export class TurnRunner implements TaskWorker {
 
     // A provider probed as chat-only must not be handed tools at all: doing so
     // is the exact request shape that fails, and the chat-only retry exists to
-    // recover from discovering that the hard way.
-    const providerAllowsTools = capabilities?.toolCalling !== false;
-    const registry = providerAllowsTools
-      ? await stageRegistry({
-          contributors: this.deps.contributors,
-          ctx: {
-            chatId,
-            runId: task.taskId,
-            scopeId: task.scopeId,
-            bindings,
-            limits,
-            signal: ctx.signal,
-            ...(this.deps.logger === undefined
+    // recover from discovering that the hard way. The setting overrides the
+    // probe in BOTH directions — see `AssistantSettings.toolCalling`.
+    const toolCalling = settings.toolCalling ?? "auto";
+    const stageTools =
+      toolCalling === "off"
+        ? false
+        : toolCalling === "on" || capabilities?.toolCalling !== false;
+    const registry = stageTools
+      ? (
+          await stageRegistry({
+            contributors: this.deps.contributors,
+            ctx: {
+              chatId,
+              runId: task.taskId,
+              scopeId: task.scopeId,
+              bindings,
+              limits,
+              signal: ctx.signal,
+              ...(this.deps.logger === undefined
+                ? {}
+                : { logger: this.deps.logger }),
+            },
+            hasPrimaryBinding,
+            ...(this.deps.toolGuards === undefined
               ? {}
-              : { logger: this.deps.logger }),
-          },
-          hasPrimaryBinding,
-        })
+              : { guards: this.deps.toolGuards }),
+          })
+        ).registry
       : new AiToolRegistry();
     const registryHadTools = registry.size() > 0;
 

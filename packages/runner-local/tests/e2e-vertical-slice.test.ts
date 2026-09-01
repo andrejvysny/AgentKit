@@ -303,6 +303,7 @@ function embedSlice(options: { provider?: AiProviderClient } = {}): Slice {
 
   // 6. Tools are contributed per run, not registered at boot.
   const contributor: ToolSetContributor = {
+    namespace: "notes",
     contribute: async () => [notesAppend as unknown as AiTool],
   };
 

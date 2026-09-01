@@ -97,7 +97,7 @@ is plain `priority DESC, enqueued_at ASC`. See
 
 ## Schema (v5)
 
-Single-file DDL in `src/schema.ts` (`SCHEMA_V5`), applied idempotently
+Single-file DDL in `src/schema.ts` (`SCHEMA_V6`), applied idempotently
 (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). No migrations ship — see
 "It owns its database file" above.
 

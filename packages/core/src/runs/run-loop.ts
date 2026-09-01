@@ -9,6 +9,8 @@ import type {
   AiRunEvent,
   AiToolCall,
   AiToolEnvelope,
+  AiToolErrorData,
+  AiToolErrorPhase,
   AiToolLimits,
   AiToolResult,
 } from "@agentkit/contracts";
@@ -363,7 +365,13 @@ export async function* runChat(
         );
         if (schemaErrors.length > 0) {
           const err = describeValidationErrors(tc.name, schemaErrors);
-          yield* failTool(stamp, runId, messages, tc, err, "schema_invalid");
+          // `retryable: false` is about THIS call, not about the tool: the same
+          // arguments will fail the same way, so a bare retry is pointless —
+          // the model has to write different ones.
+          yield* failTool(stamp, runId, messages, tc, err, "schema_invalid", {
+            phase: "validation",
+            retryable: false,
+          });
           continue;
         }
 
@@ -455,6 +463,7 @@ export async function* runChat(
             tc,
             result.error,
             "exec_failed",
+            { phase: "execution", retryable: result.retryable },
           );
         }
       }
@@ -563,6 +572,16 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
+/**
+ * The optional structured half of a failure: which gate it died at, and whether
+ * another attempt could plausibly work. Both are omitted rather than guessed —
+ * see {@link AiToolErrorPhase}.
+ */
+interface ToolFailureDetail {
+  phase?: AiToolErrorPhase;
+  retryable?: boolean;
+}
+
 /** Emit a run.tool.failed event and append the matching error tool message. */
 function* failTool(
   stamp: EventStamper,
@@ -571,6 +590,7 @@ function* failTool(
   tc: AiToolCall,
   errorMessage: string,
   errorCode: string,
+  detail: ToolFailureDetail = {},
 ): Generator<AiRunEvent, void, unknown> {
   yield stamp({
     type: "run.tool.failed",
@@ -580,7 +600,7 @@ function* failTool(
   });
   messages.push({
     role: "tool",
-    content: JSON.stringify(errorEnvelope(errorCode, errorMessage)),
+    content: JSON.stringify(errorEnvelope(errorCode, errorMessage, detail)),
     toolCallId: tc.id,
     name: tc.name,
   });
@@ -589,19 +609,28 @@ function* failTool(
 /**
  * Build the Wave-0 balanced error envelope (§0.2) fed to the model on a failure
  * path (tool missing / bad JSON / schema_invalid / exec_failed / cap). The
- * structured `data.errorCode`/`errorMessage` lets the model react precisely.
+ * structured `data.errorCode`/`errorMessage` lets the model react precisely;
+ * `phase`/`retryable` are added only where this loop actually knows them, so an
+ * absent field means "unrecorded", never "false".
  */
 function errorEnvelope(
   errorCode: string,
   errorMessage: string,
+  detail: ToolFailureDetail = {},
 ): AiToolEnvelope {
+  const data: AiToolErrorData = {
+    errorCode,
+    errorMessage,
+    ...(detail.phase === undefined ? {} : { phase: detail.phase }),
+    ...(detail.retryable === undefined ? {} : { retryable: detail.retryable }),
+  };
   return {
     ok: false,
     status: "error",
     summary: errorMessage,
     warnings: [],
     truncated: false,
-    data: { errorCode, errorMessage },
+    data,
   };
 }
 
@@ -637,12 +666,30 @@ function buildEnvelope(result: AiToolResult<unknown>): AiToolEnvelope {
   };
 }
 
+/**
+ * A thrown error's own verdict on whether trying again is worth anything.
+ *
+ * Read off an optional `retryable` property rather than inferred from the error
+ * class: only the thrower knows whether the failure was a dead socket or a
+ * rejected argument, and defaulting to `false` keeps an unannotated throw from
+ * advertising a retry nobody promised.
+ */
+function retryableOf(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "retryable" in err &&
+    (err as { retryable: unknown }).retryable === true
+  );
+}
+
 async function executeToolSafely(
   tool: AiTool<unknown, unknown>,
   ctx: Parameters<AiTool["execute"]>[0],
   input: unknown,
 ): Promise<
-  { ok: true; value: AiToolResult<unknown> } | { ok: false; error: string }
+  | { ok: true; value: AiToolResult<unknown> }
+  | { ok: false; error: string; retryable: boolean }
 > {
   const timeoutMs = tool.definition.timeoutMs;
   // No per-tool timeout: unchanged fast path (every local tool hits this).
@@ -654,6 +701,7 @@ async function executeToolSafely(
       return {
         ok: false,
         error: err instanceof Error ? err.message : String(err),
+        retryable: retryableOf(err),
       };
     }
   }
@@ -682,11 +730,15 @@ async function executeToolSafely(
       return {
         ok: false,
         error: `Tool ${tool.definition.name} timed out after ${timeoutMs}ms`,
+        // A deadline says nothing about the tool's own retry semantics, and the
+        // abort error it produced is the loop's, not the tool's.
+        retryable: false,
       };
     }
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
+      retryable: retryableOf(err),
     };
   } finally {
     clearTimeout(timer);
