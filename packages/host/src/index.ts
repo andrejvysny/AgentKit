@@ -28,8 +28,10 @@ export * from "./proposals/proposal-builder-tool.js";
 export * from "./policy/session-write-policy.js";
 
 // Conversation shape: the message-tree arithmetic every ConversationStore
-// adapter shares (active path, branch switching, fork flattening).
+// adapter shares (active path, branch switching, fork flattening, import
+// validation), plus the chat lifecycle that spans three stores.
 export * from "./conversation/message-tree.js";
+export * from "./conversation/conversation-service.js";
 
 // Turn execution: the durable worker over core's run loop.
 export * from "./turn/message-order.js";

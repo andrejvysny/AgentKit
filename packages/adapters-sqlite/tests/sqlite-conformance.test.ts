@@ -8,7 +8,7 @@ describeAssistantStoreConformance({
     const store = new SqliteAssistantStore(":memory:");
     return {
       store,
-      capabilities: { atomicTransactions: true },
+      capabilities: { atomicTransactions: true, search: true },
       close: () => store.close(),
     };
   },
@@ -16,7 +16,7 @@ describeAssistantStoreConformance({
     const store = new SqliteAssistantStore(":memory:", { clock, ...aging });
     return {
       store,
-      capabilities: { atomicTransactions: true },
+      capabilities: { atomicTransactions: true, search: true },
       close: () => store.close(),
     };
   },

@@ -28,9 +28,12 @@ import {
   activationSetOf,
   activePathOf,
   assertAppendActivation,
+  assertListMessagesCursors,
   AgentKitHostError,
+  DEFAULT_SEARCH_LIMIT,
   DuplicateActionIdError,
   DuplicateTaskError,
+  InvalidImportError,
   InvalidProposalTransitionError,
   InvalidTaskTransitionError,
   LeaseLostError,
@@ -45,6 +48,10 @@ import {
   forkedChatTitle,
   forkPrefixOf,
   planForkedMessages,
+  planImportedMessages,
+  SEARCH_MATCH_END,
+  SEARCH_MATCH_START,
+  SEARCH_SNIPPET_ELLIPSIS,
   type AppendEventsOptions,
   type AppendMessageInput,
   type ApplyOutcome,
@@ -65,12 +72,16 @@ import {
   type EndAttemptInput,
   type ForkChatResult,
   type IdGenerator,
+  type ImportConversationInput,
   type Lease,
   type ListChatsOptions,
   type ListEventsOptions,
   type ListMessagesOptions,
   type ListProposalsOptions,
   type MessageRecord,
+  type MessageSearchHit,
+  type SearchMessagesOptions,
+  type UpdateChatPatch,
   type OutboxAppendInput,
   type OutboxClaimInput,
   type OutboxRecord,
@@ -95,7 +106,7 @@ import {
   type ResolvedTaskAging,
   type TaskAgingOptions,
 } from "@agentkit/host";
-import { SCHEMA_V5, SCHEMA_VERSION } from "./schema.js";
+import { SCHEMA_V6, SCHEMA_VERSION } from "./schema.js";
 
 const DEFAULT_LEASE_TTL_MS = 30_000;
 /**
@@ -228,6 +239,7 @@ interface ChatRow {
   created_at: string;
   updated_at: string;
   metadata: string;
+  archived: number;
 }
 interface MessageRow {
   id: string;
@@ -387,6 +399,7 @@ function chatFromRow(row: ChatRow): ChatRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     metadata: parseJson<Record<string, unknown>>(row.metadata),
+    archived: fromIntBool(row.archived),
   };
 }
 
@@ -796,6 +809,39 @@ class SqliteConnection {
 // ConversationStore
 // ---------------------------------------------------------------------------
 
+/** How many tokens of context `snippet()` builds a window from. */
+const SNIPPET_TOKENS = 16;
+
+/**
+ * FTS5's query language is a hazard, not a feature, when the input is a search
+ * box: `*` is a prefix operator, `^` anchors a column, `"` opens a phrase, `-`
+ * negates, `:` filters a column, `AND`/`OR`/`NOT`/`NEAR` are keywords, and an
+ * unbalanced any-of-them is a raw SQLite error out of a method that documents
+ * none. A user typing `c++ (2)` is not writing a query; they are typing what
+ * they remember seeing.
+ *
+ * So the raw string is never handed to FTS5. The operator characters that
+ * cannot survive quoting are removed (`"` first, so nothing downstream can
+ * break out of the quotes this function adds), parentheses become spaces so
+ * `(2)` still searches for `2`, and every remaining whitespace-separated token
+ * is re-emitted as a QUOTED PHRASE. Quoting is what neutralises the rest:
+ * inside `"..."` a hyphen, a colon and the word `AND` are all just text.
+ * Several tokens juxtaposed are FTS5's implicit AND, so `quartz beacon` means
+ * "both words", which is what a person typing two words means.
+ *
+ * `null` when nothing survives — the port's "empty after sanitizing returns no
+ * hits", expressed as a value the caller cannot forget to check.
+ */
+function toFtsQuery(query: string): string | null {
+  const tokens = query
+    .replace(/["*^]/g, "")
+    .replace(/[()]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+  if (tokens.length === 0) return null;
+  return tokens.map((token) => `"${token}"`).join(" ");
+}
+
 class SqliteConversationStore implements ConversationStore {
   constructor(
     private readonly conn: SqliteConnection,
@@ -823,6 +869,7 @@ class SqliteConversationStore implements ConversationStore {
       createdAt: now,
       updatedAt: now,
       metadata,
+      archived: false,
     };
   }
 
@@ -834,12 +881,28 @@ class SqliteConversationStore implements ConversationStore {
   }
 
   async listChats(opts?: ListChatsOptions): Promise<ChatRecord[]> {
-    let sql = `SELECT * FROM chats`;
+    const where: string[] = [];
     const params: Params = {};
+    if (opts?.ids === undefined) {
+      // The browse: archived chats are out unless asked for.
+      if (opts?.includeArchived !== true) where.push(`archived = 0`);
+    } else {
+      // The batch fetch. An explicit id resolves an archived chat too, and an
+      // EMPTY list resolves nothing — inlined as a bound placeholder per id,
+      // because bun:sqlite's named parameters cannot bind an array.
+      if (opts.ids.length === 0) return [];
+      const names = opts.ids.map((id, index) => {
+        params[`$id${index}`] = id;
+        return `$id${index}`;
+      });
+      where.push(`id IN (${names.join(", ")})`);
+    }
     if (opts?.before !== undefined) {
-      sql += ` WHERE updated_at < $before`;
+      where.push(`updated_at < $before`);
       params.$before = opts.before;
     }
+    let sql = `SELECT * FROM chats`;
+    if (where.length > 0) sql += ` WHERE ${where.join(" AND ")}`;
     sql += ` ORDER BY updated_at DESC`;
     if (opts?.limit !== undefined) {
       sql += ` LIMIT $limit`;
@@ -847,6 +910,76 @@ class SqliteConversationStore implements ConversationStore {
     }
     const rows = this.conn.all(sql, params) as ChatRow[];
     return rows.map(chatFromRow);
+  }
+
+  /**
+   * Patch a chat and answer with the row as it now stands.
+   *
+   * COALESCE over three columns rather than a built-up SET list: every field is
+   * nullable-in-the-patch and not-null-in-the-row, so "leave it alone" is
+   * expressible as a bound NULL and the statement is the same one every time.
+   * The read-back is inside the transaction, so what comes back is what this
+   * write produced rather than what a concurrent append made of it.
+   */
+  async updateChat(
+    chatId: string,
+    patch: UpdateChatPatch,
+  ): Promise<ChatRecord> {
+    return this.conn.withTx(() => {
+      const changes = this.conn.run(
+        `UPDATE chats SET
+           title = COALESCE($title, title),
+           metadata = COALESCE($metadata, metadata),
+           archived = COALESCE($archived, archived),
+           updated_at = $now
+         WHERE id = $id`,
+        {
+          $title: patch.title ?? null,
+          // Metadata REPLACES the stored bag, per the port contract.
+          $metadata:
+            patch.metadata === undefined ? null : toJson(patch.metadata),
+          $archived:
+            patch.archived === undefined ? null : toIntBool(patch.archived),
+          $now: this.clock.nowIso(),
+          $id: chatId,
+        },
+      );
+      if (changes.changes === 0) {
+        throw new RecordNotFoundError(`Chat not found: ${chatId}`);
+      }
+      const row = this.conn.get(`SELECT * FROM chats WHERE id = $id`, {
+        $id: chatId,
+      }) as ChatRow;
+      return chatFromRow(row);
+    });
+  }
+
+  /**
+   * Delete the chat and every message in it, in ONE transaction.
+   *
+   * The messages go in a single statement even though `parent_message_id` is a
+   * self-FK and the delete necessarily removes parents alongside their
+   * children: SQLite checks an IMMEDIATE foreign key at the END of the
+   * statement, not per row, so a set that is closed under the relation — which
+   * every message of one chat is, since a parent is always in the same chat —
+   * leaves nothing in violation to report.
+   *
+   * The FTS index needs no separate cleanup: `messages_search_delete` fires per
+   * deleted row inside this same transaction, so a rolled-back delete un-deletes
+   * the index too.
+   */
+  async deleteChat(chatId: string): Promise<void> {
+    this.conn.withTx(() => {
+      this.conn.run(`DELETE FROM messages WHERE chat_id = $chatId`, {
+        $chatId: chatId,
+      });
+      const changes = this.conn.run(`DELETE FROM chats WHERE id = $id`, {
+        $id: chatId,
+      });
+      if (changes.changes === 0) {
+        throw new RecordNotFoundError(`Chat not found: ${chatId}`);
+      }
+    });
   }
 
   /**
@@ -1086,15 +1219,22 @@ class SqliteConversationStore implements ConversationStore {
     chatId: string,
     opts?: ListMessagesOptions,
   ): Promise<MessageRecord[]> {
+    assertListMessagesCursors(opts);
     let sql = `SELECT * FROM messages WHERE chat_id = $chatId AND active = 1`;
     const params: Params = { $chatId: chatId };
     if (opts?.afterOrderKey !== undefined) {
       sql += ` AND order_key > $after`;
       params.$after = opts.afterOrderKey;
     }
+    if (opts?.beforeOrderKey !== undefined) {
+      sql += ` AND order_key < $before`;
+      params.$before = opts.beforeOrderKey;
+    }
     sql += ` ORDER BY depth ASC, order_key ASC`;
     const rows = this.conn.all(sql, params) as MessageRow[];
     const mapped = rows.map(messageFromRow);
+    // The LAST `limit` in either direction: a scroll-back wants the page
+    // nearest its cursor, exactly as a plain listing wants the newest page.
     return opts?.limit !== undefined ? mapped.slice(-opts.limit) : mapped;
   }
 
@@ -1243,10 +1383,147 @@ class SqliteConversationStore implements ConversationStore {
           createdAt: now,
           updatedAt: now,
           metadata,
+          // NOT inherited: a fork is a conversation somebody just started, and
+          // starting one already filed away is not a state a user can have
+          // meant. The INSERT above lets the column default do this.
+          archived: false,
         },
         messages,
       };
     });
+  }
+
+  /**
+   * Write a whole conversation with the caller's ids, in ONE transaction.
+   *
+   * `withTx` (synchronous), for the same reason `forkChat` uses it: this is one
+   * port method's own SQL with nothing to await inside it, and an `await`
+   * between the BEGIN and the COMMIT is what a bun:sqlite transaction cannot
+   * survive. Inside a host-level `store.transaction(...)` it flattens into that
+   * one instead.
+   *
+   * `planImportedMessages` has already proved the payload legal and assigned
+   * every derived field, so this loop only writes. Messages go in the order
+   * given, which is creation order, which the self-FK on `parent_message_id`
+   * requires: a parent always precedes its children in a payload this store
+   * accepted.
+   */
+  async importConversation(
+    input: ImportConversationInput,
+  ): Promise<ChatRecord> {
+    return this.conn.withTx(() => {
+      const existing = this.conn.get(`SELECT id FROM chats WHERE id = $id`, {
+        $id: input.chat.id,
+      });
+      if (existing) {
+        throw new InvalidImportError(
+          `Cannot import chat ${input.chat.id}: a chat with that id already exists.`,
+          { reason: "duplicate_chat", chatId: input.chat.id },
+        );
+      }
+      const createdAt = input.chat.createdAt ?? this.clock.nowIso();
+      const plans = planImportedMessages(
+        input.messages,
+        input.chat.id,
+        createdAt,
+      );
+      const metadata = input.chat.metadata ?? {};
+      const archived = input.chat.archived ?? false;
+      this.conn.run(
+        `INSERT INTO chats (id, title, created_at, updated_at, metadata, archived)
+         VALUES ($id, $title, $createdAt, $updatedAt, $metadata, $archived)`,
+        {
+          $id: input.chat.id,
+          $title: input.chat.title ?? null,
+          $createdAt: createdAt,
+          // `createdAt`, not now: an import of a year-old conversation that
+          // jumped to the top of the chat list would reorder the very history
+          // it was meant to preserve.
+          $updatedAt: createdAt,
+          $metadata: toJson(metadata),
+          $archived: toIntBool(archived),
+        },
+      );
+      for (const plan of plans) {
+        const encoded = encodeContent(plan.input.content);
+        this.conn.run(
+          `INSERT INTO messages
+             (id, chat_id, run_id, role, content, content_format, order_key, tool_call_id, tool_calls, model_result_json, parent_message_id, depth, branch_index, active, metadata, created_at)
+           VALUES
+             ($id, $chatId, NULL, $role, $content, $contentFormat, $orderKey, NULL, NULL, NULL, $parentId, $depth, $branchIndex, $active, $metadata, $createdAt)`,
+          {
+            $id: plan.input.id,
+            $chatId: input.chat.id,
+            $role: plan.input.role,
+            $content: encoded.content,
+            $contentFormat: encoded.format,
+            $orderKey: plan.orderKey,
+            $parentId: plan.parentMessageId ?? null,
+            $depth: plan.depth,
+            $branchIndex: plan.branchIndex,
+            $active: toIntBool(plan.input.active),
+            $metadata: toJson(plan.metadata),
+            $createdAt: plan.createdAt,
+          },
+        );
+      }
+      return {
+        id: input.chat.id,
+        ...(input.chat.title === undefined ? {} : { title: input.chat.title }),
+        createdAt,
+        updatedAt: createdAt,
+        metadata,
+        archived,
+      };
+    });
+  }
+
+  /**
+   * FTS5 search over `message_search`, ranked by bm25, snippet from the index.
+   *
+   * The filters live in the JOIN back to `messages` rather than in the index,
+   * and that placement is deliberate: `internal` and `placeholder` are
+   * `metadata` keys, and metadata is REWRITTEN after the fact — a placeholder
+   * becomes a real answer the moment its run finishes. An index that had
+   * decided at insert time would keep every finished answer permanently
+   * unfindable.
+   *
+   * `LIMIT` is applied by SQL over the ranked set, so a chat filter that
+   * excludes most hits still returns a full page rather than whatever survived
+   * the first N.
+   */
+  async searchMessages(
+    query: string,
+    opts?: SearchMessagesOptions,
+  ): Promise<MessageSearchHit[]> {
+    const match = toFtsQuery(query);
+    if (match === null) return [];
+    const rows = this.conn.all(
+      `SELECT m.id AS message_id, m.chat_id AS chat_id,
+              snippet(message_search, 0, $markStart, $markEnd, $ellipsis, $tokens) AS snippet
+         FROM message_search
+         JOIN messages AS m ON m.rowid = message_search.rowid
+        WHERE message_search MATCH $match
+          AND ($chatId IS NULL OR m.chat_id = $chatId)
+          AND COALESCE(json_extract(m.metadata, '$.internal'), 0) <> 1
+          AND COALESCE(json_extract(m.metadata, '$.placeholder'), 0) <> 1
+        ORDER BY bm25(message_search)
+        LIMIT $limit`,
+      {
+        $match: match,
+        $chatId: opts?.chatId ?? null,
+        $markStart: SEARCH_MATCH_START,
+        $markEnd: SEARCH_MATCH_END,
+        $ellipsis: SEARCH_SNIPPET_ELLIPSIS,
+        $tokens: SNIPPET_TOKENS,
+        $limit: opts?.limit ?? DEFAULT_SEARCH_LIMIT,
+      },
+    ) as { message_id: string; chat_id: string; snippet: string }[];
+    return rows.map((row) => ({
+      chatId: row.chat_id,
+      messageId: row.message_id,
+      snippet: row.snippet,
+    }));
   }
 
   private requireMessage(messageId: string): MessageRecord {
@@ -1361,6 +1638,45 @@ class SqliteTaskStore implements TaskStore {
       { $parentTaskId: taskId },
     ) as TaskRow[];
     return rows.map(taskFromRow);
+  }
+
+  async listByScope(scopeId: string): Promise<TaskRecord[]> {
+    const rows = this.conn.all(
+      `SELECT * FROM tasks WHERE scope_id = $scopeId ORDER BY enqueued_at ASC, rowid ASC`,
+      { $scopeId: scopeId },
+    ) as TaskRow[];
+    return rows.map(taskFromRow);
+  }
+
+  /**
+   * Delete a scope's tasks with everything hanging off them, in ONE
+   * transaction.
+   *
+   * Children before parents, because `task_attempts` and `leases` carry real
+   * foreign keys to `tasks` and SQLite is not going to let a task row leave
+   * while either still names it. `task_events` has no FK — it is keyed by
+   * `task_id` alone, deliberately, so an event log outlives the attempt that
+   * wrote it — which is exactly why it has to be deleted explicitly here rather
+   * than swept up by a cascade that does not exist.
+   */
+  async deleteByScope(scopeId: string): Promise<number> {
+    return this.conn.withTx(() => {
+      const scoped = `SELECT task_id FROM tasks WHERE scope_id = $scopeId`;
+      const params: Params = { $scopeId: scopeId };
+      this.conn.run(
+        `DELETE FROM task_events WHERE task_id IN (${scoped})`,
+        params,
+      );
+      this.conn.run(`DELETE FROM leases WHERE task_id IN (${scoped})`, params);
+      this.conn.run(
+        `DELETE FROM task_attempts WHERE task_id IN (${scoped})`,
+        params,
+      );
+      return this.conn.run(
+        `DELETE FROM tasks WHERE scope_id = $scopeId`,
+        params,
+      ).changes;
+    });
   }
 
   async transitionTask(
@@ -2139,6 +2455,34 @@ class SqliteProposalStore implements ProposalStore {
     });
   }
 
+  /**
+   * Delete a chat's proposals and the outcomes they claimed, in ONE
+   * transaction.
+   *
+   * BY `chat_id`, never by `scope_key` — see the port: two chats routinely
+   * propose writes into one shared scope, and deleting the scope would take a
+   * bystander's staged writes with it.
+   *
+   * Outcomes first: they are keyed by `operation_id`, which only the proposal
+   * row still names, so deleting the proposals first would leave rows nothing
+   * can ever identify again.
+   */
+  async deleteByChat(chatId: string): Promise<number> {
+    return this.conn.withTx(() => {
+      const params: Params = { $chatId: chatId };
+      this.conn.run(
+        `DELETE FROM proposal_outcomes WHERE operation_id IN (
+           SELECT operation_id FROM proposals
+            WHERE chat_id = $chatId AND operation_id IS NOT NULL)`,
+        params,
+      );
+      return this.conn.run(
+        `DELETE FROM proposals WHERE chat_id = $chatId`,
+        params,
+      ).changes;
+    });
+  }
+
   private selectProposalRow(proposalId: string): ProposalRow | null {
     return (
       (this.conn.get(`SELECT * FROM proposals WHERE id = $id`, {
@@ -2426,7 +2770,7 @@ function assertSchemaVersion(db: Database, path: string): void {
     // A pragma every SQLite build answers came back with nothing. Whatever this
     // handle is, it is not a database this adapter can reason about — and the
     // one thing worse than refusing to open it is opening it anyway and running
-    // `SCHEMA_V5` against it, which is exactly what falling through would do.
+    // `SCHEMA_V6` against it, which is exactly what falling through would do.
     throw new AgentKitHostError(
       "sqlite_schema_version",
       `Cannot read user_version from the SQLite store at ${path}; refusing to touch this database.`,
@@ -2512,7 +2856,7 @@ export class SqliteAssistantStore implements AssistantStore {
     // Idempotent: every statement is CREATE ... IF NOT EXISTS / INSERT OR
     // IGNORE, so reopening the same file (or a file another process already
     // initialized) is a safe no-op.
-    db.exec(SCHEMA_V5);
+    db.exec(SCHEMA_V6);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
     this.conn = new SqliteConnection(db, busyTimeoutMs);
     const clock = options.clock ?? defaultClock;

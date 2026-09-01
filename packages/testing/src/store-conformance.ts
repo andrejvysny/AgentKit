@@ -22,9 +22,12 @@ import {
   expectRejectsWithCode,
   type DescribeAssistantStoreConformanceOptions,
 } from "./conformance-support.js";
+import { describeChatLifecycle } from "./chat-lifecycle-conformance.js";
 import { describeConversationBranching } from "./conversation-conformance.js";
 import { describeConversationForking } from "./fork-conformance.js";
+import { describeConversationImport } from "./import-conformance.js";
 import { describeConversationTreeInvariants } from "./conversation-tree-driver.js";
+import { describeMessageSearch } from "./search-conformance.js";
 import { createTestEventStamper } from "./stamp.js";
 
 // The harness/test-API/tuning types and the two rejection assertions now live in
@@ -89,6 +92,14 @@ export function describeAssistantStoreConformance(
     // through this call.
     describeConversationBranching({ create, test });
     describeConversationForking({ create, test });
+    // Rename, archive, page backwards, delete — and the scope-deletes on the
+    // other two stores that a chat's removal has to reach.
+    describeChatLifecycle({ create, test });
+    // The other way to create a chat: a whole conversation written at once,
+    // with the caller's ids.
+    describeConversationImport({ create, test });
+    // Optional; each test opts out on `capabilities.search === false`.
+    describeMessageSearch({ create, test });
     // The named rules above, composed at random and graded on the shape
     // invariant after every step — the failures no fixture is shaped to catch.
     describeConversationTreeInvariants({ create, test });

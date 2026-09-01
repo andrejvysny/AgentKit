@@ -164,6 +164,42 @@ export class InvalidForkPointError extends NamedHostError {
 }
 
 /**
+ * A chat cannot be deleted while work is still live in it — a task in its scope
+ * is `running` or `waiting_approval`.
+ *
+ * Refused rather than force-cancelled: a delete is not a cancel, and inventing
+ * one would end a provider call (and whatever staged write it was mid-apply on)
+ * on the strength of a request that never said so. Retryable in the ordinary
+ * sense — the run finishes, the task leaves those states, and the same delete
+ * succeeds — which is why this is a 409 and not a 4xx that tells a client to
+ * stop. `details.taskIds` names what is holding it, so a UI can say which run to
+ * wait for or cancel first.
+ */
+export class ChatBusyError extends NamedHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("chat_busy", message, details);
+  }
+}
+
+/**
+ * An {@link ConversationStore.importConversation} payload that does not
+ * describe a conversation this store could ever have produced: a chat id that
+ * already exists, a duplicate message id, a parent that is unknown or appears
+ * later in the list than the message naming it, or an `active` set that is not
+ * exactly one root-to-childless-leaf chain.
+ *
+ * All of them are refused BEFORE the first write, and `details.reason` says
+ * which — an import is a bulk operation, so "it failed" without a reason leaves
+ * the caller diffing a thousand messages by hand. Repairing the payload is the
+ * only fix; the same bytes will not become importable on a retry.
+ */
+export class InvalidImportError extends NamedHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("invalid_import", message, details);
+  }
+}
+
+/**
  * The {@link UsageAuthorizer} refused a provider call before it was made.
  *
  * Raised by `TurnRunner` on the pass that was refused, so the model is never
@@ -235,6 +271,8 @@ export const HOST_ERROR_CODES = [
   "revision_conflict",
   "not_found",
   "invalid_fork_point",
+  "chat_busy",
+  "invalid_import",
   "unknown_dependency",
   "usage_denied",
 ] as const;

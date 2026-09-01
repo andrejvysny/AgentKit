@@ -95,9 +95,9 @@ key. With the default `agingBonus = 0` the term folds to zero and the ordering
 is plain `priority DESC, enqueued_at ASC`. See
 [ADR 0003](../../docs/adr/0003-task-dependencies-and-subagents.md).
 
-## Schema (v5)
+## Schema (v6)
 
-Single-file DDL in `src/schema.ts` (`SCHEMA_V5`), applied idempotently
+Single-file DDL in `src/schema.ts` (`SCHEMA_V6`), applied idempotently
 (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). No migrations ship — see
 "It owns its database file" above.
 
@@ -116,9 +116,51 @@ body is written verbatim, exactly as every pre-v5 row was; a
 parts array is a string, and a store that guessed would promote it on the
 next read.
 
+v6 added chat lifecycle and full-text search:
+
+- **`chats.archived`** (`INTEGER NOT NULL DEFAULT 0`) plus
+  `idx_chats_archived_updated ON chats(archived, updated_at DESC)` — the
+  default `listChats` query. A real column rather than a `metadata` key,
+  because the listing filters on it and an index cannot reach into a JSON bag.
+- **`message_search_source`** — a VIEW computing the searchable text of every
+  message: a `'text'` row is its `content` column; a `'parts'` row is **all**
+  of its text parts, `group_concat`'d with a newline (`json_each` +
+  `json_extract`). This is `searchTextOf` from `@agentkit/host`, expressed in
+  SQL. *All* parts, never just the first: indexing only part one is a real bug
+  in the system this design is copied from, and it fails silently.
+- **`message_search`** — an `fts5` virtual table with
+  `content='message_search_source'`, `content_rowid='rowid'`,
+  `tokenize='unicode61 remove_diacritics 2'`. **External content**, so the
+  index holds terms and postings and never a second copy of the message text;
+  a plain FTS5 table would double the size of the only table holding user
+  prose. `snippet()` re-reads a body through the view when a hit needs one.
+- **Three triggers** (`messages_search_insert` / `_delete` / `_update`).
+  External content maintains nothing on its own, so every write to `messages`
+  tells FTS5 what changed; the `'delete'` command carries the OLD projection,
+  recomputed from `old.*` because the view's row is already gone by then. The
+  same generator emits the projection for all three aliases, so an index and a
+  delete-trigger cannot drift.
+- **A guarded backfill**, so re-applying the DDL on every open cannot
+  double-index. The guard reads the `%_docsize` shadow table, not
+  `message_search` itself: scanning an *external-content* FTS5 table without a
+  `MATCH` iterates the **content source**, so `SELECT 1 FROM message_search` is
+  non-empty whenever `messages` is — the obvious guard would read "already
+  populated" on a completely empty index and skip the work it exists to do.
+- Queries filter `internal`/`placeholder` at **query** time, via `json_extract`
+  on the joined `messages` row, because both are `metadata` flags that get
+  rewritten (a placeholder becomes a real answer when its run finishes) and an
+  index that decided at insert time would keep finished answers unfindable.
+  Query text is sanitized before it ever reaches FTS5 (`toFtsQuery`): the
+  operator characters `"`, `*` and `^` are stripped, parentheses become spaces,
+  and each surviving token is re-emitted as a quoted phrase — which neutralises
+  `-`, `:` and the `AND`/`OR`/`NOT`/`NEAR` keywords, and turns two typed words
+  into FTS5's implicit AND. Nothing left after sanitizing means no hits, not an
+  exception.
+
 | Table(s) | Port |
 |---|---|
 | `chats`, `messages` | `ConversationStore` |
+| `message_search_source` (view), `message_search` (fts5) + 3 triggers | *not port records* — the derived search index behind `ConversationStore.searchMessages`. |
 | `tasks`, `task_attempts`, `leases`, `task_events` | `TaskStore` |
 | `proposals`, `proposal_outcomes` | `ProposalStore` |
 | `providers`, `provider_models`, `provider_capabilities` | `ProviderStore` |

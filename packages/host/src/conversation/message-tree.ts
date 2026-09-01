@@ -14,15 +14,28 @@
  * `await` — so a helper that returned a promise would be a helper no adapter
  * could use where it matters.
  */
-import { AgentKitHostError, InvalidForkPointError } from "../errors.js";
+import type { AiMessageContent } from "@agentkit/contracts";
+import {
+  AgentKitHostError,
+  InvalidForkPointError,
+  InvalidImportError,
+} from "../errors.js";
 import type {
   AppendMessageInput,
+  ImportMessageInput,
+  ListMessagesOptions,
   MessageRecord,
 } from "../ports/conversation-store.js";
 import { orderMessagesForProvider } from "../turn/message-order.js";
 
 /** `metadata` key marking an answer still streaming; never copied by a fork. */
 const PLACEHOLDER_KEY = "placeholder";
+
+/** `metadata` key marking a replay-only record the user never saw as chat. */
+const INTERNAL_KEY = "internal";
+
+/** What separates two text parts in a message's searchable projection. */
+const SEARCH_TEXT_SEPARATOR = "\n";
 
 /** Path order: down the tree first, then append order inside a depth. */
 function byDepthThenOrderKey(a: MessageRecord, b: MessageRecord): number {
@@ -287,4 +300,241 @@ export function planForkedMessages(
  */
 export function forkedChatTitle(title: string | undefined): string | undefined {
   return title === undefined ? undefined : `Fork of ${title}`;
+}
+
+/**
+ * The text a search index sees for one message body: a string as itself, a
+ * parts body as ALL of its text parts joined with a newline.
+ *
+ * ALL of them, and that word is the whole reason this is a named function
+ * rather than an expression inlined into two adapters. The system this design
+ * is copied from indexed only the FIRST text part of a multipart message, which
+ * is invisible until the day someone searches for a phrase that happened to
+ * land in paragraph two and concludes the feature is broken. Stating the
+ * projection once — and having the sqlite adapter's SQL written against this
+ * definition — is what keeps the two implementations from disagreeing about
+ * what "the text of a message" means.
+ *
+ * Non-text parts contribute nothing: an image's base64 payload is not prose,
+ * and indexing it would bloat the index with tokens no human will ever type.
+ */
+export function searchTextOf(content: AiMessageContent): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join(SEARCH_TEXT_SEPARATOR);
+}
+
+/**
+ * Reject a `listMessages` call that named BOTH paging cursors.
+ *
+ * Shared rather than re-decided per adapter for the reason everything else here
+ * is shared: the two cursors page in opposite directions, so "both" is a range
+ * read with its own unanswered question — which end does `limit` count from? —
+ * and two adapters each guessing an answer is two different pagers behind one
+ * port. Refusing costs the caller one line and removes the ambiguity for good.
+ */
+export function assertListMessagesCursors(
+  opts:
+    | Pick<ListMessagesOptions, "afterOrderKey" | "beforeOrderKey">
+    | undefined,
+): void {
+  if (opts?.afterOrderKey !== undefined && opts.beforeOrderKey !== undefined) {
+    throw new AgentKitHostError(
+      "invalid_cursor",
+      "listMessages takes afterOrderKey or beforeOrderKey, not both.",
+      {
+        afterOrderKey: opts.afterOrderKey,
+        beforeOrderKey: opts.beforeOrderKey,
+      },
+    );
+  }
+}
+
+/**
+ * One imported message, resolved into the record fields the store will write.
+ *
+ * `orderKey`, `depth` and `branchIndex` are here — and NOT in
+ * {@link ImportMessageInput} — because they are derived, and the derivation is
+ * the same one every append in this port already performs. An import that could
+ * name them could write a chat no sequence of appends could have produced, and
+ * the very next append onto that chat would have to reconcile the difference.
+ */
+export interface ImportedMessagePlan {
+  input: ImportMessageInput;
+  /** Creation order, `1..n` — exactly what a run of appends would have assigned. */
+  orderKey: number;
+  depth: number;
+  branchIndex: number;
+  /** The resolved link; absent on a root (`undefined` and `null` both mean root). */
+  parentMessageId?: string;
+  /** The caller's bag, plus `internal: true` when the shorthand asked for it. */
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+/** Every {@link InvalidImportError} this module raises, as `details.reason`. */
+export type ImportRejectionReason =
+  | "duplicate_message_id"
+  | "unknown_parent"
+  | "forward_parent"
+  | "no_active_path"
+  | "broken_active_chain"
+  | "active_leaf_has_child";
+
+function rejectImport(
+  reason: ImportRejectionReason,
+  message: string,
+  details: Record<string, unknown>,
+): never {
+  throw new InvalidImportError(message, { reason, ...details });
+}
+
+/** Roots share one bucket in the sibling counter; no id can collide with it. */
+const ROOT_PARENT_KEY = " root";
+
+/**
+ * Validate an import payload IN FULL and resolve every derived field, or throw.
+ *
+ * Pure and synchronous, like everything else in this module, so an adapter can
+ * call it BEFORE it opens a transaction and know that the write phase which
+ * follows cannot fail on the data. That ordering is what makes "all-or-nothing"
+ * true even in the Map-backed adapter, which has no rollback to fall back on.
+ *
+ * The duplicate CHAT id is not checked here: only the store knows what it
+ * already holds, so it raises that one itself (`reason: "duplicate_chat"`).
+ */
+export function planImportedMessages(
+  messages: readonly ImportMessageInput[],
+  chatId: string,
+  defaultCreatedAt: string,
+): ImportedMessagePlan[] {
+  const declaredIds = new Set(messages.map((message) => message.id));
+  const plans: ImportedMessagePlan[] = [];
+  const planById = new Map<string, ImportedMessagePlan>();
+  // Max-plus-one, specialized: an import builds each parent's children densely
+  // from 0 in creation order and never deletes, so the count of siblings
+  // already placed IS what `nextBranchIndex` would return over them.
+  const siblingCounts = new Map<string, number>();
+  /** Children per parent — what proves the active chain ends at a LEAF. */
+  const childCounts = new Map<string, number>();
+
+  for (const input of messages) {
+    if (planById.has(input.id)) {
+      rejectImport(
+        "duplicate_message_id",
+        `Import for chat ${chatId} names message ${input.id} twice.`,
+        { chatId, messageId: input.id },
+      );
+    }
+    const parentId = input.parentMessageId ?? undefined;
+    let parent: ImportedMessagePlan | undefined;
+    if (parentId !== undefined) {
+      parent = planById.get(parentId);
+      if (parent === undefined) {
+        // Two honest reasons, told apart by whether the id is in the payload at
+        // all: a typo and a payload sorted the wrong way are different bugs,
+        // and an importer fixing the second does not want to go hunting for the
+        // first.
+        rejectImport(
+          declaredIds.has(parentId) ? "forward_parent" : "unknown_parent",
+          declaredIds.has(parentId)
+            ? `Import for chat ${chatId}: message ${input.id} names parent ${parentId}, which appears later in the list. Messages must be in creation order.`
+            : `Import for chat ${chatId}: message ${input.id} names parent ${parentId}, which the payload does not contain.`,
+          { chatId, messageId: input.id, parentMessageId: parentId },
+        );
+      }
+      childCounts.set(parentId, (childCounts.get(parentId) ?? 0) + 1);
+    }
+    const siblingKey = parentId ?? ROOT_PARENT_KEY;
+    const branchIndex = siblingCounts.get(siblingKey) ?? 0;
+    siblingCounts.set(siblingKey, branchIndex + 1);
+    const plan: ImportedMessagePlan = {
+      input,
+      orderKey: plans.length + 1,
+      depth: parent === undefined ? 0 : parent.depth + 1,
+      branchIndex,
+      ...(parentId === undefined ? {} : { parentMessageId: parentId }),
+      metadata: {
+        ...(input.metadata ?? {}),
+        ...(input.internal === true ? { [INTERNAL_KEY]: true } : {}),
+      },
+      createdAt: input.createdAt ?? defaultCreatedAt,
+    };
+    plans.push(plan);
+    planById.set(plan.input.id, plan);
+  }
+
+  assertOneActiveChain(plans, childCounts, chatId);
+  return plans;
+}
+
+/**
+ * The invariant the rest of this port maintains by construction, checked once
+ * over a payload that arrived all at once: the active messages form EXACTLY one
+ * chain from a root to a childless leaf.
+ *
+ * Every way to break it collapses to a link that does not hold when the active
+ * set is read in path order — two active children of one message put a sibling
+ * where a child belongs, an active message under an inactive parent puts a
+ * stranger at the head of the chain, a second active root does the same at
+ * depth 0. So one walk decides all of them, and the leaf check is the one extra
+ * fact a walk of the active set alone cannot see.
+ */
+function assertOneActiveChain(
+  plans: readonly ImportedMessagePlan[],
+  childCounts: ReadonlyMap<string, number>,
+  chatId: string,
+): void {
+  if (plans.length === 0) return;
+  const path = plans
+    .filter((plan) => plan.input.active)
+    .sort((a, b) => a.depth - b.depth || a.orderKey - b.orderKey);
+  if (path.length === 0) {
+    rejectImport(
+      "no_active_path",
+      `Import for chat ${chatId} has ${plans.length} messages and none of them active; a conversation with no active path reads as empty.`,
+      { chatId, messageCount: plans.length },
+    );
+  }
+  for (const [index, plan] of path.entries()) {
+    const expectedParent = index === 0 ? undefined : path[index - 1]?.input.id;
+    if (plan.parentMessageId !== expectedParent) {
+      rejectImport(
+        "broken_active_chain",
+        `Import for chat ${chatId}: active message ${plan.input.id} follows ${expectedParent ?? "the start of the path"} but names parent ${plan.parentMessageId ?? "none"}. The active messages must be one root-to-leaf chain.`,
+        {
+          chatId,
+          messageId: plan.input.id,
+          parentMessageId: plan.parentMessageId ?? null,
+          expectedParentMessageId: expectedParent ?? null,
+        },
+      );
+    }
+  }
+  const leaf = path[path.length - 1];
+  if (leaf !== undefined && (childCounts.get(leaf.input.id) ?? 0) > 0) {
+    rejectImport(
+      "active_leaf_has_child",
+      `Import for chat ${chatId}: the active path ends at ${leaf.input.id}, which has children. The active chain must run to a childless leaf.`,
+      { chatId, messageId: leaf.input.id },
+    );
+  }
+}
+
+/**
+ * Whether a message is excluded from search hits: replay bookkeeping the user
+ * never saw, or an answer that has not been written yet.
+ *
+ * Read at QUERY time rather than at index time, in both adapters, because both
+ * flags are `metadata` — and `metadata` is rewritten after the fact. A
+ * placeholder becomes a real answer when its run finishes, and an index that
+ * had decided at insert time would keep the finished answer permanently
+ * unfindable.
+ */
+export function isSearchableMetadata(
+  metadata: Record<string, unknown>,
+): boolean {
+  return metadata[INTERNAL_KEY] !== true && metadata[PLACEHOLDER_KEY] !== true;
 }

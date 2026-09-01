@@ -7,7 +7,9 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
+  ChatBusyError,
   InvalidForkPointError,
+  InvalidImportError,
   RecordNotFoundError,
   UsageDeniedError,
 } from "@agentkit/host";
@@ -34,6 +36,32 @@ describe("problemForError", () => {
     );
     expect(problemForError(new InvalidForkPointError("x"), "/i").status).toBe(
       400,
+    );
+  });
+
+  it("separates a chat that is busy now (409) from an import that never parses (400)", async () => {
+    // A live run is a state that resolves itself; the same delete succeeds
+    // later, which is what 409 tells a client and 400 would not.
+    const busy = problemForError(
+      new ChatBusyError("Chat c1 has 1 task(s) still running.", {
+        chatId: "c1",
+      }),
+      "/v1/chats/c1",
+    );
+    expect(busy.status).toBe(409);
+    expect(((await busy.json()) as Record<string, unknown>)["code"]).toBe(
+      "chat_busy",
+    );
+    // A malformed payload will not become well-formed by waiting.
+    const bad = problemForError(
+      new InvalidImportError("Two active children.", {
+        reason: "broken_active_chain",
+      }),
+      "/v1/chats/import",
+    );
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as Record<string, unknown>)["code"]).toBe(
+      "invalid_import",
     );
   });
 });

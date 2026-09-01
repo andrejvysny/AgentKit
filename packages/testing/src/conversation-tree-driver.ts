@@ -262,6 +262,12 @@ function pickStep(rng: Rng, nodeCount: number, pathLength: number): StepKind {
  * The invariant, in full: what `listMessages` returns is ONE chain from a root
  * to a childless leaf, with `depth` and `orderKey` agreeing along it.
  *
+ * Exported so the IMPORT section grades a hand-built conversation with exactly
+ * this check rather than a second, subtly weaker one written next door: an
+ * import is a new way to create a chat, so the only interesting question about
+ * it is whether the chat it creates is the same shape every other operation
+ * produces.
+ *
  * `listMessages` reports every active message in the chat, not a walk — so a
  * result that is a well-formed root-to-leaf chain IS the statement that the
  * active set is exactly that chain. A second active leaf, an orphan left active
@@ -272,7 +278,7 @@ function pickStep(rng: Rng, nodeCount: number, pathLength: number): StepKind {
  * failure prints the seed, the step and every property at once — the walk that
  * produced it is only reproducible if the message says which walk it was.
  */
-function assertOneActiveChain(
+export function assertOneActiveChain(
   path: readonly MessageRecord[],
   childCount: ReadonlyMap<string, number>,
   where: string,

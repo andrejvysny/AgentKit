@@ -46,10 +46,18 @@ export const PROBLEM_CONTENT_TYPE = "application/problem+json";
  * that means "ask again later", which is what
  * `UsageAuthorizationDecision.retryAfterMs` is for; a 403 would tell a client to
  * stop asking about a quota that refills.
+ *
+ * `chat_busy` joins the 409s and belongs there for the same reason they do:
+ * nothing about the request is wrong, the resource is in a state that forbids
+ * it, and the state changes on its own when the run finishes. `invalid_import`
+ * is a 400 for the mirror-image reason — the payload itself is malformed, and
+ * the same bytes will never be accepted however long the client waits.
  */
 const STATUS_BY_HOST_CODE = {
   not_found: 404,
   invalid_fork_point: 400,
+  invalid_import: 400,
+  chat_busy: 409,
   invalid_task_transition: 409,
   invalid_proposal_transition: 409,
   duplicate_task: 409,

@@ -1,5 +1,5 @@
 /**
- * v5 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
+ * v6 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
  * applied idempotently (every DDL statement is `CREATE ... IF NOT EXISTS`;
  * seed rows use `INSERT OR IGNORE`) so opening the same database twice, or
  * opening a database another process already initialized, is a no-op rather
@@ -7,6 +7,10 @@
  *
  * Table-by-table home in the port model:
  * - `chats` / `messages` → `ConversationStore`
+ * - `message_search_source` (a VIEW) / `message_search` (FTS5) → also
+ *   `ConversationStore`, backing `searchMessages`. Not port records: an index
+ *   is a derived view of `messages`, kept in step by triggers, and nothing
+ *   outside this file reads either name.
  * - `tasks` / `task_attempts` / `leases` / `task_events` → `TaskStore`
  * - `proposals` / `proposal_outcomes` → `ProposalStore`
  * - `providers` / `provider_models` / `provider_capabilities` → `ProviderStore`
@@ -30,7 +34,34 @@
  * stored as TEXT; the store (de)serializes them, SQLite never inspects their
  * contents.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
+
+/**
+ * The text {@link SCHEMA_V6}'s search index sees for one message row, as SQL.
+ *
+ * The definition is `searchTextOf` in `@agentkit/host` — a string body as
+ * itself, a parts body as ALL of its text parts joined by a newline — expressed
+ * three times over three different row aliases (`m` in the view, `new` and
+ * `old` in the triggers) because SQLite has no way to share it. Generated from
+ * one function so the three cannot drift: an index and a delete-trigger that
+ * disagreed about a message's text would leave the index quietly wrong,
+ * detectable only by searching for something that used to be there.
+ *
+ * ALL text parts, not the first. Indexing only part one is a real bug in the
+ * system this design is copied from, and it fails silently — the search box
+ * simply never finds a phrase that happened to land in paragraph two.
+ * Non-text parts contribute nothing: base64 image bytes are not prose.
+ */
+function messageSearchText(alias: string): string {
+  return `CASE WHEN ${alias}.content_format = 'parts'
+      THEN COALESCE(
+        (SELECT group_concat(json_extract(part.value, '$.text'), char(10))
+           FROM json_each(${alias}.content) AS part
+          WHERE json_extract(part.value, '$.type') = 'text'),
+        '')
+      ELSE ${alias}.content
+    END`;
+}
 
 /**
  * The DDL for {@link SCHEMA_VERSION}. There are NO migrations in this
@@ -40,20 +71,36 @@ export const SCHEMA_VERSION = 5;
  * migration scripts would be claiming a durability guarantee it does not have.
  * A host that needs upgrades in place owns that story with its own store.
  *
- * That refusal IS the v4 → v5 upgrade path, exactly as it was the v3 → v4 one:
- * a database stamped 4 raises `sqlite_schema_version` and is recreated. The
- * `DEFAULT 'text'` on the new `messages.content_format` column is therefore not
- * a migration aid — it is what keeps the DDL re-appliable over a database this
- * build already wrote, which is the property every statement here has.
+ * That refusal IS the v5 → v6 upgrade path, exactly as it was the v4 → v5 one:
+ * a database stamped 5 raises `sqlite_schema_version` and is recreated. The
+ * `DEFAULT 0` on the new `chats.archived` column is therefore not a migration
+ * aid — it is what keeps the DDL re-appliable over a database this build
+ * already wrote, which is the property every statement here has.
+ *
+ * v6 adds two things: `chats.archived` (the listing filter), and the FTS5
+ * machinery behind `ConversationStore.searchMessages` — a view computing the
+ * searchable text of every message, an EXTERNAL-CONTENT FTS5 table over that
+ * view, three triggers keeping the two in step, and a guarded backfill.
+ *
+ * External content, rather than a plain FTS5 table, because a plain one stores
+ * a SECOND COPY of every message body: the index would double the size of the
+ * only table that holds user text, to serve a feature most rows are never
+ * searched for. Pointing FTS5 at a view costs nothing at rest and re-computes
+ * the projection only when `snippet()` needs it.
  */
-export const SCHEMA_V5 = `
+export const SCHEMA_V6 = `
 CREATE TABLE IF NOT EXISTS chats (
   id TEXT PRIMARY KEY,
   title TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  metadata TEXT NOT NULL DEFAULT '{}'
+  metadata TEXT NOT NULL DEFAULT '{}',
+  -- Hidden from the default listing; a real column rather than a metadata key
+  -- because listChats filters on it and an index cannot reach into a JSON bag.
+  archived INTEGER NOT NULL DEFAULT 0
 );
+-- listChats' default query: unarchived chats, newest first.
+CREATE INDEX IF NOT EXISTS idx_chats_archived_updated ON chats(archived, updated_at DESC);
 
 -- A chat's messages are a TREE (parent_message_id is a self-reference), and
 -- the active column is the per-message flag marking which root-to-leaf path
@@ -103,6 +150,64 @@ CREATE INDEX IF NOT EXISTS idx_messages_chat_order ON messages(chat_id, order_ke
 CREATE INDEX IF NOT EXISTS idx_messages_active ON messages(chat_id, active, depth);
 -- Sibling lookups, and the max(branch_index) an append reads to place itself.
 CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_message_id, branch_index);
+
+-- ── FULL-TEXT SEARCH ───────────────────────────────────────────────────────
+-- The searchable projection of every message, as a view: string bodies as
+-- themselves, parts bodies as ALL of their text parts joined by a newline.
+CREATE VIEW IF NOT EXISTS message_search_source AS
+SELECT m.rowid AS rowid, ${messageSearchText("m")} AS body FROM messages AS m;
+
+-- External content (content=<the view above>): the index holds terms and
+-- postings, never a second copy of the text. snippet() re-reads the body
+-- through the view when a hit needs one.
+--
+-- unicode61 with diacritic folding is the tokenizer a chat search wants: it
+-- splits on punctuation and case, and makes "resume" find "résumé". No stemmer
+-- -- an English-only stemmer applied to whatever language a user's chat happens
+-- to be in makes matches worse, not better.
+CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(
+  body,
+  content='message_search_source',
+  content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+-- Three triggers, because with external content NOTHING maintains the index on
+-- its own: FTS5 reads the view only to fetch a body it was already told about.
+-- A 'delete' command must carry the OLD text so FTS5 can remove exactly the
+-- postings it inserted -- which is why the projection is repeated here rather
+-- than re-read from the view, whose row is already gone by then.
+CREATE TRIGGER IF NOT EXISTS messages_search_insert AFTER INSERT ON messages BEGIN
+  INSERT INTO message_search(rowid, body) VALUES (new.rowid, ${messageSearchText("new")});
+END;
+CREATE TRIGGER IF NOT EXISTS messages_search_delete AFTER DELETE ON messages BEGIN
+  INSERT INTO message_search(message_search, rowid, body)
+    VALUES ('delete', old.rowid, ${messageSearchText("old")});
+END;
+-- updateMessage rewrites a streaming answer on every chunk, so this pair runs
+-- often; it is still the cheapest correct thing, because FTS5 has no in-place
+-- update for an external-content row.
+CREATE TRIGGER IF NOT EXISTS messages_search_update AFTER UPDATE ON messages BEGIN
+  INSERT INTO message_search(message_search, rowid, body)
+    VALUES ('delete', old.rowid, ${messageSearchText("old")});
+  INSERT INTO message_search(rowid, body) VALUES (new.rowid, ${messageSearchText("new")});
+END;
+
+-- Backfill, guarded so re-applying this DDL cannot double-index anything.
+--
+-- The guard reads the FTS5 shadow table rather than message_search itself, and
+-- that is not squeamishness about internals: scanning an EXTERNAL-CONTENT fts5
+-- table without a MATCH iterates the CONTENT SOURCE, so
+-- SELECT 1 FROM message_search is non-empty whenever messages is -- the guard
+-- would read "already populated" on a completely empty index and skip the
+-- backfill it exists to perform. The %_docsize shadow table holds one row per
+-- INDEXED document, which is the question actually being asked.
+--
+-- On a fresh database this inserts nothing (there are no messages yet); it
+-- earns its place when an index is rebuilt from a store whose rows predate it.
+INSERT INTO message_search(rowid, body)
+  SELECT source.rowid, source.body FROM message_search_source AS source
+   WHERE NOT EXISTS (SELECT 1 FROM message_search_docsize);
 
 -- kind is what the executor registry dispatches on; there is no chat_id
 -- column, because a task of an arbitrary kind has no conversation. Whatever a
