@@ -53,7 +53,7 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
   );
 
   it(
-    "re-applies SCHEMA_V5 idempotently when the same file is opened again",
+    "re-applies SCHEMA_V6 idempotently when the same file is opened again",
     withTempDb(async (path) => {
       const first = new SqliteAssistantStore(path);
       await first.conversations.createChat({ id: "seed-chat" });
@@ -98,6 +98,47 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
       }
       expect(code).toBe("sqlite_schema_version");
       expect(message).toContain("no migrations");
+    }),
+  );
+
+  it(
+    "keeps the FTS index correct across a close + reopen, and the guarded backfill does not double-index",
+    withTempDb(async (path) => {
+      // The one thing ":memory:" cannot show: the schema DDL is re-applied in
+      // full on every open, backfill statement included. An unguarded backfill
+      // would insert a second copy of every message into the index here, and
+      // the only symptom would be duplicate hits.
+      const first = new SqliteAssistantStore(path);
+      const chat = await first.conversations.createChat({});
+      const message = await first.conversations.appendMessage({
+        chatId: chat.id,
+        role: "user",
+        content: "a persisted magnetometer reading",
+      });
+      first.close();
+
+      const second = new SqliteAssistantStore(path);
+      try {
+        const hits =
+          await second.conversations.searchMessages?.("magnetometer");
+        expect(hits?.map((h) => h.messageId)).toEqual([message.id]);
+        // Still live: the triggers survived the re-application too.
+        const added = await second.conversations.appendMessage({
+          chatId: chat.id,
+          role: "assistant",
+          content: "another magnetometer, written after the reopen",
+        });
+        expect(
+          (await second.conversations.searchMessages?.("magnetometer"))?.length,
+        ).toBe(2);
+        await second.conversations.deleteChat(chat.id);
+        expect(
+          (await second.conversations.searchMessages?.("magnetometer"))?.length,
+        ).toBe(0);
+        expect(added.orderKey).toBe(2);
+      } finally {
+        second.close();
+      }
     }),
   );
 

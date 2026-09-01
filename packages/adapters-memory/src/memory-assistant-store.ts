@@ -33,10 +33,14 @@ import {
   activationSetOf,
   activeLeafOf,
   activePathOf,
+  assertListMessagesCursors,
+  DEFAULT_SEARCH_LIMIT,
   DuplicateActionIdError,
   DuplicateTaskError,
+  InvalidImportError,
   InvalidProposalTransitionError,
   InvalidTaskTransitionError,
+  isSearchableMetadata,
   LeaseLostError,
   RecordNotFoundError,
   SeqConflictError,
@@ -52,6 +56,11 @@ import {
   hasActiveChild,
   nextBranchIndex,
   planForkedMessages,
+  planImportedMessages,
+  searchTextOf,
+  SEARCH_MATCH_END,
+  SEARCH_MATCH_START,
+  SEARCH_SNIPPET_ELLIPSIS,
   siblingsOf,
   type AppendEventsOptions,
   type AppendMessageInput,
@@ -72,12 +81,16 @@ import {
   type EndAttemptInput,
   type ForkChatResult,
   type IdGenerator,
+  type ImportConversationInput,
   type Lease,
   type ListChatsOptions,
   type ListEventsOptions,
   type ListMessagesOptions,
   type ListProposalsOptions,
   type MessageRecord,
+  type MessageSearchHit,
+  type SearchMessagesOptions,
+  type UpdateChatPatch,
   type OutboxAppendInput,
   type OutboxClaimInput,
   type OutboxRecord,
@@ -185,6 +198,7 @@ export class MemoryConversationStore implements ConversationStore {
       createdAt: now,
       updatedAt: now,
       metadata: input.metadata ?? {},
+      archived: false,
     };
     this.chats.set(chat.id, chat);
     this.messagesByChat.set(chat.id, []);
@@ -197,9 +211,17 @@ export class MemoryConversationStore implements ConversationStore {
   }
 
   async listChats(opts?: ListChatsOptions): Promise<ChatRecord[]> {
-    let rows = [...this.chats.values()].sort((a, b) =>
-      b.updatedAt.localeCompare(a.updatedAt),
-    );
+    // `ids` is an explicit batch fetch, so it resolves archived chats too —
+    // archiving hides a chat from BROWSING, not from a caller that can already
+    // name it. An empty array is "none of these", never "no filter".
+    const wanted = opts?.ids === undefined ? undefined : new Set(opts.ids);
+    let rows = [...this.chats.values()]
+      .filter((c) =>
+        wanted === undefined
+          ? opts?.includeArchived === true || !c.archived
+          : wanted.has(c.id),
+      )
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     if (opts?.before !== undefined) {
       const before = opts.before;
       rows = rows.filter((c) => c.updatedAt < before);
@@ -209,6 +231,41 @@ export class MemoryConversationStore implements ConversationStore {
     // every appendMessage) — a caller holding onto a listed row must not see
     // it change under it later.
     return rows.map((c) => ({ ...c }));
+  }
+
+  async updateChat(
+    chatId: string,
+    patch: UpdateChatPatch,
+  ): Promise<ChatRecord> {
+    const chat = this.chats.get(chatId);
+    if (chat === undefined) {
+      throw new RecordNotFoundError(`Chat not found: ${chatId}`);
+    }
+    if (patch.title !== undefined) chat.title = patch.title;
+    // Metadata REPLACES the stored bag, per the port contract.
+    if (patch.metadata !== undefined) chat.metadata = patch.metadata;
+    if (patch.archived !== undefined) chat.archived = patch.archived;
+    chat.updatedAt = this.clock.nowIso();
+    return { ...chat };
+  }
+
+  /**
+   * Drop the chat and every message in it — off-path branches included.
+   *
+   * One synchronous block after the existence check, so there is no interleaving
+   * point at which the chat is gone but its messages are not (see the class doc
+   * on ATOMICITY).
+   */
+  async deleteChat(chatId: string): Promise<void> {
+    if (!this.chats.has(chatId)) {
+      throw new RecordNotFoundError(`Chat not found: ${chatId}`);
+    }
+    for (const message of this.messagesByChat.get(chatId) ?? []) {
+      this.messagesById.delete(message.id);
+    }
+    this.messagesByChat.delete(chatId);
+    this.orderKeys.delete(chatId);
+    this.chats.delete(chatId);
   }
 
   async appendMessage(input: AppendMessageInput): Promise<MessageRecord> {
@@ -308,11 +365,20 @@ export class MemoryConversationStore implements ConversationStore {
     chatId: string,
     opts?: ListMessagesOptions,
   ): Promise<MessageRecord[]> {
+    assertListMessagesCursors(opts);
     let rows = activePathOf(this.messagesByChat.get(chatId) ?? []);
     if (opts?.afterOrderKey !== undefined) {
       const after = opts.afterOrderKey;
       rows = rows.filter((m) => m.orderKey > after);
     }
+    if (opts?.beforeOrderKey !== undefined) {
+      const before = opts.beforeOrderKey;
+      rows = rows.filter((m) => m.orderKey < before);
+    }
+    // `slice(-limit)` for BOTH cursors, and that is not an oversight: the page
+    // a scroll-back wants is the LAST `limit` messages before the key — the
+    // ones nearest it — exactly as a plain listing wants the last `limit` in
+    // the chat.
     if (opts?.limit !== undefined) rows = rows.slice(-opts.limit);
     return rows.map(copyMessage);
   }
@@ -368,6 +434,9 @@ export class MemoryConversationStore implements ConversationStore {
       // that lost the conversation's own bookkeeping would be a different chat
       // rather than a copy of this one.
       metadata: { ...source.metadata },
+      // NOT inherited: a fork is a conversation somebody just started, and
+      // starting one already filed away is not a state a user can have meant.
+      archived: false,
     };
     const messages: MessageRecord[] = plans.map((plan, index) => ({
       id: plan.id,
@@ -399,6 +468,112 @@ export class MemoryConversationStore implements ConversationStore {
     for (const message of messages) this.messagesById.set(message.id, message);
     this.orderKeys.set(chat.id, messages.length);
     return { chat: { ...chat }, messages: messages.map(copyMessage) };
+  }
+
+  /**
+   * Write a whole conversation with the caller's ids, in one go.
+   *
+   * VALIDATE AND BUILD FIRST, WRITE LAST — the same discipline `forkChat`
+   * follows, and the only thing that makes "all-or-nothing" true in a store
+   * with no rollback. Every rejection lives in the duplicate-chat check and in
+   * `planImportedMessages`; by the time the first Map is touched, nothing left
+   * to do can throw.
+   */
+  async importConversation(
+    input: ImportConversationInput,
+  ): Promise<ChatRecord> {
+    if (this.chats.has(input.chat.id)) {
+      throw new InvalidImportError(
+        `Cannot import chat ${input.chat.id}: a chat with that id already exists.`,
+        { reason: "duplicate_chat", chatId: input.chat.id },
+      );
+    }
+    const createdAt = input.chat.createdAt ?? this.clock.nowIso();
+    const plans = planImportedMessages(
+      input.messages,
+      input.chat.id,
+      createdAt,
+    );
+    const chat: ChatRecord = {
+      id: input.chat.id,
+      ...(input.chat.title === undefined ? {} : { title: input.chat.title }),
+      createdAt,
+      // `createdAt`, not now: an import of a year-old conversation that jumped
+      // to the top of the chat list would reorder the whole history it was
+      // meant to preserve. A host that wants it at the top passes a fresh
+      // `createdAt`.
+      updatedAt: createdAt,
+      metadata: input.chat.metadata ?? {},
+      archived: input.chat.archived ?? false,
+    };
+    const messages: MessageRecord[] = plans.map((plan) => ({
+      id: plan.input.id,
+      chatId: chat.id,
+      role: plan.input.role,
+      content: copyMessageContent(plan.input.content),
+      orderKey: plan.orderKey,
+      ...(plan.parentMessageId === undefined
+        ? {}
+        : { parentMessageId: plan.parentMessageId }),
+      depth: plan.depth,
+      branchIndex: plan.branchIndex,
+      active: plan.input.active,
+      metadata: plan.metadata,
+      createdAt: plan.createdAt,
+    }));
+
+    this.chats.set(chat.id, chat);
+    this.messagesByChat.set(chat.id, messages);
+    for (const message of messages) this.messagesById.set(message.id, message);
+    this.orderKeys.set(chat.id, messages.length);
+    return { ...chat };
+  }
+
+  /**
+   * Case-insensitive SUBSTRING search over every message body in the store.
+   *
+   * A scan, not an index, and honestly so: this adapter exists for local dev, a
+   * single-process host and tests, where the whole conversation history is
+   * already in memory and a real inverted index would be a second thing to keep
+   * correct for no gain a user of it could measure. `SqliteAssistantStore` is
+   * where FTS5 and bm25 live.
+   *
+   * Ranking is therefore an approximation with a stated rule rather than a
+   * relevance model: more occurrences first, then the most recent message. That
+   * is enough for the property the port actually promises — the best match is
+   * not buried — and pretending to more would be inventing a score nothing
+   * computes.
+   */
+  async searchMessages(
+    query: string,
+    opts?: SearchMessagesOptions,
+  ): Promise<MessageSearchHit[]> {
+    const needle = query.trim().toLowerCase();
+    if (needle.length === 0) return [];
+    const limit = opts?.limit ?? DEFAULT_SEARCH_LIMIT;
+    const scored: { hit: MessageSearchHit; count: number; order: number }[] =
+      [];
+    for (const [chatId, list] of this.messagesByChat) {
+      if (opts?.chatId !== undefined && opts.chatId !== chatId) continue;
+      for (const message of list) {
+        if (!isSearchableMetadata(message.metadata)) continue;
+        // ALL text parts, never just the first — see `searchTextOf`.
+        const text = searchTextOf(message.content);
+        const at = text.toLowerCase().indexOf(needle);
+        if (at === -1) continue;
+        scored.push({
+          hit: {
+            chatId,
+            messageId: message.id,
+            snippet: snippetAround(text, at, needle.length),
+          },
+          count: countOccurrences(text.toLowerCase(), needle),
+          order: message.orderKey,
+        });
+      }
+    }
+    scored.sort((a, b) => b.count - a.count || b.order - a.order);
+    return scored.slice(0, limit).map((entry) => entry.hit);
   }
 
   private requireMessage(messageId: string): MessageRecord {
@@ -437,6 +612,45 @@ function applyActivation(
 ): void {
   const active = activationSetOf(records, messageId);
   for (const record of records) record.active = active.has(record.id);
+}
+
+/** How much text a snippet keeps on either side of the match. */
+const SNIPPET_CONTEXT_CHARS = 40;
+
+/**
+ * A window of `text` around the match at `at`, with the match marked and
+ * anything cut off replaced by the shared ellipsis.
+ *
+ * FIRST match only, because that is what a substring search knows: it stopped
+ * looking the moment it found one. FTS5's `snippet()` marks every term inside
+ * the window it picks, so the two adapters produce different snippets for the
+ * same message — which is why the port promises the MARKERS and the presence of
+ * the matched text, not a byte-identical string.
+ */
+function snippetAround(text: string, at: number, length: number): string {
+  const start = Math.max(0, at - SNIPPET_CONTEXT_CHARS);
+  const end = Math.min(text.length, at + length + SNIPPET_CONTEXT_CHARS);
+  return [
+    start > 0 ? SEARCH_SNIPPET_ELLIPSIS : "",
+    text.slice(start, at),
+    SEARCH_MATCH_START,
+    text.slice(at, at + length),
+    SEARCH_MATCH_END,
+    text.slice(at + length, end),
+    end < text.length ? SEARCH_SNIPPET_ELLIPSIS : "",
+  ].join("");
+}
+
+/** Non-overlapping occurrences of `needle` in `haystack` (both lowercased). */
+function countOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let from = 0;
+  for (;;) {
+    const at = haystack.indexOf(needle, from);
+    if (at === -1) return count;
+    count += 1;
+    from = at + needle.length;
+  }
 }
 
 export class MemoryTaskStore implements TaskStore {
@@ -522,6 +736,37 @@ export class MemoryTaskStore implements TaskStore {
     return [...this.tasks.values()]
       .filter((task) => task.parentTaskId === taskId)
       .map((task) => ({ ...task }));
+  }
+
+  async listByScope(scopeId: string): Promise<TaskRecord[]> {
+    return [...this.tasks.values()]
+      .filter((task) => task.scopeId === scopeId)
+      .map((task) => ({ ...task }));
+  }
+
+  /**
+   * Drop every task in a scope with its attempts, its lease and its events.
+   *
+   * The token index is cleared alongside the lease it points at: a lease token
+   * left behind would keep resolving to a task that no longer exists, and the
+   * writer holding it would get a `not_found` where the honest answer is
+   * `lease_lost`.
+   */
+  async deleteByScope(scopeId: string): Promise<number> {
+    const doomed = [...this.tasks.values()].filter(
+      (task) => task.scopeId === scopeId,
+    );
+    for (const task of doomed) {
+      for (const [attemptId, attempt] of this.attempts) {
+        if (attempt.taskId === task.taskId) this.attempts.delete(attemptId);
+      }
+      const lease = this.leases.get(task.taskId);
+      if (lease !== undefined) this.leasesByToken.delete(lease.leaseToken);
+      this.leases.delete(task.taskId);
+      this.events.delete(task.taskId);
+      this.tasks.delete(task.taskId);
+    }
+    return doomed.length;
   }
 
   async transitionTask(
@@ -1064,6 +1309,25 @@ export class MemoryProposalStore implements ProposalStore {
       count++;
     }
     return count;
+  }
+
+  /**
+   * Drop a chat's proposals and the outcomes they claimed — by `chatId`, never
+   * by `scopeKey` (see the port: two chats can propose into one scope).
+   */
+  async deleteByChat(chatId: string): Promise<number> {
+    const doomed = [...this.proposals.values()].filter(
+      (proposal) => proposal.chatId === chatId,
+    );
+    for (const proposal of doomed) {
+      if (proposal.operationId !== undefined) {
+        this.outcomes.delete(proposal.operationId);
+      }
+      this.proposals.delete(proposal.id);
+      const at = this.proposalOrder.indexOf(proposal.id);
+      if (at !== -1) this.proposalOrder.splice(at, 1);
+    }
+    return doomed.length;
   }
 }
 

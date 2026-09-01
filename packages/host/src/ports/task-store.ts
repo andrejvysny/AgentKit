@@ -396,6 +396,39 @@ export interface TaskStore {
   listChildren(taskId: string): Promise<TaskRecord[]>;
 
   /**
+   * Every task in a scope, whatever its status.
+   *
+   * Deliberately the NARROWEST query that answers the one question a caller
+   * outside this port actually has — "is anything still live in this chat?",
+   * which `ConversationService.deleteChat` asks before it deletes anything. A
+   * general `listTasks(filter)` would have to grow statuses, kinds, ordering
+   * and paging, and every adapter would owe an implementation of all of it to
+   * serve one consumer that wants a handful of rows from one indexed lookup.
+   *
+   * No paging, for the same reason: a scope is a serialization key (usually one
+   * chat), so its task count is bounded by how much work that one conversation
+   * has ever queued, and a caller that must inspect all of them cannot use a
+   * page anyway.
+   */
+  listByScope(scopeId: string): Promise<TaskRecord[]>;
+
+  /**
+   * Delete every task in a scope — with its attempts, its lease and its event
+   * log — and return how many TASKS were removed.
+   *
+   * Unconditional by design: it deletes a `running` task as readily as a
+   * finished one, because deciding whether live work may be discarded is a
+   * policy question and this port has no way to answer it. The caller makes
+   * that call — `ConversationService.deleteChat` refuses outright while
+   * anything is `running` or `waiting_approval` — and this method then does
+   * exactly what it was told, in one transaction.
+   *
+   * The event log goes with the tasks: it is the record of what those attempts
+   * did, and orphaning it would leave rows nothing can ever name again.
+   */
+  deleteByScope(scopeId: string): Promise<number>;
+
+  /**
    * Compare-and-set the task's status.
    *
    * MUST reject with {@link InvalidTaskTransitionError} when the current status

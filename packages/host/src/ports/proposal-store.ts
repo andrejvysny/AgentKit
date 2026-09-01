@@ -209,4 +209,30 @@ export interface ProposalStore {
     scopeKey: string,
     newRevision: string,
   ): Promise<number>;
+
+  /**
+   * Delete every proposal a chat staged, along with the apply outcomes those
+   * proposals claimed, and return how many PROPOSALS were removed.
+   *
+   * BY CHAT, NOT BY SCOPE, and that is the substantive choice here. A proposal
+   * carries both: `chatId` is the conversation it was staged from, `scopeKey`
+   * is the thing it writes to — and those are not the same set. Two chats
+   * routinely propose writes to one shared document, so deleting "the scope" of
+   * a chat being removed would take another conversation's staged writes with
+   * it, silently. `chatId` is what identifies A CHAT's proposals, so `chatId` is
+   * what this takes.
+   *
+   * Outcomes go with their proposals because an `ApplyOutcome` is keyed by an
+   * `operationId` that only ever appears on the proposal that claimed it: left
+   * behind, it is a row describing work nothing can name — unreadable by
+   * `getOutcome` (which is asked for an id nobody holds any more) and
+   * indistinguishable from a leak.
+   *
+   * Unconditional, like `TaskStore.deleteByScope`: a `pending` proposal is
+   * deleted as readily as an applied one. Whether live work may be discarded is
+   * the caller's decision — `ConversationService.deleteChat` makes it — and a
+   * store that second-guessed it would leave a chat that cannot be deleted
+   * because a model once staged a write nobody ever answered.
+   */
+  deleteByChat(chatId: string): Promise<number>;
 }

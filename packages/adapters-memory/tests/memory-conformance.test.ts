@@ -10,11 +10,19 @@ describeAssistantStoreConformance({
     // just runs fn(this) — no BEGIN/COMMIT/ROLLBACK, so a throw after some
     // writes leaves those writes in place. The atomicity test skips this
     // adapter instead of failing it.
-    capabilities: { atomicTransactions: false },
+    // Search IS implemented here — a case-insensitive scan rather than an
+    // index, which is the right trade for a store whose whole history is
+    // already in memory. The flag exists for an adapter that ships no
+    // `searchMessages` at all.
+    capabilities: { atomicTransactions: false, search: true },
   }),
   createTuned: async ({ clock, aging }) => ({
     store: new MemoryAssistantStore({ clock, ...aging }),
-    capabilities: { atomicTransactions: false },
+    // Search IS implemented here — a case-insensitive scan rather than an
+    // index, which is the right trade for a store whose whole history is
+    // already in memory. The flag exists for an adapter that ships no
+    // `searchMessages` at all.
+    capabilities: { atomicTransactions: false, search: true },
   }),
   test: { describe, it, expect },
 });

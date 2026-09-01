@@ -7,6 +7,21 @@ export interface ChatRecord {
   createdAt: string;
   updatedAt: string;
   metadata: Record<string, unknown>;
+  /**
+   * Hidden from the default listing, but otherwise a perfectly ordinary chat:
+   * it still answers {@link ConversationStore.getChat}, still accepts appends,
+   * still comes back from an explicit `ids` fetch.
+   *
+   * A first-class column rather than a `metadata` flag because
+   * {@link ListChatsOptions.includeArchived} filters on it, and a store cannot
+   * index — or a caller reason about — a key buried in an opaque JSON bag the
+   * host is otherwise free to put anything in.
+   *
+   * `false` on every chat this store creates, and on every fork: archiving is a
+   * statement about one conversation, and a copy of an archived chat is a new
+   * conversation somebody just made on purpose.
+   */
+  archived: boolean;
 }
 
 /**
@@ -218,8 +233,35 @@ export interface UpdateMessagePatch {
   toolCalls?: AiToolCall[];
 }
 
+/**
+ * Fields a chat may change after it was created.
+ *
+ * `metadata` REPLACES the stored bag rather than merging into it — the same
+ * rule as {@link UpdateMessagePatch.metadata}, for the same reason: a merge
+ * makes "unset this flag" unexpressible, and a caller that wanted a merge
+ * already has the record it read to build one from.
+ *
+ * Every write here bumps `updatedAt`, which is `listChats`' sort key: a renamed
+ * or archived chat moves to the front of the listing, exactly as one that just
+ * received a message does. There is one `updatedAt`, and a second "touched but
+ * do not re-sort" notion of modification would be a field this record does not
+ * have.
+ */
+export interface UpdateChatPatch {
+  title?: string;
+  metadata?: Record<string, unknown>;
+  archived?: boolean;
+}
+
 export interface ListMessagesOptions {
-  /** Most recent N messages (still returned in ascending path order). */
+  /**
+   * How many messages to return.
+   *
+   * With no cursor, or with {@link ListMessagesOptions.afterOrderKey}: the most
+   * recent N (still in ascending path order). With
+   * {@link ListMessagesOptions.beforeOrderKey}: the N immediately before that
+   * key — the page above the one already on screen.
+   */
   limit?: number;
   /**
    * Only messages with `orderKey` greater than this.
@@ -237,12 +279,142 @@ export interface ListMessagesOptions {
    * active leaf's id between reads is the cheap way to see it.
    */
   afterOrderKey?: number;
+  /**
+   * Only messages with `orderKey` STRICTLY LESS than this — the `limit` of them
+   * nearest the key, still returned in ascending path order.
+   *
+   * This is the scroll-back cursor, and it is a separate option rather than a
+   * sign convention on `afterOrderKey` because the two page in opposite
+   * directions and a client that confused them would silently read the wrong
+   * end of the conversation. The pattern it serves: open a chat by listing the
+   * last page (`limit` alone), then walk upwards by passing the first returned
+   * message's `orderKey` here, again and again, until a page comes back short.
+   *
+   * Same path-scoped caveat as {@link ListMessagesOptions.afterOrderKey}: it is
+   * a cursor into a path, not into a chat, and a branch switch invalidates it.
+   *
+   * Setting BOTH cursors is rejected (`invalid_cursor`) rather than
+   * intersected. A range read is a third operation with its own paging
+   * semantics — which end does `limit` count from? — and guessing one would
+   * make the answer depend on which adapter is underneath.
+   */
+  beforeOrderKey?: number;
 }
 
 export interface ListChatsOptions {
   limit?: number;
   /** Chats updated before this ISO timestamp (keyset pagination). */
   before?: string;
+  /**
+   * Fetch exactly these chats by id, in the same order and paging as the
+   * default listing (`updatedAt` descending, `before`/`limit` still applied).
+   *
+   * A batch `getChat`, not a filter over a browse: an id a caller already holds
+   * came from somewhere — a task payload, a link, a client-side cache — and
+   * naming it is a claim that this chat specifically is wanted. So an id
+   * resolves whatever the chat's state is, {@link ListChatsOptions.includeArchived}
+   * included; archiving hides a chat from browsing, not from anyone who can
+   * already name it.
+   *
+   * An empty array returns nothing, which is the only reading that composes:
+   * "the chats among these zero ids" is empty, and treating it as "no filter"
+   * would turn a caller's emptied selection into the whole listing.
+   */
+  ids?: string[];
+  /**
+   * Whether archived chats appear. Default `false` — they do not.
+   *
+   * The default is the exclusion because that is what archiving is FOR: a chat
+   * list that still showed everything after an archive would make the feature
+   * do nothing a client could see. `ids` overrides it (see above).
+   */
+  includeArchived?: boolean;
+}
+
+/** One message matching a {@link ConversationStore.searchMessages} query. */
+export interface MessageSearchHit {
+  chatId: string;
+  messageId: string;
+  /**
+   * A window of the message's text around the match, with the matched terms
+   * wrapped in {@link SEARCH_MATCH_START}/{@link SEARCH_MATCH_END} and elided
+   * text standing in as {@link SEARCH_SNIPPET_ELLIPSIS}.
+   *
+   * A snippet rather than the message: a search result list renders the
+   * evidence, and returning whole bodies would make one query carry every
+   * attachment-bearing message it happened to match.
+   */
+  snippet: string;
+}
+
+export interface SearchMessagesOptions {
+  /** Restrict to one chat. Absent searches every chat in the store. */
+  chatId?: string;
+  /** Default {@link DEFAULT_SEARCH_LIMIT}. */
+  limit?: number;
+}
+
+/**
+ * What every adapter wraps a matched term in inside a
+ * {@link MessageSearchHit.snippet}, and what stands in for the text it elided.
+ *
+ * Fixed here rather than per adapter so a client can strip or style the markers
+ * without asking which store it is talking to — and so the conformance suite can
+ * assert them at all. Deliberately not HTML: a store does not know what its
+ * caller renders into.
+ */
+export const SEARCH_MATCH_START = "[";
+export const SEARCH_MATCH_END = "]";
+export const SEARCH_SNIPPET_ELLIPSIS = "…";
+
+/** Hits returned when {@link SearchMessagesOptions.limit} is absent. */
+export const DEFAULT_SEARCH_LIMIT = 20;
+
+/** The chat half of an {@link ImportConversationInput}. */
+export interface ImportChatInput {
+  /** Preserved verbatim; an id this store already has is `invalid_import`. */
+  id: string;
+  title?: string;
+  metadata?: Record<string, unknown>;
+  archived?: boolean;
+  /** Defaults to now. Also becomes the chat's `updatedAt` — see the method doc. */
+  createdAt?: string;
+}
+
+/**
+ * One message of an import, in CREATION ORDER.
+ *
+ * The caller supplies identity, the tree links and the `active` flags; the
+ * STORE assigns `orderKey`, `depth` and `branchIndex`. That split is the whole
+ * design: those three are derived facts with rules
+ * (`packages/host/src/conversation/message-tree.ts`) that every append in this
+ * port already obeys, and letting an import name them would let it write a chat
+ * no append could have produced — which the very next append would then have to
+ * reconcile.
+ */
+export interface ImportMessageInput {
+  id: string;
+  role: MessageRecord["role"];
+  content: AiMessageContent;
+  /** Absent or `null` makes a root. Must name a message EARLIER in the list. */
+  parentMessageId?: string | null;
+  /** Whether this message is on the imported chat's active path. */
+  active: boolean;
+  /**
+   * Shorthand for `metadata.internal = true` — a replay-only record. Merged
+   * into {@link ImportMessageInput.metadata} rather than replacing it, because
+   * an importer that has both is expressing two different things.
+   */
+  internal?: boolean;
+  metadata?: Record<string, unknown>;
+  /** Defaults to the chat's `createdAt`. */
+  createdAt?: string;
+}
+
+export interface ImportConversationInput {
+  chat: ImportChatInput;
+  /** In creation order: a parent MUST appear before any child that names it. */
+  messages: ImportMessageInput[];
 }
 
 /** What {@link ConversationStore.forkChat} wrote: the new chat and its copy. */
@@ -256,6 +428,34 @@ export interface ConversationStore {
   createChat(input: CreateChatInput): Promise<ChatRecord>;
   getChat(chatId: string): Promise<ChatRecord | null>;
   listChats(opts?: ListChatsOptions): Promise<ChatRecord[]>;
+  /**
+   * Change a chat's title, metadata bag, or archived flag, and answer with the
+   * updated record. Unknown chat → `RecordNotFoundError`.
+   *
+   * `metadata` REPLACES; `updatedAt` moves. See {@link UpdateChatPatch}.
+   */
+  updateChat(chatId: string, patch: UpdateChatPatch): Promise<ChatRecord>;
+  /**
+   * Delete the chat and EVERY message in it, transactionally — including
+   * messages on branches the conversation is not currently showing, which are
+   * as much a part of this chat as the live path is.
+   *
+   * Unknown chat → `RecordNotFoundError`, rather than a silent success. A
+   * delete that cannot say whether it deleted anything is a delete a caller
+   * cannot build a confirmation dialog on top of.
+   *
+   * SCOPED TO THE CONVERSATION, and deliberately no further: the tasks that ran
+   * in this chat and the proposals staged from it live in other stores, and a
+   * conversation store that reached into them would be making a policy decision
+   * (what a delete means) that belongs one layer up. `ConversationService.deleteChat`
+   * is the operation that composes all three — and the one that refuses while a
+   * run is still live.
+   *
+   * A store maintaining a search index MUST leave no residue behind: a hit
+   * pointing at a deleted chat is worse than a missing hit, because a client
+   * cannot tell it from a permissions bug.
+   */
+  deleteChat(chatId: string): Promise<void>;
   /**
    * Append a message, assigning the next `orderKey` for its chat and placing it
    * in the chat's tree (see {@link AppendMessageInput.parentMessageId}).
@@ -282,9 +482,11 @@ export interface ConversationStore {
    * chat nobody has branched has one path, so this returns byte-identically what
    * it returned before branching existed.
    *
-   * `limit` still means "the most recent N", and `afterOrderKey` still pages
-   * forward; both apply to the active path, and both remain well-defined because
-   * `orderKey` increases with depth along any path (see {@link MessageRecord}).
+   * `limit` still means "the most recent N", `afterOrderKey` still pages
+   * forward, and `beforeOrderKey` pages BACKWARDS from a key the caller already
+   * holds; all three apply to the active path, and all three remain well-defined
+   * because `orderKey` increases with depth along any path (see
+   * {@link MessageRecord}). Passing both cursors is `invalid_cursor`.
    */
   listMessages(
     chatId: string,
@@ -363,4 +565,71 @@ export interface ConversationStore {
    * nothing left to fix it with.
    */
   forkChat(chatId: string, fromMessageId: string): Promise<ForkChatResult>;
+  /**
+   * Write a whole conversation — the chat and its messages — in ONE
+   * transaction, PRESERVING the ids the caller supplies.
+   *
+   * This is the history-migration primitive, and id preservation is the entire
+   * point of it: a host moving conversations off another system has links,
+   * bookmarks, analytics rows and its own foreign keys already pointing at
+   * those ids, and an import that minted fresh ones would be a copy rather than
+   * a migration. It is also why this is not `createChat` plus a loop of
+   * `appendMessage`: that loop can only ever build the tree one legal append at
+   * a time, cannot express an inactive branch that was never the live path, and
+   * leaves a half-written conversation behind when it fails in the middle.
+   *
+   * WHAT THE CALLER OWNS: identity, the parent links, and the `active` flags.
+   * WHAT THE STORE OWNS: `orderKey` (creation order, `1..n`), `depth`, and
+   * `branchIndex` (per the same sibling rules every append follows). See
+   * {@link ImportMessageInput}.
+   *
+   * VALIDATED IN FULL BEFORE ANY WRITE, all-or-nothing, every failure an
+   * `InvalidImportError` carrying `details.reason`:
+   * - `duplicate_chat` — the chat id already exists.
+   * - `duplicate_message_id` — two messages share an id.
+   * - `unknown_parent` / `forward_parent` — a `parentMessageId` naming nothing
+   *   in the payload, or naming something later in it. "Creation order" is a
+   *   requirement, not a hint: a store cannot assign `depth` to a message whose
+   *   parent it has not seen.
+   * - `no_active_path` / `broken_active_chain` / `active_leaf_has_child` — the
+   *   `active` set is not exactly one chain from a root to a CHILDLESS leaf.
+   *   That is the same invariant every other method here maintains, so an
+   *   import is held to it too rather than being the one door through which a
+   *   chat with two live answers can enter.
+   *
+   * An EMPTY message list is valid and produces an empty chat. A non-empty list
+   * with nothing active is not: a conversation whose active path is empty has
+   * no answer to "what is this chat?", and every reader here would report it as
+   * blank.
+   */
+  importConversation(input: ImportConversationInput): Promise<ChatRecord>;
+  /**
+   * Full-text search over message bodies, best match first.
+   *
+   * OPTIONAL — a store that cannot index text omits it, and a caller checks for
+   * the method rather than catching a "not supported" error. The store
+   * conformance suite grades it behind `capabilities.search`.
+   *
+   * The contract every implementation shares:
+   * - The searched text of a message is its string body, or ALL of its text
+   *   parts joined with `"\n"` (see `searchTextOf`). Not the first part: a
+   *   multimodal message's answer is as likely to be in its third paragraph as
+   *   its first, and an index that stopped at part one would silently never
+   *   find it.
+   * - `internal: true` records and `placeholder: true` records are EXCLUDED.
+   *   Neither is chat: one is replay bookkeeping the user never saw, the other
+   *   is an answer that has not been written yet.
+   * - Hits are NOT restricted to the active path. A message on a branch the
+   *   conversation moved away from is still something that was said in this
+   *   chat, and it is exactly what a user searching for "where did I see that?"
+   *   is trying to find again. A caller that wants only live messages
+   *   intersects the hits with `listMessages` itself.
+   * - A query that is empty once the store has sanitized it returns `[]` rather
+   *   than raising: search boxes emit punctuation, and a 500 from a stray `*`
+   *   is a worse answer than no results.
+   */
+  searchMessages?(
+    query: string,
+    opts?: SearchMessagesOptions,
+  ): Promise<MessageSearchHit[]>;
 }

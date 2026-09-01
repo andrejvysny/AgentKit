@@ -3,11 +3,14 @@ import {
   activationSetOf,
   activeLeafOf,
   activePathOf,
+  assertListMessagesCursors,
   childrenOf,
   forkPrefixOf,
   forkedChatTitle,
   nextBranchIndex,
   planForkedMessages,
+  planImportedMessages,
+  searchTextOf,
   siblingsOf,
   type MessageRecord,
 } from "../src/index.js";
@@ -256,5 +259,166 @@ describe("forkedChatTitle", () => {
   it("prefixes a title and leaves an absent one absent", () => {
     expect(forkedChatTitle("Design review")).toBe("Fork of Design review");
     expect(forkedChatTitle(undefined)).toBe(undefined);
+  });
+});
+
+describe("searchTextOf", () => {
+  it("joins EVERY text part, not the first, and ignores non-text parts", () => {
+    expect(searchTextOf("a plain string body")).toBe("a plain string body");
+    // The regression this function exists to prevent: a projection that
+    // stopped at part one would make the third part permanently unfindable,
+    // and nothing about the stored message would look wrong.
+    expect(
+      searchTextOf([
+        { type: "text", text: "first" },
+        {
+          type: "image",
+          source: { kind: "data", base64: "aGk=", mediaType: "image/png" },
+        },
+        { type: "text", text: "second" },
+        { type: "image", source: { kind: "ref", ref: "blob:abc" } },
+        { type: "text", text: "third" },
+      ]),
+    ).toBe("first\nsecond\nthird");
+    // An image-only body has no searchable text at all, which is a legal
+    // answer rather than a reason to index base64.
+    expect(
+      searchTextOf([
+        { type: "image", source: { kind: "ref", ref: "blob:abc" } },
+      ]),
+    ).toBe("");
+    expect(searchTextOf([])).toBe("");
+  });
+});
+
+describe("assertListMessagesCursors", () => {
+  it("accepts either cursor alone and refuses both together", () => {
+    expect(() => assertListMessagesCursors(undefined)).not.toThrow();
+    expect(() => assertListMessagesCursors({})).not.toThrow();
+    expect(() => assertListMessagesCursors({ afterOrderKey: 1 })).not.toThrow();
+    expect(() =>
+      assertListMessagesCursors({ beforeOrderKey: 1 }),
+    ).not.toThrow();
+    // Zero is a real cursor value, not an absent one — a guard written with
+    // truthiness instead of `undefined` would let this pair through.
+    let code: string | undefined;
+    try {
+      assertListMessagesCursors({ afterOrderKey: 0, beforeOrderKey: 0 });
+    } catch (err) {
+      code = (err as { code?: string }).code;
+    }
+    expect(code).toBe("invalid_cursor");
+  });
+});
+
+describe("planImportedMessages", () => {
+  it("assigns creation-order keys, parent-derived depth, and dense sibling indices", () => {
+    const plans = planImportedMessages(
+      [
+        { id: "u1", role: "user", content: "q", active: true },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "first",
+          parentMessageId: "u1",
+          active: false,
+        },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "second",
+          parentMessageId: "u1",
+          active: true,
+          internal: true,
+          metadata: { source: "legacy" },
+        },
+      ],
+      "chat-1",
+      "2024-01-01T00:00:00.000Z",
+    );
+    expect(plans.map((p) => p.orderKey)).toEqual([1, 2, 3]);
+    expect(plans.map((p) => p.depth)).toEqual([0, 1, 1]);
+    // Two answers to one question: 0 then 1, exactly as `nextBranchIndex`
+    // would hand them out to two appends.
+    expect(plans.map((p) => p.branchIndex)).toEqual([0, 0, 1]);
+    expect(plans.map((p) => p.parentMessageId)).toEqual([
+      undefined,
+      "u1",
+      "u1",
+    ]);
+    // `internal` is MERGED into the caller's bag, not a replacement for it.
+    expect(plans[2]?.metadata).toEqual({ source: "legacy", internal: true });
+    expect(plans[0]?.createdAt).toBe("2024-01-01T00:00:00.000Z");
+  });
+
+  it("accepts an empty payload, and rejects a non-empty one with nothing active", () => {
+    expect(planImportedMessages([], "chat-1", "t")).toEqual([]);
+    let reason: unknown;
+    try {
+      planImportedMessages(
+        [{ id: "u1", role: "user", content: "q", active: false }],
+        "chat-1",
+        "t",
+      );
+    } catch (err) {
+      reason = (err as { details?: { reason?: unknown } }).details?.reason;
+    }
+    expect(reason).toBe("no_active_path");
+  });
+
+  it("tells a forward parent reference apart from an unknown one", () => {
+    const reasonOf = (messages: Parameters<typeof planImportedMessages>[0]) => {
+      try {
+        planImportedMessages(messages, "chat-1", "t");
+        return "accepted";
+      } catch (err) {
+        return (err as { details?: { reason?: unknown } }).details?.reason;
+      }
+    };
+    // Present, but later in the list: the payload is sorted wrong.
+    expect(
+      reasonOf([
+        {
+          id: "a1",
+          role: "assistant",
+          content: "a",
+          parentMessageId: "u1",
+          active: true,
+        },
+        { id: "u1", role: "user", content: "q", active: true },
+      ]),
+    ).toBe("forward_parent");
+    // Not in the payload at all: a typo or a truncated export.
+    expect(
+      reasonOf([
+        {
+          id: "a1",
+          role: "assistant",
+          content: "a",
+          parentMessageId: "ghost",
+          active: true,
+        },
+      ]),
+    ).toBe("unknown_parent");
+    // Two different bugs, two different reasons — an importer fixing one of
+    // them should not go hunting for the other.
+  });
+
+  it("treats an explicit null parent as a root, exactly as an absent one", () => {
+    const plans = planImportedMessages(
+      [
+        {
+          id: "u1",
+          role: "user",
+          content: "q",
+          active: true,
+          parentMessageId: null,
+        },
+      ],
+      "chat-1",
+      "t",
+    );
+    expect(plans[0]?.parentMessageId).toBe(undefined);
+    expect(plans[0]?.depth).toBe(0);
   });
 });

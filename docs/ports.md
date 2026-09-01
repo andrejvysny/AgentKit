@@ -136,6 +136,56 @@ byte-identical to before branching existed.
   its visible answer (as an empty placeholder) *before* the internal turn
   and tool results that produced it. See ADR 0007 for the full rationale.
 
+**Lifecycle and retrieval**:
+
+- `ChatRecord.archived` (a real field, not a `metadata` key, so a store can
+  index it). `false` on every created chat and on every fork — a copy of an
+  archived chat is a new conversation somebody just made.
+- `updateChat(chatId, { title?, metadata?, archived? })` returns the updated
+  record; unknown chat → `RecordNotFoundError`. `metadata` **replaces** (same
+  rule and rationale as `updateMessage`), and every write bumps `updatedAt`,
+  which is `listChats`' sort key.
+- `ListChatsOptions.includeArchived` (default `false`) excludes archived chats
+  from the listing; `ListChatsOptions.ids` is an exact-id **batch fetch** that
+  still sorts and pages like the listing and **resolves archived chats
+  regardless** — archiving hides a chat from browsing, not from a caller who can
+  already name it. An empty `ids` array returns nothing.
+- `ListMessagesOptions.beforeOrderKey` pages **backwards**: the `limit` active-path
+  messages strictly below the key, still ascending. Setting it together with
+  `afterOrderKey` is `invalid_cursor` — a range read is a third operation with
+  its own undefined answer to "which end does `limit` count from".
+- `deleteChat(chatId)` removes the chat and **every** message in it, off-path
+  branches included, transactionally; unknown chat is `not_found`, never a
+  silent success. It is scoped to the conversation on purpose: tasks and
+  proposals live in other stores, and deciding what a delete *means* is
+  `ConversationService.deleteChat`'s job (below).
+- `importConversation(input)` — the **history-migration primitive**: writes a
+  whole conversation in one transaction, **preserving the caller's ids**. The
+  caller owns identity, the parent links and the `active` flags; the STORE
+  assigns `orderKey` (creation order), `depth` and `branchIndex` by the same
+  sibling rules every append follows. Messages must be in creation order.
+  Validated in full before any write, all-or-nothing, each failure an
+  `InvalidImportError` (`invalid_import`) whose `details.reason` is one of
+  `duplicate_chat`, `duplicate_message_id`, `unknown_parent`, `forward_parent`,
+  `no_active_path`, `broken_active_chain`, `active_leaf_has_child`. An empty
+  message list is a valid empty chat; a non-empty list with nothing active is
+  not. The validation is the shared, pure `planImportedMessages`
+  (`conversation/message-tree.ts`), so both adapters accept exactly the same
+  payloads.
+- `searchMessages(query, { chatId?, limit? })` → `MessageSearchHit[]`
+  (`{ chatId, messageId, snippet }`), best match first. **Optional** on the port
+  and graded behind the conformance harness's `capabilities.search`. The
+  searched text of a message is its string body or **all** of its text parts
+  joined with `"\n"` (`searchTextOf` — indexing only the first part is a real,
+  silent bug this shared projection exists to prevent). `internal: true` and
+  `placeholder: true` records are excluded, and both flags are read at **query**
+  time because metadata is rewritten after the fact. Hits are **not** restricted
+  to the active path: a message on an abandoned branch is still something that
+  was said in this chat, and is exactly what "where did I see that?" is looking
+  for. A query that sanitizes to nothing returns `[]` rather than raising.
+  Snippets mark matches with the shared `SEARCH_MATCH_START`/`SEARCH_MATCH_END`
+  and elide with `SEARCH_SNIPPET_ELLIPSIS`.
+
 **Key invariants**: `appendMessage` assigns the next `orderKey` in the store,
 not the caller, so concurrent appends from a run and from a user land in a
 defined order. `updateMessage`'s `metadata` patch *replaces* the stored bag
@@ -155,10 +205,27 @@ appends, branch appends, chain appends and switches at random and re-checks the
 whole shape — links, depths, rising `orderKey`, childless leaf — after every
 single step, on both reference adapters.
 
+**Chat lifecycle across stores**: `ConversationService`
+([`conversation/conversation-service.ts`](../packages/host/src/conversation/conversation-service.ts))
+is where a delete that *means something* lives. `deleteChat(chatId)` runs one
+`store.transaction`: read the chat, read `TaskStore.listByScope(chatId)`, refuse
+with `ChatBusyError` (`chat_busy`, HTTP 409) if any task is `running` or
+`waiting_approval`, then `conversations.deleteChat` + `tasks.deleteByScope` +
+`proposals.deleteByChat`. The check and the deletes share one transaction
+because a task read outside it could go `running` in between, which would make
+the refusal a race. `queued` is deliberately not a busy status — nothing has
+been spent on it, and refusing would make a chat undeletable for as long as
+anything sat behind it. Force-cancelling live runs is a *different* operation
+with different consequences, so it is the caller's explicit call, never a side
+effect of a delete. The scope is the chat id, which is the convention
+`TurnRunner` writes with. `archiveChat`/`unarchiveChat` are thin, deliberately
+logic-free wrappers over `updateChat({ archived })`.
+
 **Reference / conformance**: `MemoryAssistantStore` and `SqliteAssistantStore`
-(sqlite adapter: `SCHEMA_V5`, `parent_message_id`/`depth`/`branch_index`/
-`active` on `messages` — see
-[`packages/adapters-sqlite/README.md`](../packages/adapters-sqlite/README.md#schema-v5)),
+(sqlite adapter: `SCHEMA_V6`, `parent_message_id`/`depth`/`branch_index`/
+`active` on `messages`, `chats.archived`, and the FTS5 view/table/trigger set
+behind `searchMessages` — see
+[`packages/adapters-sqlite/README.md`](../packages/adapters-sqlite/README.md#schema-v6)),
 both graded by the same conformance suite; the tree arithmetic itself
 (`activePathOf`, `activationSetOf`, `nextBranchIndex`, `forkPrefixOf`,
 `planForkedMessages`) is shared, pure, and synchronous
@@ -233,6 +300,17 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
 - `listChildren(taskId)` returns tasks whose `parentTaskId` is `taskId`, one
   level (not the subtree) — the one caller that needs the subtree
   (`TaskService.cancelTask`) already walks breadth-first and asks again.
+- `listByScope(scopeId)` returns every task in a scope, any status, unpaged —
+  deliberately the narrowest query that answers "is anything still live here?",
+  which is the only question a caller outside this port has
+  (`ConversationService.deleteChat` asks it). A general `listTasks(filter)`
+  would owe every adapter statuses, kinds, ordering and paging to serve one
+  consumer.
+- `deleteByScope(scopeId)` deletes a scope's tasks with their attempts, leases
+  and event log, and returns the number of **tasks** removed. Unconditional by
+  design: whether live work may be discarded is policy, and this port cannot
+  answer it — the caller decides (and `ConversationService.deleteChat` refuses
+  outright while anything is `running` or `waiting_approval`).
 - `updateProgress(taskId, progress, opts)` REPLACES `TaskRecord.progress`
   wholesale (never merges) and MUST reject a stale `leaseToken` with
   `LeaseLostError`, the same check `appendEvents` makes. It never touches
@@ -308,6 +386,14 @@ Staged writes: `ProposalRecord`, `ProposalStatus`, and apply outcomes
   record answers a dedup check, since a released key can be reused.
 - `recordOutcome` is idempotent per `operationId`: a second call with the
   same id must return the *first* outcome, never overwrite it.
+- `deleteByChat(chatId)` deletes a chat's proposals **and the apply outcomes
+  they claimed**, returning the number of proposals removed. **By `chatId`, not
+  by `scopeKey`** — a proposal carries both, and they are not the same set: two
+  chats routinely stage writes into one shared document, so a scope-keyed delete
+  would silently take a bystander's staged writes. Outcomes go with their
+  proposals because an `ApplyOutcome` is keyed by an `operationId` only the
+  proposal row still names; left behind it is unreadable and indistinguishable
+  from a leak. Unconditional, for the same reason `deleteByScope` is.
 
 **Reference / conformance**: `MemoryProposalStore` / SQLite equivalent
 (`proposals` + `proposal_outcomes` tables, a partial unique index on

@@ -19,12 +19,21 @@ export interface AssistantStoreConformanceHarness {
   store: AssistantStore;
   /**
    * Capabilities this adapter does NOT provide. Absent/undefined means "fully
-   * capable" — only `atomicTransactions: false` currently changes suite
-   * behavior (see {@link DescribeAssistantStoreConformanceOptions}).
+   * capable"; a `false` here is what makes the suite SKIP a section instead of
+   * failing an adapter for something it never claimed to do.
    */
   capabilities?: {
     /** False for an adapter whose `transaction()` cannot roll back (e.g. a plain in-memory store). */
     atomicTransactions?: boolean;
+    /**
+     * False for an adapter that does not implement the OPTIONAL
+     * `ConversationStore.searchMessages`.
+     *
+     * The whole search section is skipped when this is false, and asserted in
+     * full when it is not — including that the method EXISTS, so an adapter
+     * cannot quietly claim the capability and ship nothing.
+     */
+    search?: boolean;
   };
   /** Releases whatever `create()` opened (a db connection, a temp file handle, ...). Synchronous — mirrors `SqliteAssistantStore.close()`. */
   close?: () => void;
