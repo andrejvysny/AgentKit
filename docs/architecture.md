@@ -22,6 +22,10 @@ packages/mcp-client            @agentkit/mcp-client (optional adapter)
 
 packages/transport-http        @agentkit/transport-http (optional adapter)
   fetch-standard REST v1 + SSE handler serving contracts' REST surface
+
+packages/client                @agentkit/client (optional adapter)
+  the other end of that surface: typed REST v1 + SSE client, auto-resuming
+  run streams, derived run phases; depends on contracts alone
         │
         ▼  depends on
 --------------------------------------------------------------
@@ -171,6 +175,14 @@ always free to skip both and write the equivalent itself:
   + SSE) over any host that implements the port catalog below. See
   [`packages/transport-http/README.md`](../packages/transport-http/README.md)
   and [ADR 0005](adr/0005-http-transport.md).
+- **`@agentkit/client`** ([`packages/client/`](../packages/client)) —
+  `createAgentKitClient`, the calling end of that same surface: one typed
+  method per `REST_ROUTES` operation, `streamRun` as an async iterable that
+  resumes on `Last-Event-ID` after a dropped connection, `runPhase` as the
+  UI-facing derivation over status plus event log. It sits BESIDE
+  `transport-http` rather than below it — it depends on `@agentkit/contracts`
+  and nothing else, uses no Node built-in, and runs in a browser. See
+  [`packages/client/README.md`](../packages/client/README.md).
 
 ## Event flow
 

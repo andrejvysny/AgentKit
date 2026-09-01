@@ -80,6 +80,7 @@ each source package's `src/index.ts`:
   "compilerOptions": {
     "paths": {
       "agentkit/contracts": ["../AgentKit/packages/contracts/src/index.ts"],
+      "agentkit/client": ["../AgentKit/packages/client/src/index.ts"],
       "agentkit/core": ["../AgentKit/packages/core/src/index.ts"],
       "agentkit/host": ["../AgentKit/packages/host/src/index.ts"],
       "agentkit/testing": ["../AgentKit/packages/testing/src/index.ts"],

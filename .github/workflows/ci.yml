@@ -103,6 +103,7 @@ jobs:
         run: |
           ! grep -rE "require\(['\"]bun|from ['\"]bun:" \
             packages/contracts/dist \
+            packages/client/dist \
             packages/core/dist \
             packages/host/dist \
             packages/adapters-memory/dist \
