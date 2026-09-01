@@ -82,6 +82,7 @@ const PACKAGES = [
   "testing",
   "mcp-client",
   "transport-http",
+  "mcp-server",
 ];
 
 /**
@@ -379,6 +380,27 @@ const handler = transport.createRestHandler({
 });
 const versionResponse = await handler(new Request("http://x/v1/version"));
 check(versionResponse.status === 200, \`GET /v1/version answered \${versionResponse.status}\`);
+
+const mcpServer = await import("@agentkit/mcp-server");
+console.log("@agentkit/mcp-server");
+check(typeof mcpServer.createMcpServerHandler === "function", "exports createMcpServerHandler");
+check(typeof mcpServer.createStagedToolSource === "function", "exports createStagedToolSource");
+const mcpServerHandler = mcpServer.createMcpServerHandler({
+  tools: {
+    catalog: { async listTools() { return []; } },
+    async execute() { throw new Error("unreachable"); },
+  },
+  auth: { bearerToken: "pack-smoke-token" },
+});
+const mcpUnauthorized = await mcpServerHandler.fetch(new Request("http://localhost/mcp", {
+  method: "POST", headers: { host: "localhost" }, body: "{}",
+}));
+check(mcpUnauthorized.status === 401, \`an unauthenticated POST answered \${mcpUnauthorized.status}\`);
+const mcpRebound = await mcpServerHandler.fetch(new Request("http://localhost/mcp", {
+  method: "POST", headers: { host: "evil.com", authorization: "Bearer pack-smoke-token" }, body: "{}",
+}));
+check(mcpRebound.status === 403, \`a rebound Host answered \${mcpRebound.status}\`);
+await mcpServerHandler.dispose();
 
 if (failures.length > 0) {
   console.error(\`\\n\${failures.length} check(s) failed\`);

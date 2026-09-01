@@ -24,6 +24,8 @@
  *   AGENTKIT_API_KEY        provider API key, if the kind needs one
  *   AGENTKIT_MCP_COMMAND    stdio MCP server to bridge in, if set
  *   AGENTKIT_MCP_ARGS       space-separated args for that command
+ *   AGENTKIT_MCP_SERVER_TOKEN  when set, serve THIS host's tools as an MCP
+ *                              server at /mcp, behind that bearer token
  *
  * No provider env is required to boot: a provider is always seeded (from
  * presets when nothing is configured), and `GET /v1/version` never touches it.
@@ -46,6 +48,9 @@ const consoleLogger: Logger = {
 
 const PORT = Number(process.env.AGENTKIT_PORT ?? 8787);
 
+/** Where the MCP server is mounted, when one is built. */
+const MCP_PATH = "/mcp";
+
 /**
  * LOOPBACK ON PURPOSE. `Bun.serve` with no `hostname` binds every interface,
  * and `buildApp` wires no `authenticate` and no `authorize` — so the default
@@ -62,10 +67,28 @@ const { host: HOST, loopback } = resolveBindHost();
 
 const app = await buildApp({ logger: consoleLogger });
 
+/**
+ * `/mcp` is matched BEFORE the REST handler sees the request.
+ *
+ * The two are different protocols on one socket: `serveRest` resolves paths
+ * against `deps.basePath` (`/api/agentkit` here) and answers 404 for anything
+ * outside it, so `/mcp` would never reach the MCP handler if it went second.
+ * The exact-path test (rather than a prefix) is deliberate — the MCP streamable
+ * transport uses one endpoint for POST, GET and DELETE, so there are no
+ * subpaths to forward.
+ */
+const restFetch = serveRest(app.deps).fetch;
+const mcpServer = app.mcpServer;
+
 const server = Bun.serve({
   hostname: HOST,
   port: PORT,
-  ...serveRest(app.deps),
+  fetch(request) {
+    if (mcpServer && new URL(request.url).pathname === MCP_PATH) {
+      return mcpServer.fetch(request);
+    }
+    return restFetch(request);
+  },
 });
 
 if (!loopback) {
@@ -82,6 +105,11 @@ console.log(
 console.log(`[agentkit] db: ${app.dbPath}`);
 console.log(
   `[agentkit] mcp bridge: ${app.mcpEnabled ? "enabled" : "disabled"}`,
+);
+console.log(
+  mcpServer
+    ? `[agentkit] mcp server: http://${HOST}:${server.port}${MCP_PATH} (bearer token required)`
+    : "[agentkit] mcp server: disabled (set AGENTKIT_MCP_SERVER_TOKEN to enable)",
 );
 
 let shuttingDown = false;

@@ -47,6 +47,7 @@ workflows and the release ritual.
 | [`packages/runner-local`](packages/runner-local) — `@agentkit/runner-local` | Single-process `TaskRunner`: claim, execute, heartbeat, classified retry with backoff, dead-letter, recover. | 0.1.0-dev |
 | [`packages/mcp-client`](packages/mcp-client) — `@agentkit/mcp-client` | Optional adapter: bridges MCP servers' tools into a run as a `ToolSetContributor`, on the official `@modelcontextprotocol/sdk`. | 0.1.0-dev |
 | [`packages/transport-http`](packages/transport-http) — `@agentkit/transport-http` | Optional adapter: fetch-standard REST v1 + SSE handler serving `packages/contracts/src/rest.ts`, zero framework dependencies. | 0.1.0-dev |
+| [`packages/mcp-server`](packages/mcp-server) — `@agentkit/mcp-server` | Optional adapter: exposes the host's `ToolCatalog` **as** an MCP server over streamable HTTP — constant-time bearer auth, DNS-rebinding guard, per-session scope, write-tool filtering. | 0.1.0-dev |
 
 ## Layers
 
@@ -105,18 +106,20 @@ typecheck`, `bun run build`, and per-package variants
 (`bun run test:core`, `bun run test:host`, `bun run test:contracts`,
 `bun run test:testing`, `bun run test:adapters-memory`,
 `bun run test:adapters-sqlite`, `bun run test:runner-local`,
-`bun run test:mcp-client`, `bun run test:transport-http`).
+`bun run test:mcp-client`, `bun run test:transport-http`,
+`bun run test:mcp-server`).
 
 Bun is the primary runtime, but every published `@agentkit/*` package must
 stay Node-loadable — a `bun:` import anywhere in one passes the whole Bun
 suite and breaks the first Node consumer. `scripts/node-smoke.mjs` runs the
 built dists (contracts, core, host, adapters-memory, runner-local,
-mcp-client, transport-http, testing) under plain Node: Ajv-validating a
-golden event, driving `runChat` with a stub provider, loading the host port
-vocabulary, claiming a task out of the in-memory store, driving that task to
-`completed` through the local runner's claim loop, constructing an mcp-client
-manager, serving a request through transport-http, and round-tripping a
-golden trace through testing. `@agentkit/adapters-sqlite` is the one
+mcp-client, transport-http, mcp-server, testing) under plain Node:
+Ajv-validating a golden event, driving `runChat` with a stub provider, loading
+the host port vocabulary, claiming a task out of the in-memory store, driving
+that task to `completed` through the local runner's claim loop, constructing an
+mcp-client manager, serving a request through transport-http, refusing an
+unauthenticated and a DNS-rebound request through mcp-server, and
+round-tripping a golden trace through testing. `@agentkit/adapters-sqlite` is the one
 exception, Bun-only by construction (`bun:sqlite`) — see its
 [README](packages/adapters-sqlite/README.md). **Build first** — it reads
 `dist/`, which is not checked in:
@@ -126,7 +129,7 @@ bun run build && bun run smoke:node
 ```
 
 CI runs the same thing in a separate `node-smoke` job, preceded by a grep
-that fails on any `bun:` import in any of those eight dists.
+that fails on any `bun:` import in any of those nine dists.
 
 ## License
 

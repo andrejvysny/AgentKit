@@ -9,7 +9,7 @@
  * breaks the first Node consumer. So: plain Node, no Bun APIs, the built `dist`
  * output rather than the source.
  *
- * Eight checks, end-to-end rather than smoke-in-name-only where a package has
+ * Nine checks, end-to-end rather than smoke-in-name-only where a package has
  * something end-to-end to run:
  *
  *   1. Ajv (Node's, not Bun's) compiles `AiRunEventSchema` out of the contracts
@@ -35,7 +35,12 @@
  *      about the module graph and the constructor's eager validation.
  *   7. The transport-http dist serves `GET /v1/version` through a real
  *      `Request`/`Response` round trip against stub deps.
- *   8. The testing dist loads and a golden trace round-trips through it —
+ *   8. The mcp-server dist serves its OWN fetch handler: an unauthenticated
+ *      POST is refused 401 and a rebound `Host` is refused 403, both before
+ *      the MCP SDK is asked to do anything. It is also the second package
+ *      whose module graph drags in the MCP SDK under Node's resolver — this
+ *      time the SERVER half of it.
+ *   9. The testing dist loads and a golden trace round-trips through it —
  *      this is the JSON-import path that needs `with { type: "json" }" to
  *      even load under Node (see `packages/testing/src/golden/golden.ts`).
  *
@@ -89,6 +94,7 @@ const ADAPTERS_MEMORY_ENTRY = publishedEntry("adapters-memory");
 const RUNNER_LOCAL_ENTRY = publishedEntry("runner-local");
 const MCP_CLIENT_ENTRY = publishedEntry("mcp-client");
 const TRANSPORT_HTTP_ENTRY = publishedEntry("transport-http");
+const MCP_SERVER_ENTRY = publishedEntry("mcp-server");
 const TESTING_ENTRY = publishedEntry("testing");
 
 // Apply the published mapping to every workspace specifier the dists import at
@@ -101,6 +107,7 @@ const WORKSPACE_ENTRIES = {
   "@agentkit/runner-local": RUNNER_LOCAL_ENTRY,
   "@agentkit/mcp-client": MCP_CLIENT_ENTRY,
   "@agentkit/transport-http": TRANSPORT_HTTP_ENTRY,
+  "@agentkit/mcp-server": MCP_SERVER_ENTRY,
   "@agentkit/testing": TESTING_ENTRY,
 };
 
@@ -489,7 +496,60 @@ const missing = await handler(new Request("http://x/v1/nope"));
 check(missing.status === 404, `an unrouted path answered ${missing.status}`);
 
 // ---------------------------------------------------------------------------
-// 8. Testing dist: a golden trace loads and validates — this is the exact
+// 8. MCP server dist: the security gates answer before the SDK is involved
+// ---------------------------------------------------------------------------
+
+const mcpServer = await import(MCP_SERVER_ENTRY);
+console.log("mcp-server dist");
+check(
+  typeof mcpServer.createMcpServerHandler === "function",
+  "exports createMcpServerHandler",
+);
+check(
+  typeof mcpServer.createStagedToolSource === "function",
+  "exports createStagedToolSource",
+);
+
+const MCP_TOKEN = "node-smoke-token";
+const mcpServerHandler = mcpServer.createMcpServerHandler({
+  tools: {
+    catalog: {
+      async listTools() {
+        return [];
+      },
+    },
+    async execute() {
+      throw new Error("unreachable");
+    },
+  },
+  auth: { bearerToken: MCP_TOKEN },
+});
+const mcpUnauthorized = await mcpServerHandler.fetch(
+  new Request("http://localhost/mcp", {
+    method: "POST",
+    headers: { host: "localhost" },
+    body: "{}",
+  }),
+);
+check(
+  mcpUnauthorized.status === 401,
+  `an unauthenticated POST answered ${mcpUnauthorized.status}`,
+);
+const mcpRebound = await mcpServerHandler.fetch(
+  new Request("http://localhost/mcp", {
+    method: "POST",
+    headers: { host: "evil.com", authorization: `Bearer ${MCP_TOKEN}` },
+    body: "{}",
+  }),
+);
+check(
+  mcpRebound.status === 403,
+  `a rebound Host answered ${mcpRebound.status}`,
+);
+await mcpServerHandler.dispose();
+
+// ---------------------------------------------------------------------------
+// 9. Testing dist: a golden trace loads and validates — this is the exact
 //    path that broke before `golden.ts`'s JSON imports carried
 //    `with { type: "json" }`. Node throws ERR_IMPORT_ATTRIBUTE_MISSING on a
 //    bare JSON import; bun does not need the attribute, so `bun test` alone
