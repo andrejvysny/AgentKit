@@ -7,10 +7,11 @@ import {
 import { KNOWN_PROVIDER_KINDS } from "@agentkit/contracts";
 
 describe("provider presets", () => {
-  it("exposes all 5 kinds", () => {
+  it("exposes all 6 kinds", () => {
     const kinds = AI_PROVIDER_PRESETS.map((p) => p.kind).sort();
     expect(kinds).toEqual([
       "lmstudio",
+      "ollama",
       "omlx",
       "openai",
       "openai-compatible",
@@ -28,9 +29,16 @@ describe("provider presets", () => {
     expect(getPresetByKind("openai")?.requiresApiKey).toBe(true);
   });
 
-  it("lmstudio and omlx do not require API key", () => {
+  it("lmstudio, omlx and ollama do not require API key", () => {
     expect(getPresetByKind("lmstudio")?.requiresApiKey).toBe(false);
     expect(getPresetByKind("omlx")?.requiresApiKey).toBe(false);
+    expect(getPresetByKind("ollama")?.requiresApiKey).toBe(false);
+  });
+
+  it("ollama defaults to the local OpenAI-compatible endpoint", () => {
+    const ollama = getPresetByKind("ollama");
+    expect(ollama?.defaultBaseUrl).toBe("http://127.0.0.1:11434/v1");
+    expect(ollama?.probeBaseUrls).toContain("http://127.0.0.1:11434/v1");
   });
 
   it("returns undefined for a kind with no preset", () => {

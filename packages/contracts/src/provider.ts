@@ -15,6 +15,7 @@ export const KNOWN_PROVIDER_KINDS = [
   "openai-compatible",
   "lmstudio",
   "omlx",
+  "ollama",
 ] as const;
 export type KnownProviderKind = (typeof KNOWN_PROVIDER_KINDS)[number];
 
