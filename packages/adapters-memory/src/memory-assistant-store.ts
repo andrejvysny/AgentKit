@@ -1385,6 +1385,9 @@ export class MemorySettingsStore implements SettingsStore {
     contextSizePreference: "small",
     writePolicyMode: "auto_readonly_confirm_writes",
     allowRawToolData: false,
+    // Stated rather than left undefined so this store and the sqlite one (whose
+    // column is NOT NULL DEFAULT 'auto') answer `getSettings` identically.
+    toolCalling: "auto",
     metadata: {},
   };
 

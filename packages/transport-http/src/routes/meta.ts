@@ -34,10 +34,14 @@ export async function listModels(ctx: RouteContext): Promise<Response> {
  * `ToolSetContributor.contribute` is a per-RUN call: it takes the chat's
  * context bindings, the run's limits and its scope, and a host's contributor
  * legitimately returns different tools for different conversations. `GET
- * /v1/tools` names no conversation, so there is no honest run context to
- * synthesize — a fabricated one would advertise a tool set no actual turn
- * receives. A host that CAN enumerate a static catalogue supplies
- * `deps.toolCatalog`; otherwise the route reports 501 rather than lying.
+ * /v1/tools` names no conversation, so it asks the catalogue with NO scope,
+ * which is the port's chat-independent question (no bindings, unbound rules) —
+ * not a fabricated run context. A host that cannot answer it leaves
+ * `deps.toolCatalog` out and the route reports 501 rather than lying.
+ *
+ * `ToolCatalogEntry.namespace` is dropped here rather than published: the DTO
+ * this route serves is `ToolDefinitionDto`, and the namespace is a host-side
+ * attribution, not part of the versioned wire contract.
  */
 export async function listTools(ctx: RouteContext): Promise<Response> {
   const catalog = ctx.deps.toolCatalog;
@@ -47,8 +51,8 @@ export async function listTools(ctx: RouteContext): Promise<Response> {
       ctx.instance,
     );
   }
-  const tools = await catalog();
-  const items: ToolDefinitionDto[] = tools;
+  const entries = await catalog.listTools();
+  const items: ToolDefinitionDto[] = entries.map((entry) => entry.definition);
   return jsonResponse(items);
 }
 

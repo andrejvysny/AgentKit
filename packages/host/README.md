@@ -31,7 +31,9 @@ only) — alongside [`@agentkit/runner-local`](../runner-local) for the
   `ProposalApplier`, `VerificationHook`, `ContextProvider`,
   `AttachmentResolver` (`resolve(ref)` → bytes for an image part whose
   source is a host attachment handle; resolved per provider pass, never
-  written back to the message), `ToolSetContributor`, `SecretStore`,
+  written back to the message), `ToolSetContributor` (namespaced, disposable),
+  `ToolGuard` (visibility at staging / executability at call time),
+  `ToolCatalog` (chat-independent enumeration), `SecretStore`,
   `AuthorizationPort`, `UsageAuthorizer`, `system.ts`
   (`Clock`/`IdGenerator`/`Logger`).
 - `tasks/` — the kind-dispatch layer over `TaskStore`/`TaskRunner`:
@@ -55,6 +57,10 @@ only) — alongside [`@agentkit/runner-local`](../runner-local) for the
   wrapper a host's write tools are built on).
 - `policy/session-write-policy.ts` — `SessionWritePolicy`, an in-memory
   `WritePolicy`.
+- `tools/contributor-tool-catalog.ts` — `createContributorToolCatalog`, the
+  default `ToolCatalog`. Answers the chat-independent "what tools exist?"
+  question by running the SAME `stageRegistry` a turn does, so the catalogue
+  cannot drift from what a run receives.
 - `conversation/message-tree.ts` — the tree arithmetic every `ConversationStore`
   adapter shares (`activePathOf`, `activationSetOf`, `nextBranchIndex`,
   `forkPrefixOf`, `planForkedMessages`). Pure and SYNCHRONOUS: adapters call it
@@ -182,7 +188,8 @@ managed service):
    logic and `ScopeLock`'s per-process serialization approach as a model.
 6. **Implement the remaining ports as your host needs them.** `WritePolicy`,
    `ProposalApplier`, `VerificationHook`, `ContextProvider`,
-   `ToolSetContributor`, `SecretStore`, `AuthorizationPort`, and
+   `ToolSetContributor`, `ToolGuard`, `ToolCatalog`, `SecretStore`,
+   `AuthorizationPort`, and
    `UsageAuthorizer` are all independent of your storage choice — see
    [`docs/ports.md`](../../docs/ports.md) for each one's responsibility, key
    invariant, and where it is enforced.

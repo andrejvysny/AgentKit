@@ -54,6 +54,12 @@ await mcp.dispose();
 run, so a server that was down last turn comes back this turn without extra
 wiring. A server that stays down costs its own tools and nothing else.
 
+The contributor's `namespace` is `mcp`, one of AgentKit's **reserved**
+namespaces — which is why it also sets the framework-internal
+`privileged: true`. That flag is not an extension point: a host bridging tools
+of its own picks a namespace of its own (`^[a-z][a-z0-9_-]*$`, and not
+`agentkit`/`chat`/`mcp`). See [`docs/ports.md`](../../docs/ports.md#toolsetcontributor).
+
 ## Tool identity
 
 Each tool gets a canonical id `mcp.<serverAlias>.<effectiveToolName>`, where

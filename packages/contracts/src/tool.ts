@@ -113,3 +113,37 @@ export const AiToolEnvelopeSchema = Type.Object({
   data: Type.Unknown(),
 });
 export type AiToolEnvelope = Static<typeof AiToolEnvelopeSchema>;
+
+/**
+ * WHERE a tool call died. Additive and optional: an envelope without it is a
+ * failure whose stage was never recorded, not a failure that happened nowhere.
+ *
+ * The three are the three gates a call passes through, in order — the argument
+ * schema (`validation`), the guard chain (`guard`), and the tool's own body
+ * (`execution`) — so a model, a UI, or a retry policy can tell "you wrote the
+ * wrong arguments" from "you are not allowed to call this" from "it broke",
+ * which the message string alone never distinguishes reliably.
+ */
+export const AiToolErrorPhaseSchema = Type.Union([
+  Type.Literal("validation"),
+  Type.Literal("guard"),
+  Type.Literal("execution"),
+]);
+export type AiToolErrorPhase = Static<typeof AiToolErrorPhaseSchema>;
+
+/**
+ * The `data` an error {@link AiToolEnvelopeSchema} carries — the structured half
+ * of a failed call, as opposed to the human `summary`.
+ *
+ * `retryable` is the tool's/the framework's own verdict on whether another
+ * attempt could plausibly succeed; it is advice for whoever is deciding, never
+ * an instruction the run loop acts on by itself (nothing in this repository
+ * retries a tool call automatically).
+ */
+export const AiToolErrorDataSchema = Type.Object({
+  errorCode: Type.String(),
+  errorMessage: Type.String(),
+  phase: Type.Optional(AiToolErrorPhaseSchema),
+  retryable: Type.Optional(Type.Boolean()),
+});
+export type AiToolErrorData = Static<typeof AiToolErrorDataSchema>;

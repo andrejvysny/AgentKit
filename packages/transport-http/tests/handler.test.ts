@@ -386,23 +386,35 @@ describe("catalogue", () => {
       "not_implemented",
     );
 
+    const scopes: (string | undefined)[] = [];
     const wired = await createHandlerFixture({
-      toolCatalog: async () => [
-        {
-          name: "notes_read",
-          version: "1.0.0",
-          effect: "read",
-          capability: "notes.read",
-          description: "Read a note.",
-          inputSchema: { type: "object", properties: {} },
+      toolCatalog: {
+        async listTools(scope) {
+          scopes.push(scope?.chatId);
+          return [
+            {
+              namespace: "notes",
+              definition: {
+                name: "notes_read",
+                version: "1.0.0",
+                effect: "read",
+                capability: "notes.read",
+                description: "Read a note.",
+                inputSchema: { type: "object", properties: {} },
+              },
+            },
+          ];
         },
-      ],
+      },
     });
     const res = await wired.handler(request("GET", "/v1/tools"));
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { name: string }[])[0]?.name).toBe(
-      "notes_read",
-    );
+    const body = (await res.json()) as Record<string, unknown>[];
+    expect(body[0]?.["name"]).toBe("notes_read");
+    // The route names no chat, so it must not invent one — and the entry's
+    // host-side `namespace` is attribution, not part of `ToolDefinitionDto`.
+    expect(scopes).toEqual([undefined]);
+    expect(body[0]).not.toHaveProperty("namespace");
   });
 
   it("(p) 501s the proposal decision routes when no service is wired", async () => {

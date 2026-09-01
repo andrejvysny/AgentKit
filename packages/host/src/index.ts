@@ -27,6 +27,9 @@ export * from "./proposals/proposal-builder-tool.js";
 // Policy
 export * from "./policy/session-write-policy.js";
 
+// Tools: the chat-independent catalogue over the same contributors a turn uses.
+export * from "./tools/contributor-tool-catalog.js";
+
 // Conversation shape: the message-tree arithmetic every ConversationStore
 // adapter shares (active path, branch switching, fork flattening, import
 // validation), plus the chat lifecycle that spans three stores.

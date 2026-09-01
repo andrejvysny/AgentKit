@@ -99,6 +99,7 @@ import {
   type TaskRecord,
   type TaskStatus,
   type TaskStore,
+  type ToolCallingMode,
   type UpdateMessagePatch,
   type UpdateProgressOptions,
   type WritePolicyMode,
@@ -109,6 +110,8 @@ import {
 import { SCHEMA_V6, SCHEMA_VERSION } from "./schema.js";
 
 const DEFAULT_LEASE_TTL_MS = 30_000;
+/** Mirrors the `settings.tool_calling_mode` DDL default. */
+const DEFAULT_TOOL_CALLING_MODE: ToolCallingMode = "auto";
 /**
  * How long a transaction waits for another connection's write lock.
  *
@@ -385,6 +388,8 @@ interface SettingsRow {
   write_policy_mode: string;
   allow_raw_tool_data: number;
   max_tool_iterations: number | null;
+  /** Named `_mode` because `provider_capabilities.tool_calling` is a boolean. */
+  tool_calling_mode: string;
   metadata: string;
 }
 
@@ -589,6 +594,7 @@ function settingsFromRow(row: SettingsRow): AssistantSettings {
     ...(row.max_tool_iterations === null
       ? {}
       : { maxToolIterations: row.max_tool_iterations }),
+    toolCalling: row.tool_calling_mode as ToolCallingMode,
     metadata: parseJson<Record<string, unknown>>(row.metadata),
   };
 }
@@ -2650,7 +2656,8 @@ class SqliteSettingsStore implements SettingsStore {
         `UPDATE settings SET
            default_provider_id = $defaultProviderId, default_model = $defaultModel,
            context_size_preference = $contextSizePreference, write_policy_mode = $writePolicyMode,
-           allow_raw_tool_data = $allowRawToolData, max_tool_iterations = $maxToolIterations, metadata = $metadata
+           allow_raw_tool_data = $allowRawToolData, max_tool_iterations = $maxToolIterations,
+           tool_calling_mode = $toolCallingMode, metadata = $metadata
          WHERE id = 1`,
         {
           $defaultProviderId: merged.defaultProviderId ?? null,
@@ -2659,6 +2666,9 @@ class SqliteSettingsStore implements SettingsStore {
           $writePolicyMode: merged.writePolicyMode,
           $allowRawToolData: toIntBool(merged.allowRawToolData),
           $maxToolIterations: merged.maxToolIterations ?? null,
+          // The column is NOT NULL: an explicit `undefined` in the patch means
+          // "back to the default", not "store nothing".
+          $toolCallingMode: merged.toolCalling ?? DEFAULT_TOOL_CALLING_MODE,
           $metadata: toJson(merged.metadata),
         },
       );

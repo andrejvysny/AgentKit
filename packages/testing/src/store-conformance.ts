@@ -1249,6 +1249,29 @@ export function describeAssistantStoreConformance(
       }
     });
 
+    it("round-trips the toolCalling override, defaulting to auto", async () => {
+      const { store, close } = await create();
+      try {
+        // Never written: both adapters must still answer with the default, or
+        // a host reading the settings pane sees a blank where "auto" belongs.
+        expect((await store.settings.getSettings()).toolCalling).toBe("auto");
+        const updated = await store.settings.updateSettings({
+          toolCalling: "off",
+        });
+        expect(updated.toolCalling).toBe("off");
+        expect((await store.settings.getSettings()).toolCalling).toBe("off");
+        // An unrelated partial update must not reset it.
+        await store.settings.updateSettings({ allowRawToolData: true });
+        expect((await store.settings.getSettings()).toolCalling).toBe("off");
+        expect(
+          (await store.settings.updateSettings({ toolCalling: "on" }))
+            .toolCalling,
+        ).toBe("on");
+      } finally {
+        close?.();
+      }
+    });
+
     it("enqueues, claims, and publishes an outbox record without re-claiming it while in flight", async () => {
       const { store, close } = await create();
       try {

@@ -9,12 +9,12 @@
 
 ## Phase B — contract 0.4.0
 - [x] B1 content parts at persistence + `AttachmentResolver` + budgets; goldens re-recorded once
-- [ ] B2 chat ops (update/delete/archive/ids), `importConversation`, `searchMessages` (FTS5), `beforeOrderKey`, `deleteByScope`, `ConversationService.deleteChat`
+- [x] B2 chat ops (update/delete/archive/ids), `importConversation`, `searchMessages` (FTS5), `beforeOrderKey`, `deleteByScope`, `ConversationService.deleteChat`
 - [ ] B3 `TurnRunner.regenerate`, `McpServerConfigStore`, new REST routes (chat/regenerate/search/providers/settings/allowances/mcp configs)
 - [ ] Phase B verifier + fixes
 
 ## Phase C — OpenPCB parity
-- [ ] C1 tool governance (namespaces, guard chain, dispose, toolCalling override, AiToolError, ToolCatalog)
+- [x] C1 tool governance (namespaces, guard chain, dispose, toolCalling override, AiToolError, ToolCatalog)
 - [ ] C2 correction harness + `run.verification` event
 - [ ] C3 `@agentkit/mcp-server`
 - [ ] C4 `RunProjector` + `SubmitMessageInput.kind`
