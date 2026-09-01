@@ -38,6 +38,8 @@
     "build:testing": "tsc -p packages/testing/tsconfig.build.json",
     "smoke:node": "node scripts/node-smoke.mjs",
     "smoke:pack": "node scripts/pack-smoke.mjs",
+    "build:umbrella": "node scripts/build-umbrella.mjs",
+    "smoke:umbrella": "node scripts/umbrella-smoke.mjs",
     "ci": "bun install --frozen-lockfile && bun run typecheck && bun test && bun run build",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

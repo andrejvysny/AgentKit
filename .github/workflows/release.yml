@@ -1,0 +1,101 @@
+name: Release agentkit
+
+# Triggered on version tag pushes (`vX.Y.Z`). Builds the umbrella `agentkit`
+# package, commits its dist into a throwaway commit on top of the tagged
+# tree, subtree-splits `packages/agentkit` into a `release/<tag>` branch (so
+# a git install resolves a flat package root — the branch's repo root IS
+# `packages/agentkit`), then re-points the tag at the split commit. Model:
+# the sibling `shared` repo's `.github/workflows/release.yml` +
+# `shared/DEVELOPING.md`.
+#
+# The release branch and the tag are FORCE-MOVED by this workflow every time
+# it runs for a given tag — never treat either as a stable ref to build on.
+# They exist only so `npm install "github:<repo>#<tag>"` (or the bun
+# equivalent) resolves a flat, already-built `agentkit` package.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (full history for subtree split)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: bun install --frozen-lockfile
+
+      - name: Parse tag + assert it matches packages/agentkit/package.json's version
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="$(node -p "require('./packages/agentkit/package.json').version")"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "ERROR: tag $TAG does not match packages/agentkit/package.json's version (v$VERSION)." >&2
+            echo "Bump packages/agentkit/package.json's version to the release version and re-tag — see DEVELOPING.md's release ritual. A tag is never adjusted (e.g. -dev is not stripped) to match; the tagged version must already be the release version." >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_branch=release/$TAG" >> "$GITHUB_OUTPUT"
+
+      - run: bun run typecheck
+
+      - run: bun test
+
+      - run: bun run build
+
+      - run: bun run build:umbrella
+
+      - run: bun run smoke:umbrella
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+
+      - name: Commit the built umbrella dist
+        run: |
+          git add -f packages/agentkit/dist
+          git commit -m "release: ${{ steps.meta.outputs.tag }} dist"
+
+      - name: Subtree split packages/agentkit
+        run: |
+          git subtree split --prefix=packages/agentkit -b "${{ steps.meta.outputs.release_branch }}"
+
+      - name: Push release branch
+        run: git push -f origin "${{ steps.meta.outputs.release_branch }}"
+
+      - name: Re-point tag at the subtree-split commit
+        run: |
+          SPLIT_COMMIT="$(git rev-parse "${{ steps.meta.outputs.release_branch }}")"
+          git tag -f "${{ steps.meta.outputs.tag }}" "$SPLIT_COMMIT"
+          git push -f origin "${{ steps.meta.outputs.tag }}"
+
+      - name: Verify install (smoke)
+        run: |
+          mkdir -p /tmp/install-smoke
+          cd /tmp/install-smoke
+          npm init -y >/dev/null
+          npm install "github:${{ github.repository }}#${{ steps.meta.outputs.tag }}" --no-save --silent
+          node -e "import('agentkit/contracts').then((m) => { if (typeof m.CONTRACT_VERSION !== 'string') throw new Error('CONTRACT_VERSION missing'); console.log('agentkit/contracts OK, CONTRACT_VERSION =', m.CONTRACT_VERSION); })"
+
+      - name: Summarize
+        run: |
+          echo "## Released" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Package**: \`agentkit\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version**: \`${{ steps.meta.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Tag**: \`${{ steps.meta.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Install**: \`npm install \"github:${{ github.repository }}#${{ steps.meta.outputs.tag }}\"\`" >> "$GITHUB_STEP_SUMMARY"
