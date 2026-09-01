@@ -1,11 +1,11 @@
 # agentkit
 
 The single installable package for AgentKit: every `@agentkit/*` package
-(`contracts`, `client`, `core`, `host`, `testing`, `mcp-client`,
+(`contracts`, `client`, `react`, `core`, `host`, `testing`, `mcp-client`,
 `transport-http`, `mcp-server`, `adapters-memory`, `adapters-sqlite`,
 `runner-local`), built and exposed as subpath imports of one `agentkit` package.
 No `@agentkit/*` scope, no internal dependency wiring for a consumer to get
-right — one install, one version, eleven entry points.
+right — one install, one version, twelve entry points.
 
 ## Install
 
@@ -22,13 +22,14 @@ run. Works under both npm and Bun.
 
 ## Subpaths
 
-There is no root `agentkit` export — only these eleven subpaths, each
+There is no root `agentkit` export — only these twelve subpaths, each
 resolving to that package's public barrel:
 
 | Subpath                     | What                                                  |
 | ---------------------------- | ------------------------------------------------------ |
 | `agentkit/contracts`         | Wire DTOs and JSON Schemas (TypeBox).                   |
 | `agentkit/client`             | Typed REST v1 + SSE client: every operation, auto-resuming run streams. |
+| `agentkit/react`              | Headless React hooks over the client. Needs the optional `react` peer. |
 | `agentkit/core`               | Pure, in-process chat-with-tools loop (`runChat`).      |
 | `agentkit/host`               | Durable orchestration over `core` (`TurnRunner`, tasks, proposals). |
 | `agentkit/testing`             | Mocks, fixtures, golden run-event traces, conformance suites. |
@@ -49,10 +50,15 @@ import { MemoryAssistantStore } from "agentkit/adapters-memory";
 Bun — every other subpath is plain, portable JavaScript that loads under
 Node ≥20 or Bun ≥1.3.
 
+`agentkit/react` is the one subpath with a peer dependency: `react >=18`,
+declared OPTIONAL so an installer that only wants `agentkit/host` is not told
+it is missing something. Install React yourself if you import the hooks —
+npm does not install an optional peer for you.
+
 ## Developing AgentKit itself
 
 This package is generated, not hand-written — `scripts/build-umbrella.mjs`
-in the repo root assembles `dist/` from the eleven source packages' own
+in the repo root assembles `dist/` from the twelve source packages' own
 builds. If you're working on AgentKit rather than just consuming it, see
 the repo root's [`DEVELOPING.md`](https://github.com/andrejvysny/AgentKit/blob/master/DEVELOPING.md)
 for the local-iteration workflows (npm link, tsconfig path overlay) and the

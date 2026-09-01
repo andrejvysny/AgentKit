@@ -75,6 +75,7 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const PACKAGES = [
   "contracts",
   "client",
+  "react",
   "core",
   "host",
   // Ahead of the adapters: both `adapters-memory` and `adapters-sqlite` depend
@@ -97,6 +98,17 @@ const PACKAGES = [
  * `node check.mjs` would fail by design rather than find a bug.
  */
 const NOT_NODE_IMPORTABLE = new Set(["@agentkit/adapters-sqlite"]);
+
+/**
+ * Peer dependencies the consumer project must install for the packages above to
+ * be importable at all.
+ *
+ * `@agentkit/react` declares `react` as a PEER — it must not bundle or pin the
+ * consumer's React — so nothing in the tarball graph brings one, and the
+ * consumer has to. Installing it here is also the only way the check script
+ * below can load that package's dist at all.
+ */
+const PEER_DEPENDENCIES = { react: "^19.2.0" };
 
 function readPkg(dir) {
   return JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
@@ -252,9 +264,12 @@ function main() {
       private: true,
       version: "0.0.0",
       type: "module",
-      dependencies: Object.fromEntries(
-        [...tarballByName].map(([name, path]) => [name, `file:${path}`]),
-      ),
+      dependencies: {
+        ...Object.fromEntries(
+          [...tarballByName].map(([name, path]) => [name, `file:${path}`]),
+        ),
+        ...PEER_DEPENDENCIES,
+      },
     };
     mkdirSync(consumerDir, { recursive: true });
     writePkg(consumerDir, consumerPkg);
@@ -305,6 +320,17 @@ check(
   "has a method for every contract route",
 );
 check(clientPkg.runPhase({ status: "queued" }) === "queued", "runPhase mirrors a status");
+
+const reactPkg = await import("@agentkit/react");
+console.log("@agentkit/react");
+check(typeof reactPkg.AgentKitProvider === "function", "exports AgentKitProvider");
+check(
+  ["useChat", "useRun", "useBranches", "useProposals", "useProviders"].every(
+    (hook) => typeof reactPkg[hook] === "function",
+  ),
+  "exports every hook",
+);
+check(typeof reactPkg.createChangeEmitter === "function", "exports createChangeEmitter");
 
 const core = await import("@agentkit/core");
 console.log("@agentkit/core");

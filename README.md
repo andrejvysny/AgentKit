@@ -40,6 +40,7 @@ workflows and the release ritual.
 |---|---|---|
 | [`packages/contracts`](packages/contracts) — `@agentkit/contracts` | Wire DTOs and JSON Schemas (TypeBox): run events, tool/provider/prompt shapes, source refs, context bindings, multimodal message content parts, the task-event envelope, and the REST v1 route table + DTOs. | 0.1.0-dev |
 | [`packages/client`](packages/client) — `@agentkit/client` | Typed REST v1 + SSE client for the contract: one method per route, `streamRun` as an auto-resuming async iterable, derived run phases, problem+json as typed errors. Browser and Node; no dependency but `@agentkit/contracts`. | 0.1.0-dev |
+| [`packages/react`](packages/react) — `@agentkit/react` | Headless React hooks over `@agentkit/client`: `useChat` (optimistic send, streamed deltas, reconcile), `useRun`, `useBranches`, `useProposals`, `useProviders`. No components, no styling; `react` is a peer dependency. | 0.1.0-dev |
 | [`packages/core`](packages/core) — `@agentkit/core` | Pure, in-process chat-with-tools loop: provider client, Ajv-backed tool registry, `runChat()`, multimodal content-part mapping for OpenAI-compatible providers. | 0.5.0-dev |
 | [`packages/host`](packages/host) — `@agentkit/host` | Durable orchestration over `@agentkit/core`: `TaskStore` + kind-dispatched executors, `TurnRunner` as the `chat.turn` executor, proposal lifecycle, write policy. | 0.1.0-dev |
 | [`packages/testing`](packages/testing) — `@agentkit/testing` | Mocks, fixtures, golden run-event traces, and the `AssistantStore` + `TaskRunner` conformance suites. | 0.1.0-dev |
