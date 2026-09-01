@@ -851,13 +851,18 @@ export class TurnRunner implements TaskWorker {
         // including the non-final ones a streaming provider emits mid-call: a
         // recorder that only saw `finalForCall` would lose the accounting for a
         // call that died before it settled, which is exactly the call a budget
-        // most needs to know about.
+        // most needs to know about. `finalForCall`/`source`/`step` ride along
+        // so the recorder can tell those two kinds apart — reporting the
+        // interim numbers without them is just double counting.
         await this.deps.usage?.record({
           runId: task.taskId,
           callId: event.data.callId,
           attempt: event.data.attempt,
           providerId: input.providerId,
           model: event.data.model,
+          finalForCall: event.data.finalForCall,
+          source: event.data.source,
+          step: event.data.step,
           ...(event.data.promptTokens === undefined
             ? {}
             : { promptTokens: event.data.promptTokens }),

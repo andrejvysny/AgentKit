@@ -60,7 +60,7 @@
   },
   "overrides": [
     {
-      "includes": ["packages/mcp-client/tests/**"],
+      "includes": ["packages/mcp-client/tests/**", "scripts/tests/**"],
       "linter": {
         "rules": {
           "suspicious": {

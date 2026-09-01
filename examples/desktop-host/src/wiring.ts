@@ -68,12 +68,42 @@ import { createExampleToolSetContributor } from "./tools.js";
 /** The env vars this recipe reads. All optional — see ../README.md. */
 export interface WiringEnv {
   AGENTKIT_DB?: string;
+  AGENTKIT_HOST?: string;
   AGENTKIT_PROVIDER_KIND?: string;
   AGENTKIT_BASE_URL?: string;
   AGENTKIT_MODEL?: string;
   AGENTKIT_API_KEY?: string;
   AGENTKIT_MCP_COMMAND?: string;
   AGENTKIT_MCP_ARGS?: string;
+}
+
+/** Where `main.ts` binds when nothing says otherwise. See {@link resolveBindHost}. */
+export const DEFAULT_BIND_HOST = "127.0.0.1";
+
+/** The addresses that are reachable only from this machine. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/**
+ * The address `main.ts` binds — LOOPBACK unless the operator insists otherwise.
+ *
+ * This matters because of what {@link buildApp} does NOT wire: there is no
+ * `authenticate` and no `authorize` in the `RestHandlerDeps` below, so every
+ * route on this server is open to anything that can reach the socket. That
+ * includes `POST /v1/providers`, which stores provider API keys, and the chat
+ * routes, which spend them. `Bun.serve` with no `hostname` binds every
+ * interface, which publishes exactly that to the whole LAN — so this example
+ * names the host explicitly instead of taking the default.
+ *
+ * `AGENTKIT_HOST` overrides it, and `loopback: false` is the caller's cue to
+ * say so loudly: anything but loopback needs real `authenticate`/`authorize`
+ * wired into `deps` first.
+ */
+export function resolveBindHost(env: WiringEnv = process.env as WiringEnv): {
+  host: string;
+  loopback: boolean;
+} {
+  const host = env.AGENTKIT_HOST?.trim() || DEFAULT_BIND_HOST;
+  return { host, loopback: LOOPBACK_HOSTS.has(host) };
 }
 
 export interface BuildAppOptions {

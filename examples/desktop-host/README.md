@@ -29,6 +29,7 @@ Env vars, all optional:
 | Var | Default | What it does |
 | --- | --- | --- |
 | `AGENTKIT_DB` | `./agentkit.sqlite` | sqlite file path |
+| `AGENTKIT_HOST` | `127.0.0.1` | bind address. **Loopback on purpose** — see the warning below |
 | `AGENTKIT_PORT` | `8787` | HTTP port |
 | `AGENTKIT_PROVIDER_KIND` | `openai-compatible` | a kind from `@agentkit/core`'s `AI_PROVIDER_PRESETS` (`openai`, `openrouter`, `lmstudio`, `omlx`, `ollama`, `openai-compatible`) — only read on first boot, when no provider is configured yet |
 | `AGENTKIT_BASE_URL` | the kind's preset `defaultBaseUrl` | provider base URL |
@@ -36,6 +37,14 @@ Env vars, all optional:
 | `AGENTKIT_API_KEY` | unset | provider API key — stored in the in-memory `SecretStore`, never inline on the provider config (see `InMemorySecretStore` in `src/wiring.ts`) |
 | `AGENTKIT_MCP_COMMAND` | unset | a stdio MCP server command; when set, its tools are bridged in via `@agentkit/mcp-client` |
 | `AGENTKIT_MCP_ARGS` | unset | space-separated args for that command |
+
+> **This example wires no `authenticate` and no `authorize`.** Every route is
+> open to whatever can reach the socket, including `POST /v1/providers` (which
+> stores provider API keys) and the chat routes (which spend them). That is
+> why `main.ts` binds `127.0.0.1` explicitly instead of taking `Bun.serve`'s
+> default, which is every interface. Set `AGENTKIT_HOST` only together with
+> real `authenticate`/`authorize` in `src/wiring.ts`'s `RestHandlerDeps`;
+> `main.ts` prints a warning at boot when the bind address is not loopback.
 
 To point it at a local [Ollama](https://ollama.com):
 

@@ -10,10 +10,11 @@
 // test primitives (`describe`, `it`, `expect`) are INJECTED by the caller, and
 // every @agentkit/host import is `import type`.
 //
-// WHAT THIS SUITE IS ABOUT, and what it deliberately leaves alone: the four
+// WHAT THIS SUITE IS ABOUT, and what it deliberately leaves alone: the five
 // promises the `TaskRunner` port makes that a store cannot make for it —
-// enqueue idempotency, recovery from a dead owner, cancellation reaching a
-// running worker, and the concurrency budget actually meaning something.
+// enqueue idempotency, recovery from a dead owner, LEASE RENEWAL keeping a
+// long attempt out of that recovery's way, cancellation reaching a running
+// worker, and the concurrency budget actually meaning something.
 // Everything below is observed THROUGH THE STORE (attempt rows, task status,
 // dead-letter fields), never through an implementation's own bookkeeping, so a
 // runner with a completely different internal design is still gradeable. Retry
@@ -55,11 +56,28 @@ export interface TaskRunnerConformanceHarness {
   close?: () => void;
 }
 
+/** Per-test knobs the suite hands `create()`. */
+export interface TaskRunnerConformanceHarnessOptions {
+  /**
+   * Lease-renewal interval, in REAL milliseconds, that the runner must be built
+   * with. MUST be honoured when present.
+   *
+   * Every other scenario wants renewal effectively off — they advance the clock
+   * past the lease TTL on purpose and a heartbeat firing in the gap would
+   * quietly rescue the lease they need expired — so `create()` should default to
+   * an interval far longer than any test's real lifetime. The renewal scenario
+   * is the one that asks for a short one.
+   */
+  heartbeatMs?: number;
+}
+
 export interface DescribeTaskRunnerConformanceOptions {
   /** Runner name, folded into the `describe` block title. */
   name: string;
   /** Builds one fresh, isolated runner+store per test — never shared across `it()`s. */
-  create: () => Promise<TaskRunnerConformanceHarness>;
+  create: (
+    options?: TaskRunnerConformanceHarnessOptions,
+  ) => Promise<TaskRunnerConformanceHarness>;
   test: AssistantStoreConformanceTestApi;
 }
 
@@ -178,6 +196,13 @@ async function waitFor(
 function settle(ms = 50): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * Renewal interval the lease-renewal scenario asks its harness for, in REAL
+ * milliseconds. Short enough that many beats fit inside that scenario's waits,
+ * and asked for by that scenario ALONE — every other one needs renewal off.
+ */
+const RENEWAL_HEARTBEAT_MS = 5;
 
 /**
  * The full TaskRunner-conformance suite. Call once per runner with a fresh
@@ -301,6 +326,69 @@ export function describeTaskRunnerConformance(
           async () => (await statusOf(harness, "t1")) === "completed",
           "t1 to complete on its second attempt",
         );
+      } finally {
+        worker.releaseAll();
+        await handle.stop();
+        harness.close?.();
+      }
+    });
+
+    it("renews its lease so an attempt outliving the TTL is not abandoned", async () => {
+      // The port says a runner must heartbeat the lease of an attempt it is
+      // executing, and every OTHER scenario here is blind to whether it does:
+      // they all end the attempt well inside one TTL, so a `renewLease` that
+      // did nothing at all would pass the entire suite. It is the difference
+      // between a five-minute provider call finishing and being torn out from
+      // under itself by the next recovery pass.
+      //
+      // The observation is a real recovery pass, because that is the only thing
+      // that ever asks the store whether a lease is still live: a renewed lease
+      // is invisible to it, an un-renewed one is abandoned and re-dispatched.
+      const harness = await create({ heartbeatMs: RENEWAL_HEARTBEAT_MS });
+      const worker = createWorker(
+        harness.store,
+        () => "hold",
+        harness.clock.nowIso,
+      );
+      const handle = await harness.runner.startWorker(worker, {
+        concurrency: 1,
+      });
+      try {
+        await harness.seedTask({ taskId: "t1", scopeId: "s1" });
+        await harness.runner.enqueue({ taskId: "t1", scopeId: "s1" });
+        await waitFor(
+          () => worker.callsFor("t1").length === 1,
+          "the execution to start",
+        );
+
+        // Walk the clock three whole TTLs forward while the attempt runs, in
+        // steps short enough that a renewal always lands between them. The real
+        // waits are what give the heartbeat time to fire; they are many times
+        // the interval the harness was built with, not a guess.
+        const step = Math.max(1, Math.floor(harness.leaseTtlMs * 0.6));
+        for (let round = 0; round < 5; round += 1) {
+          harness.clock.advance(step);
+          await settle(RENEWAL_HEARTBEAT_MS * 10);
+        }
+
+        await harness.runner.recover();
+        await settle();
+        // Untouched: still one execution, still one attempt, and that attempt
+        // was never abandoned.
+        expect(worker.callsFor("t1").length).toBe(1);
+        const midway = await attemptsFor(harness, "t1");
+        expect(midway.length).toBe(1);
+        expect(midway[0]?.status).not.toBe("abandoned");
+
+        worker.releaseAll();
+        await waitFor(
+          async () => (await statusOf(harness, "t1")) === "completed",
+          "t1 to complete on its FIRST attempt",
+        );
+        expect(await attemptsFor(harness, "t1")).toEqual([
+          { status: "completed", attemptNumber: 1 },
+        ]);
+        expect(worker.callsFor("t1").length).toBe(1);
       } finally {
         worker.releaseAll();
         await handle.stop();

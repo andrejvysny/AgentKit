@@ -66,36 +66,59 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
 
+      # Every step below reads the tag and branch through `env:` rather than
+      # interpolating `${{ ... }}` straight into the shell. `${{ }}` is textual
+      # substitution performed BEFORE the shell sees the script, so a ref name
+      # carrying shell metacharacters would be executed rather than quoted —
+      # and a tag name is attacker-influenceable input on a public repo.
+      # Through `env:` it is only ever a variable's VALUE, and `"$TAG"` is
+      # inert whatever it contains.
       - name: Commit the built umbrella dist
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
           git add -f packages/agentkit/dist
-          git commit -m "release: ${{ steps.meta.outputs.tag }} dist"
+          git commit -m "release: $TAG dist"
 
       - name: Subtree split packages/agentkit
+        env:
+          RELEASE_BRANCH: ${{ steps.meta.outputs.release_branch }}
         run: |
-          git subtree split --prefix=packages/agentkit -b "${{ steps.meta.outputs.release_branch }}"
+          git subtree split --prefix=packages/agentkit -b "$RELEASE_BRANCH"
 
       - name: Push release branch
-        run: git push -f origin "${{ steps.meta.outputs.release_branch }}"
+        env:
+          RELEASE_BRANCH: ${{ steps.meta.outputs.release_branch }}
+        run: git push -f origin "$RELEASE_BRANCH"
 
       - name: Re-point tag at the subtree-split commit
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_BRANCH: ${{ steps.meta.outputs.release_branch }}
         run: |
-          SPLIT_COMMIT="$(git rev-parse "${{ steps.meta.outputs.release_branch }}")"
-          git tag -f "${{ steps.meta.outputs.tag }}" "$SPLIT_COMMIT"
-          git push -f origin "${{ steps.meta.outputs.tag }}"
+          SPLIT_COMMIT="$(git rev-parse "$RELEASE_BRANCH")"
+          git tag -f "$TAG" "$SPLIT_COMMIT"
+          git push -f origin "$TAG"
 
       - name: Verify install (smoke)
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           mkdir -p /tmp/install-smoke
           cd /tmp/install-smoke
           npm init -y >/dev/null
-          npm install "github:${{ github.repository }}#${{ steps.meta.outputs.tag }}" --no-save --silent
+          npm install "github:$REPOSITORY#$TAG" --no-save --silent
           node -e "import('agentkit/contracts').then((m) => { if (typeof m.CONTRACT_VERSION !== 'string') throw new Error('CONTRACT_VERSION missing'); console.log('agentkit/contracts OK, CONTRACT_VERSION =', m.CONTRACT_VERSION); })"
 
       - name: Summarize
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           echo "## Released" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Package**: \`agentkit\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Version**: \`${{ steps.meta.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Tag**: \`${{ steps.meta.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Install**: \`npm install \"github:${{ github.repository }}#${{ steps.meta.outputs.tag }}\"\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Version**: \`$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Tag**: \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Install**: \`npm install \"github:$REPOSITORY#$TAG\"\`" >> "$GITHUB_STEP_SUMMARY"

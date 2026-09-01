@@ -430,6 +430,53 @@ describe("SingleProcessTaskRunner — recovery", () => {
     harness.worker.releaseAll();
   });
 
+  it("re-runs a task recovered BEFORE the worker started — the documented boot order", async () => {
+    // `recoverOnBoot(...)` then `startWorker(...)` is the order every host
+    // wires (examples/desktop-host/src/wiring.ts, steps 9 and 10). The expiry
+    // pass DELETES the lease and ends the attempt `abandoned` before it
+    // discovers there is no worker yet — so unless the runner remembers the
+    // task, it is left `running` with no lease: invisible to the claim loop
+    // (which only takes `queued`) and to every later `recover()` (which only
+    // sees expired leases). Nothing would ever run it again.
+    const harness = createHarness({ leaseTtlMs: 1_000, maxAttempts: 3 });
+    await harness.seedTask("run-1");
+    // What a process that died mid-attempt leaves behind: a `running` task and
+    // a lease nobody is renewing.
+    const attempt = await harness.store.tasks.createAttempt({
+      attemptId: "att-crashed",
+      taskId: "run-1",
+      ownerId: "dead-owner",
+    });
+    await harness.store.tasks.transitionTask("run-1", ["queued"], "running", {
+      startedAt: harness.clock.nowIso(),
+    });
+    await harness.store.tasks.acquireLease({
+      taskId: "run-1",
+      attemptId: attempt.attemptId,
+      ownerId: "dead-owner",
+      ttlMs: 1_000,
+    });
+    harness.worker.script("run-1", [{ kind: "complete" }]);
+    harness.clock.advance(1_500);
+
+    // Step 9: recover, with nothing yet to hand the work to.
+    const report = await harness.runner.recoverWithReport();
+    expect(report).toEqual({ expired: 1, redispatched: 0, deadLettered: 0 });
+    expect(await taskStatus(harness, "run-1")).toBe("running");
+
+    // Step 10: start claiming. The interrupted task goes out immediately.
+    await start(harness);
+    await waitFor(
+      async () => (await taskStatus(harness, "run-1")) === "completed",
+      "the interrupted task to be re-executed once the worker started",
+    );
+    expect(harness.worker.callsFor("run-1").length).toBe(1);
+    expect(harness.attemptsFor("run-1")).toEqual([
+      { status: "abandoned", attemptNumber: 1 },
+      { status: "completed", attemptNumber: 2 },
+    ]);
+  });
+
   it("leaves an abandoned run for the next owner when no worker is running", async () => {
     const harness = createHarness({ leaseTtlMs: 1_000, maxAttempts: 3 });
     await harness.seedTask("run-1");
@@ -452,6 +499,10 @@ describe("SingleProcessTaskRunner — recovery", () => {
     harness.clock.advance(1_500);
     const report = await harness.runner.recoverWithReport();
 
+    // Nothing is dispatched and nothing is invented: the attempt is recorded
+    // `abandoned` and the task stays `running`. Where it goes NEXT is the
+    // previous test's subject — this one is only about the pass itself being
+    // safe to run with no worker.
     expect(report).toEqual({ expired: 1, redispatched: 0, deadLettered: 0 });
     expect(await taskStatus(harness, "run-1")).toBe("running");
     expect(harness.attemptsFor("run-1")).toEqual([
