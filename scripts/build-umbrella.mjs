@@ -33,7 +33,11 @@
  *          correct relative path into `dist/<pkg>/index.js`, computed from
  *          that file's own directory — then any leftover `@agentkit/` text
  *          (e.g. inside a doc comment) is collapsed to `agentkit/` so the
- *          old scope cannot survive anywhere in the shipped dist.
+ *          old scope cannot survive anywhere in the shipped dist. A leftover
+ *          that is still SPECIFIER-shaped (a quoted subpath import, a
+ *          template literal) fails the build with the file and line instead
+ *          of being collapsed into a broken bare import — see
+ *          `./umbrella-specifiers.mjs`.
  *   5. Verifies no `@agentkit/` string remains anywhere in the umbrella
  *      dist, and that every `exports` entry in
  *      `packages/agentkit/package.json` resolves to a file that actually
@@ -50,6 +54,10 @@ import {
 } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  AGENTKIT_SPECIFIER,
+  findResidualSpecifiers,
+} from "./umbrella-specifiers.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const UMBRELLA_DIR = join(ROOT, "packages", "agentkit");
@@ -158,7 +166,6 @@ mkdirSync(UMBRELLA_DIST, { recursive: true });
 // ---------------------------------------------------------------------------
 
 const SOURCE_MAP_COMMENT = /^\/\/# sourceMappingURL=.*$/gm;
-const AGENTKIT_SPECIFIER = /(["'])@agentkit\/([a-zA-Z0-9_-]+)\1/g;
 
 /** POSIX-relative import target, always ending in `/index.js`, always starting `./` or `../`. */
 function relativeIndexImport(fromFileDir, targetSubpath) {
@@ -172,8 +179,14 @@ function relativeIndexImport(fromFileDir, targetSubpath) {
  * Rewrites every `@agentkit/<pkg>` module specifier to its relative dist
  * path, then collapses any leftover "@agentkit/" text (e.g. inside a
  * comment) so the old scope cannot survive anywhere in the copied file.
+ *
+ * Between the two, anything still SPECIFIER-SHAPED is a hard failure — see
+ * `./umbrella-specifiers.mjs`. Collapsing one of those would produce a bare
+ * `agentkit/...` import of a module that does not exist, and would do it
+ * invisibly: the "no @agentkit/ remains" check at the end would pass, because
+ * the collapse is what removed the evidence.
  */
-function rewriteContent(content, fileDir) {
+function rewriteContent(content, fileDir, sourcePath) {
   const withoutMaps = content.replace(SOURCE_MAP_COMMENT, "");
   const withRewrittenSpecifiers = withoutMaps.replace(
     AGENTKIT_SPECIFIER,
@@ -182,6 +195,16 @@ function rewriteContent(content, fileDir) {
       return `${quote}${relativeIndexImport(fileDir, pkgName)}${quote}`;
     },
   );
+  const residual = findResidualSpecifiers(withRewrittenSpecifiers);
+  if (residual.length > 0) {
+    fail(
+      `${relative(ROOT, sourcePath)} still holds @agentkit/ module specifiers ` +
+        "the rewrite did not recognise (a subpath import, a template " +
+        "literal, or a package missing from SUBPATHS). Collapsing them would " +
+        "ship a broken bare import that nothing downstream can detect:\n" +
+        residual.map((r) => `  line ${r.line}: ${r.text}`).join("\n"),
+    );
+  }
   return withRewrittenSpecifiers.replace(/@agentkit\//g, "agentkit/");
 }
 
@@ -197,7 +220,10 @@ function copyDistTree(srcDir, dstDir) {
     if (entry.name.endsWith(".map")) continue; // dropped by design
     if (entry.name.endsWith(".js") || entry.name.endsWith(".d.ts")) {
       const content = readFileSync(srcPath, "utf8");
-      writeFileSync(dstPath, rewriteContent(content, dirname(dstPath)));
+      writeFileSync(
+        dstPath,
+        rewriteContent(content, dirname(dstPath), srcPath),
+      );
     } else {
       // Non-JS runtime assets (e.g. testing's golden-trace JSON) — copy as-is.
       cpSync(srcPath, dstPath);

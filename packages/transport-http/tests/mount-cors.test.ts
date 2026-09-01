@@ -262,6 +262,33 @@ describe("CORS — actual responses", () => {
     await res.text();
   });
 
+  it("decorates the 500 a thrown handler becomes", async () => {
+    // The catch-all at the bottom of `createRestHandler` builds its problem
+    // response by itself, off the normal path — so it is the one response that
+    // could quietly skip `decorate`. A 500 a browser cannot READ is a 500
+    // nobody can debug: the page sees an opaque network error instead of the
+    // problem document the server actually sent.
+    const f = await createHandlerFixture({ cors: { origins: [ORIGIN] } });
+    const conversations = f.store.conversations as unknown as {
+      getChat: () => never;
+    };
+    conversations.getChat = () => {
+      throw new Error("the store fell over");
+    };
+
+    const res = await f.handler(
+      withOrigin("GET", `/v1/chats/${TEST_CHAT_ID}`, ORIGIN),
+    );
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toBe("application/problem+json");
+    expect(res.headers.get("access-control-allow-origin")).toBe(ORIGIN);
+    expect(res.headers.get("vary")).toBe("Origin");
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body["code"]).toBe("internal_error");
+    // The thrown message never reaches the client.
+    expect(JSON.stringify(body)).not.toContain("fell over");
+  });
+
   it("decorates the SSE stream without breaking it", async () => {
     const f = await createHandlerFixture({
       cors: { origins: [ORIGIN] },

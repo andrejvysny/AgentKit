@@ -359,7 +359,11 @@ no adapter in this repository does that filtering yet.
 is the pair of them a host actually calls at startup: `TaskRunner.recover()`
 first, then `ProposalService.reconcileInterrupted()`, so a recovered task is
 picked back up only after the writes it may have left mid-apply are settled.
-Both halves are idempotent; it returns `{ proposalsReconciled }`.
+Both halves are idempotent; it returns `{ proposalsReconciled }`. `recover()`
+therefore runs BEFORE `startWorker`, and an implementation has to survive
+that: its expiry pass deletes the very lease a later pass would have found the
+task by, so a task it cannot hand to a worker yet must be remembered and
+re-dispatched when one starts, not dropped.
 
 **Reference / conformance**: `SingleProcessTaskRunner`
 ([`packages/runner-local/src/single-process-task-runner.ts`](../packages/runner-local/src/single-process-task-runner.ts)) —
@@ -372,9 +376,12 @@ cancellation of a task another process owns is not delivered — see
 [`docs/non-goals.md`](non-goals.md). The port's own behavioral contract is
 `@agentkit/testing`'s `describeTaskRunnerConformance(options)`
 ([`packages/testing/src/task-runner-conformance.ts`](../packages/testing/src/task-runner-conformance.ts)):
-enqueue idempotency, recovery from an expired lease, cancellation reaching a
-running worker, and the concurrency budget — run against both reference
-stores.
+enqueue idempotency, recovery from an expired lease, lease renewal across an
+attempt that outlives the TTL, cancellation reaching a running worker, and the
+concurrency budget — run against both reference stores. The renewal scenario
+asks `create()` for a short `heartbeatMs`; every other one needs renewal
+effectively off, so an adapter's default must be longer than any test's real
+lifetime.
 
 ### Task execution
 
@@ -581,7 +588,10 @@ says yes later.
 that event is durable, with the provider's own numbers (never the estimate).
 Every usage event is reported, including the non-final ones a streaming
 provider sends mid-call: a recorder that only saw `finalForCall` would lose
-the accounting for a call that died before it settled.
+the accounting for a call that died before it settled. The record carries
+`finalForCall`, `source` and `step` from the event so the recorder can tell
+those two kinds apart — sum the settled reports, treat the rest as a running
+estimate for the same `callId` rather than adding them.
 
 **A host that does not wire it gets no spend control** — `TurnRunnerDeps.usage`
 is optional, and absent the runner asks nothing, records nothing, and behaves

@@ -25,7 +25,12 @@ import type {
 } from "@agentkit/contracts";
 import { MockProviderClient } from "@agentkit/testing";
 import { serveRest } from "@agentkit/transport-http";
-import { buildApp, type App } from "../src/wiring.js";
+import {
+  buildApp,
+  resolveBindHost,
+  DEFAULT_BIND_HOST,
+  type App,
+} from "../src/wiring.js";
 
 interface Booted {
   origin: string;
@@ -33,8 +38,8 @@ interface Booted {
 }
 
 interface Cleanup {
-  app: App;
-  server: ReturnType<typeof Bun.serve>;
+  app?: App;
+  server?: ReturnType<typeof Bun.serve>;
   dir: string;
 }
 
@@ -44,8 +49,8 @@ afterEach(async () => {
   let entry: Cleanup | undefined;
   // biome-ignore lint/suspicious/noAssignInExpressions: tidiest drain of a stack in afterEach.
   while ((entry = cleanups.pop())) {
-    await entry.server.stop(true);
-    await entry.app.stop();
+    await entry.server?.stop(true);
+    await entry.app?.stop();
     rmSync(entry.dir, { recursive: true, force: true });
   }
 });
@@ -53,13 +58,19 @@ afterEach(async () => {
 /** Boot the example's real wiring, scripted provider in, real socket out. */
 async function boot(provider: MockProviderClient): Promise<Booted> {
   const dir = mkdtempSync(join(tmpdir(), "agentkit-example-smoke-"));
+  // Registered BEFORE anything that can throw. A `buildApp` that fails — a
+  // migration, a bad path — used to leak the temp dir it was handed, because
+  // the only record of the directory was created after the thing that dies.
+  const cleanup: Cleanup = { dir };
+  cleanups.push(cleanup);
   const app = await buildApp({
     dbPath: join(dir, "agentkit.sqlite"),
     providerFactory: () => provider,
     env: {},
   });
+  cleanup.app = app;
   const server = Bun.serve({ port: 0, ...serveRest(app.deps) });
-  cleanups.push({ app, server, dir });
+  cleanup.server = server;
   return {
     origin: `http://localhost:${server.port}${app.deps.basePath ?? ""}`,
     app,
@@ -122,6 +133,51 @@ async function postJson(
     body: JSON.stringify(body),
   });
 }
+
+describe("examples/desktop-host — bind address", () => {
+  // main.ts serves an API with NO `authenticate` and NO `authorize` wired.
+  // `Bun.serve` binds every interface when `hostname` is omitted, so the
+  // default it must NOT take is the one that publishes provider API keys to
+  // the LAN. The resolution lives in wiring.ts precisely so it is testable —
+  // main.ts boots a real server on import and cannot be.
+  it("binds loopback when AGENTKIT_HOST is unset", () => {
+    expect(resolveBindHost({})).toEqual({
+      host: DEFAULT_BIND_HOST,
+      loopback: true,
+    });
+    expect(DEFAULT_BIND_HOST).toBe("127.0.0.1");
+    // Blank is not a configuration.
+    expect(resolveBindHost({ AGENTKIT_HOST: "   " }).host).toBe(
+      DEFAULT_BIND_HOST,
+    );
+  });
+
+  it("honours AGENTKIT_HOST and flags anything that is not loopback", () => {
+    expect(resolveBindHost({ AGENTKIT_HOST: "::1" })).toEqual({
+      host: "::1",
+      loopback: true,
+    });
+    // The two that publish the server to the network: main.ts warns on these.
+    expect(resolveBindHost({ AGENTKIT_HOST: "0.0.0.0" })).toEqual({
+      host: "0.0.0.0",
+      loopback: false,
+    });
+    expect(resolveBindHost({ AGENTKIT_HOST: "192.168.1.20" }).loopback).toBe(
+      false,
+    );
+  });
+
+  it("main.ts passes the resolved host to Bun.serve", async () => {
+    // The unit above is only worth anything if the entry point uses it. main.ts
+    // cannot be imported (it boots a server and installs signal handlers), so
+    // this reads it — the one assertion in this file that is about source text.
+    const source = await Bun.file(
+      new URL("../src/main.ts", import.meta.url),
+    ).text();
+    expect(source).toContain("resolveBindHost()");
+    expect(source).toMatch(/Bun\.serve\(\{\s*hostname: HOST,/);
+  });
+});
 
 describe("examples/desktop-host — HTTP smoke", () => {
   it("carries a plain turn from submit to a streamed, persisted answer", async () => {

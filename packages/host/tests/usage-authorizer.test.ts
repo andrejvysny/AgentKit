@@ -211,8 +211,27 @@ describe("TurnRunner + UsageAuthorizer — approval", () => {
       promptTokens: 10,
       completionTokens: 5,
       totalTokens: 15,
+      // The three fields that say WHICH usage report this is. Without them a
+      // recorder cannot tell an interim streaming report from the call's
+      // settled numbers, and since TurnRunner deliberately reports both, it
+      // would have to double-count to be safe.
+      finalForCall: true,
+      source: "stream",
+      // The run loop stamps the iteration over whatever the client said (see
+      // core's `run-loop.ts`), and it is THAT value the port has to see.
+      step: 1,
     });
     expect(typeof record?.at).toBe("string");
+
+    // The whole event, mirrored: nothing the contract carries about a usage
+    // report is dropped on the way to the port.
+    const usageEvent = (await eventsOf(f, submitted.runId)).find(
+      (event) => event.type === "run.usage",
+    );
+    if (usageEvent?.type !== "run.usage") throw new Error("expected run.usage");
+    expect(record?.finalForCall).toBe(usageEvent.data.finalForCall);
+    expect(record?.source).toBe(usageEvent.data.source);
+    expect(record?.step).toBe(usageEvent.data.step);
 
     // Recorded only after the event was durable: a record with no event behind
     // it is a charge nobody can audit.

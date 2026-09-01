@@ -20,6 +20,13 @@ await runner.recover(); // before anything starts claiming
 const handle = await runner.startWorker(worker, { concurrency: 4 });
 ```
 
+**That order matters, and it works.** `recover()` runs with no worker to hand
+work to, and its expiry pass has already deleted the lease by the time it finds
+that out — so a task it cannot dispatch is parked internally and re-dispatched
+the instant `startWorker` runs. Dropping it would strand the task `running`
+with no lease: unclaimable (the loop only takes `queued`) and invisible to
+every later `recover()` (which only sees expired leases).
+
 Any store that passes `@agentkit/testing`'s
 `describeAssistantStoreConformance` drives it —
 [`@agentkit/adapters-memory`](../adapters-memory),
@@ -71,6 +78,15 @@ crash during the wait is recovered exactly like a crash during the attempt. The
 delay is measured against the injected `Clock`, so a test drives it rather than
 sleeping. `jitterRatio: 0` makes it exact; `baseMs: 0` turns it off.
 
+Two things the wait is re-checked for before the next attempt starts. `stop()`
+arriving mid-backoff leaves the task `running` with its **live lease** — the
+lease is deliberately NOT released, because it is the only thing the next
+process's `recover()` can find the task by. And if the lease MOVED while the
+backoff ran (a heartbeat that could not reach the store, then someone else's
+recovery), the wait ends with a fencing check and this runner writes nothing:
+minting a fresh lease there would steal back a task that already has an owner
+and run it twice, at once.
+
 ## Single-process limits
 
 - **Cancellation is cooperative, and in-memory.** `requestCancel` on a running
@@ -94,7 +110,8 @@ would have to add.
 
 `@agentkit/testing`'s `describeTaskRunnerConformance` is the `TaskRunner` port's
 behavioral contract — enqueue idempotency, recovery from an expired lease,
-cancellation reaching a running worker, and the concurrency budget. This
+lease renewal across an attempt that outlives the TTL, cancellation reaching a
+running worker, and the concurrency budget. This
 package runs it against **both** reference stores
 (`tests/task-runner-conformance.test.ts`), because those promises are all
 statements about what ends up in the store and the two stores reach those

@@ -304,3 +304,39 @@ export function createHarness(options: HarnessOptions = {}): Harness {
         })),
   };
 }
+
+/** A second runner + worker over an existing harness's store — see {@link createSecondRunner}. */
+export interface SecondRunner {
+  runner: SingleProcessTaskRunner;
+  worker: FakeWorker;
+}
+
+/**
+ * A SECOND runner over the SAME store and clock: the process that starts after
+ * the first one died or was stopped.
+ *
+ * The only way to tell "the task was left RECOVERABLE" from "the task was left"
+ * is to have somebody else actually recover it. Asserting on the first runner's
+ * own leftovers cannot: `running` with a live lease and `running` with no lease
+ * look identical from the task row, and only the second differs — it is
+ * unrecoverable forever.
+ */
+export function createSecondRunner(
+  harness: Harness,
+  options: HarnessOptions = {},
+): SecondRunner {
+  const runner = new SingleProcessTaskRunner({
+    store: harness.store,
+    clock: harness.clock,
+    pollMs: options.pollMs ?? 5,
+    heartbeatMs: options.heartbeatMs ?? 60_000,
+    ...(options.leaseTtlMs === undefined
+      ? {}
+      : { leaseTtlMs: options.leaseTtlMs }),
+    ...(options.maxAttempts === undefined
+      ? {}
+      : { maxAttempts: options.maxAttempts }),
+    retryBackoff: options.retryBackoff ?? { baseMs: 0, jitterRatio: 0 },
+  });
+  return { runner, worker: new FakeWorker(harness.store) };
+}

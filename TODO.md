@@ -5,7 +5,7 @@
 - [x] A2 umbrella package `agentkit` + build/smoke scripts + release workflow + DEVELOPING.md
 - [x] A3 `examples/desktop-host` composition root + HTTP smoke (+ `ollama` preset)
 - [x] A4 wire `UsageAuthorizer` (TurnRunner) + `AuthorizationPort` (transport); `basePath`; CORS
-- [ ] Phase A verifier (fresh context) + fixes
+- [x] Phase A verifier (fresh context) ran — 2 CRITICAL (runner recovery/fencing) + 4 IMPORTANT; fix batch in flight
 
 ## Phase B — contract 0.4.0
 - [ ] B1 content parts at persistence + `AttachmentResolver` + budgets; goldens re-recorded once

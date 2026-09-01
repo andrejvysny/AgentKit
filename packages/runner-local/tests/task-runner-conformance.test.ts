@@ -20,6 +20,7 @@ import { SqliteAssistantStore } from "@agentkit/adapters-sqlite";
 import {
   describeTaskRunnerConformance,
   type TaskRunnerConformanceHarness,
+  type TaskRunnerConformanceHarnessOptions,
 } from "@agentkit/testing";
 import { SingleProcessTaskRunner } from "../src/index.js";
 import { createTestClock } from "./support/task-runner-harness.js";
@@ -28,18 +29,24 @@ import { createTestClock } from "./support/task-runner-harness.js";
 const LEASE_TTL_MS = 1_000;
 const MAX_ATTEMPTS = 3;
 
+/**
+ * Far past any test's real lifetime: renewal must not quietly rescue a lease a
+ * scenario advances the clock past on purpose. The renewal scenario is the one
+ * that asks for something shorter, per test.
+ */
+const DEFAULT_HEARTBEAT_MS = 60_000;
+
 /** The runner knobs both harnesses share. */
 function runnerFor(
   store: MemoryAssistantStore | SqliteAssistantStore,
   clock: ReturnType<typeof createTestClock>,
+  options: TaskRunnerConformanceHarnessOptions = {},
 ) {
   return new SingleProcessTaskRunner({
     store,
     clock,
     pollMs: 5,
-    // Far past any test's real lifetime: renewal must not quietly rescue a
-    // lease this suite advances the clock past on purpose.
-    heartbeatMs: 60_000,
+    heartbeatMs: options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
     leaseTtlMs: LEASE_TTL_MS,
     maxAttempts: MAX_ATTEMPTS,
     // The backoff is measured against the same frozen clock the suite steps by
@@ -51,11 +58,11 @@ function runnerFor(
 describeTaskRunnerConformance({
   name: "SingleProcessTaskRunner over MemoryAssistantStore",
   test: { describe, it, expect },
-  create: async (): Promise<TaskRunnerConformanceHarness> => {
+  create: async (options): Promise<TaskRunnerConformanceHarness> => {
     const clock = createTestClock();
     const store = new MemoryAssistantStore({ clock, leaseTtlMs: LEASE_TTL_MS });
     return {
-      runner: runnerFor(store, clock),
+      runner: runnerFor(store, clock, options),
       store,
       clock,
       maxAttempts: MAX_ATTEMPTS,
@@ -82,7 +89,7 @@ describeTaskRunnerConformance({
 describeTaskRunnerConformance({
   name: "SingleProcessTaskRunner over SqliteAssistantStore",
   test: { describe, it, expect },
-  create: async (): Promise<TaskRunnerConformanceHarness> => {
+  create: async (options): Promise<TaskRunnerConformanceHarness> => {
     const clock = createTestClock();
     // A file rather than ":memory:", because attempt history has no port method
     // and the only honest way to read it back is a second handle on the same
@@ -95,7 +102,7 @@ describeTaskRunnerConformance({
     });
     const reader = new Database(path, { readonly: true });
     return {
-      runner: runnerFor(store, clock),
+      runner: runnerFor(store, clock, options),
       store,
       clock,
       maxAttempts: MAX_ATTEMPTS,

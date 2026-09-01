@@ -116,15 +116,23 @@ port.
 ## TaskRunner conformance suite
 
 `describeTaskRunnerConformance(options)` is the same idea for the other half
-of the host's runtime: the four promises the `TaskRunner` port makes that a
+of the host's runtime: the five promises the `TaskRunner` port makes that a
 store cannot make for it — `enqueue` idempotency per task id, `recover()`
-abandoning an expired lease and either re-attempting or dead-lettering,
+abandoning an expired lease and either re-attempting or dead-lettering, lease
+RENEWAL keeping an attempt that outlives the TTL out of that recovery's way,
 `requestCancel` reaching a running worker's `AbortSignal`, and
 `startWorker`'s concurrency budget. Same injected-primitives shape as the
 store suite (`test: { describe, it, expect }`, no runner import here), and
 everything is observed THROUGH THE STORE, so a runner with a completely
 different internal design is still gradeable. `@agentkit/runner-local` runs
 it against both reference stores.
+
+`create()` takes an optional `TaskRunnerConformanceHarnessOptions` and MUST
+honour `heartbeatMs` when it is given: the renewal scenario asks for a short
+one, and every other scenario needs renewal effectively off (they step the
+clock past the lease TTL on purpose), so an adapter's default should be longer
+than any test's real lifetime. An adapter that ignores the option fails the
+renewal scenario rather than passing it silently.
 
 ## Durability invariant suite
 

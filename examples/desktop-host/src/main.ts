@@ -16,6 +16,7 @@
  * Env vars (all optional — see ./README.md for the full list and a curl
  * walkthrough):
  *   AGENTKIT_DB             sqlite file path (default "./agentkit.sqlite")
+ *   AGENTKIT_HOST           bind address (default "127.0.0.1" — see below)
  *   AGENTKIT_PORT           HTTP port (default 8787)
  *   AGENTKIT_PROVIDER_KIND  provider preset kind (default "openai-compatible")
  *   AGENTKIT_BASE_URL       provider base URL (default: the kind's preset)
@@ -31,7 +32,7 @@
  */
 import { serveRest } from "@agentkit/transport-http";
 import type { Logger } from "@agentkit/host";
-import { buildApp } from "./wiring.js";
+import { buildApp, resolveBindHost } from "./wiring.js";
 
 const consoleLogger: Logger = {
   debug: (message, fields) =>
@@ -45,12 +46,38 @@ const consoleLogger: Logger = {
 
 const PORT = Number(process.env.AGENTKIT_PORT ?? 8787);
 
+/**
+ * LOOPBACK ON PURPOSE. `Bun.serve` with no `hostname` binds every interface,
+ * and `buildApp` wires no `authenticate` and no `authorize` — so the default
+ * would publish an unauthenticated API that stores provider API keys
+ * (`POST /v1/providers`) and spends them (the chat routes) to the whole
+ * network. Naming the host is the difference between a desktop backend and an
+ * open credential store.
+ *
+ * `AGENTKIT_HOST` overrides it. Only ever set it TOGETHER WITH real
+ * `authenticate`/`authorize` in `./wiring.ts` — the warning below says so at
+ * boot because a misconfiguration here is silent otherwise.
+ */
+const { host: HOST, loopback } = resolveBindHost();
+
 const app = await buildApp({ logger: consoleLogger });
 
-const server = Bun.serve({ port: PORT, ...serveRest(app.deps) });
+const server = Bun.serve({
+  hostname: HOST,
+  port: PORT,
+  ...serveRest(app.deps),
+});
+
+if (!loopback) {
+  console.warn(
+    `[agentkit] WARNING: bound to ${HOST}, which is not loopback. This example wires ` +
+      "no authenticate/authorize, so every route — provider API keys included — is open " +
+      "to anything that can reach this socket. Wire auth in wiring.ts or unset AGENTKIT_HOST.",
+  );
+}
 
 console.log(
-  `[agentkit] listening on http://localhost:${server.port}${app.deps.basePath ?? ""}`,
+  `[agentkit] listening on http://${HOST}:${server.port}${app.deps.basePath ?? ""}`,
 );
 console.log(`[agentkit] db: ${app.dbPath}`);
 console.log(
