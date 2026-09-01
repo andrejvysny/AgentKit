@@ -12,6 +12,7 @@ export const AiRunEventTypeSchema = Type.Union([
   Type.Literal("run.tool.failed"),
   Type.Literal("run.warning"),
   Type.Literal("run.usage"),
+  Type.Literal("run.verification"),
   Type.Literal("run.completed"),
   Type.Literal("run.failed"),
   Type.Literal("run.cancelled"),
@@ -295,6 +296,45 @@ export const AiRunUsageEventSchema = Type.Object({
 });
 export type AiRunUsageEvent = Static<typeof AiRunUsageEventSchema>;
 
+/**
+ * The outcome of ONE verification of this run — "did the work actually land?"
+ * as answered after a pass, not as narrated by the model.
+ *
+ * Emitted only by a host that wired a verification hook AND opted into the
+ * correction harness; a single-shot verification stays silent on the log, so a
+ * consumer that never sees this event cannot conclude a run was unverified.
+ *
+ * - `pass` — 0 for the verification of the run's own answer, then 1, 2, … for
+ *   each correction pass that followed. It is the harness's iteration counter,
+ *   not an index into anything durable.
+ * - `status` — `"pass"`/`"partial"` come straight from the hook's
+ *   `DeficiencyReport`. `"unavailable"` is the framework's own: the hook threw
+ *   or answered `null` mid-harness. It is NOT a pass — the harness stops
+ *   rather than assume the work landed, which is the whole point of saying so
+ *   on the log instead of omitting the event.
+ * - `deficiencies` — the report's lines verbatim; empty for `pass` and for
+ *   `unavailable`.
+ */
+export const AiRunVerificationEventSchema = Type.Object({
+  type: Type.Literal("run.verification"),
+  ...runEventBaseFields,
+  data: Type.Object({
+    pass: Type.Number({
+      description:
+        "0 for the run's own answer, then 1, 2, … per correction pass.",
+    }),
+    status: Type.Union([
+      Type.Literal("pass"),
+      Type.Literal("partial"),
+      Type.Literal("unavailable"),
+    ]),
+    deficiencies: Type.Array(Type.String()),
+  }),
+});
+export type AiRunVerificationEvent = Static<
+  typeof AiRunVerificationEventSchema
+>;
+
 export const AiRunCompletedEventSchema = Type.Object({
   type: Type.Literal("run.completed"),
   ...runEventBaseFields,
@@ -332,6 +372,7 @@ export const AiRunEventSchema = Type.Union([
   AiRunToolFailedEventSchema,
   AiRunWarningEventSchema,
   AiRunUsageEventSchema,
+  AiRunVerificationEventSchema,
   AiRunCompletedEventSchema,
   AiRunFailedEventSchema,
   AiRunCancelledEventSchema,
@@ -353,6 +394,7 @@ export type AiRunEvent =
   | AiRunToolFailedEvent
   | AiRunWarningEvent
   | AiRunUsageEvent
+  | AiRunVerificationEvent
   | AiRunCompletedEvent
   | AiRunFailedEvent
   | AiRunCancelledEvent;

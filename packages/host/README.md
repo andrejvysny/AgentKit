@@ -117,7 +117,9 @@ const turnRunner = new TurnRunner({
   clock: defaultClock,
   ids: defaultIds,
   // Everything below is optional. `secrets`, `context`, `verification`,
-  // `usage` and `limits` are documented on `TurnRunnerDeps`; `attachments`
+  // `correction`, `usage` and `limits` are documented on `TurnRunnerDeps`
+  // (`correction` opts `verification` into the bounded multi-pass correction
+  // harness; without it the check stays single-shot); `attachments`
   // is what turns a message's `{ kind: "ref" }` image sources into bytes for
   // the provider — per pass, in memory, under `attachmentBudgets`
   // (5 MiB / 20 MiB / 16 images by default). The stored message keeps the

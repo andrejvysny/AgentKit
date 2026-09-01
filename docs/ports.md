@@ -579,10 +579,79 @@ narrated success can still have achieved nothing. `verify()` returns a
 `null` when the hook has nothing to say. Domain checks are entirely the
 host's business; none are shipped by this framework.
 
-**Key invariant**: `TurnRunner` calls this **once**, only when the run
-actually made tool calls, and never feeds the deficiencies back for a
-correction pass — see the multi-pass note in
-[`docs/non-goals.md`](non-goals.md).
+`TurnRunner` verifies only when the run **actually made tool calls** — there
+is nothing to verify about a chat answer — and in one of two shapes, chosen by
+the host rather than by a heuristic.
+
+**Single-shot (the default).** Without `TurnRunnerDeps.correction`, `verify()`
+is called exactly **once**. A non-`pass` report is posted as a `system` banner
+message (`metadata.banner: "verification"`) and that is the end of it: no
+`run.verification` events, no second provider call, and a `verify()` that
+throws fails the turn, as it always did.
+
+### The correction harness
+
+[`turn/correction-harness.ts`](../packages/host/src/turn/correction-harness.ts)
+
+Set `TurnRunnerDeps.correction = { maxPasses? }` (default 3, hard-capped at 5)
+and the deficiencies are fed **back to the model** for bounded correction
+passes. Each verification — including the first — is reported on the run's
+durable log as a [`run.verification`](contracts.md) event carrying its pass
+number, status and deficiency lines.
+
+A correction pass is a full `runPass` on the same registry and the same event
+log: tools staged exactly as the run had them, `seq` continuing unbroken,
+`UsageAuthorizer` asked before it and told after it. There is no second code
+path, which is what makes "the harness cannot bypass spend control" true by
+construction.
+
+**Minimal re-context, not the full history.** The correction pass sends
+exactly three messages: the system prompt, one assistant message carrying the
+previous pass's visible answer, and one user-role **deficiency write-back**
+(a fixed template listing the host's lines verbatim and instructing the model
+to fix them with its tools). Replaying the whole conversation — every tool
+call and every tool result, growing with each attempt — is what makes a
+correction harness unaffordable; the model can re-read the domain through its
+tools, which is the more honest source anyway, since the deficiencies were
+found in the domain and not in the transcript.
+
+**What stops it:**
+
+| Rule | Behaviour |
+|---|---|
+| `status: "pass"` | The work landed. Stop. |
+| **Shrink-or-stall** | Continue **only** when the new deficiency list is **strictly shorter** than the previous one. Equal length — even with entirely different lines — is a stall, and so is a growing list. Deliberately a count, not a set-difference: deficiency lines are free-form host text, so a reworded line would read as progress and loop. |
+| **Pass cap** | `maxPasses` correction passes, then stop even while still shrinking. |
+| **Non-completed pass** | A correction pass that failed or was cancelled ends the harness instead of being re-verified. |
+| **Fail-closed** | `verify()` throwing or returning `null` mid-harness is `status: "unavailable"` on the log and a full stop. It is **never** treated as a pass, and it never crashes the run — the fault goes to the `Logger`. |
+
+**The harness does not change the run's outcome.** Deficiencies that survive
+every pass still leave a `completed` run, exactly as the single-shot check
+does, with one banner for the last report and the final `run.verification`
+event telling the story. Failing a turn over a partial verification is a
+policy decision, and the host that wrote the checks is the only layer entitled
+to make it. The run's terminal is whatever the last pass reached — so a
+provider error on a correction pass does fail the run, the same way a recovery
+pass's terminal wins today.
+
+**Where the events land.** `run.verification` is appended *after* the pass it
+describes, so pass 0's event sits after that pass's `run.completed` — the same
+position the runner's between-pass `run.warning`s occupy. An SSE consumer
+(`@agentkit/transport-http`) closes on the first terminal run event, so it sees
+the correction passes on a **replay/poll of the durable log**, not on the live
+stream it opened for the original turn. The log itself is one unbroken `seq`
+sequence, so nothing is lost.
+
+Records the harness writes — the write-back, and every message the correction
+pass produces — are **chain appends** (`activate: false`,
+`parentMessageId` = the run's own last write), so a mid-run branch switch
+cannot migrate them onto a conversation that never ran them.
+
+**Answer replacement.** A correction pass starts the visible answer over, as
+the recovery passes do: the corrected text replaces the one the verifier
+rejected rather than being glued to the end of it. A pass that fixes things
+silently — all tools, no words — keeps the superseded answer rather than
+blanking it.
 
 ## Context and tools
 
