@@ -45,6 +45,12 @@ export function chatDto(record: ChatRecord): ChatDto {
 /**
  * Drops `orderKey` (the page cursor carries it), `modelResultJson`, and `depth`.
  *
+ * `content` passes through UNCHANGED, string or parts — including an image part
+ * whose `source.kind` is `"ref"`. Resolving refs here would inline the host's
+ * blobs into every page of every conversation for a client that usually wants a
+ * thumbnail from its own endpoint; a client that understands the host's refs
+ * renders them, one that does not skips the part. See `MessageDtoSchema`.
+ *
  * `depth` is the one branching field the contract deliberately does not publish:
  * it is derivable from the parent chain a client already has, and a second
  * source of truth for a message's position is a second thing that can disagree

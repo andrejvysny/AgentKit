@@ -116,6 +116,21 @@ describe("AiContentPartSchema", () => {
       }),
     ).toBe(false);
   });
+
+  it("accepts a host attachment ref, and rejects one that carries no ref", () => {
+    const source = makeAjv().compile(asJson(AiImageSourceSchema));
+    expect(source({ kind: "ref", ref: "blob:sha256-abc123" })).toBe(true);
+    // Opaque by design: any string is a legal handle, because only the host
+    // that minted it can interpret one.
+    expect(source({ kind: "ref", ref: "42" })).toBe(true);
+    expect(source({ kind: "ref" })).toBe(false);
+    expect(source({ kind: "ref", ref: 42 })).toBe(false);
+    // A ref is a source, not a shortcut past the part shape.
+    expect(
+      validate({ type: "image", source: { kind: "ref", ref: "blob:x" } }),
+    ).toBe(true);
+    expect(validate({ type: "image", ref: "blob:x" })).toBe(false);
+  });
 });
 
 describe("AiChatMessageSchema with multimodal content", () => {

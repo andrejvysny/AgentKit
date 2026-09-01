@@ -16,6 +16,8 @@
 import { Database } from "bun:sqlite";
 import type { Changes } from "bun:sqlite";
 import type {
+  AiContentPart,
+  AiMessageContent,
   AiProviderCapabilities,
   AiProviderConfig,
   AiProviderModel,
@@ -93,7 +95,7 @@ import {
   type ResolvedTaskAging,
   type TaskAgingOptions,
 } from "@agentkit/host";
-import { SCHEMA_V4, SCHEMA_VERSION } from "./schema.js";
+import { SCHEMA_V5, SCHEMA_VERSION } from "./schema.js";
 
 const DEFAULT_LEASE_TTL_MS = 30_000;
 /**
@@ -121,6 +123,54 @@ function parseJson<T>(text: string): T {
 function parseNullableJson<T>(text: string | null): T | undefined {
   return text === null ? undefined : (JSON.parse(text) as T);
 }
+
+// ---------------------------------------------------------------------------
+// Message content: one TEXT column plus a format tag
+// ---------------------------------------------------------------------------
+
+/** The two values `messages.content_format` may hold. */
+type ContentFormat = "text" | "parts";
+
+/** A message body, ready for the `content` + `content_format` columns. */
+interface EncodedContent {
+  content: string;
+  format: ContentFormat;
+}
+
+/**
+ * Split a message body into the two columns that store it.
+ *
+ * A string is written VERBATIM with format `'text'` — byte-identical to every
+ * row this adapter wrote before v5, so nothing about the ordinary conversation
+ * changed shape. A parts array is `JSON.stringify`d with format `'parts'`.
+ *
+ * `JSON.stringify` is canonical enough here because it is the ONLY writer: key
+ * order comes from the part objects the contract defines, so
+ * `decode(encode(x))` is deep-equal to `x` for every value the closed part union
+ * admits. It is deliberately not claimed to be canonical across writers — this
+ * column is never hashed, compared as text, or indexed on equality.
+ */
+function encodeContent(content: AiMessageContent): EncodedContent {
+  return typeof content === "string"
+    ? { content, format: "text" }
+    : { content: JSON.stringify(content), format: "parts" };
+}
+
+/**
+ * Rebuild a message body from its two columns.
+ *
+ * Anything that is not exactly `'parts'` reads as text, INCLUDING a value this
+ * build does not recognize. That is the safe direction: a body handed back as
+ * the string it is stored as is readable, where a body a future format tag made
+ * unparseable would take the whole conversation down — and `assertSchemaVersion`
+ * has already refused any database a different build wrote.
+ */
+function decodeContent(content: string, format: string): AiMessageContent {
+  return format === "parts"
+    ? (JSON.parse(content) as AiContentPart[])
+    : content;
+}
+
 function toIntBool(value: boolean): number {
   return value ? 1 : 0;
 }
@@ -185,6 +235,7 @@ interface MessageRow {
   run_id: string | null;
   role: string;
   content: string;
+  content_format: string;
   order_key: number;
   tool_call_id: string | null;
   tool_calls: string | null;
@@ -345,7 +396,7 @@ function messageFromRow(row: MessageRow): MessageRecord {
     chatId: row.chat_id,
     ...(row.run_id === null ? {} : { runId: row.run_id }),
     role: row.role as MessageRecord["role"],
-    content: row.content,
+    content: decodeContent(row.content, row.content_format),
     orderKey: row.order_key,
     ...(row.tool_call_id === null ? {} : { toolCallId: row.tool_call_id }),
     ...(row.tool_calls === null
@@ -853,17 +904,19 @@ class SqliteConversationStore implements ConversationStore {
       const now = this.clock.nowIso();
       const metadata = input.metadata ?? {};
       const depth = parent === null ? 0 : parent.depth + 1;
+      const encoded = encodeContent(input.content);
       this.conn.run(
         `INSERT INTO messages
-           (id, chat_id, run_id, role, content, order_key, tool_call_id, tool_calls, model_result_json, parent_message_id, depth, branch_index, active, metadata, created_at)
+           (id, chat_id, run_id, role, content, content_format, order_key, tool_call_id, tool_calls, model_result_json, parent_message_id, depth, branch_index, active, metadata, created_at)
          VALUES
-           ($id, $chatId, $runId, $role, $content, $orderKey, $toolCallId, $toolCalls, $modelResultJson, $parentId, $depth, $branchIndex, $active, $metadata, $now)`,
+           ($id, $chatId, $runId, $role, $content, $contentFormat, $orderKey, $toolCallId, $toolCalls, $modelResultJson, $parentId, $depth, $branchIndex, $active, $metadata, $now)`,
         {
           $id: id,
           $chatId: input.chatId,
           $runId: input.runId ?? null,
           $role: input.role,
-          $content: input.content,
+          $content: encoded.content,
+          $contentFormat: encoded.format,
           $orderKey: orderKey,
           $toolCallId: input.toolCallId ?? null,
           $toolCalls:
@@ -991,7 +1044,14 @@ class SqliteConversationStore implements ConversationStore {
       if (!existing) {
         throw new RecordNotFoundError(`Message not found: ${messageId}`);
       }
-      const content = patch.content ?? existing.content;
+      // Re-encoded when the patch carries a body, carried through as the stored
+      // columns when it does not. Both halves move together or not at all: a
+      // string patch landing on a `'parts'` row that kept its old format tag
+      // would read back as JSON that is not JSON.
+      const encoded =
+        patch.content === undefined
+          ? { content: existing.content, format: existing.content_format }
+          : encodeContent(patch.content);
       // Metadata REPLACES the stored bag, per the port contract.
       const metadataJson =
         patch.metadata !== undefined
@@ -1002,9 +1062,10 @@ class SqliteConversationStore implements ConversationStore {
           ? toJson(patch.toolCalls)
           : existing.tool_calls;
       this.conn.run(
-        `UPDATE messages SET content = $content, metadata = $metadata, tool_calls = $toolCalls WHERE id = $id`,
+        `UPDATE messages SET content = $content, content_format = $contentFormat, metadata = $metadata, tool_calls = $toolCalls WHERE id = $id`,
         {
-          $content: content,
+          $content: encoded.content,
+          $contentFormat: encoded.format,
           $metadata: metadataJson,
           $toolCalls: toolCallsJson,
           $id: messageId,
@@ -1012,7 +1073,8 @@ class SqliteConversationStore implements ConversationStore {
       );
       return messageFromRow({
         ...existing,
-        content,
+        content: encoded.content,
+        content_format: encoded.format,
         metadata: metadataJson,
         tool_calls: toolCallsJson,
       });
@@ -1123,16 +1185,18 @@ class SqliteConversationStore implements ConversationStore {
       const messages: MessageRecord[] = [];
       for (const plan of plans) {
         const orderKey = messages.length + 1;
+        const encoded = encodeContent(plan.source.content);
         this.conn.run(
           `INSERT INTO messages
-             (id, chat_id, run_id, role, content, order_key, tool_call_id, tool_calls, model_result_json, parent_message_id, depth, branch_index, active, metadata, created_at)
+             (id, chat_id, run_id, role, content, content_format, order_key, tool_call_id, tool_calls, model_result_json, parent_message_id, depth, branch_index, active, metadata, created_at)
            VALUES
-             ($id, $chatId, NULL, $role, $content, $orderKey, $toolCallId, $toolCalls, $modelResultJson, $parentId, $depth, 0, 1, $metadata, $now)`,
+             ($id, $chatId, NULL, $role, $content, $contentFormat, $orderKey, $toolCallId, $toolCalls, $modelResultJson, $parentId, $depth, 0, 1, $metadata, $now)`,
           {
             $id: plan.id,
             $chatId: forkId,
             $role: plan.source.role,
-            $content: plan.source.content,
+            $content: encoded.content,
+            $contentFormat: encoded.format,
             $orderKey: orderKey,
             $toolCallId: plan.source.toolCallId ?? null,
             $toolCalls:
@@ -2362,7 +2426,7 @@ function assertSchemaVersion(db: Database, path: string): void {
     // A pragma every SQLite build answers came back with nothing. Whatever this
     // handle is, it is not a database this adapter can reason about — and the
     // one thing worse than refusing to open it is opening it anyway and running
-    // `SCHEMA_V4` against it, which is exactly what falling through would do.
+    // `SCHEMA_V5` against it, which is exactly what falling through would do.
     throw new AgentKitHostError(
       "sqlite_schema_version",
       `Cannot read user_version from the SQLite store at ${path}; refusing to touch this database.`,
@@ -2448,7 +2512,7 @@ export class SqliteAssistantStore implements AssistantStore {
     // Idempotent: every statement is CREATE ... IF NOT EXISTS / INSERT OR
     // IGNORE, so reopening the same file (or a file another process already
     // initialized) is a safe no-op.
-    db.exec(SCHEMA_V4);
+    db.exec(SCHEMA_V5);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
     this.conn = new SqliteConnection(db, busyTimeoutMs);
     const clock = options.clock ?? defaultClock;

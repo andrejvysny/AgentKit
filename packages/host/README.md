@@ -29,8 +29,11 @@ only) — alongside [`@agentkit/runner-local`](../runner-local) for the
   `ProposalStore`, `ProviderStore`,
   `SettingsStore`, `OutboxStore`, `TaskRunner`/`TaskWorker`, `WritePolicy`,
   `ProposalApplier`, `VerificationHook`, `ContextProvider`,
-  `ToolSetContributor`, `SecretStore`, `AuthorizationPort`,
-  `UsageAuthorizer`, `system.ts` (`Clock`/`IdGenerator`/`Logger`).
+  `AttachmentResolver` (`resolve(ref)` → bytes for an image part whose
+  source is a host attachment handle; resolved per provider pass, never
+  written back to the message), `ToolSetContributor`, `SecretStore`,
+  `AuthorizationPort`, `UsageAuthorizer`, `system.ts`
+  (`Clock`/`IdGenerator`/`Logger`).
 - `tasks/` — the kind-dispatch layer over `TaskStore`/`TaskRunner`:
   `kinds.ts` (`CHAT_TURN_TASK_KIND`; `chat.*`/`agentkit.*` prefixes
   reserved), `task-executor.ts` (`TaskExecutor`, `TaskExecutionContext` —
@@ -107,6 +110,14 @@ const turnRunner = new TurnRunner({
   contributors: [], // ToolSetContributor[]
   clock: defaultClock,
   ids: defaultIds,
+  // Everything below is optional. `secrets`, `context`, `verification`,
+  // `usage` and `limits` are documented on `TurnRunnerDeps`; `attachments`
+  // is what turns a message's `{ kind: "ref" }` image sources into bytes for
+  // the provider — per pass, in memory, under `attachmentBudgets`
+  // (5 MiB / 20 MiB / 16 images by default). The stored message keeps the
+  // ref, and an image that cannot be sent is dropped with a
+  // `run.warning` rather than failing the turn.
+  // attachments: { async resolve(ref) { /* your blob store */ } },
 });
 
 // Clean up after the last crash BEFORE claiming anything: expired leases and

@@ -23,6 +23,7 @@
  * below.
  */
 import { Type, type Static } from "@sinclair/typebox";
+import { AiContentPartSchema } from "./content.js";
 import { AiRunEventSchema, type AiRunEvent } from "./run-events.js";
 import { AiSourceRefSchema } from "./source-ref.js";
 import {
@@ -209,7 +210,20 @@ export const MessageDtoSchema = Type.Object({
     Type.Literal("tool"),
     Type.Literal("system"),
   ]),
-  content: Type.String(),
+  /**
+   * The message body: a plain string, or the ordered content parts of a
+   * multimodal message. The projection passes whatever the store holds through
+   * UNCHANGED — including an image part whose `source.kind` is `"ref"`, the
+   * host-side attachment handle described on `AiImageSourceSchema`.
+   *
+   * Publishing the ref rather than resolving it here is deliberate. Resolving
+   * would inline megabytes of base64 into every page of every conversation, for
+   * a client that usually wants a thumbnail from its own endpoint and sometimes
+   * wants nothing at all. A client that understands the host's refs renders
+   * them; one that does not ignores the part, exactly as it would ignore a part
+   * type from a later contract version.
+   */
+  content: Type.Union([Type.String(), Type.Array(AiContentPartSchema)]),
   toolCalls: Type.Optional(Type.Array(AiToolCallSchema)),
   toolCallId: Type.Optional(Type.String()),
   /** The message this one answers. Absent on a root — and on a pre-branching server. */
@@ -412,7 +426,16 @@ export type CreateChatRequest = Static<typeof CreateChatRequestSchema>;
  * the one write in the API that creates three records at once.
  */
 export const SubmitMessageRequestSchema = Type.Object({
-  content: Type.String(),
+  /**
+   * The turn's body: a plain string, or content parts for a multimodal turn.
+   *
+   * An image part may name a host attachment (`source.kind: "ref"`) instead of
+   * carrying its bytes — that is the shape a client that already uploaded a file
+   * sends, and it is what keeps a submit small no matter how large the
+   * attachment is. The host resolves refs per provider pass; see
+   * `AttachmentResolver` in `@agentkit/host`.
+   */
+  content: Type.Union([Type.String(), Type.Array(AiContentPartSchema)]),
   /** Overrides the provider's default model for this turn only. */
   model: Type.Optional(Type.String()),
   /**

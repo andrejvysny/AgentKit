@@ -52,6 +52,17 @@ key — not `createdAt`, for the same reason `AiRunEvent.seq` orders events:
 several messages can be written in one transaction within the same
 millisecond.
 
+**`MessageRecord.content` is `string | AiContentPart[]`** (`AiMessageContent`,
+`packages/contracts/src/content.ts`), and so are `AppendMessageInput.content`
+and `UpdateMessagePatch.content`. A store round-trips parts **losslessly** and
+inspects nothing inside them — in particular an image part may name a host
+attachment (`source: { kind: "ref", ref }`) rather than carry its bytes, and
+the ref is what is persisted. `TurnRunner` resolves refs per provider pass
+without ever rewriting the record (see [`AttachmentResolver`](#attachmentresolver)); a store
+that "helpfully" inlined the bytes would make every fork and every page of the
+conversation carry them. `role: "tool"` and `role: "system"` records are
+strings by construction.
+
 **A chat is a tree; the active path is a per-message flag** ([ADR
 0007](adr/0007-conversation-branching-fork.md)). `parentMessageId` makes a
 chat's messages a forest (one root normally); `active` marks which
@@ -145,9 +156,9 @@ whole shape — links, depths, rising `orderKey`, childless leaf — after every
 single step, on both reference adapters.
 
 **Reference / conformance**: `MemoryAssistantStore` and `SqliteAssistantStore`
-(sqlite adapter: `SCHEMA_V4`, `parent_message_id`/`depth`/`branch_index`/
+(sqlite adapter: `SCHEMA_V5`, `parent_message_id`/`depth`/`branch_index`/
 `active` on `messages` — see
-[`packages/adapters-sqlite/README.md`](../packages/adapters-sqlite/README.md#schema-v4)),
+[`packages/adapters-sqlite/README.md`](../packages/adapters-sqlite/README.md#schema-v5)),
 both graded by the same conformance suite; the tree arithmetic itself
 (`activePathOf`, `activationSetOf`, `nextBranchIndex`, `forkPrefixOf`,
 `planForkedMessages`) is shared, pure, and synchronous
@@ -485,6 +496,41 @@ What the host pins into a chat's context: bindings (the objects the model
 is working on) and system-prompt text. Resolved **per run**, not stored on
 the run, because the world moves between turns — a bound document can be
 deleted or go stale between one turn and the next.
+
+### `AttachmentResolver`
+
+[`ports/attachment-resolver.ts`](../packages/host/src/ports/attachment-resolver.ts)
+
+`resolve(ref) → { mediaType, base64 } | null`. Turns the `ref` image sources
+in stored messages into bytes a provider can be shown. **The blob storage is
+the host's** — a file, a row, an S3 key, a content-addressed cache — and the
+ref is opaque: AgentKit never parses one, derives a path from one, or mints
+one.
+
+`null` is a normal answer, not an error path: an attachment can be deleted,
+expired, or belong to a workspace the caller lost access to, and every one of
+those is a conversation that must still run. Throw only for a genuine fault
+(storage down), where failing the turn is honest.
+
+**Resolution is in-memory and per pass.** `TurnRunner` resolves after
+`assembleMessages` and before `runChat`, for every pass including retries; the
+stored message always keeps the ref, so a later turn re-resolves it at
+whatever fidelity — or refusal — applies then. Within one pass a ref resolves
+once (cached); across passes, never.
+
+**Budgets** (`TurnRunnerDeps.attachmentBudgets`, defaults 5 MiB per image /
+20 MiB total / 16 images, borrowed from OpenPCB's `MENTION_LIMITS`) cap what
+this port may add to a pass. An image that cannot be sent — unresolvable, or
+over a cap — is dropped from what the provider sees, with one durable
+`run.warning` naming the ref and the reason (`attachment_unresolved`,
+`attachment_budget_exceeded`; see
+[`docs/contracts.md`](contracts.md#warning-codes)). Degrade, never fail a turn
+over an attachment. The budgets bound this port's contribution only: base64 a
+caller inlined itself is its own decision and is left alone.
+
+**Optional.** Unwired, nothing resolves and a conversation carrying refs still
+runs — each ref-sourced image dropped with a warning. A host that never writes
+refs never notices the port exists.
 
 ### `ToolSetContributor`
 
