@@ -75,6 +75,17 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = Object.freeze([
     notes:
       "Generic OpenAI-compatible endpoint (vLLM, llama.cpp, Ollama, etc.).",
   },
+  {
+    kind: "ollama",
+    label: "Ollama",
+    defaultBaseUrl: "http://127.0.0.1:11434/v1",
+    defaultModel: "llama3.2",
+    requiresApiKey: false,
+    docsUrl: "https://github.com/ollama/ollama/blob/main/docs/openai.md",
+    notes:
+      "Run Ollama locally and pull a model; its OpenAI-compatible endpoint is exposed at /v1 on the default port.",
+    probeBaseUrls: ["http://127.0.0.1:11434/v1"],
+  },
 ]);
 
 export function getPresetByKind(

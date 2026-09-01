@@ -3,7 +3,8 @@
   "private": true,
   "license": "MIT",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "examples/*"
   ],
   "scripts": {
     "test": "bun test",
@@ -16,7 +17,7 @@
     "test:runner-local": "bun test packages/runner-local",
     "test:mcp-client": "bun test packages/mcp-client",
     "test:transport-http": "bun test packages/transport-http",
-    "typecheck": "bun run typecheck:contracts && bun run typecheck:core && bun run typecheck:testing && bun run typecheck:host && bun run typecheck:adapters-memory && bun run typecheck:adapters-sqlite && bun run typecheck:runner-local && bun run typecheck:mcp-client && bun run typecheck:transport-http",
+    "typecheck": "bun run typecheck:contracts && bun run typecheck:core && bun run typecheck:testing && bun run typecheck:host && bun run typecheck:adapters-memory && bun run typecheck:adapters-sqlite && bun run typecheck:runner-local && bun run typecheck:mcp-client && bun run typecheck:transport-http && bun run typecheck:examples",
     "typecheck:contracts": "tsc -p packages/contracts/tsconfig.json",
     "typecheck:core": "tsc -p packages/core/tsconfig.json",
     "typecheck:testing": "tsc -p packages/testing/tsconfig.json",
@@ -26,6 +27,7 @@
     "typecheck:runner-local": "tsc -p packages/runner-local/tsconfig.json",
     "typecheck:mcp-client": "tsc -p packages/mcp-client/tsconfig.json",
     "typecheck:transport-http": "tsc -p packages/transport-http/tsconfig.json",
+    "typecheck:examples": "tsc -p examples/desktop-host/tsconfig.json",
     "build": "bun run build:contracts && bun run build:core && bun run build:host && bun run build:adapters-memory && bun run build:adapters-sqlite && bun run build:runner-local && bun run build:mcp-client && bun run build:transport-http && bun run build:testing",
     "build:contracts": "tsc -p packages/contracts/tsconfig.build.json",
     "build:core": "tsc -p packages/core/tsconfig.build.json",
