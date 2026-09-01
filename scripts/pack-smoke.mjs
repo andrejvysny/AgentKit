@@ -74,13 +74,17 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 /** Dependency order — a package may only depend on ones earlier in this list. */
 const PACKAGES = [
   "contracts",
+  "client",
   "core",
   "host",
+  // Ahead of the adapters: both `adapters-memory` and `adapters-sqlite` depend
+  // on it, and `withRewrittenDeps` can only point a `workspace:*` at a tarball
+  // an EARLIER entry already packed.
+  "mcp-client",
   "adapters-memory",
   "adapters-sqlite",
   "runner-local",
   "testing",
-  "mcp-client",
   "transport-http",
   "mcp-server",
 ];
@@ -291,6 +295,16 @@ function check(condition, message) {
 const contracts = await import("@agentkit/contracts");
 console.log("@agentkit/contracts");
 check(typeof contracts.CONTRACT_VERSION === "string", "exports CONTRACT_VERSION");
+
+const clientPkg = await import("@agentkit/client");
+console.log("@agentkit/client");
+check(typeof clientPkg.createAgentKitClient === "function", "exports createAgentKitClient");
+const restClient = clientPkg.createAgentKitClient({ baseUrl: "http://127.0.0.1:1" });
+check(
+  Object.keys(contracts.REST_ROUTES).every((op) => typeof restClient[op] === "function"),
+  "has a method for every contract route",
+);
+check(clientPkg.runPhase({ status: "queued" }) === "queued", "runPhase mirrors a status");
 
 const core = await import("@agentkit/core");
 console.log("@agentkit/core");

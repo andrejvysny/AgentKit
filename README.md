@@ -39,6 +39,7 @@ workflows and the release ritual.
 | Package | Description | Status |
 |---|---|---|
 | [`packages/contracts`](packages/contracts) — `@agentkit/contracts` | Wire DTOs and JSON Schemas (TypeBox): run events, tool/provider/prompt shapes, source refs, context bindings, multimodal message content parts, the task-event envelope, and the REST v1 route table + DTOs. | 0.1.0-dev |
+| [`packages/client`](packages/client) — `@agentkit/client` | Typed REST v1 + SSE client for the contract: one method per route, `streamRun` as an auto-resuming async iterable, derived run phases, problem+json as typed errors. Browser and Node; no dependency but `@agentkit/contracts`. | 0.1.0-dev |
 | [`packages/core`](packages/core) — `@agentkit/core` | Pure, in-process chat-with-tools loop: provider client, Ajv-backed tool registry, `runChat()`, multimodal content-part mapping for OpenAI-compatible providers. | 0.5.0-dev |
 | [`packages/host`](packages/host) — `@agentkit/host` | Durable orchestration over `@agentkit/core`: `TaskStore` + kind-dispatched executors, `TurnRunner` as the `chat.turn` executor, proposal lifecycle, write policy. | 0.1.0-dev |
 | [`packages/testing`](packages/testing) — `@agentkit/testing` | Mocks, fixtures, golden run-event traces, and the `AssistantStore` + `TaskRunner` conformance suites. | 0.1.0-dev |
@@ -104,6 +105,7 @@ bun run ci        # install --frozen-lockfile && typecheck && test && build
 Other useful scripts (see [`package.json`](package.json)): `bun run
 typecheck`, `bun run build`, and per-package variants
 (`bun run test:core`, `bun run test:host`, `bun run test:contracts`,
+`bun run test:client`,
 `bun run test:testing`, `bun run test:adapters-memory`,
 `bun run test:adapters-sqlite`, `bun run test:runner-local`,
 `bun run test:mcp-client`, `bun run test:transport-http`,
@@ -112,9 +114,10 @@ typecheck`, `bun run build`, and per-package variants
 Bun is the primary runtime, but every published `@agentkit/*` package must
 stay Node-loadable — a `bun:` import anywhere in one passes the whole Bun
 suite and breaks the first Node consumer. `scripts/node-smoke.mjs` runs the
-built dists (contracts, core, host, adapters-memory, runner-local,
+built dists (contracts, client, core, host, adapters-memory, runner-local,
 mcp-client, transport-http, mcp-server, testing) under plain Node:
-Ajv-validating a golden event, driving `runChat` with a stub provider, loading
+Ajv-validating a golden event, constructing a REST client over the whole route
+table, driving `runChat` with a stub provider, loading
 the host port vocabulary, claiming a task out of the in-memory store, driving
 that task to `completed` through the local runner's claim loop, constructing an
 mcp-client manager, serving a request through transport-http, refusing an
