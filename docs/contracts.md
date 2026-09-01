@@ -10,7 +10,7 @@ Source: [`packages/contracts/src/`](../packages/contracts/src/).
 
 ## The event vocabulary
 
-Twelve event types, all discriminated on `type`
+Thirteen event types, all discriminated on `type`
 ([`packages/contracts/src/run-events.ts`](../packages/contracts/src/run-events.ts)):
 
 | Type | Payload (`data`) summary |
@@ -24,6 +24,7 @@ Twelve event types, all discriminated on `type`
 | `run.tool.failed` | `{ toolCallId, toolName, errorMessage, errorCode?, modelResultJson?, status? }` — the call failed, was skipped (cap), or was cancelled. `modelResultJson` is present only when the tool actually ran and reported failure. |
 | `run.warning` | `{ code, message }` — a non-fatal condition; see the warning-code table below. |
 | `run.usage` | `{ callId, attempt, step, model, promptTokens?, completionTokens?, totalTokens?, source, finalForCall }` — token accounting for one provider call. See "usage" below. |
+| `run.verification` | `{ pass, status, deficiencies }` — the outcome of one post-run verification. `pass` is 0 for the run's own answer, then 1, 2, … per correction pass; `status` is `pass`/`partial` from the host's `DeficiencyReport`, or `unavailable` when the hook threw or answered `null`. **Emitted only under the correction harness** — a single-shot verification writes nothing, so absence is not evidence a run went unverified. See [`docs/ports.md`](ports.md#verification). |
 | `run.completed` | `{ iterations, finishReason? }` — the run ended with an answer. |
 | `run.failed` | `{ errorMessage, errorCode? }` — the run ended in a provider or transport error. |
 | `run.cancelled` | `{ reason? }` — the run was aborted. |
