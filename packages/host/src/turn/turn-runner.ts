@@ -42,13 +42,24 @@ import type { ToolGuard } from "../ports/tool-guard.js";
 import type { UsageAuthorizer } from "../ports/usage-authorizer.js";
 import type { AssistantSettings } from "../ports/settings-store.js";
 import type { TaskRecord, TaskStatus } from "../ports/task-store.js";
-import type { VerificationHook } from "../ports/verification.js";
+import type {
+  DeficiencyReport,
+  VerificationHook,
+  VerificationInput,
+} from "../ports/verification.js";
 import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import { loadExecutableTask } from "../tasks/load-executable-task.js";
 import type {
   TaskExecutionContext,
   TaskExecutor,
 } from "../tasks/task-executor.js";
+import {
+  buildCorrectionMessages,
+  buildDeficiencyWriteBack,
+  resolveMaxCorrectionPasses,
+  shouldRunCorrectionPass,
+  type CorrectionConfig,
+} from "./correction-harness.js";
 import {
   EMULATED_TOOL_CALL_MESSAGE,
   looksLikeEmulatedToolCall,
@@ -181,6 +192,26 @@ export interface TurnRunnerDeps {
   toolGuards?: ToolGuard[];
   context?: ContextProvider;
   verification?: VerificationHook;
+  /**
+   * Opt into the multi-pass correction harness over {@link verification}.
+   *
+   * Absent — the default — {@link verification} is a SINGLE post-run check whose
+   * deficiencies are posted as a banner and nothing more: exactly what this
+   * class did before the harness existed, down to the events on the log (there
+   * are no extra ones) and the number of `verify()` calls (one).
+   *
+   * Present AND with {@link verification} wired, the deficiencies are fed back
+   * to the model for bounded correction passes, each one a full `runPass` — so
+   * {@link usage} gates it and its `run.usage` events are recorded like any
+   * other pass — and every verification, including the first, is reported on the
+   * durable log as a `run.verification` event. Present WITHOUT
+   * {@link verification} it does nothing at all: there is no check to iterate
+   * on, and inventing one is not this class's business.
+   *
+   * See [`correction-harness.ts`](./correction-harness.ts) for the stopping
+   * rules.
+   */
+  correction?: CorrectionConfig;
   /**
    * Spend control. Absent — the default — nothing is asked and nothing is
    * recorded, and this class behaves exactly as it did before the port existed;
@@ -965,38 +996,58 @@ export class TurnRunner implements TaskWorker {
       ).id;
     }
 
-    // Verification runs once, and only when the turn actually did tool work —
-    // there is nothing to verify about a chat answer. A single pass is
-    // deliberate: feeding the deficiencies back for the model to correct is a
-    // multi-pass harness, and that belongs in a later phase where its cost and
-    // its stopping condition can be designed properly rather than bolted on.
+    // Verification runs only when the turn actually did tool work — there is
+    // nothing to verify about a chat answer.
+    //
+    // TWO SHAPES, and which one runs is the host's choice, not a heuristic.
+    // Without `deps.correction` this is the SINGLE check it has always been:
+    // one `verify()`, a banner if it did not pass, no events, no second
+    // provider call — a `verify()` that throws still fails the turn, because
+    // that is what it did before and a host relying on it has not asked for
+    // anything else. With `deps.correction` the harness takes over and the
+    // rules change deliberately; see `runCorrectionHarness`.
     if (this.deps.verification && toolCallCount > 0) {
-      const report = await this.deps.verification.verify({
-        runId: task.taskId,
-        chatId,
-        scopeId: task.scopeId,
-        attemptId: ctx.attemptId,
-        toolCallCount,
-        finalContent,
-        signal: ctx.signal,
-      });
-      if (report && report.status !== "pass") {
-        state.lastMessageId = (
-          await store.conversations.appendMessage({
-            chatId,
-            runId: task.taskId,
-            role: "system",
-            content: describeDeficiencies(report.deficiencies),
-            parentMessageId: state.lastMessageId,
-            activate: false,
-            metadata: { banner: "verification", status: report.status },
-          })
-        ).id;
+      if (this.deps.correction === undefined) {
+        const report = await this.deps.verification.verify({
+          runId: task.taskId,
+          chatId,
+          scopeId: task.scopeId,
+          attemptId: ctx.attemptId,
+          toolCallCount,
+          finalContent,
+          signal: ctx.signal,
+        });
+        if (report && report.status !== "pass") {
+          state.lastMessageId = (
+            await store.conversations.appendMessage({
+              chatId,
+              runId: task.taskId,
+              role: "system",
+              content: describeDeficiencies(report.deficiencies),
+              parentMessageId: state.lastMessageId,
+              activate: false,
+              metadata: { banner: "verification", status: report.status },
+            })
+          ).id;
+        }
+      } else {
+        terminal = await this.runCorrectionHarness({
+          basePass,
+          registry,
+          systemPrompt,
+          verification: this.deps.verification,
+          maxPasses: resolveMaxCorrectionPasses(this.deps.correction),
+          terminal,
+        });
       }
     }
 
+    // `state.content` rather than the `finalContent` snapshot above: a
+    // correction pass rewrites the visible answer, and the snapshot predates it.
+    // With no harness the two are the same string — nothing between them touches
+    // the state — so this is not a behaviour change for anyone not using it.
     await store.conversations.updateMessage(assistantMessageId, {
-      content: finalContent,
+      content: state.content,
       metadata: { placeholder: false },
     });
 
@@ -1012,6 +1063,208 @@ export class TurnRunner implements TaskWorker {
     await store.tasks.endAttempt({
       attemptId: ctx.attemptId,
       status: finalStatus,
+    });
+  }
+
+  /**
+   * The multi-pass correction harness: verify, hand the deficiencies back, let
+   * the model fix them with its tools, verify again — bounded three ways.
+   *
+   * THE LOOP. Pass 0 verifies the run's own answer; each `run.verification`
+   * event names its pass number, so a log reader can tell "verified once and it
+   * was fine" from "corrected twice and it still is not". A correction pass is a
+   * full {@link runPass} on the SAME registry and the same task log: tools
+   * staged exactly as the run had them, `seq` continuing unbroken,
+   * {@link TurnRunnerDeps.usage} asked before it and told after it. There is no
+   * second code path for a correction pass, which is what makes "the harness
+   * cannot bypass spend control" true by construction rather than by review.
+   *
+   * WHAT STOPS IT (see `correction-harness.ts` for the rule itself):
+   * - `status: "pass"` — the work landed; nothing to correct.
+   * - shrink-or-stall — the new deficiency list is not strictly shorter than the
+   *   last one, so the previous pass bought nothing and the next one would not
+   *   either.
+   * - the pass cap.
+   * - a pass that did not complete. A failed or cancelled correction pass ends
+   *   the harness rather than being re-verified: re-asking a provider that just
+   *   errored, or a run the user just cancelled, spends money to learn nothing.
+   * - FAIL-CLOSED: `verify()` threw, or answered `null`, part-way through. That
+   *   is `"unavailable"` on the log and a full stop — never a pass. A verifier
+   *   that cannot answer is the case where assuming success is most expensive,
+   *   and the durable event is what lets an operator tell "checked and clean"
+   *   apart from "never actually checked".
+   *
+   * WHAT IT DOES NOT DO: change the run's outcome. A run whose deficiencies
+   * survive every pass still completes — exactly as the single-shot check leaves
+   * it — with the banner and the final `run.verification` event telling the
+   * story. Failing a turn on a partial verification would be a policy decision,
+   * and the host that wrote the checks is the only layer entitled to make it.
+   * The returned terminal is whatever the LAST pass reached, for the same reason
+   * the recovery passes' terminal wins: a provider error on a correction pass is
+   * a real failure of this run, not a verification verdict.
+   */
+  private async runCorrectionHarness(input: {
+    basePass: Omit<PassInput, "messages" | "registry" | "maxToolIterations">;
+    registry: AiToolRegistry;
+    systemPrompt: string | null;
+    verification: VerificationHook;
+    maxPasses: number;
+    terminal: PassTerminal;
+  }): Promise<PassTerminal> {
+    const { basePass, registry, systemPrompt, verification, maxPasses } = input;
+    const { ctx, state, chatId, task, assistantMessageId } = basePass;
+    const { store } = this.deps;
+
+    let terminal = input.terminal;
+    let pass = 0;
+    let previousDeficiencies: readonly string[] | undefined;
+    let lastReport: DeficiencyReport | null = null;
+
+    for (;;) {
+      const report = await this.verifyQuietly(verification, {
+        runId: task.taskId,
+        chatId,
+        scopeId: task.scopeId,
+        attemptId: ctx.attemptId,
+        toolCallCount: state.toolCallIds.size,
+        finalContent: state.content,
+        signal: ctx.signal,
+      });
+      if (report === null) {
+        await this.emitVerification(ctx, pass, "unavailable", []);
+        break;
+      }
+      lastReport = report;
+      await this.emitVerification(
+        ctx,
+        pass,
+        report.status,
+        report.deficiencies,
+      );
+      if (terminal !== "completed") break;
+      if (
+        !shouldRunCorrectionPass({
+          status: report.status,
+          deficiencies: report.deficiencies,
+          previousDeficiencies,
+          passesRun: pass,
+          maxPasses,
+        })
+      ) {
+        break;
+      }
+
+      previousDeficiencies = report.deficiencies;
+      pass += 1;
+      const writeBack = buildDeficiencyWriteBack(report.deficiencies);
+      const messages = buildCorrectionMessages({
+        systemPrompt,
+        previousContent: state.content,
+        writeBack,
+      });
+      // The write-back is persisted like every other record this run writes: a
+      // CHAIN append off the run's own last write. It is `role: "user"` because
+      // that is the role it was sent as, and a stored history that claims the
+      // model corrected itself unprompted is a history that replays wrong.
+      state.lastMessageId = (
+        await store.conversations.appendMessage({
+          chatId,
+          runId: task.taskId,
+          role: "user",
+          content: writeBack,
+          parentMessageId: state.lastMessageId,
+          activate: false,
+          metadata: { internal: true, correctionPass: pass },
+        })
+      ).id;
+
+      // Start the answer over, as the recovery passes do: the corrected answer
+      // REPLACES the one the verifier just rejected rather than being glued to
+      // the end of it, so the reader is not left with the superseded claim and
+      // its correction as one rambling reply. The superseded text is not lost —
+      // it went to the provider as this pass's assistant message, and the pass's
+      // own tool calls and results are on the log.
+      const supersededContent = state.content;
+      this.resetPass(state);
+      await store.conversations.updateMessage(assistantMessageId, {
+        content: "",
+      });
+      const corrected = await this.runPass({
+        ...basePass,
+        messages,
+        registry,
+        ...(this.deps.maxToolIterations === undefined
+          ? {}
+          : { maxToolIterations: this.deps.maxToolIterations }),
+      });
+      terminal = corrected.terminal;
+      // A correction pass that fixed things silently — all tools, no words —
+      // must not blank the answer the user is looking at. Keep what it
+      // superseded rather than replacing a real answer with nothing.
+      if (state.content.trim().length === 0) {
+        state.content = supersededContent;
+        await store.conversations.updateMessage(assistantMessageId, {
+          content: state.content,
+        });
+      }
+    }
+
+    // One banner, for the last report that actually said something — not one per
+    // pass. A conversation showing four increasingly short lists of the same
+    // problems tells a reader less than the list that survived.
+    if (lastReport !== null && lastReport.status !== "pass") {
+      state.lastMessageId = (
+        await store.conversations.appendMessage({
+          chatId,
+          runId: task.taskId,
+          role: "system",
+          content: describeDeficiencies(lastReport.deficiencies),
+          parentMessageId: state.lastMessageId,
+          activate: false,
+          metadata: { banner: "verification", status: lastReport.status },
+        })
+      ).id;
+    }
+    return terminal;
+  }
+
+  /**
+   * `verify()`, with a throw folded into the `null` answer.
+   *
+   * Only the harness calls this. The single-shot path deliberately lets a throw
+   * out (a host wired that check before this existed and gets the failure it
+   * always got); inside the harness a broken verifier must not take a run down
+   * that already produced an answer, so the fault is logged, reported as
+   * `"unavailable"` on the durable log, and the harness stops.
+   */
+  private async verifyQuietly(
+    verification: VerificationHook,
+    input: VerificationInput,
+  ): Promise<DeficiencyReport | null> {
+    try {
+      return await verification.verify(input);
+    } catch (err) {
+      this.deps.logger?.warn("verification hook failed", {
+        taskId: input.runId,
+        chatId: input.chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /** One `run.verification` event on the run's durable log. */
+  private async emitVerification(
+    ctx: TaskExecutionContext,
+    pass: number,
+    status: "pass" | "partial" | "unavailable",
+    deficiencies: readonly string[],
+  ): Promise<void> {
+    await this.appendHostEvent(ctx, {
+      type: "run.verification",
+      runId: ctx.task.taskId,
+      timestamp: this.deps.clock.nowIso(),
+      data: { pass, status, deficiencies: [...deficiencies] },
     });
   }
 
