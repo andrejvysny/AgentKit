@@ -16,12 +16,14 @@ import type {
   ApplyProposalRequest,
   ApproveProposalInput,
   AssistantStore,
+  AuthorizationPort,
   Logger,
   ProposalRecord,
   RejectProposalInput,
   SubmitMessageInput,
   SubmitMessageResult,
 } from "@agentkit/host";
+import type { RestCorsOptions } from "./cors.js";
 
 /** `TurnRunner`, narrowed to the one call `submitMessage` makes. */
 export interface TurnSubmitter {
@@ -110,16 +112,44 @@ export interface RestHandlerDeps {
   /** Reported by `getVersion` as `packages`, for an identifiable build. */
   packages?: Record<string, string>;
   /**
-   * Called before any route runs.
+   * Called before any route runs. Answers "who is calling?".
    *
    * Returning a `Response` short-circuits the request with it (401, a redirect,
-   * whatever the host's scheme needs). Any other value is an opaque principal:
-   * this adapter does not read it and threads it nowhere, because the contract
-   * has no per-principal scoping yet and pretending otherwise would bake a
-   * half-authorization into a published surface. A host needing that today
-   * filters in front of the handler.
+   * whatever the host's scheme needs). Any other value is the PRINCIPAL: it is
+   * passed to {@link RestHandlerDeps.authorize} as the `subject` (an object
+   * verbatim, anything else under `metadata.principal`) and threaded to every
+   * route handler as `RouteContext.principal`. This adapter still never
+   * interprets it — only the host's own `AuthorizationPort` does.
    */
   authenticate?(req: Request): Promise<unknown | Response>;
+  /**
+   * Consulted per route, after {@link RestHandlerDeps.authenticate} and before
+   * the route runs, with the authenticated principal as the subject, the
+   * resource the route's path names (see `authorize.ts`'s table) and an action
+   * of `read` for GET or `write` for anything else. A refusal is a 403
+   * `forbidden` problem carrying the decision's `reason`.
+   *
+   * ABSENT — the default — nothing is checked. That is not an oversight to work
+   * around: a host that does not wire this port gets no authorization, and one
+   * that needs it must supply it (or filter in front of the handler). The one
+   * route never submitted to the port is `GET /v1/version`, which reads two
+   * constants and is how a client discovers whether it can speak to this server
+   * at all.
+   */
+  authorize?: AuthorizationPort;
+  /**
+   * Mount prefix, e.g. `"/api/agentkit"`, stripped before routing so
+   * `REST_ROUTES`' `/v1/...` paths match underneath it. Normalized (a leading
+   * slash added, trailing ones removed); `""` and `"/"` mean no prefix. A
+   * request outside the prefix gets the same 404 problem any unrouted path
+   * does.
+   */
+  basePath?: string;
+  /**
+   * Cross-origin access. Absent — the default — no response carries a CORS
+   * header and `OPTIONS` answers 405 as it always did.
+   */
+  cors?: RestCorsOptions;
   logger?: Logger;
   streaming?: RestStreamOptions;
 }

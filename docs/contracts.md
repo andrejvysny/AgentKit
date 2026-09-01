@@ -328,8 +328,19 @@ document), and an SSE frame (`RunEventFrameDto`) is an `AiRunEvent`.
 Errors are RFC 7807 `application/problem+json` (`ProblemDetailsDto`) on every
 route, with one AgentKit extension member: `code`, the stable machine-readable
 code host errors already carry (`lease_lost`, `duplicate_action_id`,
-`revision_conflict`, …). A client branches on `code`; `type`/`title` are for
-humans.
+`revision_conflict`, `usage_denied`, …). A client branches on `code`;
+`type`/`title` are for humans.
+
+Two codes in that member are decided by the *transport* rather than thrown by
+the host: `not_implemented` (501 — the route exists in the contract but this
+deployment cannot serve it) and `forbidden` (403 — the host's
+`AuthorizationPort` refused this principal for this route's resource). They are
+not part of `HostErrorCode` for exactly that reason: no host error was raised,
+and inventing one to carry them would put a code in the host's closed union
+that the host never throws. `usage_denied` is the opposite case — a genuine
+host error (`UsageDeniedError`, raised when the `UsageAuthorizer` refuses a
+provider call), mapped to **429** because the caller may retry once the budget
+refills.
 
 ## TypeBox as the single source of truth
 

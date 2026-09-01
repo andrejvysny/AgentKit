@@ -73,7 +73,7 @@ only) — alongside [`@agentkit/runner-local`](../runner-local) for the
   (`invalid_task_transition`, `duplicate_task`, `executor_not_found`,
   `invalid_proposal_transition`, `lease_lost`, `seq_conflict`,
   `duplicate_action_id`, `revision_conflict`, `not_found`,
-  `invalid_fork_point`, `unknown_dependency`) — a new subclass with a code
+  `invalid_fork_point`, `unknown_dependency`, `usage_denied`) — a new subclass with a code
   missing from the union fails to compile. See [ADR
   0006](../../docs/adr/0006-hardening-tranche.md).
 
@@ -173,8 +173,16 @@ managed service):
    `ProposalApplier`, `VerificationHook`, `ContextProvider`,
    `ToolSetContributor`, `SecretStore`, `AuthorizationPort`, and
    `UsageAuthorizer` are all independent of your storage choice — see
-   [`docs/ports.md`](../../docs/ports.md) for each one's responsibility and
-   key invariant.
+   [`docs/ports.md`](../../docs/ports.md) for each one's responsibility, key
+   invariant, and where it is enforced.
+
+   Two of them are optional *and unenforced when omitted*, which is the whole
+   point of their being ports: pass `usage` to `TurnRunner` and every provider
+   pass is authorized (a refusal writes a `run.failed` with
+   `errorCode: "usage_denied"` and never reaches the model); leave it out and
+   nothing is asked. `AuthorizationPort` is consulted by the transport, per
+   route — see
+   [`@agentkit/transport-http`](../transport-http/README.md#authenticate-and-authorize).
 
 ## License
 
