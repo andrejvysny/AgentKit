@@ -17,7 +17,7 @@
 - [x] C1 tool governance (namespaces, guard chain, dispose, toolCalling override, AiToolError, ToolCatalog)
 - [x] C2 correction harness + `run.verification` event
 - [x] C3 `@agentkit/mcp-server`
-- [ ] C4 `RunProjector` + `SubmitMessageInput.kind`
+- [x] C4 `RunProjector` + `SubmitMessageInput.kind`
 - [ ] Phase C verifier + fixes
 
 ## Phase D — client + react

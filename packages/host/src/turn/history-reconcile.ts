@@ -33,7 +33,7 @@ function missingToolResultEnvelope(): string {
  * turn that declares `tool_calls` must be followed by exactly one tool message
  * per `tool_call_id`.
  *
- * WHY THIS CAN HAPPEN. `TurnRunner.projectEvent` writes the internal assistant
+ * WHY THIS CAN HAPPEN. The run projection writes the internal assistant
  * message (with its `toolCalls`) on `run.message.completed`, and each tool
  * result on the `run.tool.succeeded` / `run.tool.failed` that follows. Those are
  * SEPARATE writes, not one transaction. Anything that stops the worker between

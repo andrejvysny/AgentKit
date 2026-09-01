@@ -524,6 +524,18 @@ accident:
   description: [Task dependencies and
   subagents](architecture.md#task-dependencies-and-subagents), [ADR
   0003](adr/0003-task-dependencies-and-subagents.md).
+- A host executor answering a CONVERSATION drives
+  [`turn/projection.ts`](../packages/host/src/turn/projection.ts)
+  (`createRunProjector`) rather than writing messages itself, and its turns
+  are submitted with `SubmitMessageInput.kind` set to its own kind. The
+  projection — chain appends off the run's own last write with
+  `activate: false`, the slim tool envelope, `run.usage` → `UsageAuthorizer`
+  — is the same code `chat.turn` runs, which is what makes the two
+  indistinguishable in the store. `project` takes an ALREADY-STAMPED event
+  for the same reason the previous invariant exists; `createRunEventFeed` is
+  the drafts-in path and delegates its numbering to `createTaskEventWriter`.
+  Full description: [Custom turn
+  executors](architecture.md#custom-turn-executors).
 
 ## Policy
 

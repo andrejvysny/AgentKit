@@ -5,7 +5,6 @@ import type {
   AiMessageContent,
   AiProviderConfig,
   AiRunEvent,
-  AiToolCall,
   AiToolLimits,
 } from "@agentkit/contracts";
 import {
@@ -66,6 +65,11 @@ import {
 } from "./emulated-tool-call.js";
 import { reconcileOrphanToolCalls } from "./history-reconcile.js";
 import { orderMessagesForProvider } from "./message-order.js";
+import {
+  createRunProjector,
+  type RunProjectionState,
+  type RunProjector,
+} from "./projection.js";
 import { stageRegistry } from "./registry-staging.js";
 import {
   RETRY_MAX_TOOL_ITERATIONS,
@@ -286,6 +290,27 @@ export interface SubmitMessageInput {
    * retry, and throws `DuplicateTaskError` instead of answering.
    */
   taskId?: string;
+  /**
+   * The task kind this turn is created as. Defaults to
+   * {@link CHAT_TURN_TASK_KIND}, which is the kind `ChatTurnExecutor` claims.
+   *
+   * Naming another kind routes the turn to the host's OWN executor while
+   * everything this method does stays identical — the same user message, the
+   * same placeholder, the same one transaction, the same idempotency and the
+   * same branch mechanics. It is the submit half of the seam whose execute half
+   * is `createRunProjector` (see [`projection.ts`](./projection.ts)): a host
+   * that registers, say, `assistant.cloud-chat` for a turn it delegates to a
+   * server maps the remote frames into `AiRunEvent`s and drives the projector,
+   * and the conversation it leaves behind is the one a `chat.turn` would have.
+   *
+   * NOT VALIDATED HERE, deliberately. Whether a kind has an executor is a
+   * DEPLOYMENT fact — the box that claims the task is the box that knows — and
+   * a check here would have to be wrong in one of two ways: it would either
+   * refuse a kind whose executor lives in another process, or pass a kind
+   * nobody registered anywhere. The dispatcher answers it at claim time with
+   * `ExecutorNotFoundError`, which is a terminal failure carrying the kind.
+   */
+  kind?: string;
 }
 
 export interface SubmitMessageResult {
@@ -333,6 +358,14 @@ export interface RegenerateMessageInput {
    * returns the ids of the regenerate that already exists.
    */
   taskId?: string;
+  /**
+   * The task kind this regenerate is created as. Defaults to
+   * {@link CHAT_TURN_TASK_KIND}; same contract as
+   * {@link SubmitMessageInput.kind}, including that an unknown kind is the
+   * dispatcher's `ExecutorNotFoundError` at claim time rather than a refusal
+   * here.
+   */
+  kind?: string;
 }
 
 /**
@@ -352,33 +385,16 @@ interface TurnRequest {
   userMessageId?: string;
 }
 
-/** Mutable state accumulated across one provider pass. */
-interface PassState {
-  /** Visible answer so far. */
-  content: string;
-  /** Whether any delta arrived (a completed-only provider sends none). */
-  streamed: boolean;
-  /** Distinct tool call ids seen this run — the "did it use tools?" signal. */
-  toolCallIds: Set<string>;
-  /** Internal assistant record awaiting its tool calls (see `projectEvent`). */
-  pendingAssistantMessageId?: string;
-  pendingToolCalls: AiToolCall[];
-  /**
-   * The last message THIS RUN wrote — the link every further append chains off.
-   *
-   * Seeded with the placeholder, so the run's records descend from the answer
-   * they belong to, and carried across passes because a retry continues the
-   * same conversation branch rather than starting a second one.
-   *
-   * It exists because "the chat's active leaf" is not a stable answer for the
-   * duration of a turn: a user may switch branches between two of these
-   * writes, and an append that took the leaf would put the second half of this
-   * run's records on a conversation that never ran them — while leaving this
-   * run's own branch with tool calls nobody answered. Naming the link removes
-   * the race rather than narrowing it. See `AppendMessageInput.activate`.
-   */
-  lastMessageId: string;
-}
+/**
+ * Mutable state accumulated across one provider pass.
+ *
+ * It is the projection seam's own state — see {@link RunProjectionState} — not
+ * a second model beside it: every field this class reads between passes
+ * (`content` and `toolCallIds` for the retry decisions, `lastMessageId` for the
+ * banners it chains) is one the projector maintains, and two structures
+ * tracking the same run would be two answers to "what has this turn written".
+ */
+type PassState = RunProjectionState;
 
 interface PassInput {
   task: TaskRecord;
@@ -431,7 +447,20 @@ export class TurnRunner implements TaskWorker {
    */
   private contributorsDisposed = false;
 
-  constructor(private readonly deps: TurnRunnerDeps) {}
+  /**
+   * The event → conversation projection, shared verbatim with any host executor
+   * that drives a turn of its own. See [`projection.ts`](./projection.ts).
+   */
+  private readonly projector: RunProjector;
+
+  constructor(private readonly deps: TurnRunnerDeps) {
+    this.projector = createRunProjector({
+      store: deps.store,
+      clock: deps.clock,
+      ...(deps.usage === undefined ? {} : { usage: deps.usage }),
+      ...(deps.logger === undefined ? {} : { logger: deps.logger }),
+    });
+  }
 
   /**
    * Release every contributor that holds something open — the shutdown half of
@@ -470,6 +499,7 @@ export class TurnRunner implements TaskWorker {
    */
   async submitMessage(input: SubmitMessageInput): Promise<SubmitMessageResult> {
     const taskId = input.taskId ?? this.deps.ids.taskId();
+    const kind = input.kind ?? CHAT_TURN_TASK_KIND;
     const userMessageId = this.deps.ids.messageId();
     const assistantMessageId = this.deps.ids.messageId();
     const payload: TurnRequest = {
@@ -493,7 +523,7 @@ export class TurnRunner implements TaskWorker {
         // orphan messages in the chat for every retried request.
         await tx.tasks.createTask({
           taskId,
-          kind: CHAT_TURN_TASK_KIND,
+          kind,
           // Scope on the chat: two turns in one conversation must not run at
           // once, or they would interleave into the same message history.
           scopeId: input.chatId,
@@ -532,7 +562,7 @@ export class TurnRunner implements TaskWorker {
         });
       });
     } catch (err) {
-      const existing = await this.resubmitted(err, input, taskId);
+      const existing = await this.resubmitted(err, { ...input, kind }, taskId);
       if (existing === null) throw err;
       // Re-poked deliberately. `enqueue` is idempotent per the port's contract,
       // so this is a no-op for a task already running or finished — and the
@@ -560,22 +590,22 @@ export class TurnRunner implements TaskWorker {
    * - a MINTED id that collides is not a redelivery, it is a broken
    *   `IdGenerator`, and swallowing it would hand the caller someone else's
    *   conversation;
-   * - a task under this key that is not a `chat.turn`, or is a turn in another
-   *   chat, is an id collision between two unrelated callers — same reasoning,
-   *   louder failure mode;
+   * - a task under this key whose kind is not the one this submit asked for, or
+   *   which is a turn in another chat, is an id collision between two unrelated
+   *   callers — same reasoning, louder failure mode;
    * - a payload missing either message id cannot answer the caller at all, and
-   *   a `chat.turn` row without them did not come from this method.
+   *   a turn row without them did not come from this method.
    */
   private async resubmitted(
     err: unknown,
-    input: { chatId: string; taskId?: string },
+    input: { chatId: string; taskId?: string; kind: string },
     taskId: string,
   ): Promise<SubmitMessageResult | null> {
     if (!(err instanceof DuplicateTaskError) || input.taskId === undefined) {
       return null;
     }
     const existing = await this.deps.store.tasks.getTask(taskId);
-    if (!existing || existing.kind !== CHAT_TURN_TASK_KIND) return null;
+    if (!existing || existing.kind !== input.kind) return null;
     const payload = existing.payload as unknown as Partial<TurnRequest>;
     if (
       payload.chatId !== input.chatId ||
@@ -619,6 +649,7 @@ export class TurnRunner implements TaskWorker {
   ): Promise<SubmitMessageResult> {
     const parentMessageId = await this.regenerateParentOf(input);
     const taskId = input.taskId ?? this.deps.ids.taskId();
+    const kind = input.kind ?? CHAT_TURN_TASK_KIND;
     const assistantMessageId = this.deps.ids.messageId();
     const payload: TurnRequest = {
       chatId: input.chatId,
@@ -643,7 +674,7 @@ export class TurnRunner implements TaskWorker {
         // the chat, ACTIVE, for every retried request.
         await tx.tasks.createTask({
           taskId,
-          kind: CHAT_TURN_TASK_KIND,
+          kind,
           scopeId: input.chatId,
           payload: payload as unknown as Record<string, unknown>,
           ...(input.priority === undefined ? {} : { priority: input.priority }),
@@ -665,7 +696,7 @@ export class TurnRunner implements TaskWorker {
         });
       });
     } catch (err) {
-      const existing = await this.resubmitted(err, input, taskId);
+      const existing = await this.resubmitted(err, { ...input, kind }, taskId);
       if (existing === null) throw err;
       await this.deps.taskRunner.enqueue({ taskId, scopeId: input.chatId });
       return existing;
@@ -894,13 +925,11 @@ export class TurnRunner implements TaskWorker {
     // behind.
     const initialMessages = assembled.slice();
 
-    const state: PassState = {
-      content: "",
-      streamed: false,
-      toolCallIds: new Set<string>(),
-      pendingToolCalls: [],
-      lastMessageId: assistantMessageId,
-    };
+    const state: PassState = this.projector.createState({
+      chatId,
+      assistantMessageId,
+      providerId: provider.id,
+    });
     const basePass = {
       task,
       chatId,
@@ -1378,172 +1407,25 @@ export class TurnRunner implements TaskWorker {
   /**
    * Append an event to the durable log, then reflect it in conversation state.
    *
-   * The log is written FIRST and unconditionally: it is the record of what
-   * happened, and a projection failure must not be able to erase it.
-   *
-   * Every message this writes is a CHAIN append — `parentMessageId` is the id
-   * this run wrote last, `activate: false` — so the records land on the run's
-   * own branch whatever the user has been doing to the active path meanwhile.
-   * With no branch switch that is byte-identically what an unparented append
-   * produced: the run's last write IS the active leaf, so the chain and the
-   * path are the same messages. See {@link PassState.lastMessageId}.
+   * DELEGATED, whole, to [`projection.ts`](./projection.ts) — the seam a host
+   * executor of its own kind drives to produce the identical conversation from
+   * events this class never saw. There is no copy of the rules here, which is
+   * what makes "a custom turn executor writes what `chat.turn` writes" true by
+   * construction rather than by two implementations agreeing today.
    */
   private async projectEvent(
     event: AiRunEvent,
     input: PassInput,
   ): Promise<void> {
-    const { store } = this.deps;
-    const { state, task, chatId } = input;
-    await store.tasks.appendEvents(task.taskId, [event], {
-      leaseToken: input.ctx.leaseToken,
-    });
-
-    switch (event.type) {
-      case "run.message.delta": {
-        state.content += event.data.delta;
-        state.streamed = true;
-        await store.conversations.updateMessage(input.assistantMessageId, {
-          content: state.content,
-        });
-        break;
-      }
-      case "run.message.completed": {
-        // A new assistant turn supersedes any turn still waiting for its calls:
-        // late `run.tool.requested` events belong to THIS turn, not the last one.
-        delete state.pendingAssistantMessageId;
-        state.pendingToolCalls = [];
-        if (event.data.toolCallCount > 0) {
-          const toolCalls = event.data.toolCalls ?? [];
-          const record = await store.conversations.appendMessage({
-            chatId,
-            runId: task.taskId,
-            role: "assistant",
-            content: event.data.content,
-            toolCalls,
-            parentMessageId: state.lastMessageId,
-            activate: false,
-            metadata: { internal: true },
-          });
-          state.lastMessageId = record.id;
-          for (const call of toolCalls) state.toolCallIds.add(call.id);
-          if (toolCalls.length === 0) {
-            // A streaming provider reports the COUNT here and the calls
-            // themselves in the `run.tool.requested` events that follow. Hold
-            // the record open and fill them in as they arrive: an assistant
-            // turn persisted without its tool_calls leaves every tool result
-            // after it an orphan on the next replay.
-            state.pendingAssistantMessageId = record.id;
-            state.pendingToolCalls = [];
-          }
-        } else if (!state.streamed && event.data.content.length > 0) {
-          // Non-streaming provider: the visible answer exists only here.
-          state.content = event.data.content;
-          await store.conversations.updateMessage(input.assistantMessageId, {
-            content: state.content,
-          });
-        }
-        break;
-      }
-      case "run.usage": {
-        // Reported to the spend port AFTER the event is durable, and with the
-        // provider's own numbers rather than the estimate the pass was
-        // authorized on — the gap between the two is the whole reason
-        // `UsageAuthorizer` has a second method. Every usage event is reported,
-        // including the non-final ones a streaming provider emits mid-call: a
-        // recorder that only saw `finalForCall` would lose the accounting for a
-        // call that died before it settled, which is exactly the call a budget
-        // most needs to know about. `finalForCall`/`source`/`step` ride along
-        // so the recorder can tell those two kinds apart — reporting the
-        // interim numbers without them is just double counting.
-        await this.deps.usage?.record({
-          runId: task.taskId,
-          callId: event.data.callId,
-          attempt: event.data.attempt,
-          providerId: input.providerId,
-          model: event.data.model,
-          finalForCall: event.data.finalForCall,
-          source: event.data.source,
-          step: event.data.step,
-          ...(event.data.promptTokens === undefined
-            ? {}
-            : { promptTokens: event.data.promptTokens }),
-          ...(event.data.completionTokens === undefined
-            ? {}
-            : { completionTokens: event.data.completionTokens }),
-          ...(event.data.totalTokens === undefined
-            ? {}
-            : { totalTokens: event.data.totalTokens }),
-          at: event.timestamp,
-        });
-        break;
-      }
-      case "run.tool.requested": {
-        state.toolCallIds.add(event.data.toolCallId);
-        if (state.pendingAssistantMessageId !== undefined) {
-          state.pendingToolCalls.push({
-            id: event.data.toolCallId,
-            name: event.data.toolName,
-            argumentsJson: event.data.argumentsJson,
-          });
-          await store.conversations.updateMessage(
-            state.pendingAssistantMessageId,
-            { toolCalls: [...state.pendingToolCalls] },
-          );
-        }
-        break;
-      }
-      case "run.tool.succeeded": {
-        // The SLIM envelope is what gets persisted as the tool message, because
-        // this record is replayed into the model's context on every later turn.
-        // The full payload stays on the event, where the UI can read it once.
-        const slim = event.data.modelResultJson ?? event.data.resultJson;
-        state.lastMessageId = (
-          await store.conversations.appendMessage({
-            chatId,
-            runId: task.taskId,
-            role: "tool",
-            content: slim,
-            toolCallId: event.data.toolCallId,
-            modelResultJson: slim,
-            parentMessageId: state.lastMessageId,
-            activate: false,
-            metadata: { internal: true, toolName: event.data.toolName },
-          })
-        ).id;
-        break;
-      }
-      case "run.tool.failed": {
-        const slim =
-          event.data.modelResultJson ??
-          JSON.stringify({
-            ok: false,
-            status: "error",
-            summary: event.data.errorMessage,
-            warnings: [],
-            truncated: false,
-            data: {
-              errorCode: event.data.errorCode,
-              errorMessage: event.data.errorMessage,
-            },
-          });
-        state.lastMessageId = (
-          await store.conversations.appendMessage({
-            chatId,
-            runId: task.taskId,
-            role: "tool",
-            content: slim,
-            toolCallId: event.data.toolCallId,
-            modelResultJson: slim,
-            parentMessageId: state.lastMessageId,
-            activate: false,
-            metadata: { internal: true, toolName: event.data.toolName },
-          })
-        ).id;
-        break;
-      }
-      default:
-        break;
-    }
+    await this.projector.project(
+      {
+        task: input.task,
+        attemptId: input.ctx.attemptId,
+        leaseToken: input.ctx.leaseToken,
+      },
+      input.state,
+      event,
+    );
   }
 
   /**

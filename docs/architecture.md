@@ -192,9 +192,11 @@ always free to skip both and write the equivalent itself:
    non-monotonic `seq` (`SeqConflictError`); it MUST NOT re-stamp `seq` —
    numbering belongs to whichever emitter owns the pass, not the store
    ([`packages/host/src/ports/task-store.ts`](../packages/host/src/ports/task-store.ts)).
-4. **The durable log is canonical.** `TurnRunner.projectEvent` appends to the
-   task's log *before* reflecting the event into conversation state, so a
-   projection failure can never erase what happened. Publishing to a live
+4. **The durable log is canonical.** `RunProjector.project` — what
+   `TurnRunner` and any [custom turn executor](#custom-turn-executors) both
+   drive ([`packages/host/src/turn/projection.ts`](../packages/host/src/turn/projection.ts))
+   — appends to the task's log *before* reflecting the event into
+   conversation state, so a projection failure can never erase what happened. Publishing to a live
    transport (SSE, a websocket) is a separate, retryable step through the
    `OutboxStore` port — it replays the log outward; it is not itself the
    source of truth
@@ -316,6 +318,81 @@ becomes an executable.
   — `"chat.turn"`, the kind `TurnRunner.submitMessage` creates and
   `ChatTurnExecutor` runs. The `chat.*` and `agentkit.*` prefixes are
   reserved for the framework; everything else belongs to the host.
+
+## Custom turn executors
+
+`chat.turn` is not the only way to answer a conversation. A host whose turn
+does not come from `runChat` at all — a chat delegated to a server that
+streams its own frames, a replay of a recorded run, a bridge to a provider
+SDK this package has no client for — registers **its own kind** and drives
+the **same projection**, so the conversation it leaves behind is the one
+`chat.turn` would have left rather than a second implementation of the same
+rules.
+
+Two additive seams, and nothing else changes:
+
+- **`SubmitMessageInput.kind` / `RegenerateMessageInput.kind`**
+  ([`packages/host/src/turn/turn-runner.ts`](../packages/host/src/turn/turn-runner.ts))
+  — the task kind the submit creates, defaulting to `CHAT_TURN_TASK_KIND`.
+  Everything else about the submit is identical: the same user message and
+  empty placeholder in the same single transaction, the same idempotency per
+  caller-supplied `taskId`, the same `parentMessageId` branch mechanics.
+  **An unknown kind is not validated here** — whether a kind has an executor
+  is a deployment fact, and a check at submit time would either refuse a kind
+  whose executor lives in another process or pass one nobody registered
+  anywhere. The dispatcher answers it at claim time with
+  `ExecutorNotFoundError` (terminal, never a dead-letter).
+- **`createRunProjector(deps)`**
+  ([`packages/host/src/turn/projection.ts`](../packages/host/src/turn/projection.ts))
+  — the event → conversation projection, extracted from `TurnRunner` whole.
+  `createState({ chatId, assistantMessageId, providerId? })` opens a run;
+  `project(ctx, state, event)` appends one **already-stamped** `AiRunEvent`
+  to the durable log and then reflects it — deltas onto the placeholder,
+  `run.message.completed` with tool calls into an internal assistant record,
+  tool results into `role: "tool"` records, `run.usage` into
+  `UsageAuthorizer.record`. Every message it writes is a **chain append** off
+  `state.lastMessageId` with `activate: false`, so a user switching branches
+  mid-run cannot migrate half the run's records onto a conversation that
+  never ran them. `reflect(ctx, state, event)` is the same projection without
+  the append, for a caller that put the event on the log itself.
+  `createRunEventFeed({ projector, ctx, state, tasks, clock, ids })` is the
+  drafts-in convenience: it stamps through `createTaskEventWriter` (so the
+  numbering has exactly one implementation) and reflects, one append per
+  event.
+
+Events arrive **stamped** because on the `chat.turn` path core's
+`createEventStamper` owns the numbering for a pass — it was handed a
+`firstSeq` and counts upward in memory — and a projector that re-numbered
+from `TaskStore.nextSeq` would interleave two counters into one log. The
+producer numbers; the projector appends verbatim. A host with no stamper of
+its own uses the feed instead, never both for one event.
+
+**What the host still owns**, deliberately: producing the events; finalizing
+the placeholder (`content` + `placeholder: false`) when the turn ends; and
+the task's terminal transition plus `endAttempt`. Those are decisions about
+the run, not about an event — an executor that wanted a different terminal
+(a delegated turn landing `waiting_approval`) would otherwise have to fight
+a projector that had already settled it.
+
+```ts
+class CloudChatExecutor implements TaskExecutor {
+  readonly kind = "assistant.cloud-chat";
+  constructor(private readonly projector: RunProjector, ...) {}
+
+  async execute(ctx: TaskExecutionContext): Promise<void> {
+    const { chatId, assistantMessageId } = ctx.task.payload as TurnPayload;
+    const state = this.projector.createState({ chatId, assistantMessageId });
+    const stamp = createEventStamper({
+      firstSeq: await store.tasks.nextSeq(ctx.task.taskId),
+      attemptId: ctx.attemptId,
+    });
+    for await (const frame of remote.stream(ctx.task, ctx.signal)) {
+      await this.projector.project(ctx, state, stamp(toRunEvent(frame)));
+    }
+    // The host's half: finalize the placeholder, settle the task.
+  }
+}
+```
 
 ## Task dependencies and subagents
 
