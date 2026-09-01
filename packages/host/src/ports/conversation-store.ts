@@ -1,4 +1,4 @@
-import type { AiToolCall } from "@agentkit/contracts";
+import type { AiMessageContent, AiToolCall } from "@agentkit/contracts";
 
 /** A conversation thread. Chats own messages; runs are attached to a chat. */
 export interface ChatRecord {
@@ -64,7 +64,24 @@ export interface MessageRecord {
   chatId: string;
   runId?: string;
   role: "user" | "assistant" | "tool" | "system";
-  content: string;
+  /**
+   * The message body: a plain string, or the ordered content parts of a
+   * multimodal message (`AiMessageContent` — see
+   * `packages/contracts/src/content.ts`).
+   *
+   * A store round-trips parts LOSSLESSLY and inspects nothing inside them. In
+   * particular an image part may name a host attachment
+   * (`source: { kind: "ref", ref }`) rather than carry its bytes: the ref is
+   * what is persisted, and `TurnRunner` resolves it to inline data per provider
+   * pass without ever rewriting this record (see
+   * {@link AttachmentResolver}). A store that "helpfully" inlined the bytes
+   * would make every fork and every page of the conversation carry them.
+   *
+   * `role: "tool"` and `role: "system"` records are strings by construction — a
+   * tool result is a serialized envelope, a system record is a prompt or a UI
+   * banner — and nothing in the host writes parts on either.
+   */
+  content: AiMessageContent;
   /** Monotonic within a chat; assigned by {@link ConversationStore.appendMessage}. */
   orderKey: number;
   toolCallId?: string;
@@ -103,7 +120,7 @@ export interface AppendMessageInput {
   chatId: string;
   runId?: string;
   role: MessageRecord["role"];
-  content: string;
+  content: MessageRecord["content"];
   toolCallId?: string;
   toolCalls?: AiToolCall[];
   modelResultJson?: string;
@@ -196,7 +213,7 @@ export interface AppendMessageInput {
  * "unset this flag" unexpressible.
  */
 export interface UpdateMessagePatch {
-  content?: string;
+  content?: MessageRecord["content"];
   metadata?: Record<string, unknown>;
   toolCalls?: AiToolCall[];
 }

@@ -1,6 +1,8 @@
 import type {
   AiChatMessage,
+  AiContentPart,
   AiContextBinding,
+  AiMessageContent,
   AiProviderConfig,
   AiRunEvent,
   AiToolCall,
@@ -22,6 +24,10 @@ import {
   UsageDeniedError,
 } from "../errors.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
+import type {
+  AttachmentResolver,
+  ResolvedAttachment,
+} from "../ports/attachment-resolver.js";
 import type { ContextProvider } from "../ports/context-provider.js";
 import type { SecretStore } from "../ports/secret-store.js";
 import type { Clock, IdGenerator, Logger } from "../ports/system.js";
@@ -63,6 +69,92 @@ export const PROVIDER_SECRET_REF_KEY = "apiKeySecretRef";
 const DEFAULT_HISTORY_LIMIT = 200;
 
 /**
+ * Default attachment budgets for ONE provider pass.
+ *
+ * Borrowed from OpenPCB's `MENTION_LIMITS`, which are the numbers a shipping
+ * product arrived at against real vision models rather than a guess: 5 MiB is
+ * comfortably above a full-resolution screenshot and below the request size
+ * providers start rejecting; 20 MiB and 16 images bound what a long conversation
+ * full of attachments can cost on EVERY pass, since history is replayed whole.
+ *
+ * They are ceilings on what the {@link AttachmentResolver} contributes, not on
+ * the request: a caller that inlines its own base64 `data` sources has already
+ * decided how big its messages are, and second-guessing that here would drop
+ * images the host never asked this port about.
+ */
+const DEFAULT_MAX_BYTES_PER_IMAGE = 5 * 1024 * 1024;
+const DEFAULT_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
+const DEFAULT_MAX_IMAGES = 16;
+
+/**
+ * Caps on what resolving attachments may add to one provider pass. Every field
+ * is optional and falls back to the constant above.
+ */
+export interface AttachmentBudgets {
+  /** Decoded bytes one image may contribute. Default 5 MiB. */
+  maxBytesPerImage?: number;
+  /** Decoded bytes ALL resolved images may contribute to one pass. Default 20 MiB. */
+  maxTotalBytes?: number;
+  /** How many resolved images one pass may carry. Default 16. */
+  maxImages?: number;
+}
+
+interface ResolvedBudgets {
+  maxBytesPerImage: number;
+  maxTotalBytes: number;
+  maxImages: number;
+}
+
+/**
+ * Decoded size of a base64 payload, without decoding it.
+ *
+ * Four base64 characters encode three bytes, so `length * 3 / 4` is the size to
+ * within the two padding characters — an over-estimate by at most 2 B, on a
+ * budget measured in mebibytes. Decoding to find out exactly would allocate the
+ * whole image to answer a question about whether to allocate the whole image.
+ */
+function decodedByteLength(base64: string): number {
+  return Math.floor((base64.length * 3) / 4);
+}
+
+/** Whether a message body carries at least one `ref`-sourced image part. */
+function hasRefImage(content: AiMessageContent): boolean {
+  return (
+    typeof content !== "string" &&
+    content.some((part) => part.type === "image" && part.source.kind === "ref")
+  );
+}
+
+/**
+ * Why a resolved attachment may not join this pass, or `null` when it may.
+ *
+ * The three caps are checked in order of how local the failure is — this
+ * image's own size, then what the pass has already spent, then how many images
+ * it already carries — so the reason a caller is told is the most specific one
+ * that applies. The returned string is the tail of the warning message, and it
+ * names the number that was hit: "over budget" with no figure in it is a
+ * warning nobody can act on.
+ */
+function budgetRefusal(input: {
+  bytes: number;
+  totalBytes: number;
+  images: number;
+  budgets: ResolvedBudgets;
+}): string | null {
+  const { bytes, totalBytes, images, budgets } = input;
+  if (bytes > budgets.maxBytesPerImage) {
+    return `its ${bytes} decoded bytes exceed the ${budgets.maxBytesPerImage}-byte per-image budget.`;
+  }
+  if (totalBytes + bytes > budgets.maxTotalBytes) {
+    return `its ${bytes} decoded bytes would push this pass past the ${budgets.maxTotalBytes}-byte total budget (${totalBytes} already used).`;
+  }
+  if (images + 1 > budgets.maxImages) {
+    return `this pass already carries its budgeted ${budgets.maxImages} image(s).`;
+  }
+  return null;
+}
+
+/**
  * Everything the worker needs, injected.
  *
  * There is deliberately no `WritePolicy` here: the runner never asks whether a
@@ -92,6 +184,19 @@ export interface TurnRunnerDeps {
    * and `record()` is called for every `run.usage` event the provider emits.
    */
   usage?: UsageAuthorizer;
+  /**
+   * Turns the `ref` image sources in stored messages into bytes a provider can
+   * be shown. Absent — the default — nothing resolves: a conversation whose
+   * messages carry refs still runs, with each ref-sourced image dropped from the
+   * pass and one `attachment_unresolved` warning on the log per dropped part. A
+   * host that never writes refs never notices this port exists.
+   *
+   * Resolution is IN-MEMORY and PER PASS. The stored message always keeps the
+   * ref; see {@link AttachmentResolver}.
+   */
+  attachments?: AttachmentResolver;
+  /** Overrides the defaults for what {@link attachments} may add to one pass. */
+  attachmentBudgets?: AttachmentBudgets;
   /** Overrides the limits derived from settings + provider capabilities. */
   limits?: AiToolLimits;
   clock: Clock;
@@ -103,7 +208,13 @@ export interface TurnRunnerDeps {
 
 export interface SubmitMessageInput {
   chatId: string;
-  content: string;
+  /**
+   * The turn's body — a string, or content parts for a multimodal turn. Written
+   * to the user message verbatim; an image part naming a host attachment
+   * (`source: { kind: "ref", ref }`) is stored as the ref and resolved per
+   * provider pass, never inlined into the record.
+   */
+  content: AiMessageContent;
   model?: string;
   providerId?: string;
   metadata?: Record<string, unknown>;
@@ -687,12 +798,17 @@ export class TurnRunner implements TaskWorker {
    */
   private async runPass(input: PassInput): Promise<PassResult> {
     await this.authorizeUsage(input);
+    // Before `firstSeq` is taken, because resolving may emit warnings of its
+    // own and those must land BEFORE the pass's events — the sequence is one
+    // unbroken run of numbers, and a warning stamped after `runChat` reserved
+    // its start would collide with the pass's first event.
+    const messages = await this.resolveAttachments(input);
     const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
     const generator = runChat({
       client: input.client,
       registry: input.registry,
       model: input.model,
-      messages: input.messages,
+      messages,
       bindings: input.bindings,
       limits: input.limits,
       chatId: input.chatId,
@@ -943,6 +1059,119 @@ export class TurnRunner implements TaskWorker {
       default:
         break;
     }
+  }
+
+  /**
+   * Replace every `ref` image source in this pass's history with the bytes
+   * behind it — in memory, for this pass only.
+   *
+   * WHAT IS NOT TOUCHED: the stored message. A ref is what the conversation
+   * holds, and re-resolving it on the next pass is the whole point — an
+   * attachment can be revoked, replaced, or become too large for a budget that
+   * changed, and a record that had already been rewritten to base64 could not
+   * notice any of it. Nothing here writes to `ConversationStore`.
+   *
+   * WHAT A DROP LOOKS LIKE. An image that cannot be sent is removed from the
+   * message the provider sees, and the turn continues with the words around it —
+   * the same "degrade, never fail a request over an attachment" rule the
+   * provider client follows when it flattens parts on a `system` message. Each
+   * dropped part gets exactly one durable `run.warning` naming its ref and why,
+   * so a UI can say "this image was not sent" instead of quietly answering a
+   * question about a picture the model never saw. A message whose parts are ALL
+   * dropped becomes the empty STRING rather than an empty array: `content: []`
+   * is a shape the contract rejects and providers reject.
+   *
+   * THE CACHE IS PER PASS, deliberately. The same ref mentioned twice in one
+   * history costs one `resolve()`; the retry pass that follows a failed one asks
+   * again, because "these bytes are still there" is not a fact that survives an
+   * arbitrary amount of time and a provider round-trip.
+   *
+   * A history with no refs in it returns the caller's own array untouched — the
+   * overwhelmingly common case allocates nothing and asks the port nothing.
+   */
+  private async resolveAttachments(
+    input: PassInput,
+  ): Promise<readonly AiChatMessage[]> {
+    if (!input.messages.some((message) => hasRefImage(message.content))) {
+      return input.messages;
+    }
+    const budgets = this.resolveBudgets();
+    const resolver = this.deps.attachments;
+    const cache = new Map<string, ResolvedAttachment | null>();
+    let totalBytes = 0;
+    let images = 0;
+
+    const resolved: AiChatMessage[] = [];
+    for (const message of input.messages) {
+      if (!hasRefImage(message.content)) {
+        resolved.push(message);
+        continue;
+      }
+      const parts: AiContentPart[] = [];
+      // `content` is narrowed to a parts array by `hasRefImage`.
+      for (const part of message.content as AiContentPart[]) {
+        if (part.type !== "image" || part.source.kind !== "ref") {
+          parts.push(part);
+          continue;
+        }
+        const ref = part.source.ref;
+        if (resolver === undefined) {
+          await this.emitWarning(
+            input.ctx,
+            "attachment_unresolved",
+            `Attachment "${ref}" was dropped from this pass: no AttachmentResolver is wired.`,
+          );
+          continue;
+        }
+        if (!cache.has(ref)) cache.set(ref, await resolver.resolve(ref));
+        const attachment = cache.get(ref) ?? null;
+        if (attachment === null) {
+          await this.emitWarning(
+            input.ctx,
+            "attachment_unresolved",
+            `Attachment "${ref}" was dropped from this pass: the resolver has no bytes for it.`,
+          );
+          continue;
+        }
+        const bytes = decodedByteLength(attachment.base64);
+        const refusal = budgetRefusal({
+          bytes,
+          totalBytes,
+          images,
+          budgets,
+        });
+        if (refusal !== null) {
+          await this.emitWarning(
+            input.ctx,
+            "attachment_budget_exceeded",
+            `Attachment "${ref}" was dropped from this pass: ${refusal}`,
+          );
+          continue;
+        }
+        totalBytes += bytes;
+        images += 1;
+        parts.push({
+          ...part,
+          source: {
+            kind: "data",
+            base64: attachment.base64,
+            mediaType: attachment.mediaType,
+          },
+        });
+      }
+      resolved.push({ ...message, content: parts.length === 0 ? "" : parts });
+    }
+    return resolved;
+  }
+
+  private resolveBudgets(): ResolvedBudgets {
+    const configured = this.deps.attachmentBudgets;
+    return {
+      maxBytesPerImage:
+        configured?.maxBytesPerImage ?? DEFAULT_MAX_BYTES_PER_IMAGE,
+      maxTotalBytes: configured?.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES,
+      maxImages: configured?.maxImages ?? DEFAULT_MAX_IMAGES,
+    };
   }
 
   /**

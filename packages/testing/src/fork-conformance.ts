@@ -10,6 +10,7 @@
 // FRAMEWORK-NEUTRAL, same rules as the rest of this package: no runner import,
 // every `@agentkit/host` import is `import type`, and error assertions match on
 // the `code` string rather than on `instanceof`.
+import type { AiContentPart } from "@agentkit/contracts";
 import type { AssistantStore, MessageRecord } from "@agentkit/host";
 import {
   expectRejects,
@@ -26,6 +27,19 @@ export interface ConversationForkOptions {
 /** Ids of a record list, in the order the store returned them. */
 function ids(records: readonly MessageRecord[]): string[] {
   return records.map((record) => record.id);
+}
+
+/** Text, an inlined image, and a host attachment ref — twin of the one in `conversation-conformance.ts`. */
+function multimodalBody(): AiContentPart[] {
+  return [
+    { type: "text", text: "what is in this picture?" },
+    {
+      type: "image",
+      source: { kind: "data", base64: "aGVsbG8=", mediaType: "image/png" },
+      detail: "high",
+    },
+    { type: "image", source: { kind: "ref", ref: "blob:sha256-abc123" } },
+  ];
 }
 
 /**
@@ -418,6 +432,55 @@ export function describeConversationForking(
         expect(ids(await store.conversations.listMessages(source.id))).toEqual([
           m1.id,
         ]);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("forkChat copies content parts byte-exact, refs included", async () => {
+      const { store, close } = await create();
+      try {
+        const source = await store.conversations.createChat({});
+        const parts = multimodalBody();
+        const question = await store.conversations.appendMessage({
+          chatId: source.id,
+          role: "user",
+          content: parts,
+        });
+        const answer = await store.conversations.appendMessage({
+          chatId: source.id,
+          role: "assistant",
+          content: "a picture of a cat",
+        });
+
+        const fork = await store.conversations.forkChat(source.id, answer.id);
+        // Both halves: what forkChat returned, and what the new chat reads back
+        // as — a fork that serialized correctly on the way out and lost the
+        // format tag on the way in would pass only the first.
+        expect(fork.messages[0]?.content).toEqual(parts);
+        expect(fork.messages[1]?.content).toBe("a picture of a cat");
+        const copied = await store.conversations.listMessages(fork.chat.id);
+        expect(copied[0]?.content).toEqual(parts);
+        expect(copied[1]?.content).toBe("a picture of a cat");
+
+        // A ref survives the copy in particular. It has to: the fork replays to
+        // a provider like any other chat, and `TurnRunner` resolves the ref
+        // again on the fork's next turn.
+        const forkedParts = copied[0]?.content as AiContentPart[];
+        expect(forkedParts[2]).toEqual({
+          type: "image",
+          source: { kind: "ref", ref: "blob:sha256-abc123" },
+        });
+
+        // And the copy is independent of the original in both directions — the
+        // fork's whole point, applied to the one field that is now a mutable
+        // object graph rather than a string.
+        await store.conversations.updateMessage(question.id, {
+          content: "the source lost its attachments",
+        });
+        expect(
+          (await store.conversations.listMessages(fork.chat.id))[0]?.content,
+        ).toEqual(parts);
       } finally {
         close?.();
       }

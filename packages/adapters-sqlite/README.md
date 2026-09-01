@@ -95,9 +95,9 @@ key. With the default `agingBonus = 0` the term folds to zero and the ordering
 is plain `priority DESC, enqueued_at ASC`. See
 [ADR 0003](../../docs/adr/0003-task-dependencies-and-subagents.md).
 
-## Schema (v4)
+## Schema (v5)
 
-Single-file DDL in `src/schema.ts` (`SCHEMA_V4`), applied idempotently
+Single-file DDL in `src/schema.ts` (`SCHEMA_V5`), applied idempotently
 (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). No migrations ship — see
 "It owns its database file" above.
 
@@ -107,6 +107,14 @@ reads want (`(chat_id, active, depth)` for the active path,
 `(parent_message_id, branch_index)` for siblings). A chat is a tree; `active`
 is the per-message flag marking which root-to-leaf path through it the
 conversation currently is.
+
+v5 added multimodal message bodies: `messages.content_format` (`'text'` |
+`'parts'`, default `'text'`) says how to read the `content` column. A string
+body is written verbatim, exactly as every pre-v5 row was; a
+`AiContentPart[]` body is JSON in the same column. A format tag rather than a
+`JSON.parse` guess, because a user message whose text happens to look like a
+parts array is a string, and a store that guessed would promote it on the
+next read.
 
 | Table(s) | Port |
 |---|---|

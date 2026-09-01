@@ -613,18 +613,37 @@ function mapMessageContent(
     };
   }
   return {
-    content: content.map(toOpenAiContentPart),
+    content: content
+      .map(toOpenAiContentPart)
+      .filter((part): part is Record<string, unknown> => part !== null),
     droppedImages: false,
   };
 }
 
-/** One content part in OpenAI's shape; inline images become `data:` URLs. */
-function toOpenAiContentPart(part: AiContentPart): Record<string, unknown> {
+/**
+ * One content part in OpenAI's shape; inline images become `data:` URLs.
+ *
+ * `null` means "nothing faithful to send", which today is exactly one case: an
+ * image whose source is a host `ref`. A ref is a handle into the HOST's blob
+ * storage, resolved to inline data before a request is built (see
+ * `AttachmentResolver` in `@agentkit/host`) — one that reaches this mapping was
+ * never resolved, and the host has already said so with an
+ * `attachment_unresolved` warning. Serializing it would put a made-up URL on the
+ * wire; re-warning here would report the same dropped image twice under a
+ * second, wronger code (`multimodal_flattened` — nothing was flattened). So it
+ * is dropped silently, and `url`/`data` map byte-identically to what they always
+ * did.
+ */
+function toOpenAiContentPart(
+  part: AiContentPart,
+): Record<string, unknown> | null {
   if (part.type === "text") return { type: "text", text: part.text };
+  const source = part.source;
+  if (source.kind === "ref") return null;
   const url =
-    part.source.kind === "url"
-      ? part.source.url
-      : `data:${part.source.mediaType};base64,${part.source.base64}`;
+    source.kind === "url"
+      ? source.url
+      : `data:${source.mediaType};base64,${source.base64}`;
   return {
     type: "image_url",
     image_url: {
