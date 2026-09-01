@@ -37,6 +37,7 @@ Env vars, all optional:
 | `AGENTKIT_API_KEY` | unset | provider API key — stored in the in-memory `SecretStore`, never inline on the provider config (see `InMemorySecretStore` in `src/wiring.ts`) |
 | `AGENTKIT_MCP_COMMAND` | unset | a stdio MCP server command; when set, its tools are bridged in via `@agentkit/mcp-client` |
 | `AGENTKIT_MCP_ARGS` | unset | space-separated args for that command |
+| `AGENTKIT_MCP_SERVER_TOKEN` | unset | when set, this host's own tools are ALSO served **as** an MCP server at `/mcp`, behind this bearer token — see below |
 
 > **This example wires no `authenticate` and no `authorize`.** Every route is
 > open to whatever can reach the socket, including `POST /v1/providers` (which
@@ -94,6 +95,59 @@ use them:
 - `example_echo({ text })` → `{ echoed: text }`
 - `example_now({})` → `{ now: <ISO-8601 timestamp from the injected Clock> }`
 
+## Serving this host's tools over MCP
+
+The `AGENTKIT_MCP_COMMAND` bridge above points *inward* — someone else's MCP
+tools, brought into this host's runs. `AGENTKIT_MCP_SERVER_TOKEN` points the
+other way: this host's own tools (`example_echo`, `example_now`, plus any
+bridged ones), offered to an outside MCP client.
+
+```sh
+AGENTKIT_MCP_SERVER_TOKEN=$(openssl rand -hex 32) bun run start
+# [agentkit] mcp server: http://127.0.0.1:8787/mcp (bearer token required)
+```
+
+Point a client at it:
+
+```jsonc
+{
+  "mcpServers": {
+    "agentkit-desktop-host": {
+      "type": "http",
+      "url": "http://127.0.0.1:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer <the AGENTKIT_MCP_SERVER_TOKEN you set>",
+        // Optional. Pins the session to one chat, so tools that depend on a
+        // chat's bindings see that chat. Read ONCE, at initialize.
+        "x-agentkit-chat": "chat_...."
+      }
+    }
+  }
+}
+```
+
+Or check it by hand:
+
+```sh
+# No token — 401, with no body to learn anything from.
+curl -i -X POST http://127.0.0.1:8787/mcp
+
+# A rebound Host — 403, before the MCP SDK is asked to do anything.
+curl -i -X POST http://127.0.0.1:8787/mcp \
+  -H "Authorization: Bearer $AGENTKIT_MCP_SERVER_TOKEN" \
+  -H "Host: evil.com"
+```
+
+Unlike the REST routes, this endpoint is **not** open when it is served: there
+is no unauthenticated mode, the bearer token is compared in constant time,
+`Host` must be loopback (any port), and a session's chat scope is fixed at
+initialize rather than read per call. Write tools would still be hidden —
+`writesEnabled` defaults to `false`, and this example ships none anyway. The
+full security model is in
+[`packages/mcp-server/README.md`](../../packages/mcp-server/README.md).
+
+Leaving `AGENTKIT_MCP_SERVER_TOKEN` unset does not serve the route at all.
+
 ## What's wired, and where
 
 | Concern | Package | File |
@@ -105,6 +159,7 @@ use them:
 | Secrets | tiny in-memory `SecretStore` (this example's own) | `src/wiring.ts` |
 | Sample tools | this example's own `ToolSetContributor` | `src/tools.ts` |
 | MCP bridge (optional) | `@agentkit/mcp-client` | `src/wiring.ts` |
+| MCP server (optional) | `@agentkit/mcp-server` | `src/wiring.ts` (built) / `src/main.ts` (mounted at `/mcp`) |
 | Turn execution | `@agentkit/host` (`TurnRunner`, `ChatTurnExecutor`) | `src/wiring.ts` |
 | HTTP + SSE | `@agentkit/transport-http` (`serveRest`) | `src/main.ts` |
 

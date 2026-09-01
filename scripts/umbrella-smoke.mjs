@@ -139,6 +139,27 @@ const handler = transport.createRestHandler({
 const versionResponse = await handler(new Request("http://x/v1/version"));
 check(versionResponse.status === 200, \`GET /v1/version answered \${versionResponse.status}\`);
 
+const mcpServer = await import("agentkit/mcp-server");
+console.log("agentkit/mcp-server");
+check(typeof mcpServer.createMcpServerHandler === "function", "exports createMcpServerHandler");
+check(typeof mcpServer.createStagedToolSource === "function", "exports createStagedToolSource");
+const mcpServerHandler = mcpServer.createMcpServerHandler({
+  tools: {
+    catalog: { async listTools() { return []; } },
+    async execute() { throw new Error("unreachable"); },
+  },
+  auth: { bearerToken: "umbrella-smoke-token" },
+});
+const mcpUnauthorized = await mcpServerHandler.fetch(new Request("http://localhost/mcp", {
+  method: "POST", headers: { host: "localhost" }, body: "{}",
+}));
+check(mcpUnauthorized.status === 401, \`an unauthenticated POST answered \${mcpUnauthorized.status}\`);
+const mcpRebound = await mcpServerHandler.fetch(new Request("http://localhost/mcp", {
+  method: "POST", headers: { host: "evil.com", authorization: "Bearer umbrella-smoke-token" }, body: "{}",
+}));
+check(mcpRebound.status === 403, \`a rebound Host answered \${mcpRebound.status}\`);
+await mcpServerHandler.dispose();
+
 const adaptersMemory = await import("agentkit/adapters-memory");
 console.log("agentkit/adapters-memory");
 check(typeof adaptersMemory.MemoryAssistantStore === "function", "exports MemoryAssistantStore");
