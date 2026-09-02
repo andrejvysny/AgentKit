@@ -1,13 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { runChat, AiToolRegistry, resolveToolLimits } from "@agentkit/core";
-import { CONTRACT_VERSION, type AiRunEvent } from "@agentkit/contracts";
+import { CONTRACT_VERSION } from "@agentkit/contracts";
 import {
   GOLDEN_TRACE_NAMES,
   loadGoldenTrace,
   assertMatchesGolden,
 } from "../src/golden/golden.js";
-import { MockProviderClient } from "../src/mock-provider.js";
-import { makeUserMessage } from "../src/fixtures.js";
+import { GOLDEN_SCENARIOS } from "./golden-scenarios.js";
 
 const TERMINAL = new Set(["run.completed", "run.failed", "run.cancelled"]);
 
@@ -40,35 +38,16 @@ describe("golden traces", () => {
     });
   }
 
-  // A replay self-test: re-run the chat-only scenario live against the real
-  // run-loop and confirm it still produces the same (normalized) events as
-  // the frozen trace. This is what would catch a run-loop change that
-  // silently altered the chat-only event shape without anyone regenerating
-  // the golden trace.
-  it("replays chat-only live and matches the golden trace", async () => {
-    const client = new MockProviderClient();
-    client.setScript([
-      {
-        steps: [
-          { kind: "text", content: "Hello from the golden chat-only trace." },
-        ],
-      },
-    ]);
-    const events: AiRunEvent[] = [];
-    const gen = runChat({
-      client,
-      registry: new AiToolRegistry(),
-      model: "gpt-golden",
-      messages: [makeUserMessage("hi")],
-      limits: resolveToolLimits({ preference: "small" }),
-      runId: "run-golden-chat-only",
-      firstSeq: 0,
+  // A replay self-test: re-run EVERY golden scenario live against the real
+  // run-loop and confirm each still produces the same (normalized) events as
+  // its frozen trace. This is what would catch a run-loop change that
+  // silently altered an event shape without anyone regenerating the golden
+  // traces — for all five scenarios (chat-only, tool-run, cancelled-run,
+  // failed-run, usage-run), not just chat-only.
+  for (const name of GOLDEN_TRACE_NAMES) {
+    it(`replays ${name} live and matches the golden trace`, async () => {
+      const events = await GOLDEN_SCENARIOS[name]();
+      expect(() => assertMatchesGolden(events, name)).not.toThrow();
     });
-    for (;;) {
-      const next = await gen.next();
-      if (next.done) break;
-      events.push(next.value);
-    }
-    expect(() => assertMatchesGolden(events, "chat-only")).not.toThrow();
-  });
+  }
 });
