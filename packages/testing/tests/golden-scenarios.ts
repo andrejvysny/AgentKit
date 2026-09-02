@@ -351,7 +351,7 @@ function makeUnserializableTool(): AiTool<Record<string, never>, unknown> {
     async execute(ctx) {
       return {
         ok: true,
-        data: { count: BigInt(9007199254740993n) },
+        data: { count: 9007199254740993n },
         sources: [],
         warnings: [],
         truncated: false,

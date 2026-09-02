@@ -4,10 +4,10 @@ Updated: 2026-09-02 (session 2)
 
 ## Now (plan: ~/.claude/plans/snappy-munching-wren.md — waves A→E)
 
-- [ ] Wave A — A1 inline: `errorCode` on 2 `run.failed` sites (core provider) + flaky e2e `waitFor` budgets (react/client)
+- [x] Wave A — A1 inline: `errorCode` on 2 `run.failed` sites (core provider) + flaky e2e `waitFor` budgets (react/client)
 - [ ] Wave A — A2 (impl-critical): sqlite `SCHEMA_VERSION` 7→8 (`idx_messages_run`, `proposals.claimed_at`), `ProposalRecord.claimedAt`, store-side `poisonCount` on `endAttempt(abandoned)`, conformance ×2 adapters
 - [ ] Wave A — A3 (impl-critical): 5.6 E2E — crash after internal assistant record → recover → attempt 2 on active path; zombie cannot land terminal
-- [ ] Wave B — 5.1: `CONTRACT_VERSION` 0.5.0, 4 Phase-2 golden scenarios, re-record goldens once, release prep (umbrella 0.5.0, `#v0.5.0` snippets), CHANGELOG 0.5.0
+- [x] Wave B — 5.1: `CONTRACT_VERSION` 0.5.0, 4 Phase-2 golden scenarios, re-record goldens once, release prep (umbrella 0.5.0, `#v0.5.0` snippets), CHANGELOG 0.5.0
 - [ ] Wave C — 5.5 docs (ADR 0014, contracts.md, roadmap, migration deltas, ports/architecture, sqlite README) ∥ verifier wave 2 (host/adapters/runner + 4.1 client/react); fix findings
 - [ ] Wave D — Phase 6: `turn-runner.ts` split ∥ `sqlite-assistant-store.ts` split (pure moves)
 - [ ] Wave E — verifier wave 3 (pure-move check + A2/A3/B), final gate, handoff files + memory + Run log
