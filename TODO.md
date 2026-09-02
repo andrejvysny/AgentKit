@@ -33,7 +33,7 @@
 - [ ] 3.10 harness `includeUserRequest` (F-OWN-5)
 
 ## Phase 4 — serving surfaces
-- [ ] 4.1 stream close rule + runPhase last-terminal + react reset (F-OWN-1)
+- [x] 4.1 stream close rule + runPhase last-terminal + react reset (F-OWN-1)
 - [x] 4.2 react hooks (B2, B8, B9, B12)
 - [x] 4.3 client resume (B5)
 - [x] 4.4 transport bounds + validation (B3, B4, B6, B10, B11, B13, B14, B15, E2, E6, F5)
