@@ -52,7 +52,7 @@ stays unbroken across host-driven retries.
 ### `CONTRACT_VERSION` policy
 
 ```ts
-export const CONTRACT_VERSION = "0.4.0";
+export const CONTRACT_VERSION = "0.5.0";
 ```
 
 ([`packages/contracts/src/version.ts`](../packages/contracts/src/version.ts))

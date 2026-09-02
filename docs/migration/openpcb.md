@@ -13,14 +13,14 @@ of writing; if a cited line has drifted, the symbol name in the same row is the
 durable anchor.
 
 **AgentKit at the time of writing:** `master` @ `702434d`, umbrella package
-version `0.4.0-dev` (`packages/agentkit/package.json:3`), `CONTRACT_VERSION`
-`"0.4.0"` (`packages/contracts/src/version.ts:10`), REST v1 = **38 operations**
+version `0.5.0` (`packages/agentkit/package.json:3`), `CONTRACT_VERSION`
+`"0.5.0"` (`packages/contracts/src/version.ts:10`), REST v1 = **38 operations**
 (`packages/contracts/src/rest.ts:85-199`, enumerated by
 `Object.keys(REST_ROUTES).length`). The install pin is:
 
 ```jsonc
 // OpenPCB/package.json
-"dependencies": { "agentkit": "github:andrejvysny/AgentKit#v0.4.0" }
+"dependencies": { "agentkit": "github:andrejvysny/AgentKit#v0.5.0" }
 ```
 
 Twelve subpaths, of which OpenPCB uses nine: `agentkit/{contracts,core,host,
@@ -282,7 +282,7 @@ the prefix work, and the module router's per-route registration buys nothing for
 | `writePolicy` | **yes** | The three allowance routes replace `routes.ts:311,316,331` |
 | `mcpConfigs` | **no** | OpenPCB is an MCP *server*, not a client; `/v1/mcp/servers` answers 501, which is honest |
 | `toolCatalog` | **yes** | `createContributorToolCatalog({ contributors, guards, logger })` — replaces the reflection hack at `routes.ts:441-461`, which reaches into `runService.options.buildRegistry` through two `as unknown` casts |
-| `packages` | yes | `{ "agentkit": "0.4.0", "openpcb": <app version> }` on `GET /v1/version` |
+| `packages` | yes | `{ "agentkit": "0.5.0", "openpcb": <app version> }` on `GET /v1/version` |
 | `authenticate` / `authorize` | **no** | The backend binds `127.0.0.1` and loopback is its whole boundary (`mcp/auth.ts:5-7`). Wire both the day that changes |
 | `basePath` | yes | `"/api/modules/assistant"` |
 | `cors` | yes | Whatever `src/core/backend/http/cors.ts` allows today |

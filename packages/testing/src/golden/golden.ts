@@ -11,10 +11,24 @@ import cancelledRunTrace from "./traces/cancelled-run.json" with {
 };
 import failedRunTrace from "./traces/failed-run.json" with { type: "json" };
 import usageRunTrace from "./traces/usage-run.json" with { type: "json" };
+import toolCapRunTrace from "./traces/tool-cap-run.json" with { type: "json" };
+import duplicateIdRunTrace from "./traces/duplicate-id-run.json" with {
+  type: "json",
+};
+import toolTimeoutRunTrace from "./traces/tool-timeout-run.json" with {
+  type: "json",
+};
+import unserializableRunTrace from "./traces/unserializable-run.json" with {
+  type: "json",
+};
 
 /**
  * The recorded golden scenarios. See `scripts/record-goldens.ts` at the repo
  * root for how each one was produced and how to regenerate them.
+ *
+ * `finishReason:"incomplete"` is deliberately NOT covered here: it is
+ * produced by the SSE provider client, not the run-loop, and is already
+ * covered by `openai-compatible-assembly.test.ts`.
  */
 export const GOLDEN_TRACE_NAMES = [
   "chat-only",
@@ -22,6 +36,10 @@ export const GOLDEN_TRACE_NAMES = [
   "cancelled-run",
   "failed-run",
   "usage-run",
+  "tool-cap-run",
+  "duplicate-id-run",
+  "tool-timeout-run",
+  "unserializable-run",
 ] as const;
 export type GoldenTraceName = (typeof GOLDEN_TRACE_NAMES)[number];
 
@@ -36,6 +54,10 @@ const TRACES: Record<GoldenTraceName, AiRunEvent[]> = {
   "cancelled-run": cancelledRunTrace as unknown as AiRunEvent[],
   "failed-run": failedRunTrace as unknown as AiRunEvent[],
   "usage-run": usageRunTrace as unknown as AiRunEvent[],
+  "tool-cap-run": toolCapRunTrace as unknown as AiRunEvent[],
+  "duplicate-id-run": duplicateIdRunTrace as unknown as AiRunEvent[],
+  "tool-timeout-run": toolTimeoutRunTrace as unknown as AiRunEvent[],
+  "unserializable-run": unserializableRunTrace as unknown as AiRunEvent[],
 };
 
 /**

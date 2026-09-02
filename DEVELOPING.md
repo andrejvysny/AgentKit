@@ -22,7 +22,7 @@ Consumers add a dependency like:
 
 ```jsonc
 "dependencies": {
-  "agentkit": "github:andrejvysny/AgentKit#v0.4.0"
+  "agentkit": "github:andrejvysny/AgentKit#v0.5.0"
 }
 ```
 

@@ -1,7 +1,11 @@
 /**
- * Shared drivers for the five golden run-event scenarios, used by both
+ * Shared drivers for the golden run-event scenarios, used by both
  * `golden.test.ts` (live replay against the current run-loop) and
  * `scripts/record-goldens.ts` (regenerating the committed traces).
+ *
+ * `finishReason:"incomplete"` is deliberately NOT one of these scenarios: it
+ * is produced by the SSE provider client, not the run-loop, and is already
+ * covered by `openai-compatible-assembly.test.ts`.
  *
  * This file lives under `tests/`, not `src/`, on purpose: it imports
  * `@agentkit/core` at runtime to drive `runChat`, and
@@ -205,6 +209,188 @@ async function recordUsageRun(): Promise<AiRunEvent[]> {
   );
 }
 
+async function recordToolCapRun(): Promise<AiRunEvent[]> {
+  const client = new MockProviderClient();
+  client.setScript([
+    {
+      steps: [
+        {
+          kind: "tool_call",
+          toolCallId: "call-golden-cap-1",
+          name: "echo",
+          argumentsJson: '{"text":"a"}',
+        },
+        {
+          kind: "tool_call",
+          toolCallId: "call-golden-cap-2",
+          name: "echo",
+          argumentsJson: '{"text":"b"}',
+        },
+      ],
+    },
+    { steps: [{ kind: "text", content: "Done." }] },
+  ]);
+  const registry = new AiToolRegistry();
+  registry.register(makeEchoTool() as unknown as AiTool);
+  return collect(
+    runChat({
+      client,
+      registry,
+      model: MODEL,
+      messages: [makeUserMessage("please echo twice")],
+      limits: LIMITS,
+      runId: "run-golden-tool-cap-run",
+      firstSeq: 0,
+      maxToolCallsPerIteration: 1,
+    }),
+  );
+}
+
+async function recordDuplicateIdRun(): Promise<AiRunEvent[]> {
+  const client = new MockProviderClient();
+  client.setScript([
+    {
+      steps: [
+        {
+          kind: "tool_call",
+          toolCallId: "call-golden-dup",
+          name: "echo",
+          argumentsJson: '{"text":"one"}',
+        },
+        {
+          kind: "tool_call",
+          toolCallId: "call-golden-dup",
+          name: "echo",
+          argumentsJson: '{"text":"two"}',
+        },
+      ],
+    },
+    { steps: [{ kind: "text", content: "Done." }] },
+  ]);
+  const registry = new AiToolRegistry();
+  registry.register(makeEchoTool() as unknown as AiTool);
+  return collect(
+    runChat({
+      client,
+      registry,
+      model: MODEL,
+      messages: [makeUserMessage("please echo twice")],
+      limits: LIMITS,
+      runId: "run-golden-duplicate-id-run",
+      firstSeq: 0,
+    }),
+  );
+}
+
+/**
+ * A tool whose `execute` never resolves, the shape of a remote tool behind a
+ * hung connection. `defaultToolTimeoutMs` is fixed and small so the run
+ * terminates quickly and deterministically — the emitted error message
+ * embeds the configured timeout, not the actual elapsed wall-clock time, so
+ * the recorded trace is stable across replays.
+ */
+function makeHangingTool(): AiTool<Record<string, never>, unknown> {
+  return {
+    definition: {
+      name: "hangs",
+      version: "1",
+      effect: "read",
+      capability: "test",
+      description: "Never resolves.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    execute: () => new Promise(() => {}),
+  };
+}
+
+async function recordToolTimeoutRun(): Promise<AiRunEvent[]> {
+  const client = new MockProviderClient();
+  client.setScript([
+    {
+      steps: [
+        {
+          kind: "tool_call",
+          toolCallId: "call-golden-timeout",
+          name: "hangs",
+          argumentsJson: "{}",
+        },
+      ],
+    },
+    { steps: [{ kind: "text", content: "Done." }] },
+  ]);
+  const registry = new AiToolRegistry();
+  registry.register(makeHangingTool() as unknown as AiTool);
+  return collect(
+    runChat({
+      client,
+      registry,
+      model: MODEL,
+      messages: [makeUserMessage("please hang")],
+      limits: LIMITS,
+      runId: "run-golden-tool-timeout-run",
+      firstSeq: 0,
+      defaultToolTimeoutMs: 5,
+    }),
+  );
+}
+
+/**
+ * A tool returning a BigInt in its `data` — not JSON-serializable, the shape
+ * of a counter read straight off a driver.
+ */
+function makeUnserializableTool(): AiTool<Record<string, never>, unknown> {
+  return {
+    definition: {
+      name: "counter",
+      version: "1",
+      effect: "read",
+      capability: "test",
+      description: "Returns a BigInt count.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    async execute(ctx) {
+      return {
+        ok: true,
+        data: { count: BigInt(9007199254740993n) },
+        sources: [],
+        warnings: [],
+        truncated: false,
+        limits: ctx.limits,
+      };
+    },
+  };
+}
+
+async function recordUnserializableRun(): Promise<AiRunEvent[]> {
+  const client = new MockProviderClient();
+  client.setScript([
+    {
+      steps: [
+        {
+          kind: "tool_call",
+          toolCallId: "call-golden-unserializable",
+          name: "counter",
+          argumentsJson: "{}",
+        },
+      ],
+    },
+    { steps: [{ kind: "text", content: "Done." }] },
+  ]);
+  const registry = new AiToolRegistry();
+  registry.register(makeUnserializableTool() as unknown as AiTool);
+  return collect(
+    runChat({
+      client,
+      registry,
+      model: MODEL,
+      messages: [makeUserMessage("please count")],
+      limits: LIMITS,
+      runId: "run-golden-unserializable-run",
+      firstSeq: 0,
+    }),
+  );
+}
+
 /**
  * One driver per golden scenario, keyed by {@link GoldenTraceName}. Both
  * `scripts/record-goldens.ts` (writes the committed trace) and
@@ -221,4 +407,8 @@ export const GOLDEN_SCENARIOS: Record<
   "cancelled-run": recordCancelledRun,
   "failed-run": recordFailedRun,
   "usage-run": recordUsageRun,
+  "tool-cap-run": recordToolCapRun,
+  "duplicate-id-run": recordDuplicateIdRun,
+  "tool-timeout-run": recordToolTimeoutRun,
+  "unserializable-run": recordUnserializableRun,
 };
