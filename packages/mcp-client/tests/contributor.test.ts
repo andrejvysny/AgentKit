@@ -174,6 +174,44 @@ describe("createMcpToolSetContributor", () => {
     expect(result.warnings[0]).toContain("image");
   });
 
+  it("caps the model-facing text at the run's byte budget", async () => {
+    // The text comes from a REMOTE server, which was never told the run's
+    // budget — and an uncapped result is replayed into context on every later
+    // turn of the chat.
+    const huge = "x".repeat(40_000);
+    const manager = setup(
+      [
+        {
+          alias: "big",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
+      {
+        big: () =>
+          buildFakeServer("big", [
+            {
+              name: "dump",
+              annotations: { readOnlyHint: true },
+              handler: () => ({ content: [{ type: "text", text: huge }] }),
+            },
+          ]),
+      },
+    );
+    const [dump] = await createMcpToolSetContributor(manager).contribute(CTX);
+    const ctx = toolContext();
+    const result = await dump!.execute(ctx, {});
+
+    expect(result.truncated).toBe(true);
+    const { text } = result.modelData as { text: string };
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(
+      ctx.limits.maxBytes,
+    );
+    // The UI payload keeps every byte the server sent — the cap is on what the
+    // model reads, not on what arrived.
+    expect((result.data as McpToolCallOutcome).text).toHaveLength(40_000);
+  });
+
   it("turns a server-reported tool error into a structured failure result", async () => {
     const manager = setup(
       [

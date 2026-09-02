@@ -1,5 +1,9 @@
 import type { AiToolResult } from "@agentkit/contracts";
-import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
+import {
+  truncateString,
+  type AiTool,
+  type AiToolExecutionContext,
+} from "@agentkit/core";
 import type {
   Logger,
   ToolContributionContext,
@@ -209,6 +213,12 @@ function success(
             `only text parts were passed to the model.`,
         ]
       : [];
+  const text = capped(ctx, outcome.text);
+  if (text.truncated) {
+    warnings.push(
+      `MCP tool result was truncated to ${ctx.limits.maxBytes} bytes.`,
+    );
+  }
   return {
     ok: true,
     status: "ok",
@@ -218,16 +228,32 @@ function success(
     // replayed into context on every later turn.
     data: outcome,
     modelData: {
-      text: outcome.text,
+      text: text.value,
       ...(outcome.structuredContent === undefined
         ? {}
         : { structured: outcome.structuredContent }),
     },
     sources: [],
     warnings,
-    truncated: false,
+    truncated: text.truncated,
     limits: ctx.limits,
   };
+}
+
+/**
+ * The model-facing half of a result, under the run's byte budget.
+ *
+ * The text comes from a REMOTE server: nothing on the other side of the bridge
+ * is obliged to respect a budget it was never told about, and an uncapped
+ * result goes into the transcript and is replayed on every later turn of the
+ * chat. `data` keeps the full outcome for the UI — the cap is on what the model
+ * reads, not on what was received.
+ */
+function capped(
+  ctx: AiToolExecutionContext,
+  text: string,
+): { value: string; truncated: boolean } {
+  return truncateString(text, ctx.limits.maxBytes);
 }
 
 /** The server ran the tool and said it failed. Its text is the explanation. */
@@ -238,18 +264,22 @@ function toolReportedFailure(
 ): AiToolResult<McpToolCallOutcome> {
   const message =
     outcome.text || `MCP tool ${descriptor.canonicalId} reported an error.`;
+  // A failure's explanation is remote text like any other — a server that
+  // answers `isError` with a megabyte of stack trace must not spend the run's
+  // whole budget saying so.
+  const text = capped(ctx, message);
   return {
     ok: false,
     summary: firstLine(message),
     data: outcome,
     modelData: {
       errorCode: TOOL_ERROR_CODE,
-      errorMessage: message,
+      errorMessage: text.value,
       retryable: false,
     } satisfies McpToolErrorData,
     sources: [],
     warnings: [],
-    truncated: false,
+    truncated: text.truncated,
     limits: ctx.limits,
   };
 }
@@ -260,9 +290,12 @@ function bridgeFailure(
   descriptor: McpToolDescriptor,
   failure: McpError,
 ): AiToolResult<McpToolErrorData> {
+  // Ours, but not necessarily short: `mcp_remote_error` quotes the server's own
+  // message, and `mcp_reconnect_exhausted` quotes that quote.
+  const text = capped(ctx, failure.message);
   const data: McpToolErrorData = {
     errorCode: failure.code,
-    errorMessage: failure.message,
+    errorMessage: text.value,
     retryable: failure.retryable,
   };
   return {
@@ -273,8 +306,8 @@ function bridgeFailure(
     // code IS the payload, and it must survive into the envelope the model reads.
     modelData: data,
     sources: [],
-    warnings: [failure.message],
-    truncated: false,
+    warnings: [text.value],
+    truncated: text.truncated,
     limits: ctx.limits,
   };
 }
