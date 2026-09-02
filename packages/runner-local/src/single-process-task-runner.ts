@@ -160,8 +160,6 @@ interface LandOptions {
    * {@link SingleProcessTaskRunner.deadLetter}.
    */
   leaseToken?: string;
-  /** Attempts that died without a clean end — see `TaskRecord.poisonCount`. */
-  poisonCount?: number;
 }
 
 export class SingleProcessTaskRunner implements TaskRunner {
@@ -414,13 +412,12 @@ export class SingleProcessTaskRunner implements TaskRunner {
       }
 
       if (task.attemptCount >= this.maxAttempts) {
-        // The attempt just ended `abandoned`, and this is the transition that
-        // lands the task — the only place the count can be written, since
-        // TASK_TRANSITIONS has no `running -> running` edge to carry a
-        // mid-flight increment.
-        await this.deadLetter(task.taskId, POISON_REASON, {
-          poisonCount: task.poisonCount + 1,
-        });
+        // No poisonCount here: the `endAttempt` above already counted this
+        // death, in its own write. Re-sending one would OVERWRITE the store's
+        // count with a number derived from `task`, read before that write — the
+        // same value in this single-recoverer path, and one death short the
+        // moment anything else counted one in the gap.
+        await this.deadLetter(task.taskId, POISON_REASON);
         report.deadLettered += 1;
         continue;
       }
@@ -1144,9 +1141,6 @@ export class SingleProcessTaskRunner implements TaskRunner {
       {
         finishedAt: this.clock.nowIso(),
         ...(opts.error === undefined ? {} : { error: opts.error }),
-        ...(opts.poisonCount === undefined
-          ? {}
-          : { poisonCount: opts.poisonCount }),
       },
       opts.leaseToken === undefined
         ? undefined

@@ -1198,6 +1198,14 @@ export class MemoryTaskStore implements TaskStore {
     attempt.status = input.status;
     attempt.endedAt = this.clock.nowIso();
     if (input.error !== undefined) attempt.error = input.error;
+    // An abandoned attempt IS the poison event, so the count moves here rather
+    // than on a later transition a caller has to remember (and can lose to a
+    // crash or to a second recoverer reading the same value). Only `abandoned`;
+    // a clean failure is a different diagnosis — see `TaskRecord.poisonCount`.
+    if (input.status === "abandoned") {
+      const task = this.tasks.get(attempt.taskId);
+      if (task) task.poisonCount += 1;
+    }
     return { ...attempt };
   }
 
@@ -1735,6 +1743,7 @@ export class MemoryProposalStore implements ProposalStore {
     proposal.status = to;
     if (patch?.decision !== undefined) proposal.decision = patch.decision;
     if (patch?.decidedAt !== undefined) proposal.decidedAt = patch.decidedAt;
+    if (patch?.claimedAt !== undefined) proposal.claimedAt = patch.claimedAt;
     if (patch?.appliedAt !== undefined) proposal.appliedAt = patch.appliedAt;
     if (patch?.operationId !== undefined) {
       proposal.operationId = patch.operationId;

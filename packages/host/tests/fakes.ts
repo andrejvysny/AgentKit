@@ -602,6 +602,12 @@ export class FakeTaskStore implements TaskStore {
     attempt.status = input.status;
     attempt.endedAt = this.clock.nowIso();
     if (input.error !== undefined) attempt.error = input.error;
+    // The store owns the poison count, and the fake owes the services the same
+    // rule — see `TaskStore.endAttempt`.
+    if (input.status === "abandoned") {
+      const task = this.tasks.get(attempt.taskId);
+      if (task) task.poisonCount += 1;
+    }
     return attempt;
   }
 
@@ -897,6 +903,7 @@ export class FakeProposalStore implements ProposalStore {
     proposal.status = to;
     if (patch?.decision !== undefined) proposal.decision = patch.decision;
     if (patch?.decidedAt !== undefined) proposal.decidedAt = patch.decidedAt;
+    if (patch?.claimedAt !== undefined) proposal.claimedAt = patch.claimedAt;
     if (patch?.appliedAt !== undefined) proposal.appliedAt = patch.appliedAt;
     if (patch?.operationId !== undefined) {
       proposal.operationId = patch.operationId;

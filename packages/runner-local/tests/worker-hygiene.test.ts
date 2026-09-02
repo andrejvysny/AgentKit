@@ -164,6 +164,46 @@ describe("SingleProcessTaskRunner — recovery bookkeeping", () => {
     harness.worker.releaseAll();
   });
 
+  it("counts BOTH deaths when two attempts are abandoned before the dead letter", async () => {
+    // The count is the store's, and this is where a caller-kept one loses a
+    // death: the runner reads the task, ends the attempt, and lands the task,
+    // so a `poisonCount: task.poisonCount + 1` patch on that landing writes a
+    // number derived from a snapshot taken BEFORE the first abandon was
+    // counted — one, for two abandoned attempts.
+    const harness = createHarness({ leaseTtlMs: 1_000, maxAttempts: 2 });
+    await harness.seedTask("run-1");
+    harness.worker.script("run-1", [{ kind: "never" }]);
+    await start(harness);
+
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
+    await waitFor(
+      () => harness.worker.callsFor("run-1").length === 1,
+      "the first attempt to start",
+    );
+
+    // First abandon: under maxAttempts 2 this re-dispatches rather than buries.
+    harness.clock.advance(1_500);
+    const first = await harness.runner.recoverWithReport();
+    expect(first.deadLettered).toBe(0);
+    await waitFor(
+      () => harness.worker.callsFor("run-1").length === 2,
+      "the re-dispatched attempt to start",
+    );
+    expect((await harness.store.tasks.getTask("run-1"))?.poisonCount).toBe(1);
+
+    // Second abandon: attemptCount has reached the ceiling, so this one buries.
+    harness.clock.advance(1_500);
+    const second = await harness.runner.recoverWithReport();
+    expect(second.deadLettered).toBe(1);
+
+    const run = await harness.store.tasks.getTask("run-1");
+    expect(run?.status).toBe("failed");
+    expect(run?.poisonCount).toBe(2);
+    expect(run?.attemptCount).toBe(2);
+
+    harness.worker.releaseAll();
+  });
+
   it("aborts the execution it supersedes instead of leaving it running", async () => {
     // Recovery re-dispatching a task whose local execution is still hanging
     // creates two executions of one task in one process. The store fences the

@@ -132,6 +132,13 @@ describe("proposal routes", () => {
 
     const first = (await (await apply()).json()) as ProposalDto;
     expect(first.status).toBe("applied");
+    // The claim instant reaches the client, and is the record's own: it is what
+    // a reviewer reads as "the apply started here", and the only stamp the
+    // reconcile window can be explained by.
+    expect(first.claimedAt).toBeDefined();
+    expect(first.claimedAt).toBe(
+      (await store.proposals.get("prp-1"))?.claimedAt,
+    );
     expect(first.outcome).toEqual({
       status: "applied",
       appliedOps: 1,

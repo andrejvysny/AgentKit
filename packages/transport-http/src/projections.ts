@@ -181,6 +181,7 @@ export function proposalDto(
     ...(outcome === null ? {} : { outcome: outcomeDto(outcome) }),
     createdAt: record.createdAt,
     ...(record.decidedAt === undefined ? {} : { decidedAt: record.decidedAt }),
+    ...(record.claimedAt === undefined ? {} : { claimedAt: record.claimedAt }),
     ...(record.appliedAt === undefined ? {} : { appliedAt: record.appliedAt }),
   };
 }

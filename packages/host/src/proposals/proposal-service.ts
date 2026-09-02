@@ -79,15 +79,16 @@ export interface ReconcileOptions {
    * Default `0` — reconcile everything, which is correct at boot and is what
    * this method did before the option existed.
    *
-   * WHAT IT MEASURES, precisely, because the limitation matters more than the
-   * option: a proposal record carries no "claimed at" stamp, so the age used is
-   * the newest timestamp the record HAS — `appliedAt`, else `decidedAt`, else
-   * `createdAt`. For the auto-apply path those are within milliseconds of the
-   * claim and the window means what it says. For a write a human approved and
-   * something applied much later, `decidedAt` is older than the claim, so a
-   * live apply can look stale and be reconciled out from under itself. That is
-   * the case {@link ProposalService.reconcileInterrupted} being boot-only
-   * exists to rule out, and no window here can rule it out instead.
+   * WHAT IT MEASURES: the age of the record's `claimedAt` — the instant the
+   * apply took the `approved → applying` claim, which is exactly the thing the
+   * window is about. A record written before that stamp existed falls back to
+   * the newest timestamp it HAS (`appliedAt`, else `decidedAt`, else
+   * `createdAt`), and for such a record the old limitation still holds: a write
+   * a human approved long before something applied it measures from
+   * `decidedAt`, so a live apply can look stale and be reconciled out from
+   * under itself. The window is a SAFETY MARGIN either way, not a lock —
+   * {@link ProposalService.reconcileInterrupted} being boot-only is what rules
+   * out racing a live apply.
    */
   staleAfterMs?: number;
 }
@@ -286,7 +287,7 @@ export class ProposalService {
       input.proposalId,
       ["approved"],
       "applying",
-      { operationId: input.operationId },
+      { operationId: input.operationId, claimedAt: this.deps.clock.nowIso() },
     );
 
     let outcome: ApplyOutcome;
@@ -483,6 +484,7 @@ export class ProposalService {
       // recorded as a claimed-and-failed apply attempt.
       await proposals.transition(proposal.id, ["approved"], "applying", {
         operationId,
+        claimedAt: this.deps.clock.nowIso(),
       });
       await proposals.recordOutcome(operationId, {
         status: "failed",
@@ -501,14 +503,22 @@ export class ProposalService {
 }
 
 /**
- * The newest instant a proposal record carries, in epoch ms — the best
- * available answer to "how long has this looked stuck?". See
- * {@link ReconcileOptions.staleAfterMs} for why that is not the same as when
- * the apply claimed it. An unparsable stamp reads as epoch 0, i.e. maximally
- * old, so a corrupt record is reconciled rather than skipped forever.
+ * When this proposal was last touched, in epoch ms — the answer to "how long
+ * has it looked stuck?".
+ *
+ * `claimedAt` FIRST, because for an `applying` record it is the exact instant
+ * being measured; the rest of the chain is the fallback for a record written
+ * before the column existed, and `decidedAt` in particular is older than the
+ * claim for a write a human approved and something applied much later. An
+ * unparsable stamp reads as epoch 0, i.e. maximally old, so a corrupt record is
+ * reconciled rather than skipped forever.
  */
 function lastStampMs(proposal: ProposalRecord): number {
-  const stamp = proposal.appliedAt ?? proposal.decidedAt ?? proposal.createdAt;
+  const stamp =
+    proposal.claimedAt ??
+    proposal.appliedAt ??
+    proposal.decidedAt ??
+    proposal.createdAt;
   const parsed = new Date(stamp).getTime();
   return Number.isNaN(parsed) ? 0 : parsed;
 }
