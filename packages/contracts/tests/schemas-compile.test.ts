@@ -148,6 +148,30 @@ describe("AiRunEventSchema validation", () => {
     ).toBe(true);
   });
 
+  it("accepts a retry_pass warning with its pass context", () => {
+    // The pass boundary a multi-pass run writes: `pass`/`reason` are additive
+    // and optional, so a warning without them still validates (above).
+    expect(
+      validate({
+        type: "run.warning",
+        ...base,
+        data: {
+          code: "retry_pass",
+          message: "Retrying without tools.",
+          pass: 2,
+          reason: "chat_only",
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validate({
+        type: "run.warning",
+        ...base,
+        data: { code: "retry_pass", message: "nope", pass: "second" },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts a run.usage event and rejects an out-of-vocabulary source", () => {
     const usage = {
       type: "run.usage",

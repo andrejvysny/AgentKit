@@ -25,6 +25,8 @@ import { useRun } from "../src/index.js";
 import { strictWrapper, wrapper } from "./support/render.js";
 import {
   chattyProvider,
+  echoContributor,
+  RetryingProvider,
   startTestServer,
   TEST_CHAT_ID,
   type TestServer,
@@ -160,6 +162,31 @@ describe("useRun", () => {
     expect(result.current.events.map((e) => e.eventId)).toEqual(
       log.map((e) => e.eventId),
     );
+    expect(result.current.error).toBeNull();
+  });
+
+  test("a multi-pass run is the phase of its LAST pass", async () => {
+    // The same F-OWN-1 shape `chat.test.ts` asserts for `useChat`: pass 1's
+    // `run.failed` is on the log, and reading the FIRST terminal event
+    // reported a run the user is reading the answer to as failed.
+    await server.stop();
+    server = await startTestServer({
+      provider: new RetryingProvider(),
+      contributors: [echoContributor],
+    });
+    const client = createAgentKitClient({ baseUrl: server.baseUrl });
+    const runId = await startRun(client);
+
+    const { result } = renderHook(() => useRun(runId), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current.phase).toBe("completed"), {
+      timeout: 10_000,
+    });
+
+    const types = result.current.events.map((e) => e.type);
+    expect(types.filter((t) => t === "run.started")).toHaveLength(2);
+    expect(types).toContain("run.failed");
     expect(result.current.error).toBeNull();
   });
 

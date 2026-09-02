@@ -2,9 +2,10 @@
  * `drainRun` — the events a live stream cannot see.
  *
  * The host's correction harness appends `run.verification` to the durable log
- * AFTER the base pass has already emitted its terminal event, and a live stream
- * closes at the terminal event by contract. So those events exist and no
- * subscriber ever receives them. This is the one resumed pass that does.
+ * after a pass has already emitted its terminal event. A stream that closed
+ * before the append — the task went terminal, so the server said goodbye — never
+ * receives it, however long its subscriber waits. This is the one resumed pass
+ * that does.
  *
  * The trailing event is appended here directly rather than by wiring the
  * harness: what is under test is the CLIENT's ability to pick up a log that
@@ -87,7 +88,7 @@ describe("drainRun", () => {
     expect(drained[0]?.seq).toBe(live.length);
   });
 
-  test("a live stream never sees the trailing event on its own", async () => {
+  test("a stream re-opened after the append replays it, the log being the truth", async () => {
     const submitted = await client.submitMessage(
       { chatId: TEST_CHAT_ID },
       { content: "verify me" },
@@ -102,12 +103,18 @@ describe("drainRun", () => {
       data: { pass: 1, status: "pass", deficiencies: [] },
     });
 
-    // Re-opening the LIVE stream still stops at the terminal event; only the
-    // resumed pass reaches past it.
+    // The stream that was open at the time never saw it — it had already
+    // closed, because the TASK was terminal.
+    expect(live.some((e) => e.type === "run.verification")).toBe(false);
+
+    // A stream opened now does see it: what the server replays is the log, and
+    // a terminal run event in the middle of it is not a stopping point.
     const again: AiRunEvent[] = [];
     for await (const event of client.streamRun(runId)) again.push(event);
-    expect(again.map((e) => e.type)).toEqual(live.map((e) => e.type));
-    expect(again.some((e) => e.type === "run.verification")).toBe(false);
+    expect(again.map((e) => e.type)).toEqual([
+      ...live.map((e) => e.type),
+      "run.verification",
+    ]);
   });
 
   test("without a lastEventId it returns the whole log", async () => {
