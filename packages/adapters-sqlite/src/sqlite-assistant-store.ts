@@ -53,6 +53,7 @@ import {
   SEARCH_MATCH_END,
   SEARCH_MATCH_START,
   SEARCH_SNIPPET_ELLIPSIS,
+  TransactionGateTimeoutError,
   type AppendEventsOptions,
   type AppendMessageInput,
   type ApplyOutcome,
@@ -122,6 +123,16 @@ const DEFAULT_TOOL_CALLING_MODE: ToolCallingMode = "auto";
  * no such failure. See the multi-handle section on {@link SqliteConnection}.
  */
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
+/**
+ * How long a caller waits for another caller's open transaction before giving
+ * up with {@link TransactionGateTimeoutError}.
+ *
+ * Generous enough that no honest transaction can trip it — a callback holding
+ * the gate for half a minute has a problem the store cannot fix — and finite,
+ * which is the whole point: the wait it bounds is the one a caller can create
+ * for itself, and an unbounded version of it is indistinguishable from a hang.
+ */
+const DEFAULT_TRANSACTION_GATE_TIMEOUT_MS = 30_000;
 const DEFAULT_OUTBOX_CLAIM_VISIBILITY_MS = 30_000;
 /**
  * How many times one outbox record may be handed to a publisher before the
@@ -670,6 +681,61 @@ interface TxOwner {
 }
 
 /**
+ * One caller's BOUNDED wait on {@link SqliteConnection.txGate}.
+ *
+ * WHY A WATCHDOG. The gate's holder always settles — unless the caller waiting
+ * on it is the reason the holder cannot finish. A `transaction()` callback that
+ * awaits a ROOT-store call is exactly that shape: the call queues behind the
+ * transaction it is running inside, which cannot commit until the callback
+ * returns. That used to park the request forever, with no error anywhere and
+ * nothing in a log to read; the bound turns it into a
+ * {@link TransactionGateTimeoutError} whose stack points at the callback.
+ *
+ * WHY THE QUEUE ENTRY OUTLIVES THE CALLER. A timed-out caller is rejected, but
+ * its place in the FIFO stays and cancels itself when its turn comes
+ * ({@link arrive}). Dropping the entry instead would settle the promise the
+ * NEXT caller is already chained to while the transaction it was queued behind
+ * is still open — and that caller would then run its `BEGIN` inside a `BEGIN`.
+ */
+class GateWait {
+  private expired = false;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private readonly expiry: Promise<never>;
+
+  constructor(private readonly timeoutMs: number) {
+    this.expiry = new Promise<never>((_resolve, reject) => {
+      // Non-finite or non-positive is the documented opt-out: no timer, and the
+      // wait is unbounded exactly as it was before this class existed.
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return;
+      const timer = setTimeout(() => {
+        this.expired = true;
+        reject(new TransactionGateTimeoutError(timeoutMs));
+      }, timeoutMs);
+      // A watchdog must never be the reason a process stays alive.
+      (timer as unknown as { unref?: () => void }).unref?.();
+      this.timer = timer;
+    });
+  }
+
+  /** Whichever comes first: the caller's turn, or the deadline. */
+  race<T>(work: Promise<T>): Promise<T> {
+    return Promise.race([work, this.expiry]);
+  }
+
+  /** This caller's turn arrived: stop the clock, or refuse if it already ran out. */
+  arrive(): void {
+    this.cancel();
+    if (this.expired) throw new TransactionGateTimeoutError(this.timeoutMs);
+  }
+
+  /** Stop the clock — the wait is over, however it ended. */
+  cancel(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+}
+
+/**
  * Shared by every sub-store so a multi-statement operation (inside one port
  * method, or spanning several via {@link SqliteAssistantStore.transaction})
  * commits or rolls back as one unit. Also the single seam where bun-types'
@@ -749,6 +815,8 @@ class SqliteConnection {
     readonly db: Database,
     /** Ceiling on how long either wait above will keep trying. */
     private readonly busyTimeoutMs: number,
+    /** Ceiling on how long a caller waits for THIS connection's gate — see {@link GateWait}. */
+    private readonly gateTimeoutMs: number = DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
   ) {}
 
   run(sql: string, params?: Params): Changes {
@@ -830,8 +898,9 @@ class SqliteConnection {
    *
    * The gate wait is deliberately NOT bounded by `busyTimeoutMs`. That budget
    * exists for the write lock, which another process owns and may never
-   * release; the gate is this process's own queue, and its holder always
-   * settles.
+   * release; the gate is this process's own queue. It IS bounded by
+   * `gateTimeoutMs`, which is a different question — not "is the lock free
+   * yet?" but "is the holder waiting on me?" — see {@link GateWait}.
    */
   async withAsyncTx<T>(
     fn: (owner: TxOwner) => Promise<T>,
@@ -841,14 +910,20 @@ class SqliteConnection {
     // before the first await, so it still describes the transaction this call
     // was issued from.
     if (owner !== undefined && owner === this.currentOwner) return fn(owner);
-    const run = this.txGate.then(() => this.beginExclusive(fn));
+    const waited = new GateWait(this.gateTimeoutMs);
+    const run = this.txGate.then(() => {
+      // Still in line, and still wanted? `arrive` throws for a caller that
+      // already timed out — the BEGIN below must not happen for one.
+      waited.arrive();
+      return this.beginExclusive(fn);
+    });
     // The gate carries the SETTLED signal only: the next caller waits for this
     // one to finish, and must not inherit its rejection.
     this.txGate = run.then(
       () => undefined,
       () => undefined,
     );
-    return run;
+    return waited.race(run);
   }
 
   /**
@@ -875,13 +950,26 @@ class SqliteConnection {
    * a blast radius of exactly this write.
    */
   async whenFree<T>(fn: () => T, owner?: TxOwner): Promise<T> {
-    while (this.currentOwner !== null && owner !== this.currentOwner) {
-      // Re-read each turn: `txGate` is the TAIL of the queue, so waiting on it
-      // also lets everything already queued go first — a write cannot jump the
-      // line, and cannot be starved by callers that arrive after it either
-      // (they chain onto the same promise this one is already waiting on).
-      await this.txGate;
+    // Nothing to wait for: no timer is armed, so the ordinary write path costs
+    // exactly what it did before the watchdog existed.
+    if (this.currentOwner === null || owner === this.currentOwner) {
+      return this.withTx(fn);
     }
+    // ONE watchdog for the whole wait, not one per turn: the budget is "how
+    // long this write waits", not "how long one queue entry takes".
+    const waited = new GateWait(this.gateTimeoutMs);
+    try {
+      while (this.currentOwner !== null && owner !== this.currentOwner) {
+        // Re-read each turn: `txGate` is the TAIL of the queue, so waiting on it
+        // also lets everything already queued go first — a write cannot jump the
+        // line, and cannot be starved by callers that arrive after it either
+        // (they chain onto the same promise this one is already waiting on).
+        await waited.race(this.txGate);
+      }
+    } finally {
+      waited.cancel();
+    }
+    // Same continuation as the loop's last condition check — see the doc above.
     return this.withTx(fn);
   }
 
@@ -3358,6 +3446,17 @@ export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
    * see the multi-handle section on {@link SqliteConnection}.
    */
   busyTimeoutMs?: number;
+  /**
+   * How long a caller waits for ANOTHER caller's open `transaction()` before
+   * rejecting with `TransactionGateTimeoutError`. Default 30s.
+   *
+   * Distinct from {@link busyTimeoutMs}, which is about the file's write lock:
+   * this budget is about this handle's own queue, and the failure it makes
+   * visible is a caller waiting on itself — a `transaction()` callback that
+   * awaited a root-store call. Non-finite or non-positive disables the
+   * watchdog, restoring the (silently hanging) unbounded wait.
+   */
+  transactionGateTimeoutMs?: number;
 }
 
 /**
@@ -3383,7 +3482,10 @@ export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
  * in there waits on a transaction that cannot finish until the callback
  * returns. That was already true of a root-store `transaction()`/`claimNext`;
  * it is now true of `store.conversations.updateChat(...)` and every other
- * write. See {@link SqliteConnection}.
+ * write. That wait is BOUNDED ({@link SqliteAssistantStoreOptions.transactionGateTimeoutMs},
+ * default 30s): the mistake surfaces as a `TransactionGateTimeoutError` naming
+ * its cause instead of a request that never returns. See
+ * {@link SqliteConnection} and {@link GateWait}.
  */
 export class SqliteAssistantStore implements AssistantStore {
   private readonly conn: SqliteConnection;
@@ -3402,7 +3504,11 @@ export class SqliteAssistantStore implements AssistantStore {
   ) {
     const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
     const db = openAgentKitDatabase(path, busyTimeoutMs);
-    this.conn = new SqliteConnection(db, busyTimeoutMs);
+    this.conn = new SqliteConnection(
+      db,
+      busyTimeoutMs,
+      options.transactionGateTimeoutMs ?? DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
+    );
     const clock = options.clock ?? defaultClock;
     const ids = options.ids ?? defaultIds;
     // SECOND, IDENTICALLY-CONFIGURED INSTANCES rather than a mutable field on

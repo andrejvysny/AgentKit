@@ -24,16 +24,27 @@ const chat = await store.conversations.createChat({ title: "Hello" });
   semantics — this is not a stub that records calls. A test that passes here
   is testing the same invariants a durable store enforces.
 - **No durability.** The process exits, the data is gone.
-- **No rollback.** `transaction(fn)` runs `fn(this)` directly. A throw partway
-  through leaves the writes that already happened in place. Anything building
-  something similar should report
+- **No rollback.** Every write inside `transaction(fn)` lands on the live Maps
+  as it happens, so a throw partway through leaves the earlier ones in place.
+  Anything building something similar should report
   `capabilities: { atomicTransactions: false }` to the conformance suite, the
   way this store's own conformance test does — the suite then grades the
   atomicity section as "not claimed" rather than failing it.
-- **No isolation.** `transaction()` does not isolate concurrent work on the
-  same store instance. Keep transaction callbacks free of foreign async work:
+- **The same transaction SHAPE as the sqlite adapter**, which is the half a
+  Map-backed store can keep: `transaction()` callers are serialized, calls made
+  through the `tx` the callback is handed (a nested `tx.transaction(...)`,
+  `tx.tasks.claimNext(...)`) run inside the unit that opened it, and an
+  unrelated `claimNext` waits for an open transaction instead of interleaving
+  with it. A `transaction()` or `claimNext` issued on the ROOT store from
+  *inside* a callback waits for a transaction that cannot finish, so it fails
+  with `TransactionGateTimeoutError` (`transactionGateTimeoutMs`, default 30s)
+  rather than hanging. Keep transaction callbacks free of foreign async work:
   await the model, the applier, or another subsystem *outside*, then pass the
   results in.
+- **No isolation.** Reads from other callers still see the store
+  mid-transaction, and an ordinary write from another caller lands immediately
+  rather than queueing (the sqlite adapter queues it, because there a joined
+  write would be erased by a stranger's rollback; here there is no rollback).
 - **Snapshot returns.** Every record handed back — from a create, a read, or a
   transition — is a shallow copy, never the object living inside the store's
   Maps. A caller holding an old `Lease`/`TaskRecord` never watches it mutate
