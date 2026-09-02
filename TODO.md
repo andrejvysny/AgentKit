@@ -13,11 +13,11 @@
 - [ ] 1.5 outbox bounds (D12)
 
 ## Phase 2 — core chat loop
-- [ ] 2.1 cancellation truth (A1, A6, A15)
-- [ ] 2.2 tool-call assembly (A4, A8, A7, A12)
-- [ ] 2.3 tool execution safety (A2, A3, A10, A14, default tool timeout)
-- [ ] 2.4 provider client bounds (A5, A11, A13)
-- [ ] 2.5 Ajv hardening (A9, F6)
+- [x] 2.1 cancellation truth (A1, A6, A15)
+- [x] 2.2 tool-call assembly (A4, A8, A7, A12)
+- [x] 2.3 tool execution safety (A2, A3, A10, A14, default tool timeout)
+- [x] 2.4 provider client bounds (A5, A11, A13)
+- [x] 2.5 Ajv hardening (A9, F6)
 - [ ] 2.6 goldens replayed live for all 5 scenarios; re-record once (E3)
 
 ## Phase 3 — host orchestration
@@ -36,10 +36,10 @@
 - [ ] 4.1 stream close rule + runPhase last-terminal + react reset (F-OWN-1)
 - [x] 4.2 react hooks (B2, B8, B9, B12)
 - [x] 4.3 client resume (B5)
-- [ ] 4.4 transport bounds + validation (B3, B4, B6, B10, B11, B13, B14, B15, E2, E6, F5)
-- [ ] 4.5 authz / privileged-resource docs (B7, F5, F14)
-- [ ] 4.6 MCP server (F1, F2, F3, F7, F9, F13)
-- [ ] 4.7 MCP client (F4, F10, F11, F12, F8)
+- [x] 4.4 transport bounds + validation (B3, B4, B6, B10, B11, B13, B14, B15, E2, E6, F5)
+- [x] 4.5 authz / privileged-resource docs (B7, F5, F14)
+- [x] 4.6 MCP server (F1, F2, F3, F7, F9, F13)
+- [x] 4.7 MCP client (F4, F10, F11, F12, F8)
 
 ## Phase 5 — contracts, testing infra, packaging, docs
 - [ ] 5.1 contract 0.5.0 (E1 done, E11, E13, new codes, chat_busy, fenced options); CONTRACT_VERSION bump
