@@ -1191,11 +1191,16 @@ export class MemoryTaskStore implements TaskStore {
       throw new RecordNotFoundError(`Attempt not found: ${input.attemptId}`);
     }
     // The attempt names its task, so the ownership proof is read off the record
-    // the write is about.
+    // the write is about. BEFORE the terminal check below: "may you write
+    // here?" is a different question from "is there anything to write?".
     if (input.leaseToken !== undefined) {
       this.assertLeaseCurrent(attempt.taskId, input.leaseToken);
     }
-    const wasAbandoned = attempt.status === "abandoned";
+    // FIRST TERMINAL WINS — see `TaskStore.endAttempt`. An attempt already
+    // ended is returned as it stands, so a recovery pass acting on an expired
+    // lease cannot restate a `completed` attempt as `abandoned` and have the
+    // count below read a clean finish as a crash.
+    if (attempt.status !== "running") return { ...attempt };
     attempt.status = input.status;
     attempt.endedAt = this.clock.nowIso();
     if (input.error !== undefined) attempt.error = input.error;
@@ -1203,8 +1208,9 @@ export class MemoryTaskStore implements TaskStore {
     // than on a later transition a caller has to remember (and can lose to a
     // crash or to a second recoverer reading the same value). Only `abandoned`;
     // a clean failure is a different diagnosis — see `TaskRecord.poisonCount`.
-    // Idempotent per attempt: the same death reported twice counts once.
-    if (input.status === "abandoned" && !wasAbandoned) {
+    // Only the `running` → `abandoned` edge, which the terminal check above
+    // already guarantees: the same death reported twice counts once.
+    if (input.status === "abandoned") {
       const task = this.tasks.get(attempt.taskId);
       if (task) task.poisonCount += 1;
     }

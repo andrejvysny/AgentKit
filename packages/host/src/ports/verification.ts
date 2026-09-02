@@ -29,7 +29,12 @@ export interface VerificationInput {
   chatId: string;
   scopeId?: string;
   attemptId?: string;
-  /** Tool calls the run actually made; zero means there is nothing to verify. */
+  /**
+   * Tool calls the pass being verified actually made; zero means there is
+   * nothing to verify. Per PASS, not per run: a recovery or correction pass
+   * starts the answer over, and the tool work of the pass it superseded says
+   * nothing about the answer now on the table.
+   */
   toolCallCount: number;
   /** The answer as it will be persisted. */
   finalContent: string;

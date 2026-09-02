@@ -115,11 +115,18 @@ function describeSchedule(name: string, create: () => DurabilityHarness): void {
       // poison path common instead of incidental, which is what puts the
       // dead-letter invariants (a poisoned task must be terminal, and must have
       // earned it with attempts) under real load.
+      //
+      // The seed is a COVERAGE choice, not an oracle: what the case asserts is
+      // the invariants, and the `deadLettered` floor below only keeps the
+      // schedule from grading an easier system than the one shipped. Which seed
+      // reaches the poison path depends on the interleaving, so a change to the
+      // adapters' queueing can move it — this one dead-letters on both
+      // reference adapters with room to spare.
       const harness = create();
       try {
         const result = await runTaskSchedule({
           target: harness.target,
-          seed: 4242,
+          seed: 31337,
           clock: harness.clock,
           ids: harness.ids,
           leaseTtlMs: harness.leaseTtlMs,
@@ -132,7 +139,7 @@ function describeSchedule(name: string, create: () => DurabilityHarness): void {
         expect(
           checkTaskInvariants(result.view, {
             phase: "quiescent",
-            label: `${name} stress seed 4242`,
+            label: `${name} stress seed 31337`,
           }),
         ).toEqual([]);
         expect(result.undrained).toEqual([]);

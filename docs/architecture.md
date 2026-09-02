@@ -316,10 +316,16 @@ still work: recovery acts on a lease it has just deleted, and a cancel from an
 HTTP handler never had one. `TurnRunner` orders its terminal block around the
 fence — fenced `transitionTask` → `endAttempt` → then the placeholder
 `updateMessage` — because `ConversationStore` is lease-unaware and ordering is
-the only thing keeping a fenced-out attempt off the live answer. See [ADR
-0014](adr/0014-hardening-tranche-2.md). A renewal is
-refused once the lease has expired, since the runner asks `renewLease` *as* its
-"may I still write?" probe.
+the only thing keeping a fenced-out attempt off the live answer (see [ADR
+0014](adr/0014-hardening-tranche-2.md)).
+`SingleProcessTaskRunner` settles in the same order, for a second reason: an
+attempt row closed under a task still `running` with a live lease is exactly
+what recovery reads as a crash, and ending the attempt first left that state
+behind whenever the transition threw. It cannot be misread now anyway —
+`TaskStore.endAttempt` keeps an attempt's FIRST terminal status and writes
+nothing on a second call — but the order is what stops the pair from existing.
+A renewal is refused once the lease has expired, since the runner asks
+`renewLease` *as* its "may I still write?" probe.
 
 *Consequence for consumers*: the task reaches its terminal status a moment
 BEFORE the placeholder is finalized, so a client that polls `getTask` and reads

@@ -15,6 +15,16 @@
  * `mcp_servers` table, and the second is what a host with no assistant store —
  * a config editor, a migration script — takes.
  *
+ * ITS WRITES QUEUE ON THAT HANDLE'S GATE ({@link SqliteWriteGate}), exactly as
+ * the assistant store's own do. Sharing a connection is not the same as sharing
+ * a unit of work: this store's writes have nothing to do with whatever
+ * `transaction()` a host has open, and joining one — which is what asking the
+ * driver "are you in a transaction?" amounts to — made a committed config write
+ * collateral damage of a stranger's rollback. The corollary is the same one the
+ * aggregate documents: awaiting a config write from INSIDE a `transaction()`
+ * callback waits on a transaction only that callback can end, and is refused
+ * with `TransactionGateTimeoutError` rather than hanging.
+ *
  * NO SECRET MATERIAL IS WRITTEN. `secret_refs` holds `SecretStore` refs; the
  * values behind them are injected into env/header placeholders at connect time
  * and stored nowhere. See `secrets.ts` in `@agentkit/mcp-client`.
@@ -31,7 +41,11 @@ import {
   type McpServerConfigStore,
   type McpTransportConfig,
 } from "@agentkit/mcp-client";
-import { openAgentKitDatabase } from "./sqlite-assistant-store.js";
+import {
+  openAgentKitDatabase,
+  type SqliteWriteGate,
+  writeGateFor,
+} from "./sqlite-assistant-store.js";
 
 interface McpServerRow {
   id: string;
@@ -48,7 +62,12 @@ interface McpServerRow {
 export interface SqliteMcpServerConfigStoreOptions {
   /** Stamps `updatedAt` on a patch. Defaults to {@link defaultClock}. */
   clock?: Clock;
-  /** Only consulted when a PATH is given; see {@link openAgentKitDatabase}. */
+  /**
+   * Only consulted when this store OPENS the connection (a path was given) or
+   * mints the write gate for a handle nobody else has claimed. A handle the
+   * assistant store already owns keeps that store's budgets — see
+   * {@link openAgentKitDatabase} and `writeGateFor`.
+   */
   busyTimeoutMs?: number;
 }
 
@@ -99,6 +118,8 @@ export class SqliteMcpServerConfigStore implements McpServerConfigStore {
   private readonly clock: Clock;
   /** Whether this instance opened the handle, and may therefore close it. */
   private readonly ownsDb: boolean;
+  /** This handle's write queue — the aggregate's, when the handle is shared. */
+  private readonly gate: SqliteWriteGate;
 
   constructor(
     db: Database | string,
@@ -110,6 +131,12 @@ export class SqliteMcpServerConfigStore implements McpServerConfigStore {
         ? openAgentKitDatabase(db, options.busyTimeoutMs)
         : db;
     this.clock = options.clock ?? defaultClock;
+    this.gate = writeGateFor(
+      this.db,
+      options.busyTimeoutMs === undefined
+        ? {}
+        : { busyTimeoutMs: options.busyTimeoutMs },
+    );
   }
 
   /**
@@ -125,7 +152,7 @@ export class SqliteMcpServerConfigStore implements McpServerConfigStore {
   }
 
   async create(record: McpServerConfigRecord): Promise<McpServerConfigRecord> {
-    return this.inTransaction(() => {
+    return this.gate.whenFree(() => {
       if (this.rowById(record.id) !== null) throw mcpDuplicateId(record.id);
       if (this.idHoldingAlias(record.alias) !== null) {
         throw mcpDuplicateAlias(record.alias);
@@ -139,7 +166,7 @@ export class SqliteMcpServerConfigStore implements McpServerConfigStore {
     id: string,
     patch: McpServerConfigPatch,
   ): Promise<McpServerConfigRecord> {
-    return this.inTransaction(() => {
+    return this.gate.whenFree(() => {
       const existing = recordFromRow(this.requireRow(id));
       // Re-stating a record's OWN alias is not a collision — a patch that
       // resends every field it read is the ordinary shape of an edit form, and
@@ -168,9 +195,13 @@ export class SqliteMcpServerConfigStore implements McpServerConfigStore {
   }
 
   async delete(id: string): Promise<void> {
-    const changes = this.run(`DELETE FROM mcp_servers WHERE id = $id`, {
-      $id: id,
-    });
+    // Through the gate like every other write, even though it is one statement:
+    // a bare `run` issued while a stranger's `transaction()` is open lands
+    // INSIDE it, and a config row deleted by this store came back when that
+    // transaction rolled back.
+    const changes = await this.gate.whenFree(() =>
+      this.run(`DELETE FROM mcp_servers WHERE id = $id`, { $id: id }),
+    );
     if (changes === 0) throw mcpConfigNotFound(id);
   }
 
@@ -184,37 +215,6 @@ export class SqliteMcpServerConfigStore implements McpServerConfigStore {
       .query(`SELECT * FROM mcp_servers ORDER BY created_at ASC, id ASC`)
       .all() as McpServerRow[];
     return rows.map(recordFromRow);
-  }
-
-  /**
-   * The check and the write in one `BEGIN IMMEDIATE`, so the uniqueness a
-   * caller is told about is the uniqueness that was committed.
-   *
-   * Flattens rather than nests when a transaction is already open on this
-   * handle — the assistant store's `transaction()` holds one, and `bun:sqlite`
-   * has no savepoints in this version, so a second BEGIN would raise ("cannot
-   * start a transaction within a transaction") instead of joining. The open
-   * transaction is read off the driver's own `Database.inTransaction` rather
-   * than off a counter this class keeps: the transaction may have been opened
-   * by the assistant store sharing this handle, which no counter here could
-   * know about.
-   */
-  private inTransaction<T>(fn: () => T): T {
-    if (this.db.inTransaction) return fn();
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = fn();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        // Already rolled back by SQLite (a constraint failure can do it):
-        // rethrowing the rollback would hide the error that caused it.
-      }
-      throw err;
-    }
   }
 
   private insert(record: McpServerConfigRecord): void {
