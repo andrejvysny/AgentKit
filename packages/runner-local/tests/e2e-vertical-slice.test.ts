@@ -759,9 +759,14 @@ describe("e2e vertical slice (B) — a policy-approved write applies in the turn
         proposalKind: PROPOSAL_KIND,
         maxRisk: "medium",
       });
+      // C14: the key is the JSON tuple, not a `:`-joined string — every member
+      // is caller (or model) data, and a separator that can appear inside one
+      // makes two different grants collide. `null` is the scope: this grant
+      // was given for the chat + tool + kind and covers every scope.
       expect(allowance.key).toBe(
-        `${CHAT_ID}:${NOTES_APPEND.name}:${PROPOSAL_KIND}`,
+        JSON.stringify([CHAT_ID, NOTES_APPEND.name, PROPOSAL_KIND, null]),
       );
+      expect(allowance.scopeKey).toBeUndefined();
 
       const submitted = await submitAndSettle(slice, "add a note");
       expect((await slice.store.tasks.getTask(submitted.runId))?.status).toBe(

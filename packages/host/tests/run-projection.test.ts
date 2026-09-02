@@ -34,6 +34,7 @@ import {
   type RunProjectionState,
   type TaskExecutionContext,
   type TaskExecutor,
+  type TaskRecord,
   type UsageAuthorizationDecision,
   type UsageAuthorizer,
   type UsageRecord,
@@ -270,6 +271,11 @@ async function setup(): Promise<Fixture> {
     contributors: [],
     clock: harness.clock,
     ids: harness.ids,
+    // These tests submit several turns into one chat WITHOUT executing any of
+    // them — a custom kind has no executor here — so every task stays
+    // `queued`. The subject is the tree the submits build, not submit
+    // exclusivity (which `turn-runner.test.ts` grades on its own).
+    allowConcurrentSubmit: true,
   });
   return { ...harness, runner, chatId: chat.id };
 }
@@ -938,5 +944,256 @@ describe("regenerate — kind", () => {
       taskId: "regen-1",
     });
     expect(b).toEqual(a);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The projector's own rules, driven directly through `reflect` — no queue, no
+// executor, and a clock the test moves by hand.
+// ───────────────────────────────────────────────────────────────────────────
+
+interface ProjectorFixture extends TestHarness {
+  projector: ReturnType<typeof createRunProjector>;
+  ctx: { task: TaskRecord; attemptId: string; leaseToken: string };
+  state: RunProjectionState;
+  /** Every `updateMessage` the projector made — the coalescing assertion. */
+  updates: { messageId: string; content?: unknown }[];
+  /** One stamper for the fixture, so `seq` is the unbroken run the log needs. */
+  stamp: (draft: AiRunEventDraft) => AiRunEvent;
+  chatId: string;
+  assistantMessageId: string;
+}
+
+async function projectorFixture(): Promise<ProjectorFixture> {
+  const harness = createHarness();
+  const chat = await harness.store.conversations.createChat({ id: "chat-p" });
+  const task = await harness.store.tasks.createTask({
+    taskId: "task-p",
+    kind: CUSTOM_TURN_KIND,
+    scopeId: chat.id,
+    payload: {},
+  });
+  const question = await harness.store.conversations.appendMessage({
+    chatId: chat.id,
+    role: "user",
+    content: "q",
+  });
+  const placeholder = await harness.store.conversations.appendMessage({
+    chatId: chat.id,
+    runId: task.taskId,
+    role: "assistant",
+    content: "",
+    parentMessageId: question.id,
+    metadata: { placeholder: true },
+  });
+
+  const updates: { messageId: string; content?: unknown }[] = [];
+  const conversations = harness.store.conversations;
+  const update = conversations.updateMessage.bind(conversations);
+  conversations.updateMessage = async (messageId, patch) => {
+    updates.push({
+      messageId,
+      ...(patch.content === undefined ? {} : { content: patch.content }),
+    });
+    return update(messageId, patch);
+  };
+
+  const projector = createRunProjector({
+    store: harness.store,
+    clock: harness.clock,
+  });
+  const state = projector.createState({
+    chatId: chat.id,
+    assistantMessageId: placeholder.id,
+  });
+  return {
+    ...harness,
+    projector,
+    ctx: { task, attemptId: "att-p", leaseToken: "lease-p" },
+    state,
+    updates,
+    stamp: createEventStamper({ firstSeq: 0, attemptId: "att-p" }),
+    chatId: chat.id,
+    assistantMessageId: placeholder.id,
+  };
+}
+
+/** `reflect` one draft, stamped — the projector is what is under test here. */
+async function reflect(
+  f: ProjectorFixture,
+  draft: AiRunEventDraft,
+): Promise<void> {
+  await f.projector.reflect(f.ctx, f.state, f.stamp(draft));
+}
+
+const AT = "2026-01-01T00:00:00.000Z";
+
+function deltaDraft(runId: string, text: string): AiRunEventDraft {
+  return {
+    type: "run.message.delta",
+    runId,
+    timestamp: AT,
+    data: { delta: text },
+  };
+}
+
+function internalOf(f: ProjectorFixture): MessageRecord | undefined {
+  return f.store.conversations.messages.find(
+    (m) => m.metadata["internal"] === true,
+  );
+}
+
+function storedAnswer(f: ProjectorFixture): unknown {
+  return f.store.conversations.messages.find(
+    (m) => m.id === f.assistantMessageId,
+  )?.content;
+}
+
+describe("RunProjector — tool calls announced before the message completed (C13)", () => {
+  it("buffers them and attaches them to the record the completion creates", async () => {
+    const f = await projectorFixture();
+    const runId = f.ctx.task.taskId;
+    // A third-party client that announces its calls DURING the message and
+    // then completes with a count but no `toolCalls` list. Persisting that
+    // record with no `toolCalls` leaves every tool result after it an orphan
+    // `tool_call_id` on the next replay, which providers reject outright.
+    await reflect(f, {
+      type: "run.tool.requested",
+      runId,
+      timestamp: AT,
+      data: {
+        toolCallId: "call-1",
+        toolName: "lookup",
+        argumentsJson: '{"q":"x"}',
+      },
+    });
+    await reflect(f, {
+      type: "run.message.completed",
+      runId,
+      timestamp: AT,
+      data: { content: "", toolCallCount: 1 },
+    });
+
+    expect(internalOf(f)?.toolCalls).toEqual([
+      { id: "call-1", name: "lookup", argumentsJson: '{"q":"x"}' },
+    ]);
+    // And the buffer is spent, not carried into the next assistant turn.
+    expect(f.state.announcedToolCalls).toEqual([]);
+  });
+
+  it("holds the record open when only SOME of the calls arrived early", async () => {
+    const f = await projectorFixture();
+    const runId = f.ctx.task.taskId;
+    await reflect(f, {
+      type: "run.tool.requested",
+      runId,
+      timestamp: AT,
+      data: { toolCallId: "call-1", toolName: "a", argumentsJson: "{}" },
+    });
+    await reflect(f, {
+      type: "run.message.completed",
+      runId,
+      timestamp: AT,
+      data: { content: "", toolCallCount: 2 },
+    });
+    // The second call arrives after the record exists, the ordinary way.
+    await reflect(f, {
+      type: "run.tool.requested",
+      runId,
+      timestamp: AT,
+      data: { toolCallId: "call-2", toolName: "b", argumentsJson: "{}" },
+    });
+
+    expect(internalOf(f)?.toolCalls?.map((c) => c.id)).toEqual([
+      "call-1",
+      "call-2",
+    ]);
+  });
+
+  it("prefers the completion's own list when it carries one", async () => {
+    const f = await projectorFixture();
+    const runId = f.ctx.task.taskId;
+    await reflect(f, {
+      type: "run.tool.requested",
+      runId,
+      timestamp: AT,
+      data: { toolCallId: "call-1", toolName: "a", argumentsJson: "{}" },
+    });
+    await reflect(f, {
+      type: "run.message.completed",
+      runId,
+      timestamp: AT,
+      data: {
+        content: "",
+        toolCallCount: 1,
+        toolCalls: [
+          { id: "call-1", name: "a", argumentsJson: '{"authoritative":true}' },
+        ],
+      },
+    });
+    expect(internalOf(f)?.toolCalls?.[0]?.argumentsJson).toBe(
+      '{"authoritative":true}',
+    );
+  });
+});
+
+describe("RunProjector — placeholder writes are coalesced (F-OWN-4)", () => {
+  it("writes once per 32 deltas, not once per delta", async () => {
+    const f = await projectorFixture();
+    const runId = f.ctx.task.taskId;
+    for (let i = 0; i < 32; i += 1) {
+      await reflect(f, deltaDraft(runId, `${i} `));
+    }
+    // 32 deltas, ONE durable write — the clock never moved, so only the count
+    // rule fired. Before this, a 2000-token answer was 2000 UPDATEs on one row.
+    expect(f.updates).toHaveLength(1);
+    expect(storedAnswer(f)).toBe(f.state.content);
+  });
+
+  it("writes on a slow trickle too, once the interval has passed", async () => {
+    const f = await projectorFixture();
+    const runId = f.ctx.task.taskId;
+    await reflect(f, deltaDraft(runId, "a"));
+    expect(f.updates).toHaveLength(0);
+    // A user watching a slow model must still see the answer grow.
+    f.clock.advance(60);
+    await reflect(f, deltaDraft(runId, "b"));
+    expect(f.updates).toHaveLength(1);
+    expect(storedAnswer(f)).toBe("ab");
+  });
+
+  it("flushes before every non-delta event, so nothing downstream reads a stale answer", async () => {
+    const f = await projectorFixture();
+    const runId = f.ctx.task.taskId;
+    for (const text of ["one ", "two ", "three"]) {
+      await reflect(f, deltaDraft(runId, text));
+    }
+    // Under the count and interval rules alone none of these is durable yet.
+    expect(f.updates).toHaveLength(0);
+    await reflect(f, {
+      type: "run.completed",
+      runId,
+      timestamp: AT,
+      data: { iterations: 1 },
+    });
+    expect(f.updates).toHaveLength(1);
+    expect(storedAnswer(f)).toBe("one two three");
+  });
+
+  it("does not re-write an answer that is already durable", async () => {
+    const f = await projectorFixture();
+    const runId = f.ctx.task.taskId;
+    for (let i = 0; i < 32; i += 1) {
+      await reflect(f, deltaDraft(runId, "x"));
+    }
+    expect(f.updates).toHaveLength(1);
+    await reflect(f, {
+      type: "run.completed",
+      runId,
+      timestamp: AT,
+      data: { iterations: 1 },
+    });
+    // The terminal flush is a no-op when the last delta already landed.
+    expect(f.updates).toHaveLength(1);
   });
 });

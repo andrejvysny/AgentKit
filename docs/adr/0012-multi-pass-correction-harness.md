@@ -147,3 +147,34 @@ Letting the harness fail a turn's outcome on unresolved deficiencies (a host
 decision, not this framework's); per-deficiency-line tracking (set-based)
 instead of count-based shrink detection; a UI-facing progress indicator for
 an in-flight correction pass.
+
+## Addendum (hardening tranche 2, F-OWN-5): the request is re-contexted too
+
+Decision 3 above sent **three** messages. It now sends **four**: the system
+prompt, **the request the run is answering**, the previous pass's visible
+answer, and the write-back — in that order, because that is the order the
+exchange happened in and a history that puts an answer before its question
+replays as a different conversation. `CorrectionConfig.includeUserRequest`
+(default `true`) turns the addition off.
+
+The gap it closes: the model was being asked to correct work without being
+told what was asked for. "Add the decoupling capacitors" and "add the
+decoupling capacitors to U3 only" produce the same previous answer and the
+same deficiency list, and a model that cannot see which one it was asked can
+only guess — while the whole point of the harness is to make the second
+attempt better-informed than the first. One message is the cheapest possible
+fix, and it is the message the entire turn exists to answer.
+
+What it deliberately does **not** become: the full history. The request is
+read off the assembled conversation (the last `role: "user"` message the
+provider actually saw, so a regenerate — which has no user message of its own
+— still finds the question it is re-answering) and is sent as TEXT via
+`messageContentToText`. A multimodal request contributes its words and not its
+images: these messages are built rather than assembled from stored records, so
+an image `ref` here would reach the provider unresolved, and re-sending
+megabytes of pictures every correction round is exactly the cost the minimal
+re-context exists to avoid.
+
+**Divergence from OpenPCB recorded**, per the plan's decision 3: the ported
+semantics sent the three messages, and this framework sends four by default.
+A host that wants the original shape sets `includeUserRequest: false`.

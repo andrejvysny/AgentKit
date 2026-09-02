@@ -42,6 +42,7 @@ import {
   SeqConflictError,
   UnknownDependencyError,
   assertProposalTransition,
+  assertScopeIdle,
   assertTaskTransition,
   defaultClock,
   defaultIds,
@@ -53,6 +54,7 @@ import {
   SEARCH_MATCH_END,
   SEARCH_MATCH_START,
   SEARCH_SNIPPET_ELLIPSIS,
+  TERMINAL_TASK_STATUSES,
   type AppendEventsOptions,
   type AppendMessageInput,
   type ApplyOutcome,
@@ -1412,6 +1414,29 @@ class SqliteConversationStore implements ConversationStore {
   }
 
   /**
+   * The deepest record a run wrote in this chat — see the port.
+   *
+   * `(depth, order_key)` descending with `LIMIT 1`, and deliberately NO
+   * `active` filter: a run whose branch was abandoned mid-turn still has to
+   * continue its own chain, and a lookup that only saw the live path would hand
+   * it a link into somebody else's conversation.
+   */
+  async lastMessageOfRun(
+    chatId: string,
+    runId: string,
+  ): Promise<MessageRecord | null> {
+    const row = this.conn.get(
+      `SELECT * FROM messages
+        WHERE chat_id = $chatId AND run_id = $runId
+        ORDER BY depth DESC, order_key DESC
+        LIMIT 1`,
+      { $chatId: chatId, $runId: runId },
+      // `conn.get` answers `null` (not `undefined`) when nothing matched.
+    ) as MessageRow | null;
+    return row === null ? null : messageFromRow(row);
+  }
+
+  /**
    * The message's siblings, itself included, `branchIndex` ascending.
    *
    * Answered in SQL off `idx_messages_parent` rather than by walking a loaded
@@ -1748,6 +1773,21 @@ const BUSY_TASK_STATUS_SQL = BUSY_TASK_STATUSES.map(
 ).join(", ");
 
 /**
+ * {@link TERMINAL_TASK_STATUSES} as an SQL `IN` list — what
+ * {@link CreateTaskInput.exclusiveScope} negates to find the live rows.
+ *
+ * Built from the port's constant, which is itself derived from
+ * `TASK_TRANSITIONS`, so "unfinished" here means exactly what it means
+ * everywhere else and a new status cannot be forgotten in one of the two.
+ * `NOT IN` rather than a hand-written live list for the same reason: adding a
+ * non-terminal status must make it exclusive by default, not silently
+ * claimable alongside a running turn.
+ */
+const TERMINAL_TASK_STATUS_SQL = TERMINAL_TASK_STATUSES.map(
+  (status) => `'${status}'`,
+).join(", ");
+
+/**
  * Refuse a scope delete while anything in it is live, naming what is holding it.
  *
  * The message and `details` shape are deliberately byte-identical to the ones
@@ -1810,6 +1850,34 @@ class SqliteTaskStore implements TaskStore {
       // or a concurrent delete between them would leave the dangling edge this
       // check exists to prevent.
       await this.conn.whenFree(() => {
+        // EXCLUSIVITY IS THE FIRST THING IN THIS TRANSACTION, and the duplicate
+        // check comes before it. Nothing runs between the statements of a
+        // synchronous `whenFree` body, so the read and the INSERT below it are
+        // atomic — which is the whole reason the refusal lives here and not in
+        // the caller, where the two are separated by an await. The duplicate
+        // check is explicit rather than left to the PK constraint because the
+        // constraint fires AFTER the busy check, and a redelivery of a submit
+        // whose task is still running must be answered as a duplicate, not
+        // refused as busy. See `CreateTaskInput.exclusiveScope`.
+        if (input.exclusiveScope === true) {
+          if (this.selectTaskRow(input.taskId) !== null) {
+            throw new DuplicateTaskError(
+              `Task already exists: ${input.taskId}.`,
+              { taskId: input.taskId },
+            );
+          }
+          assertScopeIdle(
+            input.scopeId,
+            (
+              this.conn.all(
+                `SELECT task_id, status FROM tasks
+                  WHERE scope_id = $scopeId AND status NOT IN (${TERMINAL_TASK_STATUS_SQL})
+                  ORDER BY enqueued_at ASC, rowid ASC`,
+                { $scopeId: input.scopeId },
+              ) as { task_id: string; status: string }[]
+            ).map((row) => ({ taskId: row.task_id, status: row.status })),
+          );
+        }
         this.assertDependenciesExist(
           input.taskId,
           input.parentTaskId,

@@ -193,6 +193,93 @@ export function describeAssistantStoreConformance(
       }
     });
 
+    // C5: the exclusivity a chat turn is submitted under. The refusal has to be
+    // the STORE's, in the same transaction as the insert — a caller's own
+    // pre-check is separated from its write by an await and refuses nothing.
+    describe("createTask({ exclusiveScope })", () => {
+      it("refuses chat_busy while the scope holds an unfinished task, and allows it once that task is terminal", async () => {
+        const { store, close } = await create();
+        try {
+          const scopeId = uniqueId("scope");
+          const live = await store.tasks.createTask(
+            makeTaskInput({ scopeId, exclusiveScope: true }),
+          );
+          // `queued` counts: a turn whose answer is already promised is a turn
+          // this scope is busy with, even before a worker claims it.
+          await expectRejectsWithCode(
+            store.tasks.createTask(
+              makeTaskInput({ scopeId, exclusiveScope: true }),
+            ),
+            "chat_busy",
+            expect,
+          );
+          // Still busy while it runs…
+          await store.tasks.transitionTask(live.taskId, ["queued"], "running");
+          await expectRejectsWithCode(
+            store.tasks.createTask(
+              makeTaskInput({ scopeId, exclusiveScope: true }),
+            ),
+            "chat_busy",
+            expect,
+          );
+          // …and free the moment it lands.
+          await store.tasks.transitionTask(
+            live.taskId,
+            ["running"],
+            "completed",
+          );
+          const next = await store.tasks.createTask(
+            makeTaskInput({ scopeId, exclusiveScope: true }),
+          );
+          expect(next.status).toBe("queued");
+        } finally {
+          close?.();
+        }
+      });
+
+      it("is opt-in, and confined to its own scope", async () => {
+        const { store, close } = await create();
+        try {
+          const scopeId = uniqueId("scope");
+          await store.tasks.createTask(
+            makeTaskInput({ scopeId, exclusiveScope: true }),
+          );
+          // Without the flag the queue's own model applies: a scope serializes
+          // its tasks, it does not admit one at a time.
+          const queued = await store.tasks.createTask(
+            makeTaskInput({ scopeId }),
+          );
+          expect(queued.status).toBe("queued");
+          // And another scope is another conversation.
+          const elsewhere = await store.tasks.createTask(
+            makeTaskInput({ scopeId: uniqueId("scope"), exclusiveScope: true }),
+          );
+          expect(elsewhere.status).toBe("queued");
+        } finally {
+          close?.();
+        }
+      });
+
+      it("still reports a REDELIVERED task id as a duplicate, not as busy", async () => {
+        const { store, close } = await create();
+        try {
+          const scopeId = uniqueId("scope");
+          const input = makeTaskInput({ scopeId, exclusiveScope: true });
+          await store.tasks.createTask(input);
+          // The same key again while the first is still live. Answering
+          // `chat_busy` here would make an idempotent caller retry forever
+          // instead of reading back the turn it already has.
+          await expectRejectsWithCode(
+            store.tasks.createTask(input),
+            "duplicate_task",
+            expect,
+          );
+        } finally {
+          close?.();
+        }
+      });
+    });
+
     it("round-trips the task kind through create, read, and claim", async () => {
       const { store, close } = await create();
       try {

@@ -12,6 +12,7 @@ import type {
   ToolGuardContext,
   ToolGuardVerdict,
 } from "../ports/tool-guard.js";
+import { isHookTimeout, withHookDeadline } from "./hook-deadline.js";
 
 export interface StageRegistryInput {
   contributors: readonly ToolSetContributor[];
@@ -26,11 +27,24 @@ export interface StageRegistryInput {
    * and every contributed tool is staged, exactly as before the port existed.
    */
   guards?: readonly ToolGuard[];
+  /**
+   * Deadline for ONE contributor's `contribute()`. Absent, or non-positive, the
+   * call is awaited unbounded — what it was before this existed.
+   */
+  contributeTimeoutMs?: number;
 }
 
 /** The staged tool set: the registry the run loop uses, plus who owns what. */
 export interface StagedToolSet {
   registry: AiToolRegistry;
+  /**
+   * Contributors that contributed NOTHING because they threw or ran out of
+   * time. Reported rather than swallowed: the caller is the only layer that can
+   * put a `run.warning` on the durable log, and a tool set that silently
+   * shrank is indistinguishable to a user from a model that forgot it had
+   * tools.
+   */
+  failed: readonly FailedContributor[];
   /**
    * Tool name → the namespace of the contributor that offered it.
    *
@@ -47,6 +61,15 @@ export const TOOL_GUARD_REFUSED_CODE = "tool_guard_refused";
 
 /** The reason reported when a `canExecute` guard threw instead of answering. */
 export const TOOL_GUARD_ERROR_MESSAGE = "guard error";
+
+/** What {@link StageRegistryInput} reports back about a contributor that failed. */
+export interface FailedContributor {
+  namespace: string;
+  /** Why it contributed nothing: the thrown message, or the deadline. */
+  reason: string;
+  /** True when it was still running when its deadline expired. */
+  timedOut: boolean;
+}
 
 /**
  * Collect every contributor's tools into the registry for one run.
@@ -76,6 +99,13 @@ export const TOOL_GUARD_ERROR_MESSAGE = "guard error";
  *     wrapped around `execute` so it is evaluated at CALL time, on state that
  *     may have moved since staging.
  *
+ * FAIL-CLOSED PER CONTRIBUTOR, not per run: a `contribute()` that throws or
+ * runs past {@link StageRegistryInput.contributeTimeoutMs} costs that
+ * contributor's tools and nothing else, and is reported on
+ * {@link StagedToolSet.failed} for the caller to warn about. The alternative —
+ * what this did before — is that one unreachable MCP server takes every turn in
+ * every chat down with it.
+ *
  * Note that the run loop snapshots the tool list once per run: a tool that
  * appears here is advertised for the whole run, and one that does not cannot be
  * added mid-run. A contributor whose tools become usable once the run creates a
@@ -89,12 +119,20 @@ export async function stageRegistry(
   }
 
   const collected: { namespace: string; tool: AiTool }[] = [];
+  const failed: FailedContributor[] = [];
   const owners = new Map<
     string,
     { namespace: string; contributorIndex: number }
   >();
   for (const [index, contributor] of input.contributors.entries()) {
-    for (const tool of await contributor.contribute(input.ctx)) {
+    // PER CONTRIBUTOR, not per run. `contribute()` reaches out to whatever the
+    // contributor is a bridge to — an MCP server over stdio, an HTTP catalog —
+    // and one of those being down or hung used to fail the whole turn: no
+    // tools, no answer, for every chat, until it came back. A contributor that
+    // cannot answer contributes nothing and the run keeps the others' tools,
+    // which is the same fail-closed-per-unit rule the guards already follow.
+    const tools = await contributeQuietly(contributor, input, failed);
+    for (const tool of tools) {
       const name = tool.definition.name;
       const owner = owners.get(name);
       if (owner !== undefined && owner.contributorIndex !== index) {
@@ -154,7 +192,41 @@ export async function stageRegistry(
       });
     }
   }
-  return { registry, namespaces };
+  return { registry, namespaces, failed };
+}
+
+/**
+ * One contributor's tools, or an empty list and a recorded reason.
+ *
+ * A THROW and a TIMEOUT are the same outcome here — this contributor offers
+ * nothing this run — and both are reported so the caller can warn. They are
+ * distinguished on the report because they mean different things to whoever
+ * reads it: one is a broken contributor, the other is a slow dependency that
+ * may still be answering into a promise nobody is holding (see
+ * {@link withHookDeadline}).
+ */
+async function contributeQuietly(
+  contributor: ToolSetContributor,
+  input: StageRegistryInput,
+  failed: FailedContributor[],
+): Promise<readonly AiTool[]> {
+  try {
+    return await withHookDeadline({
+      hook: `contribute(${contributor.namespace})`,
+      timeoutMs: input.contributeTimeoutMs ?? 0,
+      run: () => Promise.resolve(contributor.contribute(input.ctx)),
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    const timedOut = isHookTimeout(err);
+    input.ctx.logger?.warn("tool contributor failed; contributing nothing", {
+      namespace: contributor.namespace,
+      timedOut,
+      error: reason,
+    });
+    failed.push({ namespace: contributor.namespace, reason, timedOut });
+    return [];
+  }
 }
 
 /**

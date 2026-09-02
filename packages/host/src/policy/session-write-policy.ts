@@ -20,13 +20,29 @@ export const RISK_RANK: Readonly<Record<RiskLevel, number>> = Object.freeze({
   destructive: 3,
 });
 
-/** The key an allowance is stored under: one grant per chat + tool + kind. */
+/**
+ * The key an allowance is stored under: one grant per chat + tool + kind +
+ * scope.
+ *
+ * `JSON.stringify` of the tuple rather than a `:`-joined string, because every
+ * part of it is caller data — a chat id, a tool name, a host-defined proposal
+ * kind, and a scope key derived from MODEL input — and a separator that appears
+ * inside a member makes two different tuples collide on one key. With the
+ * scope key in the tuple that stopped being theoretical: `"doc:1"` + kind
+ * `"edits"` and `"doc"` + kind `"1:edits"` are the same joined string and two
+ * different grants. JSON escapes the separator; nothing else in the shape has
+ * to be trusted.
+ *
+ * An absent `scopeKey` is `null`, NOT the empty string: a grant for every scope
+ * and a grant for a scope literally named `""` must not share a key.
+ */
 export function writeAllowanceKey(
   chatId: string,
   toolName: string,
   proposalKind: string,
+  scopeKey?: string,
 ): string {
-  return `${chatId}:${toolName}:${proposalKind}`;
+  return JSON.stringify([chatId, toolName, proposalKind, scopeKey ?? null]);
 }
 
 export interface SessionWritePolicyOptions {
@@ -63,17 +79,43 @@ export class SessionWritePolicy implements WritePolicy {
     this.currentMode = mode;
   }
 
+  /**
+   * TWO LOOKUPS, and the order is the design: the grant given for THIS scope
+   * first, then the unscoped grant that covers every scope. A host that only
+   * ever recorded unscoped allowances (everything written before
+   * `AutoApplyQuery.scopeKey` existed) hits the second lookup and behaves
+   * exactly as it did; one that records scoped grants gets the narrow answer,
+   * and a proposal naming a scope nobody granted finds neither and waits.
+   *
+   * Neither lookup can be skipped by the other: a scoped grant must not
+   * authorise a different scope, and an unscoped grant must keep working for
+   * scopes it was never told about.
+   */
   isAutoApplyAllowed(query: AutoApplyQuery): boolean {
     // `confirm_all_writes` overrides every allowance rather than clearing them:
     // turning confirmation back off must not silently re-arm grants the user
     // gave before, and turning it on must take effect immediately.
     if (this.currentMode === "confirm_all_writes") return false;
     if (this.currentMode === "auto_all") return true;
-    const allowance = this.allowances.get(
+    const scoped =
+      query.scopeKey === undefined
+        ? undefined
+        : this.allowances.get(
+            writeAllowanceKey(
+              query.chatId,
+              query.toolName,
+              query.proposalKind,
+              query.scopeKey,
+            ),
+          );
+    const anyScope = this.allowances.get(
       writeAllowanceKey(query.chatId, query.toolName, query.proposalKind),
     );
-    if (!allowance) return false;
-    return RISK_RANK[query.risk] <= RISK_RANK[allowance.maxRisk];
+    return [scoped, anyScope].some(
+      (allowance) =>
+        allowance !== undefined &&
+        RISK_RANK[query.risk] <= RISK_RANK[allowance.maxRisk],
+    );
   }
 
   allow(input: WriteAllowanceInput): WriteAllowance {
@@ -81,12 +123,14 @@ export class SessionWritePolicy implements WritePolicy {
       input.chatId,
       input.toolName,
       input.proposalKind,
+      input.scopeKey,
     );
     const allowance: WriteAllowance = {
       key,
       chatId: input.chatId,
       toolName: input.toolName,
       proposalKind: input.proposalKind,
+      ...(input.scopeKey === undefined ? {} : { scopeKey: input.scopeKey }),
       maxRisk: input.maxRisk,
       createdAt: this.clock.nowIso(),
     };

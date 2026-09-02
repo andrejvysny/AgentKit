@@ -549,6 +549,102 @@ layer that can duplicate work:
   succeeded once is the one outcome nobody can undo
   ([`packages/host/src/proposals/proposal-service.ts`](../packages/host/src/proposals/proposal-service.ts)).
 
+## A run is not one pass
+
+`TurnRunner` may drive `runChat()` several times under ONE task id, and each
+pass writes its own `run.started` … terminal pair onto the same log. The
+recovery passes are the chat-only retry (a provider that rejects a request with
+`tools` attached) and the empty-response retry (a turn that completed with no
+content and no tool calls); the correction harness adds one pass per round (see
+[ADR 0012](adr/0012-multi-pass-correction-harness.md)).
+
+**Every pass after the first is announced first**, with a
+`run.warning { code: "retry_pass", pass, reason }` event written immediately
+before it runs — `pass` is the 1-based number of the pass about to start,
+`reason` is `"chat_only" | "empty_response" | "correction"`. A consumer treats
+that event as "the run is live again": the terminal event it just saw belonged
+to the previous pass, and the text it has streamed so far must be DROPPED,
+mirroring the host's own reset of the stored placeholder. Without the boundary,
+a turn whose pass 1 failed and whose pass 2 completed reads as failed, and a UI
+concatenating deltas shows pass 1's half-sentence glued to pass 2's answer.
+
+Everything downstream is built on that rule: `transport-http` closes an SSE
+stream only when the TASK is terminal (not on the first terminal run event),
+`client`'s run phase folds to the LAST terminal, and `useChat`/`useRun` reset
+streamed text on the boundary.
+
+## A run is not one attempt, either
+
+A worker that dies mid-turn leaves the task `running` with a live placeholder;
+recovery ends the abandoned attempt and starts a new one IN PLACE — same task
+id, same event log, one more attempt. Two things make attempt 2 land correctly:
+
+- **It continues attempt 1's chain.** `runTurn` seeds
+  `RunProjectionState.lastMessageId` from
+  `ConversationStore.lastMessageOfRun(chatId, runId)` — the deepest record this
+  run has written — instead of from the placeholder. By attempt 2 the
+  placeholder already HAS an active child (attempt 1's internal assistant
+  record), and a chain append under a parent that already has an active child
+  lands `active: false`; seeding from the placeholder therefore wrote attempt
+  2's whole turn onto a dead branch, leaving the conversation replaying attempt
+  1's unanswered tool calls forever.
+- **Terminal writes are fenced.** The task transition carries the attempt's
+  `leaseToken` and goes FIRST, before `endAttempt` and before the placeholder is
+  finalized, so an attempt that lost its lease cannot overwrite the live one's
+  answer. A `LeaseLostError` stops the rest of the block, on the success path
+  and the failure path alike.
+
+**An unexpected throw is bookkept in full.** `TurnRunner.executeTask` records a
+terminal `run.failed` (or `run.cancelled` when the run was aborted) on the
+durable log, lands the task fenced, and finalizes the placeholder
+(`placeholder: false`, keeping whatever streamed) — in that order, all
+best-effort. Only the task transition used to happen, which left an SSE consumer
+watching the stream stop with no terminal event and a UI spinning on a message
+nothing was coming back to finish.
+
+## One live turn per chat
+
+`submitMessage` and `regenerate` create their task with
+`CreateTaskInput.exclusiveScope`, so a submit into a chat that already holds an
+unfinished task is refused with `ChatBusyError` (`chat_busy`, HTTP 409) — by the
+STORE, in the same transaction that would have written the user message. A
+second concurrent turn does not work: its user message takes the active-leaf
+slot under the live run's internal records, and the live run's next chain append
+then lands off the path (the same rule as above). A redelivered `taskId` is
+still answered as a duplicate, not refused as busy, so idempotent callers are
+unaffected. Hosts that queue turns deliberately opt out with
+`TurnRunnerDeps.allowConcurrentSubmit`.
+
+## Host hooks run under deadlines
+
+`ContextProvider`, `AttachmentResolver`, `ToolSetContributor.contribute` and
+`VerificationHook` are all host code the framework awaits inside a leased
+attempt. Each runs under a deadline from `TurnRunnerDeps.hookTimeoutsMs`
+(defaults: verify 30 s, context 10 s, attachments 10 s, contribute 15 s; a
+non-positive value turns one off). A deadline is a RACE, not a cancellation —
+nothing can stop host code that is not watching a signal, so a late answer is
+discarded — and every one of them degrades rather than failing the turn:
+
+| Hook | On timeout | On the log |
+|---|---|---|
+| `context.*` | no bindings / no system prompt | `run.warning hook_timeout` |
+| `contribute` | that contributor's tools are missing; the others stage | `run.warning hook_timeout` |
+| `attachments.resolve` | the image part is dropped from the pass | `run.warning attachment_unresolved` |
+| `verify` (harness) | `"unavailable"`, harness stops | `run.verification` |
+| `verify` (single-shot) | the turn fails — unchanged semantics, now bounded | `run.failed` |
+
+## Streaming writes are coalesced
+
+Every `run.message.delta` is appended to the durable log, in order, before
+anything else happens — that is unchanged and is what a consumer follows. The
+PLACEHOLDER behind it is a projection of that log, so its `updateMessage` is
+throttled to at most one per 32 deltas or 50 ms, always flushed before any
+non-delta event (`run.message.completed` and every terminal included) and
+discarded by a pass reset. A 2000-delta answer costs 63 row writes instead of
+2000 (`scripts/bench-projection.ts`: 201.8 ms → 5.2 ms on sqlite). What a crash
+can cost is under 50 ms of half-written text in a record the next attempt
+overwrites anyway.
+
 ## Loop invariants
 
 `runChat()` preserves these across every code path, including cancellation

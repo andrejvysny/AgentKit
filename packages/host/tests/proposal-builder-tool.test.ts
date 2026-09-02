@@ -3,6 +3,7 @@ import type { AiToolDefinition } from "@agentkit/contracts";
 import type { AiToolExecutionContext } from "@agentkit/core";
 import { resolveToolLimits } from "@agentkit/core";
 import {
+  AUTO_APPLY_FAILED_MESSAGE,
   ProposalService,
   SessionWritePolicy,
   createProposalBuilderTool,
@@ -44,6 +45,8 @@ interface Fixture extends TestHarness {
   policy: SessionWritePolicy;
   tool: ReturnType<typeof createProposalBuilderTool<ToolInput>>;
   builds: number;
+  /** Every `logger.warn` the tool made — where the raw failure text goes. */
+  warnings: { message: string; fields: Record<string, unknown> }[];
 }
 
 function setup(
@@ -55,6 +58,10 @@ function setup(
       | "confirm_all_writes"
       | "auto_all";
     allow?: boolean;
+    /** The scope the tool's calls write to; the grant's scope when `allow`. */
+    scopeKey?: string;
+    /** Confine the `allow` grant to `scopeKey` instead of every scope. */
+    allowScopeKey?: string;
     currentRevision?: (scopeKey: string) => Promise<string | null>;
   } = {},
 ): Fixture {
@@ -68,6 +75,9 @@ function setup(
       chatId: "chat-1",
       toolName: "write_items",
       proposalKind: "items.write",
+      ...(options.allowScopeKey === undefined
+        ? {}
+        : { scopeKey: options.allowScopeKey }),
       maxRisk: "destructive",
     });
   }
@@ -83,6 +93,7 @@ function setup(
     service,
     policy,
     builds: 0,
+    warnings: [],
     tool: undefined as unknown as Fixture["tool"],
   };
   fixture.tool = createProposalBuilderTool<ToolInput>({
@@ -91,7 +102,15 @@ function setup(
     store: harness.store,
     policy,
     ids: harness.ids,
-    scopeKeyOf: () => "scope-1",
+    scopeKeyOf: () => options.scopeKey ?? "scope-1",
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: (message, fields) => {
+        fixture.warnings.push({ message, fields: fields ?? {} });
+      },
+      error: () => {},
+    },
     ...(options.currentRevision === undefined
       ? {}
       : { currentRevision: options.currentRevision }),
@@ -311,6 +330,43 @@ describe("createProposalBuilderTool — dedup by action_id", () => {
   }
 });
 
+// C4: `scopeKeyOf` derives the scope from TOOL INPUT, which the model writes.
+// A grant that ignored it let "yes, edit document A" auto-apply a write the
+// model aimed at document B.
+describe("createProposalBuilderTool — the allowance is checked against the staged scope", () => {
+  it("auto-applies inside the granted scope", async () => {
+    const f = setup({ allow: true, allowScopeKey: "doc-a", scopeKey: "doc-a" });
+    const result = await f.tool.execute(CTX, {
+      action_id: "create_a_doc-a",
+    });
+    expect(modelData(result).status).toBe("ok");
+    expect(f.applier.calls).toHaveLength(1);
+  });
+
+  it("waits for a human when the model aimed the write somewhere else", async () => {
+    const f = setup({ allow: true, allowScopeKey: "doc-a", scopeKey: "doc-b" });
+    const result = await f.tool.execute(CTX, {
+      action_id: "create_a_doc-b",
+    });
+    // Staged, as always — and NOT applied: the grant was about another
+    // document.
+    expect(modelData(result).status).toBe("pending");
+    expect(f.applier.calls).toHaveLength(0);
+    expect([...f.store.proposals.proposals.values()][0]!.status).toBe(
+      "pending",
+    );
+  });
+
+  it("still honours an UNSCOPED grant everywhere, as it always did", async () => {
+    const f = setup({ allow: true, scopeKey: "doc-b" });
+    const result = await f.tool.execute(CTX, {
+      action_id: "create_a_doc-b",
+    });
+    expect(modelData(result).status).toBe("ok");
+    expect(f.applier.calls).toHaveLength(1);
+  });
+});
+
 describe("createProposalBuilderTool — auto-apply gate", () => {
   it("applies when the policy allows it, recording a POLICY decision", async () => {
     const f = setup({ allow: true });
@@ -410,10 +466,22 @@ describe("createProposalBuilderTool — apply results", () => {
 
     expect(result.ok).toBe(false);
     expect(result.status).toBe("partial");
-    expect(result.summary).toContain("host refused the write");
+    // C8: the applier's own message is HOST text and would be read verbatim by
+    // the model on the next turn. What it is told is fixed; the raw message
+    // goes to the logger, where an operator reads it.
+    expect(result.summary).toBe(AUTO_APPLY_FAILED_MESSAGE);
+    expect(JSON.stringify(result)).not.toContain("host refused the write");
     expect(modelData(result).skipped).toContainEqual({
       id: "apply",
-      reason: "host refused the write",
+      reason: AUTO_APPLY_FAILED_MESSAGE,
+    });
+    expect(f.warnings).toContainEqual({
+      message: "write tool auto-apply failed",
+      fields: {
+        toolName: "write_items",
+        proposalId: expect.any(String),
+        error: "host refused the write",
+      },
     });
     const proposal = [...f.store.proposals.proposals.values()][0]!;
     expect(proposal.status).toBe("failed");
@@ -431,7 +499,11 @@ describe("createProposalBuilderTool — apply results", () => {
 
     const result = await f.tool.execute(CTX, { action_id: "create_a_scope-1" });
     expect(result.ok).toBe(false);
-    expect(result.summary).toContain("changed since");
+    expect(result.summary).toBe(AUTO_APPLY_FAILED_MESSAGE);
+    // The reason still reaches an operator, on the log rather than the model.
+    expect(String(f.warnings.at(-1)?.fields["error"])).toContain(
+      "changed since",
+    );
     // The write was refused BEFORE the applier was ever called.
     expect(f.applier.calls).toHaveLength(0);
     const proposal = [...f.store.proposals.proposals.values()][0]!;
