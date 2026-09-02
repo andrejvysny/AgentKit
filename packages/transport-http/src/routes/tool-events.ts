@@ -14,6 +14,15 @@
  * Ordering is by run (first appearance in the chat's messages) then by `seq`
  * within the run — the only ordering that is stable across calls, since event
  * timestamps are wall-clock and two runs' logs share no sequence.
+ *
+ * BOUNDED AT EVERY STEP, which is why the walk below runs backwards. The
+ * answer is "the most recent N", so the newest run is where the answer starts:
+ * messages are paged newest-first through `beforeOrderKey`, each run's log is
+ * read in `EVENT_BATCH` pages through `afterSeq`, and the walk stops as soon as
+ * `limit` rows are in hand. The obvious implementation — list every message,
+ * read every run's whole log, then slice the tail — asks a chat with a thousand
+ * turns to materialize a thousand logs in order to return ten rows, and does it
+ * on a request whose `?limit=1` says the caller wanted almost nothing.
  */
 import type {
   AiSourceRef,
@@ -21,9 +30,19 @@ import type {
   TaskEventEnvelope,
   ToolEventDto,
 } from "@agentkit/contracts";
+import type { TaskStore } from "@agentkit/host";
 import { jsonResponse, readPositiveInt } from "../http.js";
 import { badRequest, notFound } from "../problem.js";
 import { pathParam, type RouteContext } from "./context.js";
+
+/** Rows returned when the caller names no `limit`. `readPositiveInt` caps it. */
+const DEFAULT_TOOL_EVENT_LIMIT = 200;
+
+/** Messages read per backwards page while collecting run ids. */
+const MESSAGE_BATCH = 200;
+
+/** Events read per `listEvents` page while walking one run's log. */
+const EVENT_BATCH = 200;
 
 /** `run.tool.*` event type → the stage it puts the call in. */
 const STATUS_BY_EVENT_TYPE: Readonly<Record<string, AiToolStatus>> =
@@ -44,29 +63,92 @@ export async function listToolEvents(ctx: RouteContext): Promise<Response> {
     return badRequest("invalid_request", limit.message, ctx.instance);
   }
 
-  const messages = await ctx.deps.store.conversations.listMessages(chatId);
-  const runIds: string[] = [];
+  const budget = limit.value ?? DEFAULT_TOOL_EVENT_LIMIT;
+  const newestFirst: ToolEventDto[][] = [];
+  let collected = 0;
+  for await (const runId of runIdsNewestFirst(ctx, chatId)) {
+    if (collected >= budget) break;
+    const rows = await tailOfRun(
+      ctx.deps.store.tasks,
+      runId,
+      chatId,
+      budget - collected,
+    );
+    if (rows.length === 0) continue;
+    newestFirst.push(rows);
+    collected += rows.length;
+  }
+
+  // Collected newest run first; answered oldest run first, which is the order
+  // the route has always returned and the only one a client can read as a
+  // timeline.
+  return jsonResponse(newestFirst.reverse().flat());
+}
+
+/**
+ * The chat's run ids, newest first, read one backwards page of messages at a
+ * time.
+ *
+ * A generator rather than a list because the caller usually wants the first
+ * one or two: `?limit=10` on a chat with a thousand turns must not page a
+ * thousand messages to answer.
+ */
+async function* runIdsNewestFirst(
+  ctx: RouteContext,
+  chatId: string,
+): AsyncGenerator<string> {
   const seen = new Set<string>();
-  for (const message of messages) {
-    const runId = message.runId;
-    if (runId === undefined || seen.has(runId)) continue;
-    seen.add(runId);
-    runIds.push(runId);
-  }
-
-  const items: ToolEventDto[] = [];
-  for (const runId of runIds) {
-    const log = await ctx.deps.store.tasks.listEvents(runId);
-    for (const event of [...log].sort((a, b) => a.seq - b.seq)) {
-      const dto = toolEventDto(event, runId, chatId);
-      if (dto !== null) items.push(dto);
+  let beforeOrderKey: number | undefined;
+  for (;;) {
+    const page = await ctx.deps.store.conversations.listMessages(chatId, {
+      limit: MESSAGE_BATCH,
+      ...(beforeOrderKey === undefined ? {} : { beforeOrderKey }),
+    });
+    if (page.length === 0) return;
+    for (let i = page.length - 1; i >= 0; i--) {
+      const runId = page[i]?.runId;
+      if (runId === undefined || seen.has(runId)) continue;
+      seen.add(runId);
+      yield runId;
     }
+    // A short page is the top of the path; anything else keeps walking up from
+    // the oldest key this page carried.
+    if (page.length < MESSAGE_BATCH) return;
+    const oldest = page[0];
+    if (oldest === undefined || oldest.orderKey === beforeOrderKey) return;
+    beforeOrderKey = oldest.orderKey;
   }
+}
 
-  // The most recent N, still oldest-first: a client asking for a bounded slice
-  // of a tool history wants the end of it.
-  const page = limit.value === undefined ? items : items.slice(-limit.value);
-  return jsonResponse(page);
+/**
+ * The LAST `budget` tool-event rows of one run's log, oldest first.
+ *
+ * The log is read forward in pages because that is the only direction
+ * `ListEventsOptions` offers, but the result is trimmed to `budget` as it goes,
+ * so the memory this costs is the page size plus the answer — not the run.
+ */
+async function tailOfRun(
+  tasks: TaskStore,
+  runId: string,
+  chatId: string,
+  budget: number,
+): Promise<ToolEventDto[]> {
+  const rows: ToolEventDto[] = [];
+  let afterSeq = -1;
+  for (;;) {
+    const batch = await tasks.listEvents(runId, {
+      limit: EVENT_BATCH,
+      ...(afterSeq < 0 ? {} : { afterSeq }),
+    });
+    if (batch.length === 0) return rows;
+    for (const event of batch) {
+      afterSeq = Math.max(afterSeq, event.seq);
+      const dto = toolEventDto(event, runId, chatId);
+      if (dto !== null) rows.push(dto);
+    }
+    if (rows.length > budget) rows.splice(0, rows.length - budget);
+    if (batch.length < EVENT_BATCH) return rows;
+  }
 }
 
 /**

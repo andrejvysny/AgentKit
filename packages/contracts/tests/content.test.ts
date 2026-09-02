@@ -6,6 +6,8 @@ import {
   AiContentPartSchema,
   AiImageSourceSchema,
   AiMessageContentSchema,
+  IMAGE_URL_PATTERN,
+  MEDIA_TYPE_PATTERN,
   type AiChatMessage,
   type AiContentPart,
 } from "../src/index.js";
@@ -115,6 +117,40 @@ describe("AiContentPartSchema", () => {
         detail: "ultra",
       }),
     ).toBe(false);
+  });
+
+  it("rejects a url source whose scheme is not http(s)", () => {
+    const source = makeAjv().compile(asJson(AiImageSourceSchema));
+    // The whole point of the pattern: a `url` part reaches the provider
+    // verbatim, and a provider client runs in the HOST's network position.
+    expect(source({ kind: "url", url: "file:///etc/passwd" })).toBe(false);
+    expect(source({ kind: "url", url: "javascript:alert(1)" })).toBe(false);
+    expect(source({ kind: "url", url: "data:image/png;base64,aGk=" })).toBe(
+      false,
+    );
+    expect(source({ kind: "url", url: "//example.test/x.png" })).toBe(false);
+    expect(source({ kind: "url", url: "https://example.test/x.png" })).toBe(
+      true,
+    );
+    // Plain http stays legal: a local model server on a LAN address is the
+    // ordinary desktop deployment, not an attack.
+    expect(source({ kind: "url", url: "http://127.0.0.1:1234/x.png" })).toBe(
+      true,
+    );
+  });
+
+  it("publishes the two source patterns other packages must restate", () => {
+    // Both are exported so a surface that validates AHEAD of the schema (the
+    // REST adapter's hand-written body checks) enforces the same rule rather
+    // than a copy of it that drifts.
+    expect(
+      new RegExp(IMAGE_URL_PATTERN).test("https://example.test/x.png"),
+    ).toBe(true);
+    expect(new RegExp(IMAGE_URL_PATTERN).test("file:///etc/passwd")).toBe(
+      false,
+    );
+    expect(new RegExp(MEDIA_TYPE_PATTERN).test("image/png")).toBe(true);
+    expect(new RegExp(MEDIA_TYPE_PATTERN).test("image/png;x=1")).toBe(false);
   });
 
   it("accepts a host attachment ref, and rejects one that carries no ref", () => {
