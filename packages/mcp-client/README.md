@@ -159,6 +159,21 @@ lockout — the precise error stays visible.
 Concurrent request failures share **one** reconnect: two calls that die on the
 same dropped session produce one reconnect and both retry after it.
 
+**Both deadlines are races, not awaits.** Aborting a signal is a request, and a
+transport that ignores it (a spawn that never execs, an SDK path that only looks
+between round trips) would otherwise hold the deadline open forever — and,
+because the connect promise is shared, take every later turn down with it while
+the circuit breaker waits for a failure that never arrives. So the timeout wins
+the race and the caller gets `mcp_connect_failed` / `mcp_request_timeout` on
+time. The abandoned attempt still cleans up after itself: a connect that
+completes after its deadline (or after a `close()`) closes the client and
+transport it built instead of installing them.
+
+**`close()` waits for a connect in flight.** `McpClientManager.dispose()`
+therefore returns only once every server's connect has settled and been torn
+down — the alternative is a `Client`, and over stdio a child process, adopted a
+moment after the manager reported everything closed.
+
 ## Errors
 
 Every failure is an `McpError` with a stable `code` and a `retryable` verdict,
@@ -180,6 +195,15 @@ A tool call never throws into the run loop. Failures come back as an
 the model reads and it can treat `mcp_request_timeout` differently from
 `mcp_remote_error`. A server-reported failure (`isError: true`) uses the code
 `mcp_tool_error`.
+
+## Result size
+
+The model-facing half of every result — the success text, a server-reported
+error's explanation, a bridge failure's message — is capped at the run's
+`limits.maxBytes` and the result is flagged `truncated`. The text arrives from a
+server that was never told the run's budget, and an uncapped one is replayed
+into context on every later turn of the chat. The `data` payload keeps
+everything the server sent, for a UI to render.
 
 ## Testing
 

@@ -56,19 +56,29 @@ export function projectMcpTools(
   tools: readonly McpListedTool[],
 ): McpToolDescriptor[] {
   const inputs: McpToolIdentityInput[] = tools.map((tool) => {
-    const alias = toolAliases?.[tool.name];
+    // `Object.hasOwn`, not a plain index: `toolAliases` is host config parsed
+    // from JSON, and a tool the server named `constructor` or `toString` would
+    // otherwise read a FUNCTION off the prototype chain and hand it to the
+    // alias grammar — a `TypeError` that costs the whole server's tools.
+    const alias =
+      toolAliases !== undefined && Object.hasOwn(toolAliases, tool.name)
+        ? toolAliases[tool.name]
+        : undefined;
     return {
       serverAlias,
       toolName: tool.name,
       ...(alias === undefined ? {} : { toolAlias: alias }),
     };
   });
-  const byToolName = new Map<string, McpToolIdentity>();
-  for (const identity of buildMcpToolIdentityIndex(inputs).values()) {
-    byToolName.set(identity.toolName, identity);
-  }
-  return tools.map((tool) => {
-    const identity = byToolName.get(tool.name);
+  // Zipped BY POSITION, not by name. The index builds exactly one identity per
+  // input, in input order (a second input landing on one id throws a collision
+  // rather than replacing an entry), and `inputs` is `tools` one-for-one — so
+  // position aligns where names do not: `normalizeMcpToolName` trims, and a
+  // server that listed `" read"` would never be found again under its own
+  // listed name.
+  const identities = [...buildMcpToolIdentityIndex(inputs).values()];
+  return tools.map((tool, index) => {
+    const identity = identities[index];
     if (!identity) {
       // Unreachable: every listed tool produced exactly one identity above.
       throw new McpError(
