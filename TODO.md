@@ -6,11 +6,11 @@
 - [x] 0.3 transaction concurrency tests
 
 ## Phase 1 — durability + fencing
-- [ ] 1.1 fenced terminal writes (C3/D4, D9) — ports + adapters + runner + TurnRunner reorder + conformance
-- [ ] 1.2 `availableAt` normalization (D3)
-- [ ] 1.3 memory adapter parity (D5, D6)
-- [ ] 1.4 runner hygiene (D7, D8, D10, D11)
-- [ ] 1.5 outbox bounds (D12)
+- [x] 1.1 fenced terminal writes (C3/D4, D9) — ports + adapters + runner + TurnRunner reorder + conformance
+- [x] 1.2 `availableAt` normalization (D3)
+- [x] 1.3 memory adapter parity (D5, D6)
+- [x] 1.4 runner hygiene (D7, D8, D10, D11)
+- [x] 1.5 outbox bounds (D12)
 
 ## Phase 2 — core chat loop
 - [x] 2.1 cancellation truth (A1, A6, A15)
