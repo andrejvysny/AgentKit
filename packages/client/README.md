@@ -88,30 +88,32 @@ What it does for you:
 
 | Behaviour | Detail |
 | --- | --- |
-| **Resume** | On a transport error before a terminal event, it reconnects with `Last-Event-ID` set to the last event it actually yielded. The server replays from **one past** that event, so every event is delivered exactly once and `seq` stays contiguous across the seam. |
+| **Resume** | On a transport error, it reconnects with `Last-Event-ID` set to the last event it actually yielded. The server replays from **one past** that event, so every event is delivered exactly once and `seq` stays contiguous across the seam. |
 | **Backoff** | `retryDelayMs` (default 500 ms) until the server's own `retry:` hint arrives, which then wins. |
 | **Retry budget** | `maxRetries` (default 5), and it **resets on every event received** — what it bounds is a server that accepts a connection and immediately drops it, not a long run that drops occasionally. |
 | **Heartbeats** | The server's `: hb` comment frames are consumed and ignored. |
 | **Abort** | `opts.signal` aborts the request and any pending backoff; no reconnect follows an abort. |
 | **Errors** | A problem response (a 404 for an unknown run) throws {@link AgentKitClientError} immediately — it is an answer, not a broken pipe, and will be the same answer on every retry. |
 
-**Iteration ends when the SERVER closes the stream** — on a terminal run event
-(`run.completed` / `run.failed` / `run.cancelled`), or when the task is terminal
-and its log is exhausted (a crashed attempt that never wrote one). A clean
-end-of-body is taken at face value; only a transport *error* triggers a
-reconnect. Use `isTerminalRunEvent(event)` to test an event yourself.
+**Iteration ends when the SERVER closes the stream**, which it does when the
+**task** is terminal and its log is exhausted — not at a terminal run event. A
+run is not one pass: the host re-asks after a failed pass, after a
+completed-but-empty one, and once per correction round, and each pass writes its
+own `run.started` … terminal pair onto the same log (the `retry_pass` warning
+marks the seam). So a break just after `run.failed` is reconnected to like any
+other, and `isTerminalRunEvent(event)` tests the end of a *pass*.
 
 A run's own failure is **not** an exception: `run.failed` is yielded like any
-other event and the iteration ends. An exception from the iterable always means
-the *call* failed.
+other event. An exception from the iterable always means the *call* failed.
 
 ### Trailing events, and `drainRun`
 
 The host's correction harness appends `run.verification` events to the log
-**after** the terminal event (`TurnRunner`'s base pass emits `run.completed`, and
-the harness runs after it). A live stream has already closed by then, so those
-events are invisible to it by construction. `drainRun` is the one resumed pass
-that reaches them:
+**after** a pass's terminal event (`TurnRunner`'s base pass emits `run.completed`,
+and the harness runs after it). A live stream that is still open sees them, since
+the task is `running` throughout — but a stream that was never open at that
+moment, or was dropped before it, did not. `drainRun` is the resumed pass that
+settles it:
 
 ```ts
 const events = [];
@@ -138,12 +140,20 @@ on the event log.
 | `running` | `status: "running"` with no `run.started`/delta yet — claimed, not yet answering. |
 | `streaming` | Any `run.started` or `run.message.delta` seen, and the run is not terminal. |
 | `waiting_approval` | `status: "waiting_approval"` — checked before `streaming`; the user has to act. |
-| `completed` / `failed` / `cancelled` | The matching terminal event, or the matching status. |
+| `completed` / `failed` / `cancelled` | The **last** terminal event, or the matching status. |
 
 A terminal **event** beats the status, because the host appends the event and
 *then* transitions the task: a client that read the two in that order holds a
 `running` status next to a log that has already ended, and believing the status
 would strand a finished run in a spinner.
+
+**Events are read in log order, and the LAST terminal event wins.** A multi-pass
+run holds one per pass, and a *pass boundary* after one — a `retry_pass` warning,
+or a second `run.started` — clears it, because the run is live again. So a log
+ending `run.failed`, `retry_pass`, `run.started`, deltas… is `streaming`, and the
+same run reported `failed` only if its final pass failed. `createRunPhaseTracker()`
+folds this one event at a time (`observe`, `phase`, and `startedNewPass()` for the
+boundary a UI must reset its streamed text on).
 
 Consuming apps' own enums map onto this directly — their `waiting` is `queued`,
 their `streaming` is `streaming`, their `paused` is `waiting_approval` — so

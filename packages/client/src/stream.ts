@@ -16,23 +16,27 @@
  * by `eventId` on the way out.
  *
  * WHAT ENDS THE ITERATION is the SERVER closing the stream, and nothing else.
- * The server closes on a terminal run event, and also when the task is terminal
- * with its log exhausted (a crashed attempt that never wrote one) — both mean
- * "nothing more is coming", and reconnecting after either would poll an ended
- * run forever. A clean end-of-body is therefore taken at face value; a
- * transport ERROR before a terminal event is what triggers the reconnect.
+ * The server closes when the TASK is terminal — its log exhausted, whether or
+ * not it holds a terminal event (a crashed attempt never writes one). A clean
+ * end-of-body is therefore taken at face value; a transport ERROR is what
+ * triggers the reconnect.
  *
- * WHAT DOES NOT END IT is the run's own outcome: a `run.failed` is a terminal
- * event, not an exception. The iterable yields it and stops. An exception from
- * this iterable always means the CALL failed — a 404 for a run that does not
- * exist, an abort, or a connection that broke more times than the retry budget
- * allows.
+ * WHAT DOES NOT END IT is a terminal run EVENT. `run.failed` is not necessarily
+ * the run's last word: the host re-asks after a failed pass, after a
+ * completed-but-empty one, and once per correction round, and each pass writes
+ * its own `run.started` … terminal pair onto the same log (the `retry_pass`
+ * warning marks the seam). So a connection that breaks just after one is a
+ * broken pipe like any other and is reconnected to — the server, which alone
+ * knows the task's status, is what says the run is over. An exception from this
+ * iterable always means the CALL failed: a 404 for a run that does not exist,
+ * an abort, or a connection that broke more times than the retry budget allows.
  *
- * TRAILING EVENTS. The host's correction harness can append `run.verification`
- * events AFTER the terminal event lands on the log (`TurnRunner`'s base pass
- * emits `run.completed` and the harness runs after it). A live stream has
- * already closed by then, so those events are invisible to it by construction —
- * {@link drainRun} is the one resumed pass that picks them up.
+ * TRAILING EVENTS. The host's correction harness appends `run.verification`
+ * events after a pass's terminal event, and the task is still `running` while it
+ * does, so a live stream now sees them. What it cannot see is anything written
+ * after the task went terminal, and a stream that was never open (or was
+ * dropped) at that moment saw nothing — {@link drainRun} is the one resumed pass
+ * that settles both cases.
  */
 import type { AiRunEvent } from "@agentkit/contracts";
 import { AgentKitClientError } from "./errors.js";
@@ -40,7 +44,8 @@ import { parseSseStream, type SseFrame } from "./sse.js";
 import type { RequestOptions, Transport } from "./transport.js";
 
 /**
- * The run events after which the server sends nothing more.
+ * The run events that end a PASS — not necessarily the run, which can open
+ * another pass after one (see the module doc and `retry_pass`).
  *
  * A MIRROR of `TERMINAL_RUN_EVENT_TYPES` in `@agentkit/transport-http`, restated
  * because this package sits beside that one rather than below it and must not
@@ -50,7 +55,7 @@ import type { RequestOptions, Transport } from "./transport.js";
 export const TERMINAL_RUN_EVENT_TYPES: ReadonlySet<AiRunEvent["type"]> =
   new Set<AiRunEvent["type"]>(["run.completed", "run.failed", "run.cancelled"]);
 
-/** Whether this event is a run's last word. */
+/** Whether this event ends a pass (`run.completed`/`failed`/`cancelled`). */
 export function isTerminalRunEvent(event: { type: string }): boolean {
   return TERMINAL_RUN_EVENT_TYPES.has(event.type as AiRunEvent["type"]);
 }
@@ -145,7 +150,6 @@ async function* iterate(
   let lastEventId = options.lastEventId;
   let attempts = 0;
   let reconnects = 0;
-  let sawTerminal = false;
   /** Recently yielded ids, so a replayed tail cannot be delivered twice. */
   const yielded = new Set<string>();
 
@@ -177,19 +181,21 @@ async function* iterate(
         if (yielded.has(event.eventId)) continue;
         remember(yielded, event.eventId);
         yield event;
-        if (isTerminalRunEvent(event)) sawTerminal = true;
       }
-      // The server closed. Terminal event or exhausted terminal task — either
-      // way it has said everything it has to say.
+      // The server closed: the task is terminal and its log is exhausted, so
+      // it has said everything it has to say.
       return;
     } catch (err) {
       if (options.signal?.aborted === true) throw err;
       // A problem response is an answer, not a broken pipe: a 404 for a run
       // that does not exist will be a 404 on every retry.
       if (err instanceof AgentKitClientError) throw err;
-      // A break after the terminal event is the connection closing behind an
-      // answer already delivered; reconnecting would replay nothing.
-      if (sawTerminal) return;
+      // A break after a terminal EVENT is not special any more. The server now
+      // closes only on a terminal TASK, so a broken pipe behind `run.failed`
+      // means the connection died — possibly while the host was already
+      // running the recovery pass that answers the question. Treating it as
+      // "the answer arrived" reported pass 1's failure as the run's outcome;
+      // the reconnect budget is what bounds this instead.
       if (attempts >= maxRetries || reconnects >= maxTotalReconnects) throw err;
       attempts += 1;
       reconnects += 1;

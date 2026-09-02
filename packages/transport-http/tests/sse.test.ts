@@ -3,8 +3,9 @@
  *
  * These are the properties a resuming client depends on and that no route-level
  * assertion can see: the frames come out in `seq` order carrying `eventId` as
- * the SSE id, a terminal event ends the stream, `Last-Event-ID` starts one past
- * the event it names, and neither an idle run nor an abandoned one leaves a
+ * the SSE id, the TASK going terminal ends the stream (a terminal run event only
+ * ends a pass — the host may open another), `Last-Event-ID` starts one past the
+ * event it names, and neither an idle run nor an abandoned one leaves a
  * connection polling forever.
  */
 import { describe, expect, it } from "bun:test";
@@ -32,6 +33,33 @@ function completedRun(): AiRunEvent[] {
     event(2, "run.message.delta", { delta: "lo" }),
     event(3, "run.message.completed", { content: "Hello", toolCallCount: 0 }),
     event(4, "run.completed", { iterations: 1 }),
+  ];
+}
+
+/** A pass that failed: started, one delta, `run.failed`. */
+function firstPass(): AiRunEvent[] {
+  return [
+    event(0, "run.started", { model: "m1", toolCount: 1 }),
+    event(1, "run.message.delta", { delta: "half a " }),
+    event(2, "run.failed", {
+      errorMessage: "the provider said no",
+      errorCode: "provider_error",
+    }),
+  ];
+}
+
+/** The recovery pass the host runs after it, on the same log. */
+function secondPass(): AiRunEvent[] {
+  return [
+    event(3, "run.warning", {
+      code: "retry_pass",
+      message: "Retrying without tools.",
+      pass: 2,
+      reason: "chat_only",
+    }),
+    event(4, "run.started", { model: "m1", toolCount: 0 }),
+    event(5, "run.message.delta", { delta: "the answer" }),
+    event(6, "run.completed", { iterations: 1 }),
   ];
 }
 
@@ -290,6 +318,9 @@ describe("createRunEventStream", () => {
       completedRun().slice(1) as TaskEventEnvelope[],
       { leaseToken: lease.leaseToken },
     );
+    // And the worker lands the task, which is what ends the stream: the
+    // terminal EVENT only means the pass ended (see (h)).
+    await store.tasks.transitionTask(TASK_ID, ["running"], "completed");
     const frames = parseFrames(await drained).slice(1);
     expect(frames.map((f) => f.id)).toEqual([
       "evt-0",
@@ -297,6 +328,61 @@ describe("createRunEventStream", () => {
       "evt-2",
       "evt-3",
       "evt-4",
+    ]);
+  });
+
+  it("(h) keeps following past a terminal event while the task still runs", async () => {
+    // The multi-pass case. `TurnRunner` runs recovery and correction passes
+    // AFTER a pass has written its terminal event (chat-only retry after
+    // `run.failed`, empty-response and correction passes after
+    // `run.completed`), and every pass appends to the SAME log. Closing at the
+    // first terminal event cut a live stream in half: the client rendered pass
+    // 1's failure as the answer while pass 2 was typing the real one.
+    const store = await seed(firstPass(), "running");
+    const lease = await store.tasks.acquireLease({
+      taskId: TASK_ID,
+      attemptId: "att-2",
+      ownerId: "owner",
+      ttlMs: 60_000,
+    });
+    const stream = createRunEventStream({
+      tasks: store.tasks,
+      taskId: TASK_ID,
+      startSeq: 0,
+      // Heartbeat out of reach, as in (g): a comment frame in the middle would
+      // break the strict id sequence asserted below.
+      options: options({ pollIntervalMs: 2, heartbeatIntervalMs: 3_600_000 }),
+    });
+    const drained = drain(stream);
+
+    // The host opens pass 2 and finishes it. Only THEN does the task go
+    // terminal, which is the fact the stream is now allowed to close on.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await store.tasks.appendEvents(
+      TASK_ID,
+      secondPass() as TaskEventEnvelope[],
+      { leaseToken: lease.leaseToken },
+    );
+    await store.tasks.transitionTask(TASK_ID, ["running"], "completed");
+
+    const frames = parseFrames(await drained).slice(1);
+    expect(frames.map((f) => f.id)).toEqual([
+      "evt-0",
+      "evt-1",
+      "evt-2",
+      "evt-3",
+      "evt-4",
+      "evt-5",
+      "evt-6",
+    ]);
+    expect(frames.map((f) => f.event)).toEqual([
+      "run.started",
+      "run.message.delta",
+      "run.failed",
+      "run.warning",
+      "run.started",
+      "run.message.delta",
+      "run.completed",
     ]);
   });
 });

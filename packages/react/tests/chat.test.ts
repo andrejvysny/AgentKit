@@ -22,6 +22,8 @@ import { useChat } from "../src/index.js";
 import { strictWrapper, wrapper } from "./support/render.js";
 import {
   chattyProvider,
+  echoContributor,
+  RetryingProvider,
   startTestServer,
   TEST_CHAT_ID,
   type TestServer,
@@ -130,6 +132,61 @@ describe("a turn through useChat", () => {
     );
     expect(result.current.messages[1]?.metadata["placeholder"]).toBe(false);
     expect(result.current.messages[1]?.content).toContain("chunk-011");
+  });
+
+  test("a retried pass replaces the first pass's text and completes the run", async () => {
+    // F-OWN-1 end to end: the terminal `run.failed` on the log belongs to pass
+    // 1, not to the turn. The stream must carry pass 2, the placeholder must
+    // start over at the boundary rather than reading "PASS-ONEPASS-TWO", and
+    // the turn must land as a success.
+    await server.stop();
+    server = await startTestServer({
+      provider: new RetryingProvider(),
+      contributors: [echoContributor],
+    });
+    const client = connect();
+
+    /** Every value the placeholder took, so the LIVE text can be asserted. */
+    const rendered: string[] = [];
+    const { result } = renderHook(
+      () => {
+        const chat = useChat(TEST_CHAT_ID);
+        // `content` widens to content PARTS in the DTO; this fixture's
+        // provider only ever writes a string.
+        const content = chat.messages[1]?.content;
+        if (typeof content === "string") rendered.push(content);
+        return chat;
+      },
+      { wrapper: wrapper(client) },
+    );
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+
+    await act(async () => {
+      await result.current.submit("retry me");
+    });
+    await waitFor(() => expect(result.current.status).toBe("idle"), {
+      timeout: 10_000,
+    });
+
+    expect(result.current.phase).toBe("completed");
+    expect(result.current.error).toBeNull();
+    expect(result.current.activeRunId).toBeNull();
+    expect(result.current.messages[1]?.content).toBe("PASS-TWO");
+    // Never both: the abandoned pass's text was cleared at the boundary
+    // instead of being prefixed to the answer.
+    expect(
+      rendered.some((c) => c.includes("PASS-ONE") && c.includes("PASS-TWO")),
+    ).toBe(false);
+
+    // Pass 1's text WAS on screen — the reset is what took it off, not a
+    // stream that never delivered it.
+    expect(rendered.some((c) => c.includes("PASS-ONE"))).toBe(true);
+    // Not vacuous: the run really did make two passes on one log, and the
+    // first one really did end in a terminal event.
+    const runId = result.current.messages[1]?.runId ?? "";
+    const log = await server.store.tasks.listEvents(runId);
+    expect(log.filter((e) => e.type === "run.started")).toHaveLength(2);
+    expect(log.some((e) => e.type === "run.failed")).toBe(true);
   });
 
   test("a run that fails lands as an error with the run's own message", async () => {
