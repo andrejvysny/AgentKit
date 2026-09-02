@@ -167,6 +167,43 @@ describe("streamRun bounds a server that misbehaves", () => {
     expect(resumeHeaders[1]).toBe("evt-1");
     expect(seen.map((e) => e.eventId)).toEqual(log.map((e) => e.eventId));
   });
+
+  test("a long replay past the old id-window still dedupes cleanly", async () => {
+    // W1: a 6000-event log breaks at 5000, and the server (not recognising the
+    // `Last-Event-ID` — its documented right) replays from the start. An
+    // `eventId`-window dedupe of a few thousand ids would have evicted event 0
+    // long before event 5000 reconnects, so the replayed head (0..4999) would
+    // land as 5000 duplicates. Dedupe by `seq` has no window to outrun.
+    const total = 6000;
+    const breakAt = 5000;
+    const log = Array.from({ length: total }, (_unused, index) =>
+      event("run.message.delta", index),
+    );
+    log.push(event("run.completed", total));
+    let opened = 0;
+    const fetchImpl: FetchLike = async () => {
+      opened += 1;
+      if (opened === 1) {
+        return sse(frames(...log.slice(0, breakAt)), "error");
+      }
+      // A resume the server answered from the start of the log, not from
+      // `Last-Event-ID` — the replay this dedupe exists to catch.
+      return sse(frames(...log), "close");
+    };
+    const client = createAgentKitClient({
+      baseUrl: BASE_URL,
+      fetch: fetchImpl,
+    });
+
+    const seen: AiRunEvent[] = [];
+    for await (const e of client.streamRun("run-1", { retryDelayMs: 1 })) {
+      seen.push(e);
+    }
+
+    expect(opened).toBe(2);
+    expect(seen).toHaveLength(total + 1);
+    expect(seen.map((e) => e.seq)).toEqual(log.map((e) => e.seq));
+  });
 });
 
 /**
