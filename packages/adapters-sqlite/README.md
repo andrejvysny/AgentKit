@@ -117,11 +117,26 @@ key. With the default `agingBonus = 0` the term folds to zero and the ordering
 is plain `priority DESC, enqueued_at ASC`. See
 [ADR 0003](../../docs/adr/0003-task-dependencies-and-subagents.md).
 
-## Schema (v7)
+## Schema (v8)
 
-Single-file DDL in `src/schema.ts` (`SCHEMA_V7`), applied idempotently
+Single-file DDL in `src/schema.ts` (`SCHEMA_V8`), applied idempotently
 (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). No migrations ship — see
 "It owns its database file" above.
+
+**v8 needs a fresh dev database.** A file stamped `user_version = 7` is refused
+with `sqlite_schema_version`, not upgraded — that refusal *is* the upgrade path
+here, by design. Delete the old file and let the store recreate it.
+
+v8 adds two durability follow-ups: `idx_messages_run` on
+`messages(chat_id, run_id, depth)` — `lastMessageOfRun`'s whole query, the
+lookup that links a resumed turn to its own chain — and `proposals.claimed_at`,
+the instant an apply took the `approved → applying` claim.
+`ProposalService.reconcileInterrupted({ staleAfterMs })` keys its window on
+that column: every stamp it had before (`applied_at`, `decided_at`,
+`created_at`) is older than the claim for a write a human approved and
+something applied later, so a live apply could look stale and be reconciled out
+from under itself. Nullable — a row that never reached `applying` has no claim
+instant.
 
 v4 added conversation branching: `messages` gained `parent_message_id` (a
 self-FK), `depth`, `branch_index` and `active`, plus the two indexes those

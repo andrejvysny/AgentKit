@@ -112,7 +112,7 @@ import {
   type ResolvedTaskAging,
   type TaskAgingOptions,
 } from "@agentkit/host";
-import { SCHEMA_V7, SCHEMA_VERSION } from "./schema.js";
+import { SCHEMA_V8, SCHEMA_VERSION } from "./schema.js";
 
 const DEFAULT_LEASE_TTL_MS = 30_000;
 /** Mirrors the `settings.tool_calling_mode` DDL default. */
@@ -390,6 +390,7 @@ interface ProposalRow {
   reason: string | null;
   created_at: string;
   decided_at: string | null;
+  claimed_at: string | null;
   applied_at: string | null;
 }
 interface ProposalOutcomeRow {
@@ -565,6 +566,7 @@ function proposalFromRow(row: ProposalRow): ProposalRecord {
     ...(row.reason === null ? {} : { reason: row.reason }),
     createdAt: row.created_at,
     ...(row.decided_at === null ? {} : { decidedAt: row.decided_at }),
+    ...(row.claimed_at === null ? {} : { claimedAt: row.claimed_at }),
     ...(row.applied_at === null ? {} : { appliedAt: row.applied_at }),
   };
 }
@@ -2242,6 +2244,18 @@ class SqliteTaskStore implements TaskStore {
           $id: input.attemptId,
         },
       );
+      // An abandoned attempt IS the poison event, so the count is written here,
+      // in the same transaction as the attempt row — never by the caller on a
+      // later transition, where a crash in between loses the death and two
+      // callers reading-then-writing lose one of two. Only `abandoned`: a
+      // failure that ended cleanly is a different diagnosis (see
+      // `TaskRecord.poisonCount`).
+      if (input.status === "abandoned") {
+        this.conn.run(
+          `UPDATE tasks SET poison_count = poison_count + 1 WHERE task_id = $taskId`,
+          { $taskId: row.task_id },
+        );
+      }
       return attemptFromRow({
         ...row,
         status: input.status,
@@ -2904,6 +2918,7 @@ class SqliteProposalStore implements ProposalStore {
            status = $status,
            decision = COALESCE($decision, decision),
            decided_at = COALESCE($decidedAt, decided_at),
+           claimed_at = COALESCE($claimedAt, claimed_at),
            applied_at = COALESCE($appliedAt, applied_at),
            operation_id = COALESCE($operationId, operation_id),
            reason = COALESCE($reason, reason)
@@ -2913,6 +2928,7 @@ class SqliteProposalStore implements ProposalStore {
           $decision:
             patch?.decision !== undefined ? toJson(patch.decision) : null,
           $decidedAt: patch?.decidedAt ?? null,
+          $claimedAt: patch?.claimedAt ?? null,
           $appliedAt: patch?.appliedAt ?? null,
           $operationId: patch?.operationId ?? null,
           $reason: patch?.reason ?? null,
@@ -3389,7 +3405,7 @@ function assertSchemaVersion(db: Database, path: string): void {
     // A pragma every SQLite build answers came back with nothing. Whatever this
     // handle is, it is not a database this adapter can reason about — and the
     // one thing worse than refusing to open it is opening it anyway and running
-    // `SCHEMA_V7` against it, which is exactly what falling through would do.
+    // `SCHEMA_V8` against it, which is exactly what falling through would do.
     throw new AgentKitHostError(
       "sqlite_schema_version",
       `Cannot read user_version from the SQLite store at ${path}; refusing to touch this database.`,
@@ -3424,7 +3440,7 @@ function assertSchemaVersion(db: Database, path: string): void {
  * open-assert-apply-stamp sequence is how one of them ends up skipping the
  * version check on the day the sequence changes.
  *
- * Applying `SCHEMA_V7` unconditionally is safe by construction — every
+ * Applying `SCHEMA_V8` unconditionally is safe by construction — every
  * statement in it is `CREATE ... IF NOT EXISTS` or `INSERT OR IGNORE` — so
  * opening a file this build (or another process running it) already
  * initialized is a no-op.
@@ -3470,7 +3486,7 @@ export function openAgentKitDatabase(
   db.exec("BEGIN IMMEDIATE");
   try {
     assertSchemaVersion(db, path);
-    db.exec(SCHEMA_V7);
+    db.exec(SCHEMA_V8);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
     db.exec("COMMIT");
   } catch (err) {

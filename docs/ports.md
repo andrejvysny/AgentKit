@@ -266,10 +266,10 @@ with. `archiveChat`/`unarchiveChat` are thin, deliberately logic-free wrappers
 over `updateChat({ archived })`.
 
 **Reference / conformance**: `MemoryAssistantStore` and `SqliteAssistantStore`
-(sqlite adapter: `SCHEMA_V7`, `parent_message_id`/`depth`/`branch_index`/
+(sqlite adapter: `SCHEMA_V8`, `parent_message_id`/`depth`/`branch_index`/
 `active` on `messages`, `chats.archived`, `settings.tool_calling_mode`, and
 the FTS5 view/table/trigger set behind `searchMessages` — see
-[`packages/adapters-sqlite/README.md`](../packages/adapters-sqlite/README.md#schema-v7)),
+[`packages/adapters-sqlite/README.md`](../packages/adapters-sqlite/README.md#schema-v8)),
 both graded by the same conformance suite; the tree arithmetic itself
 (`activePathOf`, `activationSetOf`, `nextBranchIndex`, `forkPrefixOf`,
 `planForkedMessages`) is shared, pure, and synchronous
