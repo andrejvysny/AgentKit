@@ -568,4 +568,92 @@ describe("SingleProcessTaskRunner — the runner's own terminal block", () => {
       (await harness.store.tasks.renewLease(leaseToken, 1_000)).taskId,
     ).toBe("run-1");
   });
+
+  it("leaves the attempt RUNNING when the fenced CANCEL transition throws", async () => {
+    // Same fence rule, on the throw path: `settleThrown`'s cancelled branch
+    // ended the attempt before landing the task, so a transition that failed
+    // left a `cancelled` attempt row under a `running` task with a live lease —
+    // the state recovery reads as a crash.
+    const harness = createHarness();
+    await harness.seedTask("run-1");
+
+    // A worker that throws on its way OUT of a cancel. The scripted
+    // `await-abort` cannot reach this branch: it lands the task itself, which
+    // is `settleResolved`'s business.
+    let entered!: () => void;
+    const running = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const tasks = harness.store.tasks;
+    const transitionTask = tasks.transitionTask.bind(tasks);
+    tasks.transitionTask = async (taskId, from, to, patch, opts) => {
+      if (taskId === "run-1" && to === "cancelled") {
+        throw new Error("the store said no");
+      }
+      return transitionTask(taskId, from, to, patch, opts);
+    };
+
+    const handle = await harness.runner.startWorker(
+      {
+        async execute({ signal }) {
+          entered();
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) resolve();
+            else
+              signal.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+          });
+          throw new Error("the worker threw on its way out of the cancel");
+        },
+      },
+      { concurrency: 1, ownerId: "owner-1" },
+    );
+    started.push({ harness, stop: handle.stop });
+
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
+    await running;
+    await harness.runner.requestCancel("run-1");
+    await settle();
+
+    expect(await taskStatus(harness, "run-1")).toBe("running");
+    expect(harness.attemptsFor("run-1")).toEqual([
+      { status: "running", attemptNumber: 1 },
+    ]);
+  });
+
+  it("leaves the attempt RUNNING when the fenced FAIL transition throws", async () => {
+    // And on the terminal-error branch. A diagnosed failure lands the task
+    // `failed`; the attempt row is closed only once that landed.
+    const harness = createHarness({ maxAttempts: 3 });
+    await harness.seedTask("run-1");
+    harness.worker.script("run-1", [
+      // Terminal, not transient: a transient error would retry instead of
+      // landing, and the retry path deliberately ends the attempt under a task
+      // that stays `running`.
+      { kind: "throw", error: new Error("401 unauthorized: invalid api key") },
+    ]);
+
+    const tasks = harness.store.tasks;
+    const transitionTask = tasks.transitionTask.bind(tasks);
+    tasks.transitionTask = async (taskId, from, to, patch, opts) => {
+      if (taskId === "run-1" && to === "failed") {
+        throw new Error("the store said no");
+      }
+      return transitionTask(taskId, from, to, patch, opts);
+    };
+
+    await start(harness, 1);
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
+    await waitFor(
+      () => harness.worker.callsFor("run-1").length === 1,
+      "the attempt to run",
+    );
+    await settle();
+
+    expect(await taskStatus(harness, "run-1")).toBe("running");
+    expect(harness.attemptsFor("run-1")).toEqual([
+      { status: "running", attemptNumber: 1 },
+    ]);
+  });
 });
