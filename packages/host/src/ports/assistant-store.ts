@@ -31,11 +31,35 @@ export interface AssistantStore {
    * Implementations need not support nesting: a host that cannot nest should
    * pass the ambient transaction through rather than opening a second one.
    *
-   * ISOLATION CAVEAT: `transaction()` provides no isolation from concurrent
-   * operations on the same store instance; over `bun:sqlite`, concurrent store
-   * calls issued while a transaction callback awaits genuinely-async work JOIN
-   * that transaction and roll back with it — keep transaction callbacks free of
-   * foreign async work. Do the awaiting outside, and pass the results in.
+   * CALLERS ARE SERIALIZED PER STORE HANDLE. A second `transaction()`, and a
+   * worker's `claimNext`, issued while one is open WAIT for it and then run as
+   * a unit of their own, so one caller's rollback can only ever discard that
+   * caller's writes. Calls the callback makes through the `tx` it is handed
+   * JOIN that transaction, and a nested `tx.transaction(...)` flattens into it
+   * rather than nesting.
+   *
+   * THE COROLLARY IS THAT A CALLBACK MUST WORK THROUGH `tx`. A call issued on
+   * the ROOT store from inside a callback is, by construction,
+   * indistinguishable from an unrelated caller's: it waits for a transaction
+   * that cannot finish until the callback returns. That wait is bounded, so it
+   * ends in an `AgentKitHostError` with code `transaction_gate_timeout`
+   * (`TransactionGateTimeoutError`) rather than a hang — but the fix is always
+   * to use `tx`, never to raise the budget. Keep foreign async work out of the
+   * callback entirely: do the awaiting outside and pass the results in.
+   *
+   * ISOLATION CAVEAT: what `transaction()` promises is atomicity and the
+   * serialization above, NOT snapshot isolation. READS from other callers still
+   * see the store mid-transaction (they take no lock worth serializing), and an
+   * adapter may let an ordinary single-call WRITE from another caller queue
+   * behind an open transaction — `SqliteAssistantStore` does exactly that, so
+   * such a write is delayed rather than joined and rolled back.
+   *
+   * Both reference adapters now answer the four questions above the same way:
+   * `MemoryAssistantStore` has no rollback (it declares
+   * `capabilities.atomicTransactions: false`) and does not queue ordinary
+   * writes, but serializes, flattens and times out exactly as
+   * `SqliteAssistantStore` does. The shared conformance suite in
+   * `@agentkit/testing` pins that for any adapter a host writes later.
    */
   transaction<T>(fn: (tx: AssistantStore) => Promise<T>): Promise<T>;
 }

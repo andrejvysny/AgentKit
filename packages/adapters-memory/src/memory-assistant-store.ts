@@ -46,6 +46,7 @@ import {
   LeaseLostError,
   RecordNotFoundError,
   SeqConflictError,
+  TransactionGateTimeoutError,
   UnknownDependencyError,
   assertProposalTransition,
   assertTaskTransition,
@@ -129,6 +130,13 @@ const DEFAULT_OUTBOX_CLAIM_VISIBILITY_MS = 30_000;
  * claim, forever.
  */
 const DEFAULT_OUTBOX_MAX_ATTEMPTS = 10;
+/**
+ * How long a caller waits for another caller's open `transaction()` before
+ * giving up with {@link TransactionGateTimeoutError} — the same default, and
+ * the same reasoning, as the sqlite adapter's. A host that swaps adapters must
+ * not find the wait it can create for itself behaving differently.
+ */
+const DEFAULT_TRANSACTION_GATE_TIMEOUT_MS = 30_000;
 
 export interface MemoryAssistantStoreOptions extends TaskAgingOptions {
   /** Defaults to {@link defaultClock} (real wall-clock). */
@@ -144,6 +152,17 @@ export interface MemoryAssistantStoreOptions extends TaskAgingOptions {
    * stops offering it. Default 10 — see {@link OutboxStore.claimBatch}.
    */
   outboxMaxAttempts?: number;
+  /**
+   * How long a caller waits for ANOTHER caller's open `transaction()` before
+   * rejecting with {@link TransactionGateTimeoutError}. Default 30s.
+   *
+   * The wait it bounds is the one a caller can create for itself: a
+   * `transaction()` callback that awaits a ROOT-store `transaction()` or
+   * `claimNext` waits for the unit it is running inside, which cannot finish
+   * until the callback returns. Non-finite or non-positive disables the
+   * watchdog, restoring the (silently hanging) unbounded wait.
+   */
+  transactionGateTimeoutMs?: number;
 }
 
 /**
@@ -172,6 +191,140 @@ function copyContentPart(part: AiContentPart): AiContentPart {
   return part.type === "text"
     ? { ...part }
     : { ...part, source: { ...part.source } };
+}
+
+// ---------------------------------------------------------------------------
+// Transaction gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Identity of one open logical transaction — a token, not a counter.
+ *
+ * Deliberately opaque, and deliberately the same shape as the sqlite adapter's:
+ * "a transaction is open" and "MY transaction is open" are different questions,
+ * and only the second one may run inside the first. Nothing reads a field on
+ * it; callers only ever compare it by identity.
+ */
+interface TxOwner {
+  readonly open: true;
+}
+
+/**
+ * One caller's BOUNDED wait on {@link MemoryTxGate}.
+ *
+ * A copy of the sqlite adapter's helper of the same name, on purpose: the two
+ * stores must fail the same way, and this package does not depend on that one.
+ * See there for the full reasoning; the short version is that the gate's holder
+ * always settles UNLESS the caller waiting on it is the reason it cannot — a
+ * `transaction()` callback awaiting a root-store call — and an unbounded wait
+ * makes that mistake indistinguishable from a hang.
+ *
+ * The timed-out caller's place in the FIFO stays and cancels itself when its
+ * turn comes ({@link arrive}), so the queue is still handed on in order and no
+ * unit of work runs for a caller that already gave up.
+ */
+class GateWait {
+  private expired = false;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private readonly expiry: Promise<never>;
+
+  constructor(private readonly timeoutMs: number) {
+    this.expiry = new Promise<never>((_resolve, reject) => {
+      // Non-finite or non-positive is the documented opt-out: no timer, and the
+      // wait is unbounded exactly as it was before this class existed.
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return;
+      const timer = setTimeout(() => {
+        this.expired = true;
+        reject(new TransactionGateTimeoutError(timeoutMs));
+      }, timeoutMs);
+      // A watchdog must never be the reason a process stays alive.
+      (timer as unknown as { unref?: () => void }).unref?.();
+      this.timer = timer;
+    });
+  }
+
+  /** Whichever comes first: the caller's turn, or the deadline. */
+  race<T>(work: Promise<T>): Promise<T> {
+    return Promise.race([work, this.expiry]);
+  }
+
+  /** This caller's turn arrived: stop the clock, or refuse if it already ran out. */
+  arrive(): void {
+    this.cancel();
+    if (this.expired) throw new TransactionGateTimeoutError(this.timeoutMs);
+  }
+
+  /** Stop the clock — the wait is over, however it ended. */
+  cancel(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+}
+
+/**
+ * The FIFO one unit of work at a time runs on, plus the identity of the unit
+ * running right now.
+ *
+ * The Map-backed counterpart of `SqliteConnection`'s gate, and it exists for
+ * the SAME observable contract rather than for atomicity (this store has none
+ * to protect): two callers do not interleave, a nested call made through the
+ * `tx` view runs inside the unit that opened it instead of queueing behind
+ * itself, and a call made on the ROOT store from inside a callback waits — for
+ * a transaction that cannot finish until the callback returns, so it fails with
+ * {@link TransactionGateTimeoutError} rather than hanging.
+ *
+ * Before the owner token, `transaction()` handed its callback `this`, so a
+ * nested `tx.transaction(...)` deadlocked while a root `store.tasks.claimNext()`
+ * sailed through — each the exact opposite of the sqlite adapter's answer.
+ */
+class MemoryTxGate {
+  private queue: Promise<void> = Promise.resolve();
+  private currentOwner: TxOwner | null = null;
+
+  constructor(private readonly timeoutMs: number) {}
+
+  /**
+   * Run `fn` as one unit of work, after everything already queued.
+   *
+   * The caller that IS the open unit (`owner` matches the token minted for it)
+   * runs INLINE instead of queueing — the flatten that keeps `tx.transaction()`
+   * and `tx.tasks.claimNext()` inside the unit their caller opened. Decided
+   * synchronously, before the first await, so `currentOwner` still describes
+   * the transaction this call was issued from.
+   */
+  async runExclusive<T>(
+    fn: (owner: TxOwner) => Promise<T>,
+    owner?: TxOwner,
+  ): Promise<T> {
+    if (owner !== undefined && owner === this.currentOwner) return fn(owner);
+    const waited = new GateWait(this.timeoutMs);
+    const run = this.queue.then(() => {
+      // Still wanted? `arrive` throws for a caller that already timed out, so
+      // its unit of work never runs and the queue still advances in order.
+      waited.arrive();
+      return this.enter(fn);
+    });
+    // The queue carries the SETTLED signal only: the next caller waits for this
+    // one to finish, and must not inherit its rejection.
+    this.queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return waited.race(run);
+  }
+
+  /** One unit of work, with the queue already held by this call. */
+  private async enter<T>(fn: (owner: TxOwner) => Promise<T>): Promise<T> {
+    const owner: TxOwner = { open: true };
+    this.currentOwner = owner;
+    try {
+      return await fn(owner);
+    } finally {
+      // Cleared, not restored: the queue guarantees there was no unit of work
+      // underneath this one.
+      this.currentOwner = null;
+    }
+  }
 }
 
 /**
@@ -811,6 +964,15 @@ export class MemoryTaskStore implements TaskStore {
     private readonly ids: IdGenerator,
     private readonly leaseTtlMs: number = DEFAULT_LEASE_TTL_MS,
     aging: TaskAgingOptions = {},
+    /**
+     * The aggregate's transaction gate, so a claim is one unit of work that no
+     * `transaction()` can interleave with — see {@link claimNextAs}. A store
+     * built on its own (no aggregate) gets a gate of its own, which is the same
+     * thing with nobody else on it.
+     */
+    private readonly gate: MemoryTxGate = new MemoryTxGate(
+      DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
+    ),
   ) {
     this.aging = resolveTaskAging(aging);
   }
@@ -1162,6 +1324,32 @@ export class MemoryTaskStore implements TaskStore {
   }
 
   async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
+    // No owner: a claim issued on the ROOT store is a stranger to any open
+    // transaction, and waits for it. The `tx` view calls `claimNextAs` instead.
+    return this.claimNextAs(undefined, input);
+  }
+
+  /**
+   * {@link claimNext}, told which transaction it belongs to.
+   *
+   * ONE UNIT OF WORK, matching the sqlite adapter: the walk below awaits
+   * between its transitions, so without the gate a second claim (or an
+   * unrelated `transaction()`) could interleave with it. `owner` is set only on
+   * the copy `MemoryAssistantStore.transaction` hands its callback — that
+   * caller asked for one unit and runs inside the one already open; everybody
+   * else queues, and a root claim issued from INSIDE a callback queues behind
+   * the transaction it is running in and times out.
+   */
+  claimNextAs(
+    owner: TxOwner | undefined,
+    input: ClaimNextInput,
+  ): Promise<ClaimedTask | null> {
+    return this.gate.runExclusive(() => this.claimNextInGate(input), owner);
+  }
+
+  private async claimNextInGate(
+    input: ClaimNextInput,
+  ): Promise<ClaimedTask | null> {
     const busy = new Set(input.scopesBusy);
     const kinds = input.kinds === undefined ? null : new Set(input.kinds);
     const nowMs = input.now.getTime();
@@ -1753,10 +1941,50 @@ export class MemoryOutboxStore implements OutboxStore {
 }
 
 /**
+ * `tasks` as seen from INSIDE the transaction `owner` opened.
+ *
+ * Only `claimNext` differs — it is the one method of this store that takes the
+ * gate — and only the OBJECT IDENTITY makes that difference expressible: a
+ * claim issued through `tx.tasks` belongs to the open unit, while the very same
+ * call on `store.tasks` is a stranger's and waits. Every other method forwards
+ * to the one real store, whose Maps are the state; a prototype copy would be
+ * shorter and wrong, because a method that mutates a scalar field (the fencing
+ * counter) on the copy would leave the real store's value behind.
+ */
+function taskStoreInTransaction(
+  tasks: MemoryTaskStore,
+  owner: TxOwner,
+): TaskStore {
+  return {
+    createTask: (input) => tasks.createTask(input),
+    getTask: (taskId) => tasks.getTask(taskId),
+    listChildren: (taskId) => tasks.listChildren(taskId),
+    listByScope: (scopeId) => tasks.listByScope(scopeId),
+    deleteByScope: (scopeId) => tasks.deleteByScope(scopeId),
+    transitionTask: (taskId, from, to, patch, opts) =>
+      tasks.transitionTask(taskId, from, to, patch, opts),
+    createAttempt: (input) => tasks.createAttempt(input),
+    endAttempt: (input) => tasks.endAttempt(input),
+    acquireLease: (input) => tasks.acquireLease(input),
+    renewLease: (leaseToken, ttlMs) => tasks.renewLease(leaseToken, ttlMs),
+    releaseLease: (leaseToken) => tasks.releaseLease(leaseToken),
+    expireStaleLeases: (now) => tasks.expireStaleLeases(now),
+    appendEvents: (taskId, events, opts) =>
+      tasks.appendEvents(taskId, events, opts),
+    listEvents: (taskId, opts) => tasks.listEvents(taskId, opts),
+    updateProgress: (taskId, progress, opts) =>
+      tasks.updateProgress(taskId, progress, opts),
+    nextSeq: (taskId) => tasks.nextSeq(taskId),
+    claimNext: (input) => tasks.claimNextAs(owner, input),
+    markDeadLettered: (taskId, reason, opts) =>
+      tasks.markDeadLettered(taskId, reason, opts),
+  };
+}
+
+/**
  * Map-backed, complete {@link AssistantStore}.
  *
- * NO ROLLBACK: `transaction(fn)` runs `fn(this)`, queued behind any
- * transaction already in flight — every write inside it lands on the live Maps
+ * NO ROLLBACK: every write inside `transaction(fn)` lands on the live Maps
  * immediately, and a throw after some writes leaves those writes in place.
  * That is fine for tests and single-process embedding
  * where "transaction" mostly means "these calls are logically one unit", but
@@ -1765,6 +1993,23 @@ export class MemoryOutboxStore implements OutboxStore {
  * BEGIN/COMMIT/ROLLBACK. `capabilities.atomicTransactions` in the
  * conformance suite's factory exists specifically so the atomicity test skips
  * this adapter instead of failing it.
+ *
+ * WHAT IT DOES KEEP is the half a Map-backed store can: the SHAPE of the
+ * contract. `transaction()` callers are serialized, calls made through the `tx`
+ * the callback is handed (including a nested `tx.transaction(...)` and
+ * `tx.tasks.claimNext(...)`) run inside the unit that opened it, and a
+ * `transaction()` or `claimNext` issued on the ROOT store from inside a
+ * callback waits for a transaction that cannot finish — and so fails with
+ * {@link TransactionGateTimeoutError} instead of hanging. That is the sqlite
+ * adapter's answer to all four questions, pinned for both by the shared
+ * conformance suite.
+ *
+ * The one place the two still differ is the blast radius of an ORDINARY write:
+ * `SqliteAssistantStore` makes every write method wait out a transaction it is
+ * not part of, because joining one means being erased by a stranger's
+ * rollback. There are no rollbacks here, so an unrelated
+ * `store.conversations.updateChat(...)` still lands immediately rather than
+ * queueing.
  */
 export class MemoryAssistantStore implements AssistantStore {
   readonly conversations: MemoryConversationStore;
@@ -1774,11 +2019,23 @@ export class MemoryAssistantStore implements AssistantStore {
   readonly settings = new MemorySettingsStore();
   readonly outbox: MemoryOutboxStore;
 
+  /** The FIFO {@link transaction} and `claimNext` queue on — one unit of work at a time. */
+  private readonly gate: MemoryTxGate;
+
   constructor(options: MemoryAssistantStoreOptions = {}) {
     const clock = options.clock ?? defaultClock;
     const ids = options.ids ?? defaultIds;
+    this.gate = new MemoryTxGate(
+      options.transactionGateTimeoutMs ?? DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
+    );
     this.conversations = new MemoryConversationStore(clock, ids);
-    this.tasks = new MemoryTaskStore(clock, ids, options.leaseTtlMs, options);
+    this.tasks = new MemoryTaskStore(
+      clock,
+      ids,
+      options.leaseTtlMs,
+      options,
+      this.gate,
+    );
     this.proposals = new MemoryProposalStore(clock);
     this.outbox = new MemoryOutboxStore(
       clock,
@@ -1787,33 +2044,53 @@ export class MemoryAssistantStore implements AssistantStore {
     );
   }
 
-  /** The FIFO {@link transaction} queues on — one unit of work at a time. */
-  private txGate: Promise<void> = Promise.resolve();
-
   /**
    * Run `fn` as one logical unit, after every transaction already queued.
    *
    * STILL NO ROLLBACK — see the class doc; a throw leaves whatever `fn` wrote
-   * in the Maps. What the queue adds is the OTHER half of the port's promise,
+   * in the Maps. What the gate adds is the OTHER half of the port's promise,
    * the half a Map-backed store can actually keep: two callers do not
    * interleave. Without it, a second caller's writes landed in the middle of
    * the first caller's unit, so a host reading its own writes back inside a
    * callback could see a stranger's — and no test could tell that apart from
    * the sqlite adapter's behaviour, which is what this store exists to
    * approximate.
-   *
-   * `fn` is handed `this`, so a NESTED `transaction()` inside the callback
-   * would wait on a queue only that callback can drain. Compose inside one
-   * transaction instead — the same rule the sqlite adapter states.
    */
   async transaction<T>(fn: (tx: AssistantStore) => Promise<T>): Promise<T> {
-    const run = this.txGate.then(() => fn(this));
-    // The queue carries the SETTLED signal only: the next caller waits for this
-    // one to finish, and must not inherit its rejection.
-    this.txGate = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
+    return this.gate.runExclusive((owner) => fn(this.txView(owner)));
+  }
+
+  /**
+   * The aggregate as seen from INSIDE the transaction `owner` opened.
+   *
+   * `fn` used to be handed `this`, which is what made this store the mirror
+   * image of the sqlite one: a nested `tx.transaction(...)` queued behind the
+   * callback that was already holding the queue (a deadlock), while a root
+   * `store.tasks.claimNext()` ran straight through the open unit. The view is
+   * what tells those two apart — it carries the token, so a call made through
+   * it runs inside the unit, and the same call on the root store does not.
+   *
+   * The five stores that never take the gate are shared with the root
+   * aggregate, not copied: an ungated write behaves the same either way, and a
+   * copy would only invite the reader to think it did not.
+   */
+  private txView(owner: TxOwner): AssistantStore {
+    return {
+      conversations: this.conversations,
+      tasks: taskStoreInTransaction(this.tasks, owner),
+      proposals: this.proposals,
+      providers: this.providers,
+      settings: this.settings,
+      outbox: this.outbox,
+      transaction: <T>(nested: (tx: AssistantStore) => Promise<T>) =>
+        this.gate.runExclusive(
+          // `nestedOwner` is `owner` on the flattened path, and a fresh token
+          // only if this view outlived its transaction and had to open a new
+          // one — either way the nested callback gets the view that matches the
+          // transaction it is actually running in.
+          (nestedOwner) => nested(this.txView(nestedOwner)),
+          owner,
+        ),
+    };
   }
 }
