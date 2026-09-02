@@ -1,6 +1,6 @@
 /**
  * `bun:sqlite`-backed {@link McpServerConfigStore} over the `mcp_servers` table
- * of {@link SCHEMA_V7}.
+ * of {@link SCHEMA_V8}.
  *
  * STANDALONE, not a seventh member of {@link SqliteAssistantStore}. The
  * aggregate exists so writes that must land together can, and an MCP server

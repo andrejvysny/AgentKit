@@ -109,7 +109,7 @@ every hand-rolled store — implement a port most hosts never use. The reference
 implementations are standalone classes beside the assistant store:
 `MemoryMcpServerConfigStore` (`@agentkit/adapters-memory`) and
 `SqliteMcpServerConfigStore` (`@agentkit/adapters-sqlite`, over the same
-database handle or path, `mcp_servers` in `SCHEMA_V7`). Both are graded by
+database handle or path, `mcp_servers` in `SCHEMA_V8`). Both are graded by
 `describeMcpServerConfigStoreConformance` from `@agentkit/testing`.
 
 **`alias` is unique, case-sensitively.** It is the tool namespace every

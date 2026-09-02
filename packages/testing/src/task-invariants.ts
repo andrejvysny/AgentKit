@@ -526,7 +526,9 @@ function checkEventLogs(
  * `markDeadLettered` writes the poison marks and nothing else — the row alone
  * stops no worker, so the caller must land the task too (that is what
  * `SingleProcessTaskRunner.deadLetter` does). A dead-lettered row that is still
- * runnable is a task the queue gave up on and would hand out again.
+ * runnable is a task the queue gave up on and would hand out again. The poison
+ * COUNT is not one of those marks: `TaskStore.endAttempt` increments it itself
+ * when an attempt ends `abandoned`, so nothing here has to be told about it.
  */
 function checkTaskFields(
   view: TaskInvariantView,

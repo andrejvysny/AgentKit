@@ -473,6 +473,8 @@ export const ProposalDtoSchema = Type.Object({
   outcome: Type.Optional(ApplyOutcomeDtoSchema),
   createdAt: Type.String({ description: "ISO-8601." }),
   decidedAt: Type.Optional(Type.String()),
+  /** When the apply claimed this proposal (`approved` → `applying`). */
+  claimedAt: Type.Optional(Type.String()),
   appliedAt: Type.Optional(Type.String()),
 });
 export type ProposalDto = Static<typeof ProposalDtoSchema>;
