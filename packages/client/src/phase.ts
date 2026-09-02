@@ -97,3 +97,54 @@ export function runPhase(input: RunPhaseInput): RunPhase {
   // worker picked the run up; nothing at all means it has not been seen.
   return events.length > 0 ? "running" : "queued";
 }
+
+/**
+ * The same phase, maintained one event at a time.
+ *
+ * {@link runPhase} walks the whole log on every call, which is exactly what a
+ * hook re-deriving the phase on each arriving delta must not do: a
+ * thousand-token answer then costs a million comparisons for a value that can
+ * only move forwards. The two facts `runPhase` looks for are MONOTONIC — a run
+ * that has produced output never un-produces it, and a terminal event is the
+ * last word — so a follower can simply remember them.
+ *
+ * A strict mirror of the EVENT half of {@link runPhase}, not a second opinion:
+ * same streaming vocabulary, same "the first terminal event wins", same
+ * `running`/`queued` fallback, and it lives beside it so the two cannot drift.
+ * A caller that also holds a `status` still wants {@link runPhase}.
+ */
+export interface RunPhaseTracker {
+  /** Fold one event in, and hand back the phase as of it. */
+  observe(event: AiRunEvent): RunPhase;
+  /** The phase as of the last event observed. */
+  phase(): RunPhase;
+}
+
+export function createRunPhaseTracker(): RunPhaseTracker {
+  let terminal: RunPhase | null = null;
+  let streaming = false;
+  let seen = false;
+
+  const phase = (): RunPhase => {
+    if (terminal !== null) return terminal;
+    if (streaming) return "streaming";
+    return seen ? "running" : "queued";
+  };
+
+  return {
+    observe(event: AiRunEvent): RunPhase {
+      seen = true;
+      if (STREAMING_EVENT_TYPES.has(event.type)) streaming = true;
+      if (terminal === null && isTerminalRunEvent(event)) {
+        terminal =
+          event.type === "run.completed"
+            ? "completed"
+            : event.type === "run.failed"
+              ? "failed"
+              : "cancelled";
+      }
+      return phase();
+    },
+    phase,
+  };
+}
