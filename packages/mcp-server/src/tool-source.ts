@@ -11,11 +11,16 @@ import {
   type ContextProvider,
   type IdGenerator,
   type Logger,
+  type ToolCatalog,
   type ToolGuard,
   type ToolSetContributor,
 } from "@agentkit/host";
 import { toolEnvelopeFromResult, toolErrorEnvelope } from "./envelope.js";
-import type { McpSessionScope, McpToolSource } from "./types.js";
+import {
+  EXEC_FAILED_TEXT,
+  type McpSessionScope,
+  type McpToolSource,
+} from "./types.js";
 
 export interface StagedToolSourceOptions {
   contributors: readonly ToolSetContributor[];
@@ -67,26 +72,45 @@ export function createStagedToolSource(
   options: StagedToolSourceOptions,
 ): McpToolSource {
   const limits = options.limits ?? resolveToolLimits({ preference: "small" });
-  const catalog = createContributorToolCatalog({
-    contributors: options.contributors,
-    ...(options.context === undefined ? {} : { context: options.context }),
-    ...(options.guards === undefined ? {} : { guards: options.guards }),
-    limits,
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
-  });
+  const buildCatalog = (
+    guards: readonly ToolGuard[] | undefined,
+  ): ToolCatalog =>
+    createContributorToolCatalog({
+      contributors: options.contributors,
+      ...(options.context === undefined ? {} : { context: options.context }),
+      ...(guards === undefined ? {} : { guards }),
+      limits,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+    });
+  const baseCatalog = buildCatalog(options.guards);
 
   return {
-    catalog,
+    // The catalogue is rebuilt per call ONLY when a principal has to reach the
+    // guards (the object is a closure over these options; nothing is staged
+    // until `listTools` runs). Listing has to see the same guard verdicts the
+    // call path will, or a per-principal `isVisible` would advertise tools that
+    // `tools/call` then refuses.
+    catalog: {
+      listTools(scope?: McpSessionScope) {
+        const principal = scope?.principal;
+        if (principal === undefined) return baseCatalog.listTools(scope);
+        return buildCatalog(withPrincipal(options.guards, principal)).listTools(
+          scope,
+        );
+      },
+    },
     async execute(
       name: string,
       args: unknown,
       scope?: McpSessionScope,
     ): Promise<AiToolEnvelope> {
       const chatId = scope?.chatId;
+      const principal = scope?.principal;
       const bindings =
         chatId === undefined
           ? []
           : ((await options.context?.listBindings(chatId)) ?? []);
+      const guards = withPrincipal(options.guards, principal);
       const staged = await stageRegistry({
         contributors: options.contributors,
         ctx: {
@@ -99,7 +123,7 @@ export function createStagedToolSource(
           (binding) =>
             binding.role === "primary" && binding.status === "active",
         ),
-        ...(options.guards === undefined ? {} : { guards: options.guards }),
+        ...(guards === undefined ? {} : { guards }),
       });
 
       const tool = staged.registry.get(name);
@@ -135,24 +159,67 @@ export function createStagedToolSource(
         ...(chatId === undefined ? {} : { chatId }),
         bindings,
         limits,
-        metadata: { source: "mcp-server", calledAt: options.clock.nowIso() },
+        metadata: {
+          source: "mcp-server",
+          calledAt: options.clock.nowIso(),
+          ...(principal === undefined ? {} : { principal }),
+        },
       };
 
       try {
         return toolEnvelopeFromResult(await tool.execute(ctx, args));
       } catch (err) {
+        // The thrower's message goes to the OPERATOR, not to the MCP client: a
+        // tool that threw wrote that sentence for a log, and forwarding it hands
+        // a remote caller whatever the host happened to put in it (a path, a
+        // query, a row it could not find). The client gets a fixed sentence and
+        // the call's `runId`, which is the id the warning below is filed under.
         const errorMessage = err instanceof Error ? err.message : String(err);
         options.logger?.warn("mcp tool call threw", {
           tool: name,
+          runId: ctx.runId,
           errorMessage,
         });
-        return toolErrorEnvelope("exec_failed", errorMessage, {
-          phase: "execution",
-          retryable: retryableOf(err),
-        });
+        return toolErrorEnvelope(
+          "exec_failed",
+          `${EXEC_FAILED_TEXT} (ref: ${ctx.runId}).`,
+          {
+            phase: "execution",
+            retryable: retryableOf(err),
+          },
+        );
       }
     },
   };
+}
+
+/**
+ * Show every guard WHO the call is for, without teaching `stageRegistry` about
+ * principals.
+ *
+ * The guard context is built inside staging, from the contribution context, and
+ * a principal is not something a chat turn has — so it is added here, at the one
+ * call path that knows one, by wrapping the host's guards rather than widening
+ * a type every host implements. `isVisible` gets it too: which tools a caller
+ * may even SEE is the cheaper half of the same question.
+ */
+function withPrincipal(
+  guards: readonly ToolGuard[] | undefined,
+  principal: string | undefined,
+): readonly ToolGuard[] | undefined {
+  if (guards === undefined || principal === undefined) return guards;
+  return guards.map((guard) => {
+    const wrapped: ToolGuard = {};
+    if (guard.isVisible !== undefined) {
+      const isVisible = guard.isVisible.bind(guard);
+      wrapped.isVisible = (ctx) => isVisible({ ...ctx, principal });
+    }
+    if (guard.canExecute !== undefined) {
+      const canExecute = guard.canExecute.bind(guard);
+      wrapped.canExecute = (ctx) => canExecute({ ...ctx, principal });
+    }
+    return wrapped;
+  });
 }
 
 /** Same wording as the run loop's: say what is wrong and that a retry is possible. */

@@ -20,6 +20,16 @@ export interface ToolGuardContext {
   /** The namespace of the contributor that offered {@link tool}. */
   namespace: string;
   tool: AiToolDefinition;
+  /**
+   * WHO the tools are being staged for, when the caller knows.
+   *
+   * Absent on the turn-runner path, where a run is already attributed by its
+   * chat and its task. Set by call paths that serve a named caller — today
+   * `@agentkit/mcp-server`, whose session scope resolves one at `initialize`
+   * and threads it here so a guard can answer "may THIS principal see/run this"
+   * rather than only "does this chat have the binding".
+   */
+  principal?: string;
 }
 
 /** A refusal must say why: the reason is fed back to the model verbatim. */

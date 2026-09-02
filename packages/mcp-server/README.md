@@ -33,16 +33,25 @@ const mcp = createMcpServerHandler({
   auth: { bearerToken: process.env.AGENTKIT_MCP_SERVER_TOKEN! },
   // Loopback on any port by default; name your own list to widen it.
   allowedHosts: ["localhost", "127.0.0.1"],
-  // Which chat an MCP session works in, from ITS OWN headers, once, at init.
+  // Which chat an MCP session works in — and, optionally, who it belongs to —
+  // from ITS OWN headers, once, at init.
   sessionScope: (headers) => {
     const chatId = headers.get("x-agentkit-chat");
-    return chatId === null ? {} : { chatId };
+    const principal = headers.get("x-agentkit-principal");
+    return {
+      ...(chatId === null ? {} : { chatId }),
+      ...(principal === null ? {} : { principal }),
+    };
   },
   writesEnabled: false, // default; see "Writes" below
   // Session lifetime — both defaults shown; see "Session lifetime" below.
-  maxSessions: 64,
+  maxSessions: 64,               // PER PRINCIPAL
   sessionIdleTtlMs: 30 * 60 * 1000,
-  clock,                // optional; only the two settings above read it
+  // Request bounds — all defaults shown; see "Request bounds" below.
+  maxRequestBytes: 4 * 1024 * 1024,
+  maxConcurrentCallsPerSession: 4,
+  maxBatchSize: 8,
+  clock,                // optional; only the lifetime settings read it
   logger,
 });
 
@@ -122,8 +131,32 @@ with a *different* valid token and presents a leaked `Mcp-Session-Id` gets a
 confirm the session exists, and the DELETE it would otherwise be allowed to
 send would end someone else's session.
 
+**A session's principal reaches the tools.** Whatever `sessionScope` returns as
+`principal` is threaded to `AiToolExecutionContext.metadata.principal` and to
+`ToolGuardContext.principal`, on BOTH paths — so a guard can hide or refuse per
+caller and `tools/list` shows exactly what `tools/call` would allow. It is a
+label for policy and audit, never a credential: what decides whether a request
+may use a session is the `Authorization` fingerprint above, not a string the
+scope callback derived.
+
+**A thrown tool does not explain itself to the client.** When a tool (or the
+tool source) throws, the MCP client gets `exec_failed` with a fixed sentence and
+a correlation id; the thrower's own message goes to the `logger` under the same
+id. A throw's message is written for an operator — it names paths, queries, rows
+that were not found — and the caller here is a remote agent.
+
 **Bind loopback.** Even with a token, publishing this to a LAN publishes tool
 execution to a LAN.
+
+**Composition hazard: CORS.** `@agentkit/transport-http`'s `cors` option is
+about the REST surface, but a browser does not know that. Serving this handler
+from the same origin as a transport-http server configured with
+`origins: "*"` — whose default allow-headers include `Authorization` — makes
+tool execution reachable from any page the user has open, since the browser will
+now be told the cross-origin request is permitted. If both are mounted on one
+origin, set `allowedOrigins` here to the exact origins your UI is served from
+(and prefer a named origin list over `"*"` there). The `Host` guard does not
+cover this case: a real browser sends your own host.
 
 ## Session lifetime
 
@@ -131,21 +164,51 @@ Nothing in MCP obliges a client to send the `DELETE` that ends a session, and a
 session holds a `Server`, a transport and every SSE stream its client opened —
 so the map is bounded on two axes.
 
-- **`maxSessions`** (default **64**). At the cap, opening a new session closes
-  the one that has gone longest without a request, and closes its transport
-  with it — so its open streams end rather than lingering. Evicting the oldest
-  idle rather than refusing the newcomer is deliberate: a client that walked
-  away must not be able to lock a live one out.
+- **`maxSessions`** (default **64**), **per principal**. At the cap, opening a
+  new session closes the one that has gone longest without a request, and closes
+  its transport with it — so its open streams end rather than lingering.
+  Evicting the oldest idle rather than refusing the newcomer is deliberate: a
+  client that walked away must not be able to lock a live one out. The bucket is
+  the `Authorization` fingerprint, so a caller can only ever evict its **own**
+  sessions; a global LRU would let anyone holding a valid token close everybody
+  else's by reconnecting. The map as a whole is still bounded, at
+  `maxSessions × 16`, and only past that does eviction cross principals.
 - **`sessionIdleTtlMs`** (default **30 minutes**). A session idle longer than
   this is closed. Reaped **lazily**, on the next request the handler serves —
   no timer is armed, because a package whose whole shape is "a function that
   takes a `Request`" should not keep an event loop alive. A host that wants
   eager cleanup calls `dispose()`.
 
+Neither reaping nor eviction touches a session with a **request in flight**, and
+a session's idle clock is stamped when a request COMPLETES as well as when it
+arrives. Closing a session mid-`tools/call` ends the SSE stream the answer was
+going to be written to, and the caller gets HTTP 200 with an empty body — the
+most ambiguous outcome available for a call that may well have run.
+
 Both compare timestamps from `clock` (default `@agentkit/host`'s
 `defaultClock`), which is injectable so an idle-TTL test is about a fake clock
 rather than about waiting. An evicted or expired session id answers `404`, the
 same as an unknown one.
+
+## Request bounds
+
+This handler is reachable by anything holding the token, and every one of these
+is a resource an authenticated caller could otherwise spend without limit.
+
+- **`maxRequestBytes`** (default **4 MiB**). A `Content-Length` over the cap is
+  refused `413` before a byte is read; the read then counts anyway, because a
+  chunked body declares no length and a header is not a constraint. Without it
+  the SDK transport buffers whatever arrives — before a session, a message, or
+  any other check exists.
+- **`maxBatchSize`** (default **8**). A JSON-RPC batch longer than this is
+  refused `-32600` before ANY of its messages is dispatched. Refusing partway
+  through would have run exactly the tools the limit exists to bound.
+- **`maxConcurrentCallsPerSession`** (default **4**). A batch is dispatched
+  message-by-message with no waiting in between, so its calls all reach the
+  host's tools at once; past this many, the rest queue. The catalogue staging
+  they would each repeat is computed once and shared between them — `execute`
+  still re-stages per call, so `canExecute` guards are evaluated at call time on
+  state that may have moved.
 
 ## Tool projection
 
@@ -205,7 +268,9 @@ re-implemented here, which is the only way it cannot drift.
 Cost: `contribute` runs once per `tools/list` and once per `tools/call`, because
 which tools exist depends on the chat's bindings and on state a guard reads, and
 both move between calls. A contributor whose `contribute` is expensive should
-cache inside itself.
+cache inside itself. The one thing that IS shared is the catalogue listing of a
+session's concurrently-dispatched requests (see "Request bounds") — never the
+staging `execute` does.
 
 A host with its own execution path can implement `McpToolSource` directly — it
 is two members, `{ catalog, execute }`.

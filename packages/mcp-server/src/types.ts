@@ -11,6 +11,18 @@ import type { Clock, Logger, ToolCatalog } from "@agentkit/host";
  */
 export interface McpSessionScope {
   chatId?: string;
+  /**
+   * Who this session belongs to, as the HOST names principals.
+   *
+   * Resolved by {@link McpServerHandlerOptions.sessionScope} from the same
+   * headers the `chatId` comes from, and threaded to the tools that run for the
+   * session: `AiToolExecutionContext.metadata.principal` and
+   * `ToolGuardContext.principal`. It is an opaque label for policy and audit —
+   * the handler never compares it to anything, because the thing that decides
+   * whether a request may use a session is the `Authorization` fingerprint (see
+   * `auth.ts`), not a string the scope callback derived.
+   */
+  principal?: string;
 }
 
 /**
@@ -101,7 +113,7 @@ export interface McpServerHandlerOptions {
     headers: Headers,
   ): McpSessionScope | Promise<McpSessionScope> | undefined;
   /**
-   * How many sessions may be live at once. Defaults to
+   * How many sessions ONE PRINCIPAL may hold at once. Defaults to
    * {@link DEFAULT_MAX_SESSIONS} (64).
    *
    * A session holds a `Server`, a transport, and every SSE stream the client
@@ -111,6 +123,15 @@ export interface McpServerHandlerOptions {
    * that has gone longest without a request is closed to make room: the
    * alternative, refusing the new one, lets a stale session lock a live client
    * out.
+   *
+   * PER PRINCIPAL, not global (the principal being the `Authorization`
+   * fingerprint the session was opened with). A global LRU means one caller
+   * opening `maxSessions` sessions closes everybody else's — a cross-tenant
+   * denial of service anyone holding a valid token can run. A principal can
+   * only ever evict its own. The whole map is still bounded, by
+   * `maxSessions * `{@link GLOBAL_SESSION_CAP_FACTOR}, as a backstop against a
+   * host that mints a token per client; only past THAT does eviction cross
+   * principals.
    */
   maxSessions?: number;
   /**
@@ -123,6 +144,38 @@ export interface McpServerHandlerOptions {
    * takes a `Request`"; a host that wants eager cleanup calls `dispose()`.
    */
   sessionIdleTtlMs?: number;
+  /**
+   * Largest POST body this handler will read, in bytes. Defaults to
+   * {@link DEFAULT_MAX_REQUEST_BYTES} (4 MiB); a bigger one is refused `413`.
+   *
+   * The check is made twice on purpose: a `Content-Length` over the cap is
+   * refused before a single byte is read, and the body is then read through a
+   * counter that aborts at the cap — because a chunked request declares no
+   * length, and the SDK transport buffers whatever arrives before a session (or
+   * a message) exists to attribute it to.
+   */
+  maxRequestBytes?: number;
+  /**
+   * How many `tools/call` requests ONE session may have executing at once.
+   * Defaults to {@link DEFAULT_MAX_CONCURRENT_CALLS_PER_SESSION} (4); the rest
+   * queue.
+   *
+   * A JSON-RPC batch is dispatched message-by-message with no waiting in
+   * between, so without this one request can put its whole batch into the host's
+   * tools simultaneously — every one of them staging a registry and running a
+   * tool against the host's own state.
+   */
+  maxConcurrentCallsPerSession?: number;
+  /**
+   * How many messages one JSON-RPC batch may carry. Defaults to
+   * {@link DEFAULT_MAX_BATCH_SIZE} (8); a longer array is refused `-32600`
+   * before anything in it is dispatched.
+   *
+   * The cap is on the array, not on the work it implies: refusing after the
+   * first few messages have already been handed to the transport would run
+   * exactly the tools the limit exists to bound.
+   */
+  maxBatchSize?: number;
   /**
    * Source of the timestamps {@link maxSessions} and {@link sessionIdleTtlMs}
    * compare. Defaults to `@agentkit/host`'s `defaultClock`; injected in tests
@@ -150,14 +203,47 @@ export const DEFAULT_ALLOWED_HOSTS: readonly string[] = Object.freeze([
   "[::1]",
 ]);
 
-/** Live-session cap — see {@link McpServerHandlerOptions.maxSessions}. */
+/** Per-principal session cap — see {@link McpServerHandlerOptions.maxSessions}. */
 export const DEFAULT_MAX_SESSIONS = 64;
+
+/**
+ * Multiple of `maxSessions` at which eviction stops respecting principals.
+ *
+ * The per-principal cap bounds what one caller can hold; this bounds what ALL
+ * of them can, for a host whose `verify` accepts a token per client. Reaching
+ * it means the map is already `maxSessions * 16` entries deep, so the
+ * globally-oldest session is closed regardless of whose it is.
+ */
+export const GLOBAL_SESSION_CAP_FACTOR = 16;
+
+/** Request body cap — see {@link McpServerHandlerOptions.maxRequestBytes}. */
+export const DEFAULT_MAX_REQUEST_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Concurrent `tools/call` cap per session — see
+ * {@link McpServerHandlerOptions.maxConcurrentCallsPerSession}.
+ */
+export const DEFAULT_MAX_CONCURRENT_CALLS_PER_SESSION = 4;
+
+/** JSON-RPC batch cap — see {@link McpServerHandlerOptions.maxBatchSize}. */
+export const DEFAULT_MAX_BATCH_SIZE = 8;
 
 /**
  * Idle session lifetime — see
  * {@link McpServerHandlerOptions.sessionIdleTtlMs}.
  */
 export const DEFAULT_SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * What a tool that THREW tells the MCP client, in place of the thrown message.
+ *
+ * A thrower's message is written for the host's own log — it names paths,
+ * queries, rows — and an MCP client is a remote caller, often the model itself.
+ * It gets this sentence plus a correlation id (`runId` on the staged path, a
+ * random short id when the source itself threw); the operator gets the real
+ * message logged under the same id.
+ */
+export const EXEC_FAILED_TEXT = "The host failed to execute the tool";
 
 /** What the server calls itself when the host does not say. */
 export const DEFAULT_SERVER_INFO = {

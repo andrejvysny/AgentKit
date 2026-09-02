@@ -138,8 +138,29 @@ export interface DeadlineParams {
   redact(text: string): string;
 }
 
+/** Rejects the race when the deadline (or the caller) fires. Never leaves this module. */
+class DeadlineFired extends Error {
+  constructor() {
+    super("the deadline fired before the operation settled");
+    this.name = "DeadlineFired";
+  }
+}
+
 /**
  * Run `fn` under a deadline linked to the caller's signal.
+ *
+ * A RACE, not an await. Aborting the signal is a request, and plenty of things
+ * behind this one do not honour it: a `transportFactory` that spawns a process
+ * which never execs, an SDK path that observes the signal only between round
+ * trips. Awaiting `fn` alone means our own timeout cannot fire — the deadline
+ * expires, the timer sets a flag nobody reads, and the caller waits forever on
+ * a promise that is also cached as `connecting`, so every later turn joins the
+ * same hang and the circuit breaker never gets a failure to arm on.
+ *
+ * `fn` is NOT cancelled by losing the race — nothing can cancel a promise — so
+ * whatever it holds must be released by `fn` itself when it finally settles:
+ * `McpSession.openOnce` re-checks the signal before installing the client it
+ * built, and closes it instead.
  *
  * The classification comes from state WE own — `timedOut` was set by our own
  * timer, `signal.aborted` by our own caller — so the resulting code is right
@@ -165,8 +186,17 @@ export async function withDeadline<T>(
     timedOut = true;
     controller.abort();
   }, params.timeoutMs);
+  const aborted = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener(
+      "abort",
+      () => reject(new DeadlineFired()),
+      {
+        once: true,
+      },
+    );
+  });
   try {
-    return await fn(controller.signal);
+    return await Promise.race([fn(controller.signal), aborted]);
   } catch (err) {
     if (timedOut) {
       throw new McpError(
