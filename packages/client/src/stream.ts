@@ -10,7 +10,10 @@
  * `packages/transport-http/src/sse.ts`). So a reconnect here is not a retry that
  * risks duplicates — it is the continuation the protocol was designed for, and
  * the caller never has to know it happened. Every event is yielded exactly once,
- * `seq`-contiguous across the seam.
+ * `seq`-contiguous across the seam — and that is ENFORCED here rather than
+ * assumed of the server: a resume the server answered from the start of the log
+ * (it did not recognise the id, which is its documented right) is de-duplicated
+ * by `eventId` on the way out.
  *
  * WHAT ENDS THE ITERATION is the SERVER closing the stream, and nothing else.
  * The server closes on a terminal run event, and also when the task is terminal
@@ -68,16 +71,48 @@ export interface StreamRunOptions extends RequestOptions {
    */
   maxRetries?: number;
   /**
+   * Reconnects allowed over the WHOLE iteration. Unlike {@link maxRetries} this
+   * one never resets, and it is the budget that bounds the failure the
+   * per-stretch one cannot see: a server that accepts a connection, delivers
+   * one frame and drops it earns its stretch budget back every time, so it can
+   * be reconnected to forever. Default {@link DEFAULT_STREAM_MAX_TOTAL_RECONNECTS}.
+   */
+  maxTotalReconnects?: number;
+  /**
    * Delay before a reconnect, in milliseconds. The server's own `retry:` hint
    * overrides it once seen: the server knows its poll interval and its load,
    * and the whole reason SSE carries the field is so a client does not have to
    * guess.
+   *
+   * The HINT is clamped to
+   * [{@link MIN_STREAM_RETRY_DELAY_MS}, {@link MAX_STREAM_RETRY_DELAY_MS}]; this
+   * option is not. A `retry: 0` from a misconfigured or hostile server is a
+   * reconnect loop with no pause in it, and a hint of an hour is a run the UI
+   * silently stops following — neither is a policy a client should adopt just
+   * because it arrived over the wire. A caller that really wants a 1 ms backoff
+   * is asking for it on purpose and gets it.
    */
   retryDelayMs?: number;
 }
 
 export const DEFAULT_STREAM_MAX_RETRIES = 5;
 export const DEFAULT_STREAM_RETRY_DELAY_MS = 500;
+export const DEFAULT_STREAM_MAX_TOTAL_RECONNECTS = 50;
+/** Floor for a server-supplied `retry:` hint. */
+export const MIN_STREAM_RETRY_DELAY_MS = 250;
+/** Ceiling for a server-supplied `retry:` hint. */
+export const MAX_STREAM_RETRY_DELAY_MS = 30_000;
+
+/**
+ * How many recently yielded `eventId`s the de-dup remembers.
+ *
+ * Bounded because it guards a stream that can run for hours: the duplicate it
+ * exists to catch is a REPLAY — a resume the server answered from the start of
+ * the log instead of from `Last-Event-ID` — and a replay re-sends the tail this
+ * client just saw, not something from the far past. A window is enough, and an
+ * unbounded set on a long run is a leak.
+ */
+const DEDUPE_WINDOW = 4096;
 
 interface StreamDeps {
   transport: Transport;
@@ -104,18 +139,24 @@ async function* iterate(
   options: StreamRunOptions,
 ): AsyncGenerator<AiRunEvent> {
   const maxRetries = options.maxRetries ?? DEFAULT_STREAM_MAX_RETRIES;
+  const maxTotalReconnects =
+    options.maxTotalReconnects ?? DEFAULT_STREAM_MAX_TOTAL_RECONNECTS;
   let retryDelayMs = options.retryDelayMs ?? DEFAULT_STREAM_RETRY_DELAY_MS;
   let lastEventId = options.lastEventId;
   let attempts = 0;
+  let reconnects = 0;
   let sawTerminal = false;
+  /** Recently yielded ids, so a replayed tail cannot be delivered twice. */
+  const yielded = new Set<string>();
 
   for (;;) {
     try {
       for await (const frame of connect(deps, lastEventId, options)) {
         // The reconnect hint arrives before any event, on purpose: a client
         // that loses the connection on the very next byte already has the
-        // server's policy.
-        if (frame.retry !== undefined) retryDelayMs = frame.retry;
+        // server's policy — clamped, because that policy is the server's to
+        // suggest and this client's to survive.
+        if (frame.retry !== undefined) retryDelayMs = clampRetry(frame.retry);
         if (frame.data === undefined) continue;
 
         const event = parseEvent(frame.data);
@@ -128,6 +169,13 @@ async function* iterate(
         // Progress earns back the budget: the failure this bounds is a
         // connection that never delivers, not a long run that drops twice.
         attempts = 0;
+        // An id already handed to the caller is a REPLAY, not news: a server
+        // that did not recognise the `Last-Event-ID` answers from the start of
+        // the log, and a UI that appended the tail twice would show the answer
+        // twice until the next reconcile. Its `retry:`/resume bookkeeping above
+        // still counts — only the delivery is suppressed.
+        if (yielded.has(event.eventId)) continue;
+        remember(yielded, event.eventId);
         yield event;
         if (isTerminalRunEvent(event)) sawTerminal = true;
       }
@@ -142,11 +190,27 @@ async function* iterate(
       // A break after the terminal event is the connection closing behind an
       // answer already delivered; reconnecting would replay nothing.
       if (sawTerminal) return;
-      if (attempts >= maxRetries) throw err;
+      if (attempts >= maxRetries || reconnects >= maxTotalReconnects) throw err;
       attempts += 1;
+      reconnects += 1;
       await sleep(retryDelayMs, options.signal);
     }
   }
+}
+
+/** A server's `retry:` hint, held to something a client can live with. */
+function clampRetry(hint: number): number {
+  if (hint < MIN_STREAM_RETRY_DELAY_MS) return MIN_STREAM_RETRY_DELAY_MS;
+  if (hint > MAX_STREAM_RETRY_DELAY_MS) return MAX_STREAM_RETRY_DELAY_MS;
+  return hint;
+}
+
+/** Add to the de-dup window, evicting the oldest id once it is full. */
+function remember(yielded: Set<string>, eventId: string): void {
+  yielded.add(eventId);
+  if (yielded.size <= DEDUPE_WINDOW) return;
+  const oldest = yielded.values().next();
+  if (oldest.done !== true) yielded.delete(oldest.value);
 }
 
 /** One connection's frames. Throws on a non-2xx, which is not retryable. */

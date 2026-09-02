@@ -18,10 +18,11 @@
  * abort landed).
  */
 import {
-  runPhase,
+  createRunPhaseTracker,
   type AgentKitClient,
   type AgentKitClientError,
   type RunPhase,
+  type RunPhaseTracker,
 } from "@agentkit/client";
 import type { AiRunEvent } from "@agentkit/contracts";
 import { useCallback, useEffect, useRef } from "react";
@@ -60,6 +61,8 @@ export function useRun(
 
   /** eventIds already appended — the de-dup a doubled effect needs. */
   const seenRef = useRef<Set<string>>(new Set());
+  /** The phase as a running tally, so no arrival costs a rescan of the log. */
+  const trackerRef = useRef<RunPhaseTracker>(createRunPhaseTracker());
 
   const ingest = useCallback(
     (incoming: readonly AiRunEvent[]): void => {
@@ -68,9 +71,15 @@ export function useRun(
       );
       if (fresh.length === 0) return;
       for (const event of fresh) seenRef.current.add(event.eventId);
+      for (const event of fresh) trackerRef.current.observe(event);
+      const phase = trackerRef.current.phase();
       update((prev) => {
-        const events = [...prev.events, ...fresh].sort((a, b) => a.seq - b.seq);
-        return { ...prev, events, phase: runPhase({ events }) };
+        // Inserted in `seq` order rather than re-sorted: every event but the
+        // handful either side of a resume seam belongs at the end, and sorting
+        // the whole log per token makes a long run quadratic.
+        const events = [...prev.events];
+        for (const event of fresh) insertBySeq(events, event);
+        return { ...prev, events, phase };
       });
     },
     [update],
@@ -78,6 +87,7 @@ export function useRun(
 
   useEffect(() => {
     seenRef.current = new Set();
+    trackerRef.current = createRunPhaseTracker();
     update(() => EMPTY);
     if (runId === null) return;
 
@@ -111,4 +121,20 @@ export function useRun(
   }, [runId, client, read, ingest, update, alive]);
 
   return { ...value, drain };
+}
+
+/**
+ * Place one event in a `seq`-ordered list, scanning back from the newest end.
+ *
+ * That end is where the answer almost always is — a live stream arrives in
+ * order — so the common case is one comparison. Ties keep arrival order, which
+ * is what the stable sort this replaces did.
+ */
+function insertBySeq(events: AiRunEvent[], event: AiRunEvent): void {
+  let at = events.length;
+  for (; at > 0; at -= 1) {
+    const previous = events[at - 1];
+    if (previous === undefined || previous.seq <= event.seq) break;
+  }
+  events.splice(at, 0, event);
 }

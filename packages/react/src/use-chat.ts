@@ -24,8 +24,8 @@
  * hostage for the length of the turn. Follow `status`/`phase` for the rest.
  */
 import {
+  createRunPhaseTracker,
   newIdempotencyKey,
-  runPhase,
   type AgentKitClient,
   type AgentKitClientError,
   type RunPhase,
@@ -75,6 +75,14 @@ export interface ChatState {
   phase: RunPhase | null;
   activeRunId: string | null;
   error: AgentKitClientError | Error | null;
+  /**
+   * `true` when {@link UseChatOptions.maxPages} stopped the read before the end
+   * of the conversation. {@link ChatState.messages} then ends BEFORE the newest
+   * turn — including whatever the user just sent — so a UI that renders it as a
+   * whole conversation is lying about what is there. See
+   * {@link PagingOptions.maxPages}.
+   */
+  truncated: boolean;
 }
 
 export interface UseChatOptions extends PagingOptions {
@@ -162,6 +170,7 @@ const EMPTY: ChatState = {
   phase: null,
   activeRunId: null,
   error: null,
+  truncated: false,
 };
 
 export function useChat(
@@ -184,6 +193,13 @@ export function useChat(
 
   /** The live run's stream, so a new turn or an unmount can end it. */
   const streamRef = useRef<AbortController | null>(null);
+  /**
+   * The chat this hook is CURRENTLY rendering, readable from a follow that
+   * started under a different one. Written at commit rather than during render,
+   * for the reason `useMirroredState` gives: a render concurrent React throws
+   * away must not be able to move it.
+   */
+  const chatIdRef = useRef<string | null>(chatId);
   /** A failed submit's key, held for the retry of the SAME question. */
   const parkedRef = useRef<{ key: string; signature: string } | null>(null);
 
@@ -196,7 +212,7 @@ export function useChat(
           : prev,
       );
       try {
-        const messages = await loadActivePath(
+        const path = await loadActivePath(
           client,
           chatId,
           {
@@ -208,7 +224,8 @@ export function useChat(
         if (signal?.aborted === true) return;
         update((prev) => ({
           ...prev,
-          messages,
+          messages: path.items,
+          truncated: path.truncated,
           // Only the read this call OWNS settles back to idle: a reconcile in
           // the middle of a live run must leave `streaming` alone, and the
           // error it clears is the one the retry just disproved.
@@ -234,15 +251,32 @@ export function useChat(
    * Never rejects: every failure it can see becomes `status: "error"`, because
    * the caller is a click handler and an unhandled rejection out of one is a
    * console error nobody owns.
+   *
+   * EVERY WRITE IS GUARDED by the chat this follow belongs to. The run outlives
+   * the render that started it, and `chatId` is captured — so without the guard
+   * a follow started in chat A goes on applying A's deltas after the user has
+   * switched to chat B, and finishes by writing A's `listMessages` into B's
+   * state. The switch aborts the stream as well; the guard is what covers the
+   * work already in flight when it lands.
    */
   const followRun = useCallback(
     async (runId: string, placeholderId: string): Promise<void> => {
       if (chatId === null) return;
+      const chat = chatId;
       streamRef.current?.abort();
       const controller = new AbortController();
       streamRef.current = controller;
 
+      /** Still this hook's chat, still mounted, still the live stream. */
+      const owns = (): boolean =>
+        alive.current &&
+        chatIdRef.current === chat &&
+        !controller.signal.aborted;
+
       const events: AiRunEvent[] = [];
+      // The phase, folded per event instead of rescanned per event: see
+      // `createRunPhaseTracker`.
+      const tracker = createRunPhaseTracker();
       let streamed = false;
       let lastEventId: string | undefined;
 
@@ -253,24 +287,30 @@ export function useChat(
           events.push(event);
           lastEventId = event.eventId;
           if (event.type === "run.message.delta") streamed = true;
-          if (!alive.current) return;
-          applyEvent(update, placeholderId, event, events, streamed);
+          if (!owns()) return;
+          applyEvent(
+            update,
+            placeholderId,
+            event,
+            tracker.observe(event),
+            streamed,
+          );
         }
         // The host appends `run.verification` AFTER the terminal event, so a
         // live stream is closed before those exist. One resumed pass collects
         // them; without it a corrected run reports the phase it had before the
         // correction ran.
-        events.push(
-          ...(await client.drainRun(runId, lastEventId, {
-            signal: controller.signal,
-          })),
-        );
-        if (!alive.current || controller.signal.aborted) return;
+        const drained = await client.drainRun(runId, lastEventId, {
+          signal: controller.signal,
+        });
+        events.push(...drained);
+        for (const event of drained) tracker.observe(event);
+        if (!owns()) return;
 
         await refresh(controller.signal);
-        if (!alive.current || controller.signal.aborted) return;
+        if (!owns()) return;
 
-        const phase = runPhase({ events });
+        const phase = tracker.phase();
         const failure = phase === "failed" ? runFailure(events) : null;
         update((prev) => ({
           ...prev,
@@ -280,17 +320,17 @@ export function useChat(
           error: failure ?? (phase === "failed" ? prev.error : null),
         }));
       } catch (cause) {
-        if (isAbort(cause, controller.signal)) return;
+        if (isAbort(cause, controller.signal) || !owns()) return;
         update((prev) => ({
           ...prev,
           status: "error",
           error: toError(cause),
-          phase: runPhase({ events }),
+          phase: tracker.phase(),
           activeRunId: null,
         }));
       } finally {
         if (streamRef.current === controller) streamRef.current = null;
-        if (alive.current) emitter.emit(chatTopic(chatId), { origin });
+        if (alive.current) emitter.emit(chatTopic(chat), { origin });
       }
     },
     [client, chatId, refresh, update, alive, emitter, origin],
@@ -380,8 +420,15 @@ export function useChat(
         update((prev) => ({
           ...prev,
           // Rollback: the two optimistic records described a write that never
-          // happened, and a branch submit's truncation undid itself with them.
-          messages: before,
+          // happened. Removed BY ID rather than by restoring the list as it was
+          // before the await — that snapshot is several seconds stale by now,
+          // and putting it back would also discard whatever landed while this
+          // submit was out: a delta on a still-running turn, a second submit's
+          // own optimistic pair, a reconcile.
+          messages: prev.messages.filter(
+            (message) =>
+              message.id !== ids.user && message.id !== ids.assistant,
+          ),
           status: "error",
           phase: null,
           activeRunId: null,
@@ -482,14 +529,29 @@ export function useChat(
     },
   );
 
-  // A stream outlives a render but must not outlive the component.
-  useEffect(
-    () => () => {
+  // A stream outlives a render but must not outlive the component OR THE CHAT.
+  // With `[]` deps this only fired on unmount, and switching chats mid-run left
+  // the old run streaming into a hook that had moved on — deltas applied to a
+  // placeholder that is no longer on screen, and a terminal reconcile that
+  // replaced the new chat's messages with the old chat's.
+  //
+  // The reset is part of the same fact: the run this hook was following is no
+  // longer this hook's business, so no `activeRunId` and no `streaming` may
+  // survive into the next chat. `update` is already a no-op after unmount
+  // (`useAliveRef`'s cleanup runs first), so this touches state on a chat
+  // switch only.
+  useEffect(() => {
+    chatIdRef.current = chatId;
+    return () => {
       streamRef.current?.abort();
       streamRef.current = null;
-    },
-    [],
-  );
+      update((prev) =>
+        prev.activeRunId === null && prev.status !== "streaming"
+          ? prev
+          : { ...prev, activeRunId: null, phase: null, status: "idle" },
+      );
+    };
+  }, [chatId, update]);
 
   return {
     ...value,
@@ -516,7 +578,7 @@ function applyEvent(
   update: (next: (prev: ChatState) => ChatState) => void,
   placeholderId: string,
   event: AiRunEvent,
-  events: readonly AiRunEvent[],
+  phase: RunPhase,
   streamed: boolean,
 ): void {
   update((prev) => {
@@ -537,7 +599,6 @@ function applyEvent(
         content,
       }));
     }
-    const phase = runPhase({ events });
     return {
       ...prev,
       messages,

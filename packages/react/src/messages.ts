@@ -14,15 +14,36 @@ export interface PagingOptions {
    *
    * The cap is not politeness — it is the difference between a slow chat and a
    * hung one. `listMessages` pages FORWARD from the oldest message, so the
-   * newest turn is on the LAST page: a hook that stopped after page one would
+   * newest turn is on the LAST page: a load that stopped after page one would
    * render a conversation missing the message the user just sent. Following to
    * the end is therefore the only correct default, and the cap is what stops a
    * pathological chat from turning one render into an unbounded fetch loop.
+   *
+   * WHEN THE CAP BITES the list is missing its NEWEST end, which is the worst
+   * possible truncation and the reason it is REPORTED rather than silently
+   * returned: {@link ActivePath.truncated} (and `useChat`'s `truncated`) is how
+   * a UI knows to say "this conversation is too long to show" instead of
+   * rendering a plausible-looking prefix as if it were the whole thing. The
+   * contract has no backward paging to fix this with — `ListMessagesQuery`
+   * carries `limit` and an opaque forward `cursor` and nothing else — so
+   * telling the truth is the whole of the remedy available here.
    */
   maxPages?: number;
 }
 
 export const DEFAULT_MAX_PAGES = 20;
+
+/** What {@link loadActivePath} found, and whether that was all of it. */
+export interface ActivePath {
+  /** The messages loaded, oldest first. */
+  items: MessageDto[];
+  /**
+   * `true` when {@link PagingOptions.maxPages} was reached with pages still to
+   * come — the list ends BEFORE the newest turn and must not be rendered as a
+   * complete conversation.
+   */
+  truncated: boolean;
+}
 
 /**
  * The chat's whole active path, oldest first.
@@ -36,7 +57,7 @@ export async function loadActivePath(
   chatId: string,
   paging: PagingOptions = {},
   signal?: AbortSignal,
-): Promise<MessageDto[]> {
+): Promise<ActivePath> {
   const maxPages = paging.maxPages ?? DEFAULT_MAX_PAGES;
   const items: MessageDto[] = [];
   let cursor: string | undefined;
@@ -51,10 +72,10 @@ export async function loadActivePath(
       signal === undefined ? undefined : { signal },
     );
     items.push(...answer.items);
-    if (answer.nextCursor === undefined) return items;
+    if (answer.nextCursor === undefined) return { items, truncated: false };
     cursor = answer.nextCursor;
   }
-  return items;
+  return { items, truncated: true };
 }
 
 /** Ids for one optimistic turn. Never sent anywhere; replaced by the server's. */

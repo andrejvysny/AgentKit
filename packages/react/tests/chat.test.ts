@@ -203,6 +203,75 @@ describe("a submit the server refuses", () => {
     });
   });
 
+  test("the rollback takes its OWN pair, not everything since", async () => {
+    await server.stop();
+    // Parked mid-turn, so the second submit's run cannot reconcile the list out
+    // from under the assertion and hand the old code a passing grade.
+    const hanging = new HangingProviderClient({ deltas: ["Think"] });
+    server = await startTestServer({ provider: hanging });
+
+    // A submit that fails LATE — late enough for a second one to land while it
+    // is still out, which is the whole of what a pre-`await` snapshot loses.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let refuse = true;
+    const client = connect(async (url, init) => {
+      if (url.includes("/messages") && init?.method === "POST" && refuse) {
+        refuse = false;
+        await gate;
+        return new Response(
+          JSON.stringify({
+            type: "about:blank",
+            title: "Service Unavailable",
+            status: 503,
+            code: "upstream_unavailable",
+            detail: "the queue is down",
+          }),
+          {
+            status: 503,
+            headers: { "content-type": "application/problem+json" },
+          },
+        );
+      }
+      return fetch(url, init);
+    });
+
+    const { result } = renderHook(() => useChat(TEST_CHAT_ID), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+
+    let first!: Promise<void>;
+    act(() => {
+      first = result.current.submit("first");
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.submit("second");
+    });
+    expect(result.current.messages).toHaveLength(4);
+    const runId = result.current.activeRunId!;
+
+    await act(async () => {
+      release();
+      await first;
+    });
+
+    // The failed turn's two records are gone; the accepted one is untouched.
+    expect(result.current.status).toBe("error");
+    expect(result.current.messages.map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(result.current.messages[0]?.content).toBe("second");
+
+    await hanging.whenBlocking();
+    await client.cancelRun({ runId });
+  });
+
   test("the retry of the same question replays the same Idempotency-Key", async () => {
     const refusing = refusingSubmit();
     const client = connect(refusing.fetch);
@@ -296,6 +365,53 @@ describe("lifecycle", () => {
     await waitFor(() => expect(result.current.messages).toEqual([]));
   });
 
+  test("changing the chat id mid-stream ends the old run's follow", async () => {
+    await server.stop();
+    // Parked mid-turn, so the switch DEMONSTRABLY happens while the run is
+    // still live — against a provider that finishes first there is no stale
+    // follow left to prove anything about.
+    const hanging = new HangingProviderClient({ deltas: ["Think", "ing"] });
+    server = await startTestServer({ provider: hanging });
+    const client = connect();
+    const other = await client.createChat({ title: "other" });
+
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useChat(id),
+      { wrapper: wrapper(client), initialProps: { id: TEST_CHAT_ID } },
+    );
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    await act(async () => {
+      await result.current.submit("stream me");
+    });
+    const runId = result.current.activeRunId!;
+    await hanging.whenBlocking();
+    await waitFor(() => expect(result.current.phase).toBe("streaming"));
+
+    // The user opens another conversation while the answer is still typing.
+    rerender({ id: other.id });
+    await waitFor(() => expect(result.current.messages).toEqual([]));
+    // Nothing of the old run is left pointing at the new chat.
+    expect(result.current.activeRunId).toBeNull();
+    expect(result.current.status).not.toBe("streaming");
+
+    // The abandoned run reaches its terminal event on the server. The follow's
+    // reconcile closed over the OLD chat id, and must not land here.
+    await client.cancelRun({ runId });
+    await waitFor(
+      async () => {
+        expect((await client.getRun({ runId })).status).toBe("cancelled");
+      },
+      { timeout: 10_000 },
+    );
+    // A settle: the write this test forbids would arrive within a few
+    // milliseconds of the run ending, and there is no event to wait for when
+    // the correct behaviour is that nothing happens.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(result.current.messages).toEqual([]);
+  });
+
   test("cancel stops a parked run and the stream ends on run.cancelled", async () => {
     await server.stop();
     // Parks mid-turn until the run is cancelled, so this is not a race against
@@ -322,6 +438,35 @@ describe("lifecycle", () => {
     expect(result.current.status).toBe("idle");
     expect(result.current.activeRunId).toBeNull();
     expect((await client.getRun({ runId })).status).toBe("cancelled");
+  });
+});
+
+describe("paging", () => {
+  test("a read the page cap cut short says so", async () => {
+    const client = connect();
+    await client.submitMessage({ chatId: TEST_CHAT_ID }, { content: "first" });
+    await waitFor(async () => {
+      const page = await client.listMessages({ chatId: TEST_CHAT_ID });
+      expect(page.items.length).toBeGreaterThanOrEqual(2);
+    });
+
+    // One message a page, one page: the read stops BEFORE the newest turn,
+    // which is the truncation a bare `MessageDto[]` could not report and a UI
+    // would render as the whole conversation.
+    const cut = renderHook(
+      () => useChat(TEST_CHAT_ID, { pageSize: 1, maxPages: 1 }),
+      { wrapper: wrapper(client) },
+    );
+    await waitFor(() => expect(cut.result.current.status).toBe("idle"));
+    expect(cut.result.current.messages).toHaveLength(1);
+    expect(cut.result.current.truncated).toBe(true);
+
+    const whole = renderHook(() => useChat(TEST_CHAT_ID), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(whole.result.current.status).toBe("idle"));
+    expect(whole.result.current.messages.length).toBeGreaterThanOrEqual(2);
+    expect(whole.result.current.truncated).toBe(false);
   });
 });
 
