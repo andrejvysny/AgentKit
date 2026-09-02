@@ -870,25 +870,33 @@ export class SingleProcessTaskRunner implements TaskRunner {
     const kind = entry.cancelRequested ? "cancelled" : classified.kind;
     const message = errorMessage(err);
 
+    // THE FENCED TRANSITION GOES FIRST WHEREVER ONE FOLLOWS, and the attempt is
+    // closed after it — the order `settleResolved`, `TurnRunner` and
+    // `docs/architecture.md` all use. Ending the attempt first left a window,
+    // one throw wide, where a TERMINAL attempt row sat under a `running` task
+    // with a live lease: the state recovery reads as a crash, and then tries to
+    // end `abandoned`.
     if (kind === "cancelled") {
+      await this.landIfRunning(taskId, "cancelled", {
+        leaseToken: lease.leaseToken,
+      });
       await this.store.tasks.endAttempt({
         attemptId,
         status: "cancelled",
         error: message,
         leaseToken: lease.leaseToken,
       });
-      await this.landIfRunning(taskId, "cancelled", {
-        leaseToken: lease.leaseToken,
-      });
       return { kind: "done", landed: true };
     }
 
-    await this.store.tasks.endAttempt({
-      attemptId,
-      status: "failed",
-      error: `${classified.reason}: ${message}`,
-      leaseToken: lease.leaseToken,
-    });
+    const failure = `${classified.reason}: ${message}`;
+    const endAttemptFailed = (): Promise<unknown> =>
+      this.store.tasks.endAttempt({
+        attemptId,
+        status: "failed",
+        error: failure,
+        leaseToken: lease.leaseToken,
+      });
 
     if (kind === "terminal") {
       // NOT dead-lettered: the dead-letter row means "this poisoned the queue,
@@ -900,13 +908,18 @@ export class SingleProcessTaskRunner implements TaskRunner {
         reason: classified.reason,
       });
       await this.landIfRunning(taskId, "failed", {
-        error: `${classified.reason}: ${message}`,
+        error: failure,
         leaseToken: lease.leaseToken,
       });
+      await endAttemptFailed();
       return { kind: "done", landed: true };
     }
 
-    // Transient from here down.
+    // Transient from here down: the attempt really did fail, and the TASK stays
+    // `running` on purpose — a retry mints the next attempt under it, and the
+    // "deferred to recovery" branch leaves the live lease for the next owner.
+    // There is no terminal transition here to order this write against.
+    await endAttemptFailed();
     const task = await this.store.tasks.getTask(taskId);
     if (!task || task.status !== "running") {
       // A worker that lands the task itself before rethrowing (TurnRunner's
