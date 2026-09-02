@@ -21,6 +21,11 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import type { AiRunEvent } from "@agentkit/contracts";
+import {
+  createTestEventStamper,
+  MockProviderClient,
+  nowIso,
+} from "@agentkit/testing";
 import { createAgentKitClient, type FetchLike } from "../src/index.js";
 import {
   chattyProvider,
@@ -133,6 +138,52 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   out.set(a, 0);
   out.set(b, a.length);
   return out;
+}
+
+/**
+ * A provider that streams one delta and then PARKS until the run is cancelled.
+ *
+ * A `MockProviderClient` subclass rather than `@agentkit/testing`'s
+ * `HangingProviderClient` only because the fixture here is typed to the mock —
+ * the behaviour is the same, and it is what makes "the run was demonstrably
+ * still live" a fact of the test rather than a race against a fast provider.
+ */
+class ParkingProvider extends MockProviderClient {
+  private announce!: () => void;
+  /** Resolves the first time the stream parks. */
+  readonly parked: Promise<void> = new Promise<void>((resolve) => {
+    this.announce = resolve;
+  });
+
+  override async *streamChat(
+    input: Parameters<MockProviderClient["streamChat"]>[0],
+  ): AsyncIterable<AiRunEvent> {
+    const stamp = createTestEventStamper();
+    yield stamp({
+      type: "run.started",
+      runId: input.runId,
+      timestamp: nowIso(),
+      data: { model: input.model, toolCount: 0 },
+    });
+    yield stamp({
+      type: "run.message.delta",
+      runId: input.runId,
+      timestamp: nowIso(),
+      data: { delta: "one" },
+    });
+    this.announce();
+    await new Promise<void>((resolve) => {
+      const signal = input.signal;
+      if (signal === undefined || signal.aborted) {
+        resolve();
+        return;
+      }
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    const aborted = new Error("The operation was aborted.");
+    aborted.name = "AbortError";
+    throw aborted;
+  }
 }
 
 /** The run's whole durable log, straight out of the store. */
@@ -310,6 +361,81 @@ describe("streamRun resumes across a severed connection", () => {
     await expect(iterate()).rejects.toThrow();
     // One connection: the abort was not answered with a reconnect.
     expect(severing.resumeHeaders).toHaveLength(1);
+  });
+});
+
+describe("streamRun tells a broken store from a finished run", () => {
+  test("a failed log read breaks the body, and the client resumes over it", async () => {
+    // A clean end of body is the server saying "the task is terminal", and this
+    // client is required to take that at face value. So a `listEvents` that
+    // lost a race with `SQLITE_BUSY` must NOT end the body cleanly — it used
+    // to, and the iteration returned in the middle of a live pass with no
+    // reconnect and nothing to tell the caller anything had gone wrong.
+    //
+    // The provider parks, so the run is DEMONSTRABLY unfinished when the read
+    // fails; a run that could complete on its own would make "the stream ended"
+    // ambiguous, which is the whole ambiguity under test.
+    server = await startTestServer({ provider: new ParkingProvider() });
+
+    // The SSE stream is the only reader of the event log — the host appends but
+    // never lists — so failing one `listEvents` fails exactly one stream read
+    // and nothing the turn is doing.
+    const tasks = server.store.tasks;
+    const realList = tasks.listEvents.bind(tasks);
+    let armed = false;
+    let thrown = false;
+    tasks.listEvents = async (taskId, opts) => {
+      if (armed && !thrown) {
+        thrown = true;
+        throw new Error("SQLITE_BUSY: database is locked");
+      }
+      return realList(taskId, opts);
+    };
+
+    const resumeHeaders: (string | null)[] = [];
+    const client = createAgentKitClient({
+      baseUrl: server.baseUrl,
+      fetch: async (url, init) => {
+        if (url.includes("/stream")) {
+          resumeHeaders.push(
+            new Headers(init?.headers ?? {}).get("last-event-id"),
+          );
+        }
+        return fetch(url, init);
+      },
+    });
+
+    const submitted = await client.submitMessage(
+      { chatId: TEST_CHAT_ID },
+      { content: "stream me" },
+    );
+    const runId = submitted.result.runId;
+
+    const received: AiRunEvent[] = [];
+    const iteration = (async () => {
+      for await (const event of client.streamRun(runId, { retryDelayMs: 1 })) {
+        received.push(event);
+        // Armed only once bytes have demonstrably reached this client, so what
+        // the failure breaks is the BODY of a 200 rather than the response.
+        armed = true;
+      }
+    })();
+
+    await waitFor(
+      async () => thrown && resumeHeaders.length > 1,
+      "the store failure to break the stream and the client to resume",
+    );
+    // The run is parked on the provider; cancelling is what lets it end at all.
+    await client.cancelRun({ runId });
+    await iteration;
+
+    // Two connections: the store failure was a broken pipe, and the resume
+    // carried the id of the last event the caller had actually been handed.
+    expect(resumeHeaders).toHaveLength(2);
+    expect(resumeHeaders[1]).toBeString();
+    const log = await logOf(runId);
+    expect(received.map((e) => e.eventId)).toEqual(log.map((e) => e.eventId));
+    expect(new Set(received.map((e) => e.eventId)).size).toBe(received.length);
   });
 });
 

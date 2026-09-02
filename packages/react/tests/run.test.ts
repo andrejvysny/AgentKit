@@ -27,6 +27,8 @@ import {
   chattyProvider,
   echoContributor,
   RetryingProvider,
+  scriptedEvent,
+  scriptedStreamFetch,
   startTestServer,
   TEST_CHAT_ID,
   type TestServer,
@@ -297,6 +299,101 @@ describe("useRun", () => {
       status: 404,
       code: "not_found",
     });
+  });
+
+  test("the run's status decides the phase when no terminal event arrives", async () => {
+    // The stream closes on the TASK's status, and a task can go terminal
+    // without a terminal event on its log — the host's `failQuietly` writes one
+    // only best-effort. Reading events alone left this hook `streaming` and
+    // `error: null` forever for a run that had already failed.
+    const scripted = scriptedStreamFetch({
+      runStatus: "failed",
+      events: (runId) => [
+        scriptedEvent(runId, 0, "run.started", { model: "m1", toolCount: 0 }),
+        scriptedEvent(runId, 1, "run.message.delta", { delta: "half an " }),
+      ],
+    });
+    const client = createAgentKitClient({
+      baseUrl: server.baseUrl,
+      fetch: scripted.fetch,
+    });
+    const runId = await startRun(client);
+
+    const { result } = renderHook(() => useRun(runId), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current.phase).toBe("failed"), {
+      timeout: 10_000,
+    });
+    expect(result.current.error?.message).toBe(
+      "run ended without a terminal event",
+    );
+    expect(result.current.events).toHaveLength(2);
+  });
+
+  test("exposes the finishReason of the run's last pass", async () => {
+    // `"incomplete"` is never normalized to `"stop"`: the provider's stream was
+    // cut before it said why, so the run is `completed` and the answer is not.
+    const scripted = scriptedStreamFetch({
+      events: (runId) => [
+        scriptedEvent(runId, 0, "run.started", { model: "m1", toolCount: 0 }),
+        scriptedEvent(runId, 1, "run.message.delta", { delta: "half an " }),
+        scriptedEvent(runId, 2, "run.completed", {
+          iterations: 1,
+          finishReason: "incomplete",
+        }),
+      ],
+    });
+    const client = createAgentKitClient({
+      baseUrl: server.baseUrl,
+      fetch: scripted.fetch,
+    });
+    const runId = await startRun(client);
+
+    const { result } = renderHook(() => useRun(runId), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current.phase).toBe("completed"), {
+      timeout: 10_000,
+    });
+    expect(result.current.finishReason).toBe("incomplete");
+  });
+
+  test("an event that lost its seq is appended, not spliced to the front", async () => {
+    // Every comparison against a non-number is false, so the insertion scan
+    // walked all the way to index 0 and put one mangled frame in FRONT of the
+    // whole log — the most misleading possible place for it.
+    const scripted = scriptedStreamFetch({
+      events: (runId) => {
+        const mangled = scriptedEvent(runId, 1, "run.warning", {
+          code: "middlebox",
+          message: "a frame that lost its seq",
+        });
+        delete (mangled as { seq?: number }).seq;
+        return [
+          scriptedEvent(runId, 0, "run.started", { model: "m1", toolCount: 0 }),
+          mangled,
+          scriptedEvent(runId, 2, "run.completed", { iterations: 1 }),
+        ];
+      },
+    });
+    const client = createAgentKitClient({
+      baseUrl: server.baseUrl,
+      fetch: scripted.fetch,
+    });
+    const runId = await startRun(client);
+
+    const { result } = renderHook(() => useRun(runId), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current.phase).toBe("completed"), {
+      timeout: 10_000,
+    });
+    expect(result.current.events.map((e) => e.eventId)).toEqual([
+      "evt-0",
+      "evt-1",
+      "evt-2",
+    ]);
   });
 
   test("useRun(null) is inert", () => {
