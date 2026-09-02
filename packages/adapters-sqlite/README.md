@@ -96,9 +96,16 @@ Redis, or similar) implementing the same ports — see
 `transaction()` gives atomicity, not isolation. The connection has exactly one
 open transaction and every statement issued on it belongs to that one, so
 WRITES from other callers — a second `transaction()`, a worker's `claimNext`,
-an ordinary `updateChat` — wait for it and then run in a transaction of their
-own rather than joining one whose rollback would erase them. READS are exempt
-and still join.
+an ordinary `updateChat`, and a `SqliteMcpServerConfigStore` sharing the handle
+— wait for it and then run in a transaction of their own rather than joining
+one whose rollback would erase them. READS are exempt and still join.
+
+**The queue is FIFO across both kinds.** A transaction and a root write take a
+slot in the same queue when they are issued, and run in that order. Re-checking
+"is the connection free yet?" after each wait instead is a retry loop, not a
+queue, and it starves: transactions issued *after* a waiting write are already
+chained to the promise that write is waiting on, so they run first — for as
+long as they keep arriving.
 
 The corollary is that a callback must work through the `tx` it is handed: a
 call issued on the ROOT store from inside it is indistinguishable from an

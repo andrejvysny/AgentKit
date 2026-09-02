@@ -66,7 +66,13 @@ export type AttemptBehavior =
   /** Block until the signal aborts, then append `run.cancelled` and finalize. */
   | { kind: "await-abort" }
   /** Never resolve, write nothing: the process that died holding a lease. */
-  | { kind: "never" };
+  | { kind: "never" }
+  /**
+   * Append an event and RETURN without landing the task — the worker
+   * `settleResolved`'s defensive branch exists for, which the runner then has
+   * to finalize itself.
+   */
+  | { kind: "quiet" };
 
 export interface WorkerCall {
   taskId: string;
@@ -152,6 +158,9 @@ export class FakeWorker implements TaskWorker {
           return;
         case "never":
           await new Promise<void>((resolve) => this.deadGates.push(resolve));
+          return;
+        case "quiet":
+          await this.appendCompleted(taskId, attemptId, leaseToken);
           return;
       }
     } finally {

@@ -510,3 +510,62 @@ describe("SingleProcessTaskRunner — recovery", () => {
     ]);
   });
 });
+
+describe("SingleProcessTaskRunner — the runner's own terminal block", () => {
+  it("finalizes a worker that returned without landing the task", async () => {
+    // The defensive branch: leaving the task `running` forever with no lease
+    // would make it invisible to both the claim loop and `recover()`.
+    const harness = createHarness();
+    await harness.seedTask("run-1");
+    harness.worker.script("run-1", [{ kind: "quiet" }]);
+    await start(harness, 1);
+
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
+    await waitFor(
+      async () => (await taskStatus(harness, "run-1")) === "completed",
+      "the runner to land the task the worker left running",
+    );
+    expect(harness.attemptsFor("run-1")).toEqual([
+      { status: "completed", attemptNumber: 1 },
+    ]);
+  });
+
+  it("leaves the attempt RUNNING when the fenced transition throws", async () => {
+    // The fence order is the whole point: task transition first, attempt
+    // second. Ending the attempt first left a terminal attempt row under a
+    // `running` task with a live lease whenever the transition failed — the
+    // state `recover()` reads as a crash, so it would then end that same
+    // already-terminal attempt `abandoned` and count a completion as poison.
+    const harness = createHarness();
+    await harness.seedTask("run-1");
+    harness.worker.script("run-1", [{ kind: "quiet" }]);
+
+    const tasks = harness.store.tasks;
+    const transitionTask = tasks.transitionTask.bind(tasks);
+    tasks.transitionTask = async (taskId, from, to, patch, opts) => {
+      if (taskId === "run-1" && to === "completed") {
+        throw new Error("the store said no");
+      }
+      return transitionTask(taskId, from, to, patch, opts);
+    };
+
+    await start(harness, 1);
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
+    await waitFor(
+      () => harness.worker.callsFor("run-1").length === 1,
+      "the attempt to run",
+    );
+    await settle();
+
+    // Nothing after the throw ran, so the task is exactly what recovery is
+    // built to find: `running`, with a live lease and an attempt still open.
+    expect(await taskStatus(harness, "run-1")).toBe("running");
+    expect(harness.attemptsFor("run-1")).toEqual([
+      { status: "running", attemptNumber: 1 },
+    ]);
+    const leaseToken = harness.worker.callsFor("run-1")[0]!.leaseToken;
+    expect(
+      (await harness.store.tasks.renewLease(leaseToken, 1_000)).taskId,
+    ).toBe("run-1");
+  });
+});

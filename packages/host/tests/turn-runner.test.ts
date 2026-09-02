@@ -13,6 +13,7 @@ import {
 import {
   CHAT_TURN_TASK_KIND,
   DuplicateTaskError,
+  InvalidTaskTransitionError,
   LeaseLostError,
   MISSING_TOOL_RESULT_CODE,
   TOOL_GUARD_REFUSED_CODE,
@@ -978,6 +979,80 @@ describe("TurnRunner.execute — retries", () => {
     );
   });
 
+  it("warns when a CHAT-ONLY retry answers with nothing, tool calls or not", async () => {
+    // The retry runs with an EMPTY registry and one round-trip: it cannot call
+    // a tool, so pass 1's tool call says nothing about it. Carrying those ids
+    // across `resetPass` made `toolCallCount > 0` for the retry, which
+    // suppressed this warning (and the emulated-call detector) for a pass that
+    // answered with nothing at all — leaving the user an empty bubble and a
+    // clean log.
+    const inner = new MockProviderClient();
+    inner.setScript([
+      // Round-trip 1: the model asks for a tool. The loop runs it and calls
+      // back — and THAT call is the one the endpoint rejects, failing pass 1
+      // with a tool call already on the run's books.
+      {
+        steps: [
+          {
+            kind: "tool_call" as const,
+            toolCallId: "call-1",
+            name: "echo",
+            argumentsJson: '{"text":"hi"}',
+          },
+        ],
+      },
+      // Round-trip 3 (the chat-only retry): completes with nothing at all.
+      { steps: [] },
+    ]);
+    let calls = 0;
+    const client: AiProviderClient = {
+      id: "flaky",
+      kind: "openai-compatible",
+      capabilities: async () => ({
+        streaming: true,
+        toolCalling: true,
+        modelList: false,
+      }),
+      listModels: async () => [],
+      async *streamChat(input) {
+        calls += 1;
+        // The endpoint that accepts a plain chat request and rejects the same
+        // one with `tools` attached — here on the loop's second round-trip.
+        if (calls === 2) throw new Error("tools not supported here");
+        yield* inner.streamChat(input);
+      },
+    };
+
+    const f = await setupRunner({
+      contributors: [echoContributor],
+      inner: client,
+    });
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hi",
+    });
+    await drive(f, submitted.runId);
+
+    const events = await eventsOf(f, submitted.runId);
+    // The chat-only retry did run, and it is the pass being judged.
+    expect(
+      events.some(
+        (e) =>
+          e.type === "run.warning" &&
+          e.data.code === "retry_pass" &&
+          e.data.reason === "chat_only",
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (e) => e.type === "run.warning" && e.data.code === "empty_response",
+      ),
+    ).toBe(true);
+    expect(
+      messagesOf(f).find((m) => m.id === submitted.assistantMessageId)?.content,
+    ).toBe("");
+  });
+
   it("does not warn when the retry produces an answer", async () => {
     const f = await setupRunner();
     f.mock.setScript([
@@ -1193,6 +1268,61 @@ describe("TurnRunner.execute — cancellation and failure", () => {
       (m) => m.id === submitted.assistantMessageId,
     );
     expect(placeholder?.metadata["placeholder"]).toBe(true);
+  });
+
+  it("finalizes the placeholder when the task was landed OUT OF BAND", async () => {
+    // The other half of the fencing rule. `failQuietly` used to take "I landed
+    // the task" as its only proof of ownership, so a task somebody else settled
+    // mid-turn — an operator cancel, a host transition, a `waiting_approval`
+    // host — skipped the transition, and NOTHING then took `placeholder: true`
+    // off the answer. The run was over, the task cancelled, and the UI span
+    // forever on a message nothing was coming back to finish. This attempt's
+    // lease is still current, so nobody else was ever going to write it.
+    let f!: RunnerFixture;
+    const inner = new MockProviderClient();
+    const client: AiProviderClient = {
+      id: "external-cancel",
+      kind: "openai-compatible",
+      capabilities: async () => ({
+        streaming: true,
+        toolCalling: false,
+        modelList: false,
+      }),
+      listModels: async () => [],
+      async *streamChat(input) {
+        // Somebody else settles the task while this turn is still mid-flight.
+        await f.store.tasks.transitionTask(
+          input.runId,
+          ["running"],
+          "cancelled",
+          { finishedAt: new Date().toISOString() },
+        );
+        yield* inner.streamChat(input);
+      },
+    };
+    f = await setupRunner({ inner: client });
+    f.mock.setScript([
+      { steps: [{ kind: "text", content: "half an answer" }] },
+    ]);
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hi",
+    });
+    // The turn's own terminal CAS is what discovers the out-of-band verdict:
+    // `running -> completed` cannot apply to a task already cancelled, and that
+    // throw is what puts this run on the `failQuietly` path.
+    await expect(drive(f, submitted.runId)).rejects.toThrow(
+      InvalidTaskTransitionError,
+    );
+
+    // The out-of-band verdict stands — this attempt does not overwrite it.
+    expect((await f.store.tasks.getTask(submitted.runId))?.status).toBe(
+      "cancelled",
+    );
+    const placeholder = messagesOf(f).find(
+      (m) => m.id === submitted.assistantMessageId,
+    );
+    expect(placeholder?.metadata["placeholder"]).toBe(false);
   });
 
   it("fails terminally when the task payload has no chatId", async () => {

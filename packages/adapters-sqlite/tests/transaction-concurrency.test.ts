@@ -200,7 +200,54 @@ describe("SqliteTaskStore — claimNext against an unrelated open transaction", 
 });
 
 describe("SqliteMcpServerConfigStore — the shared handle, under the gate", () => {
-  it("commits a config write made inside transaction(), with a caller queued behind it", async () => {
+  const notesServer = {
+    id: "mcp-1",
+    alias: "notes",
+    transport: { kind: "stdio", command: "notes-server" },
+    createdAt: CONFIG_AT,
+    updatedAt: CONFIG_AT,
+  } as const;
+
+  it("survives the rollback of an unrelated transaction it never joined", async () => {
+    // Sharing a CONNECTION is not sharing a UNIT OF WORK. This store used to
+    // ask the driver "are you in a transaction?" — true for ANY holder — and
+    // join whatever it found: `create()` returned a record, and the host
+    // transaction that happened to be open then threw and took the row with it.
+    // The same `txDepth`-for-ownership mistake the aggregate store already paid
+    // for, one object over.
+    const store = new SqliteAssistantStore(":memory:");
+    const configs = new SqliteMcpServerConfigStore(store.database);
+    try {
+      const opened = deferred();
+      const mayFail = deferred();
+      const doomed = store.transaction(async (tx) => {
+        await tx.conversations.createChat({ id: "chat-rolled-back" });
+        opened.resolve();
+        await mayFail.promise;
+        throw new Error("the transaction changed its mind");
+      });
+      await opened.promise;
+
+      // Issued by someone with no part in that transaction, on the same handle.
+      const created = configs.create({ ...notesServer });
+      await drainLoop();
+      // Still waiting: under the bug it had already run inside the open
+      // transaction, which is what made it collateral damage below.
+      expect(await configs.list()).toEqual([]);
+
+      mayFail.resolve();
+      await expect(doomed).rejects.toThrow("the transaction changed its mind");
+      expect((await created).id).toBe("mcp-1");
+
+      // THE HEADLINE: the rollback took only the writes that belonged to it.
+      expect((await configs.list()).map((row) => row.id)).toEqual(["mcp-1"]);
+      expect(await store.conversations.getChat("chat-rolled-back")).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("commits behind a transaction that commits, in arrival order", async () => {
     const store = new SqliteAssistantStore(":memory:");
     const configs = new SqliteMcpServerConfigStore(store.database);
     try {
@@ -209,32 +256,30 @@ describe("SqliteMcpServerConfigStore — the shared handle, under the gate", () 
       const release = deferred();
       const outer = store.transaction(async (tx) => {
         await tx.conversations.createChat({ id: "chat-1" });
-        // Another object over the SAME handle, writing synchronously: this is
-        // the flatten the gate must not take away.
-        await configs.create({
-          id: "mcp-1",
-          alias: "notes",
-          transport: { kind: "stdio", command: "notes-server" },
-          createdAt: CONFIG_AT,
-          updatedAt: CONFIG_AT,
-        });
         order.push("outer");
         opened.resolve();
         await release.promise;
       });
-
       await opened.promise;
+
+      const created = configs.create({ ...notesServer });
+      // Issued AFTER the config write, so it must see the row: the transaction
+      // reporting what it can read is the only ordering evidence that is not an
+      // artifact of when a promise happened to resolve.
       const queued = store.transaction(async () => {
-        order.push("queued");
+        order.push((await configs.list()).length === 1 ? "sees" : "misses");
       });
       await drainLoop();
       expect(order).toEqual(["outer"]);
 
       release.resolve();
       await outer;
+      await created;
       await queued;
 
-      expect(order).toEqual(["outer", "queued"]);
+      // The config write took its slot BEFORE the queued transaction did, and
+      // the queue kept that order.
+      expect(order).toEqual(["outer", "sees"]);
       expect((await configs.list()).map((row) => row.id)).toEqual(["mcp-1"]);
       expect(await store.conversations.getChat("chat-1")).not.toBeNull();
     } finally {
@@ -357,6 +402,112 @@ describe("SqliteAssistantStore — a ROOT write against an open transaction", ()
         "renamed",
       );
       expect(await store.conversations.getChat("chat-second")).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("SqliteAssistantStore — the gate runs its callers in ARRIVAL order", () => {
+  it("lands a root write that later transactions keep arriving in front of", async () => {
+    // The wait used to be a retry loop — "is the connection free yet?" re-asked
+    // after each settle — and a retry loop is not a queue. Every
+    // `transaction()` issued AFTER this write had already chained its own
+    // `.then` onto the promise the write was waiting on, so it opened its BEGIN
+    // first and the write found the connection busy again, forever. Three
+    // overlapping callers is all it takes, and every turn-critical write
+    // (`appendEvents`, `appendMessage`, `transitionTask`) is on this path.
+    const store = new SqliteAssistantStore(":memory:", {
+      transactionGateTimeoutMs: 250,
+    });
+    try {
+      await store.conversations.createChat({ id: "chat-a" });
+
+      let churning = true;
+      let announced = false;
+      const opened = deferred();
+      const churn = async (): Promise<void> => {
+        while (churning) {
+          await store.transaction(async (tx) => {
+            await tx.conversations.listChats();
+            if (!announced) {
+              announced = true;
+              opened.resolve();
+            }
+            // Held across real time, the way any host transaction that awaits
+            // anything holds it.
+            await new Promise((resolve) => setTimeout(resolve, 2));
+          });
+        }
+      };
+      const loops = [churn(), churn(), churn()];
+      await opened.promise;
+
+      // Issued while a transaction is open, by someone with no part in it.
+      const rename = store.conversations
+        .updateChat("chat-a", { title: "renamed" })
+        .then(
+          () => "landed",
+          (err: unknown) => (err as { code?: string }).code ?? "threw",
+        );
+      // Longer than the gate budget: a starved write has run out by now, and
+      // the churn is still arriving in front of it.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      churning = false;
+      await Promise.all(loops);
+
+      // THE HEADLINE: arrival order, not "whoever noticed the gate free first".
+      expect(await rename).toBe("landed");
+      expect((await store.conversations.getChat("chat-a"))?.title).toBe(
+        "renamed",
+      );
+    } finally {
+      store.close();
+    }
+  });
+
+  it("interleaves transactions and root writes in the order they were issued", async () => {
+    // Each transaction reports the title it can see, so the sequence of reads
+    // IS the run order: a write that ran late shows up as a transaction that
+    // read the value before it.
+    const store = new SqliteAssistantStore(":memory:");
+    try {
+      await store.conversations.createChat({ id: "chat-a" });
+      const seen: (string | undefined)[] = [];
+      const opened = deferred();
+      const release = deferred();
+
+      // Holds the gate so everything below has to queue rather than run on
+      // arrival — the whole question is what order the queue keeps.
+      const holder = store.transaction(async (tx) => {
+        await tx.conversations.listChats();
+        opened.resolve();
+        await release.promise;
+      });
+      await opened.promise;
+
+      // Issued write, transaction, write, transaction — in that order.
+      const first = store.conversations.updateChat("chat-a", {
+        title: "first",
+      });
+      const readA = store.transaction(async (tx) => {
+        seen.push((await tx.conversations.getChat("chat-a"))?.title);
+      });
+      const second = store.conversations.updateChat("chat-a", {
+        title: "second",
+      });
+      const readB = store.transaction(async (tx) => {
+        seen.push((await tx.conversations.getChat("chat-a"))?.title);
+      });
+      await drainLoop();
+
+      release.resolve();
+      await Promise.all([holder, first, readA, second, readB]);
+
+      expect(seen).toEqual(["first", "second"]);
+      expect((await store.conversations.getChat("chat-a"))?.title).toBe(
+        "second",
+      );
     } finally {
       store.close();
     }
