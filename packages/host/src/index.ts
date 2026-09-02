@@ -45,4 +45,7 @@ export * from "./turn/registry-staging.js";
 export * from "./turn/correction-harness.js";
 export * from "./turn/retry.js";
 export * from "./turn/projection.js";
+export * from "./turn/history-assembly.js";
+export * from "./turn/submit.js";
+export * from "./turn/harness-driver.js";
 export * from "./turn/turn-runner.js";
