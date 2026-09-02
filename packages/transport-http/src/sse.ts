@@ -35,6 +35,12 @@
  * wrote one); without it that stream would poll forever against a run that will
  * never speak again.
  *
+ * A STORE FAILURE IS NOT A CLOSE. Because a clean end of body IS the "the run
+ * is over" signal, a read that threw must end the body the other way — errored
+ * — or a transient `SQLITE_BUSY` is indistinguishable from a finished run and
+ * the client returns mid-pass with no reconnect. An errored body is a broken
+ * pipe, which is exactly what `Last-Event-ID` exists to recover from.
+ *
  * BOTH ENDS OF THE PIPE ARE BOUNDED, and by the same number
  * (`RestStreamOptions.readBatchSize`). Reads take a `limit`, so replaying a
  * long log walks it a batch at a time instead of materialising it whole — and a
@@ -318,10 +324,23 @@ export function createRunEventStream(
           }
         };
 
+        /**
+         * What the pump threw, if it threw. Held rather than swallowed because
+         * a CLEAN END OF BODY is the one signal the whole close rule rests on:
+         * the client reads it as "the task is terminal and its log is
+         * exhausted" and stops, with no reconnect. A `listEvents` that lost a
+         * race with `SQLITE_BUSY` closed the body exactly like a finished run,
+         * so a UI reported a live turn as finished mid-pass. Erroring the
+         * stream is what makes the two distinguishable: a broken body is a
+         * broken pipe, which the client already resumes from.
+         */
+        let failure: { cause: unknown } | null = null;
+
         // NOT awaited: `start` resolving is what makes the body readable, and a
         // stream that only becomes readable when the run ends is not a stream.
         void pump()
           .catch((err: unknown) => {
+            failure = { cause: err };
             logger?.error("run event stream failed", {
               taskId,
               message: err instanceof Error ? err.message : String(err),
@@ -331,7 +350,8 @@ export function createRunEventStream(
             stop();
             signal?.removeEventListener("abort", onAbort);
             try {
-              controller.close();
+              if (failure === null) controller.close();
+              else controller.error(failure.cause);
             } catch {
               // Already closed — an abort and a terminal event can land
               // together.

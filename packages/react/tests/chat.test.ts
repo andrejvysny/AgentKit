@@ -24,6 +24,8 @@ import {
   chattyProvider,
   echoContributor,
   RetryingProvider,
+  scriptedEvent,
+  scriptedStreamFetch,
   startTestServer,
   TEST_CHAT_ID,
   type TestServer,
@@ -608,6 +610,234 @@ describe("lifecycle", () => {
     expect(result.current.status).toBe("idle");
     expect(result.current.activeRunId).toBeNull();
     expect((await client.getRun({ runId })).status).toBe("cancelled");
+  });
+});
+
+describe("a chat switch while a write is in flight", () => {
+  test("a submit that lands after the switch does not write into the new chat", async () => {
+    // The follow had `owns()`; `submit` had only `alive.current`. So a submit
+    // that resolved after the user opened another conversation wrote chat A's
+    // `activeRunId` and `status: "streaming"` into chat B — and then followed
+    // A's run into B's placeholder.
+    const setup = connect();
+    const other = await setup.createChat({ title: "other" });
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let parked = false;
+    const client = connect(async (url, init) => {
+      if (
+        url.includes(`/chats/${TEST_CHAT_ID}/messages`) &&
+        init?.method === "POST"
+      ) {
+        parked = true;
+        await gate;
+      }
+      return fetch(url, init);
+    });
+
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useChat(id),
+      { wrapper: wrapper(client), initialProps: { id: TEST_CHAT_ID } },
+    );
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+
+    // Deliberately not awaited: the state under test is the one between the
+    // click and the server's answer.
+    act(() => {
+      void result.current.submit("for chat A");
+    });
+    await waitFor(() => expect(parked).toBe(true));
+
+    rerender({ id: other.id });
+    await waitFor(() => expect(result.current.messages).toEqual([]));
+
+    // The answer lands now, for a chat nobody is looking at. A settle follows:
+    // the write this test forbids would arrive a few milliseconds later, and
+    // there is no event to wait for when the correct behaviour is silence.
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+
+    expect(result.current.activeRunId).toBeNull();
+    expect(result.current.status).not.toBe("streaming");
+    expect(result.current.messages).toEqual([]);
+  });
+
+  test("a branch submit's refresh does not render chat A's messages under chat B", async () => {
+    // `refresh()` called with no signal writes unconditionally, and the branch
+    // submit calls it right after the accept — so chat A's `listMessages`
+    // landed under chat B's id.
+    const setup = connect();
+    const other = await setup.createChat({ title: "other" });
+    await setup.submitMessage({ chatId: TEST_CHAT_ID }, { content: "first" });
+    await waitFor(async () => {
+      const page = await setup.listMessages({ chatId: TEST_CHAT_ID });
+      expect(page.items.length).toBeGreaterThanOrEqual(2);
+    });
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let park = false;
+    let parked = false;
+    const client = connect(async (url, init) => {
+      if (
+        park &&
+        url.includes(`/chats/${TEST_CHAT_ID}/messages`) &&
+        (init?.method ?? "GET") === "GET"
+      ) {
+        park = false;
+        parked = true;
+        await gate;
+      }
+      return fetch(url, init);
+    });
+
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useChat(id),
+      { wrapper: wrapper(client), initialProps: { id: TEST_CHAT_ID } },
+    );
+    await waitFor(() => expect(result.current.messages.length).toBe(2));
+    const parentId = result.current.messages[0]?.id ?? "";
+
+    // The next read of chat A's messages is the branch submit's own reconcile.
+    park = true;
+    act(() => {
+      void result.current.editAndResubmit(parentId, "edited");
+    });
+    await waitFor(() => expect(parked).toBe(true));
+
+    rerender({ id: other.id });
+    await waitFor(() => expect(result.current.messages).toEqual([]));
+
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.activeRunId).toBeNull();
+    expect(result.current.status).not.toBe("streaming");
+  });
+});
+
+describe("a run whose log never said how it ended", () => {
+  test("the run's status decides the phase when no terminal event arrives", async () => {
+    // The host's `failQuietly` lands a task `failed` and writes `run.failed`
+    // only best-effort; `sse.ts` closes the stream on the TASK's status
+    // precisely so such a log can end. Deriving the final phase from events
+    // alone left this hook `streaming`, `idle` and `error: null` forever — for
+    // the one outcome the user most needs told about.
+    const scripted = scriptedStreamFetch({
+      runStatus: "failed",
+      events: (runId) => [
+        scriptedEvent(runId, 0, "run.started", { model: "m1", toolCount: 0 }),
+        scriptedEvent(runId, 1, "run.message.delta", { delta: "half an " }),
+      ],
+    });
+    const client = connect(scripted.fetch);
+
+    const { result } = renderHook(() => useChat(TEST_CHAT_ID), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    await act(async () => {
+      await result.current.submit("quietly fail");
+    });
+
+    await waitFor(() => expect(result.current.phase).toBe("failed"), {
+      timeout: 10_000,
+    });
+    expect(result.current.status).toBe("error");
+    // No `run.failed` to quote, so the hook says so itself rather than pairing
+    // `phase: "failed"` with `error: null`.
+    expect(result.current.error?.message).toBe(
+      "run ended without a terminal event",
+    );
+    expect(result.current.activeRunId).toBeNull();
+  });
+
+  test("a truncated answer reports its finishReason", async () => {
+    // `"incomplete"` is never normalized to `"stop"`: the provider's stream was
+    // cut before it said why. The run is `completed` and the answer is not.
+    const scripted = scriptedStreamFetch({
+      events: (runId) => [
+        scriptedEvent(runId, 0, "run.started", { model: "m1", toolCount: 0 }),
+        scriptedEvent(runId, 1, "run.message.delta", { delta: "half an " }),
+        scriptedEvent(runId, 2, "run.completed", {
+          iterations: 1,
+          finishReason: "incomplete",
+        }),
+      ],
+    });
+    const client = connect(scripted.fetch);
+
+    const { result } = renderHook(() => useChat(TEST_CHAT_ID), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    await act(async () => {
+      await result.current.submit("cut me off");
+    });
+
+    await waitFor(() => expect(result.current.phase).toBe("completed"), {
+      timeout: 10_000,
+    });
+    expect(result.current.finishReason).toBe("incomplete");
+  });
+});
+
+describe("the trailing drain", () => {
+  test("a failed drain does not turn a completed run into an error", async () => {
+    // The drain is one EXTRA request against a run that has already finished
+    // and is deliberately not reconnected to. Sharing the stream's `try` meant
+    // one transient 503 on it reported a perfect turn as `status: "error"` and
+    // skipped the reconcile, leaving the placeholder unflipped.
+    let streams = 0;
+    const client = connect(async (url, init) => {
+      if (/\/runs\/[^/?]+\/stream/.test(url)) {
+        streams += 1;
+        if (streams === 2) {
+          return new Response(
+            JSON.stringify({
+              type: "about:blank",
+              title: "Service Unavailable",
+              status: 503,
+              code: "upstream_unavailable",
+              detail: "the drain failed",
+            }),
+            {
+              status: 503,
+              headers: { "content-type": "application/problem+json" },
+            },
+          );
+        }
+      }
+      return fetch(url, init);
+    });
+
+    const { result } = renderHook(() => useChat(TEST_CHAT_ID), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    await act(async () => {
+      await result.current.submit("say hello");
+    });
+
+    await waitFor(() => expect(result.current.phase).toBe("completed"), {
+      timeout: 10_000,
+    });
+    expect(streams).toBe(2);
+    expect(result.current.status).toBe("idle");
+    expect(result.current.error).toBeNull();
+    // The reconcile still ran: the placeholder is the server's message.
+    expect(result.current.messages[1]?.content).toBe("Hello, hooks.");
+    expect(result.current.messages[1]?.metadata["placeholder"]).not.toBe(true);
   });
 });
 
