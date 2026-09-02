@@ -2249,8 +2249,9 @@ class SqliteTaskStore implements TaskStore {
       // later transition, where a crash in between loses the death and two
       // callers reading-then-writing lose one of two. Only `abandoned`: a
       // failure that ended cleanly is a different diagnosis (see
-      // `TaskRecord.poisonCount`).
-      if (input.status === "abandoned") {
+      // `TaskRecord.poisonCount`). Idempotent per attempt: a recoverer that
+      // ends the same attempt `abandoned` twice reports one death, not two.
+      if (input.status === "abandoned" && row.status !== "abandoned") {
         this.conn.run(
           `UPDATE tasks SET poison_count = poison_count + 1 WHERE task_id = $taskId`,
           { $taskId: row.task_id },

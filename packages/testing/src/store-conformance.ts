@@ -459,6 +459,31 @@ export function describeAssistantStoreConformance(
       }
     });
 
+    it("counts the same abandoned attempt once, however often it is ended", async () => {
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(makeTaskInput());
+        const attempt = await store.tasks.createAttempt({
+          attemptId: uniqueId("att"),
+          taskId: task.taskId,
+          ownerId: "worker-1",
+        });
+        const end = () =>
+          store.tasks.endAttempt({
+            attemptId: attempt.attemptId,
+            status: "abandoned",
+            error: "lease expired",
+          });
+        await end();
+        // A second recoverer (or a retried recovery pass) reporting the SAME
+        // death must not make the diagnosis read "two crashing workers".
+        await end();
+        expect((await store.tasks.getTask(task.taskId))?.poisonCount).toBe(1);
+      } finally {
+        close?.();
+      }
+    });
+
     it("acquires, renews, and releases a lease", async () => {
       const { store, close } = await create();
       try {

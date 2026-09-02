@@ -179,7 +179,8 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
       // Read off the FILE, not off the DDL string: what the store actually
       // applied is the only thing a stale dev database or a half-applied DDL
       // could disagree with. `idx_messages_run` serves lastMessageOfRun's
-      // (chat_id, run_id, ORDER BY depth DESC) lookup; `proposals.claimed_at`
+      // (chat_id, run_id, ORDER BY depth DESC, order_key DESC) lookup, the
+      // whole ORDER BY included so no temp b-tree is needed; `proposals.claimed_at`
       // is the reconcile window's stamp.
       const store = new SqliteAssistantStore(path);
       store.close();
@@ -190,7 +191,9 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
             `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_run'`,
           )
           .get() as { sql: string } | null;
-        expect(index?.sql).toContain("messages(chat_id, run_id, depth)");
+        expect(index?.sql).toContain(
+          "messages(chat_id, run_id, depth, order_key)",
+        );
         const columns = (
           raw.query(`PRAGMA table_info(proposals)`).all() as { name: string }[]
         ).map((column) => column.name);
