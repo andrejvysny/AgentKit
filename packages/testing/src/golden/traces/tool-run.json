@@ -2,56 +2,56 @@
   {
     "type": "run.started",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-09-01T19:50:02.637Z",
+    "timestamp": "2026-09-02T11:21:19.493Z",
     "data": {
       "model": "gpt-golden",
       "toolCount": 1
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_9f8c6f4e-8fa2-4a6e-a741-5267df799b2c",
+    "eventId": "evt_d58b2b82-c837-4f02-b7fa-95384fb06cf5",
     "seq": 0
   },
   {
     "type": "run.message.completed",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-09-01T19:50:02.637Z",
+    "timestamp": "2026-09-02T11:21:19.493Z",
     "data": {
       "content": "",
       "toolCallCount": 1
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_2ae636a9-b880-47dc-b299-388a5260c041",
+    "eventId": "evt_7679170f-8285-4f9e-9d71-d6d740365473",
     "seq": 1
   },
   {
     "type": "run.tool.requested",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-09-01T19:50:02.637Z",
+    "timestamp": "2026-09-02T11:21:19.493Z",
     "data": {
       "toolCallId": "call-golden-1",
       "toolName": "echo",
       "argumentsJson": "{\"text\":\"golden\"}"
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_e25af6df-bbe8-4432-8109-7362690ed325",
+    "eventId": "evt_4fa90ac5-1d9c-46a3-949c-d926ceef4429",
     "seq": 2
   },
   {
     "type": "run.tool.running",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-09-01T19:50:02.637Z",
+    "timestamp": "2026-09-02T11:21:19.493Z",
     "data": {
       "toolCallId": "call-golden-1",
       "toolName": "echo"
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_6fcd62f2-2508-4c4d-a098-c02f644fd072",
+    "eventId": "evt_0607560e-1688-42ad-8388-5f55a74659a4",
     "seq": 3
   },
   {
     "type": "run.tool.succeeded",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-09-01T19:50:02.637Z",
+    "timestamp": "2026-09-02T11:21:19.493Z",
     "data": {
       "toolCallId": "call-golden-1",
       "toolName": "echo",
@@ -63,42 +63,42 @@
       "modelResultJson": "{\"ok\":true,\"status\":\"ok\",\"warnings\":[],\"truncated\":false,\"data\":{\"echoed\":\"golden\"}}"
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_e03f566d-15e3-4e6e-9b07-277fd77596ef",
+    "eventId": "evt_ab7c4468-34cf-404b-8c98-6a64d11b9565",
     "seq": 4
   },
   {
     "type": "run.message.delta",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-09-01T19:50:02.637Z",
+    "timestamp": "2026-09-02T11:21:19.493Z",
     "data": {
       "delta": "Done."
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_b28891aa-e9eb-45a6-8bdf-715e0d14b3c7",
+    "eventId": "evt_9a0f52d4-9907-4b84-b55c-11a035d8e633",
     "seq": 5
   },
   {
     "type": "run.message.completed",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-09-01T19:50:02.637Z",
+    "timestamp": "2026-09-02T11:21:19.493Z",
     "data": {
       "content": "Done.",
       "toolCallCount": 0
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_f31b2265-52bf-4734-84ff-8da809fe8841",
+    "eventId": "evt_1d033ca2-7cca-4bae-98b5-35f863a25ba6",
     "seq": 6
   },
   {
     "type": "run.completed",
     "runId": "run-golden-tool-run",
-    "timestamp": "2026-09-01T19:50:02.637Z",
+    "timestamp": "2026-09-02T11:21:19.493Z",
     "data": {
       "iterations": 2,
       "finishReason": "stop"
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_e69c210e-d608-4831-82b5-9653a2a8c84e",
+    "eventId": "evt_99538d10-7ccf-48ff-beaf-2ba941e6aede",
     "seq": 7
   }
 ]

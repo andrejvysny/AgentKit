@@ -2,42 +2,42 @@
   {
     "type": "run.started",
     "runId": "run-golden-usage-run",
-    "timestamp": "2026-09-01T19:50:02.639Z",
+    "timestamp": "2026-09-02T11:21:19.494Z",
     "data": {
       "model": "gpt-golden",
       "toolCount": 0
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_af7bd2b7-4d3e-434f-8dbd-f61ec930a10d",
+    "eventId": "evt_61d01dbc-8618-441c-8818-1953855e85f0",
     "seq": 0
   },
   {
     "type": "run.message.delta",
     "runId": "run-golden-usage-run",
-    "timestamp": "2026-09-01T19:50:02.639Z",
+    "timestamp": "2026-09-02T11:21:19.494Z",
     "data": {
       "delta": "Usage-tracked answer."
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_7079b61f-2406-4f62-b4b1-617168e7c1fd",
+    "eventId": "evt_a2d2285f-3cdc-4765-837b-0e3fc726f058",
     "seq": 1
   },
   {
     "type": "run.message.completed",
     "runId": "run-golden-usage-run",
-    "timestamp": "2026-09-01T19:50:02.639Z",
+    "timestamp": "2026-09-02T11:21:19.494Z",
     "data": {
       "content": "Usage-tracked answer.",
       "toolCallCount": 0
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_03fe7407-3d33-4d81-a8da-8908421de27b",
+    "eventId": "evt_460a4ff4-816f-4a5a-a301-7854b425285e",
     "seq": 2
   },
   {
     "type": "run.usage",
     "runId": "run-golden-usage-run",
-    "timestamp": "2026-09-01T19:50:02.639Z",
+    "timestamp": "2026-09-02T11:21:19.494Z",
     "data": {
       "callId": "call-usage-0",
       "attempt": 1,
@@ -50,19 +50,19 @@
       "finalForCall": true
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_f07b1ca3-f119-47ba-ab2f-ed28fd29a5d2",
+    "eventId": "evt_e23e05f8-8b50-4bd1-917d-d4321f99f6de",
     "seq": 3
   },
   {
     "type": "run.completed",
     "runId": "run-golden-usage-run",
-    "timestamp": "2026-09-01T19:50:02.639Z",
+    "timestamp": "2026-09-02T11:21:19.494Z",
     "data": {
       "iterations": 1,
       "finishReason": "stop"
     },
     "contractVersion": "0.4.0",
-    "eventId": "evt_039b894d-eb59-4555-b96f-1cbac3c55211",
+    "eventId": "evt_48cf7108-98c1-40d7-9d2b-d727320ccc6e",
     "seq": 4
   }
 ]
