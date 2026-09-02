@@ -286,7 +286,7 @@ the prefix work, and the module router's per-route registration buys nothing for
 | `authenticate` / `authorize` | **no** | The backend binds `127.0.0.1` and loopback is its whole boundary (`mcp/auth.ts:5-7`). Wire both the day that changes |
 | `basePath` | yes | `"/api/modules/assistant"` |
 | `cors` | yes | Whatever `src/core/backend/http/cors.ts` allows today |
-| `maxBodyBytes` | **yes** | Absent means no cap. Mentions inline images; pick a number above `MAX_TOTAL_IMAGES × MAX_IMAGE_BYTE_SIZE` |
+| `maxBodyBytes` | **yes** | Defaults to 1 MiB since 0.5.0 (JSON depth 64). Mentions inline images; pick a number above `MAX_TOTAL_IMAGES × MAX_IMAGE_BYTE_SIZE` |
 
 ---
 
@@ -803,9 +803,9 @@ block work.
    today and the settings pane calls it. Either keep it app-owned over
    `store.providers` (trivial) or re-point the UI at `listProviders`. Note the
    asymmetry so nobody hunts for a `getProvider` op.
-8. **`maxBodyBytes` is unset by default.** Absent means **no cap**. Mentions
-   inline images up to 5 MiB each; pick a number before step 6, not after the
-   first 200 MB paste.
+8. **`maxBodyBytes` defaults to 1 MiB since 0.5.0** (it used to be unset,
+   meaning no cap). Mentions inline images up to 5 MiB each, so the default
+   refuses them; pick a number before step 6, not after the first 200 MB paste.
 9. **`assistant_context_binding` stays app-owned, and so does its REST surface.**
    No AgentKit port persists bindings — `ContextProvider` resolves them per run,
    deliberately, "because the world moves between turns". That is the right
