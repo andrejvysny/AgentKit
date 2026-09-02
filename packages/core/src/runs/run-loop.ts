@@ -19,6 +19,7 @@ import {
   type ValidationError,
 } from "../tools/validation.js";
 import { truncateString } from "../tools/limits.js";
+import { dedupeToolCallIds } from "../tools/tool-calls.js";
 
 export interface RunChatInput {
   client: AiProviderClient;
@@ -265,7 +266,15 @@ export async function* runChat(
     }
 
     const assistantContent = completedContent ?? deltaContent;
-    const turnToolCalls = completedToolCalls ?? requestedToolCalls;
+    // Re-keyed HERE, not only inside the first-party client: `AiProviderClient`
+    // is an interface a host may implement, and a client that emits two calls
+    // under one id would otherwise produce two `role:"tool"` messages sharing a
+    // `tool_call_id` — one answer for two calls, and colliding projections.
+    // Idempotent, so the client's own pass leaves nothing for this one to find.
+    const assembledToolCalls = dedupeToolCallIds(
+      completedToolCalls ?? requestedToolCalls,
+    );
+    const turnToolCalls = assembledToolCalls.calls;
 
     // Hoisted above the tool-call branch on purpose: a turn cut off at the
     // token budget usually breaks the TOOL ARGUMENTS (which then fail as
@@ -287,6 +296,17 @@ export async function* runChat(
     // If the assistant produced tool calls, append the assistant message with tool_calls
     // and execute each tool, appending role:'tool' messages with tool_call_id.
     if (turnToolCalls.length > 0) {
+      if (assembledToolCalls.duplicateIds.length > 0) {
+        yield stamp({
+          type: "run.warning",
+          runId,
+          timestamp: nowIso(),
+          data: {
+            code: "duplicate_tool_call_id",
+            message: `Provider reused tool call id(s) ${assembledToolCalls.duplicateIds.join(", ")} in one turn; the later call(s) were re-keyed so each stays answerable.`,
+          },
+        });
+      }
       // A completed-only provider carries its tool calls solely in
       // run.message.completed.data.toolCalls and announces nothing, so a UI keyed
       // on run.tool.requested would show a tool jumping straight to running (or
@@ -349,6 +369,7 @@ export async function* runChat(
             stamp,
             runId,
             messages,
+            input.limits.maxBytes,
             rem,
             "Run cancelled before this tool produced a result.",
             "cancelled",
@@ -376,13 +397,29 @@ export async function* runChat(
         const tool = input.registry.get(tc.name);
         if (!tool) {
           const err = `Tool not registered: ${tc.name}`;
-          yield* failTool(stamp, runId, messages, tc, err, "tool_missing");
+          yield* failTool(
+            stamp,
+            runId,
+            messages,
+            input.limits.maxBytes,
+            tc,
+            err,
+            "tool_missing",
+          );
           continue;
         }
         const parsed = parseToolArguments(tc.argumentsJson);
         if (!parsed.ok) {
           const err = `Invalid arguments JSON: ${parsed.error}`;
-          yield* failTool(stamp, runId, messages, tc, err, "bad_args");
+          yield* failTool(
+            stamp,
+            runId,
+            messages,
+            input.limits.maxBytes,
+            tc,
+            err,
+            "bad_args",
+          );
           continue;
         }
         const args = parsed.value;
@@ -399,10 +436,19 @@ export async function* runChat(
           // `retryable: false` is about THIS call, not about the tool: the same
           // arguments will fail the same way, so a bare retry is pointless —
           // the model has to write different ones.
-          yield* failTool(stamp, runId, messages, tc, err, "schema_invalid", {
-            phase: "validation",
-            retryable: false,
-          });
+          yield* failTool(
+            stamp,
+            runId,
+            messages,
+            input.limits.maxBytes,
+            tc,
+            err,
+            "schema_invalid",
+            {
+              phase: "validation",
+              retryable: false,
+            },
+          );
           continue;
         }
 
@@ -445,6 +491,7 @@ export async function* runChat(
               stamp,
               runId,
               messages,
+              input.limits.maxBytes,
               tc,
               `Tool ${tc.name} produced a result that could not be serialized: ${serialized.error}`,
               "result_unserializable",
@@ -487,6 +534,7 @@ export async function* runChat(
               stamp,
               runId,
               messages,
+              input.limits.maxBytes,
               tc,
               `Tool ${tc.name} produced a result that could not be serialized: ${envelopeJson.error}`,
               "result_unserializable",
@@ -494,11 +542,15 @@ export async function* runChat(
             );
             continue;
           }
-          const errorMessage =
+          // Capped like every other model-facing failure text: this comes
+          // straight from the tool, and the envelope beside it is capped too.
+          const errorMessage = truncateString(
             result.value.summary ??
-            (result.value.warnings.length > 0
-              ? result.value.warnings.join("; ")
-              : `Tool ${tc.name} reported failure`);
+              (result.value.warnings.length > 0
+                ? result.value.warnings.join("; ")
+                : `Tool ${tc.name} reported failure`),
+            envelopeTextBudget(input.limits.maxBytes),
+          ).value;
           yield stamp({
             type: "run.tool.failed",
             runId,
@@ -525,6 +577,7 @@ export async function* runChat(
             stamp,
             runId,
             messages,
+            input.limits.maxBytes,
             tc,
             result.error,
             "exec_failed",
@@ -651,16 +704,27 @@ interface ToolFailureDetail {
   retryable?: boolean;
 }
 
-/** Emit a run.tool.failed event and append the matching error tool message. */
+/**
+ * Emit a run.tool.failed event and append the matching error tool message.
+ *
+ * `maxBytes` is the run's output budget: a thrown error's message is arbitrary
+ * host text (a stack, a dumped row, a whole HTTP body) and it lands in
+ * `messages`, so it is capped exactly like a successful result's prose is.
+ */
 function* failTool(
   stamp: EventStamper,
   runId: string,
   messages: AiChatMessage[],
+  maxBytes: number,
   tc: AiToolCall,
-  errorMessage: string,
+  rawErrorMessage: string,
   errorCode: string,
   detail: ToolFailureDetail = {},
 ): Generator<AiRunEvent, void, unknown> {
+  const errorMessage = truncateString(
+    rawErrorMessage,
+    envelopeTextBudget(maxBytes),
+  ).value;
   yield stamp({
     type: "run.tool.failed",
     runId,
@@ -743,6 +807,14 @@ function serializeToolResult(
   | { ok: false; error: string } {
   const envelopeJson = safeStringify(envelope);
   if (!envelopeJson.ok) return { ok: false, error: envelopeJson.error };
+  // A tool with nothing to return (`AiToolResult<void>`; `data` is optional in
+  // the schema) is not a serialization failure. `safeStringify(undefined)`
+  // reports one by design — "no JSON at all" is not a message the model can be
+  // fed — so the ABSENCE is spelled `null` here, which is what the event's
+  // `resultJson` means anyway. The envelope drops the key entirely.
+  if (data === undefined) {
+    return { ok: true, envelopeJson: envelopeJson.json, dataJson: "null" };
+  }
   const dataJson = safeStringify(data);
   if (!dataJson.ok) return { ok: false, error: dataJson.error };
   return { ok: true, envelopeJson: envelopeJson.json, dataJson: dataJson.json };
@@ -750,6 +822,62 @@ function serializeToolResult(
 
 /** Floor on the data budget, so a huge `summary` can't leave zero room for data. */
 const MIN_ENVELOPE_DATA_BYTES = 256;
+
+/**
+ * Share of `limits.maxBytes` each prose field of the envelope may take: 1/8 for
+ * `summary`, 1/8 for all `warnings` together.
+ *
+ * The budget used to bound `data` alone, so a tool answering with a 200 KB
+ * summary (or 200 KB of warnings, or a 200 KB error message) put every byte of
+ * it into `messages` — and therefore into EVERY later request of the run —
+ * while `truncated: true` claimed it was the data that had been cut. A share
+ * each is enough for a sentence and never enough to be the payload.
+ */
+const ENVELOPE_TEXT_DIVISOR = 8;
+
+/** Floor on a prose budget, so a small `maxBytes` still leaves a readable line. */
+const MIN_ENVELOPE_TEXT_BYTES = 128;
+
+/** The byte budget one prose field of the envelope gets. */
+function envelopeTextBudget(maxBytes: number): number {
+  return Math.max(
+    MIN_ENVELOPE_TEXT_BYTES,
+    Math.floor(maxBytes / ENVELOPE_TEXT_DIVISOR),
+  );
+}
+
+/** UTF-8 length, for budgets that are spent in bytes rather than code units. */
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+/**
+ * Cap the warnings ARRAY against one shared budget, dropping what no longer
+ * fits.
+ *
+ * Per-array rather than per-warning: a tool emitting a thousand short warnings
+ * costs the same as one emitting a single long one, and only the total is what
+ * the model's context actually pays.
+ */
+function capWarnings(
+  warnings: readonly string[],
+  budget: number,
+): { warnings: string[]; truncated: boolean } {
+  let remaining = budget;
+  const capped: string[] = [];
+  let truncated = false;
+  for (const warning of warnings) {
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    const cut = truncateString(warning, remaining);
+    capped.push(cut.value);
+    if (cut.truncated) truncated = true;
+    remaining -= byteLength(cut.value);
+  }
+  return { warnings: capped, truncated };
+}
 
 /**
  * Build the balanced model-facing envelope (Wave 0 §0.2) from a tool result.
@@ -769,12 +897,19 @@ function buildEnvelope(
   // status maps to "error".
   const status: AiToolEnvelope["status"] =
     result.status === "partial" ? "partial" : result.ok ? "ok" : "error";
+  const textBudget = envelopeTextBudget(limits.maxBytes);
+  const summary =
+    result.summary === undefined
+      ? undefined
+      : truncateString(result.summary, textBudget);
+  const warnings = capWarnings(result.warnings, textBudget);
   const envelope: AiToolEnvelope = {
     ok: result.ok,
     status,
-    summary: result.summary,
-    warnings: result.warnings,
-    truncated: result.truncated,
+    summary: summary?.value,
+    warnings: warnings.warnings,
+    truncated:
+      result.truncated || (summary?.truncated ?? false) || warnings.truncated,
     data: result.modelData ?? result.data,
   };
   const measured = safeStringify(envelope);
@@ -804,13 +939,58 @@ function fitEnvelope(
   let budget = Math.max(MIN_ENVELOPE_DATA_BYTES, maxBytes - overhead);
   let capped = capEnvelopeData(envelope, budget);
   while (budget > MIN_ENVELOPE_DATA_BYTES) {
-    const json = safeStringify(capped);
-    if (!json.ok) return capped;
-    if (!truncateString(json.json, maxBytes).truncated) return capped;
+    if (envelopeFits(capped, maxBytes)) return capped;
     budget = Math.max(MIN_ENVELOPE_DATA_BYTES, Math.floor(budget / 2));
     capped = capEnvelopeData(envelope, budget);
   }
-  return capped;
+  if (envelopeFits(capped, maxBytes)) return capped;
+  return lastResort(capped, maxBytes);
+}
+
+/** Does the SERIALIZED envelope stay inside the byte budget? */
+function envelopeFits(envelope: AiToolEnvelope, maxBytes: number): boolean {
+  const json = safeStringify(envelope);
+  // Unserializable is not "too big": the caller reports it as
+  // `result_unserializable` rather than capping something it cannot read.
+  if (!json.ok) return true;
+  return !truncateString(json.json, maxBytes).truncated;
+}
+
+/**
+ * The backstop: even `data` at its floor did not bring the envelope under the
+ * cap, so the remaining fields go.
+ *
+ * A fixed ladder — `data` becomes the marker object, then the warnings go, then
+ * the summary shrinks and finally disappears — so this terminates whatever the
+ * payload was. The last candidate is returned even if it STILL does not fit: at
+ * that point `maxBytes` is smaller than an empty envelope, which is a
+ * misconfiguration rather than a payload to cut.
+ */
+function lastResort(
+  envelope: AiToolEnvelope,
+  maxBytes: number,
+): AiToolEnvelope {
+  const summary = envelope.summary ?? "";
+  const ladder = [
+    summary,
+    truncateString(summary, Math.max(1, Math.floor(maxBytes / 4))).value,
+    truncateString(summary, Math.max(1, Math.floor(maxBytes / 16))).value,
+    "",
+  ];
+  let candidate: AiToolEnvelope = {
+    ...envelope,
+    truncated: true,
+    data: { truncated: true },
+  };
+  for (const [step, text] of ladder.entries()) {
+    candidate = {
+      ...candidate,
+      ...(envelope.summary === undefined ? {} : { summary: text }),
+      warnings: step === 0 ? envelope.warnings : [],
+    };
+    if (envelopeFits(candidate, maxBytes)) return candidate;
+  }
+  return candidate;
 }
 
 /** One capping pass: replace `data` with at most `budget` bytes of itself. */

@@ -51,6 +51,7 @@ const mcp = createMcpServerHandler({
   maxRequestBytes: 4 * 1024 * 1024,
   maxConcurrentCallsPerSession: 4,
   maxBatchSize: 8,
+  maxCallMs: 120_000,   // one tools/call; see "Session lifetime" below
   clock,                // optional; only the lifetime settings read it
   logger,
 });
@@ -184,6 +185,20 @@ a session's idle clock is stamped when a request COMPLETES as well as when it
 arrives. Closing a session mid-`tools/call` ends the SSE stream the answer was
 going to be written to, and the caller gets HTTP 200 with an empty body — the
 most ambiguous outcome available for a call that may well have run.
+
+"In flight" is a reprieve, not a licence, or a call that never returns would
+pin its session past both caps:
+
+- **`maxCallMs`** (default **2 minutes**). `createStagedToolSource` races each
+  tool against it — aborting `ctx.signal` and answering the caller with an
+  `ok: false` envelope (`errorCode: "timeout"`) — so a tool that hangs does not
+  hold its session. A host-implemented `McpToolSource` obeys no deadline of
+  ours, so the reap has a backstop too: a session whose oldest in-flight request
+  is older than `maxCallMs + sessionIdleTtlMs` is closed anyway.
+- **At the per-principal cap with every session busy**, a NEW session is refused
+  `503` with `Retry-After` instead of being admitted over the cap. A cap that is
+  exceeded whenever the sessions under it are busy is not a cap, and "busy" is a
+  state a caller can hold on purpose.
 
 Both compare timestamps from `clock` (default `@agentkit/host`'s
 `defaultClock`), which is injectable so an idle-TTL test is about a fake clock

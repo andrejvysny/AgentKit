@@ -20,6 +20,7 @@ import {
 import {
   DEFAULT_ALLOWED_HOSTS,
   DEFAULT_MAX_BATCH_SIZE,
+  DEFAULT_MAX_CALL_MS,
   DEFAULT_MAX_CONCURRENT_CALLS_PER_SESSION,
   DEFAULT_MAX_REQUEST_BYTES,
   DEFAULT_MAX_SESSIONS,
@@ -27,6 +28,7 @@ import {
   DEFAULT_SESSION_IDLE_TTL_MS,
   EXEC_FAILED_TEXT,
   GLOBAL_SESSION_CAP_FACTOR,
+  SESSION_CAPACITY_RETRY_AFTER_SECONDS,
   type McpServerHandler,
   type McpServerHandlerOptions,
   type McpSessionScope,
@@ -53,6 +55,16 @@ interface SessionRuntime {
    * a write that may well have happened.
    */
   inFlight: number;
+  /**
+   * When the OLDEST currently in-flight request arrived, or `undefined` when
+   * none is.
+   *
+   * "In flight" is a reason not to reap, not a licence to live forever: a tool
+   * source that never returns would otherwise pin its session past every cap,
+   * and the caps would stop bounding anything at all. Age past
+   * `maxCallMs + sessionIdleTtlMs` says the request is never going to answer.
+   */
+  inFlightSince: number | undefined;
   /** `tools/call` permits in use, and the handlers waiting for one. */
   running: number;
   waiters: (() => void)[];
@@ -71,6 +83,12 @@ interface SessionEntry {
    */
   fingerprint: string;
   runtime: SessionRuntime;
+  /**
+   * Set when the session could not be registered because the cap was reached
+   * and every session under it was busy. Its initialize answer is discarded for
+   * a 503 — see {@link evictForCapacity}.
+   */
+  capacityRefused: boolean;
 }
 
 /**
@@ -131,6 +149,7 @@ export function createMcpServerHandler(
     options.maxConcurrentCallsPerSession ??
     DEFAULT_MAX_CONCURRENT_CALLS_PER_SESSION;
   const maxBatchSize = options.maxBatchSize ?? DEFAULT_MAX_BATCH_SIZE;
+  const maxCallMs = options.maxCallMs ?? DEFAULT_MAX_CALL_MS;
   const clock = options.clock ?? defaultClock;
   const logger = options.logger;
 
@@ -154,7 +173,7 @@ export function createMcpServerHandler(
     server.setRequestHandler(
       ListToolsRequestSchema,
       async (): Promise<ListToolsResult> => {
-        runtime.inFlight += 1;
+        beginRequest(runtime);
         try {
           const entries = await listCatalog(runtime, scope);
           return {
@@ -174,7 +193,7 @@ export function createMcpServerHandler(
         // Counted BEFORE the queue wait, not after it: a session whose calls are
         // all still waiting for a permit is as busy as one executing them, and
         // reaping it would drop answers nobody has produced yet.
-        runtime.inFlight += 1;
+        beginRequest(runtime);
         try {
           await acquireCallSlot(runtime);
           try {
@@ -306,7 +325,20 @@ export function createMcpServerHandler(
    */
   function finishRequest(runtime: SessionRuntime): void {
     runtime.inFlight -= 1;
+    if (runtime.inFlight <= 0) runtime.inFlightSince = undefined;
     runtime.lastUsedAt = clock.now().getTime();
+  }
+
+  /**
+   * A handler entered the session.
+   *
+   * The arrival time is recorded for the FIRST of a concurrent set only: the
+   * stuck check asks how long this session has had something outstanding, and
+   * a batch's later messages arriving must not make that answer younger.
+   */
+  function beginRequest(runtime: SessionRuntime): void {
+    if (runtime.inFlight === 0) runtime.inFlightSince = clock.now().getTime();
+    runtime.inFlight += 1;
   }
 
   /**
@@ -360,10 +392,28 @@ export function createMcpServerHandler(
    * until the next request arrives — which is when it starts mattering.
    */
   function reapIdleSessions(): void {
-    const cutoff = clock.now().getTime() - sessionIdleTtlMs;
+    const now = clock.now().getTime();
+    const cutoff = now - sessionIdleTtlMs;
+    // A request that has outlived its own deadline AND a whole idle TTL on top
+    // of it is not a request any more. `createStagedToolSource` bounds the
+    // calls it runs, but `McpToolSource` is a host-implemented interface that
+    // obeys no deadline of ours — and one call that never answers used to pin
+    // its session forever, past both session caps.
+    const stuckCutoff = now - (maxCallMs + sessionIdleTtlMs);
     for (const [sessionId, entry] of sessions) {
-      if (entry.runtime.inFlight > 0) continue;
-      if (entry.runtime.lastUsedAt < cutoff) {
+      const runtime = entry.runtime;
+      if (runtime.inFlight > 0) {
+        const since = runtime.inFlightSince;
+        if (since === undefined || since > stuckCutoff) continue;
+        logger?.warn("mcp session reaped with a request still in flight", {
+          sessionId,
+          inFlight: runtime.inFlight,
+          stuckForMs: now - since,
+        });
+        closeSession(sessionId, entry, "expired");
+        continue;
+      }
+      if (runtime.lastUsedAt < cutoff) {
         closeSession(sessionId, entry, "expired");
       }
     }
@@ -381,27 +431,37 @@ export function createMcpServerHandler(
    * backstop for a host that mints a token per client — only there does
    * eviction cross principals, and only once the map is
    * {@link GLOBAL_SESSION_CAP_FACTOR} times over.
+   *
+   * Returns whether there is now room. `false` means every session at the cap
+   * is busy, and the caller REFUSES the new one (503) rather than going over:
+   * a cap that is exceeded whenever the sessions under it are busy is not a
+   * cap, and "busy" is exactly the state a caller can drive on purpose.
    */
-  function evictForCapacity(fingerprint: string): void {
-    evictOldest(maxSessions, (entry) => entry.fingerprint === fingerprint);
-    evictOldest(globalMaxSessions, () => true);
+  function evictForCapacity(fingerprint: string): boolean {
+    const perPrincipal = evictOldest(
+      maxSessions,
+      (entry) => entry.fingerprint === fingerprint,
+    );
+    const global = evictOldest(globalMaxSessions, () => true);
+    return perPrincipal && global;
   }
 
   /**
    * Close the oldest idle sessions matching `matches` until fewer than `cap`
-   * remain.
+   * remain, and report whether that succeeded.
    *
    * A session with a request in flight is never a victim (see
-   * {@link SessionRuntime.inFlight}), so the loop stops when every candidate is
-   * busy — going one over the cap is the lesser fault next to answering a live
-   * `tools/call` with an empty body. Counting by scan rather than by a second
-   * index keyed on fingerprint: the caps are small, and a map that has to be
-   * kept in step with `sessions` is a map that can fall out of step with it.
+   * {@link SessionRuntime.inFlight}): closing one answers a live `tools/call`
+   * with an empty body. When every candidate is busy there is nothing to close,
+   * so this returns `false` and the caller refuses the new session instead of
+   * quietly exceeding the cap. Counting by scan rather than by a second index
+   * keyed on fingerprint: the caps are small, and a map that has to be kept in
+   * step with `sessions` is a map that can fall out of step with it.
    */
   function evictOldest(
     cap: number,
     matches: (entry: SessionEntry) => boolean,
-  ): void {
+  ): boolean {
     for (;;) {
       let count = 0;
       let oldestId: string | undefined;
@@ -415,7 +475,7 @@ export function createMcpServerHandler(
           oldestId = sessionId;
         }
       }
-      if (count < cap) return;
+      if (count < cap) return true;
       if (oldestId === undefined) {
         // Only interesting when there WAS something to evict: a cap of 0 has no
         // candidates and needs no warning about it.
@@ -425,10 +485,11 @@ export function createMcpServerHandler(
             live: count,
           });
         }
-        return;
+        return false;
       }
       const victim = sessions.get(oldestId);
-      if (victim === undefined) return;
+      // Gone since the scan (its transport closed): that is the room we needed.
+      if (victim === undefined) return true;
       closeSession(oldestId, victim, "evicted");
     }
   }
@@ -442,6 +503,7 @@ export function createMcpServerHandler(
     const runtime: SessionRuntime = {
       lastUsedAt: clock.now().getTime(),
       inFlight: 0,
+      inFlightSince: undefined,
       running: 0,
       waiters: [],
       listing: undefined,
@@ -460,7 +522,12 @@ export function createMcpServerHandler(
         // At the moment of insertion, not before it: two initializes racing
         // each other would both pass a check made earlier and leave the map one
         // over the cap.
-        evictForCapacity(fingerprint);
+        if (!evictForCapacity(fingerprint)) {
+          logger?.warn("mcp session refused: capacity full", { sessionId });
+          entry.capacityRefused = true;
+          void server.close();
+          return;
+        }
         sessions.set(sessionId, entry);
         logger?.debug("mcp session opened", { sessionId });
       },
@@ -475,6 +542,7 @@ export function createMcpServerHandler(
       scope,
       fingerprint,
       runtime,
+      capacityRefused: false,
     };
     // A transport that dies for any other reason (stream error, dispose) must
     // not leave a dangling map entry that later requests would route into.
@@ -583,7 +651,16 @@ export function createMcpServerHandler(
       }
 
       const entry = await openSession(request.headers);
-      return entry.transport.handleRequest(request, { parsedBody: body });
+      const response = await entry.transport.handleRequest(request, {
+        parsedBody: body,
+      });
+      // The capacity verdict is only known once the transport has minted the id
+      // and called back (see `onsessioninitialized`), which happens inside that
+      // call — so the initialize answer is built and then discarded. A refused
+      // session was never registered and its server is already closing; what
+      // the client must not get is a session id it could keep using.
+      if (entry.capacityRefused) return capacityRefusal();
+      return response;
     },
 
     async dispose(): Promise<void> {
@@ -607,11 +684,33 @@ export function createMcpServerHandler(
 }
 
 /** The JSON-RPC error envelope the streamable-HTTP transport itself uses. */
-function jsonRpcError(status: number, code: number, message: string): Response {
+function jsonRpcError(
+  status: number,
+  code: number,
+  message: string,
+  headers: Record<string, string> = {},
+): Response {
   return new Response(
     JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }),
-    { status, headers: { "Content-Type": "application/json" } },
+    {
+      status,
+      headers: { "Content-Type": "application/json", ...headers },
+    },
   );
+}
+
+/**
+ * No room for another session, and nothing evictable — every session at the cap
+ * has a request in flight.
+ *
+ * 503 with `Retry-After`, because this is temporary and the client's correct
+ * move is to come back: the alternative, going over the cap, is how one caller
+ * turns "all my sessions are busy" into unbounded memory.
+ */
+function capacityRefusal(): Response {
+  return jsonRpcError(503, -32000, "Server has no session capacity available", {
+    "Retry-After": String(SESSION_CAPACITY_RETRY_AFTER_SECONDS),
+  });
 }
 
 /** Either the parsed body, or the response that refuses it. */

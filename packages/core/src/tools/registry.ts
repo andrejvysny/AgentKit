@@ -12,6 +12,39 @@ import { mapValidatorErrors, type ValidationError } from "./validation.js";
 const MAX_SCHEMA_NODES = 2000;
 const MAX_SCHEMA_DEPTH = 32;
 
+/** How many compiled validators the process-wide cache keeps — see {@link compileInputSchema}. */
+const MAX_CACHED_VALIDATORS = 512;
+
+/** Why an inputSchema was refused. */
+export type ToolSchemaErrorCode = "schema_too_large" | "schema_invalid";
+
+/**
+ * An inputSchema this registry refuses to compile.
+ *
+ * Typed rather than a bare `Error` because the callers that matter are not
+ * humans reading a message: `stageRegistry` (and the MCP bridge behind it)
+ * turns a whole tool set into a run's registry, and a plain throw from one
+ * malformed schema used to be indistinguishable from a bug — so the tool was
+ * dropped silently. A code lets a caller report WHICH tool it lost and why.
+ */
+export class ToolSchemaError extends Error {
+  readonly code: ToolSchemaErrorCode;
+  /** The tool whose `inputSchema` was refused. */
+  readonly toolName: string;
+
+  constructor(
+    code: ToolSchemaErrorCode,
+    toolName: string,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "ToolSchemaError";
+    this.code = code;
+    this.toolName = toolName;
+  }
+}
+
 /**
  * The tools one run may call, with their inputSchemas compiled once.
  *
@@ -25,7 +58,12 @@ const MAX_SCHEMA_DEPTH = 32;
  *   patterns; a host staging untrusted tools should pre-filter them (drop the
  *   keyword, or vet the source) before registering.
  * - size is bounded here: a schema over {@link MAX_SCHEMA_NODES} nodes or
- *   {@link MAX_SCHEMA_DEPTH} deep is refused rather than compiled.
+ *   {@link MAX_SCHEMA_DEPTH} deep is refused with a {@link ToolSchemaError}
+ *   rather than compiled.
+ *
+ * CHANGED IN 0.5.0: `format` keywords are now VALIDATED (`ajv-formats`), where
+ * before they were ignored. A tool whose schema says `format: "email"` and whose
+ * caller passes `"not-an-email"` now fails validation instead of executing.
  */
 export class AiToolRegistry {
   private readonly tools = new Map<string, AiTool>();
@@ -90,7 +128,24 @@ export class AiToolRegistry {
 }
 
 /**
- * Compile one tool's inputSchema on its OWN Ajv instance.
+ * Compiled validators, keyed by the schema they were compiled from and shared
+ * by every registry in the process.
+ *
+ * Staging builds a fresh {@link AiToolRegistry} per turn — and the MCP bridge
+ * stages once per `tools/call` — so the SAME handful of schemas were compiled
+ * over and over, each compile costing its own Ajv instance plus `ajv-formats`.
+ * Sharing the result is safe because a `ValidateFunction` is stateless between
+ * calls: the only thing it writes is `validate.errors`, read synchronously by
+ * {@link AiToolRegistry.validateInput} in the same tick.
+ *
+ * Bounded and LRU (a `Map` iterates in insertion order; a hit re-inserts), so a
+ * host staging thousands of distinct schemas cannot grow it without limit.
+ */
+const validatorCache = new Map<string, ValidateFunction>();
+
+/**
+ * Compile one tool's inputSchema on its OWN Ajv instance, or reuse the
+ * validator an identical schema already produced.
  *
  * Per tool, not shared: `$id` is a GLOBAL key on an Ajv instance, so two tools
  * declaring the same one made the second `register()` throw and took the whole
@@ -101,53 +156,94 @@ export class AiToolRegistry {
  * keywords tolerated); `allErrors: true` mirrors validation.ts so callers see
  * every problem; `ajv-formats` so `format: "email"`/`"uri"`/... actually
  * validate instead of being ignored with a console warning.
+ *
+ * BEHAVIOUR NOTE (0.5.0): with `ajv-formats` installed, a `format` keyword that
+ * used to be ignored now REJECTS a non-conforming value. `logger: false` keeps
+ * the other half of that change quiet — an UNKNOWN format logs a warning per
+ * property per compile, which on a per-turn staging is a console flood, not a
+ * diagnostic.
  */
 function compileInputSchema(
   toolName: string,
   inputSchema: AiTool["definition"]["inputSchema"],
 ): ValidateFunction {
-  assertSchemaWithinBounds(toolName, inputSchema);
-  const ajv = new Ajv({ allErrors: true, strict: false });
+  const prepared = prepareSchema(toolName, inputSchema);
+  // The prepared document itself is the key: a digest would be shorter but a
+  // collision would silently validate one tool's arguments against another
+  // tool's schema, and the node cap already bounds how big this gets.
+  const key = JSON.stringify(prepared);
+  const cached = validatorCache.get(key);
+  if (cached !== undefined) {
+    validatorCache.delete(key);
+    validatorCache.set(key, cached);
+    return cached;
+  }
+  const ajv = new Ajv({ allErrors: true, strict: false, logger: false });
   addFormats(ajv);
-  return ajv.compile(stripSchemaIdentity(inputSchema));
+  let validate: ValidateFunction;
+  try {
+    validate = ajv.compile(prepared);
+  } catch (err) {
+    throw new ToolSchemaError(
+      "schema_invalid",
+      toolName,
+      `Invalid inputSchema for tool "${toolName}": ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      { cause: err },
+    );
+  }
+  validatorCache.set(key, validate);
+  while (validatorCache.size > MAX_CACHED_VALIDATORS) {
+    const oldest = validatorCache.keys().next();
+    if (oldest.done) break;
+    validatorCache.delete(oldest.value);
+  }
+  return validate;
 }
 
 /**
- * Drop top-level `$id` and `$schema`.
+ * One walk that both bounds the schema and copies it without `$id`/`$schema`.
  *
  * `$id` only names the schema in a registry this tool doesn't share any more,
- * and `$schema` names a DIALECT: an MCP server correctly advertising
- * `2020-12` (its own spec's dialect) made this draft-07 Ajv throw at compile
- * time, and the tool was silently dropped. Neither keyword changes how an
- * instance validates here.
+ * and `$schema` names a DIALECT: an MCP server correctly advertising `2020-12`
+ * (its own spec's dialect) made this draft-07 Ajv throw at compile time, and
+ * the tool was silently dropped. Neither keyword changes how an instance
+ * validates here — and both are stripped at EVERY level, because a NESTED `$id`
+ * duplicated inside one document fails the compile with "resolves to more than
+ * one schema" exactly like a top-level one used to.
  */
-function stripSchemaIdentity(schema: object): Record<string, unknown> {
-  const stripped: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema)) {
-    if (key === "$id" || key === "$schema") continue;
-    stripped[key] = value;
-  }
-  return stripped;
-}
-
-/** Refuse a schema too large or too deep to compile cheaply. */
-function assertSchemaWithinBounds(toolName: string, schema: object): void {
+function prepareSchema(
+  toolName: string,
+  schema: object,
+): Record<string, unknown> {
   let nodes = 0;
-  const walk = (node: unknown, depth: number): void => {
-    if (node === null || typeof node !== "object") return;
+  const walk = (node: unknown, depth: number): unknown => {
+    if (node === null || typeof node !== "object") return node;
     if (depth > MAX_SCHEMA_DEPTH) {
-      throw new Error(
+      throw new ToolSchemaError(
+        "schema_too_large",
+        toolName,
         `Invalid inputSchema for tool "${toolName}": nesting exceeds ${MAX_SCHEMA_DEPTH} levels.`,
       );
     }
     nodes += 1;
     if (nodes > MAX_SCHEMA_NODES) {
-      throw new Error(
+      throw new ToolSchemaError(
+        "schema_too_large",
+        toolName,
         `Invalid inputSchema for tool "${toolName}": exceeds ${MAX_SCHEMA_NODES} nodes.`,
       );
     }
-    for (const value of Object.values(node as Record<string, unknown>))
-      walk(value, depth + 1);
+    if (Array.isArray(node)) return node.map((item) => walk(item, depth + 1));
+    const copy: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(
+      node as Record<string, unknown>,
+    )) {
+      if (key === "$id" || key === "$schema") continue;
+      copy[key] = walk(value, depth + 1);
+    }
+    return copy;
   };
-  walk(schema, 1);
+  return walk(schema, 1) as Record<string, unknown>;
 }

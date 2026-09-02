@@ -169,10 +169,16 @@ time. The abandoned attempt still cleans up after itself: a connect that
 completes after its deadline (or after a `close()`) closes the client and
 transport it built instead of installing them.
 
-**`close()` waits for a connect in flight.** `McpClientManager.dispose()`
-therefore returns only once every server's connect has settled and been torn
-down — the alternative is a `Client`, and over stdio a child process, adopted a
-moment after the manager reported everything closed.
+**`close()` waits for a connect — and for a RECONNECT — in flight.**
+`McpClientManager.dispose()` therefore returns only once every server's connect
+has settled and been torn down — the alternative is a `Client`, and over stdio a
+child process, adopted a moment after the manager reported everything closed. A
+reconnect is a teardown followed by an open, so a close landing between its two
+halves is checked on both sides of them.
+
+**A closed session stays closed.** Only an explicit `connect()` re-opens one:
+the request path (and the reconnect it drives) refuses a disposed session with
+`mcp_not_connected` rather than reviving it behind `dispose()`'s back.
 
 ## Errors
 

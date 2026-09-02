@@ -76,7 +76,7 @@ export class McpSession {
   /** Suppresses the peer-closed bookkeeping while WE are the ones closing. */
   private closingDeliberately = false;
   /**
-   * Set by {@link close}, cleared when a NEW connect cycle starts.
+   * Set by {@link close}; cleared ONLY by an explicit {@link connect}.
    *
    * What it buys is the ordering `close()` cannot get any other way: an
    * `openOnce` already past its `transportFactory` call owns a process (or a
@@ -84,6 +84,11 @@ export class McpSession {
    * has swept leaves it unowned for the rest of the run — the stdio-child leak
    * ADR 0004 says was fixed. So a close marks the session, waits for the open
    * in flight, and that open closes what it built instead of installing it.
+   *
+   * The flag is only that ordering if nothing on the REQUEST path can clear it:
+   * a reconnect triggered by a failing `tools/call` used to, and a `close()`
+   * landing during one was simply erased — the session came back connected,
+   * with a transport `dispose()` had already reported closed.
    */
   private disposed = false;
 
@@ -105,9 +110,37 @@ export class McpSession {
     return this.client !== undefined;
   }
 
-  /** Idempotent. A connected session returns at once; concurrent calls share one attempt. */
+  /**
+   * Idempotent. A connected session returns at once; concurrent calls share one
+   * attempt.
+   *
+   * This is also the ONLY thing that revives a closed session: an explicit
+   * connect is a caller declaring a new lifecycle, where the reconnect the
+   * request path performs is the continuation of the old one. See
+   * {@link disposed}.
+   */
   async connect(): Promise<void> {
+    this.disposed = false;
     if (this.client) return;
+    return this.open();
+  }
+
+  /**
+   * Connect for a REQUEST. A closed session refuses instead of reviving.
+   *
+   * `close()` on a session with a request in flight has to mean the request
+   * fails, not that the request quietly re-opens what was just closed — which
+   * is what calling the public {@link connect} from the retry loop used to do.
+   */
+  private async ensureConnected(operation: string): Promise<void> {
+    if (this.client) return;
+    if (this.disposed) {
+      throw new McpError(
+        "mcp_not_connected",
+        `MCP server "${this.alias}" is closed; ${operation} was not sent.`,
+        { retryable: false, details: { alias: this.alias } },
+      );
+    }
     return this.open();
   }
 
@@ -179,6 +212,13 @@ export class McpSession {
    */
   async close(): Promise<void> {
     this.disposed = true;
+    // The reconnect in flight is awaited BEFORE the sweep, because a reconnect
+    // is a teardown followed by an open: sweeping between its two halves left
+    // the transport it went on to build owned by nobody. It sees `disposed`
+    // (set above) at both of its own checkpoints, so what is awaited here is a
+    // reconnect that is already unwinding, not one that will connect.
+    const reconnecting = this.reconnecting;
+    if (reconnecting) await swallow(() => reconnecting);
     await this.teardown();
   }
 
@@ -210,14 +250,19 @@ export class McpSession {
 
   // --- connection lifecycle -------------------------------------------------
 
-  /** The dedup'd "make me a connection" path. Both connect and reconnect go through it. */
+  /**
+   * The dedup'd "make me a connection" path. Both connect and reconnect go
+   * through it.
+   *
+   * It deliberately does NOT clear {@link disposed}: this is reached from the
+   * request path (through the reconnect), and clearing the flag there is what
+   * let a reconnect racing a `close()` install a fresh client — and, over
+   * stdio, a fresh child process — on a session `dispose()` had already
+   * reported closed. Only {@link connect} starts a new lifecycle.
+   */
   private open(): Promise<void> {
     const inFlight = this.connecting;
     if (inFlight) return inFlight;
-    // A deliberate new cycle supersedes an earlier close: `disposed` only has to
-    // beat the open that was ALREADY in flight when the close ran, and that one
-    // is the branch above.
-    this.disposed = false;
     const started = (async () => {
       this.circuit.assertClosed();
       await this.runConnectCycle();
@@ -358,7 +403,15 @@ export class McpSession {
     if (inFlight) return inFlight;
     const started = (async () => {
       await this.teardown();
+      // Both checks are the same question asked on either side of an await: did
+      // a `close()` land while this reconnect was between its two halves? The
+      // first stops us from re-opening a closed session at all; the second
+      // catches a close that arrived while the open was in flight — `openOnce`
+      // refuses to install into a disposed session, but a close landing after
+      // it installed would otherwise leave the new transport unswept.
+      if (this.disposed) return;
       await this.open();
+      if (this.disposed) await this.teardown();
     })();
     const tracked = started.finally(() => {
       if (this.reconnecting === tracked) this.reconnecting = undefined;
@@ -382,7 +435,7 @@ export class McpSession {
     const { reconnectMaxAttempts } = this.resilience;
     let retries = 0;
     for (;;) {
-      await this.connect();
+      await this.ensureConnected(operation);
       const client = this.client;
       const generation = this.generation;
       // Captured, not read from `this` in the catch: a CONCURRENT caller's

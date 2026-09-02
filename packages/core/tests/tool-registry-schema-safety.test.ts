@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { AiToolRegistry } from "../src/tools/registry.js";
+import { AiToolRegistry, ToolSchemaError } from "../src/tools/registry.js";
 import type { AiTool } from "../src/tools/tool.js";
 import type { AiJsonSchemaObject } from "@agentkit/contracts";
 
@@ -102,5 +102,107 @@ describe("AiToolRegistry schema hygiene", () => {
   it("accepts an ordinary schema well within the bounds", () => {
     const r = new AiToolRegistry();
     expect(() => r.register(makeTool("normal", deepSchema(10)))).not.toThrow();
+  });
+
+  it("registers two tools whose NESTED subschemas share an $id", () => {
+    // The strip used to be top-level only, so a document repeating one `$id`
+    // inside itself failed the compile ("resolves to more than one schema") and
+    // staging dropped the tool without a word.
+    const schema = {
+      type: "object",
+      properties: {
+        from: { $id: "https://example.test/node.json", type: "string" },
+        to: { $id: "https://example.test/node.json", type: "string" },
+      },
+      required: ["from"],
+    } as unknown as AiJsonSchemaObject;
+    const r = new AiToolRegistry();
+    expect(() => r.register(makeTool("nested_ids", schema))).not.toThrow();
+    expect(r.validateInput("nested_ids", { from: "a" })).toEqual([]);
+    expect(r.validateInput("nested_ids", { from: 1 })).not.toEqual([]);
+  });
+
+  it("refuses an over-large schema with a typed ToolSchemaError", () => {
+    const r = new AiToolRegistry();
+    let thrown: unknown;
+    try {
+      r.register(makeTool("too_deep", deepSchema(40)));
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(ToolSchemaError);
+    expect((thrown as ToolSchemaError).code).toBe("schema_too_large");
+    expect((thrown as ToolSchemaError).toolName).toBe("too_deep");
+  });
+
+  it("refuses an uncompilable schema with a typed ToolSchemaError", () => {
+    const r = new AiToolRegistry();
+    let thrown: unknown;
+    try {
+      r.register(
+        makeTool("remote_ref", {
+          type: "object",
+          properties: { v: { $ref: "https://example.test/other.json" } },
+        } as unknown as AiJsonSchemaObject),
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(ToolSchemaError);
+    expect((thrown as ToolSchemaError).code).toBe("schema_invalid");
+  });
+
+  it("compiles one schema once and shares the validator across registries", () => {
+    // Staging builds a fresh registry per turn (per CALL, over MCP), so the
+    // same handful of schemas were recompiled — Ajv instance, formats and all —
+    // for every one of them.
+    const schema = (): AiJsonSchemaObject =>
+      ({
+        type: "object",
+        properties: { to: { type: "string", format: "email" } },
+        required: ["to"],
+      }) as unknown as AiJsonSchemaObject;
+    const first = new AiToolRegistry();
+    first.register(makeTool("mailer_one", schema()));
+    const second = new AiToolRegistry();
+    second.register(makeTool("mailer_two", schema()));
+
+    expect(second.getValidator("mailer_two")).toBe(
+      first.getValidator("mailer_one"),
+    );
+    // Shared, and still correct for both.
+    expect(first.validateInput("mailer_one", { to: "a@b.test" })).toEqual([]);
+    expect(second.validateInput("mailer_two", { to: "nope" })).not.toEqual([]);
+  });
+
+  it("compiles an unknown format without printing anything", () => {
+    // `ajv-formats` warns once per property per compile for a format it does
+    // not know — which, on a per-turn (or per-call) staging, is a console flood
+    // rather than a diagnostic.
+    const printed: unknown[] = [];
+    const spies = ["log", "warn", "error", "info"] as const;
+    const original = spies.map((key) => [key, console[key]] as const);
+    for (const key of spies) {
+      console[key] = (...args: unknown[]) => {
+        printed.push(args);
+      };
+    }
+    const r = new AiToolRegistry();
+    try {
+      r.register(
+        makeTool("odd_format", {
+          type: "object",
+          properties: {
+            v: { type: "string", format: "agentkit-not-a-real-format" },
+          },
+        } as unknown as AiJsonSchemaObject),
+      );
+    } finally {
+      for (const [key, fn] of original) console[key] = fn;
+    }
+
+    expect(printed).toEqual([]);
+    // Unknown formats stay permissive — only the noise went away.
+    expect(r.validateInput("odd_format", { v: "anything" })).toEqual([]);
   });
 });

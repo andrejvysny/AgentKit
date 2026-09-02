@@ -576,6 +576,82 @@ describe("resilience", () => {
     for (const server of servers) await server.close();
   });
 
+  it("does not resurrect a session closed DURING a reconnect", async () => {
+    // The reconnect path re-opened what `close()` had just swept: `open()`
+    // cleared the disposed flag, and `close()` waited only for a connect in
+    // flight — not for a reconnect. `dispose()` returned, and a moment later a
+    // fresh client (over stdio, a fresh child process) was installed on a
+    // session nobody would ever close again.
+    const gate = deferred<null>();
+    const opened: { entered: boolean; closed: boolean }[] = [];
+    const servers: ReturnType<typeof buildFakeServer>[] = [];
+    let attempt = 0;
+    const transportFactory: McpTransportFactory = async () => {
+      attempt += 1;
+      const server = buildFakeServer("flap", [
+        // Never answers, so the call times out and (with `retryTimeouts`) the
+        // session reconnects while still holding a live client to tear down.
+        { name: "work", handler: () => new Promise(() => {}) },
+      ]);
+      servers.push(server);
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const record = { entered: false, closed: false };
+      opened.push(record);
+      const close = clientTransport.close.bind(clientTransport);
+      const gated = attempt === 1;
+      clientTransport.close = async () => {
+        record.entered = true;
+        // The reconnect's TEARDOWN parks here, so the `close()` below lands
+        // between the reconnect's two halves — after the teardown, before the
+        // open it exists to perform.
+        if (gated) await gate.promise;
+        await close();
+        record.closed = true;
+      };
+      return clientTransport;
+    };
+    const manager = new McpClientManager(
+      {
+        secrets: createSecretStore(),
+        clock: createTestClock(),
+        transportFactory,
+      },
+      [
+        {
+          alias: "flap",
+          transport: { kind: "stdio", command: "x" },
+          resilience: {
+            ...FAST,
+            requestTimeoutMs: 40,
+            retryTimeouts: true,
+            reconnectMaxAttempts: 1,
+          },
+        },
+      ],
+    );
+
+    await manager.connect("flap");
+    const call = manager
+      .callTool("mcp.flap.work", {})
+      .then(() => null)
+      .catch((err: unknown) => err);
+    await until(() => opened[0]?.entered === true);
+
+    const disposing = manager.dispose();
+    gate.resolve(null);
+    await disposing;
+    await call;
+
+    expect(manager.isConnected("flap")).toBe(false);
+    // Nothing was opened after the close, and everything that was opened is
+    // closed — the property `dispose()` is supposed to guarantee.
+    expect(opened).toHaveLength(1);
+    expect(opened.every((record) => record.closed)).toBe(true);
+    for (const server of servers) await server.close();
+  });
+
   it("gives up on a transport factory that never settles", async () => {
     // `withDeadline` races rather than awaits: a factory that ignores the
     // signal would otherwise hang forever, be cached as the shared `connecting`
@@ -603,3 +679,15 @@ describe("resilience", () => {
     expect(manager.isConnected("stuck")).toBe(false);
   });
 });
+
+/** Poll until `predicate` holds, so a test never guesses how long a phase takes. */
+async function until(
+  predicate: () => boolean,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("condition never became true");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}

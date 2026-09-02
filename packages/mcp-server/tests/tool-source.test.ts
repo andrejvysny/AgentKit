@@ -169,3 +169,54 @@ describe("createStagedToolSource", () => {
     expect(seen).toEqual(["chat-a"]);
   });
 });
+
+describe("createStagedToolSource call deadline", () => {
+  /** A tool that never settles, however politely it is asked to stop. */
+  function hangingTool(seen: { aborted: boolean }): AiTool {
+    return {
+      definition: {
+        ...echoTool().definition,
+        name: "demo_hang",
+        inputSchema: { type: "object", properties: {} },
+      },
+      execute(ctx) {
+        ctx.signal?.addEventListener("abort", () => {
+          seen.aborted = true;
+        });
+        return new Promise(() => {});
+      },
+    };
+  }
+
+  it("answers with a timeout envelope instead of pinning the session", async () => {
+    const seen = { aborted: false };
+    const tools = createStagedToolSource({
+      contributors: [
+        { namespace: "demo", contribute: async () => [hangingTool(seen)] },
+      ],
+      clock: defaultClock,
+      ids: defaultIds,
+      maxCallMs: 20,
+    });
+
+    const envelope = await tools.execute("demo_hang", {});
+    expect(envelope.ok).toBe(false);
+    expect(envelope.data).toMatchObject({
+      errorCode: "timeout",
+      phase: "execution",
+    });
+    // The tool's signal is aborted too, so a tool that DOES watch it stops.
+    expect(seen.aborted).toBe(true);
+  });
+
+  it("leaves a tool that answers within the deadline alone", async () => {
+    const tools = createStagedToolSource({
+      contributors: [demoContributor()],
+      clock: defaultClock,
+      ids: defaultIds,
+      maxCallMs: 5_000,
+    });
+    const envelope = await tools.execute("demo_echo", { text: "hi" });
+    expect(envelope.ok).toBe(true);
+  });
+});

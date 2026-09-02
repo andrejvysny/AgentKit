@@ -95,4 +95,22 @@ describe("parseSseStream", () => {
     };
     await expect(run()).rejects.toThrow(/sse_parse/);
   });
+
+  it("parses a chunk carrying far more than the cap in COMPLETE frames", async () => {
+    // The cap used to be tested against the whole read, before any frame was
+    // parsed out of it — so one big read from a fast provider (or a proxy that
+    // coalesces) failed a perfectly healthy stream. What has to stay bounded is
+    // the unparsed remainder, not the throughput.
+    const frames = 30_000;
+    const pad = "x".repeat(40);
+    const chunk = Array.from(
+      { length: frames },
+      (_unused, i) => `data: ${i}-${pad}\n\n`,
+    ).join("");
+    // Well over the 1 MiB cap, in one read, and every byte of it well-formed.
+    expect(chunk.length).toBeGreaterThan(1024 * 1024);
+    const parsed = await collect(streamFromChunks([chunk]));
+    expect(parsed).toHaveLength(frames);
+    expect(parsed.at(-1)).toBe(`${frames - 1}-${pad}`);
+  });
 });

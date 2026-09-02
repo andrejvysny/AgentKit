@@ -177,6 +177,20 @@ export interface McpServerHandlerOptions {
    */
   maxBatchSize?: number;
   /**
+   * How long one `tools/call` may run before the session stops being pinned by
+   * it. Defaults to {@link DEFAULT_MAX_CALL_MS} (2 minutes).
+   *
+   * Two mechanisms share the number. `createStagedToolSource` races the tool
+   * against it and answers the caller with a timeout error, which is what
+   * normally keeps `inFlight` from growing without bound; and the reap here
+   * treats a session whose oldest in-flight request is older than
+   * `maxCallMs + sessionIdleTtlMs` as stuck and closes it anyway — because a
+   * HOST-supplied {@link McpToolSource} obeys no deadline of ours, and an
+   * in-flight call otherwise pinned its session forever, defeating both session
+   * caps.
+   */
+  maxCallMs?: number;
+  /**
    * Source of the timestamps {@link maxSessions} and {@link sessionIdleTtlMs}
    * compare. Defaults to `@agentkit/host`'s `defaultClock`; injected in tests
    * so an idle-TTL assertion is about a fake clock rather than about waiting.
@@ -227,6 +241,28 @@ export const DEFAULT_MAX_CONCURRENT_CALLS_PER_SESSION = 4;
 
 /** JSON-RPC batch cap — see {@link McpServerHandlerOptions.maxBatchSize}. */
 export const DEFAULT_MAX_BATCH_SIZE = 8;
+
+/**
+ * Deadline for one `tools/call` — see
+ * {@link McpServerHandlerOptions.maxCallMs} and
+ * `StagedToolSourceOptions.maxCallMs`.
+ *
+ * Generous on purpose: it is a backstop against a tool that never returns, not
+ * a service-level objective. A tool that needs longer sets its own
+ * `definition.timeoutMs`, which the run loop honours; this one bounds the
+ * session it would otherwise pin.
+ */
+export const DEFAULT_MAX_CALL_MS = 120_000;
+
+/**
+ * What a session-capacity refusal tells the client to wait, in seconds.
+ *
+ * Room appears when an in-flight call finishes, which is bounded by
+ * {@link DEFAULT_MAX_CALL_MS} but usually far sooner — so the hint is short
+ * enough to be worth honouring, and a poll every few seconds costs the server
+ * one auth comparison.
+ */
+export const SESSION_CAPACITY_RETRY_AFTER_SECONDS = 5;
 
 /**
  * Idle session lifetime — see

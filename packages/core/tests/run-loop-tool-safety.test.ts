@@ -6,7 +6,24 @@ import { messageContentToText } from "../src/messages/content.js";
 import { MockProviderClient, type MockScriptStep } from "@agentkit/testing";
 import { collectRun } from "./helpers.js";
 import type { AiTool } from "../src/tools/tool.js";
-import type { AiRunEvent, AiToolEnvelope } from "@agentkit/contracts";
+import type {
+  AiRunEvent,
+  AiToolEnvelope,
+  AiToolLimits,
+} from "@agentkit/contracts";
+
+const utf8 = (value: string): number => new TextEncoder().encode(value).length;
+
+/** The `role:"tool"` message a run appended — what the model is actually fed. */
+function toolMessageText(result: { appendedMessages: readonly unknown[] }) {
+  const message = (
+    result.appendedMessages as { role: string; content: unknown }[]
+  ).find((m) => m.role === "tool");
+  if (message === undefined) throw new Error("no tool message was appended");
+  return messageContentToText(
+    message.content as Parameters<typeof messageContentToText>[0],
+  );
+}
 
 const TERMINAL = new Set(["run.completed", "run.failed", "run.cancelled"]);
 
@@ -36,7 +53,7 @@ function makeTool(
 
 function scriptedRun(
   tool: AiTool,
-  extra: { defaultToolTimeoutMs?: number } = {},
+  extra: { defaultToolTimeoutMs?: number; limits?: AiToolLimits } = {},
 ) {
   const client = new MockProviderClient();
   client.setScript([
@@ -45,14 +62,15 @@ function scriptedRun(
   ]);
   const registry = new AiToolRegistry();
   registry.register(tool);
+  const { limits, ...rest } = extra;
   return collectRun(
     runChat({
       client,
       registry,
       model: "m",
       messages: [{ role: "user", content: "go" }],
-      limits: resolveToolLimits({ preference: "small" }),
-      ...extra,
+      limits: limits ?? resolveToolLimits({ preference: "small" }),
+      ...rest,
     }),
   );
 }
@@ -241,6 +259,113 @@ describe("runChat — output budget", () => {
     expect(new TextEncoder().encode(content).length).toBeLessThanOrEqual(
       limits.maxBytes,
     );
+  });
+
+  // The budget used to bound `data` alone. Everything below rides in the same
+  // message, is replayed into every later request of the run, and used to be
+  // uncapped — while `truncated: true` claimed the DATA was what got cut.
+  const tightLimits: AiToolLimits = resolveToolLimits({
+    preference: "small",
+    requestedMaxBytes: 2048,
+  });
+
+  it("caps an over-budget summary", async () => {
+    const { result } = await scriptedRun(
+      makeTool("chatty_summary", async (ctx) => ({
+        ok: true,
+        data: { small: true },
+        summary: "s".repeat(200_000),
+        sources: [],
+        warnings: [],
+        truncated: false,
+        limits: ctx.limits,
+      })),
+      { limits: tightLimits },
+    );
+
+    const content = toolMessageText(result);
+    expect(utf8(content)).toBeLessThanOrEqual(tightLimits.maxBytes);
+    const envelope = JSON.parse(content) as AiToolEnvelope;
+    expect(envelope.truncated).toBe(true);
+    expect(envelope.summary).toContain("[...truncated]");
+  });
+
+  it("caps over-budget warnings", async () => {
+    const { result } = await scriptedRun(
+      makeTool("chatty_warnings", async (ctx) => ({
+        ok: true,
+        data: { small: true },
+        summary: "fine",
+        sources: [],
+        warnings: Array.from({ length: 50 }, () => "w".repeat(10_000)),
+        truncated: false,
+        limits: ctx.limits,
+      })),
+      { limits: tightLimits },
+    );
+
+    const content = toolMessageText(result);
+    expect(utf8(content)).toBeLessThanOrEqual(tightLimits.maxBytes);
+    expect((JSON.parse(content) as AiToolEnvelope).truncated).toBe(true);
+  });
+
+  it("caps the error message of a tool that threw", async () => {
+    const { events, result } = await scriptedRun(
+      makeTool("loud_thrower", async () => {
+        throw new Error("e".repeat(200_000));
+      }),
+      { limits: tightLimits },
+    );
+
+    const content = toolMessageText(result);
+    expect(utf8(content)).toBeLessThanOrEqual(tightLimits.maxBytes);
+    const failed = failedEvents(events)[0];
+    expect(failed!.data.errorCode).toBe("exec_failed");
+    expect(utf8(failed!.data.errorMessage)).toBeLessThanOrEqual(
+      tightLimits.maxBytes,
+    );
+  });
+
+  it("caps the failure text a tool reports without throwing", async () => {
+    const { result } = await scriptedRun(
+      makeTool("loud_failure", async (ctx) => ({
+        ok: false,
+        data: { small: true },
+        summary: "f".repeat(200_000),
+        sources: [],
+        warnings: [],
+        truncated: false,
+        limits: ctx.limits,
+      })),
+      { limits: tightLimits },
+    );
+
+    expect(utf8(toolMessageText(result))).toBeLessThanOrEqual(
+      tightLimits.maxBytes,
+    );
+  });
+
+  it("treats a tool that returns no data as a success, not a serialization failure", async () => {
+    // `AiToolResult.data` is optional in the contract, so `AiToolResult<void>`
+    // is legal — and `JSON.stringify(undefined)` producing nothing used to be
+    // reported as `result_unserializable` AFTER the tool's side effects ran.
+    const { events } = await scriptedRun(
+      makeTool("no_data", (async (ctx: { limits: AiToolLimits }) => ({
+        ok: true,
+        summary: "did the thing",
+        sources: [],
+        warnings: [],
+        truncated: false,
+        limits: ctx.limits,
+      })) as unknown as AiTool["execute"]),
+    );
+
+    expect(failedEvents(events)).toEqual([]);
+    const succeeded = events.find((e) => e.type === "run.tool.succeeded") as
+      | (AiRunEvent & { data: { resultJson: string } })
+      | undefined;
+    expect(succeeded!.data.resultJson).toBe("null");
+    expect(events.at(-1)!.type).toBe("run.completed");
   });
 });
 

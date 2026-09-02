@@ -42,11 +42,6 @@ export async function* parseSseStream(
       const { value, done } = await readOrAbort(reader, signal);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      if (buffer.length > MAX_BUFFER_CHARS) {
-        throw new Error(
-          `sse_parse: no frame boundary within ${MAX_BUFFER_CHARS} bytes; refusing to buffer more.`,
-        );
-      }
       let idx: number;
       // biome-ignore lint/suspicious/noAssignInExpressions: the assign-and-test scan loop is the canonical incremental-parser idiom; splitting it duplicates the indexOf call
       while ((idx = buffer.indexOf("\n")) !== -1) {
@@ -58,6 +53,16 @@ export async function* parseSseStream(
           continue;
         }
         appendField(frame, rawLine);
+      }
+      // Checked on what is LEFT after every complete frame has been parsed out,
+      // never on the whole read: one chunk carrying several MiB of well-formed
+      // frames is a fast provider, not an attack, and failing it killed healthy
+      // streams. What must stay bounded is the unterminated remainder — the
+      // server that never sends a newline.
+      if (buffer.length > MAX_BUFFER_CHARS) {
+        throw new Error(
+          `sse_parse: no frame boundary within ${MAX_BUFFER_CHARS} bytes; refusing to buffer more.`,
+        );
       }
     }
     // A stream that ends without its final blank line still owes us the frame

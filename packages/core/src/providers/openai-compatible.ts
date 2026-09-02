@@ -2,6 +2,8 @@ import { newCallId, nowIso } from "../ids.js";
 import { createEventStamper } from "../events.js";
 import { messageContentToText } from "../messages/content.js";
 import { parseSseStream } from "./sse.js";
+import { truncateString } from "../tools/limits.js";
+import { dedupeToolCallIds } from "../tools/tool-calls.js";
 import type { AiChatRequest, AiProviderClient } from "./client.js";
 import type {
   AiChatRole,
@@ -317,7 +319,11 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         type: "run.failed",
         runId,
         timestamp: nowIso(),
-        data: { errorMessage: errMsg(err) },
+        // Coded like every other transport-level failure of this client (the
+        // non-2xx path carries the HTTP status): a consumer branching on
+        // `errorCode` must not have to parse the `sse_parse:` sentence the
+        // parser's buffer cap throws to know this was the provider's fault.
+        data: { errorMessage: errMsg(err), errorCode: "provider_error" },
       });
       return;
     }
@@ -713,17 +719,26 @@ function newToolCallState(): ToolCallState {
  * id when there is one — and starting a FRESH accumulator when the index slot
  * already holds a different, non-empty id — keeps both shapes from collapsing
  * two calls into one call with concatenated arguments.
+ *
+ * When there are no ids at all, the tool NAME is the remaining evidence: see
+ * {@link namesConflict}.
  */
 function accumulatorFor(
   state: ToolCallState,
-  delta: { index?: number; id?: string },
+  delta: { index?: number; id?: string; function?: { name?: string } },
 ): ToolCallAccumulator {
   const id = typeof delta.id === "string" ? delta.id : "";
+  const name =
+    typeof delta.function?.name === "string" ? delta.function.name : "";
   if (typeof delta.index === "number") {
     const slot = state.byIndex.get(delta.index);
     // The same slot only while the ids agree (or one side never named one); a
     // second, DIFFERENT id on the slot is a different call reusing the number.
-    if (slot && (id === "" || slot.id === "" || slot.id === id)) {
+    if (
+      slot &&
+      (id === "" || slot.id === "" || slot.id === id) &&
+      !namesConflict(slot, name)
+    ) {
       if (id !== "" && slot.id === "") {
         slot.id = id;
         state.byId.set(id, slot);
@@ -733,8 +748,24 @@ function accumulatorFor(
     return openAccumulator(state, id, delta.index);
   }
   if (id) return state.byId.get(id) ?? openAccumulator(state, id, undefined);
-  // Neither key: a continuation of the call opened most recently.
-  return state.order.at(-1) ?? openAccumulator(state, "", undefined);
+  // Neither key: a continuation of the call opened most recently — unless it
+  // names a different tool.
+  const last = state.order.at(-1);
+  if (last && !namesConflict(last, name)) return last;
+  return openAccumulator(state, "", undefined);
+}
+
+/**
+ * A second, DIFFERENT tool name landing on an accumulator that already has one.
+ *
+ * A provider sends `function.name` once per call and then streams arguments, so
+ * a new name is never a continuation: it is the next call, from a server that
+ * reused the index (or sent neither key). Merging the two produced one call
+ * whose arguments were two JSON documents concatenated — reported as `bad_args`
+ * with the other call silently gone.
+ */
+function namesConflict(acc: ToolCallAccumulator, name: string): boolean {
+  return name !== "" && acc.name !== "" && acc.name !== name;
 }
 
 function openAccumulator(
@@ -752,33 +783,25 @@ function openAccumulator(
 /**
  * Freeze the accumulators into the turn's tool calls, in first-seen order.
  *
- * Ids must be unique: the assistant message lists every call and each one is
- * answered by a `role:"tool"` message keyed on its id, so a repeat would give
- * two calls one answer and make projections keyed on `toolCallId` collide.
- * Later duplicates are re-keyed `<id>#2`, `<id>#3` — the id is echoed back on
- * exactly the pair of messages this client produced, so re-keying is invisible
- * to the provider.
+ * An accumulator with no name never became a call (a stray continuation, a
+ * truncated tool block); one with no id gets a positional fallback. Uniqueness
+ * of the ids is then {@link dedupeToolCallIds}' job — the same function the run
+ * loop applies to whatever a third-party client hands it.
  */
 function assembleToolCalls(state: ToolCallState): {
   calls: AiToolCall[];
   duplicateIds: string[];
 } {
-  const seen = new Map<string, number>();
-  const duplicateIds: string[] = [];
-  const calls: AiToolCall[] = [];
+  const assembled: AiToolCall[] = [];
   state.order.forEach((acc, i) => {
     if (acc.name.length === 0) return;
-    const base = acc.id || `call_${i}`;
-    const count = (seen.get(base) ?? 0) + 1;
-    seen.set(base, count);
-    if (count > 1 && !duplicateIds.includes(base)) duplicateIds.push(base);
-    calls.push({
-      id: count === 1 ? base : `${base}#${count}`,
+    assembled.push({
+      id: acc.id || `call_${i}`,
       name: acc.name,
       argumentsJson: acc.argumentsJson || "{}",
     });
   });
-  return { calls, duplicateIds };
+  return dedupeToolCallIds(assembled);
 }
 
 interface OpenAiUsage {
@@ -835,23 +858,44 @@ const MAX_ERROR_BODY_BYTES = 64 * 1024;
 async function safeBody(response: Response): Promise<string> {
   try {
     const body = response.body;
-    if (!body) return await response.text();
+    // A body that is not a stream (a `Response` built from a string, a fetch
+    // double) never reached the read loop, so it used to bypass the cap
+    // entirely — it is the same error MESSAGE and gets the same budget.
+    if (!body) return capErrorBody(await response.text());
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let text = "";
-    let bytes = 0;
     try {
-      while (bytes < MAX_ERROR_BODY_BYTES) {
+      // The budget is checked against what has ALREADY been accumulated and
+      // each chunk is cut to what is left of it. The old loop tested the size
+      // BEFORE each read, so a single 300 KB chunk was appended whole and a
+      // 64 KiB cap bought nothing. One character MORE than the cap is kept, so
+      // a body that exactly fills the budget still measures as over it and is
+      // marked truncated rather than passing for complete.
+      const readBudget = MAX_ERROR_BODY_BYTES + 1;
+      while (text.length < readBudget) {
         const { value, done } = await reader.read();
         if (done) break;
-        bytes += value.byteLength;
-        text += decoder.decode(value, { stream: true });
+        text += decoder
+          .decode(value, { stream: true })
+          .slice(0, readBudget - text.length);
       }
     } finally {
       await reader.cancel().catch(() => {});
     }
-    return bytes > MAX_ERROR_BODY_BYTES ? `${text}\n[...truncated]` : text;
+    return capErrorBody(text);
   } catch {
     return "<unreadable body>";
   }
+}
+
+/**
+ * Cap the quoted body at {@link MAX_ERROR_BODY_BYTES} UTF-8 bytes.
+ *
+ * `truncateString` measures BYTES and appends its own truncation marker inside
+ * the budget, so the returned message never exceeds the cap however multi-byte
+ * the body was.
+ */
+function capErrorBody(text: string): string {
+  return truncateString(text, MAX_ERROR_BODY_BYTES).value;
 }
