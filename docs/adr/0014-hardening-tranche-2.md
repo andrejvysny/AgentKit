@@ -398,6 +398,35 @@ drops twice. `@agentkit/react` aborts and resets on a chat switch, rolls back
 optimistic writes **by id** rather than by count, and restores a truncated tail
 when a branch submit fails.
 
+The second verifier wave confirmed the rule on all three layers and then broke
+the edges around it, all fixed in the same session:
+
+- A pump exception in `packages/transport-http/src/sse.ts` (a store read
+  failing mid-stream) used to end the body **cleanly** — the one signal that
+  now means "task terminal" — so the client returned mid-pass with no error and
+  no reconnect. The pump now `controller.error()`s the body; close is reserved
+  for the normal exit, and `streamRun` resumes over the break with
+  `Last-Event-ID`.
+- `useChat`/`useRun` derived the final phase from events alone, so a task the
+  host landed terminal **without** a terminal run event (`failQuietly` writes
+  none, and the SSE handler supports exactly that) stayed `streaming` forever.
+  Both hooks now settle the phase against the run's status when the stream
+  closes non-terminal, synthesizing a fixed-message failure for `failed`/
+  `cancelled`; a `getRun` probe that itself fails leaves the event-derived
+  phase alone rather than reporting the probe's error as the run's outcome.
+- `submit`/`regenerate`/`refresh` carry the chat-switch guard `followRun`
+  already had, so a write that lands after the user switched chats no longer
+  puts chat A's run or messages under chat B; the trailing best-effort drain
+  runs in its own `try`, so a transient failure on that extra GET cannot turn
+  a completed run into an error or skip the reconcile.
+- A frame that lost its `seq` no longer disables `maxSeqYielded` dedupe (a
+  server answering a resume from the start of the log delivered the whole run
+  twice), and `useRun` appends such an event instead of splicing it to the
+  front.
+- Both hooks expose `finishReason`, so an `"incomplete"` answer is not
+  rendered as a finished one — the contract's synthetic value was otherwise
+  invisible above the client.
+
 Two findings from this wave are recorded as **known and deliberately not fixed
 here**:
 
