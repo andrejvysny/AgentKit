@@ -72,9 +72,9 @@ Updated: 2026-09-02 (session 2)
 
 ## Follow-ups surfaced by agents/verifiers (not in plan; decide before or after 5.5)
 - [x] `poisonCount` exact only if incremented on `endAttempt(abandoned)` store-side
-- [x] `idx_messages_run ON messages(chat_id, run_id, depth)` + `ProposalRecord.claimedAt` at next sqlite `SCHEMA_VERSION` bump
+- [x] `idx_messages_run ON messages(chat_id, run_id, depth, order_key)` + `ProposalRecord.claimedAt` — sqlite schema v8
 - [x] two other `run.failed` sites in `openai-compatible.ts` still lack `errorCode`
-- [ ] `docs/contracts.md` warning table lacks Phase-2 codes (folds into 5.5)
+- [x] `docs/contracts.md` warning table lacks Phase-2 codes (folds into 5.5)
 - [ ] memory adapter does NOT queue ordinary writes behind an open tx (documented adapter-MAY); full parity needs sub-store state injection
 - [x] react/client real-socket e2e tests flake under concurrent test load (~1 s `waitFor`); raise budgets or serialize
 - [ ] `useChat.error` stale until reconcile during pass 2; failed submit clears run fields of a concurrently accepted run

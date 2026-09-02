@@ -89,7 +89,7 @@ executor. See §9.
 | `src-ts/src/infrastructure/mcp/session-manager.ts` (599 L) — a hand-rolled JSON-RPC 2.0 client over stdio (`McpJsonRpcSuccess`/`McpJsonRpcError`, lines 37-50), with its own connect/retry/circuit-breaker config (`resilience-config.ts`) | `agentkit/mcp-client`: `McpClientManager` on the official `@modelcontextprotocol/sdk`, with OneMind's own battle-tested semantics kept on top — canonical ids, fail-closed collisions, circuit breaker, reconnect dedup |
 | `src-ts/src/infrastructure/mcp/http-mcp-session-manager.ts` | Same — the SDK's transports cover stdio and streamable HTTP |
 | `src-ts/src/domain/services/mcp/mcp-tool-registry-bridge.ts` — canonical-id minting and `has()` collision refusal (lines 49-63) | `createMcpToolSetContributor` (namespace `mcp`, `privileged: true`), which fails the **whole** contribution closed on a canonical-id collision rather than dropping one tool |
-| `src-ts/src/db/repositories/mcp-server.ts` + `src-ts/src/db/schema/mcp-server.ts` | `McpServerConfigStore` (`packages/mcp-client/src/config-store.ts:64-90`) — `SqliteMcpServerConfigStore` over `adapters-sqlite`'s v7 `mcp_servers` table |
+| `src-ts/src/db/repositories/mcp-server.ts` + `src-ts/src/db/schema/mcp-server.ts` | `McpServerConfigStore` (`packages/mcp-client/src/config-store.ts:64-90`) — `SqliteMcpServerConfigStore` over `adapters-sqlite`'s `mcp_servers` table (schema v8) |
 | `src-ts/src/domain/services/mcp-service.ts` and `mcp/mcp-tool-identity-policy.ts` | Folded into the contributor + config store |
 
 ### 1d. Tool dispatch
@@ -231,7 +231,7 @@ a server ambiguity.
 | `authorize` | **decide** | Absent means **no authorization at all**. OneMind is workspace-scoped, and AgentKit chats are not (§9 item 1). If workspace isolation must hold at the transport, wire an `AuthorizationPort` that resolves `{ kind: "chat", id }` → workspace and checks the principal. If OneMind is single-user local-first, leave it absent and say so in the wiring comment |
 | `basePath` | yes | `"/api/agentkit"` |
 | `cors` | yes | Mirror `CORS_HEADERS` from `transport/http/helpers.ts` |
-| `maxBodyBytes` | **yes** | Absent means no cap, and this app uploads files |
+| `maxBodyBytes` | **yes** | Defaults to 1 MiB since 0.5.0 (JSON depth 64), and this app uploads files |
 
 ---
 
