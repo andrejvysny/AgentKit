@@ -43,12 +43,14 @@ import {
   InvalidProposalTransitionError,
   InvalidTaskTransitionError,
   isSearchableMetadata,
+  isTerminalTaskStatus,
   LeaseLostError,
   RecordNotFoundError,
   SeqConflictError,
   TransactionGateTimeoutError,
   UnknownDependencyError,
   assertProposalTransition,
+  assertScopeIdle,
   assertTaskTransition,
   defaultClock,
   defaultIds,
@@ -613,6 +615,30 @@ export class MemoryConversationStore implements ConversationStore {
     return rows.map(copyMessage);
   }
 
+  /**
+   * The deepest record a run wrote in this chat — see the port.
+   *
+   * `(depth, orderKey)` descending, and NOT filtered on `active`: a run whose
+   * branch was abandoned mid-turn still has to continue its own chain.
+   */
+  async lastMessageOfRun(
+    chatId: string,
+    runId: string,
+  ): Promise<MessageRecord | null> {
+    let deepest: MessageRecord | undefined;
+    for (const record of this.messagesByChat.get(chatId) ?? []) {
+      if (record.runId !== runId) continue;
+      if (
+        deepest === undefined ||
+        record.depth > deepest.depth ||
+        (record.depth === deepest.depth && record.orderKey > deepest.orderKey)
+      ) {
+        deepest = record;
+      }
+    }
+    return deepest === undefined ? null : copyMessage(deepest);
+  }
+
   async listSiblings(messageId: string): Promise<MessageRecord[]> {
     const record = this.requireMessage(messageId);
     const list = this.messagesByChat.get(record.chatId) ?? [];
@@ -984,6 +1010,20 @@ export class MemoryTaskStore implements TaskStore {
       throw new DuplicateTaskError(`Task already exists: ${input.taskId}.`, {
         taskId: input.taskId,
       });
+    }
+    // AFTER the duplicate check, per the port: a redelivery of a submit whose
+    // task is still running is a retry to be answered from the record, not a
+    // second turn to refuse. This method never awaits, so the check and the
+    // write below it are as atomic as this store gets.
+    if (input.exclusiveScope === true) {
+      assertScopeIdle(
+        input.scopeId,
+        [...this.tasks.values()].filter(
+          (task) =>
+            task.scopeId === input.scopeId &&
+            !isTerminalTaskStatus(task.status),
+        ),
+      );
     }
     if (
       input.parentTaskId !== undefined &&

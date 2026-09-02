@@ -457,6 +457,10 @@ describe("TurnRunner.submitMessage — idempotency key", () => {
       chatId: f.chatId,
       content: "hi",
     });
+    // Driven to terminal before the second submit: with `chat_busy` on by
+    // default a chat answers one turn at a time, so "no key means a new turn"
+    // is asserted the way a caller reaches it.
+    await drive(f, first.runId);
     const second = await f.runner.submitMessage({
       chatId: f.chatId,
       content: "hi",

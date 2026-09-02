@@ -144,6 +144,15 @@ byte-identical to before branching existed.
 - `listSiblings(messageId)` — the messages sharing a message's parent,
   itself included, `branchIndex` ascending (a root's siblings are the
   chat's roots).
+- `lastMessageOfRun(chatId, runId)` — the DEEPEST record a run wrote in a
+  chat (`(depth, orderKey)` descending), or `null`. Deliberately **not**
+  restricted to the active path: a run whose branch was abandoned mid-turn
+  still has to continue its own chain, and a lookup that only saw the live
+  path would hand it a link into somebody else's conversation. `TurnRunner`
+  seeds every attempt's chain from this, which is what lets attempt 2 of a
+  crashed turn continue attempt 1's records instead of starting a second
+  chain off a placeholder that already has an active child — see
+  [architecture.md](architecture.md#a-run-is-not-one-attempt-either).
 - `activatePath(messageId)` — makes a message's path the chat's active one,
   atomically, and **returns that path** (what `listMessages` would answer
   next): its ancestors, itself, and a descent to a leaf that prefers an
@@ -299,6 +308,23 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
   `UnknownDependencyError` — every dependency must already exist when the
   dependent is written, which is what makes the dependency graph a DAG by
   construction rather than by runtime cycle detection.
+- **`createTask({ exclusiveScope: true })` refuses a busy scope.** With the
+  flag, the store MUST reject with `ChatBusyError` (`chat_busy`, HTTP 409)
+  when any task in `scopeId` is not in `TERMINAL_TASK_STATUSES` — checked as
+  the FIRST statement of the same transaction as the insert, with no `await`
+  between them, because two racing submits is the case the flag exists for
+  and a caller's own pre-check cannot be atomic. `queued` counts as busy here
+  (unlike `deleteByScope`'s check, which refuses only on work that is
+  happening): the caller is asking "is this scope free right now", and a
+  queued turn is a turn whose answer is already promised. A DUPLICATE
+  `taskId` still wins — the store raises `DuplicateTaskError` and the scope
+  check never runs, so a redelivery of a submit whose task is still running
+  is answered as the retry it is rather than refused as busy. Both reference
+  adapters raise the refusal through the shared `assertScopeIdle`, so a
+  caller cannot tell which store refused. Default `false`: the queue's own
+  model is that a scope SERIALIZES its tasks, not that it admits one at a
+  time. `TurnRunner` passes it on every submit and regenerate — see
+  `allowConcurrentSubmit`.
 - `transitionTask` is compare-and-set: it MUST reject with
   `InvalidTaskTransitionError` when the task's current status is not in the
   caller's `from` set (someone else moved it first — a lost race, not a
@@ -687,11 +713,24 @@ allowance is ever honored), `auto_all` (trusted, fully-undoable hosts only).
 write tool's execution, on the hot path of a model turn, and an IO-bound
 answer could time out, turning "needs confirmation" into "tool failed".
 
-**Key invariant**: allowances are risk-ranked (`RISK_RANK`: `low` < `medium`
-< `high` < `destructive`); an allowance at rank N covers every proposal at
-rank ≤ N, never higher — a grant for low-risk edits does not imply consent
-to a destructive one, and a model cannot escalate by re-labeling its own
-proposal's risk.
+**Key invariants**:
+- Allowances are risk-ranked (`RISK_RANK`: `low` < `medium` < `high` <
+  `destructive`); an allowance at rank N covers every proposal at rank ≤ N,
+  never higher — a grant for low-risk edits does not imply consent to a
+  destructive one, and a model cannot escalate by re-labeling its own
+  proposal's risk.
+- Allowances can be **scoped**. `AutoApplyQuery.scopeKey` is the scope the
+  staged proposal actually writes to, and it matters because that scope comes
+  from MODEL-SUPPLIED tool input (`ProposalBuilderToolOptions.scopeKeyOf`
+  derives it from the call): without it, a "yes, edit this document" answered
+  about document A is a standing yes for the same tool writing document B. An
+  allowance recorded WITHOUT a `scopeKey` still matches any scope — that is
+  what every grant given before the field existed meant, and narrowing them
+  silently would turn working auto-apply into a wall of confirmations. The
+  key is `JSON.stringify([chatId, toolName, proposalKind, scopeKey ?? null])`
+  rather than a `:`-joined string, because every member is caller or model
+  data and a separator that can appear inside one makes two different grants
+  collide on one key.
 
 **Reference**: `SessionWritePolicy`
 ([`packages/host/src/policy/session-write-policy.ts`](../packages/host/src/policy/session-write-policy.ts))

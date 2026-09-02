@@ -1,5 +1,5 @@
 import type { TaskEventEnvelope } from "@agentkit/contracts";
-import { InvalidTaskTransitionError } from "../errors.js";
+import { ChatBusyError, InvalidTaskTransitionError } from "../errors.js";
 
 /**
  * Lifecycle of a durable task.
@@ -70,6 +70,47 @@ export const TASK_TRANSITIONS: Readonly<
   failed: Object.freeze([] as const),
   cancelled: Object.freeze([] as const),
 });
+
+/**
+ * Statuses a task can never leave, DERIVED from {@link TASK_TRANSITIONS} rather
+ * than listed again: "terminal" means "has no outgoing edge", and a second hand
+ * written list would be one more thing to forget when a status is added.
+ */
+export const TERMINAL_TASK_STATUSES: readonly TaskStatus[] = Object.freeze(
+  (Object.keys(TASK_TRANSITIONS) as TaskStatus[]).filter(
+    (status) => TASK_TRANSITIONS[status].length === 0,
+  ),
+);
+
+/** True when nothing can move this task any further. */
+export function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return TERMINAL_TASK_STATUSES.includes(status);
+}
+
+/**
+ * Refuse an exclusive create while anything in the scope is still live — see
+ * {@link CreateTaskInput.exclusiveScope}.
+ *
+ * Exported so BOTH reference adapters raise the identical error from inside
+ * their own transaction instead of each writing its own wording: a caller (and
+ * a transport mapping `chat_busy` onto a 409) must not be able to tell which
+ * store refused, and `details.taskIds` is what lets a UI point at the run it is
+ * waiting for instead of saying "busy".
+ */
+export function assertScopeIdle(
+  scopeId: string,
+  live: readonly { taskId: string; status: TaskStatus | string }[],
+): void {
+  if (live.length === 0) return;
+  throw new ChatBusyError(
+    `Chat ${scopeId} already has ${live.length} unfinished task(s); wait for them to finish or cancel them before submitting again.`,
+    {
+      chatId: scopeId,
+      taskIds: live.map((task) => task.taskId),
+      statuses: live.map((task) => task.status),
+    },
+  );
+}
 
 /** True when `from → to` is a legal task transition. */
 export function isTaskTransitionAllowed(
@@ -273,6 +314,32 @@ export interface CreateTaskInput {
   parentTaskId?: string;
   /** Gate — see {@link TaskRecord.dependsOn}. Every id must already exist. */
   dependsOn?: string[];
+  /**
+   * Refuse this create — {@link ChatBusyError}, code `chat_busy` — when ANY
+   * task in `scopeId` is still unfinished (not one of
+   * {@link TERMINAL_TASK_STATUSES}). Default `false`: the queue's own model is
+   * that a scope SERIALIZES its tasks rather than admitting one at a time.
+   *
+   * `queued` counts as unfinished here, unlike in `deleteByScope`'s busy check,
+   * and that difference is the point. A delete refuses on work that is
+   * happening; this refuses on work that is going to happen, because the caller
+   * asking for exclusivity is asking "is this scope free RIGHT NOW", and a
+   * queued turn is a turn whose answer is already promised.
+   *
+   * THE CHECK MUST BE THE FIRST STATEMENT OF THE SAME TRANSACTION AS THE
+   * INSERT, with no `await` between them. Two submits racing is precisely the
+   * case this exists for, so a check the caller makes before calling — where
+   * the read and the write are separated by an await — is not the same
+   * guarantee and cannot be substituted for this one.
+   *
+   * A DUPLICATE `taskId` STILL WINS. When the id already exists, this raises
+   * {@link DuplicateTaskError} exactly as it would without the flag, and the
+   * scope check never runs: a redelivery of a submit whose task is still
+   * running is a retry to be answered from the existing record, not a second
+   * turn to refuse — and reporting it as `chat_busy` would make an idempotent
+   * caller retry forever.
+   */
+  exclusiveScope?: boolean;
 }
 
 /** Fields a transition may write alongside the status change, atomically. */
@@ -446,6 +513,10 @@ export interface TaskStore {
    * contains the task's own id. That check is the acyclicity proof — see
    * {@link TaskRecord.dependsOn} — so a store that skipped it would accept a
    * graph its own `claimNext` can never drain.
+   *
+   * And with {@link CreateTaskInput.exclusiveScope}, MUST reject with
+   * {@link ChatBusyError} when the scope already holds an unfinished task,
+   * checked ATOMICALLY with the insert — see that field.
    */
   createTask(input: CreateTaskInput): Promise<TaskRecord>;
   getTask(taskId: string): Promise<TaskRecord | null>;

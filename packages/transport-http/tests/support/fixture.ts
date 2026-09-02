@@ -85,6 +85,13 @@ export async function createHandlerFixture(
     contributors: [],
     clock: defaultClock,
     ids: defaultIds,
+    // `InertTaskRunner` never claims anything, so every turn this fixture
+    // submits stays `queued` forever. These tests grade ROUTES — status codes,
+    // idempotency, branch shape — and with submit exclusivity on by default the
+    // second request in every one of them would be refused `chat_busy` before
+    // reaching the code under test. `chats.test.ts` covers the refusal itself
+    // against a fixture that lets a turn finish.
+    allowConcurrentSubmit: true,
   });
   const tasks = new TaskService({
     store,

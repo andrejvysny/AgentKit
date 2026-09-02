@@ -391,4 +391,59 @@ describe("ProposalService — reconcileInterrupted", () => {
       failed: 0,
     });
   });
+
+  // C9: `applying` cannot distinguish "a process that died" from "a process
+  // that is inside `applier.apply` right now". Called mid-apply, this writes a
+  // failed outcome under the LIVE apply's own operation id, and the real apply
+  // then throws on a record that is already terminal — after its side effects
+  // happened. Boot-only is the rule; `staleAfterMs` is the margin for a host
+  // that cannot keep it there.
+  it("leaves a freshly claimed record alone when a staleness window is given", async () => {
+    const f = setup();
+    const proposal = await f.service.stage(stageInput());
+    await f.service.approve({ proposalId: proposal.id, actor: "user" });
+    await f.store.proposals.transition(proposal.id, ["approved"], "applying", {
+      operationId: "op-live",
+    });
+
+    const report = await f.service.reconcileInterrupted({
+      staleAfterMs: 60_000,
+    });
+    // Not counted as reconciled either: a caller reading this report to decide
+    // whether a sweep found anything must not be told it settled a record it
+    // deliberately skipped.
+    expect(report).toEqual({ reconciled: 0, applied: 0, failed: 0 });
+    expect((await f.store.proposals.get(proposal.id))?.status).toBe("applying");
+    expect(await f.store.proposals.getOutcome("op-live")).toBeNull();
+  });
+
+  it("reconciles it once the window has passed", async () => {
+    const f = setup();
+    const proposal = await f.service.stage(stageInput());
+    await f.service.approve({ proposalId: proposal.id, actor: "user" });
+    await f.store.proposals.transition(proposal.id, ["approved"], "applying", {
+      operationId: "op-old",
+    });
+
+    f.clock.advance(120_000);
+    const report = await f.service.reconcileInterrupted({
+      staleAfterMs: 60_000,
+    });
+    expect(report).toEqual({ reconciled: 1, applied: 0, failed: 1 });
+    expect((await f.store.proposals.get(proposal.id))?.status).toBe("failed");
+  });
+
+  it("defaults to sweeping everything, which is what a boot pass wants", async () => {
+    const f = setup();
+    const proposal = await f.service.stage(stageInput());
+    await f.service.approve({ proposalId: proposal.id, actor: "user" });
+    await f.store.proposals.transition(proposal.id, ["approved"], "applying", {
+      operationId: "op-boot",
+    });
+    expect(await f.service.reconcileInterrupted()).toEqual({
+      reconciled: 1,
+      applied: 0,
+      failed: 1,
+    });
+  });
 });

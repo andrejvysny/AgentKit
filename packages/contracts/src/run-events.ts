@@ -238,6 +238,12 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  *   "correction"`. A consumer must treat the run as LIVE again — the terminal
  *   event it just saw belonged to the previous pass — and RESET the text it has
  *   streamed so far, mirroring the host's own reset of the stored answer.
+ * - `hook_timeout` — host-emitted: one of the host's own hooks
+ *   (`ContextProvider`, `AttachmentResolver`, `ToolSetContributor.contribute`,
+ *   `VerificationHook`) did not answer inside its deadline, so the turn went on
+ *   WITHOUT what it would have contributed — no bindings, no system prompt, one
+ *   contributor's tools missing. The turn is degraded, not failed, and the hook
+ *   may still settle later; its answer is discarded.
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
  *   produce them, but hosts layering their own provider adapters on top of this
  *   contract do, so they are part of the shared vocabulary.
@@ -260,6 +266,7 @@ export type AiRunWarningCode =
   | "duplicate_tool_call_id"
   | "tool_late_result"
   | "retry_pass"
+  | "hook_timeout"
   | "empty_response"
   | "emulated_tool_call";
 

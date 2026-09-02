@@ -28,6 +28,7 @@ import {
   assertListMessagesCursors,
   hasActiveChild,
   InvalidImportError,
+  isTerminalTaskStatus,
   nextBranchIndex,
   planForkedMessages,
   planImportedMessages,
@@ -36,6 +37,7 @@ import {
   SeqConflictError,
   UnknownDependencyError,
   assertProposalTransition,
+  assertScopeIdle,
   assertTaskTransition,
   evaluateTaskDependencies,
   type ApplyOutcome,
@@ -346,6 +348,27 @@ export class FakeConversationStore implements ConversationStore {
     return rows;
   }
 
+  /** The deepest record a run wrote — `(depth, orderKey)` desc, see the port. */
+  async lastMessageOfRun(
+    chatId: string,
+    runId: string,
+  ): Promise<MessageRecord | null> {
+    const written = this.chatMessages(chatId).filter(
+      (record) => record.runId === runId,
+    );
+    let deepest: MessageRecord | undefined;
+    for (const record of written) {
+      if (
+        deepest === undefined ||
+        record.depth > deepest.depth ||
+        (record.depth === deepest.depth && record.orderKey > deepest.orderKey)
+      ) {
+        deepest = record;
+      }
+    }
+    return deepest ?? null;
+  }
+
   async listSiblings(messageId: string): Promise<MessageRecord[]> {
     const record = this.requireMessage(messageId);
     return siblingsOf(this.chatMessages(record.chatId), record);
@@ -436,6 +459,19 @@ export class FakeTaskStore implements TaskStore {
       throw new DuplicateTaskError(`Task already exists: ${input.taskId}.`, {
         taskId: input.taskId,
       });
+    }
+    // After the duplicate check, exactly as both reference adapters order it —
+    // a fake that refused a redelivery as `chat_busy` would let a submit
+    // idempotency bug pass every test here.
+    if (input.exclusiveScope === true) {
+      assertScopeIdle(
+        input.scopeId,
+        [...this.tasks.values()].filter(
+          (task) =>
+            task.scopeId === input.scopeId &&
+            !isTerminalTaskStatus(task.status),
+        ),
+      );
     }
     // Deps must pre-exist, exactly as the real adapters demand — a fake that
     // accepted a dangling edge would let a service test build a graph no store
