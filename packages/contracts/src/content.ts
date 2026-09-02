@@ -43,11 +43,18 @@ export const MEDIA_TYPE_PATTERN =
  * A `url` source reaches the provider VERBATIM, and a provider client runs
  * wherever the host runs — often on a developer's own machine, next to a local
  * model server that will happily fetch what it is handed. Unconstrained,
- * `file:///etc/passwd`, `http://169.254.169.254/latest/meta-data/` and
- * `javascript:alert(1)` are all legal bodies that ask something in the HOST's
- * network position to dereference them; the `data` source is pattern-guarded
- * against the same class of smuggling. HTTP(S) is the only scheme a remote
- * provider could ever have fetched anyway, so nothing legitimate is lost.
+ * `file:///etc/passwd` and `javascript:alert(1)` are legal bodies that ask
+ * something in the HOST's network position to dereference them; the `data`
+ * source is pattern-guarded against the same class of smuggling. HTTP(S) is the
+ * only scheme a remote provider could ever have fetched anyway, so nothing
+ * legitimate is lost.
+ *
+ * WHAT THIS DOES NOT DO: it says nothing about WHERE an `http(s)` URL points.
+ * `http://169.254.169.254/…`, `http://localhost:…` and private ranges all pass —
+ * SSRF against the host's own network is a host policy (an allow-list, an
+ * egress proxy), not a schema rule. Lowercase scheme only, deliberately: every
+ * URL a client or model produces is already normalized, and a case-insensitive
+ * pattern buys nothing but a longer regex.
  *
  * Exported for the same reason {@link MEDIA_TYPE_PATTERN} is: the rule has to
  * hold on the surfaces that validate ahead of the schema too.

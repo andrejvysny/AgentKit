@@ -11,8 +11,8 @@
  * latest state. Folding here would throw away the timeline and could not be
  * reconstructed from what was left.
  *
- * Ordering is by run (first appearance in the chat's messages) then by `seq`
- * within the run — the only ordering that is stable across calls, since event
+ * Ordering is by run (LAST appearance in the chat's messages, because the
+ * walk below runs newest-first) then by `seq` within the run — the only ordering that is stable across calls, since event
  * timestamps are wall-clock and two runs' logs share no sequence.
  *
  * BOUNDED AT EVERY STEP, which is why the walk below runs backwards. The

@@ -29,6 +29,7 @@ import { pathParam, type RouteContext } from "./context.js";
 import {
   validateCreateProviderRequest,
   validateUpdateProviderRequest,
+  providerIdIssue,
 } from "../validate.js";
 
 /**
@@ -238,6 +239,17 @@ function planApiKey(
   apiKey: string | undefined,
 ): ApiKeyPlan {
   if (apiKey === undefined) return { kind: "none" };
+  // The ref is derived from the id, so the id's grammar is checked HERE, where
+  // the ref is minted — not only on the create body. The update route reaches
+  // this with a raw path parameter, and a row that predates the grammar must
+  // not keep an escaped ref alive.
+  const idIssue = providerIdIssue(providerId);
+  if (idIssue !== null) {
+    return {
+      kind: "unavailable",
+      response: badRequest("invalid_request", idIssue, ctx.instance),
+    };
+  }
   if (ctx.deps.secrets === undefined) {
     return {
       kind: "unavailable",
