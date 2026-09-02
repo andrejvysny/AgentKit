@@ -96,6 +96,74 @@ describe("OpenAiCompatibleClient tool-call assembly", () => {
     ]);
   });
 
+  it("splits two id-less calls that reuse one index but name different tools", async () => {
+    // A gateway that numbers every delta `index: 0` and sends no ids at all:
+    // the second name is not a continuation of the first call, it IS the second
+    // call. Merged, the survivor got both argument strings concatenated into
+    // unparseable JSON and the other call vanished.
+    const { calls } = await assemble([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, function: { name: "f", arguments: '{"x":1}' } },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, function: { name: "g", arguments: '{"y":2}' } },
+              ],
+            },
+          },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    ]);
+    expect(calls.map((call) => call.name)).toEqual(["f", "g"]);
+    expect(calls.map((call) => call.argumentsJson)).toEqual([
+      '{"x":1}',
+      '{"y":2}',
+    ]);
+  });
+
+  it("keeps streaming arguments on one call when only the first delta names it", async () => {
+    // The guard above must not split the ordinary shape, where continuations
+    // carry no name at all.
+    const { calls } = await assemble([
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, function: { name: "f", arguments: "{" } },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: '"x":1}' } }],
+            },
+          },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    ]);
+    expect(calls).toEqual([
+      { id: "call_0", name: "f", argumentsJson: '{"x":1}' },
+    ]);
+  });
+
   it("still assembles the ordinary indexed shape", async () => {
     const { calls } = await assemble([
       {

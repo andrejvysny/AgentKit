@@ -122,6 +122,82 @@ describe("OpenAiCompatibleClient.streamChat", () => {
   });
 });
 
+describe("OpenAiCompatibleClient error bodies", () => {
+  const MAX_ERROR_BODY_BYTES = 64 * 1024;
+  const utf8 = (value: string): number =>
+    new TextEncoder().encode(value).length;
+
+  const failedEvent = (events: AiRunEvent[]) =>
+    events.find((e) => e.type === "run.failed") as
+      | (AiRunEvent & { data: { errorMessage: string; errorCode?: string } })
+      | undefined;
+
+  it("caps an error body delivered as ONE oversized chunk", async () => {
+    // The read loop tested its budget BEFORE each read, so a single 300 KB
+    // chunk was appended whole and the cap bought nothing.
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("e".repeat(300_000)));
+        controller.close();
+      },
+    });
+    const client = makeClient(
+      (async () =>
+        new Response(body, { status: 500 })) as unknown as typeof fetch,
+    );
+
+    const failed = failedEvent(await collectStream(client));
+    expect(failed).toBeDefined();
+    expect(utf8(failed!.data.errorMessage)).toBeLessThanOrEqual(
+      MAX_ERROR_BODY_BYTES + 128,
+    );
+    expect(failed!.data.errorMessage).toContain("[...truncated]");
+  });
+
+  it("caps an error body that never was a stream", async () => {
+    // A `Response` a double built from a string (or any body the runtime hands
+    // over whole) skipped the read loop entirely.
+    const notStreamed = {
+      ok: false,
+      status: 500,
+      body: null,
+      text: async () => "e".repeat(300_000),
+    };
+    const client = makeClient(
+      (async () => notStreamed) as unknown as typeof fetch,
+    );
+
+    const failed = failedEvent(await collectStream(client));
+    expect(utf8(failed!.data.errorMessage)).toBeLessThanOrEqual(
+      MAX_ERROR_BODY_BYTES + 128,
+    );
+  });
+
+  it("codes a stream that blows the SSE buffer cap as a provider error", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // No frame boundary anywhere: the parser refuses at 1 MiB.
+        controller.enqueue(
+          new TextEncoder().encode(`data: ${"x".repeat(2e6)}`),
+        );
+        controller.close();
+      },
+    });
+    const client = makeClient(
+      (async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        })) as unknown as typeof fetch,
+    );
+
+    const failed = failedEvent(await collectStream(client));
+    expect(failed!.data.errorMessage).toContain("sse_parse");
+    // A consumer branching on the code must not have to parse the sentence.
+    expect(failed!.data.errorCode).toBe("provider_error");
+  });
+});
+
 describe("OpenAiCompatibleClient extraHeaders", () => {
   it("merges extraHeaders into requests but cannot override authorization", async () => {
     let seen: Headers | undefined;

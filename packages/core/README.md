@@ -75,6 +75,18 @@ console.log(result.terminal, result.appendedMessages);
 appends, and returns only what it appended (`RunChatResult.appendedMessages`),
 so the same history can be retried or driven from more than one call site.
 
+## 0.5.0 behaviour notes
+
+- **`format` keywords are now validated.** `AiToolRegistry` compiles every
+  `inputSchema` with `ajv-formats`, so `format: "email"` / `"uri"` / `"date-time"`
+  reject a non-conforming value instead of being ignored. A tool whose schema
+  declared a format it did not mean now fails validation before it executes.
+  Unknown formats stay permissive (and no longer log: the Ajv logger is off).
+- **A refused `inputSchema` throws `ToolSchemaError`** (`code:
+  "schema_too_large" | "schema_invalid"`), so a caller staging a tool set can
+  report which tool it dropped instead of losing it to a bare `Error`. `$id` and
+  `$schema` are stripped at every level of the document before compiling.
+
 ## What changed vs. `@openpcb/ai-core` 0.4.0
 
 This package was extracted from `@openpcb/ai-core` (see
