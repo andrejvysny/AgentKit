@@ -486,12 +486,15 @@ export function describeChatLifecycle(options: ChatLifecycleOptions): void {
             expect(
               (await tx.tasks.listByScope(doomed)).map((t) => t.status),
             ).toEqual(["queued"]);
-            // THE INTERLEAVING, forced rather than hoped for: a worker claims
-            // the task between that check and the delete below. The call is
-            // made on the STORE, not on `tx`, and it still lands inside this
-            // transaction — flattening is what makes the check above unable to
-            // be the guarantee.
-            claimed.value = await store.tasks.claimNext({
+            // THE INTERLEAVING, forced rather than hoped for: a task is
+            // claimed between that check and the delete below. It is claimed
+            // through `tx`, the view of THIS transaction, because that is what
+            // an adapter is allowed to flatten — one made on the root store is
+            // another caller by construction, and an adapter that serializes
+            // transactions would have it wait for this one. What is being
+            // graded is unchanged either way: a check that a later await can
+            // invalidate cannot be the guarantee.
+            claimed.value = await tx.tasks.claimNext({
               ownerId: "worker-1",
               now: new Date(),
               scopesBusy: [],

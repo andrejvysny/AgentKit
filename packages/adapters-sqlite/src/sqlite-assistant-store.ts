@@ -622,6 +622,18 @@ function outboxFromRow(row: OutboxRow): OutboxRecord {
 type Params = Record<string, string | number | boolean | bigint | null>;
 
 /**
+ * Identity of one open async transaction — a token, not a counter.
+ *
+ * "A transaction is open" and "MY transaction is open" are different questions,
+ * and only the second one may flatten; see
+ * {@link SqliteConnection.withAsyncTx}. Deliberately opaque: nothing reads a
+ * field on it, callers only ever compare it by identity.
+ */
+interface TxOwner {
+  readonly open: true;
+}
+
+/**
  * Shared by every sub-store so a multi-statement operation (inside one port
  * method, or spanning several via {@link SqliteAssistantStore.transaction})
  * commits or rolls back as one unit. Also the single seam where bun-types'
@@ -633,18 +645,37 @@ type Params = Record<string, string | number | boolean | bigint | null>;
  *
  * `bun:sqlite` is synchronous and does not support nested transactions on one
  * connection (no savepoints in this v1 — see the class doc on
- * {@link SqliteAssistantStore.transaction}), so a `txDepth` counter flattens
- * re-entrant calls: only the outermost `withTx`/`withAsyncTx` issues
- * BEGIN/COMMIT/ROLLBACK; anything nested inside it just runs against the
- * already-open transaction.
+ * {@link SqliteAssistantStore.transaction}), so re-entrant calls FLATTEN into
+ * the transaction already open: only the outermost `withTx`/`withAsyncTx`
+ * issues BEGIN/COMMIT/ROLLBACK.
+ *
+ * WHICH CALLS COUNT AS RE-ENTRANT IS DECIDED BY OWNERSHIP, NOT BY DEPTH. A
+ * raised `txDepth` says "a transaction is open", never "mine is open", and an
+ * unrelated caller that flattened on it made its whole unit of work hostage to
+ * a stranger's rollback: a second `AssistantStore.transaction` caller reported
+ * a commit its neighbour's throw then erased, and a `claimNext` that landed in
+ * a host transaction had its claim reverted under a worker already holding the
+ * lease. So the two helpers answer the question differently:
+ *
+ * - {@link withTx} (synchronous) still flattens on depth. It holds the thread
+ *   from BEGIN to COMMIT, so nothing can interleave WITH it, and flattening is
+ *   what lets another object over this same handle — `SqliteMcpServerConfigStore`
+ *   — write inside an open transaction instead of deadlocking against it.
+ * - {@link withAsyncTx} flattens only for the caller holding the CURRENT owner
+ *   token. Every other caller queues behind {@link txGate} and gets its own
+ *   BEGIN, so one caller's rollback can only ever discard that caller's work.
+ *
+ * What is left over is the port's documented isolation caveat, not a promise
+ * this class breaks: an unrelated caller's SYNCHRONOUS port write, issued while
+ * an async transaction sits on an `await`, still joins that transaction.
  *
  * ── SEVERAL HANDLES OVER ONE FILE ─────────────────────────────────────────
  *
  * Supported, and this class is where the support lives. Two
  * {@link SqliteAssistantStore} instances on one path — two worker processes, or
  * two connections in one process — are two connections contending for SQLite's
- * single write lock, and `SqliteTaskStore`'s per-instance claim mutex means
- * nothing across that boundary. `BEGIN IMMEDIATE` is what keeps them correct;
+ * single write lock, and this connection's own {@link txGate} means nothing
+ * across that boundary. `BEGIN IMMEDIATE` is what keeps them correct;
  * what keeps them USABLE is waiting for the lock instead of failing on it, and
  * the two waits are deliberately different:
  *
@@ -662,6 +693,16 @@ type Params = Record<string, string | number | boolean | bigint | null>;
  */
 class SqliteConnection {
   private txDepth = 0;
+
+  /**
+   * The FIFO every top-level {@link withAsyncTx} queues on: each call chains
+   * onto the previous one's SETTLED signal, so async transactions run one at a
+   * time on this connection, in call order.
+   */
+  private txGate: Promise<void> = Promise.resolve();
+
+  /** Token of the async transaction currently open, `null` when there is none. */
+  private currentOwner: TxOwner | null = null;
 
   constructor(
     readonly db: Database,
@@ -731,26 +772,62 @@ class SqliteConnection {
   }
 
   /**
-   * Async transaction helper for {@link AssistantStore.transaction}: `fn` may
-   * itself `await` several port calls, each of which calls `withTx` and sees
-   * `txDepth > 0`, flattening into this same outer transaction.
+   * Async transaction helper for {@link AssistantStore.transaction} and
+   * `claimNext`: `fn` may `await` between its statements, so this transaction
+   * is held across turns of the event loop, where anybody else's callback can
+   * run.
+   *
+   * ONE AT A TIME PER CONNECTION, IN CALL ORDER. A caller that arrives while a
+   * transaction is open waits on {@link txGate} for it to settle instead of
+   * joining it — joining is what let one caller's rollback discard another
+   * caller's finished work (see the class doc). The one exception is the caller
+   * that IS the open transaction: `owner` names it, and a call carrying the
+   * token of the transaction currently running flattens into it, since there
+   * are no savepoints to nest with. That is how a nested `transaction()` and a
+   * `claimNext` issued through the `tx` view stay inside the unit their caller
+   * opened, while the same calls made by anyone else queue.
+   *
+   * The gate wait is deliberately NOT bounded by `busyTimeoutMs`. That budget
+   * exists for the write lock, which another process owns and may never
+   * release; the gate is this process's own queue, and its holder always
+   * settles.
+   */
+  async withAsyncTx<T>(
+    fn: (owner: TxOwner) => Promise<T>,
+    owner?: TxOwner,
+  ): Promise<T> {
+    // Decided SYNCHRONOUSLY, on the caller's own turn: `currentOwner` is read
+    // before the first await, so it still describes the transaction this call
+    // was issued from.
+    if (owner !== undefined && owner === this.currentOwner) return fn(owner);
+    const run = this.txGate.then(() => this.beginExclusive(fn));
+    // The gate carries the SETTLED signal only: the next caller waits for this
+    // one to finish, and must not inherit its rejection.
+    this.txGate = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /**
+   * One async transaction, with {@link txGate} already held by this call.
    *
    * Same BEGIN-then-increment ordering as {@link withTx}, for the same reason,
    * and the same exception-safety: a lock this call never won leaves the
-   * counter untouched.
+   * counter untouched, and the owner token is minted only once the transaction
+   * really is open.
    */
-  async withAsyncTx<T>(fn: () => Promise<T>): Promise<T> {
+  private async beginExclusive<T>(
+    fn: (owner: TxOwner) => Promise<T>,
+  ): Promise<T> {
     const deadline = Date.now() + this.busyTimeoutMs;
-    // THE DEPTH CHECK AND THE BEGIN MUST NOT BE SEPARATED BY AN AWAIT. Every
-    // iteration re-does both synchronously: if a transaction is open by the
-    // time this caller is scheduled it flattens into it, exactly as it always
-    // has; otherwise it tries for the lock, and only the WAIT between attempts
-    // is asynchronous. Awaiting before the check instead would leave a window
-    // where `txDepth` reads 0 while a BEGIN is already in flight, and the
-    // second caller would raise "cannot start a transaction within a
-    // transaction" where it used to flatten.
+    // Whoever holds the lock here is on ANOTHER HANDLE: the gate keeps this
+    // handle's async transactions apart, and a synchronous one cannot still be
+    // open across the await below. So this is the cross-connection wait the
+    // class doc describes — yield and retry rather than park the thread, see
+    // tryBeginImmediate.
     for (let attempt = 0; ; attempt += 1) {
-      if (this.txDepth > 0) return fn();
       const busy = this.tryBeginImmediate();
       if (busy === null) break;
       if (Date.now() >= deadline) throw busy;
@@ -761,14 +838,19 @@ class SqliteConnection {
         setTimeout(resolve, Math.min(attempt, 10)),
       );
     }
+    const owner: TxOwner = { open: true };
+    this.currentOwner = owner;
     try {
-      const result = await fn();
+      const result = await fn(owner);
       this.exec("COMMIT");
       return result;
     } catch (err) {
       this.rollback();
       throw err;
     } finally {
+      // Cleared, not restored: the gate guarantees there was no async
+      // transaction underneath this one.
+      this.currentOwner = null;
       this.txDepth -= 1;
     }
   }
@@ -1613,6 +1695,12 @@ class SqliteTaskStore implements TaskStore {
     private readonly ids: IdGenerator,
     private readonly leaseTtlMs: number = DEFAULT_LEASE_TTL_MS,
     aging: TaskAgingOptions = {},
+    /**
+     * Set only on the copy {@link SqliteAssistantStore.transaction} hands its
+     * callback: the identity of that transaction, so a `claimNext` made through
+     * it joins the caller's unit of work instead of queueing behind it.
+     */
+    private readonly txOwner?: TxOwner,
   ) {
     this.aging = resolveTaskAging(aging);
   }
@@ -2101,39 +2189,24 @@ class SqliteTaskStore implements TaskStore {
   }
 
   /**
-   * Serializes {@link claimNext} against itself for this store instance.
+   * A claim is one transaction of its own: task row, attempt and lease land
+   * together or not at all.
    *
-   * `withAsyncTx` FLATTENS a re-entrant call into the transaction already open
-   * on the connection (there are no savepoints — see {@link SqliteConnection}),
-   * and `claimNext` awaits inside its candidate walk. Two overlapping claims
-   * would therefore share ONE transaction, which makes the second caller's
-   * work hostage to the first: a rollback on the first caller's path discards
-   * the claim the second was already granted — the task row reverts to
-   * `queued` while the attempt and lease it wrote afterwards commit on their
-   * own, and a later `claimNext` hands the same task to a second worker.
+   * OF ITS OWN is the load-bearing part, and it is the connection's FIFO that
+   * provides it (see {@link SqliteConnection.withAsyncTx}). `claimNext` awaits
+   * inside its candidate walk, so overlapping calls used to flatten into ONE
+   * transaction and make the second caller's grant hostage to the first: a
+   * rollback anywhere on that shared path reverted the task row to `queued`
+   * while the attempt and lease written afterwards committed, and a later
+   * `claimNext` handed the same task to a second worker. The same happened to a
+   * claim that arrived while an unrelated `AssistantStore.transaction` was
+   * open.
    *
-   * The narrow fix is a per-instance mutex on this one method: every call
-   * chains onto the previous one, so each gets its own `BEGIN IMMEDIATE` and
-   * its own rollback blast radius. Deliberately NOT a general queue in front
-   * of `withAsyncTx` — flattening is the intended semantics for
-   * `AssistantStore.transaction`, where the caller wants one atomic unit.
+   * A claim issued through the `tx` view of an open transaction is the one
+   * caller that still joins it — {@link txOwner} is set on that copy, and such
+   * a caller asked for one unit of work.
    */
-  private claimGate: Promise<void> = Promise.resolve();
-
   async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
-    const run = this.claimGate.then(() => this.claimNextExclusive(input));
-    // The gate swallows the outcome: the next caller waits for this one to
-    // SETTLE, but must not inherit its rejection.
-    this.claimGate = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
-  }
-
-  private async claimNextExclusive(
-    input: ClaimNextInput,
-  ): Promise<ClaimedTask | null> {
     return this.conn.withAsyncTx(async () => {
       const nowIso = input.now.toISOString();
       const rows = this.selectClaimCandidates(
@@ -2145,9 +2218,9 @@ class SqliteTaskStore implements TaskStore {
       // the queue can be gated on a dependency still in flight, or doomed by
       // one that failed, and neither may hide the claimable work behind it.
       //
-      // The rows are a SNAPSHOT. The mutex above keeps two `claimNext` calls
-      // apart, but nothing stops another caller settling or claiming one of
-      // these tasks between the SELECT and this row's turn — so a lost
+      // The rows are a SNAPSHOT. The connection's gate keeps two `claimNext`
+      // calls apart, but nothing stops another caller settling or claiming
+      // one of these tasks between the SELECT and this row's turn — so a lost
       // `queued`-> CAS means someone else got there first, which is the race
       // resolving normally, not a fault: skip the row and keep walking.
       for (const row of rows) {
@@ -2189,7 +2262,7 @@ class SqliteTaskStore implements TaskStore {
         return { task, attempt, lease };
       }
       return null;
-    });
+    }, this.txOwner);
   }
 
   async markDeadLettered(taskId: string, reason: string): Promise<TaskRecord> {
@@ -2983,14 +3056,26 @@ export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
  *
  * `transaction(fn)` opens a real `BEGIN IMMEDIATE` and commits or rolls back
  * around `fn` — unlike `MemoryAssistantStore`, a throw inside `fn` discards
- * every write `fn` made. Nested `transaction()` calls (including a port
- * method that itself opens a mini-transaction, like `transitionTask` or
- * `createAttempt`) are FLATTENED into the outermost one rather than nested —
- * `bun:sqlite` has no savepoint support in this v1, so re-entrant calls just
- * run against the already-open transaction. See {@link SqliteConnection}.
+ * every write `fn` made. Nested `transaction()` calls on the `tx` it hands the
+ * callback (including a port method that itself opens a mini-transaction, like
+ * `transitionTask` or `createAttempt`) are FLATTENED into the outermost one
+ * rather than nested — `bun:sqlite` has no savepoint support in this v1, so
+ * re-entrant calls just run against the already-open transaction.
+ *
+ * TRANSACTIONS ARE SERIALIZED PER CONNECTION: a second caller's `transaction()`
+ * (or a worker's `claimNext`) issued while one is open WAITS for it, and then
+ * runs in a transaction of its own. It used to join the open one and be rolled
+ * back by a stranger's throw. The corollary is that a callback must do its work
+ * through the `tx` it is given: a call made on the ROOT store from inside the
+ * callback is, by construction, indistinguishable from an unrelated caller's,
+ * so awaiting a root-store `transaction()`/`claimNext` in there waits on a
+ * transaction that cannot finish until the callback returns. See
+ * {@link SqliteConnection}.
  */
 export class SqliteAssistantStore implements AssistantStore {
   private readonly conn: SqliteConnection;
+  /** {@link tasks}, bound to one open transaction — see {@link txView}. */
+  private readonly tasksInTransaction: (owner: TxOwner) => TaskStore;
   readonly conversations: ConversationStore;
   readonly tasks: TaskStore;
   readonly proposals: ProposalStore;
@@ -3015,6 +3100,19 @@ export class SqliteAssistantStore implements AssistantStore {
       options.leaseTtlMs,
       options,
     );
+    // A second, identically-configured instance rather than a mutable field on
+    // the first: the token belongs to ONE transaction, and a field would leak
+    // it to every other caller of `store.tasks` for as long as that transaction
+    // is open — the exact confusion the token exists to end.
+    this.tasksInTransaction = (owner) =>
+      new SqliteTaskStore(
+        this.conn,
+        clock,
+        ids,
+        options.leaseTtlMs,
+        options,
+        owner,
+      );
     this.proposals = new SqliteProposalStore(this.conn, clock);
     this.providers = new SqliteProviderStore(this.conn);
     this.settings = new SqliteSettingsStore(this.conn);
@@ -3026,7 +3124,41 @@ export class SqliteAssistantStore implements AssistantStore {
   }
 
   async transaction<T>(fn: (tx: AssistantStore) => Promise<T>): Promise<T> {
-    return this.conn.withAsyncTx(() => fn(this));
+    return this.conn.withAsyncTx((owner) => fn(this.txView(owner)));
+  }
+
+  /**
+   * The aggregate as seen from INSIDE the transaction `owner` opened.
+   *
+   * The port already says `transaction` hands its callback "a store view scoped
+   * to that transaction"; this is that view, and it is no longer `this` because
+   * `this` carries no transaction identity. Only the two entry points that can
+   * open a SECOND transaction need scoping — `transaction` and `tasks.claimNext`
+   * — and both carry `owner` through it so they flatten into the caller's unit
+   * instead of queueing behind it.
+   *
+   * The other five stores are the root instances unchanged: every one of their
+   * methods reaches the database through the SYNCHRONOUS `withTx`, which
+   * flattens on depth and cannot be interleaved, so inside this callback they
+   * already write into this transaction.
+   */
+  private txView(owner: TxOwner): AssistantStore {
+    return {
+      conversations: this.conversations,
+      tasks: this.tasksInTransaction(owner),
+      proposals: this.proposals,
+      providers: this.providers,
+      settings: this.settings,
+      outbox: this.outbox,
+      transaction: <T>(nested: (tx: AssistantStore) => Promise<T>) =>
+        this.conn.withAsyncTx((nestedOwner) => {
+          // `nestedOwner` is `owner` on the flattened path and a fresh token
+          // only if this view outlived its transaction and had to open a new
+          // one — either way the nested callback gets the view that matches the
+          // transaction it is actually running in.
+          return nested(this.txView(nestedOwner));
+        }, owner),
+    };
   }
 
   /**
