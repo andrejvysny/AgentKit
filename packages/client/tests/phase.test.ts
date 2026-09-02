@@ -7,7 +7,12 @@ import {
   type AiRunEvent,
   type RunStatusDto,
 } from "@agentkit/contracts";
-import { isTerminalRunEvent, runPhase, type RunPhase } from "../src/index.js";
+import {
+  createRunPhaseTracker,
+  isTerminalRunEvent,
+  runPhase,
+  type RunPhase,
+} from "../src/index.js";
 
 let seq = 0;
 
@@ -155,6 +160,51 @@ describe("runPhase", () => {
       ).toBe(row.expected);
     });
   }
+});
+
+/**
+ * The tracker is the incremental form of the same function, so the assertion
+ * that matters is AGREEMENT: fold a log one event at a time and every prefix
+ * must answer what `runPhase` answers for that prefix. Anything else is two
+ * definitions of a phase, which is the thing having one function prevented.
+ */
+describe("createRunPhaseTracker", () => {
+  const verification = () =>
+    event("run.verification", { verdict: "ok", passes: 1 });
+
+  test("every prefix of a log agrees with runPhase over that prefix", () => {
+    const log = [started(), delta(), usage(), delta(), completed()];
+    const tracker = createRunPhaseTracker();
+    expect(tracker.phase()).toBe("queued");
+
+    const folded = log.map((e) => tracker.observe(e));
+    expect(folded).toEqual(
+      log.map((_e, i) => runPhase({ events: log.slice(0, i + 1) })),
+    );
+    expect(tracker.phase()).toBe("completed");
+  });
+
+  test("output alone is streaming; anything else is only running", () => {
+    const running = createRunPhaseTracker();
+    expect(running.observe(usage())).toBe("running");
+    const streaming = createRunPhaseTracker();
+    expect(streaming.observe(started())).toBe("streaming");
+  });
+
+  test("a terminal event is the last word, whatever the log carries after it", () => {
+    for (const [terminal, expected] of [
+      [failed(), "failed"],
+      [cancelled(), "cancelled"],
+    ] as const) {
+      const tracker = createRunPhaseTracker();
+      tracker.observe(started());
+      tracker.observe(terminal);
+      // `run.verification` is appended AFTER the terminal event by the host's
+      // correction harness; it must not move the phase back off it.
+      tracker.observe(verification());
+      expect(tracker.phase()).toBe(expected);
+    }
+  });
 });
 
 describe("isTerminalRunEvent", () => {
