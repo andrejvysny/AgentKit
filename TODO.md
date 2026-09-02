@@ -34,8 +34,8 @@
 
 ## Phase 4 — serving surfaces
 - [ ] 4.1 stream close rule + runPhase last-terminal + react reset (F-OWN-1)
-- [ ] 4.2 react hooks (B2, B8, B9, B12)
-- [ ] 4.3 client resume (B5)
+- [x] 4.2 react hooks (B2, B8, B9, B12)
+- [x] 4.3 client resume (B5)
 - [ ] 4.4 transport bounds + validation (B3, B4, B6, B10, B11, B13, B14, B15, E2, E6, F5)
 - [ ] 4.5 authz / privileged-resource docs (B7, F5, F14)
 - [ ] 4.6 MCP server (F1, F2, F3, F7, F9, F13)
