@@ -6,6 +6,199 @@ entry links the architecture decision records (`docs/adr/`) that carry the
 full reasoning; this file is the short answer to "what changed and why",
 newest first.
 
+## 0.5.0 — 2026-09-02 — Hardening tranche 2: durability fencing, the chat loop's truth, multi-pass streams, serving bounds
+
+**Contract change (minor bump, pre-consumer):** every DTO addition is
+optional and every new vocabulary item is additive — six new `run.warning`
+codes (`retry_pass`, `stream_incomplete`, `result_unserializable`,
+`duplicate_tool_call_id`, `tool_late_result` (reserved), `hook_timeout`),
+optional `pass`/`reason` on warning data, the synthetic
+`finishReason: "incomplete"` on `run.message.completed`/`run.completed`,
+`AiToolResult.data` now optional, `run.failed.errorCode` populated on every
+provider-client failure path (`network_error`, `empty_body`,
+`provider_error`, the HTTP status), and an optional `ProposalDto.claimedAt`. What earns the minor
+is **behaviour**: a concurrent submit into a busy chat is refused with
+`chat_busy` (409) by default; an SSE run stream now closes on the *task*
+terminal, not the first run-terminal event; JSON Schema `format` keywords are
+validated instead of silently ignored; REST bodies are capped at 1 MiB and
+depth 64 by default; an `Idempotency-Key` replayed with a different body is
+a 422. `CONTRACT_VERSION` `0.4.0` → `0.5.0`; golden traces re-recorded once
+(only `contractVersion`/`timestamp`/`eventId` moved), four new golden
+scenarios cover the loop's cap/duplicate-id/timeout/unserializable paths.
+The umbrella `agentkit` package is versioned `0.5.0` for the first tagged
+release (`v0.5.0`, cut per `DEVELOPING.md`).
+
+A six-reviewer adversarial review of 0.4.0 — five fresh-context reviewers
+over core, transport/client/react, host, durability and contracts/packaging,
+plus a sixth over the MCP packages — found two CRITICAL and roughly twenty
+HIGH defects between them, in the places OpenPCB and OneMind would hit on
+day one of a migration: the sqlite transaction gate, the write-policy
+routes, the chat loop's cancellation and tool-call assembly, the host's
+crash-recovery chain, and the "one terminal event closes the stream"
+assumption every serving surface shared. Every fix below is pinned by a
+test that fails on the old code. The reasoning lives in [ADR
+0014](docs/adr/0014-hardening-tranche-2.md).
+
+### Durability: transactions are owned, terminal writes are fenced ([ADR 0014](docs/adr/0014-hardening-tranche-2.md))
+
+- **CRITICAL: sqlite `withAsyncTx` flattened ANY caller into an open
+  transaction.** A `txDepth` counter said "someone's transaction is open",
+  not "mine", so an unrelated store call awaiting inside another caller's
+  `transaction()` silently joined it — an acknowledged write could be rolled
+  back by a stranger's failure, and two workers could claim one task. Both
+  adapters now gate on an **owner token** with a FIFO queue; `transaction()`
+  hands the callback an owner-bearing view (`txView`) so only *its* nested
+  calls flatten; root synchronous writes queue behind an open transaction
+  (`whenFree`, gate exit and `withTx` in one continuation — a
+  `ready()`-then-`withTx` split has a microtask gap, and a test pins it).
+  Waits are bounded by `transactionGateTimeoutMs` (30 s) with a typed
+  `TransactionGateTimeoutError` (`transaction_gate_timeout`, 500) — a silent
+  hang is not an acceptable failure mode for a third-party host. The memory
+  adapter mints owners the same way (its nested `tx.transaction` used to
+  HANG); it does not queue ordinary writes behind an open transaction, which
+  is documented as an adapter-MAY because memory has no rollback.
+- **Terminal task writes are fenced.** `transitionTask`, `endAttempt` and
+  `markDeadLettered` take an optional `{ leaseToken }` checked inside the
+  same synchronous body as the write, and the turn runner lands a pass
+  fenced-transition FIRST, then `endAttempt`, then the placeholder — so a
+  zombie attempt whose lease expired can no longer overwrite attempt 2's
+  answer through the lease-unaware `ConversationStore`. Fencing is optional
+  per call because recovery paths write after the lease is gone by design.
+  A runner-level end-to-end test now kills a worker after the internal
+  assistant record landed, recovers onto attempt 2 on the ACTIVE path, and
+  proves the zombie cannot land a terminal.
+- **Attempt 2 continues attempt 1's chain.** Recovery used to append from the
+  placeholder, landing attempt 2's records on a dead branch (a parent with an
+  active child lands new records inactive); the runner now resumes from
+  `lastMessageOfRun`. A throw mid-turn lands `run.failed|run.cancelled` on the
+  log before the fenced transition and finalizes the placeholder only if THIS
+  attempt landed. Runner supersede now ABORTS the old execution instead of
+  skipping recovery (skipping broke crash-recovery). `availableAt` is
+  normalized (garbage → `invalid_timestamp`); the outbox is bounded
+  (`maxAttempts` 10, `prune`).
+- **sqlite schema 8** (no migrations by design — recreate the dev database):
+  `idx_messages_run` for `lastMessageOfRun`, `proposals.claimed_at`, and
+  `TaskRecord.poisonCount` is now incremented by the *store* on
+  `endAttempt({ status: "abandoned" })` rather than patched by the runner at
+  dead-letter time, so it is exact after every recovery, not only the last
+  one, and idempotent per attempt (the same death reported twice counts once;
+  `RunDto` still omits the count). `ProposalRecord.claimedAt` is stamped on the
+  `approved → applying` claim, and `reconcileInterrupted`'s staleness window
+  keys on it (it used to fall back to the decision time, which could be far
+  older than the claim).
+
+### The chat loop tells the truth (`@agentkit/core`)
+
+- Cancel on a chunk boundary used to commit a half answer as `completed`; the
+  loop re-checks the signal after every chunk. Tool-call deltas are keyed
+  index-primary / id-secondary (pure id keying merged two indexed calls that
+  shared an id — real providers do that); duplicates are re-keyed `<id>#n` in
+  the provider client AND the loop, with a `duplicate_tool_call_id` warning.
+  A stream that ends without `[DONE]`/`finish_reason` reports
+  `finishReason: "incomplete"` plus `stream_incomplete` instead of claiming
+  it finished.
+- A tool result that cannot be serialized (a `BigInt`) used to escape the
+  generator with no terminal event; `safeStringify` turns it into
+  `result_unserializable`. Tool deadlines are a real `Promise.race`
+  (`timeoutMs` used to be advisory), with a loop-wide `defaultToolTimeoutMs`.
+  The model-facing envelope is capped at `limits.maxBytes` including
+  `summary`, `warnings` and error text, with a last-resort backstop.
+- **Ajv per tool** with `ajv-formats` — `format` keywords are now
+  **validated** (they were silently ignored: an `email` or `uri` constraint
+  in a tool schema was decoration) — `$id`/`$schema` stripped recursively,
+  node/depth caps, a validator LRU (512, keyed by the stripped schema) after
+  a verifier measured 3.4× compile cost per call, and a typed
+  `ToolSchemaError`. Provider client: SSE framing per spec, abort throws,
+  `reader.cancel()`, a 1 MiB residual cap, bounded error bodies, `errorCode`
+  on every `run.failed`.
+
+### Host orchestration (`@agentkit/host`)
+
+- **`chat_busy` by default.** Users type while the model is generating, and a
+  second submit corrupted the chain. `createTask({ exclusiveScope })` refuses
+  inside the adapter transaction (`ChatBusyError`, 409) on submit and
+  regenerate; opt out per host with `TurnRunnerDeps.allowConcurrentSubmit`.
+- **A run is not one pass.** The host emits `run.warning { code:
+  "retry_pass", pass, reason }` immediately BEFORE every recovery
+  (`chat_only`, `empty_response`) or correction pass, so a consumer can tell
+  "the previous pass ended" from "the run ended" — the contract every serving
+  surface below now relies on. The correction harness gained
+  `includeUserRequest` (default **true**: the verifier sees what was asked;
+  OpenPCB's harness did not, and ADR 0014 records the divergence).
+- Hook deadlines: `ContextProvider`, `AttachmentResolver` and
+  `ToolSetContributor.contribute` run under `withHookDeadline` (30/10/10/15 s,
+  `TurnRunnerDeps.hookTimeoutsMs`); a late hook degrades the turn with
+  `hook_timeout` instead of hanging it. Write-policy allowances are scoped by
+  `scopeKey`; model-facing strings are fixed; the emulated-tool-call detector
+  requires a staged tool name and understands XML and bare JSON; early
+  `run.tool.requested` is buffered in the projection; streamed deltas are
+  coalesced into the stored message (2000 deltas: 2004 → 63 `updateMessage`
+  calls, 201.8 → 5.2 ms, `scripts/bench-projection.ts`).
+
+### Serving surfaces: transport, client, react, MCP
+
+- **The stream closes on the TASK terminal.** `@agentkit/transport-http`'s
+  SSE handler checks the task immediately after a run-terminal event and
+  drains the tail fully, so recovery and correction passes reach the client
+  on the same stream. `@agentkit/client` no longer stops on the first
+  terminal; `runPhase()`/`createRunPhaseTracker` fold the log so the LAST
+  terminal wins and a pass boundary clears it; resumed streams are deduped by
+  `seq` (an event-id window collapsed on long logs); retry is clamped
+  [250 ms, 30 s] with a total reconnect cap. `@agentkit/react` resets the
+  streamed text and status at a boundary, takes the last failure, aborts and
+  resets on chat switch, rolls back by optimistic ids and restores a
+  truncated tail when a branch submit fails.
+- **Found by the second verifier wave, fixed the same day**: an SSE pump
+  exception (a store hiccup mid-stream) used to end the body *cleanly* — the
+  one signal that now means "task terminal" — so the client returned
+  mid-pass; it now rejects the stream and the client reconnects. The hooks
+  fold the task's status when a stream closes without a terminal run event
+  (the host's quiet-failure path writes none), `submit`/`regenerate`/
+  `refresh` carry the chat-switch guard `followRun` already had, the
+  trailing drain can no longer flip a completed run to an error, a
+  `seq`-less event no longer disables replay dedupe, and `finishReason` is
+  exposed so an `"incomplete"` answer is not rendered as a finished one.
+- **CRITICAL: a write-policy grant could be redirected.** The body's `chatId`
+  overrode the authorized path chat on `POST
+  /v1/chats/:chatId/write-policy/allowances`; body fields are now named and
+  the path wins. Transport bounds: `maxBodyBytes` 1 MiB and JSON depth 64 by
+  default, a bounded tool-events walk, an idempotency **body fingerprint**
+  (same key + different body → 422 `idempotency_key_mismatch`), a provider id
+  grammar enforced at create AND where the secret ref is minted, MCP config
+  alias/resilience validation, and a generic detail on every ≥ 500.
+- **`@agentkit/mcp-server`**: 4 MiB request cap, batches ≤ 8, 4 concurrent
+  calls per session, per-fingerprint session eviction with a global backstop,
+  `maxCallMs` 120 s, 503 + `Retry-After` when nothing is evictable,
+  in-flight-safe reaping, `principal` threaded to tool guards.
+  **`@agentkit/mcp-client`**: `close()` awaits an in-flight connect AND
+  reconnect and `open()` never clears `disposed` (a reconnect used to revive a
+  closed session), `withDeadline` races for real, identities zipped by
+  position, result text capped.
+
+### Testing, CI, packaging
+
+- `describeSecretStoreConformance` + a reference `MemorySecretStore`; the
+  golden traces are replayed LIVE for every scenario (they were vacuous) and
+  the drivers live in `packages/testing/tests/` so `@agentkit/core` stays a
+  peer the testing package never imports at runtime; a nightly three-seed
+  random matrix; the one `it.skip` holds the real two-handle repro; the CI
+  dist guard proves each dist exists and matches `import "bun:x"`.
+- Umbrella: root `"."` export (contracts), `sideEffects: false` on every
+  package, `ajv-formats` as a dependency, README install/layering fixes.
+
+### Verification
+
+Three fresh-context adversarial verifier waves ran inside this tranche, each
+over the diffs of the phases before it: wave 1 (core + MCP, and
+transport/client/react + packaging) found 25 issues, wave 2 (durability +
+host, and the multi-pass stream rule) found 9 and confirmed the core rule on
+every layer, wave 3 checked the file splits were pure moves. Every confirmed
+finding was fixed in the same session with a regression test that fails
+(red) if the fix is reverted; the runner-level crash/zombie end-to-end test
+proved its own fences by patching each one out in turn. Final gate: 1610
+tests passing, 1 skipped, across typecheck, lint, build, the umbrella
+assembly and both smokes.
+
 ## 0.4.0 — 2026-09-02 — Library-ready: adapters, umbrella, management surface, governance, serving stack
 
 **Contract change (breaking, pre-consumer):** message content widens from

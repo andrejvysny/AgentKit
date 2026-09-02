@@ -5,8 +5,8 @@ Updated: 2026-09-02 (session 2)
 ## Now (plan: ~/.claude/plans/snappy-munching-wren.md — waves A→E)
 
 - [x] Wave A — A1 inline: `errorCode` on 2 `run.failed` sites (core provider) + flaky e2e `waitFor` budgets (react/client)
-- [ ] Wave A — A2 (impl-critical): sqlite `SCHEMA_VERSION` 7→8 (`idx_messages_run`, `proposals.claimed_at`), `ProposalRecord.claimedAt`, store-side `poisonCount` on `endAttempt(abandoned)`, conformance ×2 adapters
-- [ ] Wave A — A3 (impl-critical): 5.6 E2E — crash after internal assistant record → recover → attempt 2 on active path; zombie cannot land terminal
+- [x] Wave A — A2 (impl-critical): sqlite `SCHEMA_VERSION` 7→8 (`idx_messages_run`, `proposals.claimed_at`), `ProposalRecord.claimedAt`, store-side `poisonCount` on `endAttempt(abandoned)`, conformance ×2 adapters
+- [x] Wave A — A3 (impl-critical): 5.6 E2E — crash after internal assistant record → recover → attempt 2 on active path; zombie cannot land terminal
 - [x] Wave B — 5.1: `CONTRACT_VERSION` 0.5.0, 4 Phase-2 golden scenarios, re-record goldens once, release prep (umbrella 0.5.0, `#v0.5.0` snippets), CHANGELOG 0.5.0
 - [ ] Wave C — 5.5 docs (ADR 0014, contracts.md, roadmap, migration deltas, ports/architecture, sqlite README) ∥ verifier wave 2 (host/adapters/runner + 4.1 client/react); fix findings
 - [ ] Wave D — Phase 6: `turn-runner.ts` split ∥ `sqlite-assistant-store.ts` split (pure moves)
@@ -54,12 +54,12 @@ Updated: 2026-09-02 (session 2)
 - [x] 4.7 MCP client (F4, F10, F11, F12, F8)
 
 ## Phase 5 — contracts, testing infra, packaging, docs
-- [ ] 5.1 contract 0.5.0 (E1, E11, E13 done; new codes, chat_busy, fenced options); CONTRACT_VERSION bump
+- [x] 5.1 contract 0.5.0 (E1, E11, E13 done; new codes, chat_busy, fenced options); CONTRACT_VERSION bump
 - [x] 5.2 SecretStore conformance + reference impl (E5)
 - [x] 5.3 CI (E4, E9, E7)
 - [x] 5.4 packaging (E8, E10, E12)
 - [ ] 5.5 docs: ADR 0014, architecture/ports/contracts, CHANGELOG, roadmap, migration delta
-- [ ] 5.6 second-attempt + zombie E2E
+- [x] 5.6 second-attempt + zombie E2E
 
 ## Phase 6 — structure (last)
 - [ ] turn-runner.ts split
@@ -71,13 +71,13 @@ Updated: 2026-09-02 (session 2)
 - [ ] wave 3 — after Phase 5–6
 
 ## Follow-ups surfaced by agents/verifiers (not in plan; decide before or after 5.5)
-- [ ] `poisonCount` exact only if incremented on `endAttempt(abandoned)` store-side
-- [ ] `idx_messages_run ON messages(chat_id, run_id, depth)` + `ProposalRecord.claimedAt` at next sqlite `SCHEMA_VERSION` bump
-- [ ] two other `run.failed` sites in `openai-compatible.ts` still lack `errorCode`
+- [x] `poisonCount` exact only if incremented on `endAttempt(abandoned)` store-side
+- [x] `idx_messages_run ON messages(chat_id, run_id, depth)` + `ProposalRecord.claimedAt` at next sqlite `SCHEMA_VERSION` bump
+- [x] two other `run.failed` sites in `openai-compatible.ts` still lack `errorCode`
 - [ ] `docs/contracts.md` warning table lacks Phase-2 codes (folds into 5.5)
 - [ ] memory adapter does NOT queue ordinary writes behind an open tx (documented adapter-MAY); full parity needs sub-store state injection
-- [ ] react/client real-socket e2e tests flake under concurrent test load (~1 s `waitFor`); raise budgets or serialize
+- [x] react/client real-socket e2e tests flake under concurrent test load (~1 s `waitFor`); raise budgets or serialize
 - [ ] `useChat.error` stale until reconcile during pass 2; failed submit clears run fields of a concurrently accepted run
 - [ ] MCP `toolAliases` values ungrammatical at REST boundary; `withHookDeadline` cannot cancel hooks (needs AbortSignal on hook ports)
-- [ ] no golden scenario covers Phase-2 paths (byte cap, dup ids, timeout, `incomplete`)
+- [x] no golden scenario covers Phase-2 paths (byte cap, dup ids, timeout, `incomplete`)
 - [ ] `resume.test.ts` now ~2.8 s (retry floor 250 ms)
