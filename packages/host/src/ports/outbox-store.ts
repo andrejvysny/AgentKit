@@ -38,10 +38,49 @@ export interface OutboxClaimInput {
 }
 
 export interface OutboxStore {
+  /**
+   * Persist a record for publication.
+   *
+   * `availableAt` is NORMALIZED to a UTC ISO instant
+   * (`new Date(x).toISOString()`), because the reference adapters compare it as
+   * TEXT: an offset-form string (`…T01:30:00-05:00`) sorts before a `Z` string
+   * naming a later instant, so an un-normalized value is claimed hours early.
+   * An unparsable value is rejected rather than stored.
+   */
   enqueue(input: OutboxAppendInput): Promise<OutboxRecord>;
-  /** Claim up to `limit` due records, incrementing their attempt counter. */
+  /**
+   * Claim up to `limit` due records, incrementing their attempt counter.
+   *
+   * BOUNDED BY ATTEMPTS. A record that has been handed out `maxAttempts` times
+   * (adapter option, default 10) is never claimed again: it stays in the table
+   * with its `attempts` and `lastError` as an inspectable dead letter, rather
+   * than being redelivered forever to a consumer that cannot accept it. There
+   * is no separate "dead" flag — `attempts` IS the record of how many times the
+   * publisher tried, and a cap read off it needs no schema of its own.
+   */
   claimBatch(input: OutboxClaimInput): Promise<OutboxRecord[]>;
+  /** MUST reject an unknown id with {@link RecordNotFoundError}. */
   markPublished(id: string, at: Date): Promise<void>;
-  /** Record the failure and schedule the retry. */
+  /**
+   * Record the failure and schedule the retry. At the attempt cap the retry
+   * schedule no longer matters — `claimBatch` will not take the record again —
+   * but the error is still recorded, because that string is the only diagnosis
+   * of why publication was abandoned.
+   *
+   * MUST reject an unknown id with {@link RecordNotFoundError}.
+   */
   markFailed(id: string, error: string, retryAt: Date): Promise<void>;
+  /**
+   * Delete records that can never be claimed again and are older than
+   * `before` — published ones (compared on `publishedAt`) and attempt-exhausted
+   * ones (compared on `createdAt`). Returns how many rows were removed.
+   *
+   * RETENTION IS A CALLER'S DECISION, which is why this takes an instant
+   * instead of running itself on a timer: how long a published event stays
+   * readable is a product question (an audit trail, a debugging window), and a
+   * store that swept on its own would answer it for every host. Nothing
+   * claimable is ever removed, whatever `before` says — a pruner that could
+   * delete work still waiting to be published would be a data-loss button.
+   */
+  prune(before: Date): Promise<number>;
 }
