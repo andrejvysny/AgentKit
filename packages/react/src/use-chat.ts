@@ -40,7 +40,10 @@ import { useCallback, useEffect, useRef } from "react";
 import { useAgentKitClient, useAgentKitContext } from "./context.js";
 import { chatTopic, nextOrigin } from "./emitter.js";
 import {
+  finishReasonOf,
   isAbort,
+  quietFailure,
+  settlePhase,
   toError,
   useAliveRef,
   useMirroredState,
@@ -83,6 +86,17 @@ export interface ChatState {
    * {@link PagingOptions.maxPages}.
    */
   truncated: boolean;
+  /**
+   * Why the current turn's last pass stopped — the `finishReason` of its
+   * `run.completed` (or `run.message.completed`) — and `null` before one has
+   * arrived, at a pass boundary, and on a chat switch.
+   *
+   * Worth rendering because `"incomplete"` is a real answer the contract
+   * refuses to launder: the provider's stream was cut before it said why, so
+   * the run is `completed` and the answer is TRUNCATED. A UI that shows only
+   * the phase presents that as a finished reply.
+   */
+  finishReason: string | null;
 }
 
 export interface UseChatOptions extends PagingOptions {
@@ -171,6 +185,7 @@ const EMPTY: ChatState = {
   activeRunId: null,
   error: null,
   truncated: false,
+  finishReason: null,
 };
 
 export function useChat(
@@ -202,6 +217,32 @@ export function useChat(
   const chatIdRef = useRef<string | null>(chatId);
   /** A failed submit's key, held for the retry of the SAME question. */
   const parkedRef = useRef<{ key: string; signature: string } | null>(null);
+  /**
+   * The abort scope of the chat currently on screen, replaced when the hook
+   * leaves it. A write's own `await` is not what has to be cancelled — the READ
+   * that follows it is: `refresh` closes over the chat id of the render that
+   * built it, so a `refresh()` that resolves after a switch would write chat
+   * A's `listMessages` into chat B. Handing it this signal makes the switch cut
+   * that read short.
+   */
+  const scopeRef = useRef<AbortController | null>(null);
+  /** The live chat scope's signal, read at the point of USE, never captured. */
+  const chatScope = useCallback((): AbortSignal => {
+    scopeRef.current ??= new AbortController();
+    return scopeRef.current.signal;
+  }, []);
+  /**
+   * Still mounted, and still rendering the chat this call started under.
+   *
+   * The counterpart to `followRun`'s `owns()` for the WRITES: a submit is
+   * several seconds of network on a chat the user is free to leave, and every
+   * `update` past its first `await` belongs to the chat it started in or to
+   * nobody.
+   */
+  const stillOwns = useCallback(
+    (chat: string): boolean => alive.current && chatIdRef.current === chat,
+    [alive],
+  );
 
   const refresh = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
@@ -263,6 +304,11 @@ export function useChat(
     async (runId: string, placeholderId: string): Promise<void> => {
       if (chatId === null) return;
       const chat = chatId;
+      // Checked BEFORE the abort below, not only before the writes: this
+      // callback is captured per render, so a caller holding chat A's copy
+      // after the user moved to chat B would otherwise tear down B's live
+      // stream on its way to following a run B has nothing to do with.
+      if (chatIdRef.current !== chat) return;
       streamRef.current?.abort();
       const controller = new AbortController();
       streamRef.current = controller;
@@ -278,6 +324,7 @@ export function useChat(
       // `createRunPhaseTracker`.
       const tracker = createRunPhaseTracker();
       let streamed = false;
+      let finishReason: string | null = null;
       let lastEventId: string | undefined;
 
       try {
@@ -292,31 +339,78 @@ export function useChat(
           // and so does the "did this pass stream?" flag the
           // `run.message.completed` rule below reads.
           const boundary = tracker.startedNewPass();
-          if (boundary) streamed = false;
+          if (boundary) {
+            streamed = false;
+            finishReason = null;
+          }
           if (event.type === "run.message.delta") streamed = true;
+          const reason = finishReasonOf(event);
+          if (reason !== undefined) finishReason = reason;
           if (!owns()) return;
-          applyEvent(update, placeholderId, event, phase, streamed, boundary);
+          applyEvent(update, placeholderId, {
+            event,
+            phase,
+            streamed,
+            boundary,
+            finishReason,
+          });
         }
         // The stream closed because the TASK is terminal, and anything written
         // in the same breath as that transition — the harness's
         // `run.verification`, a late warning — may be on the log without having
         // been delivered. One resumed pass collects it; without it a corrected
         // run reports the phase it had before the correction ran.
-        const drained = await client.drainRun(runId, lastEventId, {
-          signal: controller.signal,
-        });
-        events.push(...drained);
-        for (const event of drained) tracker.observe(event);
+        //
+        // ITS OWN try/catch, and that is the whole point of it being here: the
+        // drain is an EXTRA request against a run that has already finished, so
+        // one 503 or dropped socket on it used to turn a completed turn into
+        // `status: "error"` and skip the reconcile below — leaving the
+        // placeholder unflipped for a run that went perfectly. There is nothing
+        // to report and nothing to retry (see `drainRun`): what the drain
+        // cannot fetch, the `refresh` that follows reads from the server
+        // anyway.
+        try {
+          const drained = await client.drainRun(runId, lastEventId, {
+            signal: controller.signal,
+          });
+          events.push(...drained);
+          for (const event of drained) {
+            tracker.observe(event);
+            if (tracker.startedNewPass()) finishReason = null;
+            const reason = finishReasonOf(event);
+            if (reason !== undefined) finishReason = reason;
+          }
+        } catch {
+          // Best effort. An abort lands here too and is caught by `owns()`.
+        }
+        if (!owns()) return;
+
+        // The log need not hold a terminal event at all — the host's
+        // `failQuietly` lands the task without one — so the run's own status
+        // decides when the events cannot.
+        const settled = await settlePhase(
+          client,
+          runId,
+          tracker,
+          events,
+          controller.signal,
+        );
         if (!owns()) return;
 
         await refresh(controller.signal);
         if (!owns()) return;
 
-        const phase = tracker.phase();
-        const failure = phase === "failed" ? runFailure(events) : null;
+        const phase = settled.phase;
+        const quiet =
+          settled.fromStatus && (phase === "failed" || phase === "cancelled");
+        const failure =
+          phase === "failed" || quiet
+            ? (runFailure(events) ?? (quiet ? quietFailure() : null))
+            : null;
         update((prev) => ({
           ...prev,
           phase,
+          finishReason,
           activeRunId: null,
           status: phase === "failed" ? "error" : "idle",
           error: failure ?? (phase === "failed" ? prev.error : null),
@@ -344,6 +438,8 @@ export function useChat(
         update((prev) => ({ ...prev, status: "error", error: noChatId() }));
         return;
       }
+      // The chat this write belongs to, captured before the first `await`.
+      const chat = chatId;
 
       const ids = nextOptimisticIds();
       const before = read().messages;
@@ -372,6 +468,7 @@ export function useChat(
         phase: "queued",
         activeRunId: null,
         error: null,
+        finishReason: null,
       }));
 
       // The key is minted HERE rather than left to the client, which mints one
@@ -387,7 +484,7 @@ export function useChat(
 
       try {
         const submitted = await client.submitMessage(
-          { chatId },
+          { chatId: chat },
           {
             content,
             ...(opts.model === undefined ? {} : { model: opts.model }),
@@ -399,7 +496,12 @@ export function useChat(
           { idempotencyKey },
         );
         parkedRef.current = null;
-        if (!alive.current) return;
+        // The run was accepted, but for a chat this hook has left: adopting the
+        // ids here wrote chat A's `activeRunId` and `status: "streaming"` into
+        // chat B, and the follow that came after streamed A's answer into B's
+        // placeholder. The run itself is fine — a remount of chat A picks it up
+        // from the server.
+        if (!stillOwns(chat)) return;
 
         const { result } = submitted;
         update((prev) => ({
@@ -417,16 +519,22 @@ export function useChat(
           status: "streaming",
           phase: "queued",
         }));
-        emitter.emit(chatTopic(chatId), { origin });
+        emitter.emit(chatTopic(chat), { origin });
 
         // A branch submit moved the active path; the truncation above was this
-        // hook's guess at it and the server's answer is the fact.
-        if (opts.parentMessageId !== undefined) await refresh();
+        // hook's guess at it and the server's answer is the fact. Scoped to
+        // this chat: the read takes a round trip the user is free to leave in,
+        // and its answer is chat A's message list.
+        if (opts.parentMessageId !== undefined) await refresh(chatScope());
+        if (!stillOwns(chat)) return;
         void followRun(result.runId, result.assistantMessageId);
       } catch (cause) {
         // The key survives the failure so the retry lands on the same turn.
         parkedRef.current = { key: idempotencyKey, signature };
-        if (!alive.current) return;
+        // The rollback is chat A's too: removing A's optimistic pair from B's
+        // list is a no-op, but `status: "error"` and a wiped `activeRunId`
+        // would land on whatever B is doing.
+        if (!stillOwns(chat)) return;
         update((prev) => {
           // Rollback: the two optimistic records described a write that never
           // happened. Removed BY ID rather than by restoring the list as it was
@@ -458,7 +566,18 @@ export function useChat(
         });
       }
     },
-    [chatId, client, read, update, alive, emitter, origin, refresh, followRun],
+    [
+      chatId,
+      client,
+      read,
+      update,
+      stillOwns,
+      chatScope,
+      emitter,
+      origin,
+      refresh,
+      followRun,
+    ],
   );
 
   const regenerate = useCallback<UseChatResult["regenerate"]>(
@@ -467,32 +586,39 @@ export function useChat(
         update((prev) => ({ ...prev, status: "error", error: noChatId() }));
         return;
       }
+      // The chat this write belongs to, captured before the first `await`.
+      const chat = chatId;
       update((prev) => ({
         ...prev,
         status: "loading",
         phase: "queued",
         error: null,
+        finishReason: null,
       }));
       try {
         const { idempotencyKey, ...body } = opts;
         const { result } = await client.regenerateMessage(
-          { chatId, messageId },
+          { chatId: chat, messageId },
           body,
           idempotencyKey === undefined ? undefined : { idempotencyKey },
         );
-        if (!alive.current) return;
+        // Same rule as `submit`: a run accepted for a chat this hook has left
+        // is not this hook's run any more.
+        if (!stillOwns(chat)) return;
         update((prev) => ({
           ...prev,
           activeRunId: result.runId,
           status: "streaming",
         }));
-        emitter.emit(chatTopic(chatId), { origin });
+        emitter.emit(chatTopic(chat), { origin });
         // The new sibling is the active one now, and it is not in the list this
-        // hook is holding — there is nothing optimistic to show, so read.
-        await refresh();
+        // hook is holding — there is nothing optimistic to show, so read. Under
+        // this chat's scope: the answer is chat A's message list.
+        await refresh(chatScope());
+        if (!stillOwns(chat)) return;
         void followRun(result.runId, result.assistantMessageId);
       } catch (cause) {
-        if (!alive.current) return;
+        if (!stillOwns(chat)) return;
         update((prev) => ({
           ...prev,
           status: "error",
@@ -502,7 +628,17 @@ export function useChat(
         }));
       }
     },
-    [chatId, client, update, alive, emitter, origin, refresh, followRun],
+    [
+      chatId,
+      client,
+      update,
+      stillOwns,
+      chatScope,
+      emitter,
+      origin,
+      refresh,
+      followRun,
+    ],
   );
 
   const editAndResubmit = useCallback<UseChatResult["editAndResubmit"]>(
@@ -514,10 +650,13 @@ export function useChat(
   const cancel = useCallback<UseChatResult["cancel"]>(async () => {
     const runId = read().activeRunId;
     if (runId === null) return;
+    // The chat the cancelled run belongs to: a failure to cancel A's run is not
+    // an error to show under B.
+    const chat = chatIdRef.current;
     try {
       await client.cancelRun({ runId });
     } catch (cause) {
-      if (!alive.current) return;
+      if (!alive.current || chatIdRef.current !== chat) return;
       update((prev) => ({ ...prev, status: "error", error: toError(cause) }));
     }
   }, [client, read, update, alive]);
@@ -575,6 +714,13 @@ export function useChat(
     return () => {
       streamRef.current?.abort();
       streamRef.current = null;
+      // The scope is aborted on the way OUT and rebuilt lazily, not swapped on
+      // the way in: under `<StrictMode>` the effect runs, tears down and runs
+      // again, and a scope created by the setup half would be the one the
+      // teardown had already aborted — every read in the second life would be
+      // cancelled before it started.
+      scopeRef.current?.abort();
+      scopeRef.current = null;
       update((prev) => ({
         ...prev,
         activeRunId: null,
@@ -583,6 +729,7 @@ export function useChat(
         messages: [],
         truncated: false,
         error: null,
+        finishReason: null,
       }));
     };
   }, [chatId, update]);
@@ -608,14 +755,23 @@ export function useChat(
  * concatenation of every pass — and the host, which is what the reconcile will
  * hand back, keeps the concatenation.
  */
+interface AppliedEvent {
+  event: AiRunEvent;
+  phase: RunPhase;
+  /** Whether THIS pass has produced a delta yet. */
+  streamed: boolean;
+  /** Whether this event opened a new pass. */
+  boundary: boolean;
+  /** The pass's `finishReason` as of this event. */
+  finishReason: string | null;
+}
+
 function applyEvent(
   update: (next: (prev: ChatState) => ChatState) => void,
   placeholderId: string,
-  event: AiRunEvent,
-  phase: RunPhase,
-  streamed: boolean,
-  boundary: boolean,
+  applied: AppliedEvent,
 ): void {
+  const { event, phase, streamed, boundary, finishReason } = applied;
   update((prev) => {
     let messages = prev.messages;
     if (boundary) {
@@ -648,6 +804,7 @@ function applyEvent(
       ...prev,
       messages,
       phase,
+      finishReason,
       // A boundary is proof the run is live again, so it clears a `status` a
       // terminal event of the previous pass (or a failed reconcile) had set.
       status: !boundary && prev.status === "error" ? "error" : "streaming",

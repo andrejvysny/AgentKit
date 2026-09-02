@@ -10,7 +10,14 @@
  * and both are avoided by the same two objects: a liveness ref and a state
  * mirror.
  */
-import { AgentKitClientError } from "@agentkit/client";
+import {
+  AgentKitClientError,
+  runPhase,
+  type AgentKitClient,
+  type RunPhase,
+  type RunPhaseTracker,
+} from "@agentkit/client";
+import type { AiRunEvent } from "@agentkit/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEmitter, ChangeListener } from "./emitter.js";
 
@@ -126,4 +133,86 @@ export function useTopicSubscription(
       latest.current(event);
     });
   }, [emitter, topic]);
+}
+
+/** The phases that mean the run is over and will say nothing more. */
+export function isTerminalPhase(phase: RunPhase): boolean {
+  return phase === "completed" || phase === "failed" || phase === "cancelled";
+}
+
+export interface SettledPhase {
+  phase: RunPhase;
+  /**
+   * `true` when the run's STATUS is what decided a terminal phase, because the
+   * log held no terminal event to decide it. The caller owes an `error` in that
+   * case: there is no `run.failed` to take a message from.
+   */
+  fromStatus: boolean;
+}
+
+/**
+ * The phase a closed stream really ended on, asking the server when the log
+ * cannot say.
+ *
+ * A TERMINAL TASK NEED NOT HAVE WRITTEN A TERMINAL EVENT. The host's
+ * `failQuietly` lands the task `failed`/`cancelled` on an unexpected throw and
+ * the matching `run.failed` write is best-effort — and `sse.ts` closes the
+ * stream on the task's status precisely so that log can still end. A hook that
+ * derived its final phase from events alone therefore sat on `streaming`
+ * forever for the one failure the user most needs told about. One `getRun` at
+ * the seam settles it; a terminal EVENT still wins over the status, per
+ * {@link runPhase}, because the worker writes the event first.
+ *
+ * A failing `getRun` leaves the phase where the events left it: the stream
+ * itself succeeded, and reporting a status probe's 503 as the run's outcome
+ * would replace one wrong answer with a worse one.
+ */
+export async function settlePhase(
+  client: AgentKitClient,
+  runId: string,
+  tracker: RunPhaseTracker,
+  events: readonly AiRunEvent[],
+  signal?: AbortSignal,
+): Promise<SettledPhase> {
+  const phase = tracker.phase();
+  if (isTerminalPhase(phase)) return { phase, fromStatus: false };
+  try {
+    const run = await client.getRun(
+      { runId },
+      signal === undefined ? {} : { signal },
+    );
+    const settled = runPhase({ status: run.status, events });
+    return { phase: settled, fromStatus: isTerminalPhase(settled) };
+  } catch {
+    return { phase, fromStatus: false };
+  }
+}
+
+/**
+ * The failure a terminal STATUS implies when the log holds no terminal event.
+ *
+ * Deliberately message-only: there is no `run.failed` to take an `errorCode`
+ * from, and inventing one would leave consumers branching on a code the server
+ * never wrote.
+ */
+export function quietFailure(): Error {
+  return new Error("run ended without a terminal event");
+}
+
+/**
+ * The `finishReason` this event reports, or `undefined` when it reports none.
+ *
+ * `null` and `undefined` are DIFFERENT ANSWERS here: a completion event that
+ * carries no reason has ended the pass and said nothing about why, which clears
+ * whatever the last one reported; an event that is not a completion at all must
+ * leave it alone.
+ */
+export function finishReasonOf(event: AiRunEvent): string | null | undefined {
+  if (
+    event.type !== "run.completed" &&
+    event.type !== "run.message.completed"
+  ) {
+    return undefined;
+  }
+  return event.data.finishReason ?? null;
 }

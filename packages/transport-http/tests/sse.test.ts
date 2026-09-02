@@ -385,6 +385,44 @@ describe("createRunEventStream", () => {
       "run.completed",
     ]);
   });
+
+  it("(i) errors the body when a store read fails, instead of closing it", async () => {
+    // A CLEAN END OF BODY is how this stream says "the task is terminal and its
+    // log is exhausted", and `@agentkit/client` takes it at face value: it
+    // returns, with no reconnect. So a `listEvents` that lost a race with
+    // `SQLITE_BUSY` used to be indistinguishable from a finished run — the UI
+    // reconciled a turn that was still typing as finished. The peer must see a
+    // broken body, which is a broken pipe, which resume already handles.
+    const store = await seed(completedRun().slice(0, 2), "running");
+    const logged: string[] = [];
+    let reads = 0;
+    const real = store.tasks.listEvents.bind(store.tasks);
+    store.tasks.listEvents = async (taskId, opts) => {
+      reads += 1;
+      if (reads >= 2) throw new Error("SQLITE_BUSY: database is locked");
+      return real(taskId, opts);
+    };
+
+    const stream = createRunEventStream({
+      tasks: store.tasks,
+      taskId: TASK_ID,
+      startSeq: 0,
+      options: options(),
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: (message) => {
+          logged.push(message);
+        },
+      },
+    });
+
+    await expect(drain(stream)).rejects.toThrow("SQLITE_BUSY");
+    // The diagnosis still reaches the operator; what changed is what the CLIENT
+    // is told.
+    expect(logged).toContain("run event stream failed");
+  });
 });
 
 describe("frameFor", () => {

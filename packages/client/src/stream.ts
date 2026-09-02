@@ -176,8 +176,18 @@ async function* iterate(
         // twice would show the answer twice until the next reconcile. Its
         // `retry:`/resume bookkeeping above still counts — only the delivery is
         // suppressed.
-        if (maxSeqYielded !== undefined && event.seq <= maxSeqYielded) continue;
-        maxSeqYielded = event.seq;
+        //
+        // An UNUSABLE `seq` — absent, or something a middlebox mangled into a
+        // non-number — is yielded but does not move the cursor. Writing it
+        // through would set the high-water mark to `NaN`/`undefined`, and every
+        // later comparison against that is false: one bad frame would disable
+        // the dedupe for the REST OF THE RUN, so the next replay lands whole.
+        if (Number.isFinite(event.seq)) {
+          if (maxSeqYielded !== undefined && event.seq <= maxSeqYielded) {
+            continue;
+          }
+          maxSeqYielded = event.seq;
+        }
         yield event;
       }
       // The server closed: the task is terminal and its log is exhausted, so

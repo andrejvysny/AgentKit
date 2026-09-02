@@ -168,6 +168,56 @@ describe("streamRun bounds a server that misbehaves", () => {
     expect(seen.map((e) => e.eventId)).toEqual(log.map((e) => e.eventId));
   });
 
+  test("a frame that lost its seq does not disable the replay dedupe", async () => {
+    // The cursor is ONE NUMBER for the life of the stream, so writing an
+    // unusable value into it is not one bad frame — it is the dedupe off for
+    // the rest of the run. `undefined <= n` is false, so the very next replay
+    // (which the server is entitled to answer from the start of the log) landed
+    // whole and the UI showed the answer twice.
+    const log = [
+      event("run.message.delta", 0),
+      event("run.message.delta", 1),
+      event("run.message.delta", 2),
+      event("run.completed", 3),
+    ];
+    // A frame a middlebox mangled: same shape, no `seq`. It is delivered once
+    // and never replayed, so the only duplicates this test can see are the
+    // WELL-FORMED events either side of it.
+    const mangled = {
+      ...event("run.warning", 9, { code: "middlebox", message: "no seq" }),
+      eventId: "evt-mangled",
+    };
+    delete (mangled as { seq?: number }).seq;
+
+    let opened = 0;
+    const fetchImpl: FetchLike = async () => {
+      opened += 1;
+      if (opened === 1) {
+        return sse(frames(log[0]!, log[1]!, mangled as AiRunEvent), "error");
+      }
+      return sse(frames(...log), "close");
+    };
+    const client = createAgentKitClient({
+      baseUrl: BASE_URL,
+      fetch: fetchImpl,
+    });
+
+    const seen: AiRunEvent[] = [];
+    for await (const e of client.streamRun("run-1", { retryDelayMs: 1 })) {
+      seen.push(e);
+    }
+
+    expect(opened).toBe(2);
+    expect(seen.map((e) => e.eventId)).toEqual([
+      "evt-0",
+      "evt-1",
+      "evt-mangled",
+      "evt-2",
+      "evt-3",
+    ]);
+    expect(new Set(seen.map((e) => e.eventId)).size).toBe(seen.length);
+  });
+
   test("a long replay past the old id-window still dedupes cleanly", async () => {
     // W1: a 6000-event log breaks at 5000, and the server (not recognising the
     // `Last-Event-ID` — its documented right) replays from the start. An

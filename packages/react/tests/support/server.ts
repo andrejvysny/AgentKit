@@ -34,7 +34,8 @@ import {
 } from "@agentkit/host";
 import { SingleProcessTaskRunner } from "@agentkit/runner-local";
 import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
-import type { AiRunEvent } from "@agentkit/contracts";
+import type { FetchLike } from "@agentkit/client";
+import { CONTRACT_VERSION, type AiRunEvent } from "@agentkit/contracts";
 import {
   createTestEventStamper,
   MockProviderClient,
@@ -250,6 +251,77 @@ export class RetryingProvider extends MockProviderClient {
       data: { content: "PASS-TWO", toolCallCount: 0 },
     });
   }
+}
+
+export interface ScriptedStream {
+  fetch: FetchLike;
+  /** How many `GET /runs/:id/stream` requests were served. */
+  readonly opened: () => number;
+}
+
+/**
+ * A `fetch` that scripts the RUN STREAM and leaves every other route real.
+ *
+ * The two shapes it exists for cannot be produced by a scripted provider: a
+ * task that goes terminal WITHOUT a terminal event on its log (the host's
+ * `failQuietly` writes one only best-effort, and `sse.ts` closes on the task's
+ * status precisely so that log can end), and a `run.completed` carrying a
+ * `finishReason` the mock provider does not emit. Everything else — the chat,
+ * the messages the reconcile reads — is the real server, because the point is
+ * what the HOOK does with a real reconcile around a scripted stream.
+ */
+export function scriptedStreamFetch(options: {
+  /** The events every stream request answers with, before a CLEAN close. */
+  events: (runId: string) => AiRunEvent[];
+  /** What `getRun` should report instead of the run's real status. */
+  runStatus?: "failed" | "cancelled" | "completed";
+}): ScriptedStream {
+  const encoder = new TextEncoder();
+  let opened = 0;
+  const wrapped: FetchLike = async (url, init) => {
+    const stream = /\/runs\/([^/?]+)\/stream/.exec(url);
+    if (stream !== null) {
+      opened += 1;
+      const body = options
+        .events(stream[1] ?? "")
+        .map(
+          (event) =>
+            `id: ${event.eventId}\nevent: ${event.type}\n` +
+            `data: ${JSON.stringify(event)}\n\n`,
+        )
+        .join("");
+      return new Response(encoder.encode(body), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+    if (options.runStatus !== undefined && /\/runs\/[^/?]+$/.test(url)) {
+      const real = await fetch(url, init);
+      if (!real.ok) return real;
+      const dto = (await real.json()) as Record<string, unknown>;
+      return Response.json({ ...dto, status: options.runStatus });
+    }
+    return fetch(url, init);
+  };
+  return { fetch: wrapped, opened: () => opened };
+}
+
+/** One synthetic run event, for {@link scriptedStreamFetch}. */
+export function scriptedEvent(
+  runId: string,
+  seq: number,
+  type: AiRunEvent["type"],
+  data: Record<string, unknown>,
+): AiRunEvent {
+  return {
+    type,
+    runId,
+    timestamp: new Date(seq * 1000).toISOString(),
+    contractVersion: CONTRACT_VERSION,
+    eventId: `evt-${seq}`,
+    seq,
+    data,
+  } as AiRunEvent;
 }
 
 /** A provider that streams `count` deltas — a run long enough to cut in half. */
