@@ -98,7 +98,7 @@ export const AiRunMessageCompletedEventSchema = Type.Object({
     finishReason: Type.Optional(
       Type.String({
         description:
-          'Raw provider finish_reason for this turn (e.g. "stop", "length", "tool_calls").',
+          'Raw provider finish_reason for this turn (e.g. "stop", "length", "tool_calls"), or the synthetic "incomplete" when the stream ended without one (see the stream_incomplete warning).',
       }),
     ),
   }),
@@ -214,6 +214,20 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  *   have blown the pass's attachment budget (this image's own byte cap, the
  *   run's total bytes, or its image count). Dropped from the pass, kept in the
  *   store, same as above.
+ * - `stream_incomplete` — the provider's stream ended without a `[DONE]`
+ *   sentinel and without any `finish_reason` (an idle proxy cut, a dropped
+ *   socket). What arrived is a partial answer; the turn's `finishReason` is
+ *   `"incomplete"` rather than the `"stop"` that would claim it finished.
+ * - `result_unserializable` — a tool RAN, but its result could not be turned
+ *   into JSON (a BigInt, a cycle), so the model was fed a failure envelope
+ *   instead. Its side effects still happened; only the reporting failed. Also
+ *   the `errorCode` on the matching `run.tool.failed`.
+ * - `duplicate_tool_call_id` — one streamed turn produced two tool calls with
+ *   the same id. The later ones are re-keyed (`<id>#2`, `<id>#3`) so every call
+ *   keeps a distinct, answerable `tool_call_id`.
+ * - `tool_late_result` — reserved: a tool that ignored its deadline settled
+ *   after the run had already reported it as timed out. Not emitted today (the
+ *   late result is dropped without an event).
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
  *   produce them, but hosts layering their own provider adapters on top of this
  *   contract do, so they are part of the shared vocabulary.
@@ -231,6 +245,10 @@ export type AiRunWarningCode =
   | "multimodal_flattened"
   | "attachment_unresolved"
   | "attachment_budget_exceeded"
+  | "stream_incomplete"
+  | "result_unserializable"
+  | "duplicate_tool_call_id"
+  | "tool_late_result"
   | "empty_response"
   | "emulated_tool_call";
 
@@ -340,6 +358,12 @@ export const AiRunCompletedEventSchema = Type.Object({
   ...runEventBaseFields,
   data: Type.Object({
     iterations: Type.Number(),
+    /**
+     * Why the run stopped: the last turn's provider `finish_reason`, or one of
+     * the loop's own — `"max_iterations"` (budget spent), `"incomplete"` (the
+     * stream was cut before the provider said why; never normalized to
+     * `"stop"`, which would claim an answer that never finished).
+     */
     finishReason: Type.Optional(Type.String()),
   }),
 });

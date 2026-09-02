@@ -18,6 +18,7 @@ import {
   parseToolArguments,
   type ValidationError,
 } from "../tools/validation.js";
+import { truncateString } from "../tools/limits.js";
 
 export interface RunChatInput {
   client: AiProviderClient;
@@ -40,6 +41,13 @@ export interface RunChatInput {
   maxOutputTokens?: number;
   maxToolIterations?: number;
   maxToolCallsPerIteration?: number;
+  /**
+   * Deadline applied to any tool whose definition sets no `timeoutMs` of its
+   * own. Undefined (the default) keeps the historical behaviour: such tools run
+   * unbounded. A host that cannot afford a hung local tool to hold its lease
+   * forever sets this once for the whole run.
+   */
+  defaultToolTimeoutMs?: number;
   signal?: AbortSignal;
   /** Override runId for deterministic tests. */
   runId?: string;
@@ -90,7 +98,13 @@ export async function* runChat(
   input: RunChatInput,
 ): AsyncGenerator<AiRunEvent, RunChatResult, unknown> {
   const runId = input.runId ?? newRunId();
-  const maxIterations = input.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
+  // Clamped: `0` (or a negative) used to mean "never call the provider" and end
+  // the run as a silent empty success, which reads as a model that answered
+  // nothing rather than as the misconfiguration it is.
+  const maxIterations = Math.max(
+    1,
+    input.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS,
+  );
   const maxCallsPerIter =
     input.maxToolCallsPerIteration ?? DEFAULT_MAX_TOOL_CALLS_PER_ITERATION;
   const toolDefinitions = input.registry.listDefinitions();
@@ -253,6 +267,23 @@ export async function* runChat(
     const assistantContent = completedContent ?? deltaContent;
     const turnToolCalls = completedToolCalls ?? requestedToolCalls;
 
+    // Hoisted above the tool-call branch on purpose: a turn cut off at the
+    // token budget usually breaks the TOOL ARGUMENTS (which then fail as
+    // bad_args with no hint why), and that is exactly the case the old
+    // no-tool-calls-only placement never warned about.
+    if (turnFinishReason === "length") {
+      yield stamp({
+        type: "run.warning",
+        runId,
+        timestamp: nowIso(),
+        data: {
+          code: "truncated",
+          message:
+            "Response truncated (finish_reason=length); increase max output tokens.",
+        },
+      });
+    }
+
     // If the assistant produced tool calls, append the assistant message with tool_calls
     // and execute each tool, appending role:'tool' messages with tool_call_id.
     if (turnToolCalls.length > 0) {
@@ -388,6 +419,7 @@ export async function* runChat(
             metadata: { toolEventId: newToolEventId() },
           },
           args,
+          input.defaultToolTimeoutMs,
         );
 
         // NOTE: do NOT abort here. This tool has already executed — its side
@@ -401,8 +433,26 @@ export async function* runChat(
         // Branch on the tool's OWN ok, not just the executor wrapper: a tool that
         // returns { ok: false } is a failure even though it didn't throw.
         if (result.ok && result.value.ok) {
-          const envelope = buildEnvelope(result.value);
-          const modelResultJson = JSON.stringify(envelope);
+          const envelope = buildEnvelope(result.value, input.limits);
+          // Serializing OUTSIDE the executor used to throw straight out of this
+          // generator (a BigInt or a cycle in the result) — after the tool's
+          // side effects were real, and with no terminal event for the run. The
+          // tool ran; only the reporting failed, and that is what the model is
+          // told.
+          const serialized = serializeToolResult(envelope, result.value.data);
+          if (!serialized.ok) {
+            yield* failTool(
+              stamp,
+              runId,
+              messages,
+              tc,
+              `Tool ${tc.name} produced a result that could not be serialized: ${serialized.error}`,
+              "result_unserializable",
+              { phase: "execution", retryable: false },
+            );
+            continue;
+          }
+          const modelResultJson = serialized.envelopeJson;
           yield stamp({
             type: "run.tool.succeeded",
             runId,
@@ -410,9 +460,11 @@ export async function* runChat(
             data: {
               toolCallId: tc.id,
               toolName: tc.name,
-              resultJson: JSON.stringify(result.value.data),
+              resultJson: serialized.dataJson,
               sources: result.value.sources,
-              truncated: result.value.truncated,
+              // The envelope's flag, not the tool's: it is true when the loop
+              // itself had to cap an over-budget payload.
+              truncated: envelope.truncated,
               warnings: result.value.warnings,
               status: envelope.status === "partial" ? "partial" : "ok",
               summary: result.value.summary,
@@ -428,7 +480,20 @@ export async function* runChat(
           });
         } else if (result.ok && !result.value.ok) {
           // Tool ran but reported failure: emit failed + feed an error envelope.
-          const envelope = buildEnvelope(result.value);
+          const envelope = buildEnvelope(result.value, input.limits);
+          const envelopeJson = safeStringify(envelope);
+          if (!envelopeJson.ok) {
+            yield* failTool(
+              stamp,
+              runId,
+              messages,
+              tc,
+              `Tool ${tc.name} produced a result that could not be serialized: ${envelopeJson.error}`,
+              "result_unserializable",
+              { phase: "execution", retryable: false },
+            );
+            continue;
+          }
           const errorMessage =
             result.value.summary ??
             (result.value.warnings.length > 0
@@ -446,12 +511,12 @@ export async function* runChat(
               // #3: carry the balanced envelope (preserves status:"partial" +
               // modelData) so run-service persists/replays it faithfully.
               status: envelope.status === "partial" ? "partial" : "error",
-              modelResultJson: JSON.stringify(envelope),
+              modelResultJson: envelopeJson.json,
             },
           });
           messages.push({
             role: "tool",
-            content: JSON.stringify(envelope),
+            content: envelopeJson.json,
             toolCallId: tc.id,
             name: tc.name,
           });
@@ -495,7 +560,9 @@ export async function* runChat(
     }
 
     // No tool calls; commit final assistant message and finish.
-    messages.push({ role: "assistant", content: assistantContent });
+    // `turnFinishReason` may be the synthetic "incomplete" (stream cut before
+    // the provider said why) — passed through untouched, because defaulting it
+    // to "stop" is precisely the lie that made a half answer look final.
     finishReason = turnFinishReason ?? "stop";
     // #4: surface finish_reason="tool_calls" with no reconstructable call — but
     // only if the provider didn't already emit it during streaming (dedup).
@@ -511,18 +578,20 @@ export async function* runChat(
         },
       });
     }
-    if (finishReason === "length") {
+    // Cancellation arriving while the last chunk was in flight must not be
+    // committed as a finished answer. Checked HERE, immediately before the
+    // commit and its terminal event: every yield above handed control back to
+    // the consumer, so the signal can have moved since the loop-top check.
+    if (input.signal?.aborted) {
       yield stamp({
-        type: "run.warning",
+        type: "run.cancelled",
         runId,
         timestamp: nowIso(),
-        data: {
-          code: "truncated",
-          message:
-            "Response truncated (finish_reason=length); increase max output tokens.",
-        },
+        data: { reason: "aborted" },
       });
+      return finish("cancelled");
     }
+    messages.push({ role: "assistant", content: assistantContent });
     yield stamp({
       type: "run.completed",
       runId,
@@ -646,23 +715,126 @@ function describeValidationErrors(
 }
 
 /**
+ * `JSON.stringify` that reports instead of throwing. A tool result is arbitrary
+ * host data: a BigInt, a cycle, or a `toJSON` that throws are all reachable,
+ * and each of them used to escape the generator as a raw rejection.
+ */
+function safeStringify(
+  value: unknown,
+): { ok: true; json: string } | { ok: false; error: string } {
+  try {
+    const json = JSON.stringify(value);
+    // `undefined` (and a bare function/symbol) serializes to nothing at all,
+    // which is not a message the model can be fed.
+    if (json === undefined)
+      return { ok: false, error: "value is not representable as JSON" };
+    return { ok: true, json };
+  } catch (err) {
+    return { ok: false, error: errorMessageOf(err) };
+  }
+}
+
+/** Both JSON views of a successful call: the model's envelope and the UI's raw data. */
+function serializeToolResult(
+  envelope: AiToolEnvelope,
+  data: unknown,
+):
+  | { ok: true; envelopeJson: string; dataJson: string }
+  | { ok: false; error: string } {
+  const envelopeJson = safeStringify(envelope);
+  if (!envelopeJson.ok) return { ok: false, error: envelopeJson.error };
+  const dataJson = safeStringify(data);
+  if (!dataJson.ok) return { ok: false, error: dataJson.error };
+  return { ok: true, envelopeJson: envelopeJson.json, dataJson: dataJson.json };
+}
+
+/** Floor on the data budget, so a huge `summary` can't leave zero room for data. */
+const MIN_ENVELOPE_DATA_BYTES = 256;
+
+/**
  * Build the balanced model-facing envelope (Wave 0 §0.2) from a tool result.
  * `data` carries `modelData` when present, else the full `data`. The full payload
  * stays in the success event's `resultJson` for UI/persistence.
+ *
+ * The envelope is also where the run's output budget is enforced: an uncapped
+ * result does not just bloat one message, it is replayed into EVERY later
+ * request of the run.
  */
-function buildEnvelope(result: AiToolResult<unknown>): AiToolEnvelope {
+function buildEnvelope(
+  result: AiToolResult<unknown>,
+  limits: AiToolLimits,
+): AiToolEnvelope {
   // A tool that reports status:"partial" keeps "partial" even when ok:false
   // (a partial apply is not a hard error — F5b). Only ok:false WITHOUT a partial
   // status maps to "error".
   const status: AiToolEnvelope["status"] =
     result.status === "partial" ? "partial" : result.ok ? "ok" : "error";
-  return {
+  const envelope: AiToolEnvelope = {
     ok: result.ok,
     status,
     summary: result.summary,
     warnings: result.warnings,
     truncated: result.truncated,
     data: result.modelData ?? result.data,
+  };
+  const measured = safeStringify(envelope);
+  // Unserializable: hand it back as-is; the caller turns that into
+  // `result_unserializable` rather than silently capping something it can't read.
+  if (!measured.ok) return envelope;
+  if (!truncateString(measured.json, limits.maxBytes).truncated)
+    return envelope;
+  return fitEnvelope(envelope, limits.maxBytes);
+}
+
+/**
+ * Shrink `data` until the SERIALIZED envelope fits `maxBytes`.
+ *
+ * One pass is not always enough: a preview is JSON inside JSON, and escaping
+ * every quote can nearly double what the first budget assumed. So the budget
+ * halves until the whole envelope measures under the cap.
+ */
+function fitEnvelope(
+  envelope: AiToolEnvelope,
+  maxBytes: number,
+): AiToolEnvelope {
+  const shell = safeStringify({ ...envelope, data: null });
+  // Bytes, not code units: the budget is a byte budget, and a non-ASCII summary
+  // spends 2-4x what its `.length` suggests.
+  const overhead = shell.ok ? new TextEncoder().encode(shell.json).length : 0;
+  let budget = Math.max(MIN_ENVELOPE_DATA_BYTES, maxBytes - overhead);
+  let capped = capEnvelopeData(envelope, budget);
+  while (budget > MIN_ENVELOPE_DATA_BYTES) {
+    const json = safeStringify(capped);
+    if (!json.ok) return capped;
+    if (!truncateString(json.json, maxBytes).truncated) return capped;
+    budget = Math.max(MIN_ENVELOPE_DATA_BYTES, Math.floor(budget / 2));
+    capped = capEnvelopeData(envelope, budget);
+  }
+  return capped;
+}
+
+/** One capping pass: replace `data` with at most `budget` bytes of itself. */
+function capEnvelopeData(
+  envelope: AiToolEnvelope,
+  budget: number,
+): AiToolEnvelope {
+  const data = envelope.data;
+  if (typeof data === "string") {
+    return {
+      ...envelope,
+      truncated: true,
+      data: truncateString(data, budget).value,
+    };
+  }
+  const json = safeStringify(data);
+  if (!json.ok) return envelope;
+  return {
+    ...envelope,
+    truncated: true,
+    // A cut-off object is no longer valid JSON, so the head of its serialization
+    // rides as a STRING preview: readable by the model, impossible to mistake
+    // for the whole result.
+    data: { truncated: true, preview: truncateString(json.json, budget).value },
   };
 }
 
@@ -683,16 +855,19 @@ function retryableOf(err: unknown): boolean {
   );
 }
 
+type ToolExecutionOutcome =
+  | { ok: true; value: AiToolResult<unknown> }
+  | { ok: false; error: string; retryable: boolean };
+
 async function executeToolSafely(
   tool: AiTool<unknown, unknown>,
   ctx: Parameters<AiTool["execute"]>[0],
   input: unknown,
-): Promise<
-  | { ok: true; value: AiToolResult<unknown> }
-  | { ok: false; error: string; retryable: boolean }
-> {
-  const timeoutMs = tool.definition.timeoutMs;
-  // No per-tool timeout: unchanged fast path (every local tool hits this).
+  defaultTimeoutMs?: number,
+): Promise<ToolExecutionOutcome> {
+  const declared = tool.definition.timeoutMs;
+  const timeoutMs = declared && declared > 0 ? declared : defaultTimeoutMs;
+  // No timeout at all: unchanged fast path (every local tool hits this).
   if (!timeoutMs || timeoutMs <= 0) {
     try {
       const value = await tool.execute(ctx, input);
@@ -705,8 +880,11 @@ async function executeToolSafely(
       };
     }
   }
-  // Per-tool timeout: abort via a controller linked to the run-level signal, so
-  // either the run cancelling OR the deadline elapsing aborts the tool's fetch.
+  // Deadline: abort via a controller linked to the run-level signal, so either
+  // the run cancelling OR the deadline elapsing aborts the tool's fetch — AND
+  // race it, because a tool is free to ignore the signal it was handed. Without
+  // the race, an unresponsive remote tool parks the run (and the host's lease)
+  // for as long as it feels like.
   const controller = new AbortController();
   const parent = ctx.signal;
   const onParentAbort = () => controller.abort(parent?.reason);
@@ -714,34 +892,41 @@ async function executeToolSafely(
     if (parent.aborted) controller.abort(parent.reason);
     else parent.addEventListener("abort", onParentAbort, { once: true });
   }
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
+  // An async wrapper so a synchronous throw from execute() becomes a rejection
+  // the race can observe; the no-op catch keeps a LATE rejection (the tool
+  // settling after the deadline, when nobody is listening) from surfacing as an
+  // unhandled one. A late result is dropped: the failure is already reported.
+  const running = (async () =>
+    tool.execute({ ...ctx, signal: controller.signal }, input))();
+  running.catch(() => {});
   try {
-    const value = await tool.execute(
-      { ...ctx, signal: controller.signal },
-      input,
-    );
+    const value = await Promise.race([
+      running,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+          reject(
+            new Error(
+              `Tool ${tool.definition.name} timed out after ${timeoutMs}ms`,
+            ),
+          );
+        }, timeoutMs);
+      }),
+    ]);
     return { ok: true, value };
   } catch (err) {
-    if (timedOut) {
-      return {
-        ok: false,
-        error: `Tool ${tool.definition.name} timed out after ${timeoutMs}ms`,
-        // A deadline says nothing about the tool's own retry semantics, and the
-        // abort error it produced is the loop's, not the tool's.
-        retryable: false,
-      };
-    }
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
-      retryable: retryableOf(err),
+      // A deadline says nothing about the tool's own retry semantics, and the
+      // abort error it produced is the loop's, not the tool's.
+      retryable: timedOut ? false : retryableOf(err),
     };
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
     if (parent) parent.removeEventListener("abort", onParentAbort);
   }
 }

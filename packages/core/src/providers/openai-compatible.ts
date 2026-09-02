@@ -219,12 +219,42 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     let aggregatedContent = "";
     let aggregatedReasoning = "";
     let droppedSseLines = 0;
-    const toolCallAccumulators = new Map<number, ToolCallAccumulator>();
+    const toolCallState = newToolCallState();
     let finishReason: string | undefined;
     let usage: OpenAiUsage | undefined;
+    let sawDone = false;
+
+    /**
+     * Usage for THIS call. `finalForCall` is false on the failure/abort paths:
+     * the numbers are real (the provider already billed them) but the call was
+     * cut short, so more may have been on the way.
+     */
+    const usageEvent = (counts: OpenAiUsage, finalForCall: boolean) =>
+      stamp({
+        type: "run.usage" as const,
+        runId,
+        timestamp: nowIso(),
+        data: {
+          callId,
+          attempt: 1,
+          // The client has no loop context; the run-loop re-stamps this with the
+          // iteration the call belongs to.
+          step: 0,
+          model: input.model,
+          promptTokens: counts.prompt_tokens,
+          completionTokens: counts.completion_tokens,
+          totalTokens: counts.total_tokens,
+          source: "stream" as const,
+          finalForCall,
+        },
+      });
 
     try {
       for await (const line of parseSseStream(response.body, input.signal)) {
+        if (line.done) {
+          sawDone = true;
+          continue;
+        }
         let event: OpenAiStreamChunk | null = null;
         try {
           event = JSON.parse(line.data) as OpenAiStreamChunk;
@@ -256,13 +286,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         }
         if (delta.tool_calls) {
           for (const tcDelta of delta.tool_calls) {
-            const idx = typeof tcDelta.index === "number" ? tcDelta.index : 0;
-            let acc = toolCallAccumulators.get(idx);
-            if (!acc) {
-              acc = { id: "", name: "", argumentsJson: "" };
-              toolCallAccumulators.set(idx, acc);
-            }
-            if (tcDelta.id) acc.id = tcDelta.id;
+            const acc = accumulatorFor(toolCallState, tcDelta);
             const fn = tcDelta.function;
             if (fn) {
               if (typeof fn.name === "string" && fn.name.length > 0)
@@ -277,6 +301,9 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         }
       }
     } catch (err) {
+      // Tokens counted before the cut are still spent, so report them rather
+      // than discarding them with the failure.
+      if (usage) yield usageEvent(usage, false);
       if (input.signal?.aborted) {
         yield stamp({
           type: "run.cancelled",
@@ -297,42 +324,28 @@ export class OpenAiCompatibleClient implements AiProviderClient {
 
     // Token accounting for THIS provider call. Emitted only when the server
     // actually reported usage — a fabricated zero would be worse than silence.
-    if (usage) {
+    if (usage) yield usageEvent(usage, true);
+
+    const assembled = assembleToolCalls(toolCallState);
+    if (assembled.duplicateIds.length > 0) {
       yield stamp({
-        type: "run.usage",
+        type: "run.warning",
         runId,
         timestamp: nowIso(),
         data: {
-          callId,
-          attempt: 1,
-          // The client has no loop context; the run-loop re-stamps this with the
-          // iteration the call belongs to.
-          step: 0,
-          model: input.model,
-          promptTokens: usage.prompt_tokens,
-          completionTokens: usage.completion_tokens,
-          totalTokens: usage.total_tokens,
-          source: "stream",
-          finalForCall: true,
+          code: "duplicate_tool_call_id",
+          message: `Provider reused tool call id(s) ${assembled.duplicateIds.join(", ")} in one turn; the later call(s) were re-keyed so each stays answerable.`,
         },
       });
     }
-
-    const toolCalls: AiToolCall[] = Array.from(toolCallAccumulators.entries())
-      .sort(([a], [b]) => a - b)
-      .map(([, acc], i) => ({
-        id: acc.id || `call_${i}`,
-        name: acc.name,
-        argumentsJson: acc.argumentsJson || "{}",
-      }))
-      .filter((tc) => tc.name.length > 0);
+    const calls = assembled.calls;
 
     // Surface malformed-SSE drops only when they likely cost us the answer, to avoid
     // noise on healthy streams.
     if (
       droppedSseLines > 0 &&
       aggregatedContent.length === 0 &&
-      toolCalls.length === 0
+      calls.length === 0
     ) {
       yield stamp({
         type: "run.warning",
@@ -345,10 +358,27 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       });
     }
 
+    // A stream that stopped without saying why (idle proxy cut, dropped socket)
+    // used to default to "stop" downstream, committing half an answer as the
+    // final one. Say "incomplete" instead, and warn.
+    if (finishReason === undefined && !sawDone) {
+      finishReason = "incomplete";
+      yield stamp({
+        type: "run.warning",
+        runId,
+        timestamp: nowIso(),
+        data: {
+          code: "stream_incomplete",
+          message:
+            "Provider stream ended without [DONE] or a finish_reason; the response is incomplete.",
+        },
+      });
+    }
+
     // finish_reason=tool_calls but no reconstructable call (truncated/garbled tool
     // block) would otherwise read as an empty success. Warn so the loop doesn't
     // silently end an iteration with nothing to act on.
-    if (finishReason === "tool_calls" && toolCalls.length === 0) {
+    if (finishReason === "tool_calls" && calls.length === 0) {
       yield stamp({
         type: "run.warning",
         runId,
@@ -367,14 +397,14 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       timestamp: nowIso(),
       data: {
         content: aggregatedContent,
-        toolCallCount: toolCalls.length,
-        toolCalls,
+        toolCallCount: calls.length,
+        toolCalls: calls,
         reasoningContent: aggregatedReasoning || undefined,
         finishReason,
       },
     });
 
-    for (const tc of toolCalls) {
+    for (const tc of calls) {
       yield stamp({
         type: "run.tool.requested",
         runId,
@@ -400,7 +430,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     const send = (b: Record<string, unknown>): Promise<Response> =>
       this.fetchImpl(`${this.baseUrl}/chat/completions`, {
         method: "POST",
-        headers: { ...this.buildHeaders(), "content-type": "application/json" },
+        headers: this.buildHeaders("application/json"),
         body: JSON.stringify(b),
         signal,
       });
@@ -475,10 +505,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         `${this.baseUrl}/chat/completions`,
         {
           method: "POST",
-          headers: {
-            ...this.buildHeaders(),
-            "content-type": "application/json",
-          },
+          headers: this.buildHeaders("application/json"),
           body: JSON.stringify(body),
           signal,
         },
@@ -577,15 +604,22 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     return { body, flattenedRoles: [...flattened] };
   }
 
-  private buildHeaders(): Record<string, string> {
-    // extraHeaders first so the built-in accept/auth headers below always win.
-    const headers: Record<string, string> = { ...this.extraHeaders };
-    headers.accept = "application/json";
-    if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
+  /**
+   * Outgoing headers, built as a `Headers` so the built-ins below `.set()` (and
+   * therefore REPLACE) whatever `extraHeaders` spelled. A plain object merge is
+   * case-sensitive: an `extraHeaders` entry keyed `Authorization` survived
+   * alongside the built-in lowercase `authorization`, and `fetch` joins the two
+   * into `Bearer SPOOFED, Bearer real`. `Headers` normalizes the name first.
+   */
+  private buildHeaders(contentType?: string): Headers {
+    const headers = new Headers(this.extraHeaders);
+    headers.set("accept", "application/json");
+    if (this.apiKey) headers.set("authorization", `Bearer ${this.apiKey}`);
+    if (contentType) headers.set("content-type", contentType);
     // Attribution is opt-in and kind-independent: the caller decides what app
     // name to advertise, if any.
-    if (this.appReferer) headers["HTTP-Referer"] = this.appReferer;
-    if (this.appTitle) headers["X-Title"] = this.appTitle;
+    if (this.appReferer) headers.set("HTTP-Referer", this.appReferer);
+    if (this.appTitle) headers.set("X-Title", this.appTitle);
     return headers;
   }
 }
@@ -659,6 +693,94 @@ interface ToolCallAccumulator {
   argumentsJson: string;
 }
 
+/** In-flight tool calls of one stream: first-seen order plus both lookup keys. */
+interface ToolCallState {
+  order: ToolCallAccumulator[];
+  byId: Map<string, ToolCallAccumulator>;
+  byIndex: Map<number, ToolCallAccumulator>;
+}
+
+function newToolCallState(): ToolCallState {
+  return { order: [], byId: new Map(), byIndex: new Map() };
+}
+
+/**
+ * The accumulator a tool-call delta belongs to.
+ *
+ * Providers disagree on what identifies a call mid-stream: OpenAI numbers every
+ * delta (`index`), while llama.cpp/vLLM-style servers and some gateways send
+ * the `id` on the first delta and nothing on its continuations. Keying on the
+ * id when there is one — and starting a FRESH accumulator when the index slot
+ * already holds a different, non-empty id — keeps both shapes from collapsing
+ * two calls into one call with concatenated arguments.
+ */
+function accumulatorFor(
+  state: ToolCallState,
+  delta: { index?: number; id?: string },
+): ToolCallAccumulator {
+  const id = typeof delta.id === "string" ? delta.id : "";
+  if (typeof delta.index === "number") {
+    const slot = state.byIndex.get(delta.index);
+    // The same slot only while the ids agree (or one side never named one); a
+    // second, DIFFERENT id on the slot is a different call reusing the number.
+    if (slot && (id === "" || slot.id === "" || slot.id === id)) {
+      if (id !== "" && slot.id === "") {
+        slot.id = id;
+        state.byId.set(id, slot);
+      }
+      return slot;
+    }
+    return openAccumulator(state, id, delta.index);
+  }
+  if (id) return state.byId.get(id) ?? openAccumulator(state, id, undefined);
+  // Neither key: a continuation of the call opened most recently.
+  return state.order.at(-1) ?? openAccumulator(state, "", undefined);
+}
+
+function openAccumulator(
+  state: ToolCallState,
+  id: string,
+  index: number | undefined,
+): ToolCallAccumulator {
+  const acc: ToolCallAccumulator = { id, name: "", argumentsJson: "" };
+  state.order.push(acc);
+  if (index !== undefined) state.byIndex.set(index, acc);
+  if (id) state.byId.set(id, acc);
+  return acc;
+}
+
+/**
+ * Freeze the accumulators into the turn's tool calls, in first-seen order.
+ *
+ * Ids must be unique: the assistant message lists every call and each one is
+ * answered by a `role:"tool"` message keyed on its id, so a repeat would give
+ * two calls one answer and make projections keyed on `toolCallId` collide.
+ * Later duplicates are re-keyed `<id>#2`, `<id>#3` — the id is echoed back on
+ * exactly the pair of messages this client produced, so re-keying is invisible
+ * to the provider.
+ */
+function assembleToolCalls(state: ToolCallState): {
+  calls: AiToolCall[];
+  duplicateIds: string[];
+} {
+  const seen = new Map<string, number>();
+  const duplicateIds: string[] = [];
+  const calls: AiToolCall[] = [];
+  state.order.forEach((acc, i) => {
+    if (acc.name.length === 0) return;
+    const base = acc.id || `call_${i}`;
+    const count = (seen.get(base) ?? 0) + 1;
+    seen.set(base, count);
+    if (count > 1 && !duplicateIds.includes(base)) duplicateIds.push(base);
+    calls.push({
+      id: count === 1 ? base : `${base}#${count}`,
+      name: acc.name,
+      argumentsJson: acc.argumentsJson || "{}",
+    });
+  });
+  return { calls, duplicateIds };
+}
+
 interface OpenAiUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
@@ -703,9 +825,32 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * Cap on how much of a non-2xx body is read. The body only ever becomes an
+ * error MESSAGE; a misconfigured endpoint answering an error with a multi-GB
+ * body must not be buffered whole just to quote it.
+ */
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+
 async function safeBody(response: Response): Promise<string> {
   try {
-    return await response.text();
+    const body = response.body;
+    if (!body) return await response.text();
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    let bytes = 0;
+    try {
+      while (bytes < MAX_ERROR_BODY_BYTES) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        text += decoder.decode(value, { stream: true });
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+    return bytes > MAX_ERROR_BODY_BYTES ? `${text}\n[...truncated]` : text;
   } catch {
     return "<unreadable body>";
   }
