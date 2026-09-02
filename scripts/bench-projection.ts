@@ -38,6 +38,7 @@ import {
   type RunProjectionContext,
   type TaskRecord,
 } from "../packages/host/src/index.js";
+import { CONTRACT_VERSION } from "../packages/contracts/src/index.js";
 import type { AiRunEvent } from "../packages/contracts/src/index.js";
 
 const DELTAS = 2000;
@@ -52,7 +53,7 @@ function delta(seq: number): AiRunEvent {
     runId: TASK_ID,
     seq,
     eventId: `evt-${seq}`,
-    contractVersion: "0.4.0",
+    contractVersion: CONTRACT_VERSION,
     timestamp: "2026-01-01T00:00:00.000Z",
     data: { delta: DELTA_TEXT },
   };
@@ -128,7 +129,7 @@ async function run(perDelta: boolean): Promise<void> {
       runId: TASK_ID,
       seq: DELTAS,
       eventId: "evt-done",
-      contractVersion: "0.4.0",
+      contractVersion: CONTRACT_VERSION,
       timestamp: "2026-01-01T00:00:00.000Z",
       data: { iterations: 1 },
     });

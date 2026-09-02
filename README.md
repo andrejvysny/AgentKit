@@ -23,9 +23,8 @@ Consumers install AgentKit as **one package**, `agentkit`, via a GitHub tag
 
 ```jsonc
 "dependencies": {
-  // No release tag exists yet — `v0.5.0` lands once the hardening tranche
-  // ships. Until then, pin a commit SHA, or track the branch with `#master`.
-  "agentkit": "github:andrejvysny/AgentKit#master"
+  // Tag cut per DEVELOPING.md's release ritual.
+  "agentkit": "github:andrejvysny/AgentKit#v0.5.0"
 }
 ```
 

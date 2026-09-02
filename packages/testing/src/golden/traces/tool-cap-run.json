@@ -1,0 +1,143 @@
+[
+  {
+    "type": "run.started",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "model": "gpt-golden",
+      "toolCount": 1
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_d1ef90e4-6f6e-46d1-93c5-1037ba729f9d",
+    "seq": 0
+  },
+  {
+    "type": "run.message.completed",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "content": "",
+      "toolCallCount": 2
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_5feb12a3-509b-4859-b08d-fe66c2625ba1",
+    "seq": 1
+  },
+  {
+    "type": "run.tool.requested",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "toolCallId": "call-golden-cap-1",
+      "toolName": "echo",
+      "argumentsJson": "{\"text\":\"a\"}"
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_0bacb899-b014-4cf9-b75f-92a0dc8679b2",
+    "seq": 2
+  },
+  {
+    "type": "run.tool.requested",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "toolCallId": "call-golden-cap-2",
+      "toolName": "echo",
+      "argumentsJson": "{\"text\":\"b\"}"
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_6a793c15-3e66-4d8b-89ff-e928c244ee7e",
+    "seq": 3
+  },
+  {
+    "type": "run.warning",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "code": "tool_call_cap",
+      "message": "Truncated 2 tool calls to 1 per iteration."
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_8ad6a9f8-0b8a-4c5f-aff2-c3f369662dd2",
+    "seq": 4
+  },
+  {
+    "type": "run.tool.running",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "toolCallId": "call-golden-cap-1",
+      "toolName": "echo"
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_bf75c26c-c8b6-4983-a7c8-6c6f67da6ee8",
+    "seq": 5
+  },
+  {
+    "type": "run.tool.succeeded",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "toolCallId": "call-golden-cap-1",
+      "toolName": "echo",
+      "resultJson": "{\"echoed\":\"a\"}",
+      "sources": [],
+      "truncated": false,
+      "warnings": [],
+      "status": "ok",
+      "modelResultJson": "{\"ok\":true,\"status\":\"ok\",\"warnings\":[],\"truncated\":false,\"data\":{\"echoed\":\"a\"}}"
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_1c1f62cc-f008-4aba-86ba-c2f59439cfb0",
+    "seq": 6
+  },
+  {
+    "type": "run.tool.failed",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "toolCallId": "call-golden-cap-2",
+      "toolName": "echo",
+      "errorMessage": "Skipped: exceeded maxToolCallsPerIteration=1.",
+      "errorCode": "tool_call_cap"
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_c6daf107-d5c1-406b-adcd-86af99a29643",
+    "seq": 7
+  },
+  {
+    "type": "run.message.delta",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "delta": "Done."
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_c3dac5ee-476a-47d5-a607-01b6bda34cf6",
+    "seq": 8
+  },
+  {
+    "type": "run.message.completed",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "content": "Done.",
+      "toolCallCount": 0
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_368a7c95-3894-408e-8f96-5f83b95fb981",
+    "seq": 9
+  },
+  {
+    "type": "run.completed",
+    "runId": "run-golden-tool-cap-run",
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "data": {
+      "iterations": 2,
+      "finishReason": "stop"
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_b9ed35f2-d5c2-4b59-96c2-a584a9005426",
+    "seq": 10
+  }
+]

@@ -1,0 +1,100 @@
+[
+  {
+    "type": "run.started",
+    "runId": "run-golden-tool-timeout-run",
+    "timestamp": "2026-09-02T14:03:41.486Z",
+    "data": {
+      "model": "gpt-golden",
+      "toolCount": 1
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_a2fd5e0a-a062-4813-aa16-b49738b160ba",
+    "seq": 0
+  },
+  {
+    "type": "run.message.completed",
+    "runId": "run-golden-tool-timeout-run",
+    "timestamp": "2026-09-02T14:03:41.486Z",
+    "data": {
+      "content": "",
+      "toolCallCount": 1
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_688c99d7-f190-4d87-9c6d-e7e5ff4853fa",
+    "seq": 1
+  },
+  {
+    "type": "run.tool.requested",
+    "runId": "run-golden-tool-timeout-run",
+    "timestamp": "2026-09-02T14:03:41.486Z",
+    "data": {
+      "toolCallId": "call-golden-timeout",
+      "toolName": "hangs",
+      "argumentsJson": "{}"
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_2717b444-8f0e-43e1-91c1-963be96ae1fd",
+    "seq": 2
+  },
+  {
+    "type": "run.tool.running",
+    "runId": "run-golden-tool-timeout-run",
+    "timestamp": "2026-09-02T14:03:41.486Z",
+    "data": {
+      "toolCallId": "call-golden-timeout",
+      "toolName": "hangs"
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_eccb0127-7003-40d5-a2ac-66c323d532f8",
+    "seq": 3
+  },
+  {
+    "type": "run.tool.failed",
+    "runId": "run-golden-tool-timeout-run",
+    "timestamp": "2026-09-02T14:03:41.492Z",
+    "data": {
+      "toolCallId": "call-golden-timeout",
+      "toolName": "hangs",
+      "errorMessage": "Tool hangs timed out after 5ms",
+      "errorCode": "exec_failed"
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_78ea0fc7-6204-4c36-a8ea-300a16cf894b",
+    "seq": 4
+  },
+  {
+    "type": "run.message.delta",
+    "runId": "run-golden-tool-timeout-run",
+    "timestamp": "2026-09-02T14:03:41.492Z",
+    "data": {
+      "delta": "Done."
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_d0bec965-521e-4400-ac29-5be1af718a46",
+    "seq": 5
+  },
+  {
+    "type": "run.message.completed",
+    "runId": "run-golden-tool-timeout-run",
+    "timestamp": "2026-09-02T14:03:41.492Z",
+    "data": {
+      "content": "Done.",
+      "toolCallCount": 0
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_0878eaf8-8c93-4aa2-a74e-314c7a8f7f08",
+    "seq": 6
+  },
+  {
+    "type": "run.completed",
+    "runId": "run-golden-tool-timeout-run",
+    "timestamp": "2026-09-02T14:03:41.492Z",
+    "data": {
+      "iterations": 2,
+      "finishReason": "stop"
+    },
+    "contractVersion": "0.5.0",
+    "eventId": "evt_2da9caca-8c87-48db-b76b-eab2345b78a8",
+    "seq": 7
+  }
+]

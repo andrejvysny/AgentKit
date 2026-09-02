@@ -12,12 +12,12 @@ in it was modified. The canonical backend is **`src-ts/`**; the root `backend/`
 directory is unrelated legacy and is not touched by this migration.
 
 **AgentKit at the time of writing:** `master` @ `702434d`, umbrella version
-`0.4.0-dev`, `CONTRACT_VERSION` `"0.4.0"`, REST v1 = **38 operations**
+`0.5.0`, `CONTRACT_VERSION` `"0.5.0"`, REST v1 = **38 operations**
 (`packages/contracts/src/rest.ts:85-199`).
 
 ```jsonc
 // OneMind/package.json
-"dependencies": { "agentkit": "github:andrejvysny/AgentKit#v0.4.0" }
+"dependencies": { "agentkit": "github:andrejvysny/AgentKit#v0.5.0" }
 ```
 
 ---
