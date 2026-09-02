@@ -60,6 +60,19 @@ cannot event-loop-wait for another handle's in-flight *async* claim in the
 same process. See
 [ADR 0006](../../docs/adr/0006-hardening-tranche.md).
 
+Concretely: `SqliteTaskStore.claimNext` holds its transaction across `await`s;
+a second handle's synchronous transactions (`appendEvents`, `transitionTask`,
+`endAttempt`, every `withTx`) can only park the thread while they wait for
+that lock, which is the one thread that could run the holder's continuation
+and commit — so a fully concurrent claim-AND-execute workload over two
+handles in one process stalls for the whole `busy_timeout` and then throws
+`SQLITE_BUSY`. Pinned, not fixed, by the skipped case at the bottom of
+`tests/sqlite-multi-handle.test.ts` (seed 7 over a 4-worker/24-task/40-step
+schedule reproduces it in ~5s). The fix is architectural — either the
+synchronous transaction helpers become async, or `claimNext` stops holding
+its transaction across `await`s — and is tracked as the roadmap's
+"claim-tx-across-awaits redesign" item.
+
 ## Not for a distributed deployment
 
 Multiple handles over one *file* is not multiple *machines*. A distributed or

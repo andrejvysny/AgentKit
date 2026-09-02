@@ -247,6 +247,25 @@ for (const name of SUBPATHS) {
 }
 
 // ---------------------------------------------------------------------------
+// 4b. Root entry (`"."` export) — a tiny re-export of `./contracts`
+//
+// `import "agentkit"` with no subpath used to be `ERR_PACKAGE_PATH_NOT_EXPORTED`
+// (there was no `"."` in `exports` at all). `agentkit/contracts` is the one
+// subpath every other subpath already depends on transitively, so the root
+// re-exports exactly that — a consumer that types `import "agentkit"` gets
+// the wire contract rather than nothing.
+// ---------------------------------------------------------------------------
+
+writeFileSync(
+  join(UMBRELLA_DIST, "index.js"),
+  'export * from "./contracts/index.js";\n',
+);
+writeFileSync(
+  join(UMBRELLA_DIST, "index.d.ts"),
+  'export * from "./contracts/index.js";\n',
+);
+
+// ---------------------------------------------------------------------------
 // 5. Verify
 // ---------------------------------------------------------------------------
 

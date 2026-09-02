@@ -34,7 +34,7 @@ Env vars, all optional:
 | `AGENTKIT_PROVIDER_KIND` | `openai-compatible` | a kind from `@agentkit/core`'s `AI_PROVIDER_PRESETS` (`openai`, `openrouter`, `lmstudio`, `omlx`, `ollama`, `openai-compatible`) — only read on first boot, when no provider is configured yet |
 | `AGENTKIT_BASE_URL` | the kind's preset `defaultBaseUrl` | provider base URL |
 | `AGENTKIT_MODEL` | the kind's preset `defaultModel` | model id |
-| `AGENTKIT_API_KEY` | unset | provider API key — stored in the in-memory `SecretStore`, never inline on the provider config (see `InMemorySecretStore` in `src/wiring.ts`) |
+| `AGENTKIT_API_KEY` | unset | provider API key — stored in the in-memory `SecretStore`, never inline on the provider config (see `@agentkit/adapters-memory`'s `MemorySecretStore`, wired in `src/wiring.ts`) |
 | `AGENTKIT_MCP_COMMAND` | unset | a stdio MCP server command; when set, its tools are bridged in via `@agentkit/mcp-client` |
 | `AGENTKIT_MCP_ARGS` | unset | space-separated args for that command |
 | `AGENTKIT_MCP_SERVER_TOKEN` | unset | when set, this host's own tools are ALSO served **as** an MCP server at `/mcp`, behind this bearer token — see below |

@@ -23,7 +23,10 @@ import {
   type TaskWorker,
   type WorkerHandle,
 } from "@agentkit/host";
-import { MemoryAssistantStore } from "@agentkit/adapters-memory";
+import {
+  MemoryAssistantStore,
+  MemorySecretStore,
+} from "@agentkit/adapters-memory";
 import { SingleProcessTaskRunner } from "@agentkit/runner-local";
 import { MockProviderClient } from "@agentkit/testing";
 import {
@@ -31,6 +34,9 @@ import {
   type RestFetchHandler,
   type RestHandlerDeps,
 } from "../../src/index.js";
+
+/** Re-exported so tests can `import { MemorySecretStore } from "./support/fixture.js"`. */
+export { MemorySecretStore };
 
 export const TEST_CHAT_ID = "chat-http";
 
@@ -189,31 +195,6 @@ async function seedHostState(store: MemoryAssistantStore): Promise<void> {
   ]);
   await store.settings.updateSettings({ defaultProviderId: "p1" });
   await store.conversations.createChat({ id: TEST_CHAT_ID });
-}
-
-/**
- * A `SecretStore` in a Map — the smallest thing that answers the question the
- * provider routes ask of it, and the only way to assert that a key went in
- * HERE and nowhere else.
- */
-export class MemorySecretStore {
-  readonly values = new Map<string, string>();
-
-  async get(ref: string): Promise<string | null> {
-    return this.values.get(ref) ?? null;
-  }
-
-  async set(ref: string, value: string): Promise<void> {
-    this.values.set(ref, value);
-  }
-
-  async delete(ref: string): Promise<void> {
-    this.values.delete(ref);
-  }
-
-  async listRefs(): Promise<string[]> {
-    return [...this.values.keys()];
-  }
 }
 
 /** Poll until `predicate` holds, or fail loudly about what never happened. */

@@ -18,6 +18,7 @@
     "directory": "examples/desktop-host"
   },
   "dependencies": {
+    "@agentkit/adapters-memory": "workspace:*",
     "@agentkit/adapters-sqlite": "workspace:*",
     "@agentkit/contracts": "workspace:*",
     "@agentkit/core": "workspace:*",
