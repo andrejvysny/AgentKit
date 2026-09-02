@@ -443,12 +443,12 @@ const INIT_BODY = JSON.stringify({
   },
 });
 
-/** Open a session over raw fetch and return the id the server minted. */
-async function initSession(
+/** The raw `initialize` POST, answered however the handler chooses. */
+function initSessionRaw(
   handler: McpServerHandler,
   headers: Record<string, string> = authHeaders(),
-): Promise<string> {
-  const response = await handler.fetch(
+): Promise<Response> {
+  return handler.fetch(
     new Request("http://localhost/mcp", {
       method: "POST",
       headers: {
@@ -460,6 +460,14 @@ async function initSession(
       body: INIT_BODY,
     }),
   );
+}
+
+/** Open a session over raw fetch and return the id the server minted. */
+async function initSession(
+  handler: McpServerHandler,
+  headers: Record<string, string> = authHeaders(),
+): Promise<string> {
+  const response = await initSessionRaw(handler, headers);
   expect(response.status).toBe(200);
   const sessionId = response.headers.get("mcp-session-id");
   if (sessionId === null) throw new Error("initialize returned no session id");
@@ -887,6 +895,70 @@ describe("in-flight calls", () => {
     gate.resolve();
     const rpc = await readRpcResponse(call);
     expect(rpc["result"]).toBeDefined();
+  });
+
+  it("refuses a new session with 503 when every session at the cap is busy", async () => {
+    const clock = createTestClock();
+    const gate = deferred();
+    const seen = { peak: 0 };
+    const handler = build({
+      maxSessions: 1,
+      clock,
+      tools: sourceOf([blockingTool(gate.promise, seen)]),
+    });
+    const sessionId = await initSession(handler);
+    const call = await postRaw(handler, sessionId, {
+      jsonrpc: "2.0",
+      id: 9,
+      method: "tools/call",
+      params: { name: "demo_block", arguments: {} },
+    });
+    await settle();
+    expect(seen.peak).toBe(1);
+
+    // The only session under the cap is in a tool call, so nothing is
+    // evictable. Going over the cap here is what let a caller hold unbounded
+    // sessions simply by keeping each one busy.
+    const refused = await initSessionRaw(handler);
+    expect(refused.status).toBe(503);
+    expect(refused.headers.get("retry-after")).toBe("5");
+
+    // And the live session is untouched: its answer still arrives.
+    gate.resolve();
+    const rpc = await readRpcResponse(call);
+    expect(rpc["result"]).toBeDefined();
+    expect((await listToolsRaw(handler, sessionId)).status).toBe(200);
+  });
+
+  it("reaps a session pinned by a call that outlived maxCallMs", async () => {
+    const clock = createTestClock();
+    const gate = deferred();
+    const seen = { peak: 0 };
+    const handler = build({
+      sessionIdleTtlMs: 60_000,
+      maxCallMs: 30_000,
+      clock,
+      // NOT the staged source's deadline: a host-supplied McpToolSource obeys
+      // none, which is exactly the case the reap backstop exists for.
+      tools: sourceOf([blockingTool(gate.promise, seen)]),
+    });
+    const sessionId = await initSession(handler);
+    await postRaw(handler, sessionId, {
+      jsonrpc: "2.0",
+      id: 11,
+      method: "tools/call",
+      params: { name: "demo_block", arguments: {} },
+    });
+    await settle();
+    expect(seen.peak).toBe(1);
+
+    // Still inside maxCallMs + idle TTL: a slow call is not a stuck one.
+    clock.advance(60_000);
+    expect((await listToolsRaw(handler, sessionId)).status).toBe(200);
+
+    clock.advance(30_001);
+    expect((await listToolsRaw(handler, sessionId)).status).toBe(404);
+    gate.resolve();
   });
 });
 

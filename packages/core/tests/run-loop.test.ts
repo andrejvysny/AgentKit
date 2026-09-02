@@ -371,4 +371,58 @@ describe("runChat", () => {
     expect(failed?.data.errorMessage).toContain("timed out");
     expect(events.find((e) => e.type === "run.completed")).toBeDefined();
   });
+
+  it("re-keys duplicate tool_call_ids from ANY provider client", async () => {
+    // The first-party client dedupes its own accumulators, but `AiProviderClient`
+    // is an interface a host may implement: two calls under one id used to
+    // produce two `role:"tool"` messages sharing a `tool_call_id` — one answer
+    // for two calls, and colliding projections.
+    const client = new MockProviderClient();
+    client.setScript([
+      {
+        steps: [
+          {
+            kind: "tool_call",
+            toolCallId: "dup",
+            name: "echo",
+            argumentsJson: JSON.stringify({ text: "one" }),
+          },
+          {
+            kind: "tool_call",
+            toolCallId: "dup",
+            name: "echo",
+            argumentsJson: JSON.stringify({ text: "two" }),
+          },
+        ],
+      },
+      { steps: [{ kind: "text", content: "done" }] },
+    ]);
+    const registry = new AiToolRegistry();
+    registry.register(makeEchoTool() as unknown as AiTool);
+
+    const { events, result } = await collectRun(
+      runChat({
+        client,
+        registry,
+        model: "m",
+        messages: [{ role: "user", content: "go" }],
+        limits: resolveToolLimits({ preference: "small" }),
+      }),
+    );
+
+    const warning = events.find(
+      (e) =>
+        e.type === "run.warning" && e.data.code === "duplicate_tool_call_id",
+    );
+    expect(warning).toBeDefined();
+    const toolIds = result.appendedMessages
+      .filter((m) => m.role === "tool")
+      .map((m) => (m as { toolCallId: string }).toolCallId);
+    expect(toolIds).toEqual(["dup", "dup#2"]);
+    // The assistant message must list exactly the ids its answers use.
+    const assistant = result.appendedMessages.find(
+      (m) => m.role === "assistant",
+    ) as { toolCalls?: { id: string }[] } | undefined;
+    expect(assistant?.toolCalls?.map((tc) => tc.id)).toEqual(["dup", "dup#2"]);
+  });
 });

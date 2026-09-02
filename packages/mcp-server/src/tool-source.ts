@@ -1,6 +1,11 @@
-import type { AiToolEnvelope, AiToolLimits } from "@agentkit/contracts";
+import type {
+  AiToolEnvelope,
+  AiToolLimits,
+  AiToolResult,
+} from "@agentkit/contracts";
 import {
   resolveToolLimits,
+  type AiTool,
   type AiToolExecutionContext,
   type ValidationError,
 } from "@agentkit/core";
@@ -17,6 +22,7 @@ import {
 } from "@agentkit/host";
 import { toolEnvelopeFromResult, toolErrorEnvelope } from "./envelope.js";
 import {
+  DEFAULT_MAX_CALL_MS,
   EXEC_FAILED_TEXT,
   type McpSessionScope,
   type McpToolSource,
@@ -30,6 +36,19 @@ export interface StagedToolSourceOptions {
   guards?: readonly ToolGuard[];
   /** Budget handed to `contribute` and to `execute`. Defaults to the `small` profile. */
   limits?: AiToolLimits;
+  /**
+   * Deadline for one tool execution. Defaults to {@link DEFAULT_MAX_CALL_MS}
+   * (2 minutes); `0` or a negative number disables it.
+   *
+   * There is no run loop on this path and no user watching a spinner, so a tool
+   * that never returns is never noticed: the MCP session stays pinned by the
+   * in-flight request (it cannot be reaped or evicted without answering an open
+   * `tools/call` with an empty body), and the session caps stop bounding
+   * anything. The tool's `ctx.signal` is aborted at the deadline and the caller
+   * gets a failed-call envelope; a tool that ignores the signal keeps running,
+   * but no longer keeps the session alive.
+   */
+  maxCallMs?: number;
   clock: Clock;
   ids: IdGenerator;
   logger?: Logger;
@@ -72,6 +91,7 @@ export function createStagedToolSource(
   options: StagedToolSourceOptions,
 ): McpToolSource {
   const limits = options.limits ?? resolveToolLimits({ preference: "small" });
+  const maxCallMs = options.maxCallMs ?? DEFAULT_MAX_CALL_MS;
   const buildCatalog = (
     guards: readonly ToolGuard[] | undefined,
   ): ToolCatalog =>
@@ -167,8 +187,25 @@ export function createStagedToolSource(
       };
 
       try {
-        return toolEnvelopeFromResult(await tool.execute(ctx, args));
+        return toolEnvelopeFromResult(
+          await runWithDeadline(tool, ctx, args, maxCallMs),
+        );
       } catch (err) {
+        if (err instanceof ToolCallTimeout) {
+          options.logger?.warn("mcp tool call timed out", {
+            tool: name,
+            runId: ctx.runId,
+            maxCallMs: err.maxCallMs,
+          });
+          return toolErrorEnvelope(
+            "timeout",
+            `The host tool did not finish within ${err.maxCallMs}ms (ref: ${ctx.runId}).`,
+            // Nothing is known about whether the tool completed its work, only
+            // that it did not answer — so `retryable` stays unrecorded rather
+            // than promising a safe re-run.
+            { phase: "execution" },
+          );
+        }
         // The thrower's message goes to the OPERATOR, not to the MCP client: a
         // tool that threw wrote that sentence for a log, and forwarding it hands
         // a remote caller whatever the host happened to put in it (a path, a
@@ -191,6 +228,51 @@ export function createStagedToolSource(
       }
     },
   };
+}
+
+/** The deadline fired before the tool answered. */
+class ToolCallTimeout extends Error {
+  constructor(readonly maxCallMs: number) {
+    super(`Tool call exceeded ${maxCallMs}ms`);
+    this.name = "ToolCallTimeout";
+  }
+}
+
+/**
+ * Run the tool, racing it against `maxCallMs`.
+ *
+ * A deliberate mirror of the run loop's `executeToolSafely`, and for the same
+ * reason: aborting `ctx.signal` alone bounds nothing, because a tool is free to
+ * ignore the signal it was handed. The race is what lets THIS call answer,
+ * which is what unpins the session. A late result is dropped — the caller has
+ * already been told the call timed out — and its rejection is swallowed so it
+ * never surfaces as an unhandled one.
+ */
+async function runWithDeadline(
+  tool: AiTool<unknown, unknown>,
+  ctx: AiToolExecutionContext,
+  args: unknown,
+  maxCallMs: number,
+): Promise<AiToolResult<unknown>> {
+  if (maxCallMs <= 0) return tool.execute(ctx, args);
+  const controller = new AbortController();
+  const running = (async () =>
+    tool.execute({ ...ctx, signal: controller.signal }, args))();
+  running.catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      running,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new ToolCallTimeout(maxCallMs));
+        }, maxCallMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**

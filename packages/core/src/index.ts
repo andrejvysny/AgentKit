@@ -19,6 +19,7 @@ export * from "./messages/content.js";
 export * from "./tools/tool.js";
 export * from "./tools/limits.js";
 export * from "./tools/registry.js";
+export * from "./tools/tool-calls.js";
 export * from "./tools/validation.js";
 
 // Runs
