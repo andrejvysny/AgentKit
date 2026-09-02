@@ -352,6 +352,68 @@ describe("a submit the server refuses", () => {
     expect(second).toBe(first!);
   });
 
+  test("a rejected branch submit restores the tail it optimistically cut", async () => {
+    // W2: `editAndResubmit` truncates the active path at the parent
+    // optimistically; a failed submit's rollback used to filter only the two
+    // new optimistic ids and leave that truncation in place, so a rejected
+    // edit silently dropped the messages after the edited one.
+    //
+    // The FIRST submit (building the branch point) must succeed — only the
+    // edit itself is refused — so this cannot reuse `refusingSubmit`, which
+    // refuses whichever POST reaches it first.
+    let refuseNext = false;
+    const client = connect(async (url, init) => {
+      if (refuseNext && url.includes("/messages") && init?.method === "POST") {
+        refuseNext = false;
+        return new Response(
+          JSON.stringify({
+            type: "about:blank",
+            title: "Service Unavailable",
+            status: 503,
+            code: "upstream_unavailable",
+            detail: "the queue is down",
+          }),
+          {
+            status: 503,
+            headers: { "content-type": "application/problem+json" },
+          },
+        );
+      }
+      return fetch(url, init);
+    });
+    const { result } = renderHook(() => useChat(TEST_CHAT_ID), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+
+    // Build a real branch point: a first turn, allowed through, that leaves an
+    // answer to edit under.
+    await act(async () => {
+      await result.current.submit("first question");
+    });
+    await waitFor(() => expect(result.current.status).toBe("idle"), {
+      timeout: 10_000,
+    });
+    const before = result.current.messages;
+    expect(before).toHaveLength(2);
+    const parentId = before[0]!.id;
+
+    refuseNext = true;
+    await act(async () => {
+      await result.current.editAndResubmit(parentId, "edited question");
+    });
+
+    expect(result.current.status).toBe("error");
+    // Identical to before the click: the cut tail (the original answer) is
+    // back, and the failed edit's optimistic pair is gone.
+    expect(result.current.messages.map((m) => m.id)).toEqual(
+      before.map((m) => m.id),
+    );
+    expect(result.current.messages.map((m) => m.content)).toEqual(
+      before.map((m) => m.content),
+    );
+  });
+
   test("a DIFFERENT question after a failure mints a fresh key", async () => {
     const refusing = refusingSubmit();
     const client = connect(refusing.fetch);
@@ -420,6 +482,57 @@ describe("lifecycle", () => {
 
     rerender({ id: other.id });
     await waitFor(() => expect(result.current.messages).toEqual([]));
+  });
+
+  test("a failed read after switching chats does not keep the old chat's messages", async () => {
+    // W3: the reset effect used to clear `activeRunId`/`phase`/`status` on a
+    // chat switch but leave `messages`/`truncated` alone. A switch whose
+    // `refresh` then FAILS was rendering chat A's messages (and A's
+    // `truncated` flag) under chat B's id.
+    const client = connect();
+    const other = await client.createChat({ title: "other" });
+    await client.submitMessage({ chatId: TEST_CHAT_ID }, { content: "from A" });
+
+    let failNextRead = false;
+    const failing = connect(async (url, init) => {
+      if (
+        failNextRead &&
+        url.includes(`/chats/${other.id}/messages`) &&
+        (init?.method ?? "GET") === "GET"
+      ) {
+        failNextRead = false;
+        return new Response(
+          JSON.stringify({
+            type: "about:blank",
+            title: "Service Unavailable",
+            status: 503,
+            code: "upstream_unavailable",
+            detail: "the read failed",
+          }),
+          {
+            status: 503,
+            headers: { "content-type": "application/problem+json" },
+          },
+        );
+      }
+      return fetch(url, init);
+    });
+
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useChat(id),
+      { wrapper: wrapper(failing), initialProps: { id: TEST_CHAT_ID } },
+    );
+    await waitFor(() => expect(result.current.messages.length).toBe(2));
+
+    failNextRead = true;
+    rerender({ id: other.id });
+
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    // No trace of chat A's messages or its (false) truncation flag survives
+    // under chat B.
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.truncated).toBe(false);
+    expect(result.current.activeRunId).toBeNull();
   });
 
   test("changing the chat id mid-stream ends the old run's follow", async () => {
