@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   McpClientManager,
   type McpError,
   type McpServerConfig,
+  type McpTransportFactory,
 } from "../src/index.js";
 import {
   buildFakeServer,
@@ -203,6 +206,48 @@ describe("McpClientManager", () => {
       .then(() => null)
       .catch((err: unknown) => err);
     expect((failure as McpError).code).toBe("mcp_not_connected");
+  });
+
+  it("does not read a tool alias off the prototype chain", async () => {
+    // `constructor` is a legal MCP tool name and a property every object has.
+    // Read with a plain index, `toolAliases["constructor"]` hands a FUNCTION to
+    // the alias grammar and the TypeError costs the server's whole tool set.
+    const { manager } = setup(
+      [
+        {
+          alias: "proto",
+          transport: { kind: "stdio", command: "x" },
+          toolAliases: { other: "renamed" },
+          resilience: FAST,
+        },
+      ],
+      {
+        proto: () =>
+          buildFakeServer("proto", [
+            { name: "constructor", annotations: { readOnlyHint: true } },
+          ]),
+      },
+    );
+    const tools = await manager.listTools("proto");
+    expect(tools.map((t) => t.canonicalId)).toEqual(["mcp.proto.constructor"]);
+  });
+
+  it("still finds the identity of a tool the server listed with padding", async () => {
+    // The identity is normalized (trimmed); the listing is not. Matching the
+    // two by NAME loses the tool — and with it, the whole batch.
+    const { manager } = setup(
+      [
+        {
+          alias: "pad",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
+      { pad: () => buildFakeServer("pad", [{ name: " read " }]) },
+    );
+    const tools = await manager.listTools("pad");
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.canonicalId).toBe("mcp.pad.read");
   });
 
   it("dispose closes every session", async () => {
@@ -474,5 +519,87 @@ describe("resilience", () => {
     // Two concurrent failures, one reconnect: 1 initial + 1 = 2.
     expect(harness.connects("flap")).toBe(2);
     blocked.resolve({ content: [{ type: "text", text: "never read" }] });
+  });
+
+  it("closes a transport that finished connecting after dispose, never installs it", async () => {
+    // The leak ADR 0004 says was fixed: `dispose()` returned while a connect
+    // was still in flight, and the client (and, over stdio, its child process)
+    // was installed on a session nobody would ever close again.
+    const gate = deferred<null>();
+    // A flag, not a count: closing one half of an `InMemoryTransport` pair
+    // cascades back through the other, so the patched `close` sees itself twice.
+    let closed = false;
+    const servers: ReturnType<typeof buildFakeServer>[] = [];
+    const transportFactory: McpTransportFactory = async () => {
+      const server = echoServer();
+      servers.push(server);
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      // The connect parks HERE, where the transport exists and the session
+      // cannot see it yet.
+      await gate.promise;
+      const close = clientTransport.close.bind(clientTransport);
+      clientTransport.close = async () => {
+        closed = true;
+        await close();
+      };
+      return clientTransport;
+    };
+    const manager = new McpClientManager(
+      {
+        secrets: createSecretStore(),
+        clock: createTestClock(),
+        transportFactory,
+      },
+      [
+        {
+          alias: "slowopen",
+          transport: { kind: "stdio", command: "x" },
+          resilience: FAST,
+        },
+      ],
+    );
+    const connecting = manager
+      .connect("slowopen")
+      .then(() => null)
+      .catch((err: unknown) => err);
+
+    const disposing = manager.dispose();
+    gate.resolve(null);
+    const failure = await connecting;
+    await disposing;
+
+    expect(manager.isConnected("slowopen")).toBe(false);
+    expect(closed).toBe(true);
+    expect((failure as McpError | null)?.code).toBe("mcp_not_connected");
+    for (const server of servers) await server.close();
+  });
+
+  it("gives up on a transport factory that never settles", async () => {
+    // `withDeadline` races rather than awaits: a factory that ignores the
+    // signal would otherwise hang forever, be cached as the shared `connecting`
+    // promise, and take every later turn down with it — while the circuit
+    // breaker waits for a failure that never arrives.
+    const manager = new McpClientManager(
+      {
+        secrets: createSecretStore(),
+        clock: createTestClock(),
+        transportFactory: () => new Promise<Transport>(() => {}),
+      },
+      [
+        {
+          alias: "stuck",
+          transport: { kind: "stdio", command: "x" },
+          resilience: { ...FAST, connectTimeoutMs: 20, maxConnectAttempts: 1 },
+        },
+      ],
+    );
+    const failure = await manager
+      .connect("stuck")
+      .then(() => null)
+      .catch((err: unknown) => err);
+    expect((failure as McpError).code).toBe("mcp_connect_failed");
+    expect(manager.isConnected("stuck")).toBe(false);
   });
 });

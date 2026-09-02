@@ -9,7 +9,7 @@ import {
   type CallToolResult,
   type ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import { defaultClock } from "@agentkit/host";
+import { defaultClock, type ToolCatalogEntry } from "@agentkit/host";
 import { authFingerprint, resolveAuth, timingSafeEqualString } from "./auth.js";
 import { checkRebindingGuard } from "./guard.js";
 import {
@@ -19,13 +19,46 @@ import {
 } from "./projection.js";
 import {
   DEFAULT_ALLOWED_HOSTS,
+  DEFAULT_MAX_BATCH_SIZE,
+  DEFAULT_MAX_CONCURRENT_CALLS_PER_SESSION,
+  DEFAULT_MAX_REQUEST_BYTES,
   DEFAULT_MAX_SESSIONS,
   DEFAULT_SERVER_INFO,
   DEFAULT_SESSION_IDLE_TTL_MS,
+  EXEC_FAILED_TEXT,
+  GLOBAL_SESSION_CAP_FACTOR,
   type McpServerHandler,
   type McpServerHandlerOptions,
   type McpSessionScope,
 } from "./types.js";
+
+/**
+ * The mutable half of a session: what the tool handlers write and the
+ * housekeeping reads.
+ *
+ * Separate from {@link SessionEntry} because of WHEN each exists. The handlers
+ * are built (and close over their state) before the transport has minted a
+ * session id, so anything they update has to be an object that already exists
+ * at `buildServer` time.
+ */
+interface SessionRuntime {
+  /** Epoch ms of the last request ARRIVAL or COMPLETION on this session. */
+  lastUsedAt: number;
+  /**
+   * Tool handlers currently inside this session, queued ones included.
+   *
+   * Reaping and eviction skip a session with any: closing one mid-`tools/call`
+   * ends the SSE stream the answer was going to be written to, and the caller
+   * sees HTTP 200 with an empty body — the most ambiguous outcome available for
+   * a write that may well have happened.
+   */
+  inFlight: number;
+  /** `tools/call` permits in use, and the handlers waiting for one. */
+  running: number;
+  waiters: (() => void)[];
+  /** One shared catalogue staging for every handler that wants one right now. */
+  listing: Promise<ToolCatalogEntry[]> | undefined;
+}
 
 /** One live MCP client: its transport, its server, and the scope it is pinned to. */
 interface SessionEntry {
@@ -37,9 +70,7 @@ interface SessionEntry {
    * at initialize; every later request must present the same one.
    */
   fingerprint: string;
-  /** Epoch ms of the last request served on this session; drives both the
-   * idle TTL and the eviction order. */
-  lastUsedAt: number;
+  runtime: SessionRuntime;
 }
 
 /**
@@ -92,8 +123,14 @@ export function createMcpServerHandler(
   const allowedOrigins = options.allowedOrigins;
   const serverInfo = options.serverInfo ?? { ...DEFAULT_SERVER_INFO };
   const maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+  const globalMaxSessions = maxSessions * GLOBAL_SESSION_CAP_FACTOR;
   const sessionIdleTtlMs =
     options.sessionIdleTtlMs ?? DEFAULT_SESSION_IDLE_TTL_MS;
+  const maxRequestBytes = options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES;
+  const maxConcurrentCalls =
+    options.maxConcurrentCallsPerSession ??
+    DEFAULT_MAX_CONCURRENT_CALLS_PER_SESSION;
+  const maxBatchSize = options.maxBatchSize ?? DEFAULT_MAX_BATCH_SIZE;
   const clock = options.clock ?? defaultClock;
   const logger = options.logger;
 
@@ -106,7 +143,10 @@ export function createMcpServerHandler(
    * transports) is what makes the scope a property of the session instead of a
    * variable the handlers have to look up and could look up wrong.
    */
-  function buildServer(scope: McpSessionScope | undefined): Server {
+  function buildServer(
+    scope: McpSessionScope | undefined,
+    runtime: SessionRuntime,
+  ): Server {
     const server = new Server(serverInfo, {
       capabilities: { tools: { listChanged: false } },
     });
@@ -114,68 +154,159 @@ export function createMcpServerHandler(
     server.setRequestHandler(
       ListToolsRequestSchema,
       async (): Promise<ListToolsResult> => {
-        const entries = await tools.catalog.listTools(scope);
-        return {
-          tools: visibleEntries(entries, writesEnabled).map(
-            projectToolDefinition,
-          ),
-        };
+        runtime.inFlight += 1;
+        try {
+          const entries = await listCatalog(runtime, scope);
+          return {
+            tools: visibleEntries(entries, writesEnabled).map(
+              projectToolDefinition,
+            ),
+          };
+        } finally {
+          finishRequest(runtime);
+        }
       },
     );
 
     server.setRequestHandler(
       CallToolRequestSchema,
       async (request): Promise<CallToolResult> => {
-        const name = request.params.name;
-        const entries = visibleEntries(
-          await tools.catalog.listTools(scope),
-          writesEnabled,
-        );
-        const entry = entries.find((it) => it.definition.name === name);
-        if (entry === undefined) {
-          // A hidden write tool and a tool that never existed answer the SAME
-          // way. Distinguishing them would confirm the name to a client that is
-          // not allowed to call it.
-          //
-          // Thrown, not returned: an unknown method parameter is a PROTOCOL
-          // error (a JSON-RPC error response the SDK builds from this), not a
-          // tool that ran and failed. Reporting it as `isError` content would
-          // tell the model its call was dispatched.
-          throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);
-        }
-
+        // Counted BEFORE the queue wait, not after it: a session whose calls are
+        // all still waiting for a permit is as busy as one executing them, and
+        // reaping it would drop answers nobody has produced yet.
+        runtime.inFlight += 1;
         try {
-          const envelope = await tools.execute(
-            name,
-            request.params.arguments ?? {},
-            scope,
-          );
-          return projectEnvelope(envelope);
-        } catch (err) {
-          if (err instanceof McpError) throw err;
-          // A source that THREW is a fault in host code, and the call is what
-          // failed — not the protocol. Report it as a failed tool result so the
-          // session survives and the caller learns why.
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          logger?.error("mcp tool source threw", { tool: name, errorMessage });
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({
-                  errorCode: "exec_failed",
-                  errorMessage,
-                  phase: "execution",
-                }),
-              },
-            ],
-          };
+          await acquireCallSlot(runtime);
+          try {
+            return await callTool(request.params, scope, runtime);
+          } finally {
+            releaseCallSlot(runtime);
+          }
+        } finally {
+          finishRequest(runtime);
         }
       },
     );
 
     return server;
+  }
+
+  /** The body of one `tools/call`, once it holds a concurrency permit. */
+  async function callTool(
+    params: { name: string; arguments?: Record<string, unknown> },
+    scope: McpSessionScope | undefined,
+    runtime: SessionRuntime,
+  ): Promise<CallToolResult> {
+    const name = params.name;
+    const entries = visibleEntries(
+      await listCatalog(runtime, scope),
+      writesEnabled,
+    );
+    const entry = entries.find((it) => it.definition.name === name);
+    if (entry === undefined) {
+      // A hidden write tool and a tool that never existed answer the SAME
+      // way. Distinguishing them would confirm the name to a client that is
+      // not allowed to call it.
+      //
+      // Thrown, not returned: an unknown method parameter is a PROTOCOL
+      // error (a JSON-RPC error response the SDK builds from this), not a
+      // tool that ran and failed. Reporting it as `isError` content would
+      // tell the model its call was dispatched.
+      throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);
+    }
+
+    try {
+      const envelope = await tools.execute(name, params.arguments ?? {}, scope);
+      return projectEnvelope(envelope);
+    } catch (err) {
+      if (err instanceof McpError) throw err;
+      // A source that THREW is a fault in host code, and the call is what
+      // failed — not the protocol. Report it as a failed tool result so the
+      // session survives and the caller learns something happened.
+      //
+      // Not WHY, though: the thrower is host code, and its message is written
+      // for an operator's log, not for a remote MCP client that has just been
+      // told the host's internals. The client gets a correlation id; the
+      // operator gets the message under the same id.
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const correlationId = crypto.randomUUID().slice(0, 8);
+      logger?.error("mcp tool source threw", {
+        tool: name,
+        correlationId,
+        errorMessage,
+      });
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              errorCode: "exec_failed",
+              errorMessage: `${EXEC_FAILED_TEXT} (ref: ${correlationId})`,
+              phase: "execution",
+            }),
+          },
+        ],
+      };
+    }
+  }
+
+  /**
+   * The session's tool catalogue, computed ONCE for everyone asking right now.
+   *
+   * A JSON-RPC batch is dispatched message-by-message without waiting, so all
+   * of its calls reach this in the same tick — and each of them staging the
+   * whole registry (with an Ajv compile per tool) is the cost the batch cap and
+   * this share exist to bound. What they share is a listing for ONE session, so
+   * the same scope and the same guards would have answered each of them the
+   * same way; nothing is cached ACROSS requests, and `tools.execute` re-stages
+   * per call regardless, so a `canExecute` guard is still evaluated at call
+   * time on state that may have moved.
+   */
+  function listCatalog(
+    runtime: SessionRuntime,
+    scope: McpSessionScope | undefined,
+  ): Promise<ToolCatalogEntry[]> {
+    const inFlight = runtime.listing;
+    if (inFlight) return inFlight;
+    const started = tools.catalog.listTools(scope);
+    const tracked = started.finally(() => {
+      if (runtime.listing === tracked) runtime.listing = undefined;
+    });
+    runtime.listing = tracked;
+    return tracked;
+  }
+
+  /** One permit, or a place in the queue for the next one released. */
+  function acquireCallSlot(runtime: SessionRuntime): Promise<void> {
+    if (runtime.running < maxConcurrentCalls) {
+      runtime.running += 1;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      runtime.waiters.push(resolve);
+    });
+  }
+
+  /** Hand the permit to the next waiter, or give it back to the pool. */
+  function releaseCallSlot(runtime: SessionRuntime): void {
+    const next = runtime.waiters.shift();
+    if (next === undefined) {
+      runtime.running -= 1;
+      return;
+    }
+    next();
+  }
+
+  /**
+   * A handler left the session: it is one less reason not to reap, and the
+   * session was in use as recently as NOW — not as recently as when the request
+   * arrived, which for a long tool call is far enough in the past to be reaped
+   * out from under the answer.
+   */
+  function finishRequest(runtime: SessionRuntime): void {
+    runtime.inFlight -= 1;
+    runtime.lastUsedAt = clock.now().getTime();
   }
 
   /**
@@ -231,7 +362,10 @@ export function createMcpServerHandler(
   function reapIdleSessions(): void {
     const cutoff = clock.now().getTime() - sessionIdleTtlMs;
     for (const [sessionId, entry] of sessions) {
-      if (entry.lastUsedAt < cutoff) closeSession(sessionId, entry, "expired");
+      if (entry.runtime.inFlight > 0) continue;
+      if (entry.runtime.lastUsedAt < cutoff) {
+        closeSession(sessionId, entry, "expired");
+      }
     }
   }
 
@@ -240,21 +374,59 @@ export function createMcpServerHandler(
    *
    * Evicting the OLDEST IDLE rather than refusing the newcomer: a client that
    * walked away holding a session must not be able to lock a live one out, and
-   * nothing in MCP obliges a client to send the DELETE that would free it. The
-   * loop is written to stop when the map is empty so a `maxSessions` of 0
-   * cannot spin.
+   * nothing in MCP obliges a client to send the DELETE that would free it.
+   *
+   * Two caps, in this order. The per-principal one first, so a caller opening
+   * sessions can only ever displace its own; the global one after, as a
+   * backstop for a host that mints a token per client — only there does
+   * eviction cross principals, and only once the map is
+   * {@link GLOBAL_SESSION_CAP_FACTOR} times over.
    */
-  function evictForCapacity(): void {
-    while (sessions.size >= maxSessions) {
+  function evictForCapacity(fingerprint: string): void {
+    evictOldest(maxSessions, (entry) => entry.fingerprint === fingerprint);
+    evictOldest(globalMaxSessions, () => true);
+  }
+
+  /**
+   * Close the oldest idle sessions matching `matches` until fewer than `cap`
+   * remain.
+   *
+   * A session with a request in flight is never a victim (see
+   * {@link SessionRuntime.inFlight}), so the loop stops when every candidate is
+   * busy — going one over the cap is the lesser fault next to answering a live
+   * `tools/call` with an empty body. Counting by scan rather than by a second
+   * index keyed on fingerprint: the caps are small, and a map that has to be
+   * kept in step with `sessions` is a map that can fall out of step with it.
+   */
+  function evictOldest(
+    cap: number,
+    matches: (entry: SessionEntry) => boolean,
+  ): void {
+    for (;;) {
+      let count = 0;
       let oldestId: string | undefined;
       let oldestUsedAt = Number.POSITIVE_INFINITY;
       for (const [sessionId, entry] of sessions) {
-        if (entry.lastUsedAt < oldestUsedAt) {
-          oldestUsedAt = entry.lastUsedAt;
+        if (!matches(entry)) continue;
+        count += 1;
+        if (entry.runtime.inFlight > 0) continue;
+        if (entry.runtime.lastUsedAt < oldestUsedAt) {
+          oldestUsedAt = entry.runtime.lastUsedAt;
           oldestId = sessionId;
         }
       }
-      if (oldestId === undefined) return;
+      if (count < cap) return;
+      if (oldestId === undefined) {
+        // Only interesting when there WAS something to evict: a cap of 0 has no
+        // candidates and needs no warning about it.
+        if (count > 0) {
+          logger?.warn("mcp session cap reached with every session busy", {
+            cap,
+            live: count,
+          });
+        }
+        return;
+      }
       const victim = sessions.get(oldestId);
       if (victim === undefined) return;
       closeSession(oldestId, victim, "evicted");
@@ -267,7 +439,14 @@ export function createMcpServerHandler(
     // with, not something a later message can restate.
     const fingerprint = await authFingerprint(headers.get("authorization"));
     const scope = (await options.sessionScope?.(headers)) ?? undefined;
-    const server = buildServer(scope);
+    const runtime: SessionRuntime = {
+      lastUsedAt: clock.now().getTime(),
+      inFlight: 0,
+      running: 0,
+      waiters: [],
+      listing: undefined,
+    };
+    const server = buildServer(scope, runtime);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: () => crypto.randomUUID(),
       onsessioninitialized: (sessionId) => {
@@ -281,7 +460,7 @@ export function createMcpServerHandler(
         // At the moment of insertion, not before it: two initializes racing
         // each other would both pass a check made earlier and leave the map one
         // over the cap.
-        evictForCapacity();
+        evictForCapacity(fingerprint);
         sessions.set(sessionId, entry);
         logger?.debug("mcp session opened", { sessionId });
       },
@@ -295,7 +474,7 @@ export function createMcpServerHandler(
       transport,
       scope,
       fingerprint,
-      lastUsedAt: clock.now().getTime(),
+      runtime,
     };
     // A transport that dies for any other reason (stream error, dispose) must
     // not leave a dangling map entry that later requests would route into.
@@ -337,6 +516,30 @@ export function createMcpServerHandler(
       // gone by the time it could be routed into.
       reapIdleSessions();
 
+      // The body is read HERE, under a cap, for EVERY post — and handed back to
+      // the transport as `parsedBody`, because a `Request` body is single-use.
+      // Two reasons it cannot be left to the SDK: the transport buffers the
+      // whole thing before any limit of ours could apply, and a batch has to be
+      // measured before one message of it is dispatched.
+      let body: unknown;
+      if (request.method === "POST") {
+        const read = await readCappedJson(request, maxRequestBytes);
+        if (!read.ok) return read.response;
+        body = read.body;
+        if (Array.isArray(body) && body.length > maxBatchSize) {
+          logger?.warn("mcp batch refused", {
+            messages: body.length,
+            maxBatchSize,
+          });
+          return jsonRpcError(
+            400,
+            -32600,
+            `Invalid Request: batch of ${body.length} messages exceeds the ` +
+              `limit of ${maxBatchSize}`,
+          );
+        }
+      }
+
       const sessionId = request.headers.get("mcp-session-id");
       if (sessionId !== null) {
         const entry = sessions.get(sessionId);
@@ -355,8 +558,10 @@ export function createMcpServerHandler(
         if (!(await timingSafeEqualString(entry.fingerprint, presented))) {
           return jsonRpcError(404, -32001, "Session not found");
         }
-        entry.lastUsedAt = clock.now().getTime();
-        return entry.transport.handleRequest(request);
+        entry.runtime.lastUsedAt = clock.now().getTime();
+        return request.method === "POST"
+          ? entry.transport.handleRequest(request, { parsedBody: body })
+          : entry.transport.handleRequest(request);
       }
 
       if (request.method !== "POST") {
@@ -367,15 +572,8 @@ export function createMcpServerHandler(
         );
       }
 
-      // The body is read HERE, so `isInitializeRequest` can be checked before a
-      // session is created — and handed back to the transport as `parsedBody`,
-      // because a `Request` body is single-use.
-      let body: unknown;
-      try {
-        body = await request.json();
-      } catch {
-        return jsonRpcError(400, -32700, "Parse error");
-      }
+      // `isInitializeRequest` is checked before a session is created: a client
+      // cannot slip any other method in without one.
       if (!isInitializeRequest(body)) {
         return jsonRpcError(
           400,
@@ -413,5 +611,72 @@ function jsonRpcError(status: number, code: number, message: string): Response {
   return new Response(
     JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }),
     { status, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+/** Either the parsed body, or the response that refuses it. */
+type BodyRead = { ok: true; body: unknown } | { ok: false; response: Response };
+
+/**
+ * Read a POST body under a byte cap and parse it as JSON.
+ *
+ * `Content-Length` is checked first, so an oversized request that declares
+ * itself is refused without reading a byte; the read then counts anyway,
+ * because a chunked body declares nothing and a lying header is not a
+ * constraint. The cap is on the ENCODED bytes, which is what the peer sends and
+ * what memory pays for.
+ */
+async function readCappedJson(
+  request: Request,
+  maxBytes: number,
+): Promise<BodyRead> {
+  const declared = Number(request.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return { ok: false, response: tooLarge(maxBytes) };
+  }
+  const text = await readCappedText(request.body, maxBytes);
+  if (text === null) return { ok: false, response: tooLarge(maxBytes) };
+  try {
+    return { ok: true, body: JSON.parse(text) };
+  } catch {
+    return { ok: false, response: jsonRpcError(400, -32700, "Parse error") };
+  }
+}
+
+/** The decoded body, or `null` once more than `maxBytes` have arrived. */
+async function readCappedText(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+): Promise<string | null> {
+  if (body === null) return "";
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    total += chunk.value.byteLength;
+    if (total > maxBytes) {
+      // Cancelled, not just abandoned: the point of the cap is that the rest of
+      // the body is never buffered.
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(chunk.value);
+  }
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
+}
+
+function tooLarge(maxBytes: number): Response {
+  return jsonRpcError(
+    413,
+    -32000,
+    `Request body exceeds the ${maxBytes}-byte limit`,
   );
 }

@@ -75,6 +75,17 @@ export class McpSession {
   private generation = 0;
   /** Suppresses the peer-closed bookkeeping while WE are the ones closing. */
   private closingDeliberately = false;
+  /**
+   * Set by {@link close}, cleared when a NEW connect cycle starts.
+   *
+   * What it buys is the ordering `close()` cannot get any other way: an
+   * `openOnce` already past its `transportFactory` call owns a process (or a
+   * socket) that `close()` cannot see yet, and installing it after the close
+   * has swept leaves it unowned for the rest of the run — the stdio-child leak
+   * ADR 0004 says was fixed. So a close marks the session, waits for the open
+   * in flight, and that open closes what it built instead of installing it.
+   */
+  private disposed = false;
 
   constructor(
     readonly config: McpServerConfig,
@@ -151,6 +162,13 @@ export class McpSession {
    * Close the session. A deliberate shutdown is not a failure, so the circuit is
    * untouched.
    *
+   * It also WAITS for a connect that is in flight, and marks the session so that
+   * connect closes whatever it opened rather than installing it. Returning
+   * before then is how `McpClientManager.dispose()` used to come back while a
+   * child process was still being adopted: the manager reported everything
+   * closed, and a moment later a `Client` and its stdio child were installed on
+   * a session nobody would ever close again.
+   *
    * The resolved secret material goes with it. A closed session — a disposed
    * manager, a server removed from the config — has no business still holding
    * live tokens in memory for the lifetime of the process, and `openOnce`
@@ -160,8 +178,24 @@ export class McpSession {
    * loop iteration.
    */
   async close(): Promise<void> {
+    this.disposed = true;
+    await this.teardown();
+  }
+
+  /**
+   * Close what is open, without declaring the session finished.
+   *
+   * Split from {@link close} for the reconnect path: a reconnect closes in order
+   * to open again immediately, and marking the session disposed would make the
+   * open it exists to perform refuse itself.
+   */
+  private async teardown(): Promise<void> {
     this.closingDeliberately = true;
     try {
+      // Awaited FIRST: until it settles, the client and transport this is about
+      // to read may not exist yet.
+      const connecting = this.connecting;
+      if (connecting) await swallow(() => connecting);
       const client = this.client;
       const transport = this.transport;
       this.client = undefined;
@@ -180,6 +214,10 @@ export class McpSession {
   private open(): Promise<void> {
     const inFlight = this.connecting;
     if (inFlight) return inFlight;
+    // A deliberate new cycle supersedes an earlier close: `disposed` only has to
+    // beat the open that was ALREADY in flight when the close ran, and that one
+    // is the branch above.
+    this.disposed = false;
     const started = (async () => {
       this.circuit.assertClosed();
       await this.runConnectCycle();
@@ -284,6 +322,20 @@ export class McpSession {
           await swallow(() => transport.close());
           throw err;
         }
+        // The two ways this connection is already unwanted, checked at the one
+        // moment it is fully built and not yet owned by anything: a `close()`
+        // that ran while we were connecting, and a deadline that fired and
+        // handed our caller a failure (`withDeadline` races, so it did not wait
+        // for us). Installing either would leave a live client — and, over
+        // stdio, a live child process — that nothing will ever close.
+        if (this.disposed || signal.aborted) {
+          await swallow(() => client.close());
+          throw new McpError(
+            "mcp_not_connected",
+            `MCP server "${this.alias}" was closed while connecting.`,
+            { retryable: false, details: { alias: this.alias } },
+          );
+        }
         this.client = client;
         this.transport = transport;
         this.generation += 1;
@@ -305,7 +357,7 @@ export class McpSession {
     const inFlight = this.reconnecting;
     if (inFlight) return inFlight;
     const started = (async () => {
-      await this.close();
+      await this.teardown();
       await this.open();
     })();
     const tracked = started.finally(() => {

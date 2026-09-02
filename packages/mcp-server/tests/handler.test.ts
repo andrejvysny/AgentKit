@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { defaultClock, defaultIds } from "@agentkit/host";
+import type { AiTool } from "@agentkit/core";
+import { defaultClock, defaultIds, type ToolGuard } from "@agentkit/host";
 import {
   createMcpServerHandler,
   createStagedToolSource,
   type McpServerHandler,
   type McpServerHandlerOptions,
+  type McpToolSource,
 } from "../src/index.js";
 import {
   authHeaders,
@@ -609,7 +611,11 @@ describe("session limits", () => {
 
     const first = await initSession(handler);
     const second = await initSession(handler);
-    expect((await listToolsRaw(handler, first)).status).toBe(200);
+    const warm = await listToolsRaw(handler, first);
+    expect(warm.status).toBe(200);
+    // Drained, because the ANSWER is written after `fetch` returns: until it
+    // is, the session has a request in flight and is deliberately not reapable.
+    await readRpcResponse(warm);
 
     clock.advance(60_001);
     // Lazily: this very request is what sweeps them.
@@ -622,5 +628,325 @@ describe("session limits", () => {
     const fourth = await initSession(handler);
     expect((await listToolsRaw(handler, third)).status).toBe(200);
     expect((await listToolsRaw(handler, fourth)).status).toBe(200);
+  });
+});
+
+/** One raw POST of an arbitrary JSON-RPC payload on an existing session. */
+function postRaw(
+  handler: McpServerHandler,
+  sessionId: string,
+  payload: unknown,
+  headers: Record<string, string> = authHeaders(),
+): Promise<Response> {
+  return handler.fetch(
+    new Request("http://localhost/mcp", {
+      method: "POST",
+      headers: {
+        host: "localhost",
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-session-id": sessionId,
+        ...headers,
+      },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+/** A promise a test resolves by hand, for "this call is still running" scenarios. */
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * Let the transport's message dispatch run.
+ *
+ * `fetch` resolves as soon as the SSE stream exists — the handlers it will
+ * write into have not started yet — so every assertion about what a call is
+ * DOING has to wait for a macrotask first.
+ */
+function settle(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 5);
+  });
+}
+
+/** A tool that parks inside `execute` until the test lets it go. */
+function blockingTool(gate: Promise<void>, seen: { peak: number }): AiTool {
+  let running = 0;
+  return {
+    definition: {
+      name: "demo_block",
+      version: "1.0.0",
+      effect: "read",
+      capability: "demo.block",
+      description: "Blocks until released.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    async execute(ctx) {
+      running += 1;
+      seen.peak = Math.max(seen.peak, running);
+      await gate;
+      running -= 1;
+      return {
+        ok: true,
+        summary: "released",
+        data: { released: true },
+        sources: [],
+        warnings: [],
+        truncated: false,
+        limits: ctx.limits,
+      };
+    },
+  };
+}
+
+function sourceOf(
+  tools: AiTool[],
+  guards?: readonly ToolGuard[],
+): McpToolSource {
+  return createStagedToolSource({
+    contributors: [{ namespace: "demo", contribute: async () => tools }],
+    clock: defaultClock,
+    ids: defaultIds,
+    ...(guards === undefined ? {} : { guards }),
+  });
+}
+
+describe("request limits", () => {
+  const oversized = (bytes: number): string =>
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "x".repeat(bytes), version: "1.0.0" },
+      },
+    });
+
+  it("refuses a body over maxRequestBytes with 413", async () => {
+    const handler = build({ maxRequestBytes: 1024 });
+    const response = await handler.fetch(
+      new Request("http://localhost/mcp", {
+        method: "POST",
+        headers: {
+          ...authHeaders(),
+          host: "localhost",
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+        },
+        body: oversized(4096),
+      }),
+    );
+    expect(response.status).toBe(413);
+    // Nothing was created for it: the cap is checked before a session exists.
+    expect(response.headers.get("mcp-session-id")).toBeNull();
+  });
+
+  it("refuses an oversized CHUNKED body, which declares no length", async () => {
+    const handler = build({ maxRequestBytes: 1024 });
+    const chunk = new TextEncoder().encode("x".repeat(512));
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 8; i += 1) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    const init: RequestInit & { duplex: "half" } = {
+      method: "POST",
+      headers: {
+        ...authHeaders(),
+        host: "localhost",
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      body,
+      duplex: "half",
+    };
+    const response = await handler.fetch(
+      new Request("http://localhost/mcp", init),
+    );
+    expect(response.status).toBe(413);
+  });
+
+  it("refuses a batch longer than maxBatchSize without dispatching any of it", async () => {
+    const gate = deferred();
+    const seen = { peak: 0 };
+    const handler = build({
+      maxBatchSize: 2,
+      tools: sourceOf([blockingTool(gate.promise, seen)]),
+    });
+    const sessionId = await initSession(handler);
+    const batch = Array.from({ length: 25 }, (_unused, index) => ({
+      jsonrpc: "2.0",
+      id: index + 10,
+      method: "tools/call",
+      params: { name: "demo_block", arguments: {} },
+    }));
+
+    const response = await postRaw(handler, sessionId, batch);
+    expect(response.status).toBe(400);
+    const rpc = await readRpcResponse(response);
+    expect((rpc["error"] as { code: number }).code).toBe(-32600);
+
+    // The refusal is the whole point: not one of the 25 reached a tool.
+    await settle();
+    expect(seen.peak).toBe(0);
+    gate.resolve();
+  });
+
+  it("runs at most maxConcurrentCallsPerSession calls of one batch at a time", async () => {
+    const gate = deferred();
+    const seen = { peak: 0 };
+    const handler = build({
+      maxConcurrentCallsPerSession: 2,
+      maxBatchSize: 6,
+      tools: sourceOf([blockingTool(gate.promise, seen)]),
+    });
+    const sessionId = await initSession(handler);
+    const batch = Array.from({ length: 6 }, (_unused, index) => ({
+      jsonrpc: "2.0",
+      id: index + 10,
+      method: "tools/call",
+      params: { name: "demo_block", arguments: {} },
+    }));
+
+    const response = await postRaw(handler, sessionId, batch);
+    await settle();
+    expect(seen.peak).toBe(2);
+
+    // Released, the queue drains and every message still gets its answer.
+    gate.resolve();
+    const frames = (await response.text())
+      .split("\n")
+      .filter((line) => line.startsWith("data:"));
+    expect(frames).toHaveLength(6);
+  });
+});
+
+describe("per-principal session capacity", () => {
+  const TOKEN_A = "principal-a-token-000";
+  const TOKEN_B = "principal-b-token-111";
+  const twoPrincipals = {
+    auth: {
+      verify: (header: string | null) =>
+        header === `Bearer ${TOKEN_A}` || header === `Bearer ${TOKEN_B}`,
+    },
+  };
+  const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+
+  it("lets a principal evict only its OWN oldest session", async () => {
+    const clock = createTestClock();
+    const handler = build({ ...twoPrincipals, maxSessions: 1, clock });
+
+    const a = await initSession(handler, bearer(TOKEN_A));
+    clock.advance(1_000);
+    const b1 = await initSession(handler, bearer(TOKEN_B));
+    clock.advance(1_000);
+    // B is at ITS cap, so this closes B's own oldest — and nothing of A's,
+    // however long A has been idle.
+    const b2 = await initSession(handler, bearer(TOKEN_B));
+
+    expect((await listToolsRaw(handler, a, bearer(TOKEN_A))).status).toBe(200);
+    expect((await listToolsRaw(handler, b1, bearer(TOKEN_B))).status).toBe(404);
+    expect((await listToolsRaw(handler, b2, bearer(TOKEN_B))).status).toBe(200);
+  });
+});
+
+describe("in-flight calls", () => {
+  it("does not reap a session whose tool call is still running", async () => {
+    const clock = createTestClock();
+    const gate = deferred();
+    const seen = { peak: 0 };
+    const handler = build({
+      sessionIdleTtlMs: 60_000,
+      clock,
+      tools: sourceOf([blockingTool(gate.promise, seen)]),
+    });
+    const sessionId = await initSession(handler);
+    const call = await postRaw(handler, sessionId, {
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: { name: "demo_block", arguments: {} },
+    });
+    await settle();
+    expect(seen.peak).toBe(1);
+
+    // The session has now been idle past its TTL by the clock — but the answer
+    // to a call it is still running has to go somewhere.
+    clock.advance(60_001);
+    expect((await listToolsRaw(handler, sessionId)).status).toBe(200);
+
+    gate.resolve();
+    const rpc = await readRpcResponse(call);
+    expect(rpc["result"]).toBeDefined();
+  });
+});
+
+describe("session principal", () => {
+  const PRINCIPAL_HEADER = "x-agentkit-principal";
+
+  function principalTool(seen: { tool?: unknown }): AiTool {
+    return {
+      definition: {
+        name: "demo_whoami",
+        version: "1.0.0",
+        effect: "read",
+        capability: "demo.whoami",
+        description: "Reports the calling principal.",
+        inputSchema: { type: "object", properties: {} },
+      },
+      async execute(ctx) {
+        seen.tool = ctx.metadata?.["principal"];
+        return {
+          ok: true,
+          summary: "ok",
+          data: { principal: ctx.metadata?.["principal"] },
+          sources: [],
+          warnings: [],
+          truncated: false,
+          limits: ctx.limits,
+        };
+      },
+    };
+  }
+
+  it("threads the session's principal to the tool context and the guards", async () => {
+    const seen: { tool?: unknown; guard?: string | undefined } = {};
+    const guard: ToolGuard = {
+      canExecute: (ctx) => {
+        seen.guard = ctx.principal;
+        return { allowed: true };
+      },
+    };
+    const handler = build({
+      tools: sourceOf([principalTool(seen)], [guard]),
+      sessionScope: (headers) => {
+        const principal = headers.get(PRINCIPAL_HEADER);
+        return principal === null ? {} : { principal };
+      },
+    });
+    const served = serve(handler);
+    const { client } = await connectClient(
+      served.url,
+      authHeaders({ [PRINCIPAL_HEADER]: "alice" }),
+    );
+    const result = await client.callTool({
+      name: "demo_whoami",
+      arguments: {},
+    });
+    await client.close();
+
+    expect(seen.tool).toBe("alice");
+    expect(seen.guard).toBe("alice");
+    const content = result.content as { type: string; text?: unknown }[];
+    expect(JSON.parse(textBlock(content, 1))).toEqual({ principal: "alice" });
   });
 });

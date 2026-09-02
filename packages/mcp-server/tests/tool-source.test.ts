@@ -8,7 +8,7 @@ import {
   type ToolGuard,
   type ToolSetContributor,
 } from "@agentkit/host";
-import { createStagedToolSource } from "../src/index.js";
+import { createStagedToolSource, EXEC_FAILED_TEXT } from "../src/index.js";
 import { demoContributor, echoTool } from "./helpers.js";
 
 const PRIMARY: AiContextBinding = {
@@ -96,10 +96,14 @@ describe("createStagedToolSource", () => {
     const envelope = await tools.execute("demo_throw", {});
     expect(envelope.data).toMatchObject({
       errorCode: "exec_failed",
-      errorMessage: "boom",
       phase: "execution",
       retryable: false,
     });
+    // The thrower's own sentence is NOT forwarded — it went to the logger,
+    // under the correlation id this message carries. See F13.
+    const { errorMessage } = envelope.data as { errorMessage: string };
+    expect(errorMessage).not.toContain("boom");
+    expect(errorMessage).toContain(EXEC_FAILED_TEXT);
   });
 
   it("runs the SAME guard chain the turn runner would", async () => {
