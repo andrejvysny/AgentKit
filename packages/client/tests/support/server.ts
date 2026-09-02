@@ -14,7 +14,10 @@
  * a cross-package relative import into `tests/` would tie this suite to a path
  * nothing publishes.
  */
-import { MemoryAssistantStore } from "@agentkit/adapters-memory";
+import {
+  MemoryAssistantStore,
+  MemorySecretStore,
+} from "@agentkit/adapters-memory";
 import {
   ChatTurnExecutor,
   ExecutorRegistry,
@@ -33,27 +36,6 @@ import {
 
 export const TEST_CHAT_ID = "chat-client";
 export const SEEDED_API_KEY = "sk-never-published-abcdef";
-
-/** A `SecretStore` in a Map — enough to prove a key went in here and nowhere else. */
-export class MemorySecretStore {
-  readonly values = new Map<string, string>();
-
-  async get(ref: string): Promise<string | null> {
-    return this.values.get(ref) ?? null;
-  }
-
-  async set(ref: string, value: string): Promise<void> {
-    this.values.set(ref, value);
-  }
-
-  async delete(ref: string): Promise<void> {
-    this.values.delete(ref);
-  }
-
-  async listRefs(): Promise<string[]> {
-    return [...this.values.keys()];
-  }
-}
 
 export interface TestServer {
   baseUrl: string;

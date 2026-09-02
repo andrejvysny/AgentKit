@@ -23,7 +23,9 @@ Consumers install AgentKit as **one package**, `agentkit`, via a GitHub tag
 
 ```jsonc
 "dependencies": {
-  "agentkit": "github:andrejvysny/AgentKit#v0.4.0"
+  // No release tag exists yet — `v0.5.0` lands once the hardening tranche
+  // ships. Until then, pin a commit SHA, or track the branch with `#master`.
+  "agentkit": "github:andrejvysny/AgentKit#master"
 }
 ```
 
@@ -57,7 +59,12 @@ workflows and the release ritual.
 adapters-memory / adapters-sqlite / runner-local  →  @agentkit/host  →  @agentkit/core  →  @agentkit/contracts
 ```
 
-Each package depends only on the ones to its right. Full diagram, the event
+Each package depends only on the ones to its right, with one documented
+exception: `adapters-memory` and `adapters-sqlite` also depend sideways on
+`@agentkit/mcp-client`, purely for the `McpServerConfigStore` port's DTOs
+and errors (they live in `mcp-client`, not `contracts`, today). See
+[`docs/roadmap.md`](docs/roadmap.md)'s "MCP config types toward
+`@agentkit/contracts`" item for the plan to close it. Full diagram, the event
 flow (`seq`/`eventId` stamping, lease fencing), the run/attempt/lease model,
 and the loop invariants `runChat()` preserves: see
 [`docs/architecture.md`](docs/architecture.md).

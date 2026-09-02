@@ -25,7 +25,7 @@ import {
 const asJson = (schema: TSchema): object =>
   JSON.parse(JSON.stringify(schema)) as object;
 
-const makeAjv = () => new Ajv({ strict: false, allErrors: true });
+const makeAjv = () => new Ajv({ strict: true, allErrors: true });
 
 const entries = Object.entries(schemas) as Array<[string, TSchema]>;
 

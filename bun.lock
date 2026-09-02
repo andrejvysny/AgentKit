@@ -13,6 +13,7 @@
       "name": "@agentkit/example-desktop-host",
       "version": "0.1.0-dev",
       "dependencies": {
+        "@agentkit/adapters-memory": "workspace:*",
         "@agentkit/adapters-sqlite": "workspace:*",
         "@agentkit/contracts": "workspace:*",
         "@agentkit/core": "workspace:*",
@@ -64,6 +65,7 @@
         "@modelcontextprotocol/sdk": "^1.30.0",
         "@sinclair/typebox": "^0.34.0",
         "ajv": "^8.17.1",
+        "ajv-formats": "^3.0.1",
       },
       "peerDependencies": {
         "react": ">=18",

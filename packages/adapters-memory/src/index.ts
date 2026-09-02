@@ -8,3 +8,4 @@
 
 export * from "./memory-assistant-store.js";
 export * from "./memory-mcp-server-config-store.js";
+export * from "./memory-secret-store.js";

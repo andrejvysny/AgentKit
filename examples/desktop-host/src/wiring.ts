@@ -33,6 +33,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { SqliteAssistantStore } from "@agentkit/adapters-sqlite";
+import { MemorySecretStore } from "@agentkit/adapters-memory";
 import type { AiProviderConfig } from "@agentkit/contracts";
 import {
   OpenAiCompatibleClient,
@@ -129,7 +130,7 @@ export interface BuildAppOptions {
    * stack runs with no network access.
    */
   providerFactory?: (config: AiProviderConfig) => AiProviderClient;
-  /** Defaults to a process-lifetime, in-memory store — see `InMemorySecretStore`. */
+  /** Defaults to a process-lifetime, in-memory store — see `MemorySecretStore`. */
   secrets?: SecretStore;
   clock?: Clock;
   ids?: IdGenerator;
@@ -160,37 +161,6 @@ export interface App {
    * (if any), and closes the DB. Idempotent — a repeated signal is safe.
    */
   stop(): Promise<void>;
-}
-
-/**
- * A `SecretStore` for one process's lifetime: values never touch disk, and are
- * gone the moment this object is. This is what lets `AGENTKIT_API_KEY` reach
- * the provider client without ever being written into `AiProviderConfig` —
- * `upsertProvider` below stores a `ref` under `metadata[PROVIDER_SECRET_REF_KEY]`
- * and `TurnRunner` resolves it through this port, once, right before building
- * the client (see `packages/host/src/turn/turn-runner.ts`'s `withSecret`).
- *
- * A real desktop host swaps this for the OS keychain / an encrypted file —
- * anything implementing the four methods below.
- */
-export class InMemorySecretStore implements SecretStore {
-  private readonly values = new Map<string, string>();
-
-  async get(ref: string): Promise<string | null> {
-    return this.values.get(ref) ?? null;
-  }
-
-  async set(ref: string, value: string): Promise<void> {
-    this.values.set(ref, value);
-  }
-
-  async delete(ref: string): Promise<void> {
-    this.values.delete(ref);
-  }
-
-  async listRefs(): Promise<string[]> {
-    return [...this.values.keys()];
-  }
 }
 
 /**
@@ -265,7 +235,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
   const env = options.env ?? (process.env as WiringEnv);
   const clock = options.clock ?? defaultClock;
   const ids = options.ids ?? defaultIds;
-  const secrets = options.secrets ?? new InMemorySecretStore();
+  const secrets = options.secrets ?? new MemorySecretStore();
   const logger = options.logger;
   // (1. Ambient ports: `clock`/`ids`/`secrets` above.)
 
