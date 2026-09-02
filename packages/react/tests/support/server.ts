@@ -13,7 +13,10 @@
  * for the reason that file gives for mirroring transport-http's: another
  * package's test-only file is not a module path anything publishes.
  */
-import { MemoryAssistantStore } from "@agentkit/adapters-memory";
+import {
+  MemoryAssistantStore,
+  MemorySecretStore,
+} from "@agentkit/adapters-memory";
 import {
   ChatTurnExecutor,
   ExecutorRegistry,
@@ -149,27 +152,6 @@ class RecordingApplier implements ProposalApplier {
 
   async getOutcome(operationId: string): Promise<ApplyOutcome | null> {
     return this.outcomes.get(operationId) ?? null;
-  }
-}
-
-/** A `SecretStore` in a Map — enough to keep a written key out of every read. */
-export class MemorySecretStore {
-  readonly values = new Map<string, string>();
-
-  async get(ref: string): Promise<string | null> {
-    return this.values.get(ref) ?? null;
-  }
-
-  async set(ref: string, value: string): Promise<void> {
-    this.values.set(ref, value);
-  }
-
-  async delete(ref: string): Promise<void> {
-    this.values.delete(ref);
-  }
-
-  async listRefs(): Promise<string[]> {
-    return [...this.values.keys()];
   }
 }
 

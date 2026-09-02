@@ -43,6 +43,7 @@ import { dirname, join } from "node:path";
 import {
   checkTaskInvariants,
   createRng,
+  runTaskSchedule,
   snapshotTaskInvariants,
   type ObservedLease,
 } from "@agentkit/testing";
@@ -773,7 +774,31 @@ db.close();
     // transaction helpers become async, or `claimNext` stops holding its
     // transaction across `await`s (which would also close the documented
     // `transaction()` flattening hazard). Both are adapter redesigns beyond the
-    // scope this landing was given.
-    expect(true).toBe(true);
+    // scope this landing was given — see the "claim-tx-across-awaits redesign"
+    // roadmap item and this package's README.
+    const harness = createSqliteHarness(2);
+    try {
+      const startedAt = performance.now();
+      const result = await runTaskSchedule({
+        target: harness.target,
+        seed: 7,
+        clock: harness.clock,
+        ids: harness.ids,
+        leaseTtlMs: harness.leaseTtlMs,
+        workers: 4,
+        tasks: 24,
+        steps: 40,
+      });
+      const elapsedMs = performance.now() - startedAt;
+
+      // What the bug actually does: parks the real thread for the whole
+      // busy_timeout, then throws "database is locked" out of the schedule
+      // rather than landing a clean result. Once the redesign above lands,
+      // both assertions hold and this case can move out of `it.skip`.
+      expect(elapsedMs).toBeLessThan(1_000);
+      expect(result.spotCheckViolations).toEqual([]);
+    } finally {
+      harness.close();
+    }
   });
 });

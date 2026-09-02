@@ -25,6 +25,11 @@ export * from "./store-conformance.js";
 // AssistantStore aggregate and so cannot be graded through its harness.
 export * from "./mcp-config-conformance.js";
 
+// SecretStore conformance: the same idea for the credential port
+// (@agentkit/host), which every host wires but none of the port matrix
+// covers. @agentkit/adapters-memory's MemorySecretStore runs it.
+export * from "./secret-store-conformance.js";
+
 // Runner conformance: the same idea for the other half of the host's runtime —
 // the four promises the TaskRunner port makes that a store cannot make for it.
 // @agentkit/runner-local runs it against both reference stores.

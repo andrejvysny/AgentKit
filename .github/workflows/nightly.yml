@@ -1,0 +1,50 @@
+name: nightly
+
+# Randomized-schedule durability coverage the fixed CI seeds never see. `bun
+# test` (see ci.yml) always grades the same three seeds (`[1, 7, 1337]`, see
+# `packages/adapters-sqlite/tests/support/durability-harness.ts`) so a red run
+# is always reproducible — but that also means the same three schedules are
+# the only ones ever exercised. This job runs the durability/invariant suite
+# under three FRESH, run-specific seeds every night, so a bug a fixed seed
+# never happens to hit still eventually gets caught. A failure here names its
+# seed in the job name and in every assertion message, so reproducing it
+# locally is `AGENTKIT_SEED=<seed> bun test packages/adapters-sqlite/tests/durability-schedule.test.ts`.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  durability-random-seed:
+    runs-on: ubuntu-latest
+    strategy:
+      # Independent seeds, not a shared one: three unrelated schedules per
+      # run beats three runs of the same schedule at finding something a
+      # fixed set never hits. `fail-fast: false` so one bad seed doesn't hide
+      # the other two.
+      fail-fast: false
+      matrix:
+        seed-index: [1, 2, 3]
+    name: durability (seed set ${{ matrix.seed-index }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - name: pick a run-specific seed
+        id: seed
+        # `$RANDOM`-derived: unique per matrix leg AND per run, so two
+        # nightly runs never grade the same schedule twice in a row.
+        # `GITHUB_RUN_ID` (monotonic, unique per workflow run) folded in
+        # keeps it that way even if the shell's `$RANDOM` ever repeated.
+        run: |
+          seed=$(( (RANDOM * 100000 + GITHUB_RUN_ID + ${{ matrix.seed-index }}) % 1000000 ))
+          echo "value=$seed" >> "$GITHUB_OUTPUT"
+          echo "AGENTKIT_SEED=$seed"
+
+      - name: bun test packages/adapters-sqlite (AGENTKIT_SEED=${{ steps.seed.outputs.value }})
+        env:
+          AGENTKIT_SEED: ${{ steps.seed.outputs.value }}
+        run: bun test packages/adapters-sqlite

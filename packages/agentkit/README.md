@@ -12,7 +12,9 @@ right — one install, one version, twelve entry points.
 ```jsonc
 // package.json
 "dependencies": {
-  "agentkit": "github:andrejvysny/AgentKit#v0.4.0"
+  // No release tag exists yet — `v0.5.0` lands once the hardening tranche
+  // ships. Until then, pin a commit SHA, or track the branch with `#master`.
+  "agentkit": "github:andrejvysny/AgentKit#master"
 }
 ```
 
@@ -20,10 +22,17 @@ Then `npm install` or `bun install`. The pinned tag's branch ships a
 committed `dist/` — no build step, no `prepare` script, nothing else to
 run. Works under both npm and Bun.
 
+## Root import
+
+`import "agentkit"` (no subpath) resolves to `@agentkit/contracts` only — the
+wire DTOs and JSON Schemas every other subpath already depends on. It exists
+so a bare `import "agentkit"` does not fail with
+`ERR_PACKAGE_PATH_NOT_EXPORTED`; it is not a re-export of everything below.
+Reach for a subpath for anything else — `agentkit/core`, `agentkit/host`, etc.
+
 ## Subpaths
 
-There is no root `agentkit` export — only these twelve subpaths, each
-resolving to that package's public barrel:
+Twelve subpaths, each resolving to that package's public barrel:
 
 | Subpath                     | What                                                  |
 | ---------------------------- | ------------------------------------------------------ |
@@ -48,7 +57,10 @@ import { MemoryAssistantStore } from "agentkit/adapters-memory";
 
 `agentkit/adapters-sqlite` is built on `bun:sqlite` and only loads under
 Bun — every other subpath is plain, portable JavaScript that loads under
-Node ≥20 or Bun ≥1.3.
+Node ≥20 or Bun ≥1.3. `package.json`'s top-level `engines` (`node >=20, bun
+>=1.3`) describes the package as a whole, not this one subpath: an installer
+targeting Node alone can use every subpath except `agentkit/adapters-sqlite`,
+which needs Bun regardless of what `engines` says.
 
 `agentkit/react` is the one subpath with a peer dependency: `react >=18`,
 declared OPTIONAL so an installer that only wants `agentkit/host` is not told
