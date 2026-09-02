@@ -98,10 +98,14 @@ const TITLE_BY_STATUS: Readonly<Record<number, string>> = Object.freeze({
   405: "Method Not Allowed",
   409: "Conflict",
   413: "Content Too Large",
+  422: "Unprocessable Content",
   429: "Too Many Requests",
   500: "Internal Server Error",
   501: "Not Implemented",
 });
+
+/** The one detail every 5xx publishes; the real message goes to the logger. */
+const SERVER_FAULT_DETAIL = "The server failed to handle the request.";
 
 export interface ProblemInit {
   status: number;
@@ -177,6 +181,27 @@ export function conflict(
 }
 
 /**
+ * The 422 a body that contradicts a key the server has already answered under
+ * becomes — `idempotency_key_mismatch`, and nothing else so far.
+ *
+ * 422 and not 409: nothing about the record moved, and retrying is not what the
+ * client should do. The request is syntactically fine and semantically
+ * impossible — the key says "this is that request again" and the body says it
+ * is not — and the only fix is a different `Idempotency-Key`.
+ *
+ * Transport-level for the same reason {@link conflict} is: the rule is enforced
+ * HERE, ahead of a host whose `submitMessage` is idempotent on the task id
+ * alone and would happily answer the second body with the first turn's ids.
+ */
+export function unprocessable(
+  code: string,
+  detail: string,
+  instance: string,
+): Response {
+  return problemResponse({ status: 422, code, detail, instance });
+}
+
+/**
  * The 403 an {@link AuthorizationPort} refusal becomes.
  *
  * A transport-level code, like `not_implemented` and `method_not_allowed`: the
@@ -217,12 +242,20 @@ export function notImplemented(detail: string, instance: string): Response {
 /**
  * Map a thrown error onto a problem response.
  *
- * A host error is reported with its own `code` and message: those strings are
- * written by this framework, not by a user, so they are safe to publish and are
- * the only thing that makes a 409 actionable. Anything else is a bug in this
- * process — logged in full, answered with a generic detail, because an
- * unexpected exception's message is the one string most likely to carry
- * internals.
+ * A host error BELOW 500 is reported with its own `code` and message: those
+ * strings are written by this framework, not by a user, they name records the
+ * caller already holds ids for, and they are the only thing that makes a 409
+ * actionable.
+ *
+ * A host error AT OR ABOVE 500 keeps its `code` and loses its message. The
+ * status says the fault is this deployment's, and this deployment's faults are
+ * where the message stops being about the caller's request and starts being
+ * about the server: `executor_not_found` names the task kinds this process
+ * registered, which is a map of the wiring published to whoever asked for a run
+ * that could not be executed. The full message is logged, so nothing is lost to
+ * the operator — only to the client. Anything that is not an
+ * `AgentKitHostError` is a bug in this process and has always been reported the
+ * same way, for the same reason.
  */
 export function problemForError(
   err: unknown,
@@ -241,7 +274,7 @@ export function problemForError(
     return problemResponse({
       status,
       code: err.code,
-      detail: err.message,
+      detail: status >= 500 ? SERVER_FAULT_DETAIL : err.message,
       instance,
     });
   }
@@ -252,7 +285,7 @@ export function problemForError(
   return problemResponse({
     status: 500,
     code: "internal_error",
-    detail: "The server failed to handle the request.",
+    detail: SERVER_FAULT_DETAIL,
     instance,
   });
 }

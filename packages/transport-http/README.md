@@ -71,7 +71,7 @@ them under a prefix, set `basePath` (below) rather than rewriting `req.url`.
 | `authorize` | no | `AuthorizationPort` — consulted per route; a refusal is 403 |
 | `basePath` | no | Mount prefix, e.g. `"/api/agentkit"`; stripped before routing |
 | `cors` | no | `{ origins, allowHeaders?, exposeHeaders?, maxAgeSeconds? }` |
-| `maxBodyBytes` | no | Largest accepted request body; **absent means no cap** |
+| `maxBodyBytes` | no | Largest accepted request body; **absent means 1 MiB** |
 | `clock` | no | `Clock` (`@agentkit/host`) for the timestamps `createMcpServer` mints; defaults to `defaultClock` |
 | `logger` | no | `Logger`; 5xx and stream failures are logged |
 | `streaming` | no | `{ pollIntervalMs, heartbeatIntervalMs, retryHintMs }` — 150 / 15000 / 2000 |
@@ -199,6 +199,39 @@ routed request proceeds. That is the right default for a single-user desktop
 embedding and the wrong one for a multi-tenant service, which must supply the
 port (or filter in front of the handler).
 
+### Two limitations a multi-tenant deployment must read
+
+**Collection routes are unscoped.** `AuthorizationPort` answers allow/deny; it
+cannot filter. `GET /v1/chats`, `/v1/providers`, `/v1/mcp/servers`,
+`/v1/settings` and `/v1/search` without a `chatId` are authorized against a
+resource with **no id**, so the only two answers available are "every row" and
+"no rows". A host serving more than one tenant out of one store **must filter in
+front of this handler** — its own route wrapper, or a store scoped per tenant.
+Denying the collection route is the only thing this port can do about it, and it
+denies it for everybody. Per-resource routes (`/v1/chats/{chatId}` and below)
+carry the id and are checkable.
+
+**`mcp_config` is privileged: a write to it is code execution.**
+`POST`/`PATCH /v1/mcp/servers` stores a transport, and a `stdio` transport is a
+`command`, its `args` and its `env`. Nothing executes it during the request; the
+host's MCP client spawns it at the next `contribute()` — i.e. on the next turn
+in *any* chat — as the process running the host, with that process's filesystem
+and network. **A caller who can write one row can run anything the host user can
+run.** That is not a bug in the feature; it is the feature.
+
+So: never expose the `mcp_config` routes without wiring `authorize` and denying
+`write` to anyone who is not an administrator of the machine, and treat "can
+configure MCP servers" as equal to "can log in to the host". The alias grammar
+(`^[a-z][a-z0-9-]*$`) and resilience bounds this adapter enforces are hygiene —
+they stop a malformed row from bricking host wiring at construction time — not a
+sandbox.
+
+One more composition hazard, if you also serve `@agentkit/mcp-server`: its
+`Origin` check is **off by default**, and CORS here with `origins: "*"`
+(`Authorization` is in the default allow-headers) makes tool execution reachable
+from any web page the browser happens to be on. Turn the MCP server's origin
+check on, or do not use `"*"`.
+
 Spend control is the *other* port and lives elsewhere: `UsageAuthorizer` is
 enforced by `TurnRunner` per provider pass, not by this adapter. Its refusal
 surfaces here only as the `usage_denied` → **429** row in the error table below.
@@ -267,13 +300,13 @@ createRestHandler({
 
 ## Body size, and what a served deployment owes this handler
 
-**There is no body-size cap by default.** `createRestHandler` will read whatever
-a client sends: a request body is `await req.text()`-ed by the route that needs
-it, and nothing in this package decides how large "too large" is. That is right
-for the embedding this adapter was written for — a desktop host on
-`127.0.0.1`, where the only client is the app's own window and a submit
-carrying an inline image is legitimately megabytes — and wrong for anything
-reachable by someone you have not met.
+**The default cap is 1 MiB.** `createRestHandler` refuses a larger body before
+`authenticate` runs. A default rather than nothing, because "no cap" is not a
+neutral choice: it lets any caller that can reach the handler make this process
+buffer a body of any size, and the deployment this adapter was written for — a
+desktop host on `127.0.0.1` — has no proxy in front of it to say otherwise.
+1 MiB clears every body in the contract except a submit carrying an inline
+image, which is the one case a host has to raise it for.
 
 **If you serve this on a network, put a limit in front of the handler.** A
 reverse proxy is the right place for it: nginx's `client_max_body_size`,
@@ -282,8 +315,8 @@ Caddy's `request_body max_size`, an ALB or API Gateway payload limit, a Hono
 upload before the bytes reach this process, which is the difference that
 matters under load.
 
-`maxBodyBytes` is the in-handler version, for a deployment that has no proxy to
-put it in:
+`maxBodyBytes` is the in-handler version, and the way to raise the default for a
+host that accepts inline images:
 
 ```ts
 createRestHandler({ ...deps, maxBodyBytes: 5 * 1024 * 1024 });
@@ -294,7 +327,17 @@ Over the limit is a **413** with code `body_too_large`, in the same
 `authenticate` runs. A request that declares a `Content-Length` over the limit
 is rejected on the header alone; one that declares none (a chunked body) is
 measured, which means buffering it — so this option bounds memory, it does not
-avoid spending it. Absent, nothing is capped.
+avoid spending it.
+
+Two smaller bounds ride along with it, and neither is configurable:
+
+- **JSON nesting deeper than 64 levels is a 400** `invalid_body`. `JSON.parse`
+  survives a deeply nested body; the things that walk it afterwards —
+  validation, `structuredClone`, the store's own serialization — do not, and
+  which frame the overflow lands in depends on the runtime.
+- **Every `limit` query parameter is capped at 1000**, and a larger one is a
+  **400** rather than a silent clamp: a client that asked for 100000 rows and
+  quietly got 1000 would page forever off a cursor it thinks it has passed.
 
 ## Idempotency on `submitMessage` and `regenerateMessage`
 
@@ -330,7 +373,18 @@ ids, and re-pokes the queue (the rescue for a first submit that committed and
 then died before it could enqueue).
 
 - First call → **201** with `SubmitMessageResponse`.
-- Replay of the same key → **200** with the *identical* body.
+- Replay of the same key with the *same* request → **200** with the identical
+  body.
+- Replay of the same key with a **different** request → **422**
+  `idempotency_key_mismatch`. A key is a claim that this is the same request
+  again; answering a different question with the first turn's ids would discard
+  the new message in silence. The comparison rebuilds the first request's
+  fingerprint from the records it left behind (its user message's content and
+  metadata, the task payload's `model`/`providerId`), so nothing extra is
+  stored and the check survives a restart. Two caveats follow from that: an
+  omitted `parentMessageId` cannot be compared (the store resolved it to
+  whatever the active leaf was), and a regenerate compares only `model` and
+  `providerId`, its target already being part of the derived id.
 - A different key → a different run.
 
 A regenerate's `SubmitMessageResponse.userMessageId` is the question that was
@@ -421,17 +475,26 @@ through untouched. The mapping:
 | `invalid_fork_point`, `invalid_regenerate`, `invalid_decision`, `invalid_request`, `invalid_body`, `idempotency_key_required` | 400 |
 | `forbidden` | 403 (`deps.authorize` refused) |
 | `method_not_allowed` | 405 (with an `Allow` header) |
-| `body_too_large` | 413 (only when `deps.maxBodyBytes` is set) |
+| `body_too_large` | 413 (default cap 1 MiB; see `deps.maxBodyBytes`) |
+| `idempotency_key_mismatch` | 422 (key replayed with a different request) |
 | `usage_denied` | 429 (`UsageAuthorizer` refused a provider call) |
 | `not_implemented` | 501 |
 | anything else (incl. `executor_not_found`) | 500, logged, with a generic `detail` |
+
+**Every 5xx publishes a generic `detail`**, its own `code` included but its
+message not: at that status the message stops being about the caller's request
+and starts being about this deployment — `executor_not_found` names the task
+kinds this process registered — and the full text goes to `deps.logger` instead.
+Below 500 the host's message is passed through, because that is what makes a 409
+or a 404 actionable.
 
 The host-`code` → status table is `satisfies Record<HostErrorCode, number>`
 — a code added to the closed union without a status here fails
 `bun run typecheck` rather than silently falling back to 500 (see [ADR
 0006](../../docs/adr/0006-hardening-tranche.md)).
 
-`forbidden`, `not_implemented`, `body_too_large`, `secret_write_failed`,
+`forbidden`, `not_implemented`, `body_too_large`, `idempotency_key_mismatch`,
+`secret_write_failed`,
 `duplicate_provider` and `duplicate_alias` are **transport-level** codes: this
 adapter decides them, no `AgentKitHostError` was thrown, and inventing one to
 carry them would put a code in the host's closed union that the host never
@@ -611,8 +674,9 @@ root):
 - `tests/handler.test.ts` — the routes as a client calls them: idempotent
   submit (201 then 200, identical body), the `providerId` override reaching the
   host's submit input, validation, run projection, cancel, message paging,
-  credential redaction, the 501s, `maxBodyBytes` (413 over, served under, off by
-  default), `authenticate`.
+  credential redaction, the 501s, `maxBodyBytes` (413 over, served under, 1 MiB
+  by default), the 422 on a key replayed with a different body, the JSON depth
+  and `limit` bounds, `authenticate`.
 - `tests/authorize.test.ts` — the `AuthorizationPort` per route: 403 shape,
   subject/action/resource, the `getVersion` exemption, and a table-driven walk
   of `REST_ROUTES` asserting every route resolves to a resource.

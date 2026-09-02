@@ -28,9 +28,31 @@ import { Type, type Static } from "@sinclair/typebox";
  * `toOpenAiContentPart` in `@agentkit/core`), so a `;` or a `,` smuggled in
  * here would end the media-type field early and hand the provider a URL that
  * decodes to something the caller never sent.
+ *
+ * EXPORTED because it is a security rule, not a formatting nicety: every
+ * surface that accepts a `data` source ahead of the schema — the REST adapter's
+ * hand-written body validation, for one — must reject exactly what the schema
+ * rejects, and a hand-copied regex is one rule with two homes that drift apart.
  */
-const MEDIA_TYPE_PATTERN =
+export const MEDIA_TYPE_PATTERN =
   "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$";
+
+/**
+ * The schemes an image `url` source may name.
+ *
+ * A `url` source reaches the provider VERBATIM, and a provider client runs
+ * wherever the host runs — often on a developer's own machine, next to a local
+ * model server that will happily fetch what it is handed. Unconstrained,
+ * `file:///etc/passwd`, `http://169.254.169.254/latest/meta-data/` and
+ * `javascript:alert(1)` are all legal bodies that ask something in the HOST's
+ * network position to dereference them; the `data` source is pattern-guarded
+ * against the same class of smuggling. HTTP(S) is the only scheme a remote
+ * provider could ever have fetched anyway, so nothing legitimate is lost.
+ *
+ * Exported for the same reason {@link MEDIA_TYPE_PATTERN} is: the rule has to
+ * hold on the surfaces that validate ahead of the schema too.
+ */
+export const IMAGE_URL_PATTERN = "^https?://";
 
 export const AiTextPartSchema = Type.Object({
   type: Type.Literal("text"),
@@ -60,7 +82,8 @@ export type AiTextPart = Static<typeof AiTextPartSchema>;
 export const AiImageSourceSchema = Type.Union([
   Type.Object({
     kind: Type.Literal("url"),
-    url: Type.String(),
+    /** Constrained by {@link IMAGE_URL_PATTERN} — `http:`/`https:` only. */
+    url: Type.String({ pattern: IMAGE_URL_PATTERN }),
   }),
   Type.Object({
     kind: Type.Literal("data"),

@@ -8,12 +8,14 @@
 import { describe, expect, it } from "bun:test";
 import {
   ChatBusyError,
+  ExecutorNotFoundError,
   InvalidForkPointError,
   InvalidImportError,
+  type Logger,
   RecordNotFoundError,
   UsageDeniedError,
 } from "@agentkit/host";
-import { forbidden, problemForError } from "../src/problem.js";
+import { forbidden, problemForError, unprocessable } from "../src/problem.js";
 
 describe("problemForError", () => {
   it("maps a usage refusal to 429, not to a 4xx that says stop asking", async () => {
@@ -63,6 +65,61 @@ describe("problemForError", () => {
     expect(((await bad.json()) as Record<string, unknown>)["code"]).toBe(
       "invalid_import",
     );
+  });
+});
+
+describe("problemForError on a server fault", () => {
+  it("publishes a generic detail for a 5xx and logs the real message", async () => {
+    const logged: { message: string; fields?: Record<string, unknown> }[] = [];
+    const logger: Logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: (message, fields) => logged.push({ message, ...{ fields } }),
+    };
+    // `executor_not_found` is the everyday 5xx here, and its message names the
+    // task kinds this process registered — a map of the deployment's wiring,
+    // handed to whoever asked for a run it could not execute.
+    const res = problemForError(
+      new ExecutorNotFoundError(
+        'No executor registered for kind "chat.turn"; registered: index.embed, audit.replay.',
+      ),
+      "/v1/runs/r1",
+      logger,
+    );
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as Record<string, unknown>;
+    // The code still travels — a client branches on it — but the message does
+    // not.
+    expect(body["code"]).toBe("executor_not_found");
+    expect(body["detail"]).toBe("The server failed to handle the request.");
+    expect(JSON.stringify(body)).not.toContain("index.embed");
+    // Nothing is lost to the operator.
+    expect(logged[0]?.fields?.["message"]).toContain("index.embed");
+  });
+
+  it("keeps the host's own message on a 4xx, which is what makes it actionable", async () => {
+    const res = problemForError(
+      new RecordNotFoundError("Chat not found: c-missing"),
+      "/v1/chats/c-missing",
+    );
+    expect(((await res.json()) as Record<string, unknown>)["detail"]).toBe(
+      "Chat not found: c-missing",
+    );
+  });
+});
+
+describe("unprocessable", () => {
+  it("is a transport-level 422 with the status's own title", async () => {
+    const res = unprocessable(
+      "idempotency_key_mismatch",
+      "Reused key, different body.",
+      "/v1/chats/c1/messages",
+    );
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body["code"]).toBe("idempotency_key_mismatch");
+    expect(body["title"]).toBe("Unprocessable Content");
   });
 });
 
