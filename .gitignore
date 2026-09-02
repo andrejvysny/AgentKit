@@ -12,5 +12,5 @@ package.json.publishconfig-backup
 graphify-out/
 prompt.md
 
-# Agent worktrees (local session artifacts)
-.claude/worktrees/
+# Claude session-local artifacts (worktrees, agent memory)
+.claude/
