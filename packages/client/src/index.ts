@@ -13,13 +13,22 @@ export {
   AgentKitClientError,
   isAgentKitClientError,
 } from "./errors.js";
-export { runPhase, type RunPhase, type RunPhaseInput } from "./phase.js";
+export {
+  createRunPhaseTracker,
+  runPhase,
+  type RunPhase,
+  type RunPhaseInput,
+  type RunPhaseTracker,
+} from "./phase.js";
 export { parseSseStream, type SseFrame } from "./sse.js";
 export {
   isTerminalRunEvent,
   TERMINAL_RUN_EVENT_TYPES,
   DEFAULT_STREAM_MAX_RETRIES,
+  DEFAULT_STREAM_MAX_TOTAL_RECONNECTS,
   DEFAULT_STREAM_RETRY_DELAY_MS,
+  MAX_STREAM_RETRY_DELAY_MS,
+  MIN_STREAM_RETRY_DELAY_MS,
   type StreamRunOptions,
 } from "./stream.js";
 export {

@@ -33,6 +33,7 @@ export {
 export {
   DEFAULT_MAX_PAGES,
   loadActivePath,
+  type ActivePath,
   type PagingOptions,
 } from "./messages.js";
 export {
