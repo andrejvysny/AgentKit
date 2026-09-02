@@ -465,6 +465,41 @@ describe("provider CRUD", () => {
     );
     expect(asked).toEqual(["refresh:p1", "test:p1"]);
   });
+
+  it("(l2) refuses a provider id that would escape a secret store's namespace", async () => {
+    const secrets = new MemorySecretStore();
+    const f = await createHandlerFixture({ secrets });
+    const create = (id: string): Request =>
+      request("POST", "/v1/providers", {
+        body: {
+          id,
+          label: "New",
+          kind: "openai-compatible",
+          baseUrl: "http://localhost:9",
+          defaultModel: "m1",
+          apiKey: SECRET,
+        },
+      });
+
+    // The id becomes `provider/<id>/api-key`, the NAME a SecretStore files the
+    // credential under — so a path-namespaced store handed any of these writes
+    // outside the namespace it was given.
+    for (const bad of [
+      "../../root",
+      "..",
+      "a/b",
+      "with space",
+      "nul byte",
+      "x".repeat(65),
+    ]) {
+      await expectProblem(await f.handler(create(bad)), 400, "invalid_request");
+    }
+    // Nothing reached the secret store on the way to those refusals.
+    expect(await secrets.listRefs()).toEqual([]);
+
+    expect((await f.handler(create("openai.eu-1_v2"))).status).toBe(201);
+    expect(secrets.values.get("provider/openai.eu-1_v2/api-key")).toBe(SECRET);
+  });
 });
 
 describe("settings", () => {
@@ -510,6 +545,20 @@ describe("settings", () => {
       400,
       "invalid_request",
     );
+  });
+
+  it("(n2) 400s a maxToolIterations that is not a bounded whole number", async () => {
+    const { handler } = await createHandlerFixture();
+    const patch = (maxToolIterations: unknown): Request =>
+      request("PATCH", "/v1/settings", { body: { maxToolIterations } });
+
+    // Each of these was stored verbatim before: `1e9` is a turn that never
+    // ends, `0` is a turn that never calls the provider, and NaN is a
+    // comparison that is false in both directions.
+    for (const bad of [0, -1, 1e9, 2.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expectProblem(await handler(patch(bad)), 400, "invalid_request");
+    }
+    expect((await handler(patch(8))).status).toBe(200);
   });
 });
 
@@ -960,5 +1009,72 @@ describe("MCP server configs", () => {
       404,
       "not_found",
     );
+  });
+
+  it("(t2) refuses an alias the MCP client cannot normalize", async () => {
+    const mcpConfigs = new MemoryMcpServerConfigStore();
+    const { handler } = await createHandlerFixture({ mcpConfigs });
+    const create = (alias: string): Request =>
+      request("POST", "/v1/mcp/servers", {
+        body: { alias, transport: STDIO },
+      });
+
+    // Stored, any of these throws `mcp_invalid_alias` while the HOST is being
+    // wired — not on the turn that uses this server, but on every turn in every
+    // chat, until somebody edits the database by hand.
+    for (const bad of ["Notes", "1notes", "notes.two", "notes_two", "-notes"]) {
+      await expectProblem(await handler(create(bad)), 400, "invalid_request");
+    }
+    expect((await handler(create("notes-2"))).status).toBe(201);
+
+    // The same rule on the patch, which can rename.
+    const [created] = (await (
+      await handler(request("GET", "/v1/mcp/servers"))
+    ).json()) as McpServerDto[];
+    await expectProblem(
+      await handler(
+        request("PATCH", `/v1/mcp/servers/${created?.id ?? ""}`, {
+          body: { alias: "Notes" },
+        }),
+      ),
+      400,
+      "invalid_request",
+    );
+    expect(await mcpConfigs.list()).toHaveLength(1);
+  });
+
+  it("(t3) bounds the resilience knobs and refuses one it does not have", async () => {
+    const mcpConfigs = new MemoryMcpServerConfigStore();
+    const { handler } = await createHandlerFixture({ mcpConfigs });
+    const create = (resilience: unknown): Request =>
+      request("POST", "/v1/mcp/servers", {
+        body: { alias: "notes", transport: STDIO, resilience },
+      });
+
+    for (const bad of [
+      // A deadline no run outlives, and one that is not a number at all.
+      { requestTimeoutMs: 86_400_000 },
+      { requestTimeoutMs: -1 },
+      { connectTimeoutMs: "5s" },
+      // A spawn loop with a lease held open in front of it.
+      { maxConnectAttempts: 1_000_000 },
+      { reconnectMaxAttempts: 0 },
+      // A misspelling is silently ignored forever: the operator believes the
+      // timeout they configured is in force, and it never was.
+      { requestTimeouMs: 5000 },
+    ]) {
+      await expectProblem(await handler(create(bad)), 400, "invalid_request");
+    }
+    expect(await mcpConfigs.list()).toEqual([]);
+
+    const ok = await handler(
+      create({
+        requestTimeoutMs: 5_000,
+        maxConnectAttempts: 3,
+        reconnectBackoffFactor: 1.5,
+        retryTimeouts: false,
+      }),
+    );
+    expect(ok.status).toBe(201);
   });
 });

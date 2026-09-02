@@ -271,6 +271,34 @@ export interface RestHandlerDeps {
    * route never submitted to the port is `GET /v1/version`, which reads two
    * constants and is how a client discovers whether it can speak to this server
    * at all.
+   *
+   * ## TWO LIMITATIONS A MULTI-TENANT DEPLOYMENT MUST READ
+   *
+   * **1. Collection routes are UNSCOPED.** The port answers allow/deny; it
+   * cannot filter. `GET /v1/chats`, `/v1/providers`, `/v1/mcp/servers`,
+   * `/v1/settings` and `/v1/search` without a `chatId` are authorized against a
+   * resource with NO id, so the only two answers available are "every row" and
+   * "no rows". A host serving more than one tenant from one store must filter
+   * in front of this handler (its own route wrapper, or a store scoped per
+   * tenant) — denying the collection route is the only thing this port can do,
+   * and it denies it for everybody. Per-resource routes (`/v1/chats/{chatId}`
+   * and below) carry the id and ARE checkable.
+   *
+   * **2. `mcp_config` is a PRIVILEGED resource — treat a write to it as
+   * granting code execution.** `POST`/`PATCH /v1/mcp/servers` stores a
+   * transport, and a `stdio` transport is a `command`, its `args` and its `env`.
+   * Nothing executes it during the request; the host's MCP client spawns it at
+   * the next `contribute()`, i.e. on the next turn in any chat, as the process
+   * running the host, with that process's filesystem and network. A caller who
+   * can write one row can therefore run anything the host user can run — this
+   * is not privilege escalation through a bug, it is what the feature IS.
+   *
+   * Consequences: never expose the `mcp_config` routes without wiring this port
+   * and denying `write` to anyone who is not an administrator of the machine;
+   * treat "can configure MCP servers" as equal to "can log in to the host".
+   * The alias and resilience bounds this adapter enforces are hygiene, not a
+   * sandbox — they stop a malformed row from bricking host wiring, and stop
+   * nothing else.
    */
   authorize?: AuthorizationPort;
   /**
@@ -287,14 +315,19 @@ export interface RestHandlerDeps {
    */
   cors?: RestCorsOptions;
   /**
-   * Largest request body this handler will accept, in bytes. **Absent — the
-   * default — there is no cap at all.**
+   * Largest request body this handler will accept, in bytes. **Absent means
+   * 1 MiB**, not "no limit".
    *
-   * Off by default because a limit that is right for one deployment is wrong
-   * for the next: a submit carrying an inline image is legitimately megabytes,
-   * and a handler that guessed a ceiling would reject real turns on a host that
-   * never asked it to. A served deployment should set one here or, better,
-   * enforce it in the proxy in front of the handler, which can refuse the
+   * A default rather than nothing, because "no limit" is not a neutral choice:
+   * it lets any caller that can reach the handler make this process buffer a
+   * body of any size, and the deployment this adapter was written for — a
+   * desktop host binding a loopback port — has no proxy in front of it to say
+   * otherwise. 1 MiB clears every body in the contract except a submit carrying
+   * an inline image.
+   *
+   * A host that accepts inline images RAISES this (`20 * 1024 * 1024`, say), and
+   * one that has a proxy enforcing its own ceiling can raise it past what the
+   * proxy allows. Better still, enforce it in the proxy: that can refuse the
    * upload before the bytes are on this process's heap.
    *
    * Enforced from `Content-Length` when the request declares one — the refusal

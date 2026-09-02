@@ -113,9 +113,29 @@ export async function resolveStartSeq(
   }
 }
 
-/** One SSE frame carrying one event verbatim (`RunEventFrameDto`). */
+/**
+ * One SSE frame carrying one event verbatim (`RunEventFrameDto`).
+ *
+ * `id` and `event` are stripped of CR and LF before they are interpolated.
+ * They are the only two fields written RAW — `data` goes through
+ * `JSON.stringify`, which escapes both — and a newline in either one ends the
+ * field, then the frame, and lets whatever follows be read by the client as
+ * further SSE fields of its own. Neither value is this adapter's: `eventId` and
+ * `type` are strings the store handed back, ultimately written by whatever
+ * appended to the log.
+ *
+ * Stripped rather than rejected: a frame is being written to an open stream,
+ * where there is no status code left to refuse with, and dropping the event
+ * would break the `seq` continuity the client uses to detect loss.
+ */
 export function frameFor(event: TaskEventEnvelope): string {
-  return `id: ${event.eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+  const id = stripNewlines(event.eventId);
+  const type = stripNewlines(event.type);
+  return `id: ${id}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+function stripNewlines(value: string): string {
+  return value.replace(/[\r\n]/g, "");
 }
 
 export function createRunEventStream(

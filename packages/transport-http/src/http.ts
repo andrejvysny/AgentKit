@@ -73,6 +73,18 @@ export async function readJsonObject(
       ),
     };
   }
+  // After the parse, not during it: the check is a walk over the value, and it
+  // is cheap next to the parse that already happened.
+  if (exceedsMaxDepth(parsed)) {
+    return {
+      ok: false,
+      response: badRequest(
+        "invalid_body",
+        `Request body is nested more than ${MAX_JSON_DEPTH} levels deep.`,
+        instance,
+      ),
+    };
+  }
   return { ok: true, value: parsed as Record<string, unknown> };
 }
 
@@ -85,15 +97,61 @@ export async function readJsonObject(
 export function readPositiveInt(
   url: URL,
   name: string,
+  max: number = MAX_PAGE_LIMIT,
 ): { ok: true; value?: number } | { ok: false; message: string } {
   const raw = url.searchParams.get(name);
   if (raw === null) return { ok: true };
   const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) {
+  if (!Number.isInteger(value) || value <= 0 || value > max) {
     return {
       ok: false,
-      message: `Query parameter \`${name}\` must be a positive integer.`,
+      message: `Query parameter \`${name}\` must be an integer between 1 and ${max}.`,
     };
   }
   return { ok: true, value };
+}
+
+/**
+ * Ceiling on every `limit` this surface accepts.
+ *
+ * Refused rather than clamped: a client that asked for 100000 rows and silently
+ * got 1000 pages forever off a `nextCursor` it thinks it has already passed. A
+ * 400 says what happened while the client can still fix it.
+ */
+export const MAX_PAGE_LIMIT = 1000;
+
+/**
+ * Deepest JSON nesting `readJsonObject` will hand to a route.
+ *
+ * `JSON.parse` itself is iterative and survives deep input, but nearly
+ * everything downstream of it is not: structural validation walks content
+ * parts, `structuredClone` copies metadata bags, and the store serializes them
+ * again. A 200-byte body of nothing but `[` is a stack overflow somewhere in
+ * that chain, and which frame it lands in depends on the runtime.
+ */
+const MAX_JSON_DEPTH = 64;
+
+/**
+ * Whether anything in `root` sits deeper than {@link MAX_JSON_DEPTH}. Stops at
+ * the first offender rather than measuring the whole body.
+ *
+ * Iterative, with its own explicit stack: a RECURSIVE depth check on a body
+ * whose depth is the thing in question would overflow on exactly the input it
+ * exists to reject.
+ */
+function exceedsMaxDepth(root: unknown): boolean {
+  const stack: { value: unknown; depth: number }[] = [
+    { value: root, depth: 1 },
+  ];
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop() as { value: unknown; depth: number };
+    if (value === null || typeof value !== "object") continue;
+    if (depth > MAX_JSON_DEPTH) return true;
+    const children = Array.isArray(value)
+      ? value
+      : Object.values(value as Record<string, unknown>);
+    for (const child of children)
+      stack.push({ value: child, depth: depth + 1 });
+  }
+  return false;
 }

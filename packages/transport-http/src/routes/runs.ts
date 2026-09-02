@@ -52,16 +52,22 @@ export async function streamRun(ctx: RouteContext): Promise<Response> {
     return notFound(`Run not found: ${runId}`, ctx.instance);
 
   const tasks = ctx.deps.store.tasks;
+  // Resolved ONCE and shared with the stream: the resume scan pages the log at
+  // the same size the stream reads it at, so a deployment that tuned
+  // `readBatchSize` down tunes the pre-first-frame cost too. Left off, the scan
+  // silently used the default while the stream used the configured value.
+  const options = resolveStreamOptions(ctx.deps.streaming);
   const startSeq = await resolveStartSeq(
     tasks,
     runId,
     ctx.req.headers.get("last-event-id"),
+    options.readBatchSize,
   );
   const stream = createRunEventStream({
     tasks,
     taskId: runId,
     startSeq,
-    options: resolveStreamOptions(ctx.deps.streaming),
+    options,
     ...(ctx.req.signal === undefined ? {} : { signal: ctx.req.signal }),
     ...(ctx.deps.logger === undefined ? {} : { logger: ctx.deps.logger }),
   });

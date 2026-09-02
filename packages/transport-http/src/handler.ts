@@ -267,8 +267,21 @@ async function checkAuthorization(
 }
 
 /**
- * `deps.maxBodyBytes`, enforced — or passed straight through when there is no
- * cap, which is the default.
+ * The cap applied when `deps.maxBodyBytes` names none.
+ *
+ * A default rather than "unlimited", which is what this used to be: every
+ * deployment that forgot the option handed an anonymous request the ability to
+ * make this process buffer a body of any size, and "the proxy should do it" is
+ * not true of the desktop host this adapter was written for, which has no proxy.
+ * 1 MiB clears every request in the contract except a submit carrying an inline
+ * image — the one case a host really does have to raise it for, and the one it
+ * will notice immediately.
+ */
+const DEFAULT_MAX_BODY_BYTES = 1024 * 1024;
+
+/**
+ * `deps.maxBodyBytes`, enforced — falling back to
+ * {@link DEFAULT_MAX_BODY_BYTES}.
  *
  * Two paths, because there are two kinds of request. One that DECLARES a
  * `Content-Length` over the limit is refused on the header alone, so an
@@ -285,10 +298,10 @@ async function checkAuthorization(
  */
 async function enforceBodyLimit(
   req: Request,
-  maxBodyBytes: number | undefined,
+  configured: number | undefined,
   instance: string,
 ): Promise<{ ok: true; req: Request } | { ok: false; response: Response }> {
-  if (maxBodyBytes === undefined) return { ok: true, req };
+  const maxBodyBytes = configured ?? DEFAULT_MAX_BODY_BYTES;
 
   const declared = Number(req.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBodyBytes) {
