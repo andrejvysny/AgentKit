@@ -10,7 +10,7 @@ Updated: 2026-09-02 (session 2)
 - [x] Wave B — 5.1: `CONTRACT_VERSION` 0.5.0, 4 Phase-2 golden scenarios, re-record goldens once, release prep (umbrella 0.5.0, `#v0.5.0` snippets), CHANGELOG 0.5.0
 - [x] Wave C — 5.5 docs (ADR 0014, contracts.md, roadmap, migration deltas, ports/architecture, sqlite README) ∥ verifier wave 2 (host/adapters/runner + 4.1 client/react); fix findings
 - [x] Wave D — Phase 6: `turn-runner.ts` split ∥ `sqlite-assistant-store.ts` split (pure moves)
-- [ ] Wave E — verifier wave 3 (pure-move check + A2/A3/B), final gate, handoff files + memory + Run log
+- [x] Wave E — verifier wave 3 (pure-move check + A2/A3/B), final gate, handoff files + memory + Run log
 
 ## Phase 0 — stop the bleeding
 - [x] 0.1 write-policy body `chatId` override (B1) — inline
@@ -68,7 +68,7 @@ Updated: 2026-09-02 (session 2)
 ## Verifier passes (fresh-context `reviewer-critical`, read-only, 2 agents per wave)
 - [x] wave 1 — Phase 0/2/4 + 5.2–5.4 (25 findings, all closed: V1–V14, W1–W11)
 - [x] wave 2 — Phase 1 (fencing), Phase 3 (host), adapters V7–V9, 4.1 multi-pass (2a: 7 findings, 2b: 9 findings — all HIGH/MED fixed; F6/F9 of 2b deferred)
-- [ ] wave 3 — after Phase 5–6
+- [x] wave 3 — after Phase 5–6 (pure-move verdict clean; 6 findings fixed inline: barrel leak, fence-first conformance case, settleResolved endAttempt guard, fake returns copies, zombie-resumed assertion)
 
 ## Follow-ups surfaced by agents/verifiers (not in plan; decide before or after 5.5)
 - [x] `poisonCount` exact only if incremented on `endAttempt(abandoned)` store-side

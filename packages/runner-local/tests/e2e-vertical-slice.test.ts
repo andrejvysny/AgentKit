@@ -969,6 +969,13 @@ class ParkingProviderClient implements AiProviderClient {
   readonly kind = "openai-compatible" as const;
   /** Provider round-trips so far. */
   callCount = 0;
+  /**
+   * Gated round-trips that were released and carried on past their gate. The
+   * proof that a "zombie" actually woke up and tried, rather than a stream
+   * nobody ever resumed — the run loop may abandon a suspended generator
+   * without `return()`ing it, so "the stream settled" is not observable.
+   */
+  resumedCalls = 0;
 
   constructor(
     private readonly inner: MockProviderClient,
@@ -990,6 +997,7 @@ class ParkingProviderClient implements AiProviderClient {
     for await (const event of this.inner.streamChat(input)) {
       if (gate !== undefined && event.type === "run.message.completed") {
         await gate.park();
+        this.resumedCalls += 1;
       }
       yield event;
     }
@@ -1280,6 +1288,11 @@ describe("e2e vertical slice (D) — a crashed attempt is continued, and its zom
       zombieGate.release();
       await workerA.stop();
       workerA = null;
+      // The zombie DID wake up past its gate and hand its answer to the run
+      // loop (call 3, the live attempt, is still parked), so what follows is a
+      // refusal, not a test that never asked.
+      expect(provider.resumedCalls).toBe(1);
+      expect(provider.callCount).toBe(3);
 
       const contested = await slice.store.tasks.getTask(submitted.runId);
       expect(contested?.status).toBe("running");

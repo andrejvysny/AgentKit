@@ -510,6 +510,66 @@ export function describeAssistantStoreConformance(
       }
     });
 
+    it("checks the fence BEFORE the first-terminal short-circuit", async () => {
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(makeTaskInput());
+        const first = await store.tasks.createAttempt({
+          attemptId: uniqueId("att"),
+          taskId: task.taskId,
+          ownerId: "worker-1",
+        });
+        const lost = await store.tasks.acquireLease({
+          taskId: task.taskId,
+          attemptId: first.attemptId,
+          ownerId: "worker-1",
+          ttlMs: 60_000,
+        });
+        await store.tasks.transitionTask(task.taskId, ["queued"], "running");
+        await store.tasks.endAttempt({
+          attemptId: first.attemptId,
+          status: "completed",
+          leaseToken: lost.leaseToken,
+        });
+        await store.tasks.expireStaleLeases(new Date(Date.now() + 120_000));
+        const second = await store.tasks.createAttempt({
+          attemptId: uniqueId("att"),
+          taskId: task.taskId,
+          ownerId: "worker-2",
+        });
+        const current = await store.tasks.acquireLease({
+          taskId: task.taskId,
+          attemptId: second.attemptId,
+          ownerId: "worker-2",
+          ttlMs: 60_000,
+        });
+
+        // A zombie re-ending an attempt that already landed must learn that
+        // its lease moved — a silent "unchanged" return would let its caller
+        // carry on as if it still owned the task. The fence is checked first.
+        await expectRejectsWithCode(
+          store.tasks.endAttempt({
+            attemptId: first.attemptId,
+            status: "abandoned",
+            leaseToken: lost.leaseToken,
+          }),
+          "lease_lost",
+          expect,
+        );
+        // The live owner asking the same thing gets the short-circuit: the
+        // first terminal status, unchanged, and no death counted.
+        const unchanged = await store.tasks.endAttempt({
+          attemptId: first.attemptId,
+          status: "abandoned",
+          leaseToken: current.leaseToken,
+        });
+        expect(unchanged.status).toBe("completed");
+        expect((await store.tasks.getTask(task.taskId))?.poisonCount).toBe(0);
+      } finally {
+        close?.();
+      }
+    });
+
     it("counts the same abandoned attempt once, however often it is ended", async () => {
       const { store, close } = await create();
       try {

@@ -850,11 +850,25 @@ export class SingleProcessTaskRunner implements TaskRunner {
       { finishedAt: this.clock.nowIso() },
       { leaseToken: lease.leaseToken },
     );
-    await this.store.tasks.endAttempt({
-      attemptId,
-      status,
-      leaseToken: lease.leaseToken,
-    });
+    try {
+      await this.store.tasks.endAttempt({
+        attemptId,
+        status,
+        leaseToken: lease.leaseToken,
+      });
+    } catch (err) {
+      // The task IS landed — that write committed. An attempt row left
+      // `running` under a terminal task is inconsistent but not corrupting
+      // (nothing reads attempt status for a terminal task, and recovery skips
+      // non-running tasks), so it is logged rather than allowed to mask the
+      // landing that already happened.
+      this.logger?.warn("task landed but its attempt could not be ended", {
+        taskId,
+        attemptId,
+        status,
+        error: errorMessage(err),
+      });
+    }
     return { kind: "done", landed: true };
   }
 
