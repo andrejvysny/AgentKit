@@ -86,7 +86,7 @@ function messageSearchText(alias: string): string {
  * this build already wrote, which is the property every statement here has.
  *
  * v8 adds two things, both durability follow-ups rather than features:
- * `idx_messages_run` on `messages(chat_id, run_id, depth)`, which is
+ * `idx_messages_run` on `messages(chat_id, run_id, depth, order_key)`, which is
  * `lastMessageOfRun`'s whole query — the lookup that opens EVERY turn attempt
  * by linking it to its own chain, and until now a scan of one chat's whole
  * message table each time — and `proposals.claimed_at`, the instant an apply
@@ -181,7 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_message_id, br
 -- depth is the third column so the ORDER BY reads it off the index backwards;
 -- SQLite is left sorting only the LAST term (order_key), over the rows of one
 -- run sitting at one depth.
-CREATE INDEX IF NOT EXISTS idx_messages_run ON messages(chat_id, run_id, depth);
+CREATE INDEX IF NOT EXISTS idx_messages_run ON messages(chat_id, run_id, depth, order_key);
 
 -- ── FULL-TEXT SEARCH ───────────────────────────────────────────────────────
 -- The searchable projection of every message, as a view: string bodies as

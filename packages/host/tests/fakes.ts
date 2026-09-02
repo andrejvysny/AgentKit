@@ -599,12 +599,13 @@ export class FakeTaskStore implements TaskStore {
     if (input.leaseToken !== undefined) {
       this.assertLeaseCurrent(attempt.taskId, input.leaseToken);
     }
+    const wasAbandoned = attempt.status === "abandoned";
     attempt.status = input.status;
     attempt.endedAt = this.clock.nowIso();
     if (input.error !== undefined) attempt.error = input.error;
     // The store owns the poison count, and the fake owes the services the same
     // rule — see `TaskStore.endAttempt`.
-    if (input.status === "abandoned") {
+    if (input.status === "abandoned" && !wasAbandoned) {
       const task = this.tasks.get(attempt.taskId);
       if (task) task.poisonCount += 1;
     }

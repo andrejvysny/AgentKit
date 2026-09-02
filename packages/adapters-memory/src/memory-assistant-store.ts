@@ -1195,6 +1195,7 @@ export class MemoryTaskStore implements TaskStore {
     if (input.leaseToken !== undefined) {
       this.assertLeaseCurrent(attempt.taskId, input.leaseToken);
     }
+    const wasAbandoned = attempt.status === "abandoned";
     attempt.status = input.status;
     attempt.endedAt = this.clock.nowIso();
     if (input.error !== undefined) attempt.error = input.error;
@@ -1202,7 +1203,8 @@ export class MemoryTaskStore implements TaskStore {
     // than on a later transition a caller has to remember (and can lose to a
     // crash or to a second recoverer reading the same value). Only `abandoned`;
     // a clean failure is a different diagnosis — see `TaskRecord.poisonCount`.
-    if (input.status === "abandoned") {
+    // Idempotent per attempt: the same death reported twice counts once.
+    if (input.status === "abandoned" && !wasAbandoned) {
       const task = this.tasks.get(attempt.taskId);
       if (task) task.poisonCount += 1;
     }
