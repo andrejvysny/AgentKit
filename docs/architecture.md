@@ -303,6 +303,30 @@ write; `fencingToken` is monotonic across *all* leases ever issued for a
 task, so a worker that paused and woke up believing it still owns the task
 is rejected by comparison even if it manages to re-acquire.
 
+**Fencing is enforced on the TERMINAL writes too**, not only on
+`appendEvents`/`updateProgress`: `transitionTask`, `endAttempt` and
+`markDeadLettered` take an optional `leaseToken`, and a store verifies it
+inside the same transaction as the write (`LeaseLostError` otherwise). Without
+it a zombie attempt — one whose lease expired mid-tool-call, with recovery
+already running attempt 2 — landed the task and ended its own attempt anyway,
+burying the live attempt's verdict; a runner cannot close that from outside,
+because its `renewLease` pre-check and the write it guards are separated by
+awaits. The option is optional so the paths that have no token by construction
+still work: recovery acts on a lease it has just deleted, and a cancel from an
+HTTP handler never had one. `TurnRunner` orders its terminal block around the
+fence — fenced `transitionTask` → `endAttempt` → then the placeholder
+`updateMessage` — because `ConversationStore` is lease-unaware and ordering is
+the only thing keeping a fenced-out attempt off the live answer. A renewal is
+refused once the lease has expired, since the runner asks `renewLease` *as* its
+"may I still write?" probe.
+
+*Consequence for consumers*: the task reaches its terminal status a moment
+BEFORE the placeholder is finalized, so a client that polls `getTask` and reads
+the message in the same breath can catch `placeholder: true` with empty content.
+The run event log is the authority on what the answer is — the placeholder is a
+projection of it — and the ordering is deliberate: a fenced-out attempt must be
+refused before it can touch a message no store can fence.
+
 ## Task kinds and executors
 
 A task's `kind` says what work it is and which code runs it — statuses,

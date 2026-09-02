@@ -188,6 +188,11 @@ export interface TaskRecord {
    * What to run, in whatever shape the executor for this `kind` understands —
    * for a chat turn: the chat, model, provider, and the message ids the turn
    * owns.
+   *
+   * MUST be serializable: a durable store round-trips it through its own
+   * encoding, and the reference adapters copy it on the way in and out so a
+   * caller that keeps mutating the object it submitted cannot edit a task
+   * already queued.
    */
   payload: Record<string, unknown>;
   /**
@@ -236,7 +241,18 @@ export interface TaskRecord {
   progress?: Record<string, unknown>;
   error?: string;
   attemptCount: number;
-  /** Attempts that died without a clean end — the dead-letter trigger. */
+  /**
+   * Attempts that died without a clean end (`abandoned`), as counted by
+   * whoever gave up on the task.
+   *
+   * NOT the dead-letter trigger — `attemptCount` is (the runner compares it
+   * with its own `maxAttempts`). This is the diagnosis that travels with the
+   * dead letter: "three attempts, and all three were abandoned" is a crashing
+   * worker, while "three attempts, none abandoned" is work that fails cleanly.
+   * Written through {@link TaskPatch.poisonCount} on the transition that lands
+   * the task, because {@link TASK_TRANSITIONS} has no `running → running` edge
+   * to carry a mid-flight increment.
+   */
   poisonCount: number;
   deadLetteredAt?: string;
   deadLetterReason?: string;
@@ -248,6 +264,10 @@ export interface CreateTaskInput {
   scopeId: string;
   payload: Record<string, unknown>;
   priority?: number;
+  /**
+   * Not claimable before this instant. NORMALIZED by the store to a UTC ISO
+   * string (`new Date(x).toISOString()`) — see {@link TaskPatch.availableAt}.
+   */
   availableAt?: string;
   /** Lineage — see {@link TaskRecord.parentTaskId}. Must already exist. */
   parentTaskId?: string;
@@ -260,6 +280,17 @@ export interface TaskPatch {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
+  /**
+   * Reschedule the task's earliest claim.
+   *
+   * NORMALIZED to a UTC ISO instant before it is stored, and an unparsable
+   * value is REJECTED rather than written. Both matter because a store compares
+   * this field as TEXT: `2026-01-01T01:30:00-05:00` names 06:30Z but sorts
+   * before `2026-01-01T02:00:00.000Z`, so an un-normalized offset-form backoff
+   * is claimed hours before it is due — and one adapter parsing it as a date
+   * while another compares the raw string is a divergence no conformance case
+   * would see unless it used an offset.
+   */
   availableAt?: string;
   priority?: number;
   poisonCount?: number;
@@ -288,6 +319,13 @@ export interface EndAttemptInput {
   attemptId: string;
   status: Exclude<AttemptStatus, "running">;
   error?: string;
+  /**
+   * Proof of ownership — see {@link FencedWriteOptions}. Absent means the
+   * write is not fenced, which is what recovery needs: it ends the attempt of
+   * a lease that has already been expired and deleted, so there is no token
+   * left to prove anything with.
+   */
+  leaseToken?: string;
 }
 
 /**
@@ -313,6 +351,34 @@ export interface AcquireLeaseInput {
   attemptId: string;
   ownerId: string;
   ttlMs: number;
+}
+
+/**
+ * Ownership proof for the writes that END a task or an attempt.
+ *
+ * `appendEvents` and `updateProgress` have always demanded a `leaseToken`,
+ * because two attempts interleaving into one event stream is obviously wrong.
+ * The TERMINAL writes did not, and that was the bigger hole: an attempt whose
+ * lease expired mid-tool-call (recovery has since started attempt 2) would
+ * still transition the task `completed` and end its own attempt, burying the
+ * live attempt's verdict under a zombie's. A runner cannot close that from
+ * outside — its `renewLease` pre-check and the write it guards are separated by
+ * awaits — so the proof has to be checked INSIDE the adapter's own
+ * transaction, next to the write.
+ *
+ * OPTIONAL, and deliberately so. A host that lands a task from outside any
+ * lease (a cancel from an HTTP handler, a boot-time reaper, `TaskService`) has
+ * no token to offer, and refusing those writes would break the very recovery
+ * paths that repair a crashed run. Absent means "unfenced, as before"; present
+ * means "verify or refuse".
+ */
+export interface FencedWriteOptions {
+  /**
+   * The writer's current lease token. When given, the store MUST verify inside
+   * the same transaction as the write that this token names the task's CURRENT
+   * lease, and throw {@link LeaseLostError} otherwise.
+   */
+  leaseToken?: string;
 }
 
 export interface AppendEventsOptions {
@@ -425,15 +491,16 @@ export interface TaskStore {
    * WHY THE STORE AND NOT THE CALLER. `ConversationService.deleteChat` still
    * checks first — it wants to refuse before it has deleted the conversation —
    * but its check cannot be the guarantee. It reads the scope and then deletes
-   * inside one async transaction, and in a single-event-loop host a CONCURRENT
-   * store call (a worker's `claimNext`) FLATTENS into that in-flight
-   * transaction rather than opening its own. So a task can go `queued →
-   * running` between the service's read and this call, and the service would
-   * then delete work a worker had just been handed. That hazard is a CLASS, not
-   * a quirk of this method: any check-then-act invariant that spans an `await`
-   * inside a transaction is not actually atomic, and every invariant of that
-   * shape has to be enforced by a single synchronous statement or transaction
-   * inside the adapter — which is what this method does.
+   * inside one async transaction, with an `await` in between, and a
+   * check-then-act invariant that spans an `await` is not atomic no matter how
+   * well-wrapped the transaction is. The reference adapters now QUEUE an
+   * unrelated caller's write behind an open transaction rather than letting it
+   * flatten in (that is how a concurrent `claimNext` used to move a task
+   * `queued → running` inside the gap), but that is an adapter's courtesy, not
+   * something this port can promise of every store. The hazard is a CLASS: an
+   * invariant of that shape has to be enforced by a single synchronous
+   * statement or transaction inside the adapter — which is what this method
+   * does.
    *
    * `queued` is deliberately NOT live: nothing has been spent on it, and
    * refusing on one would make a chat undeletable for as long as anything sat
@@ -455,15 +522,27 @@ export interface TaskStore {
    * hiccup) or when `from → to` is not in {@link TASK_TRANSITIONS}. Passing the
    * expected `from` set rather than blind-writing is what makes cancel-vs-finish
    * races resolve to exactly one winner.
+   *
+   * With `opts.leaseToken`, the CAS is fenced as well: the store MUST verify
+   * ownership inside the same transaction and reject a stale token with
+   * {@link LeaseLostError} — see {@link FencedWriteOptions}.
    */
   transitionTask(
     taskId: string,
     from: TaskStatus[],
     to: TaskStatus,
     patch?: TaskPatch,
+    opts?: FencedWriteOptions,
   ): Promise<TaskRecord>;
 
   createAttempt(input: CreateAttemptInput): Promise<AttemptRecord>;
+  /**
+   * Close an attempt with its outcome.
+   *
+   * With {@link EndAttemptInput.leaseToken}, fenced the same way
+   * {@link transitionTask} is: the token must name the CURRENT lease of the
+   * attempt's task, or the write is refused with {@link LeaseLostError}.
+   */
   endAttempt(input: EndAttemptInput): Promise<AttemptRecord>;
 
   acquireLease(input: AcquireLeaseInput): Promise<Lease>;
@@ -486,6 +565,14 @@ export interface TaskStore {
    * `RunChatInput.firstSeq` inside a chat pass, `createTaskEventWriter`
    * elsewhere), so a store that renumbered would desync the ids already streamed
    * to a client.
+   *
+   * A REPEATED `eventId` is rejected with {@link SeqConflictError} too. The
+   * guaranteed scope of that uniqueness is ONE TASK — that is all a consumer
+   * deduping a replayed stream needs, and all a store can promise cheaply. A
+   * store MAY enforce it more widely (the sqlite adapter's `event_id` index is
+   * UNIQUE across the whole table, so a collision between two tasks fails there
+   * and passes on the memory adapter); ids come from `IdGenerator.eventId`, so
+   * a cross-task collision means a broken generator either way.
    *
    * The element type is the task-kind-agnostic {@link TaskEventEnvelope}: the
    * store orders by `seq` and dedups by `eventId` and reads nothing else, so one
@@ -545,5 +632,15 @@ export interface TaskStore {
    */
   claimNext(input: ClaimNextInput): Promise<ClaimedTask | null>;
 
-  markDeadLettered(taskId: string, reason: string): Promise<TaskRecord>;
+  /**
+   * Stamp the task as poisoned — the row that says "stop feeding this work".
+   *
+   * Fenced by `opts.leaseToken` on the same terms as {@link transitionTask}:
+   * present, the token must name the task's current lease.
+   */
+  markDeadLettered(
+    taskId: string,
+    reason: string,
+    opts?: FencedWriteOptions,
+  ): Promise<TaskRecord>;
 }

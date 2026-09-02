@@ -151,6 +151,19 @@ type AttemptOutcome =
   | { kind: "done"; landed: boolean }
   | { kind: "retry"; next: { attemptId: string; lease: Lease } };
 
+/** What a terminal transition writes alongside the status. */
+interface LandOptions {
+  error?: string;
+  /**
+   * Present only where this process still holds the task. Absent on the
+   * recovery paths, whose whole premise is that the lease is gone — see
+   * {@link SingleProcessTaskRunner.deadLetter}.
+   */
+  leaseToken?: string;
+  /** Attempts that died without a clean end — see `TaskRecord.poisonCount`. */
+  poisonCount?: number;
+}
+
 export class SingleProcessTaskRunner implements TaskRunner {
   /**
    * Per-scope serialization + queue positions. Public because "you are second
@@ -201,6 +214,8 @@ export class SingleProcessTaskRunner implements TaskRunner {
   private worker: TaskWorker | null = null;
   private ownerId = "";
   private concurrency = DEFAULT_CONCURRENCY;
+  /** {@link StartWorkerOptions.kinds}, forwarded to every claim. */
+  private kinds: string[] | undefined;
   private stopped = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** True while a claim pass is running — there is exactly one loop. */
@@ -257,6 +272,10 @@ export class SingleProcessTaskRunner implements TaskRunner {
       });
     }
     if (task.status !== "queued") {
+      // Claimed elsewhere, or already finished. Drop whatever place in line an
+      // earlier enqueue gave it: nothing will ever dispatch it here, and a
+      // waiter nobody removes is how `waitingByScope` grows without bound.
+      this.scopeLock.remove(task.scopeId, task.taskId);
       this.logger?.debug("enqueue ignored: task is not queued", {
         taskId: task.taskId,
         status: task.status,
@@ -323,7 +342,10 @@ export class SingleProcessTaskRunner implements TaskRunner {
       }
       return;
     }
-    // Terminal: nothing to stop.
+    // Terminal: nothing to stop — but a task that was queued behind a busy
+    // scope when it was cancelled still holds its place in line, and nothing
+    // else will ever take it out.
+    this.scopeLock.remove(task.scopeId, taskId);
   }
 
   /**
@@ -392,7 +414,13 @@ export class SingleProcessTaskRunner implements TaskRunner {
       }
 
       if (task.attemptCount >= this.maxAttempts) {
-        await this.deadLetter(task.taskId, POISON_REASON);
+        // The attempt just ended `abandoned`, and this is the transition that
+        // lands the task — the only place the count can be written, since
+        // TASK_TRANSITIONS has no `running -> running` edge to carry a
+        // mid-flight increment.
+        await this.deadLetter(task.taskId, POISON_REASON, {
+          poisonCount: task.poisonCount + 1,
+        });
         report.deadLettered += 1;
         continue;
       }
@@ -487,6 +515,11 @@ export class SingleProcessTaskRunner implements TaskRunner {
     this.worker = worker;
     this.ownerId = opts.ownerId ?? `owner_${crypto.randomUUID()}`;
     this.concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
+    // Copied, not aliased: the claim filter must not change under this worker
+    // because the caller kept editing the array it passed. An EMPTY array is
+    // kept as an empty array — "no kind is claimable" is a real answer, and
+    // folding it to `undefined` would hand this worker everything.
+    this.kinds = opts.kinds === undefined ? undefined : [...opts.kinds];
     this.stopped = false;
     // The boot order's other half: a `recover()` that ran BEFORE this (which is
     // how `recoverOnBoot` is wired) parked its abandoned tasks for want of a
@@ -563,6 +596,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
             ownerId: this.ownerId,
             now: this.clock.now(),
             scopesBusy: this.scopeLock.busyScopes(),
+            ...(this.kinds === undefined ? {} : { kinds: this.kinds }),
           });
         } catch (err) {
           this.logger?.error("claimNext failed", { error: errorMessage(err) });
@@ -591,8 +625,16 @@ export class SingleProcessTaskRunner implements TaskRunner {
     if (superseded) {
       // Only reachable via `recover()` re-dispatching a task whose previous
       // execution is still hanging in this process. The new one owns the task
-      // from here; the old one is fenced out by the lease and will write
-      // nothing when it eventually settles.
+      // from here, and the old one is fenced out of every TASK write by the
+      // lease it no longer holds — but not out of the conversation records it
+      // may be mid-stream on, and not out of the provider call it is paying
+      // for. So it is ABORTED rather than merely left to discover the loss:
+      // two executions of one task writing the same chat is the hazard
+      // superseding creates, and the signal is what ends it. Its own `finally`
+      // still checks `active.get(taskId) === entry`, so nothing it does on the
+      // way out can touch the new execution's resources.
+      superseded.cancelRequested = true;
+      superseded.controller.abort();
       this.logger?.warn(
         "superseding a still-running execution after recovery",
         {
@@ -620,9 +662,20 @@ export class SingleProcessTaskRunner implements TaskRunner {
 
     const promise = this.executeClaimed(claimed, worker, entry);
     this.inFlight.add(promise);
-    void promise.finally(() => {
-      this.inFlight.delete(promise);
-    });
+    // `executeClaimed` catches its own failures, so this `catch` is for what is
+    // left: a throw from its `finally` (a logger, `kick()`), which would
+    // otherwise surface as an unhandled rejection — in Bun, a process-level
+    // event with no connection to the task it came from.
+    promise
+      .finally(() => {
+        this.inFlight.delete(promise);
+      })
+      .catch((err: unknown) => {
+        this.logger?.error("task execution settled with an unhandled error", {
+          taskId: task.taskId,
+          error: errorMessage(err),
+        });
+      });
   }
 
   /**
@@ -760,7 +813,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
 
     return threw
       ? await this.settleThrown(taskId, attemptId, lease, entry, thrown)
-      : await this.settleResolved(taskId, attemptId, entry);
+      : await this.settleResolved(taskId, attemptId, lease, entry);
   }
 
   /**
@@ -777,6 +830,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
   private async settleResolved(
     taskId: string,
     attemptId: string,
+    lease: Lease,
     entry: ActiveExecution,
   ): Promise<AttemptOutcome> {
     const task = await this.store.tasks.getTask(taskId);
@@ -784,10 +838,21 @@ export class SingleProcessTaskRunner implements TaskRunner {
       return { kind: "done", landed: true };
     // A cancel that the worker swallowed still means cancelled, not completed.
     const status = entry.cancelRequested ? "cancelled" : "completed";
-    await this.store.tasks.endAttempt({ attemptId, status });
-    await this.store.tasks.transitionTask(taskId, ["running"], status, {
-      finishedAt: this.clock.nowIso(),
+    // FENCED. `stillHoldsLease` above is a pre-check, not the guarantee — it
+    // and these writes are separated by awaits, and the token is what makes the
+    // store refuse a verdict from an attempt that lost the task in the gap.
+    await this.store.tasks.endAttempt({
+      attemptId,
+      status,
+      leaseToken: lease.leaseToken,
     });
+    await this.store.tasks.transitionTask(
+      taskId,
+      ["running"],
+      status,
+      { finishedAt: this.clock.nowIso() },
+      { leaseToken: lease.leaseToken },
+    );
     return { kind: "done", landed: true };
   }
 
@@ -808,8 +873,11 @@ export class SingleProcessTaskRunner implements TaskRunner {
         attemptId,
         status: "cancelled",
         error: message,
+        leaseToken: lease.leaseToken,
       });
-      await this.landIfRunning(taskId, "cancelled");
+      await this.landIfRunning(taskId, "cancelled", {
+        leaseToken: lease.leaseToken,
+      });
       return { kind: "done", landed: true };
     }
 
@@ -817,6 +885,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
       attemptId,
       status: "failed",
       error: `${classified.reason}: ${message}`,
+      leaseToken: lease.leaseToken,
     });
 
     if (kind === "terminal") {
@@ -828,11 +897,10 @@ export class SingleProcessTaskRunner implements TaskRunner {
         attemptId,
         reason: classified.reason,
       });
-      await this.landIfRunning(
-        taskId,
-        "failed",
-        `${classified.reason}: ${message}`,
-      );
+      await this.landIfRunning(taskId, "failed", {
+        error: `${classified.reason}: ${message}`,
+        leaseToken: lease.leaseToken,
+      });
       return { kind: "done", landed: true };
     }
 
@@ -855,7 +923,9 @@ export class SingleProcessTaskRunner implements TaskRunner {
     // `attemptCount` is the store's own count, incremented by `createAttempt` —
     // no separate bookkeeping to drift out of sync with the attempt rows.
     if (task.attemptCount >= this.maxAttempts) {
-      await this.deadLetter(taskId, `${classified.reason}: ${message}`);
+      await this.deadLetter(taskId, `${classified.reason}: ${message}`, {
+        leaseToken: lease.leaseToken,
+      });
       return { kind: "done", landed: true };
     }
     if (this.stopped || !this.worker) {
@@ -969,10 +1039,18 @@ export class SingleProcessTaskRunner implements TaskRunner {
     (heartbeat as unknown as { unref?: () => void }).unref?.();
     try {
       while (!this.stopped && !entry.cancelRequested) {
-        const remaining = deadline - this.clock.now().getTime();
-        if (remaining <= 0) break;
+        // THE DEADLINE IS ON THE INJECTED CLOCK; the sleep is on the real one,
+        // and the two are never mixed. `Clock` has no timer facility — it
+        // answers "what time is it?", not "wake me later" — so a real
+        // `setTimeout` is the only way to yield at all, and it is capped at
+        // `pollMs` so the loop keeps re-asking the injected clock (a test that
+        // jumps its clock forward leaves the backoff within one poll) and
+        // `stop()` stays responsive instead of waiting out a 30-second wait.
+        // Sleeping for the injected `remaining` would be the category error:
+        // a fake clock's milliseconds are not real ones.
+        if (this.clock.now().getTime() >= deadline) break;
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, Math.min(remaining, this.pollMs));
+          const timer = setTimeout(resolve, this.pollMs);
           (timer as unknown as { unref?: () => void }).unref?.();
         });
       }
@@ -1014,11 +1092,29 @@ export class SingleProcessTaskRunner implements TaskRunner {
     return { attempt, lease };
   }
 
-  /** Mark the task poisoned AND land it failed — the row alone stops nothing. */
-  private async deadLetter(taskId: string, reason: string): Promise<void> {
+  /**
+   * Mark the task poisoned AND land it failed — the row alone stops nothing.
+   *
+   * `opts.leaseToken` is present only when this process still owns the task
+   * (the settle path). The RECOVERY path has no token to offer by construction:
+   * `expireStaleLeases` deleted the lease that made the task findable before
+   * this is reached, and refusing the write for want of a token would leave the
+   * poisoned task `running` forever.
+   */
+  private async deadLetter(
+    taskId: string,
+    reason: string,
+    opts: LandOptions = {},
+  ): Promise<void> {
     this.logger?.warn("dead-lettering task", { taskId, reason });
-    await this.store.tasks.markDeadLettered(taskId, reason);
-    await this.landIfRunning(taskId, "failed", reason);
+    await this.store.tasks.markDeadLettered(
+      taskId,
+      reason,
+      opts.leaseToken === undefined
+        ? undefined
+        : { leaseToken: opts.leaseToken },
+    );
+    await this.landIfRunning(taskId, "failed", { ...opts, error: reason });
   }
 
   /**
@@ -1030,7 +1126,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
   private async landIfRunning(
     taskId: string,
     to: "completed" | "failed" | "cancelled",
-    error?: string,
+    opts: LandOptions = {},
   ): Promise<void> {
     const task = await this.store.tasks.getTask(taskId);
     if (!task || task.status !== "running") {
@@ -1041,10 +1137,21 @@ export class SingleProcessTaskRunner implements TaskRunner {
       });
       return;
     }
-    await this.store.tasks.transitionTask(taskId, ["running"], to, {
-      finishedAt: this.clock.nowIso(),
-      ...(error === undefined ? {} : { error }),
-    });
+    await this.store.tasks.transitionTask(
+      taskId,
+      ["running"],
+      to,
+      {
+        finishedAt: this.clock.nowIso(),
+        ...(opts.error === undefined ? {} : { error: opts.error }),
+        ...(opts.poisonCount === undefined
+          ? {}
+          : { poisonCount: opts.poisonCount }),
+      },
+      opts.leaseToken === undefined
+        ? undefined
+        : { leaseToken: opts.leaseToken },
+    );
   }
 
   /**
