@@ -4,6 +4,8 @@
   "description": "Embeddable AI-assistant framework: chat-with-tools loop, durable task orchestration, and storage/transport adapters, as one installable package with subpath imports.",
   "license": "MIT",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "engines": {
     "node": ">=20",
     "bun": ">=1.3"
@@ -12,7 +14,12 @@
     "dist",
     "README.md"
   ],
+  "sideEffects": false,
   "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
     "./contracts": {
       "types": "./dist/contracts/index.d.ts",
       "import": "./dist/contracts/index.js"

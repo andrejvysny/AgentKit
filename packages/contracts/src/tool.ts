@@ -69,7 +69,7 @@ export type AiToolLimits = Static<typeof AiToolLimitsSchema>;
 
 export const AiToolResultSchema = Type.Object({
   ok: Type.Boolean(),
-  data: Type.Unknown(),
+  data: Type.Optional(Type.Unknown()),
   sources: Type.Array(AiSourceRefSchema),
   warnings: Type.Array(Type.String()),
   truncated: Type.Boolean(),
