@@ -258,11 +258,6 @@ itself) creates real pressure for them.
   unknown-session path never reaches — a caller that can measure response
   latency can tell "no such session" from "that session exists, but it is
   not yours." Recorded here rather than fixed in the same wave.
-- **`openAgentKitDatabase` can leak a handle on a throw path.**
-  `packages/adapters-sqlite/src/sqlite-assistant-store.ts`'s
-  `openAgentKitDatabase` opens a `bun:sqlite` handle and then runs schema
-  setup against it; a throw partway through schema setup does not appear to
-  close the handle it already opened before propagating.
 - **`WriteAllowanceDto.chatId` is redundant** now that all three allowance
   routes are nested under `/v1/chats/:chatId/write-policy/allowances`
   (moved there so `AuthorizationPort` can authorize them per chat) — the DTO
