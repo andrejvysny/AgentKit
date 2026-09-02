@@ -36,17 +36,20 @@ or rolls all of it back on a throw. An adapter that cannot roll back (a
 plain in-memory store) must declare `capabilities.atomicTransactions: false`
 to the conformance harness rather than silently pass a weaker guarantee.
 
-**Callers are serialized per store handle.** A `transaction()` (or a worker's
-`claimNext`) issued while another caller's transaction is open WAITS for it and
-then runs in a transaction of its own, so a throw rolls back only that caller's
-writes — it used to join whatever was open and be discarded by a stranger's
-rollback. Port calls the callback makes through the `tx` it is handed join that
-transaction, and a nested `tx.transaction(...)` flattens into it rather than
-nesting. The corollary is that a callback must do its work through `tx`: a call
-made on the ROOT store from inside the callback is indistinguishable from an
-unrelated caller's, so awaiting a root-store `transaction()`/`claimNext` in
-there waits on a transaction that cannot finish until the callback returns.
-Both reference adapters do this, and the conformance suite grades it.
+**Callers are serialized per store handle.** A `transaction()`, a worker's
+`claimNext`, and every ordinary WRITE issued while another caller's transaction
+is open all WAIT for it and then run in a transaction of their own, so a throw
+rolls back only that caller's writes — they used to join whatever was open and
+be discarded by a stranger's rollback. READS are exempt and still join: they
+take no lock worth serializing, and a `getTask` that queued behind every busy
+host transaction would be a performance cliff for no correctness. Port calls the
+callback makes through the `tx` it is handed join that transaction, and a nested
+`tx.transaction(...)` flattens into it rather than nesting. The corollary is
+that a callback must do its work through `tx`: a write made on the ROOT store
+from inside the callback is indistinguishable from an unrelated caller's, so
+awaiting one in there waits on a transaction that cannot finish until the
+callback returns. Both reference adapters do this, and the conformance suite
+grades it.
 
 **Reference / conformance**: `MemoryAssistantStore` in
 [`packages/adapters-memory/src/`](../packages/adapters-memory/src/) and
@@ -283,14 +286,55 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
   retryable hiccup), and MUST reject a transition not in
   `TASK_TRANSITIONS`. `TASK_TRANSITIONS` admits one `queued → failed` edge,
   reserved for the dependency cascade below.
+- **Terminal writes can be FENCED.** `transitionTask(…, opts?)`,
+  `EndAttemptInput.leaseToken?` and `markDeadLettered(…, opts?)` all take an
+  optional `leaseToken`; when one is given the store MUST verify **inside the
+  same transaction as the write** that it names the task's CURRENT lease, and
+  reject a stale one with `LeaseLostError`. This is what closes the zombie
+  attempt: a run whose lease expired mid-tool-call (recovery has since started
+  attempt 2) used to transition the task and end its own attempt anyway,
+  burying the live attempt's verdict — `appendEvents`/`updateProgress` refused
+  such a writer, the terminal writes did not, and `Lease.fencingToken` was a
+  field nothing ever compared. The reference adapters keep exactly one lease
+  row per task, replaced on every `acquireLease`, so matching the token IS the
+  fencing comparison. **The option is OPTIONAL on purpose**: a host that lands
+  a task from outside any lease (a cancel from an HTTP handler, a boot-time
+  reaper, `TaskService`) has no token to offer, and the recovery paths that
+  repair a crashed run depend on being able to write without one.
+  `TurnRunner`'s terminal block therefore ORDERS itself around the fence —
+  fenced `transitionTask` → `endAttempt` → only then the placeholder
+  `updateMessage` — because `ConversationStore` knows nothing about leases and
+  ordering is the only way to keep a fenced-out attempt off the live answer.
+- `availableAt` (on `CreateTaskInput`, and on the `TaskPatch` a backoff writes)
+  is NORMALIZED to a UTC ISO instant, and an unparsable value is REJECTED. Both
+  adapters compare the field as text or parse it back to a `Date`, and
+  `2026-01-01T01:30:00-05:00` (06:30Z) sorts before `2026-01-01T02:00:00.000Z`
+  — an un-normalized offset-form backoff is claimed hours early on one adapter
+  and not the other, silently, in the retry paths nobody watches.
+- `poisonCount` counts attempts that ended `abandoned`, written through
+  `TaskPatch.poisonCount` on the transition that LANDS the task — there is no
+  `running → running` edge to carry a mid-flight increment. It is the diagnosis
+  that travels with a dead letter ("three attempts, all abandoned" is a
+  crashing worker), not the dead-letter trigger; `attemptCount` is.
 - `appendEvents`/`listEvents` are typed on `TaskEventEnvelope`
   (`@agentkit/contracts`) — the kind-agnostic shape the store actually
   orders (`seq`) and dedups (`eventId`); `AiRunEvent` is the `chat.turn`
   vocabulary and structurally satisfies it. `appendEvents` MUST reject a
-  stale `leaseToken` (`LeaseLostError`) and a non-monotonic `seq`
-  (`SeqConflictError`); it MUST NOT re-stamp `seq` — the emitter owns
-  numbering (core's stamper inside a chat pass, `createTaskEventWriter`
-  elsewhere).
+  stale `leaseToken` (`LeaseLostError`), a non-monotonic `seq` and a REPEATED
+  `eventId` (both `SeqConflictError`); it MUST NOT re-stamp `seq` — the emitter
+  owns numbering (core's stamper inside a chat pass, `createTaskEventWriter`
+  elsewhere). The guaranteed scope of `eventId` uniqueness is **one task** —
+  that is what a consumer deduping a replay needs. A store MAY enforce it more
+  widely: `SqliteTaskStore`'s `event_id` index is unique across the whole
+  table, so it also rejects a collision between two tasks, while
+  `MemoryTaskStore` keeps a per-task set. Ids come from `IdGenerator.eventId`,
+  so a cross-task collision means a broken generator either way.
+- Records handed back are SNAPSHOTS. A caller may mutate what it submitted or
+  what it was returned without reaching stored state, in either direction —
+  `SqliteTaskStore` gets this from rebuilding every record out of its own
+  encoding; `MemoryTaskStore` clones `payload`, `progress`, message metadata and
+  every event at both boundaries. `TaskRecord.payload` must therefore be
+  serializable.
 - `claimNext` MUST be atomic: claiming a task creates its attempt and lease
   in the same operation, so no other caller can claim the same task.
   `ClaimNextInput.kinds?` optionally restricts the claim to a set of kinds,
@@ -336,20 +380,28 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
   with the previous attempt's snapshot still in place until it writes one.
 
 > **Hazard class: check-then-act across an `await` inside a transaction.**
-> In a single-event-loop host, a concurrent SYNCHRONOUS store call still
-> **flattens into an in-flight async transaction** rather than opening its own
-> (over `bun:sqlite` there are no savepoints, and the same handle is what lets
-> the MCP config store write inside a host transaction at all). Only the
-> transaction-opening calls — `transaction` and `claimNext` — queue instead. So
-> an invariant checked before an `await` and acted on after it is *not* atomic,
-> however well-wrapped the transaction is: a verifier drove exactly this
-> against `ConversationService.deleteChat` and got a `claimNext` claiming a
-> task the committed transaction had deleted.
-> Any invariant of that shape must be enforced by a **single synchronous
-> statement or transaction inside the adapter** — which is why the busy check
-> now lives in `deleteByScope` and is pinned there by the shared conformance
-> suite (`packages/testing/src/chat-lifecycle-conformance.ts`), for both
-> reference adapters.
+> An invariant checked before an `await` and acted on after it is *not* atomic,
+> however well-wrapped the transaction is: a verifier drove exactly this against
+> `ConversationService.deleteChat` and got a `claimNext` claiming a task the
+> committed transaction had deleted. Any invariant of that shape must be
+> enforced by a **single synchronous statement or transaction inside the
+> adapter** — which is why the busy check lives in `deleteByScope` and is pinned
+> there by the shared conformance suite
+> (`packages/testing/src/chat-lifecycle-conformance.ts`), for both reference
+> adapters.
+>
+> **What the adapters now guarantee underneath it.** Every WRITE method of every
+> `SqliteAssistantStore` sub-store waits out an async transaction it is not part
+> of before opening its own, and the `tx` view a `transaction()` callback is
+> handed carries the owner token that lets ITS writes flatten in. So a
+> concurrent `store.conversations.updateChat(...)` no longer joins a stranger's
+> `BEGIN` and no longer dies with its rollback, and neither does a `claimNext`.
+> READS still join an open transaction: they take no lock worth serializing, and
+> a `getTask` that queued behind every busy host transaction would be a
+> performance cliff for no correctness. The gate check and the `BEGIN` happen in
+> ONE tick — the obvious two-step (`await ready()`, then `withTx`) leaves a
+> microtask gap in which a transaction already queued on the same gate runs its
+> own `BEGIN`, which is exactly the flatten being prevented.
 
 **`waiting_approval` is currently producer-less.** No code in this repository
 moves a task into it: a staged write returns `pending` to the model and the
@@ -457,10 +509,26 @@ a separate, retryable step keyed on `claimBatch`/`markPublished`/
 `markFailed` — without it, a host would have to choose between announcing
 work that may still roll back and losing the announcement on a crash.
 
-**Key invariant** (`OutboxStore`): `claimBatch` must not hand an in-flight
-record to a second claimer before it is resolved — the reference adapter
-does this by pushing `availableAt` forward on claim, the same trick a
-visibility-timeout queue uses.
+**Key invariants** (`OutboxStore`):
+- `claimBatch` must not hand an in-flight record to a second claimer before it
+  is resolved — the reference adapters do this by pushing `availableAt` forward
+  on claim, the same trick a visibility-timeout queue uses.
+- **Delivery is capped.** A record that has been claimed `maxAttempts` times
+  (adapter option, default 10) stops matching the claim query and stays as an
+  inspectable dead letter with its `attempts` and `lastError`. There is no
+  separate flag: `attempts` is already the count, and uncapped meant a payload
+  no consumer can accept was redelivered on every claim for the life of the
+  database.
+- `markPublished` / `markFailed` MUST reject an unknown id with
+  `RecordNotFoundError`. Silently doing nothing made "the publisher says it
+  published, the row says it did not" a mystery with no error anywhere.
+- `prune(before)` deletes what can never be claimed again and is older than
+  `before` — published records (aged from `publishedAt`) and attempt-exhausted
+  ones (aged from `createdAt`) — and returns how many rows went. It never
+  removes a claimable record, whatever `before` says. Retention is the caller's
+  decision, which is why this takes an instant rather than sweeping on a timer.
+  `availableAt` is normalized on `enqueue`, for the same reason it is on
+  `TaskPatch`.
 
 ## Execution
 
@@ -472,6 +540,10 @@ The durable queue that turns "a task exists" into "a worker is executing
 it". Deliberately has **no `subscribe()`** — events reach consumers through
 the task event log and the outbox, both of which survive a restart; a
 subscription on the runner would be a second, lossier channel.
+`StartWorkerOptions.kinds?` is forwarded verbatim as `ClaimNextInput.kinds`,
+which is what makes the documented multi-pool deployment reachable: absent
+means "any kind", an empty array means "no kind" (what a worker with an empty
+executor registry actually wants).
 
 **Key invariants**:
 - `enqueue` is idempotent per `taskId`: a redelivered enqueue for a task
@@ -542,8 +614,14 @@ accident:
 - `TaskService.dispatch` (and therefore `submitTask`) MUST run strictly
   after the transaction that created the task has committed. Enqueuing from
   inside the transaction callback risks the claim loop claiming a row that
-  a rollback then deletes out from under a running worker — the
-  `bun:sqlite` join-transaction hazard noted on
+  a rollback then deletes out from under a running worker. The reference
+  adapters now make an unrelated `claimNext` (and every other unrelated write)
+  QUEUE behind an open transaction rather than join it, so it can no longer be
+  rolled back by a stranger — but a claim of a row that is still uncommitted is
+  a different failure, and the ordering rule is what prevents it. A callback
+  must also do its own work through the `tx` it was handed: a ROOT-store write
+  issued from inside it is indistinguishable from an unrelated caller's and
+  waits on the transaction it is running in — see
   [`AssistantStore.transaction`](#assistantstore-aggregate).
 - `createTaskEventWriter` is barred from use inside a chat pass. Inside a
   pass, core's `createEventStamper` owns `seq` numbering in memory; a

@@ -20,6 +20,7 @@ import {
   AgentKitHostError,
   DuplicateTaskError,
   InvalidRegenerateError,
+  LeaseLostError,
   RecordNotFoundError,
   UsageDeniedError,
 } from "../errors.js";
@@ -833,7 +834,7 @@ export class TurnRunner implements TaskWorker {
    * it.
    */
   async executeTask(ctx: TaskExecutionContext): Promise<void> {
-    const { task, attemptId } = ctx;
+    const { task } = ctx;
     const payload = task.payload as unknown as Partial<TurnRequest>;
     const chatId = payload.chatId;
     const assistantMessageId = payload.assistantMessageId;
@@ -858,7 +859,7 @@ export class TurnRunner implements TaskWorker {
         )} in its payload; only TurnRunner.submitMessage may create tasks of this kind.`,
         { taskId: task.taskId, kind: task.kind, missing },
       );
-      await this.failQuietly(task.taskId, attemptId, error.message);
+      await this.failQuietly(ctx, error.message);
       throw error;
     }
 
@@ -867,7 +868,7 @@ export class TurnRunner implements TaskWorker {
       await this.runTurn(ctx, chatId, request, assistantMessageId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.failQuietly(task.taskId, attemptId, message);
+      await this.failQuietly(ctx, message);
       throw err;
     }
   }
@@ -1100,6 +1101,33 @@ export class TurnRunner implements TaskWorker {
       }
     }
 
+    const finalStatus: TaskStatus =
+      terminal === "completed"
+        ? "completed"
+        : terminal === "cancelled"
+          ? "cancelled"
+          : "failed";
+    // THE FENCED TASK TRANSITION GOES FIRST, and the placeholder write last.
+    // `ConversationStore` knows nothing about leases, so the only way to keep a
+    // zombie attempt — one whose lease expired mid-tool-call, with recovery
+    // already running attempt 2 — from overwriting the live attempt's answer is
+    // to make it prove ownership on a write that CAN check, before it touches
+    // the message. `LeaseLostError` from here therefore aborts the whole block:
+    // the placeholder is left for the owner that actually holds the task, and
+    // the error propagates so the queue classifies this attempt as lost rather
+    // than finished.
+    await store.tasks.transitionTask(
+      task.taskId,
+      ["running"],
+      finalStatus,
+      { finishedAt: clock.nowIso() },
+      { leaseToken: ctx.leaseToken },
+    );
+    await store.tasks.endAttempt({
+      attemptId: ctx.attemptId,
+      status: finalStatus,
+      leaseToken: ctx.leaseToken,
+    });
     // `state.content` rather than the `finalContent` snapshot above: a
     // correction pass rewrites the visible answer, and the snapshot predates it.
     // With no harness the two are the same string — nothing between them touches
@@ -1107,20 +1135,6 @@ export class TurnRunner implements TaskWorker {
     await store.conversations.updateMessage(assistantMessageId, {
       content: state.content,
       metadata: { placeholder: false },
-    });
-
-    const finalStatus: TaskStatus =
-      terminal === "completed"
-        ? "completed"
-        : terminal === "cancelled"
-          ? "cancelled"
-          : "failed";
-    await store.tasks.transitionTask(task.taskId, ["running"], finalStatus, {
-      finishedAt: clock.nowIso(),
-    });
-    await store.tasks.endAttempt({
-      attemptId: ctx.attemptId,
-      status: finalStatus,
     });
   }
 
@@ -1752,37 +1766,50 @@ export class TurnRunner implements TaskWorker {
    * Best-effort failure bookkeeping on an unexpected throw. Every step is
    * guarded: the original error is what the caller must see, and a secondary
    * failure while recording it would replace the diagnosis with noise.
+   *
+   * SAME ORDER AS THE TERMINAL BLOCK, for the same reason: the fenced task
+   * transition is the one write that can prove this attempt still owns the
+   * task, so it goes first, and a `LeaseLostError` from it stops the rest. An
+   * attempt that has been fenced out must record nothing — not even a failure —
+   * because the owner that took the task over is the one whose verdict counts,
+   * and `abandoned` (which recovery already wrote for this attempt) is the
+   * honest description of what happened here.
    */
   private async failQuietly(
-    taskId: string,
-    attemptId: string,
+    ctx: TaskExecutionContext,
     message: string,
   ): Promise<void> {
     const { store, clock, logger } = this.deps;
-    try {
-      await store.tasks.endAttempt({
-        attemptId,
-        status: "failed",
-        error: message,
-      });
-    } catch (err) {
-      logger?.warn("could not end attempt after failure", {
-        taskId,
-        attemptId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    const taskId = ctx.task.taskId;
     try {
       const task = await store.tasks.getTask(taskId);
       if (task?.status === "running") {
-        await store.tasks.transitionTask(taskId, ["running"], "failed", {
-          finishedAt: clock.nowIso(),
-          error: message,
-        });
+        await store.tasks.transitionTask(
+          taskId,
+          ["running"],
+          "failed",
+          { finishedAt: clock.nowIso(), error: message },
+          { leaseToken: ctx.leaseToken },
+        );
       }
     } catch (err) {
       logger?.warn("could not fail task after error", {
         taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      if (err instanceof LeaseLostError) return;
+    }
+    try {
+      await store.tasks.endAttempt({
+        attemptId: ctx.attemptId,
+        status: "failed",
+        error: message,
+        leaseToken: ctx.leaseToken,
+      });
+    } catch (err) {
+      logger?.warn("could not end attempt after failure", {
+        taskId,
+        attemptId: ctx.attemptId,
         error: err instanceof Error ? err.message : String(err),
       });
     }

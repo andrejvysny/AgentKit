@@ -30,6 +30,7 @@ import type {
 } from "@agentkit/contracts";
 import {
   ACTION_ID_RELEASING_STATUSES,
+  AgentKitHostError,
   activationSetOf,
   activeLeafOf,
   activePathOf,
@@ -80,6 +81,7 @@ import {
   type CreateProposalInput,
   type CreateTaskInput,
   type EndAttemptInput,
+  type FencedWriteOptions,
   type ForkChatResult,
   type IdGenerator,
   type ImportConversationInput,
@@ -119,6 +121,14 @@ import {
 const DEFAULT_LEASE_TTL_MS = 30_000;
 /** How long a claimed-but-unresolved outbox record stays invisible to `claimBatch`. */
 const DEFAULT_OUTBOX_CLAIM_VISIBILITY_MS = 30_000;
+/**
+ * How many times one outbox record may be handed to a publisher before the
+ * queue stops offering it — the same default the sqlite adapter uses, because a
+ * host that swaps adapters must not find its retry budget changed underneath
+ * it. Uncapped meant a payload no consumer can accept was redelivered on every
+ * claim, forever.
+ */
+const DEFAULT_OUTBOX_MAX_ATTEMPTS = 10;
 
 export interface MemoryAssistantStoreOptions extends TaskAgingOptions {
   /** Defaults to {@link defaultClock} (real wall-clock). */
@@ -129,6 +139,11 @@ export interface MemoryAssistantStoreOptions extends TaskAgingOptions {
   leaseTtlMs?: number;
   /** Outbox claim-visibility window. Default 30s. */
   outboxClaimVisibilityMs?: number;
+  /**
+   * How many delivery attempts one outbox record gets before `claimBatch`
+   * stops offering it. Default 10 — see {@link OutboxStore.claimBatch}.
+   */
+  outboxMaxAttempts?: number;
 }
 
 /**
@@ -159,9 +174,61 @@ function copyContentPart(part: AiContentPart): AiContentPart {
     : { ...part, source: { ...part.source } };
 }
 
-/** The snapshot copy of a message record: shallow, plus a real content copy. */
+/**
+ * The snapshot copy of a message record: shallow, plus real copies of every
+ * nested value a caller could mutate.
+ *
+ * `content`, `metadata` and `toolCalls` all needed one. The sqlite adapter
+ * rebuilds each of them from JSON on every read, so a caller that edits what it
+ * was handed changes nothing there; a Map-backed store that returned the stored
+ * objects let a host corrupt its own store — and pass, because the corruption
+ * looked exactly like a write it had made on purpose.
+ */
 function copyMessage(record: MessageRecord): MessageRecord {
-  return { ...record, content: copyMessageContent(record.content) };
+  return {
+    ...record,
+    content: copyMessageContent(record.content),
+    metadata: structuredClone(record.metadata),
+    ...(record.toolCalls === undefined
+      ? {}
+      : { toolCalls: structuredClone(record.toolCalls) }),
+  };
+}
+
+/**
+ * The snapshot copy of a task record.
+ *
+ * `structuredClone` rather than a spread, because the two fields a caller is
+ * most likely to hold on to — `payload` and `progress` — are nested objects a
+ * spread would alias. The sqlite adapter rebuilds both from JSON on every read,
+ * so this is what "the same record, freshly materialized" means here. It throws
+ * on a value SQLite could not have stored either (a function, a class
+ * instance), which is the right moment to find out.
+ */
+function copyTask(task: TaskRecord): TaskRecord {
+  return structuredClone(task);
+}
+
+/**
+ * A caller-supplied instant, normalized to the UTC ISO form every record
+ * stores — the same normalization the sqlite adapter needs for its TEXT
+ * comparisons, done here so the two adapters agree on what they persisted.
+ *
+ * Unparsable input is refused rather than stored: this store parses
+ * `availableAt` back into a `Date` to decide claimability, and `new
+ * Date("soon")` is `NaN`, whose comparisons are all false — a task quietly
+ * unclaimable forever.
+ */
+function normalizeInstant(value: string, field: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new AgentKitHostError(
+      "invalid_timestamp",
+      `${field} is not a parsable instant: ${JSON.stringify(value)}.`,
+      { field, value },
+    );
+  }
+  return parsed.toISOString();
 }
 
 /**
@@ -301,7 +368,9 @@ export class MemoryConversationStore implements ConversationStore {
       ...(input.toolCallId === undefined
         ? {}
         : { toolCallId: input.toolCallId }),
-      ...(input.toolCalls === undefined ? {} : { toolCalls: input.toolCalls }),
+      ...(input.toolCalls === undefined
+        ? {}
+        : { toolCalls: structuredClone(input.toolCalls) }),
       ...(input.modelResultJson === undefined
         ? {}
         : { modelResultJson: input.modelResultJson }),
@@ -311,7 +380,10 @@ export class MemoryConversationStore implements ConversationStore {
       // sibling and every append would land on index 1.
       branchIndex: nextBranchIndex(list, parentId),
       active: chained ? chainedActive(list, parent) : true,
-      metadata: input.metadata ?? {},
+      // Cloned on the way in for the same reason `content` is: the caller keeps
+      // its own object, and a submit that reused one across two appends must
+      // not alias them.
+      metadata: structuredClone(input.metadata ?? {}),
       createdAt: now,
     };
     this.orderKeys.set(input.chatId, orderKey);
@@ -356,8 +428,12 @@ export class MemoryConversationStore implements ConversationStore {
       record.content = copyMessageContent(patch.content);
     }
     // Metadata REPLACES the stored bag, per the port contract.
-    if (patch.metadata !== undefined) record.metadata = patch.metadata;
-    if (patch.toolCalls !== undefined) record.toolCalls = patch.toolCalls;
+    if (patch.metadata !== undefined) {
+      record.metadata = structuredClone(patch.metadata);
+    }
+    if (patch.toolCalls !== undefined) {
+      record.toolCalls = structuredClone(patch.toolCalls);
+    }
     return copyMessage(record);
   }
 
@@ -713,6 +789,18 @@ export class MemoryTaskStore implements TaskStore {
   private readonly leases = new Map<string, Lease>();
   private readonly leasesByToken = new Map<string, string>();
   private readonly events = new Map<string, TaskEventEnvelope[]>();
+  /**
+   * taskId → every `eventId` its log holds, so a REPEAT is rejected rather than
+   * appended twice.
+   *
+   * Per task, not global: that is the scope the port guarantees (see
+   * `TaskStore.appendEvents`). The sqlite adapter's `event_id` index happens to
+   * be unique across the whole table, so it also rejects a collision between
+   * two tasks — a strictly wider promise than the port makes, and not one this
+   * store copies, because a global index over a growing Map is a cost with no
+   * consumer.
+   */
+  private readonly eventIds = new Map<string, Set<string>>();
   /** Store-global monotonic fencing counter — every `acquireLease` draws the next value. */
   private fencing = 0;
 
@@ -763,8 +851,16 @@ export class MemoryTaskStore implements TaskStore {
       status: "queued",
       priority: input.priority ?? 0,
       enqueuedAt: now,
-      availableAt: input.availableAt ?? now,
-      payload: input.payload,
+      availableAt:
+        input.availableAt === undefined
+          ? now
+          : normalizeInstant(input.availableAt, "availableAt"),
+      // CLONED, not aliased. A durable store round-trips the payload through
+      // its own encoding, so a caller that keeps mutating the object it
+      // submitted edits nothing there; holding the caller's object here made
+      // this store the one place where that corruption is possible — and
+      // invisible, because a host tested against it would pass.
+      payload: structuredClone(input.payload),
       ...(input.parentTaskId === undefined
         ? {}
         : { parentTaskId: input.parentTaskId }),
@@ -777,24 +873,24 @@ export class MemoryTaskStore implements TaskStore {
       poisonCount: 0,
     };
     this.tasks.set(task.taskId, task);
-    return { ...task };
+    return copyTask(task);
   }
 
   async getTask(taskId: string): Promise<TaskRecord | null> {
     const task = this.tasks.get(taskId);
-    return task ? { ...task } : null;
+    return task ? copyTask(task) : null;
   }
 
   async listChildren(taskId: string): Promise<TaskRecord[]> {
     return [...this.tasks.values()]
       .filter((task) => task.parentTaskId === taskId)
-      .map((task) => ({ ...task }));
+      .map(copyTask);
   }
 
   async listByScope(scopeId: string): Promise<TaskRecord[]> {
     return [...this.tasks.values()]
       .filter((task) => task.scopeId === scopeId)
-      .map((task) => ({ ...task }));
+      .map(copyTask);
   }
 
   /**
@@ -804,10 +900,10 @@ export class MemoryTaskStore implements TaskStore {
    *
    * THE CHECK AND THE DELETES ARE ONE SYNCHRONOUS RUN, with no `await` between
    * them, and that is the whole point of the guard living here rather than only
-   * in `ConversationService.deleteChat`. The service's check runs inside an
-   * async transaction, and a concurrent `claimNext` on this same store FLATTENS
-   * into that transaction — so a task can go `queued → running` between the
-   * service's check and this call. Nothing can run between the two halves of a
+   * in `ConversationService.deleteChat`. The service reads the scope and then
+   * calls this, with an `await` in between, and a `claimNext` that lands in
+   * that gap moves a task `queued → running` after the service has already
+   * decided the chat is idle. Nothing can run between the two halves of a
    * synchronous method body, so a check made here holds for the deletes that
    * follow it. See `TaskStore.deleteByScope`.
    *
@@ -829,6 +925,7 @@ export class MemoryTaskStore implements TaskStore {
       if (lease !== undefined) this.leasesByToken.delete(lease.leaseToken);
       this.leases.delete(task.taskId);
       this.events.delete(task.taskId);
+      this.eventIds.delete(task.taskId);
       this.tasks.delete(task.taskId);
     }
     return doomed.length;
@@ -839,9 +936,17 @@ export class MemoryTaskStore implements TaskStore {
     from: TaskStatus[],
     to: TaskStatus,
     patch?: TaskPatch,
+    opts?: FencedWriteOptions,
   ): Promise<TaskRecord> {
+    const availableAt =
+      patch?.availableAt === undefined
+        ? undefined
+        : normalizeInstant(patch.availableAt, "availableAt");
     const task = this.tasks.get(taskId);
     if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+    if (opts?.leaseToken !== undefined) {
+      this.assertLeaseCurrent(taskId, opts.leaseToken);
+    }
     if (!from.includes(task.status)) {
       throw new InvalidTaskTransitionError(
         `Task ${taskId} is ${task.status}, expected one of [${from.join(", ")}].`,
@@ -853,11 +958,13 @@ export class MemoryTaskStore implements TaskStore {
     if (patch?.startedAt !== undefined) task.startedAt = patch.startedAt;
     if (patch?.finishedAt !== undefined) task.finishedAt = patch.finishedAt;
     if (patch?.error !== undefined) task.error = patch.error;
-    if (patch?.availableAt !== undefined) task.availableAt = patch.availableAt;
+    if (availableAt !== undefined) task.availableAt = availableAt;
     if (patch?.priority !== undefined) task.priority = patch.priority;
     if (patch?.poisonCount !== undefined) task.poisonCount = patch.poisonCount;
-    if (patch?.payload !== undefined) task.payload = patch.payload;
-    return { ...task };
+    if (patch?.payload !== undefined) {
+      task.payload = structuredClone(patch.payload);
+    }
+    return copyTask(task);
   }
 
   async createAttempt(input: CreateAttemptInput): Promise<AttemptRecord> {
@@ -880,6 +987,11 @@ export class MemoryTaskStore implements TaskStore {
     const attempt = this.attempts.get(input.attemptId);
     if (!attempt) {
       throw new RecordNotFoundError(`Attempt not found: ${input.attemptId}`);
+    }
+    // The attempt names its task, so the ownership proof is read off the record
+    // the write is about.
+    if (input.leaseToken !== undefined) {
+      this.assertLeaseCurrent(attempt.taskId, input.leaseToken);
     }
     attempt.status = input.status;
     attempt.endedAt = this.clock.nowIso();
@@ -913,11 +1025,28 @@ export class MemoryTaskStore implements TaskStore {
     return { ...lease };
   }
 
+  /**
+   * Extend a lease that is still alive.
+   *
+   * AN EXPIRED LEASE IS NOT RENEWABLE, even while the record survives: it only
+   * survives until someone runs `expireStaleLeases`, and from the expiry
+   * instant another owner is entitled to take the task. Renewing across it
+   * would resurrect ownership recovery has already been told it may claim —
+   * and the runner asks this question AS its fencing probe, where "yes" on an
+   * expired lease is simply the wrong answer.
+   */
   async renewLease(leaseToken: string, ttlMs: number): Promise<Lease> {
     const lease = this.currentLeaseByToken(leaseToken);
-    lease.expiresAt = new Date(
-      this.clock.now().getTime() + ttlMs,
-    ).toISOString();
+    const now = this.clock.now();
+    // `<=` matches `expireStaleLeases`, so the two never disagree about a lease
+    // expiring exactly on the instant being asked about.
+    if (new Date(lease.expiresAt).getTime() <= now.getTime()) {
+      throw new LeaseLostError(
+        `Lease token ${leaseToken} expired at ${lease.expiresAt}.`,
+        { leaseToken, expiresAt: lease.expiresAt },
+      );
+    }
+    lease.expiresAt = new Date(now.getTime() + ttlMs).toISOString();
     return { ...lease };
   }
 
@@ -955,9 +1084,13 @@ export class MemoryTaskStore implements TaskStore {
     }
     if (events.length === 0) return;
     const log = this.events.get(taskId) ?? [];
+    const ids = this.eventIds.get(taskId) ?? new Set<string>();
     // Validate the WHOLE batch before mutating anything — a mid-batch seq
-    // conflict must leave the store exactly as it was, not half-applied.
+    // conflict must leave the store exactly as it was, not half-applied. The
+    // batch is checked against ITSELF as well as against the log, or a batch
+    // carrying the same id twice would slip through the log check.
     let last = log.length > 0 ? log[log.length - 1]!.seq : -1;
+    const incoming = new Set<string>();
     for (const event of events) {
       if (event.seq <= last) {
         throw new SeqConflictError(
@@ -965,10 +1098,23 @@ export class MemoryTaskStore implements TaskStore {
           { taskId, seq: event.seq, last },
         );
       }
+      if (ids.has(event.eventId) || incoming.has(event.eventId)) {
+        throw new SeqConflictError(
+          `Duplicate eventId ${event.eventId} for task ${taskId}.`,
+          { taskId, eventId: event.eventId, seq: event.seq },
+        );
+      }
+      incoming.add(event.eventId);
       last = event.seq;
     }
-    log.push(...events);
+    // CLONED on the way in: the log is the durable record, and a caller that
+    // kept editing the array elements it appended would be editing history.
+    for (const event of events) {
+      log.push(structuredClone(event));
+      ids.add(event.eventId);
+    }
     this.events.set(taskId, log);
+    this.eventIds.set(taskId, ids);
   }
 
   async listEvents(
@@ -981,7 +1127,10 @@ export class MemoryTaskStore implements TaskStore {
       log = log.filter((e) => e.seq > after);
     }
     if (opts?.limit !== undefined) log = log.slice(0, opts.limit);
-    return log;
+    // Cloned on the way out, for the mirror of the reason they are cloned on
+    // the way in: sqlite reparses each row, so a reader there cannot reach the
+    // stored event at all.
+    return log.map((event) => structuredClone(event));
   }
 
   async nextSeq(taskId: string): Promise<number> {
@@ -1008,8 +1157,8 @@ export class MemoryTaskStore implements TaskStore {
     }
     // Overwrite, and store a copy — a caller that keeps mutating the object it
     // reported would otherwise keep editing the stored snapshot.
-    task.progress = { ...progress };
-    return { ...task };
+    task.progress = structuredClone(progress);
+    return copyTask(task);
   }
 
   async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
@@ -1111,12 +1260,44 @@ export class MemoryTaskStore implements TaskStore {
     return null;
   }
 
-  async markDeadLettered(taskId: string, reason: string): Promise<TaskRecord> {
+  async markDeadLettered(
+    taskId: string,
+    reason: string,
+    opts?: FencedWriteOptions,
+  ): Promise<TaskRecord> {
     const task = this.tasks.get(taskId);
     if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+    if (opts?.leaseToken !== undefined) {
+      this.assertLeaseCurrent(taskId, opts.leaseToken);
+    }
     task.deadLetteredAt = this.clock.nowIso();
     task.deadLetterReason = reason;
-    return { ...task };
+    return copyTask(task);
+  }
+
+  /**
+   * Refuse a write whose `leaseToken` is not the task's CURRENT lease.
+   *
+   * `leases` is one entry per task, replaced by every `acquireLease`, so the
+   * entry this reads always carries the HIGHEST fencing token issued for the
+   * task — matching the token IS the fencing comparison, with no second value
+   * to compare. Mirrors `SqliteTaskStore.assertLeaseCurrent`, down to the
+   * message, so a caller cannot tell the two adapters apart by their refusal.
+   */
+  private assertLeaseCurrent(taskId: string, leaseToken: string): void {
+    const lease = this.leases.get(taskId);
+    if (!lease || lease.leaseToken !== leaseToken) {
+      throw new LeaseLostError(
+        `Lease token ${leaseToken} is not current for task ${taskId}.`,
+        {
+          taskId,
+          leaseToken,
+          ...(lease === undefined
+            ? {}
+            : { currentFencingToken: lease.fencingToken }),
+        },
+      );
+    }
   }
 
   /**
@@ -1475,6 +1656,7 @@ export class MemoryOutboxStore implements OutboxStore {
   constructor(
     private readonly clock: Clock,
     private readonly claimVisibilityMs: number = DEFAULT_OUTBOX_CLAIM_VISIBILITY_MS,
+    private readonly maxAttempts: number = DEFAULT_OUTBOX_MAX_ATTEMPTS,
   ) {}
 
   async enqueue(input: OutboxAppendInput): Promise<OutboxRecord> {
@@ -1483,9 +1665,14 @@ export class MemoryOutboxStore implements OutboxStore {
       id: input.id ?? `outbox_${crypto.randomUUID()}`,
       topic: input.topic,
       ...(input.runId === undefined ? {} : { runId: input.runId }),
-      payload: input.payload,
+      payload: structuredClone(input.payload),
       createdAt: now,
-      availableAt: input.availableAt ?? now,
+      // Normalized so the two adapters store the same string for the same
+      // instant — see `normalizeInstant`.
+      availableAt:
+        input.availableAt === undefined
+          ? now
+          : normalizeInstant(input.availableAt, "availableAt"),
       attempts: 0,
     };
     this.records.set(record.id, record);
@@ -1501,6 +1688,10 @@ export class MemoryOutboxStore implements OutboxStore {
       const record = this.records.get(id);
       if (!record) continue;
       if (record.publishedAt !== undefined) continue;
+      // The attempt cap, read straight off the counter `claimBatch` itself
+      // maintains: a record that used its budget stops being offered and stays
+      // as an inspectable dead letter. See `OutboxStore.claimBatch`.
+      if (record.attempts >= this.maxAttempts) continue;
       if (new Date(record.availableAt).getTime() > nowMs) continue;
       record.attempts += 1;
       // Push the visibility window forward so a concurrent claimBatch call
@@ -1517,16 +1708,47 @@ export class MemoryOutboxStore implements OutboxStore {
   }
 
   async markPublished(id: string, at: Date): Promise<void> {
-    const record = this.records.get(id);
-    if (record) record.publishedAt = at.toISOString();
+    this.require(id).publishedAt = at.toISOString();
   }
 
   async markFailed(id: string, error: string, retryAt: Date): Promise<void> {
-    const record = this.records.get(id);
-    if (record) {
-      record.lastError = error;
-      record.availableAt = retryAt.toISOString();
+    const record = this.require(id);
+    record.lastError = error;
+    record.availableAt = retryAt.toISOString();
+  }
+
+  /**
+   * Drop what can never be claimed again and is older than `before` —
+   * published records (aged from `publishedAt`) and attempt-exhausted ones
+   * (aged from `createdAt`, the only age they have). See `OutboxStore.prune`.
+   */
+  async prune(before: Date): Promise<number> {
+    const cutoff = before.getTime();
+    const doomed = [...this.records.values()].filter((record) =>
+      record.publishedAt === undefined
+        ? record.attempts >= this.maxAttempts &&
+          new Date(record.createdAt).getTime() < cutoff
+        : new Date(record.publishedAt).getTime() < cutoff,
+    );
+    for (const record of doomed) {
+      this.records.delete(record.id);
+      const at = this.order.indexOf(record.id);
+      if (at >= 0) this.order.splice(at, 1);
     }
+    return doomed.length;
+  }
+
+  /**
+   * A `markPublished`/`markFailed` naming an id this store does not have used
+   * to be a silent no-op, which made "the publisher says it published, the
+   * record says it did not" a mystery with no error anywhere.
+   */
+  private require(id: string): OutboxRecord {
+    const record = this.records.get(id);
+    if (!record) {
+      throw new RecordNotFoundError(`Outbox record not found: ${id}`, { id });
+    }
+    return record;
   }
 }
 
@@ -1558,7 +1780,11 @@ export class MemoryAssistantStore implements AssistantStore {
     this.conversations = new MemoryConversationStore(clock, ids);
     this.tasks = new MemoryTaskStore(clock, ids, options.leaseTtlMs, options);
     this.proposals = new MemoryProposalStore(clock);
-    this.outbox = new MemoryOutboxStore(clock, options.outboxClaimVisibilityMs);
+    this.outbox = new MemoryOutboxStore(
+      clock,
+      options.outboxClaimVisibilityMs,
+      options.outboxMaxAttempts,
+    );
   }
 
   /** The FIFO {@link transaction} queues on — one unit of work at a time. */
