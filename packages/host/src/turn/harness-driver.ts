@@ -21,12 +21,8 @@ import {
 import type { ResolvedHookTimeouts } from "./hook-deadline.js";
 import { withHookDeadline } from "./hook-deadline.js";
 import type { PassTerminal } from "./retry.js";
-import type {
-  PassInput,
-  PassResult,
-  PassState,
-  TurnRunnerDeps,
-} from "./turn-runner.js";
+import type { PassInput, PassResult, PassState } from "./pass-types.js";
+import type { TurnRunnerDeps } from "./turn-runner.js";
 
 /**
  * Everything {@link runCorrectionHarness} needs from `TurnRunner` besides the
