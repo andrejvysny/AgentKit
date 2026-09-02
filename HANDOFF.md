@@ -23,7 +23,7 @@ shipped defaults confirmed as-is; Phase 6 = both splits.
 ## Done so far (and why)
 
 Session 1 landed Phases 0–4, 5.2–5.4 and verifier wave 1 (see the session-1 handoff text preserved in the plan's
-Run log). Session 2 landed everything that remained; master is 60+ commits past `5cef867`, never pushed, no tag:
+Run log). Session 2 landed everything that remained; master is 65 commits past `5cef867`, pushed to `origin/master` at the user's request at session end, no tag:
 
 - **Contract 0.5.0 + release prep** — `CONTRACT_VERSION` 0.5.0; four Phase-2 golden scenarios (`tool-cap-run`,
   `duplicate-id-run`, `tool-timeout-run`, `unserializable-run`; `finishReason:"incomplete"` has no golden because
@@ -73,7 +73,7 @@ id-keyed accumulators; golden drivers in `packages/testing/src`; sideways `norma
 2. Verify: `bun install --frozen-lockfile && bun run typecheck && bun test && bun run lint && bun run build && bun run build:umbrella && bun run smoke:umbrella && node scripts/node-smoke.mjs` — expect the numbers in `CURRENT_STATE.md`.
 3. Next: the tranche is COMPLETE (waves A–E, verifier waves 1–3 all closed; see the Run log). The user's call:
    cut `v0.5.0` (`DEVELOPING.md` "Releasing": tag `v0.5.0` on master and push — CI builds the umbrella release
-   branch; nothing has been pushed yet), or start the OpenPCB migration (`docs/migration/openpcb.md`, §8
+   branch; master is pushed, the tag is not), or start the OpenPCB migration (`docs/migration/openpcb.md`, §8
    Sequencing), or P6 (`docs/roadmap.md`).
 4. Ritual unchanged: delegate ≥150-line tasks to worktree agents with a brief file; red-on-revert via patch file;
    merge with `git -C <abs repo>`; run the full gate yourself; commit per landing; never push; append to the Run log.
