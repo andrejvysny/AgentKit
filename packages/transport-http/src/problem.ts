@@ -72,6 +72,11 @@ const STATUS_BY_HOST_CODE = {
   unknown_dependency: 409,
   usage_denied: 429,
   executor_not_found: 500,
+  // A host-side fault, like `executor_not_found`: the store gave up waiting for
+  // an open transaction, which almost always means a callback awaited a
+  // root-store call. Nothing about the request was wrong and repeating it
+  // verbatim will not help, so a 4xx would blame the wrong party.
+  transaction_gate_timeout: 500,
 } satisfies Record<HostErrorCode, number>;
 
 /**

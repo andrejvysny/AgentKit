@@ -36,20 +36,39 @@ or rolls all of it back on a throw. An adapter that cannot roll back (a
 plain in-memory store) must declare `capabilities.atomicTransactions: false`
 to the conformance harness rather than silently pass a weaker guarantee.
 
-**Callers are serialized per store handle.** A `transaction()`, a worker's
-`claimNext`, and every ordinary WRITE issued while another caller's transaction
-is open all WAIT for it and then run in a transaction of their own, so a throw
-rolls back only that caller's writes — they used to join whatever was open and
-be discarded by a stranger's rollback. READS are exempt and still join: they
-take no lock worth serializing, and a `getTask` that queued behind every busy
-host transaction would be a performance cliff for no correctness. Port calls the
-callback makes through the `tx` it is handed join that transaction, and a nested
-`tx.transaction(...)` flattens into it rather than nesting. The corollary is
-that a callback must do its work through `tx`: a write made on the ROOT store
-from inside the callback is indistinguishable from an unrelated caller's, so
-awaiting one in there waits on a transaction that cannot finish until the
-callback returns. Both reference adapters do this, and the conformance suite
-grades it.
+**Callers are serialized per store handle.** A `transaction()` and a worker's
+`claimNext` issued while another caller's transaction is open WAIT for it and
+then run as a unit of their own, so a throw rolls back only that caller's
+writes — they used to join whatever was open and be discarded by a stranger's
+rollback. Port calls the callback makes through the `tx` it is handed join that
+transaction, and a nested `tx.transaction(...)` flattens into it rather than
+nesting.
+
+**A callback must do its work through `tx`, and the store now says so.** A call
+made on the ROOT store from inside a callback is indistinguishable from an
+unrelated caller's, so it waits on a transaction that cannot finish until the
+callback returns. That wait is BOUNDED: after
+`transactionGateTimeoutMs` (default 30s, an option on both adapters) the caller
+rejects with `TransactionGateTimeoutError` — an `AgentKitHostError` with code
+`transaction_gate_timeout`, whose message names the likely cause. It used to
+hang forever, with nothing in a log to read. Raising the budget is never the
+fix; using `tx` is.
+
+**What is not promised** is snapshot isolation. READS from other callers are
+exempt from the queue and still join an open transaction: they take no lock
+worth serializing, and a `getTask` that queued behind every busy host
+transaction would be a performance cliff for no correctness. An ordinary
+single-call WRITE from another caller may be delayed by an open transaction —
+`SqliteAssistantStore` queues it (Phase 1.6) rather than let it join a
+transaction whose rollback would erase it.
+
+**The two reference adapters agree.** `MemoryAssistantStore` cannot roll back
+(hence `capabilities.atomicTransactions: false`) and does not queue ordinary
+writes — with no rollback there is no stranger's blast radius to keep them out
+of — but it serializes `transaction()` callers, flattens calls made through
+`tx`, gates `claimNext`, and times out a root call made from inside a callback
+exactly as `SqliteAssistantStore` does. The conformance suite grades all four
+against both.
 
 **Reference / conformance**: `MemoryAssistantStore` in
 [`packages/adapters-memory/src/`](../packages/adapters-memory/src/) and
@@ -401,7 +420,10 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
 > performance cliff for no correctness. The gate check and the `BEGIN` happen in
 > ONE tick — the obvious two-step (`await ready()`, then `withTx`) leaves a
 > microtask gap in which a transaction already queued on the same gate runs its
-> own `BEGIN`, which is exactly the flatten being prevented.
+> own `BEGIN`, which is exactly the flatten being prevented. Every one of those
+> waits is bounded by `transactionGateTimeoutMs`: a caller that waits longer
+> rejects with `transaction_gate_timeout` and its queued turn cancels itself, so
+> the caller behind it still gets a gate with no transaction open under it.
 
 **`waiting_approval` is currently producer-less.** No code in this repository
 moves a task into it: a staged write returns `pending` to the model and the
@@ -621,7 +643,8 @@ accident:
   a different failure, and the ordering rule is what prevents it. A callback
   must also do its own work through the `tx` it was handed: a ROOT-store write
   issued from inside it is indistinguishable from an unrelated caller's and
-  waits on the transaction it is running in — see
+  waits on the transaction it is running in, until the bounded wait gives up
+  with `transaction_gate_timeout` — see
   [`AssistantStore.transaction`](#assistantstore-aggregate).
 - `createTaskEventWriter` is barred from use inside a chat pass. Inside a
   pass, core's `createEventStamper` owns `seq` numbering in memory; a
