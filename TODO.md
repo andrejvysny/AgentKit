@@ -18,7 +18,7 @@
 - [x] 2.3 tool execution safety (A2, A3, A10, A14, default tool timeout)
 - [x] 2.4 provider client bounds (A5, A11, A13)
 - [x] 2.5 Ajv hardening (A9, F6)
-- [ ] 2.6 goldens replayed live for all 5 scenarios; re-record once (E3)
+- [x] 2.6 goldens replayed live for all 5 scenarios; re-record once (E3)
 
 ## Phase 3 — host orchestration
 - [ ] 3.1 recovery chain resume (C1)
