@@ -283,16 +283,20 @@ export interface TaskRecord {
   error?: string;
   attemptCount: number;
   /**
-   * Attempts that died without a clean end (`abandoned`), as counted by
-   * whoever gave up on the task.
+   * Attempts that died without a clean end (`abandoned`).
    *
    * NOT the dead-letter trigger — `attemptCount` is (the runner compares it
    * with its own `maxAttempts`). This is the diagnosis that travels with the
    * dead letter: "three attempts, and all three were abandoned" is a crashing
    * worker, while "three attempts, none abandoned" is work that fails cleanly.
-   * Written through {@link TaskPatch.poisonCount} on the transition that lands
-   * the task, because {@link TASK_TRANSITIONS} has no `running → running` edge
-   * to carry a mid-flight increment.
+   *
+   * THE STORE OWNS IT: {@link TaskStore.endAttempt} increments it by one when
+   * an attempt ends `abandoned`, in the same write as the attempt row, and
+   * leaves it alone for every other status. A caller cannot get that right —
+   * it reads the count, then writes count + 1 on a later transition, and both
+   * a crash in the gap and a second recoverer reading the same value lose a
+   * death that did happen. {@link TaskPatch.poisonCount} remains for a host
+   * that must overwrite the number outright.
    */
   poisonCount: number;
   deadLetteredAt?: string;
@@ -360,6 +364,14 @@ export interface TaskPatch {
    */
   availableAt?: string;
   priority?: number;
+  /**
+   * OVERWRITE the poison count, for a host with a reason to.
+   *
+   * Not how the count is normally written: {@link TaskStore.endAttempt}
+   * increments it itself when an attempt ends `abandoned`, so a transition that
+   * omits this field keeps whatever the store has counted. Setting it here
+   * replaces that number rather than adding to it.
+   */
   poisonCount?: number;
   payload?: Record<string, unknown>;
 }
@@ -609,6 +621,11 @@ export interface TaskStore {
   createAttempt(input: CreateAttemptInput): Promise<AttemptRecord>;
   /**
    * Close an attempt with its outcome.
+   *
+   * `status: "abandoned"` MUST also increment the task's
+   * {@link TaskRecord.poisonCount} by one, atomically with the attempt write —
+   * the attempt ending that way IS the poison event, and a count kept by
+   * callers loses deaths (see that field). Every other status leaves it alone.
    *
    * With {@link EndAttemptInput.leaseToken}, fenced the same way
    * {@link transitionTask} is: the token must name the CURRENT lease of the

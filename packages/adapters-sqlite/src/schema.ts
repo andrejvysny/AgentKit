@@ -1,5 +1,5 @@
 /**
- * v7 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
+ * v8 SQLite schema for {@link SqliteAssistantStore} — a single-file DDL string,
  * applied idempotently (every DDL statement is `CREATE ... IF NOT EXISTS`;
  * seed rows use `INSERT OR IGNORE`) so opening the same database twice, or
  * opening a database another process already initialized, is a no-op rather
@@ -40,10 +40,10 @@
  * stored as TEXT; the store (de)serializes them, SQLite never inspects their
  * contents.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /**
- * The text {@link SCHEMA_V7}'s search index sees for one message row, as SQL.
+ * The text {@link SCHEMA_V8}'s search index sees for one message row, as SQL.
  *
  * The definition is `searchTextOf` in `@agentkit/host` — a string body as
  * itself, a parts body as ALL of its text parts joined by a newline — expressed
@@ -78,12 +78,24 @@ function messageSearchText(alias: string): string {
  * A host that needs upgrades in place owns that story with its own store.
  *
 
- * That refusal IS the v6 → v7 upgrade path, exactly as it was the v5 → v6 one:
- * a database stamped 6 raises `sqlite_schema_version` and is recreated. The
- * `DEFAULT` clauses on the newer columns (`chats.archived`,
+ * That refusal IS the v7 → v8 upgrade path, exactly as it was the v6 → v7 and
+ * v5 → v6 ones: a database stamped 7 raises `sqlite_schema_version` and is
+ * recreated. The `DEFAULT` clauses on the newer columns (`chats.archived`,
  * `messages.content_format`, `settings.tool_calling_mode`) are therefore not
  * migration aids — they are what keeps the DDL re-appliable over a database
  * this build already wrote, which is the property every statement here has.
+ *
+ * v8 adds two things, both durability follow-ups rather than features:
+ * `idx_messages_run` on `messages(chat_id, run_id, depth)`, which is
+ * `lastMessageOfRun`'s whole query — the lookup that opens EVERY turn attempt
+ * by linking it to its own chain, and until now a scan of one chat's whole
+ * message table each time — and `proposals.claimed_at`, the instant an apply
+ * took the `approved → applying` claim. The reconcile window keys on that column: the
+ * stamps it used before (`applied_at`, `decided_at`, `created_at`) are all
+ * OLDER than the claim for a write a human approved and something applied
+ * later, so a live apply could look stale and be reconciled out from under
+ * itself. NULLABLE, because every row written before v8 has no claim instant
+ * to record and the fallback chain still answers for them.
  *
  * v7 adds one table: `mcp_servers`, the durable half of
  * `McpServerConfigStore`. It carries NO secret material — `secret_refs` holds
@@ -102,7 +114,7 @@ function messageSearchText(alias: string): string {
  * searched for. Pointing FTS5 at a view costs nothing at rest and re-computes
  * the projection only when `snippet()` needs it.
  */
-export const SCHEMA_V7 = `
+export const SCHEMA_V8 = `
 CREATE TABLE IF NOT EXISTS chats (
   id TEXT PRIMARY KEY,
   title TEXT,
@@ -164,6 +176,12 @@ CREATE INDEX IF NOT EXISTS idx_messages_chat_order ON messages(chat_id, order_ke
 CREATE INDEX IF NOT EXISTS idx_messages_active ON messages(chat_id, active, depth);
 -- Sibling lookups, and the max(branch_index) an append reads to place itself.
 CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_message_id, branch_index);
+-- lastMessageOfRun's whole query: one run's deepest message in one chat, which
+-- without this index scans every message of the chat on every turn resume.
+-- depth is the third column so the ORDER BY reads it off the index backwards;
+-- SQLite is left sorting only the LAST term (order_key), over the rows of one
+-- run sitting at one depth.
+CREATE INDEX IF NOT EXISTS idx_messages_run ON messages(chat_id, run_id, depth);
 
 -- ── FULL-TEXT SEARCH ───────────────────────────────────────────────────────
 -- The searchable projection of every message, as a view: string bodies as
@@ -339,6 +357,12 @@ CREATE TABLE IF NOT EXISTS proposals (
   reason TEXT,
   created_at TEXT NOT NULL,
   decided_at TEXT,
+  -- When the apply claim (approved -> applying) was taken. The reconcile
+  -- window keys on it: decided_at is when a human said yes, which for a write
+  -- applied much later is far older than the claim and would make a live apply
+  -- look stuck. NULL on every row a pre-v8 build wrote and on every row that
+  -- never reached the applying state.
+  claimed_at TEXT,
   applied_at TEXT
 );
 -- The idempotency guarantee: a (scopeKey, actionId) pair is unique EXCEPT

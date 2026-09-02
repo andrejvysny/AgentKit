@@ -76,7 +76,7 @@ replacement. Every path was confirmed present.
 | `…/runtime/event-bus.ts` (28 L) | `TaskStore.appendEvents`/`listEvents` (the durable log) + `transport-http`'s SSE replay-then-poll |
 | `…/runtime/executor-registry.ts` (15 L) | `ExecutorRegistry` (`packages/host/src/tasks/executor-registry.ts`) — throws on duplicate kind at boot |
 | `…/storage/openpcb-task-storage.ts` (219 L) | `SqliteTaskStore` inside `SqliteAssistantStore` |
-| `…/migrations/0000_init.sql` (51 L) — `tasks_task`, `tasks_task_chunk`, `tasks_task_event` | `SCHEMA_V7` in `packages/adapters-sqlite/src/schema.ts` |
+| `…/migrations/0000_init.sql` (51 L) — `tasks_task`, `tasks_task_chunk`, `tasks_task_event` | `SCHEMA_V8` in `packages/adapters-sqlite/src/schema.ts` |
 | `…/backend/routes.ts` (89 L) | `transport-http` — see §4b. **`GET /tasks/:id/stream` (lines 52-88) carries a known replay/subscribe race**: it drains `storage.listEvents` (line 59) and only then subscribes (line 68), so anything emitted between the two is lost. AgentKit's SSE resumes on a `seq` cursor with `Last-Event-ID` and has no such window |
 | `…/backend/runtime-singleton.ts`, `…/backend/index.ts`, `…/backend/sdk.ts`, `module.backend.ts`, `manifest.json` | The composition root in §3 |
 | `src/sdks/tasks/types.ts` (168 L) + `src/sdks/tasks/index.ts` — `TasksSDK`, `Task`, `TaskEvent`, `TaskChunk`, `TaskStatus` | `agentkit/contracts` (`RunDto`, `AiRunEvent`, `TaskEventEnvelope`) and `agentkit/host` (`TaskRecord`, `TaskExecutor`) |
@@ -115,7 +115,7 @@ retryable step through `OutboxStore`.
 | `routes.ts` (485 L) — ~45 handlers | `transport-http` for 24 of them; ~21 stay app-owned. Full table in §4b |
 | `sdk.ts`, and the `assistant` half of `src/sdks/assistant/types.ts` that mirrors chat/message/run shapes | `agentkit/contracts` DTOs |
 | `providers/openpcb-provider-factory.ts` — `buildAiProviderClient` | `OpenAiCompatibleClient.fromConfig` behind `TurnRunnerDeps.providerFactory`. The `extraHeaders` option it takes (`run-service.ts:658-661`) is the same seam AgentKit exposes on the provider config |
-| Migrations `0000`–`0014` under `backend/migrations/` | `SCHEMA_V7`. **Do not port them.** `adapters-sqlite` owns its file and guards it with `PRAGMA user_version` (see `packages/adapters-sqlite/README.md`, "It owns its database file"). The old tables live on in the archived app DB for the one-shot import in §5 |
+| Migrations `0000`–`0014` under `backend/migrations/` | `SCHEMA_V8`. **Do not port them.** `adapters-sqlite` owns its file and guards it with `PRAGMA user_version` (see `packages/adapters-sqlite/README.md`, "It owns its database file"). The old tables live on in the archived app DB for the one-shot import in §5 |
 
 ### 1c. `shared/packages/ai-core` — retired
 

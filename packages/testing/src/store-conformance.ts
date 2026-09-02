@@ -413,6 +413,52 @@ export function describeAssistantStoreConformance(
       }
     });
 
+    it("counts an abandoned attempt in the task's poisonCount, and only an abandoned one", async () => {
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(makeTaskInput());
+        const endWith = async (
+          status: "abandoned" | "failed" | "completed",
+        ): Promise<void> => {
+          const attempt = await store.tasks.createAttempt({
+            attemptId: uniqueId("att"),
+            taskId: task.taskId,
+            ownerId: "worker-1",
+          });
+          await store.tasks.endAttempt({
+            attemptId: attempt.attemptId,
+            status,
+          });
+        };
+
+        expect((await store.tasks.getTask(task.taskId))?.poisonCount).toBe(0);
+        await endWith("abandoned");
+        await endWith("abandoned");
+        // The store counts the deaths itself, so two of them are two — a caller
+        // that read the count before its own endAttempt and wrote count + 1
+        // would land on one.
+        expect((await store.tasks.getTask(task.taskId))?.poisonCount).toBe(2);
+
+        await endWith("failed");
+        await endWith("completed");
+        // A clean end is a different diagnosis; only `abandoned` is poison.
+        expect((await store.tasks.getTask(task.taskId))?.poisonCount).toBe(2);
+
+        // A transition patch that says nothing about the count leaves the
+        // store's number alone — the landing transition of a dead letter is
+        // exactly such a patch.
+        const landed = await store.tasks.transitionTask(
+          task.taskId,
+          ["queued"],
+          "cancelled",
+          { finishedAt: new Date().toISOString() },
+        );
+        expect(landed.poisonCount).toBe(2);
+      } finally {
+        close?.();
+      }
+    });
+
     it("acquires, renews, and releases a lease", async () => {
       const { store, close } = await create();
       try {
@@ -1502,6 +1548,47 @@ export function describeAssistantStoreConformance(
         expect(
           await store.proposals.getOutcome(uniqueId("never-recorded")),
         ).toBeNull();
+      } finally {
+        close?.();
+      }
+    });
+
+    it("persists claimedAt from the apply claim, and reads it back from get and listByStatus", async () => {
+      const { store, close } = await create();
+      try {
+        const proposal = await store.proposals.create(
+          makeProposalInput({ scopeKey: uniqueId("scope") }),
+        );
+        const claimedAt = "2026-02-02T03:04:05.000Z";
+        await store.proposals.transition(proposal.id, ["pending"], "approved", {
+          decidedAt: "2026-02-02T00:00:00.000Z",
+        });
+        const claimed = await store.proposals.transition(
+          proposal.id,
+          ["approved"],
+          "applying",
+          { operationId: uniqueId("op"), claimedAt },
+        );
+        expect(claimed.claimedAt).toBe(claimedAt);
+        expect((await store.proposals.get(proposal.id))?.claimedAt).toBe(
+          claimedAt,
+        );
+        // The crash-recovery read: reconcile finds its records this way, and a
+        // stamp it cannot see is a window it cannot honour.
+        const applying = await store.proposals.listByStatus("applying");
+        expect(applying.find((p) => p.id === proposal.id)?.claimedAt).toBe(
+          claimedAt,
+        );
+
+        // A later transition that says nothing about the claim keeps it: the
+        // stamp records when the apply STARTED, and finishing does not move it.
+        const applied = await store.proposals.transition(
+          proposal.id,
+          ["applying"],
+          "applied",
+          { appliedAt: "2026-02-02T04:00:00.000Z" },
+        );
+        expect(applied.claimedAt).toBe(claimedAt);
       } finally {
         close?.();
       }

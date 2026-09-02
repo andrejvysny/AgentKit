@@ -341,6 +341,46 @@ describe("ProposalService — idempotency keys and staleness", () => {
   });
 });
 
+describe("ProposalService — the apply claim", () => {
+  it("stamps claimedAt when it takes the approved -> applying claim", async () => {
+    const f = setup();
+    const proposal = await f.service.stage(stageInput());
+    await f.service.approve({ proposalId: proposal.id, actor: "user" });
+    // Approved now, applied two minutes later: that gap is the whole reason the
+    // stamp exists, and it is what the reconcile window must not read as two
+    // minutes of being stuck.
+    f.clock.advance(120_000);
+    const claimedAt = f.clock.nowIso();
+    await f.service.apply({ proposalId: proposal.id, operationId: "op-A" });
+
+    const stored = (await f.store.proposals.get(proposal.id)) as ProposalRecord;
+    expect(stored.claimedAt).toBe(claimedAt);
+    expect(stored.decidedAt).not.toBe(claimedAt);
+  });
+
+  it("stamps claimedAt on the revision-conflict claim too", async () => {
+    // That path claims and fails the proposal without ever calling the applier,
+    // and it leaves a terminal record behind; an unstamped one would be the
+    // only `applying` claim in the service with nothing to measure it by.
+    const f = setup({ revisions: { "scope-1": "rev-1" } });
+    const proposal = await f.service.stage(
+      stageInput({ revisionAtCreate: "rev-1" }),
+    );
+    await f.service.approve({ proposalId: proposal.id, actor: "user" });
+    f.clock.advance(120_000);
+    const claimedAt = f.clock.nowIso();
+    f.applier.revisions.set("scope-1", "rev-2");
+
+    await expect(
+      f.service.apply({ proposalId: proposal.id, operationId: "op-B" }),
+    ).rejects.toThrow(RevisionConflictError);
+
+    const stored = (await f.store.proposals.get(proposal.id)) as ProposalRecord;
+    expect(stored.status).toBe("failed");
+    expect(stored.claimedAt).toBe(claimedAt);
+  });
+});
+
 describe("ProposalService — reconcileInterrupted", () => {
   it("finalizes to applied when the applier can prove the write landed", async () => {
     const f = setup();
@@ -423,6 +463,45 @@ describe("ProposalService — reconcileInterrupted", () => {
     await f.service.approve({ proposalId: proposal.id, actor: "user" });
     await f.store.proposals.transition(proposal.id, ["approved"], "applying", {
       operationId: "op-old",
+    });
+
+    f.clock.advance(120_000);
+    const report = await f.service.reconcileInterrupted({
+      staleAfterMs: 60_000,
+    });
+    expect(report).toEqual({ reconciled: 1, applied: 0, failed: 1 });
+    expect((await f.store.proposals.get(proposal.id))?.status).toBe("failed");
+  });
+
+  // The window measures the CLAIM, not the approval. Without `claimedAt` the
+  // oldest stamp on this record is `decidedAt` — two minutes old here — and the
+  // sweep would finalize a proposal an apply took a millisecond ago, writing a
+  // failed outcome under the live apply's own operation id.
+  it("measures the window from claimedAt, not from a much older decidedAt", async () => {
+    const f = setup();
+    const proposal = await f.service.stage(stageInput());
+    await f.service.approve({ proposalId: proposal.id, actor: "user" });
+    f.clock.advance(120_000);
+    await f.store.proposals.transition(proposal.id, ["approved"], "applying", {
+      operationId: "op-just-claimed",
+      claimedAt: f.clock.nowIso(),
+    });
+
+    const report = await f.service.reconcileInterrupted({
+      staleAfterMs: 60_000,
+    });
+    expect(report).toEqual({ reconciled: 0, applied: 0, failed: 0 });
+    expect((await f.store.proposals.get(proposal.id))?.status).toBe("applying");
+    expect(await f.store.proposals.getOutcome("op-just-claimed")).toBeNull();
+  });
+
+  it("still reconciles once the claim itself has aged past the window", async () => {
+    const f = setup();
+    const proposal = await f.service.stage(stageInput());
+    await f.service.approve({ proposalId: proposal.id, actor: "user" });
+    await f.store.proposals.transition(proposal.id, ["approved"], "applying", {
+      operationId: "op-stale-claim",
+      claimedAt: f.clock.nowIso(),
     });
 
     f.clock.advance(120_000);

@@ -53,7 +53,7 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
   );
 
   it(
-    "re-applies SCHEMA_V7 idempotently when the same file is opened again",
+    "re-applies SCHEMA_V8 idempotently when the same file is opened again",
     withTempDb(async (path) => {
       const first = new SqliteAssistantStore(path);
       await first.conversations.createChat({ id: "seed-chat" });
@@ -102,6 +102,37 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
   );
 
   it(
+    "refuses a database stamped with the PREVIOUS schema version rather than migrating it",
+    withTempDb(async (path) => {
+      // The concrete upgrade case, not a synthetic one: v7 is the version the
+      // build before this one wrote, and it is exactly the file a developer
+      // still has on disk. No migration ships, so the only correct answer is
+      // the typed refusal — silently layering v8's DDL over a v7 file would
+      // leave `proposals.claimed_at` missing and every apply claim failing at
+      // runtime instead of at open.
+      const first = new SqliteAssistantStore(path);
+      await first.conversations.createChat({ id: "v7-era-chat" });
+      first.close();
+
+      // The literal 7, not `SCHEMA_VERSION - 1`: this pins the ONE version a
+      // real dev database out there carries, and it has to keep failing the
+      // open after the next bump too.
+      const raw = new Database(path);
+      raw.exec("PRAGMA user_version = 7;");
+      raw.close();
+      expect(SCHEMA_VERSION).toBeGreaterThan(7);
+
+      let code: string | undefined;
+      try {
+        new SqliteAssistantStore(path);
+      } catch (err) {
+        code = (err as { code?: string }).code;
+      }
+      expect(code).toBe("sqlite_schema_version");
+    }),
+  );
+
+  it(
     "keeps the FTS index correct across a close + reopen, and the guarded backfill does not double-index",
     withTempDb(async (path) => {
       // The one thing ":memory:" cannot show: the schema DDL is re-applied in
@@ -138,6 +169,34 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
         expect(added.orderKey).toBe(2);
       } finally {
         second.close();
+      }
+    }),
+  );
+
+  it(
+    "declares the v8 index and column the schema bump exists for",
+    withTempDb(async (path) => {
+      // Read off the FILE, not off the DDL string: what the store actually
+      // applied is the only thing a stale dev database or a half-applied DDL
+      // could disagree with. `idx_messages_run` serves lastMessageOfRun's
+      // (chat_id, run_id, ORDER BY depth DESC) lookup; `proposals.claimed_at`
+      // is the reconcile window's stamp.
+      const store = new SqliteAssistantStore(path);
+      store.close();
+      const raw = new Database(path);
+      try {
+        const index = raw
+          .query(
+            `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_run'`,
+          )
+          .get() as { sql: string } | null;
+        expect(index?.sql).toContain("messages(chat_id, run_id, depth)");
+        const columns = (
+          raw.query(`PRAGMA table_info(proposals)`).all() as { name: string }[]
+        ).map((column) => column.name);
+        expect(columns).toContain("claimed_at");
+      } finally {
+        raw.close();
       }
     }),
   );

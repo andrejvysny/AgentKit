@@ -75,6 +75,16 @@ export interface ProposalRecord {
   reason?: string;
   createdAt: string;
   decidedAt?: string;
+  /**
+   * When the apply claim (`approved → applying`) was taken; the reconcile
+   * window keys on it.
+   *
+   * The other stamps cannot stand in for it: `decidedAt` is when a human said
+   * yes, which for a write applied much later is far older than the claim, so a
+   * live apply measured by it looks stuck. Absent on records written before the
+   * field existed and on anything that never reached `applying`.
+   */
+  claimedAt?: string;
   appliedAt?: string;
 }
 
@@ -117,6 +127,12 @@ export interface CreateProposalInput {
 export interface ProposalPatch {
   decision?: ProposalDecision;
   decidedAt?: string;
+  /**
+   * When the apply claim (`approved → applying`) was taken; the reconcile
+   * window keys on it. Written by the transition that takes the claim — see
+   * {@link ProposalRecord.claimedAt}.
+   */
+  claimedAt?: string;
   appliedAt?: string;
   operationId?: string;
   /** Why it failed / was invalidated; surfaced to the model and the UI. */
