@@ -2022,10 +2022,25 @@ export class TurnRunner implements TaskWorker {
     });
   }
 
-  /** Clear the answer-so-far before a recovery pass re-answers from scratch. */
+  /**
+   * Clear the answer-so-far before a recovery or correction pass re-answers
+   * from scratch.
+   *
+   * THE TOOL-CALL IDS GO TOO, because every reader of them asks about the pass
+   * that produced the answer, not about the run's history: the `empty_response`
+   * warning ("this pass returned nothing and called nothing"), the
+   * emulated-call detector ("it described a tool call instead of making one"),
+   * and `VerificationInput.toolCallCount` ("was there tool work to verify?").
+   * The chat-only and empty-response retries run with an EMPTY registry and
+   * cannot call a tool at all, so carrying pass 1's ids across suppressed both
+   * signals for a pass that made no calls, and ran verification on a pass that
+   * did no tool work — over results that pass had already filtered out of its
+   * own history.
+   */
   private resetPass(state: PassState): void {
     state.content = "";
     state.streamed = false;
+    state.toolCallIds.clear();
     delete state.pendingAssistantMessageId;
     state.pendingToolCalls = [];
     state.announcedToolCalls = [];
@@ -2034,6 +2049,11 @@ export class TurnRunner implements TaskWorker {
     // afterwards would put the abandoned pass's text straight back. See
     // `RunProjectionState.unflushedDeltas`.
     state.unflushedDeltas = 0;
+    // Re-stamped, so the next pass coalesces from NOW. Left alone, the
+    // elapsed-since-last-flush check reads the moment the previous pass last
+    // wrote — long past the interval by the time a retry starts — and every
+    // recovery pass flushed its very first delta straight to the store.
+    state.lastFlushAtMs = this.deps.clock.now().getTime();
   }
 
   /**
@@ -2170,6 +2190,13 @@ export class TurnRunner implements TaskWorker {
    * because the owner that took the task over is the one whose verdict counts,
    * and `abandoned` (which recovery already wrote for this attempt) is the
    * honest description of what happened here.
+   *
+   * THE PLACEHOLDER IS FINALIZED ON EITHER PROOF OF OWNERSHIP: this attempt
+   * landed the task, or the fenced `endAttempt` succeeded on a task somebody
+   * landed OUT OF BAND (a host transition, an operator cancel). Requiring the
+   * first alone left the second case with `placeholder: true` forever — the
+   * task cancelled, the run over, and a UI still spinning on a message nothing
+   * was coming back to finish.
    */
   private async failQuietly(
     ctx: TaskExecutionContext,
@@ -2187,9 +2214,15 @@ export class TurnRunner implements TaskWorker {
     // queue) stopped this run, and landing it `failed` reports a user action as
     // an error to every consumer downstream.
     const status: TaskStatus = ctx.signal.aborted ? "cancelled" : "failed";
-    // Whether THIS attempt actually landed the task — the only proof available
-    // that it still owns it, and therefore that it may touch the placeholder.
+    // Whether THIS attempt actually landed the task — one of two proofs that it
+    // still owns it, and therefore that it may touch the placeholder.
     let landed = false;
+    // The other proof, for the task that was landed OUT OF BAND: a host
+    // transition, an operator cancel, a `waiting_approval` host that settled it
+    // while this turn was breaking. `endAttempt` below is fenced, so its
+    // SUCCESS says the lease is still this attempt's — nobody else has taken
+    // the task over, and nobody else will finalize the placeholder.
+    let leaseCurrent = false;
     try {
       const task = await store.tasks.getTask(taskId);
       if (task?.status === "running") {
@@ -2216,6 +2249,7 @@ export class TurnRunner implements TaskWorker {
         error: message,
         leaseToken: ctx.leaseToken,
       });
+      leaseCurrent = true;
     } catch (err) {
       logger?.warn("could not end attempt after failure", {
         taskId,
@@ -2223,12 +2257,18 @@ export class TurnRunner implements TaskWorker {
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    // LAST, and only when the fenced transition proved this attempt owns the
-    // task. A task somebody else already landed is a task whose placeholder
-    // somebody else is responsible for, and a `LeaseLostError` above has
-    // already returned — so `landed` is what separates "I ended this turn" from
-    // "I found it ended".
-    if (!landed || assistantMessageId === undefined) return;
+    // LAST, and only with ownership proved. A task somebody ELSE took over is a
+    // task whose placeholder somebody else is responsible for — a
+    // `LeaseLostError` from the transition has already returned, and one from
+    // the fenced `endAttempt` leaves `leaseCurrent` false.
+    //
+    // `landed` alone was not enough. A task landed out of band — a host
+    // transition, an operator cancel — is terminal before this block runs, so
+    // the transition above is skipped and nothing else was ever going to take
+    // the `placeholder: true` flag off: the run's answer stayed a spinner
+    // forever, with the task long since cancelled. Nobody else can write it,
+    // because the lease proves the task is still this attempt's.
+    if (!(landed || leaseCurrent) || assistantMessageId === undefined) return;
     try {
       // Whatever the run streamed before it broke is KEPT — a half-written
       // answer plus a terminal event explaining the stop is more use to a

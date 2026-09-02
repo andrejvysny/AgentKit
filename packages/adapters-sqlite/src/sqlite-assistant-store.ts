@@ -740,6 +740,15 @@ class GateWait {
 }
 
 /**
+ * Every {@link SqliteConnection} ever built, keyed by the handle it wraps.
+ *
+ * A WeakMap so a closed store's connection is collectable with its `Database`
+ * — this registry must not be the reason either stays alive. See
+ * {@link writeGateFor} for what reads it.
+ */
+const connectionsByHandle = new WeakMap<Database, SqliteConnection>();
+
+/**
  * Shared by every sub-store so a multi-statement operation (inside one port
  * method, or spanning several via {@link SqliteAssistantStore.transaction})
  * commits or rolls back as one unit. Also the single seam where bun-types'
@@ -806,11 +815,22 @@ class SqliteConnection {
   private txDepth = 0;
 
   /**
-   * The FIFO every top-level {@link withAsyncTx} queues on: each call chains
-   * onto the previous one's SETTLED signal, so async transactions run one at a
-   * time on this connection, in call order.
+   * The FIFO every transaction and every queued root write takes a slot in:
+   * each call chains onto the previous one's SETTLED signal, so they run one at
+   * a time on this connection, in call order.
    */
   private txGate: Promise<void> = Promise.resolve();
+
+  /**
+   * Slots taken on {@link txGate} and not yet finished — queued as well as
+   * running.
+   *
+   * {@link currentOwner} cannot answer "is the queue empty?": a transaction
+   * that has taken its slot has not opened its BEGIN yet, so the owner is still
+   * `null` for a turn of the event loop. A write that read only the owner would
+   * run ahead of every transaction issued before it and still waiting.
+   */
+  private gateDepth = 0;
 
   /** Token of the async transaction currently open, `null` when there is none. */
   private currentOwner: TxOwner | null = null;
@@ -821,7 +841,12 @@ class SqliteConnection {
     private readonly busyTimeoutMs: number,
     /** Ceiling on how long a caller waits for THIS connection's gate — see {@link GateWait}. */
     private readonly gateTimeoutMs: number = DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
-  ) {}
+  ) {
+    // One queue per HANDLE, findable from the handle alone — see
+    // {@link writeGateFor}. A second store over this same connection has to
+    // queue on THIS gate; a gate of its own would serialize nothing.
+    connectionsByHandle.set(db, this);
+  }
 
   run(sql: string, params?: Params): Changes {
     // bun-types' generic for Database.run (`...bindings: ParamsType[]` where
@@ -921,60 +946,83 @@ class SqliteConnection {
       waited.arrive();
       return this.beginExclusive(fn);
     });
-    // The gate carries the SETTLED signal only: the next caller waits for this
-    // one to finish, and must not inherit its rejection.
-    this.txGate = run.then(
-      () => undefined,
-      () => undefined,
-    );
+    this.enqueue(run);
     return waited.race(run);
   }
 
   /**
-   * Run `fn` in a synchronous transaction of its own, once this connection has
-   * no async transaction open that `owner` is not part of.
+   * Take the tail of {@link txGate} for `run`, and leave the next caller a
+   * SETTLED signal to chain onto.
    *
-   * THE GATE CHECK AND THE `withTx` ARE ONE TICK, and that is the whole point.
-   * The obvious shape — an `await ready()` helper followed by the caller's own
+   * The signal is settled-only: the next caller waits for this one to finish
+   * and must not inherit its rejection. {@link gateDepth} is raised
+   * SYNCHRONOUSLY, on the turn the slot is taken, which is what makes arrival
+   * order — not "who noticed the gate free first" — the run order.
+   */
+  private enqueue(run: Promise<unknown>): void {
+    this.gateDepth += 1;
+    const done = (): void => {
+      this.gateDepth -= 1;
+    };
+    this.txGate = run.then(done, done);
+  }
+
+  /**
+   * Run `fn` in a synchronous transaction of its own, in ARRIVAL ORDER with the
+   * async transactions on this connection.
+   *
+   * A ROOT WRITE TAKES A REAL SLOT IN {@link txGate}, exactly as
+   * {@link withAsyncTx} does, and that is what makes the queue fair. Re-reading
+   * the gate after each wait instead — "am I free yet?" — is not fairness but a
+   * retry loop, and it starves: every `withAsyncTx` issued after this write has
+   * already chained its own `.then` onto the promise this write is waiting on,
+   * so it opens its BEGIN first and the write finds the connection busy again,
+   * for as long as transactions keep arriving. A measured three overlapping
+   * `transaction()` loops were enough to hold an `updateChat` off until it hit
+   * the gate timeout — and `appendEvents`, `appendMessage` and `transitionTask`
+   * are all on this path.
+   *
+   * THE GATE EXIT AND THE `withTx` ARE ONE TICK, and that is load-bearing. The
+   * obvious shape — an `await ready()` helper followed by the caller's own
    * `withTx` — leaves a microtask gap: a transaction already queued on
    * {@link txGate} runs its BEGIN in that gap, and the write then flattens into
-   * the stranger's transaction after all. Here the `while` exits and
-   * `this.withTx(fn)` runs in the same synchronous continuation, so nothing can
-   * open a transaction in between.
+   * the stranger's transaction after all. Here `this.withTx(fn)` runs in the
+   * same continuation the slot resolves in, so nothing can open a transaction
+   * in between.
    *
-   * The caller that IS the open transaction passes its `owner` and never waits:
-   * the loop's condition is false for it, so `fn` runs immediately and
-   * {@link withTx} flattens it into the transaction it belongs to. That is what
-   * keeps `tx.conversations.updateChat(...)` inside its caller's unit — and
-   * what keeps `claimNext`'s own nested writes from waiting on the transaction
-   * they are running inside.
+   * TWO CALLERS SKIP THE QUEUE. The one that IS the open transaction passes its
+   * `owner` and flattens immediately — that is what keeps
+   * `tx.conversations.updateChat(...)` inside its caller's unit, and what keeps
+   * `claimNext`'s own nested writes from waiting on the transaction they are
+   * running inside. And a caller arriving at an EMPTY queue runs synchronously:
+   * no slot to take, no timer to arm, so the ordinary write path costs exactly
+   * what it did before the queue existed. "Empty" is {@link gateDepth}, not
+   * {@link currentOwner} — a transaction that has taken its slot has not opened
+   * its BEGIN yet, and a write that jumped ahead of it would be the same
+   * unfairness in the other direction.
    *
    * A single-statement write is wrapped too. The BEGIN/COMMIT costs a pair of
    * pragma-free statements and buys the one thing the bare `run` did not have:
    * a blast radius of exactly this write.
    */
   async whenFree<T>(fn: () => T, owner?: TxOwner): Promise<T> {
-    // Nothing to wait for: no timer is armed, so the ordinary write path costs
-    // exactly what it did before the watchdog existed.
-    if (this.currentOwner === null || owner === this.currentOwner) {
+    if (owner !== undefined && owner === this.currentOwner) {
       return this.withTx(fn);
     }
-    // ONE watchdog for the whole wait, not one per turn: the budget is "how
-    // long this write waits", not "how long one queue entry takes".
+    if (this.gateDepth === 0) return this.withTx(fn);
+    // ONE watchdog for the whole wait: the budget is "how long this write
+    // waits", not "how long one queue entry takes".
     const waited = new GateWait(this.gateTimeoutMs);
-    try {
-      while (this.currentOwner !== null && owner !== this.currentOwner) {
-        // Re-read each turn: `txGate` is the TAIL of the queue, so waiting on it
-        // also lets everything already queued go first — a write cannot jump the
-        // line, and cannot be starved by callers that arrive after it either
-        // (they chain onto the same promise this one is already waiting on).
-        await waited.race(this.txGate);
-      }
-    } finally {
-      waited.cancel();
-    }
-    // Same continuation as the loop's last condition check — see the doc above.
-    return this.withTx(fn);
+    const run = this.txGate.then(() => {
+      // Still in line, and still wanted? `arrive` throws for a caller that
+      // already timed out — the BEGIN below must not happen for one, and the
+      // slot is released either way (see enqueue) so the caller behind it is
+      // not orphaned.
+      waited.arrive();
+      return this.withTx(fn);
+    });
+    this.enqueue(run);
+    return waited.race(run);
   }
 
   /**
@@ -2231,9 +2279,18 @@ class SqliteTaskStore implements TaskStore {
       }
       // The attempt names its task, so the ownership proof is read from the
       // same row the write is about — inside this transaction, next to it.
+      // BEFORE the terminal check below: "may you write here?" is a different
+      // question from "is there anything to write?".
       if (input.leaseToken !== undefined) {
         this.assertLeaseCurrent(row.task_id, input.leaseToken);
       }
+      // FIRST TERMINAL WINS — see `TaskStore.endAttempt`. An attempt already
+      // ended is returned as it stands, so a recovery pass acting on an expired
+      // lease cannot restate a `completed` attempt as `abandoned` and have the
+      // count below read a clean finish as a crash. Reachable in one process:
+      // a runner that ends the attempt and then fails to land the task leaves
+      // exactly that pair behind for recovery to find.
+      if (row.status !== "running") return attemptFromRow(row);
       const endedAt = this.clock.nowIso();
       this.conn.run(
         `UPDATE task_attempts SET status = $status, ended_at = $endedAt, error = COALESCE($error, error) WHERE attempt_id = $id`,
@@ -2249,9 +2306,10 @@ class SqliteTaskStore implements TaskStore {
       // later transition, where a crash in between loses the death and two
       // callers reading-then-writing lose one of two. Only `abandoned`: a
       // failure that ended cleanly is a different diagnosis (see
-      // `TaskRecord.poisonCount`). Idempotent per attempt: a recoverer that
-      // ends the same attempt `abandoned` twice reports one death, not two.
-      if (input.status === "abandoned" && row.status !== "abandoned") {
+      // `TaskRecord.poisonCount`). Only the `running` → `abandoned` EDGE, which
+      // the terminal check above already guarantees — a recoverer that ends the
+      // same attempt `abandoned` twice reports one death, not two.
+      if (input.status === "abandoned") {
         this.conn.run(
           `UPDATE tasks SET poison_count = poison_count + 1 WHERE task_id = $taskId`,
           { $taskId: row.task_id },
@@ -3465,6 +3523,30 @@ export function openAgentKitDatabase(
   busyTimeoutMs: number = DEFAULT_BUSY_TIMEOUT_MS,
 ): Database {
   const db = new Database(path);
+  // THE HANDLE IS THIS FUNCTION'S UNTIL IT RETURNS ONE. Every throw below —
+  // the documented `sqlite_schema_version` refusal above all, which a host is
+  // invited to catch and act on — used to leave the connection open: an fd plus
+  // its `-shm`/`-wal` sidecars, once per attempt, for a process that retries
+  // after asking the user to point somewhere else.
+  try {
+    return openInto(db, path, busyTimeoutMs);
+  } catch (err) {
+    try {
+      db.close();
+    } catch {
+      // Nothing usable was opened, or the driver already dropped it. The error
+      // being rethrown is the one worth reporting.
+    }
+    throw err;
+  }
+}
+
+/** {@link openAgentKitDatabase}'s body, minus the handle's lifetime. */
+function openInto(
+  db: Database,
+  path: string | ":memory:",
+  busyTimeoutMs: number,
+): Database {
   // Several handles over one file are supported; this is half of what makes
   // them wait for each other rather than fail on each other (the other half
   // is `SqliteConnection.beginImmediateAsync` — see that class's doc).
@@ -3500,6 +3582,58 @@ export function openAgentKitDatabase(
     throw err;
   }
   return db;
+}
+
+/**
+ * The write queue of one handle: the seam a store over a SHARED connection
+ * takes so its writes wait out a transaction they are not part of, instead of
+ * joining it.
+ *
+ * Deliberately one method wide. A second store over the aggregate's handle
+ * needs exactly one thing from `SqliteConnection` — a turn — and everything
+ * else about that class (owner tokens, the async transaction path) belongs to
+ * the aggregate that owns the connection.
+ */
+export interface SqliteWriteGate {
+  /**
+   * Run `fn` in a transaction of its own, after every caller already queued.
+   *
+   * `fn` must be SYNCHRONOUS: it runs between a `BEGIN IMMEDIATE` and its
+   * `COMMIT`, and an `await` in there would hold the write lock across a turn
+   * of the event loop that the queue is not holding for it.
+   */
+  whenFree<T>(fn: () => T): Promise<T>;
+}
+
+/**
+ * The write gate for `db` — the one the {@link SqliteAssistantStore} over this
+ * handle already uses, or a fresh one when nothing else has claimed the handle.
+ *
+ * WHY A LOOKUP AND NOT A CONSTRUCTOR ARGUMENT: {@link SqliteMcpServerConfigStore}
+ * is handed a bare `Database` (that is the documented way to share one
+ * connection, and it is what {@link SqliteAssistantStore.database} returns), so
+ * the handle is all it has to go on. Reading the driver's own
+ * `Database.inTransaction` instead — "someone has a transaction open, join it"
+ * — is the `txDepth`-for-ownership mistake the aggregate store already paid
+ * for: a config write that joined a stranger's `transaction()` reported success
+ * and was then erased by that stranger's rollback.
+ *
+ * `options` is only consulted when this call MINTS the gate; a handle the
+ * aggregate already owns keeps the budgets that store was configured with,
+ * because a queue with two different timeouts depending on who is asking is not
+ * one queue.
+ */
+export function writeGateFor(
+  db: Database,
+  options: { busyTimeoutMs?: number; transactionGateTimeoutMs?: number } = {},
+): SqliteWriteGate {
+  const existing = connectionsByHandle.get(db);
+  if (existing !== undefined) return existing;
+  return new SqliteConnection(
+    db,
+    options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS,
+    options.transactionGateTimeoutMs ?? DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
+  );
 }
 
 // ---------------------------------------------------------------------------

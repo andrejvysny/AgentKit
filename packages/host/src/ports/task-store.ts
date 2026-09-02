@@ -26,9 +26,14 @@ export type TaskStatus =
   | "cancelled";
 
 /**
- * Lifecycle of ONE attempt at a task. `abandoned` is the crash outcome: the
- * lease expired with the attempt still marked running, so recovery ends it that
- * way rather than claiming knowledge of success or failure it does not have.
+ * Lifecycle of ONE attempt at a task: `running` → `completed` | `failed` |
+ * `abandoned` | `cancelled`, and no edge out of a terminal one. `abandoned` is
+ * the crash outcome: the lease expired with the attempt still marked running,
+ * so recovery ends it that way rather than claiming knowledge of success or
+ * failure it does not have.
+ *
+ * The terminal statuses are terminal in the store as well as on paper — see
+ * {@link TaskStore.endAttempt} for what a second `endAttempt` does.
  */
 export type AttemptStatus =
   | "running"
@@ -622,14 +627,27 @@ export interface TaskStore {
   /**
    * Close an attempt with its outcome.
    *
-   * `status: "abandoned"` MUST also increment the task's
+   * FIRST TERMINAL WINS. An attempt that is no longer `running` is returned
+   * UNCHANGED — same status, same `endedAt`, same `error` — and nothing is
+   * written. {@link AttemptStatus} has no edge out of a terminal state, and the
+   * second report is by construction the less informed one: it comes from a
+   * recovery pass acting on an expired lease, or from a caller retrying after a
+   * failure that happened AFTER the attempt row already landed. A store that
+   * overwrote would let a clean `completed` be restated as `abandoned` and
+   * counted as a crash. This is also why re-reporting the same death is free
+   * rather than a special case.
+   *
+   * A `running` → `abandoned` end MUST also increment the task's
    * {@link TaskRecord.poisonCount} by one, atomically with the attempt write —
    * the attempt ending that way IS the poison event, and a count kept by
-   * callers loses deaths (see that field). Every other status leaves it alone.
+   * callers loses deaths (see that field). Every other edge leaves it alone.
    *
    * With {@link EndAttemptInput.leaseToken}, fenced the same way
    * {@link transitionTask} is: the token must name the CURRENT lease of the
-   * attempt's task, or the write is refused with {@link LeaseLostError}.
+   * attempt's task, or the write is refused with {@link LeaseLostError}. The
+   * fence is checked BEFORE the terminal short-circuit — "may you write here?"
+   * is a different question from "is there anything to write?", and a caller
+   * whose lease moved should learn that it did.
    */
   endAttempt(input: EndAttemptInput): Promise<AttemptRecord>;
 

@@ -36,13 +36,17 @@ or rolls all of it back on a throw. An adapter that cannot roll back (a
 plain in-memory store) must declare `capabilities.atomicTransactions: false`
 to the conformance harness rather than silently pass a weaker guarantee.
 
-**Callers are serialized per store handle.** A `transaction()` and a worker's
-`claimNext` issued while another caller's transaction is open WAIT for it and
-then run as a unit of their own, so a throw rolls back only that caller's
-writes — they used to join whatever was open and be discarded by a stranger's
-rollback. Port calls the callback makes through the `tx` it is handed join that
-transaction, and a nested `tx.transaction(...)` flattens into it rather than
-nesting.
+**Callers are serialized per store handle, in ARRIVAL ORDER.** A
+`transaction()` and a worker's `claimNext` issued while another caller's
+transaction is open WAIT for it and then run as a unit of their own, so a throw
+rolls back only that caller's writes — they used to join whatever was open and
+be discarded by a stranger's rollback. The queue is FIFO, and on
+`SqliteAssistantStore` an ordinary root write takes a slot in the SAME queue: a
+write that instead re-asked "is the connection free yet?" after each wait was
+overtaken by every transaction issued after it, because those had already
+chained onto the promise it was waiting on. Port calls the callback makes
+through the `tx` it is handed join that transaction, and a nested
+`tx.transaction(...)` flattens into it rather than nesting.
 
 **A callback must do its work through `tx`, and the store now says so.** A call
 made on the ROOT store from inside a callback is indistinguishable from an
@@ -60,7 +64,10 @@ worth serializing, and a `getTask` that queued behind every busy host
 transaction would be a performance cliff for no correctness. An ordinary
 single-call WRITE from another caller may be delayed by an open transaction —
 `SqliteAssistantStore` queues it (Phase 1.6) rather than let it join a
-transaction whose rollback would erase it.
+transaction whose rollback would erase it. That includes a
+`SqliteMcpServerConfigStore` constructed over the aggregate's handle: sharing a
+connection is not sharing a unit of work, and it takes a slot in the same queue
+instead of asking the driver whether *anyone* has a transaction open.
 
 **The two reference adapters agree.** `MemoryAssistantStore` cannot roll back
 (hence `capabilities.atomicTransactions: false`) and does not queue ordinary
@@ -356,11 +363,20 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
   `2026-01-01T01:30:00-05:00` (06:30Z) sorts before `2026-01-01T02:00:00.000Z`
   — an un-normalized offset-form backoff is claimed hours early on one adapter
   and not the other, silently, in the retry paths nobody watches.
-- `poisonCount` counts attempts that ended `abandoned`, written through
-  `TaskPatch.poisonCount` on the transition that LANDS the task — there is no
-  `running → running` edge to carry a mid-flight increment. It is the diagnosis
-  that travels with a dead letter ("three attempts, all abandoned" is a
-  crashing worker), not the dead-letter trigger; `attemptCount` is.
+- `poisonCount` counts attempts that ended `abandoned`, and **the STORE owns
+  it**: `endAttempt` increments it by one on the `running → abandoned` edge, in
+  the same write as the attempt row. `TaskPatch.poisonCount` remains for a host
+  that must overwrite the number outright. It is the diagnosis that travels
+  with a dead letter ("three attempts, all abandoned" is a crashing worker),
+  not the dead-letter trigger; `attemptCount` is.
+- **An attempt's first terminal status wins.** `AttemptStatus` is
+  `running → completed | failed | abandoned | cancelled` with no edge out of a
+  terminal state, and `endAttempt` on an attempt that is no longer `running`
+  returns it UNCHANGED, writing nothing — the second report is by construction
+  the less informed one (a recovery pass acting on an expired lease, or a
+  caller retrying after the attempt row already landed). It is also what keeps
+  the count above exact: a clean `completed` restated as `abandoned` would be
+  counted as a crash, and the same death reported twice counts once.
 - `appendEvents`/`listEvents` are typed on `TaskEventEnvelope`
   (`@agentkit/contracts`) — the kind-agnostic shape the store actually
   orders (`seq`) and dedups (`eventId`); `AiRunEvent` is the `chat.turn`
@@ -436,8 +452,9 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
 > adapters.
 >
 > **What the adapters now guarantee underneath it.** Every WRITE method of every
-> `SqliteAssistantStore` sub-store waits out an async transaction it is not part
-> of before opening its own, and the `tx` view a `transaction()` callback is
+> `SqliteAssistantStore` sub-store takes a slot in the connection's queue when a
+> transaction it is not part of is open or waiting, and the `tx` view a
+> `transaction()` callback is
 > handed carries the owner token that lets ITS writes flatten in. So a
 > concurrent `store.conversations.updateChat(...)` no longer joins a stranger's
 > `BEGIN` and no longer dies with its rollback, and neither does a `claimNext`.
