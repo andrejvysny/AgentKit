@@ -13,7 +13,11 @@
  * `seq`-contiguous across the seam — and that is ENFORCED here rather than
  * assumed of the server: a resume the server answered from the start of the log
  * (it did not recognise the id, which is its documented right) is de-duplicated
- * by `eventId` on the way out.
+ * by `seq` on the way out. `seq` rather than `eventId` because it is a small
+ * monotonic counter with a known floor (the last one yielded) instead of an
+ * opaque id — a dedupe keyed on it needs to remember exactly one number for
+ * the life of the stream, not a window of ids that a long-enough replay can
+ * still outrun.
  *
  * WHAT ENDS THE ITERATION is the SERVER closing the stream, and nothing else.
  * The server closes when the TASK is terminal — its log exhausted, whether or
@@ -108,17 +112,6 @@ export const MIN_STREAM_RETRY_DELAY_MS = 250;
 /** Ceiling for a server-supplied `retry:` hint. */
 export const MAX_STREAM_RETRY_DELAY_MS = 30_000;
 
-/**
- * How many recently yielded `eventId`s the de-dup remembers.
- *
- * Bounded because it guards a stream that can run for hours: the duplicate it
- * exists to catch is a REPLAY — a resume the server answered from the start of
- * the log instead of from `Last-Event-ID` — and a replay re-sends the tail this
- * client just saw, not something from the far past. A window is enough, and an
- * unbounded set on a long run is a leak.
- */
-const DEDUPE_WINDOW = 4096;
-
 interface StreamDeps {
   transport: Transport;
   runId: string;
@@ -150,8 +143,12 @@ async function* iterate(
   let lastEventId = options.lastEventId;
   let attempts = 0;
   let reconnects = 0;
-  /** Recently yielded ids, so a replayed tail cannot be delivered twice. */
-  const yielded = new Set<string>();
+  /**
+   * The highest `seq` handed to the caller so far, so a replayed tail cannot be
+   * delivered twice. `undefined` until the first event — `seq` starts at 0 (or
+   * wherever the log starts), so a sentinel number would collide with a real one.
+   */
+  let maxSeqYielded: number | undefined;
 
   for (;;) {
     try {
@@ -173,13 +170,14 @@ async function* iterate(
         // Progress earns back the budget: the failure this bounds is a
         // connection that never delivers, not a long run that drops twice.
         attempts = 0;
-        // An id already handed to the caller is a REPLAY, not news: a server
-        // that did not recognise the `Last-Event-ID` answers from the start of
-        // the log, and a UI that appended the tail twice would show the answer
-        // twice until the next reconcile. Its `retry:`/resume bookkeeping above
-        // still counts — only the delivery is suppressed.
-        if (yielded.has(event.eventId)) continue;
-        remember(yielded, event.eventId);
+        // A `seq` at or below the highest already handed to the caller is a
+        // REPLAY, not news: a server that did not recognise the `Last-Event-ID`
+        // answers from the start of the log, and a UI that appended the tail
+        // twice would show the answer twice until the next reconcile. Its
+        // `retry:`/resume bookkeeping above still counts — only the delivery is
+        // suppressed.
+        if (maxSeqYielded !== undefined && event.seq <= maxSeqYielded) continue;
+        maxSeqYielded = event.seq;
         yield event;
       }
       // The server closed: the task is terminal and its log is exhausted, so
@@ -209,14 +207,6 @@ function clampRetry(hint: number): number {
   if (hint < MIN_STREAM_RETRY_DELAY_MS) return MIN_STREAM_RETRY_DELAY_MS;
   if (hint > MAX_STREAM_RETRY_DELAY_MS) return MAX_STREAM_RETRY_DELAY_MS;
   return hint;
-}
-
-/** Add to the de-dup window, evicting the oldest id once it is full. */
-function remember(yielded: Set<string>, eventId: string): void {
-  yielded.add(eventId);
-  if (yielded.size <= DEDUPE_WINDOW) return;
-  const oldest = yielded.values().next();
-  if (oldest.done !== true) yielded.delete(oldest.value);
 }
 
 /** One connection's frames. Throws on a non-2xx, which is not retryable. */

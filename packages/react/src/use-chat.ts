@@ -351,6 +351,14 @@ export function useChat(
         opts.parentMessageId === undefined
           ? before
           : truncateAfter(before, opts.parentMessageId);
+      // The tail a branch submit optimistically cut off, so a failed submit can
+      // put it back. `undefined` for an append (nothing was cut) and for a
+      // branch whose parent was not found (the truncation above was a no-op,
+      // so there is nothing to restore either).
+      const cutTail =
+        opts.parentMessageId === undefined || base.length === before.length
+          ? undefined
+          : before.slice(base.length);
       const pair = optimisticPair({
         chatId,
         ids,
@@ -419,23 +427,35 @@ export function useChat(
         // The key survives the failure so the retry lands on the same turn.
         parkedRef.current = { key: idempotencyKey, signature };
         if (!alive.current) return;
-        update((prev) => ({
-          ...prev,
+        update((prev) => {
           // Rollback: the two optimistic records described a write that never
           // happened. Removed BY ID rather than by restoring the list as it was
           // before the await — that snapshot is several seconds stale by now,
           // and putting it back would also discard whatever landed while this
           // submit was out: a delta on a still-running turn, a second submit's
           // own optimistic pair, a reconcile.
-          messages: prev.messages.filter(
+          const withoutPair = prev.messages.filter(
             (message) =>
               message.id !== ids.user && message.id !== ids.assistant,
-          ),
-          status: "error",
-          phase: null,
-          activeRunId: null,
-          error: toError(cause),
-        }));
+          );
+          // A branch submit's rollback owes the tail it optimistically cut off,
+          // too — `truncateAfter` is otherwise never undone. Restored only if
+          // the parent is still exactly where this submit found it: anything
+          // else means the list moved on while this call was out, and splicing
+          // a stale tail back in would be a worse guess than leaving it be.
+          const messages =
+            cutTail === undefined
+              ? withoutPair
+              : restoreTail(withoutPair, opts.parentMessageId!, cutTail);
+          return {
+            ...prev,
+            messages,
+            status: "error",
+            phase: null,
+            activeRunId: null,
+            error: toError(cause),
+          };
+        });
       }
     },
     [chatId, client, read, update, alive, emitter, origin, refresh, followRun],
@@ -542,16 +562,28 @@ export function useChat(
   // survive into the next chat. `update` is already a no-op after unmount
   // (`useAliveRef`'s cleanup runs first), so this touches state on a chat
   // switch only.
+  //
+  // `messages`/`truncated`/`error` reset here too, not just the run fields:
+  // the read effect's own `refresh()` only touches `messages`/`truncated` on
+  // SUCCESS, so a switch whose read then fails would otherwise go on showing
+  // chat A's messages — and A's `truncated` flag — under chat B. Clearing them
+  // before that read starts (`status: "loading"`, matching what `refresh` sets
+  // for a fresh chat) is what makes a failed read fail onto an empty chat
+  // instead of a stale one.
   useEffect(() => {
     chatIdRef.current = chatId;
     return () => {
       streamRef.current?.abort();
       streamRef.current = null;
-      update((prev) =>
-        prev.activeRunId === null && prev.status !== "streaming"
-          ? prev
-          : { ...prev, activeRunId: null, phase: null, status: "idle" },
-      );
+      update((prev) => ({
+        ...prev,
+        activeRunId: null,
+        phase: null,
+        status: "loading",
+        messages: [],
+        truncated: false,
+        error: null,
+      }));
     };
   }, [chatId, update]);
 
@@ -639,6 +671,24 @@ function runFailure(events: readonly AiRunEvent[]): Error | null {
     return error;
   }
   return null;
+}
+
+/**
+ * Splice a branch submit's cut tail back after `parentMessageId`, but only
+ * when the parent is still the LAST message — proof nothing else appended
+ * past it while the failed submit was out. Anything else (a second submit's
+ * own pair, a reconcile) means the truncation is no longer the freshest guess
+ * about the list, and restoring a stale tail on top of it would be wrong in a
+ * different way than leaving it truncated.
+ */
+function restoreTail(
+  messages: readonly MessageDto[],
+  parentMessageId: string,
+  tail: readonly MessageDto[],
+): MessageDto[] {
+  const last = messages[messages.length - 1];
+  if (last === undefined || last.id !== parentMessageId) return [...messages];
+  return [...messages, ...tail];
 }
 
 /** An optimistic record taking on the id the server gave it. */
