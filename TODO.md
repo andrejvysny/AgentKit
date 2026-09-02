@@ -1,7 +1,7 @@
 # TODO — hardening tranche 2 (plan: ~/.claude/plans/act-as-senior-software-linked-seal.md, ADR 0014, contract 0.4.0 → 0.5.0)
 
 ## Phase 0 — stop the bleeding
-- [ ] 0.1 write-policy body `chatId` override (B1) — inline
+- [x] 0.1 write-policy body `chatId` override (B1) — inline
 - [ ] 0.2 sqlite/memory transaction owner gate (D1, D2)
 - [ ] 0.3 transaction concurrency tests
 
@@ -42,9 +42,9 @@
 - [ ] 4.7 MCP client (F4, F10, F11, F12, F8)
 
 ## Phase 5 — contracts, testing infra, packaging, docs
-- [ ] 5.1 contract 0.5.0 (E1, E11, E13, new codes, chat_busy, fenced options); CONTRACT_VERSION bump
+- [ ] 5.1 contract 0.5.0 (E1 done, E11, E13, new codes, chat_busy, fenced options); CONTRACT_VERSION bump
 - [ ] 5.2 SecretStore conformance + reference impl (E5)
-- [ ] 5.3 CI (E4, E9, E7)
+- [ ] 5.3 CI (E4 done, E9, E7)
 - [ ] 5.4 packaging (E8, E10, E12)
 - [ ] 5.5 docs: ADR 0014, architecture/ports/contracts, CHANGELOG, roadmap, migration delta
 - [ ] 5.6 second-attempt + zombie E2E
