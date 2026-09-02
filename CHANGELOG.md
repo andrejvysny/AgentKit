@@ -206,7 +206,7 @@ host, and the multi-pass stream rule) found 9 and confirmed the core rule on
 every layer, wave 3 checked the file splits were pure moves. Every confirmed
 finding was fixed in the same session with a regression test that fails
 (red) if the fix is reverted; the runner-level crash/zombie end-to-end test
-proved its own fences by patching each one out in turn. Final gate: 1610
+proved its own fences by patching each one out in turn. Final gate: 1646
 tests passing, 1 skipped, across typecheck, lint, build, the umbrella
 assembly and both smokes.
 
