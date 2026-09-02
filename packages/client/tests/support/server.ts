@@ -167,7 +167,9 @@ async function seedHostState(store: MemoryAssistantStore): Promise<void> {
 export async function waitFor(
   predicate: () => Promise<boolean>,
   what: string,
-  timeoutMs = 5_000,
+  // Real-socket e2e cases have flaked under concurrent test load with the old
+  // 5 s budget; a generous ceiling costs nothing when the predicate holds early.
+  timeoutMs = 10_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

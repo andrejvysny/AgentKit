@@ -192,7 +192,10 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         type: "run.failed",
         runId,
         timestamp: nowIso(),
-        data: { errorMessage: errMsg(err) },
+        // The request never produced a response (DNS, refused connection,
+        // TLS, a fetch double that threw): distinct from a provider that
+        // answered with an error status.
+        data: { errorMessage: errMsg(err), errorCode: "network_error" },
       });
       return;
     }
@@ -213,7 +216,10 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         type: "run.failed",
         runId,
         timestamp: nowIso(),
-        data: { errorMessage: "Provider returned empty body" },
+        data: {
+          errorMessage: "Provider returned empty body",
+          errorCode: "empty_body",
+        },
       });
       return;
     }
