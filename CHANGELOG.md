@@ -86,6 +86,17 @@ test that fails on the old code. The reasoning lives in [ADR
   `approved → applying` claim, and `reconcileInterrupted`'s staleness window
   keys on it (it used to fall back to the decision time, which could be far
   older than the claim).
+- **Found by the second verifier wave, fixed the same day**: the FIFO gate
+  was not yet fair — a root write already waiting could be overtaken by every
+  transaction that arrived after it and starve to the gate timeout; it now
+  takes a real slot in the queue. `SqliteMcpServerConfigStore`, which shares
+  the database handle, still joined any open transaction and was erased by a
+  stranger's rollback; it now queues through a per-handle write gate.
+  `endAttempt` keeps an attempt's first terminal status (a recovery pass can
+  no longer restate a clean completion as a crash), the local runner lands the
+  fenced transition before ending the attempt on every settle path, and
+  `openAgentKitDatabase` closes the handle it opened when it refuses a stale
+  database.
 
 ### The chat loop tells the truth (`@agentkit/core`)
 

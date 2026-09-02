@@ -119,6 +119,29 @@ ordinary writes behind an open transaction — recorded as an adapter-**MAY** in
 [`docs/ports.md`](../ports.md), because memory has no rollback, so the failure
 mode the queueing prevents does not exist there.
 
+The second verifier wave then attacked the gate itself and found the FIFO
+promise was not yet true: `whenFree` re-read the owner only after the current
+tail settled, so every `withAsyncTx` that arrived later chained ahead of an
+already-waiting root write, which could starve to the gate timeout under
+sustained transaction load. `whenFree` now takes a real slot on the same queue
+(`enqueue` raises `gateDepth` and re-points the tail synchronously, on the
+caller's own turn), so arrival order is run order for transactions and root
+writes alike; the fast path is `gateDepth === 0`, stricter than the old
+owner check. The same wave found `SqliteMcpServerConfigStore` — which shares
+the handle but not the connection object — still gating on `db.inTransaction`,
+i.e. joining any holder's transaction and being erased by a stranger's
+rollback, the exact CRITICAL this decision closes; it now queues through a
+per-handle `SqliteWriteGate` (`writeGateFor(db)`), the narrowest change that
+keeps its public `Database` constructor. Two smaller findings landed with
+them: `openAgentKitDatabase` closes the handle it opened when it refuses a
+database (a host retrying the documented `sqlite_schema_version` error used
+to leak two descriptors per attempt), and `TaskStore.endAttempt` keeps an
+attempt's FIRST terminal status and writes nothing on a second call — without
+that rule a `completed` attempt restated `abandoned` by a recovery pass
+counted a clean completion as a crash, and the local runner's settle path,
+which ended the attempt before the fenced transition, could produce exactly
+that pair; the runner now lands the transition first on every branch.
+
 Files:
 [`packages/adapters-sqlite/src/sqlite-assistant-store.ts`](../../packages/adapters-sqlite/src/sqlite-assistant-store.ts),
 [`packages/adapters-memory/src/memory-assistant-store.ts`](../../packages/adapters-memory/src/memory-assistant-store.ts),
