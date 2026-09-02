@@ -1,5 +1,4 @@
 import type {
-  AiChatMessage,
   AiContextBinding,
   AiProviderConfig,
   AiRunEvent,
@@ -33,7 +32,7 @@ import type { ToolSetContributor } from "../ports/tool-contributor.js";
 import type { ToolGuard } from "../ports/tool-guard.js";
 import type { UsageAuthorizer } from "../ports/usage-authorizer.js";
 import type { AssistantSettings } from "../ports/settings-store.js";
-import type { TaskRecord, TaskStatus } from "../ports/task-store.js";
+import type { TaskStatus } from "../ports/task-store.js";
 import type { VerificationHook } from "../ports/verification.js";
 import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import { loadExecutableTask } from "../tasks/load-executable-task.js";
@@ -67,11 +66,7 @@ import {
   describeDeficiencies,
   runCorrectionHarness,
 } from "./harness-driver.js";
-import {
-  createRunProjector,
-  type RunProjectionState,
-  type RunProjector,
-} from "./projection.js";
+import { createRunProjector, type RunProjector } from "./projection.js";
 import type { PassInput, PassResult, PassState } from "./pass-types.js";
 import { stageRegistry } from "./registry-staging.js";
 import {
