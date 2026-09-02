@@ -404,7 +404,17 @@ export function validateGrantAllowanceRequest(
     checkRequiredEnum(body, "maxRisk", RISK_LEVELS),
   );
   if (issue !== null) return { ok: false, detail: issue };
-  return { ok: true, value: body as GrantAllowanceRequest };
+  // Rebuilt field by field, not `body as ...`: the route spreads this value into
+  // the port call, and a stray body member — a `chatId` — riding through the
+  // cast would override the path parameter the authorizer already ruled on.
+  return {
+    ok: true,
+    value: {
+      toolName: body["toolName"] as string,
+      proposalKind: body["proposalKind"] as string,
+      maxRisk: body["maxRisk"] as GrantAllowanceRequest["maxRisk"],
+    },
+  };
 }
 
 /**

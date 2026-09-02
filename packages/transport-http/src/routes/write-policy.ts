@@ -67,9 +67,13 @@ export async function grantAllowance(ctx: RouteContext): Promise<Response> {
   if (!validated.ok) {
     return badRequest("invalid_request", validated.detail, ctx.instance);
   }
+  // Named fields, path `chatId` LAST: the body must never be able to say which
+  // chat a grant lands in — that is the one field the authorizer checked.
   const granted = policy.allow({
+    toolName: validated.value.toolName,
+    proposalKind: validated.value.proposalKind,
+    maxRisk: validated.value.maxRisk,
     chatId: pathParam(ctx, "chatId"),
-    ...validated.value,
   });
   return jsonResponse(writeAllowanceDto(granted), 201);
 }
