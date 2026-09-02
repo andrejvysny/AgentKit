@@ -242,3 +242,123 @@ describe("SqliteMcpServerConfigStore — the shared handle, under the gate", () 
     }
   });
 });
+
+describe("SqliteAssistantStore — a ROOT write against an open transaction", () => {
+  it("queues the write behind the transaction instead of enlisting it", async () => {
+    // The residual hole after the owner gate landed: `transaction()` callers
+    // stopped joining each other, but an unrelated caller's SYNCHRONOUS port
+    // write still flattened into whatever transaction happened to be open — and
+    // died with its rollback. Two HTTP requests in one event loop is all it
+    // takes: one mid-`transaction()`, the other renaming a chat.
+    const store = new SqliteAssistantStore(":memory:");
+    try {
+      await store.conversations.createChat({ id: "chat-a" });
+
+      const opened = deferred();
+      const mayFail = deferred();
+      const doomed = store.transaction(async (tx) => {
+        await tx.conversations.createChat({ id: "chat-rolled-back" });
+        opened.resolve();
+        await mayFail.promise;
+        throw new Error("the transaction changed its mind");
+      });
+      await opened.promise;
+
+      // Issued on the ROOT store, by someone with no part in that transaction.
+      const rename = store.conversations.updateChat("chat-a", {
+        title: "renamed",
+      });
+      await drainLoop();
+      // Still waiting: under the bug it had already run inside the open
+      // transaction, which is what made it collateral damage below.
+      expect(
+        (await store.conversations.getChat("chat-a"))?.title,
+      ).toBeUndefined();
+
+      mayFail.resolve();
+      await expect(doomed).rejects.toThrow("the transaction changed its mind");
+      await rename;
+
+      // THE HEADLINE: the rollback took only the writes that belonged to it.
+      expect((await store.conversations.getChat("chat-a"))?.title).toBe(
+        "renamed",
+      );
+      expect(await store.conversations.getChat("chat-rolled-back")).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("still rolls a tx-view write back with the transaction it belongs to", async () => {
+    // The other half of the same rule: waiting is for STRANGERS. A write made
+    // through the view the callback was handed is part of that unit of work and
+    // must die with it — if it queued instead, it would wait on a transaction
+    // only its own callback can end.
+    const store = new SqliteAssistantStore(":memory:");
+    try {
+      await expect(
+        store.transaction(async (tx) => {
+          await tx.conversations.createChat({ id: "chat-inner" });
+          await tx.providers.upsertProvider({
+            id: "p1",
+            label: "P",
+            kind: "openai-compatible",
+            baseUrl: "http://localhost:1234",
+            defaultModel: "m",
+            enabled: true,
+          });
+          await tx.settings.updateSettings({ defaultModel: "m" });
+          throw new Error("outer changed its mind");
+        }),
+      ).rejects.toThrow("outer changed its mind");
+
+      expect(await store.conversations.getChat("chat-inner")).toBeNull();
+      expect(await store.providers.listProviders()).toEqual([]);
+      expect((await store.settings.getSettings()).defaultModel).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("does not let a transaction queued behind the same gate swallow the write", async () => {
+    // The microtask trap in the obvious implementation: `await ready()` then
+    // `withTx()` are two ticks, and a transaction already queued on the gate
+    // runs its BEGIN in between — so the write flattens into a stranger after
+    // all, and the stranger's rollback erases it. Three callers, arriving in
+    // this order, is the shape that catches it.
+    const store = new SqliteAssistantStore(":memory:");
+    try {
+      await store.conversations.createChat({ id: "chat-a" });
+
+      const opened = deferred();
+      const release = deferred();
+      const first = store.transaction(async (tx) => {
+        await tx.conversations.listChats();
+        opened.resolve();
+        await release.promise;
+      });
+      await opened.promise;
+
+      const rename = store.conversations.updateChat("chat-a", {
+        title: "renamed",
+      });
+      const second = store.transaction(async (tx) => {
+        await tx.conversations.createChat({ id: "chat-second" });
+        throw new Error("second changed its mind");
+      });
+      await drainLoop();
+
+      release.resolve();
+      await first;
+      await rename;
+      await expect(second).rejects.toThrow("second changed its mind");
+
+      expect((await store.conversations.getChat("chat-a"))?.title).toBe(
+        "renamed",
+      );
+      expect(await store.conversations.getChat("chat-second")).toBeNull();
+    } finally {
+      store.close();
+    }
+  });
+});

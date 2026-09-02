@@ -71,6 +71,7 @@ import {
   type CreateProposalInput,
   type CreateTaskInput,
   type EndAttemptInput,
+  type FencedWriteOptions,
   type ForkChatResult,
   type IdGenerator,
   type ImportConversationInput,
@@ -122,6 +123,14 @@ const DEFAULT_TOOL_CALLING_MODE: ToolCallingMode = "auto";
  */
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 const DEFAULT_OUTBOX_CLAIM_VISIBILITY_MS = 30_000;
+/**
+ * How many times one outbox record may be handed to a publisher before the
+ * queue stops offering it. Ten is generous for a transient consumer outage
+ * (with the caller's own backoff between them) and short of "forever", which is
+ * what an uncapped outbox meant: a payload no consumer can accept was
+ * redelivered on every claim for the life of the database.
+ */
+const DEFAULT_OUTBOX_MAX_ATTEMPTS = 10;
 
 // ---------------------------------------------------------------------------
 // JSON / bool helpers
@@ -137,6 +146,33 @@ function parseJson<T>(text: string): T {
 /** For nullable columns where NULL means "the field was absent". */
 function parseNullableJson<T>(text: string | null): T | undefined {
   return text === null ? undefined : (JSON.parse(text) as T);
+}
+
+/**
+ * A caller-supplied instant, rendered as the UTC ISO string this store's
+ * TEXT comparisons need.
+ *
+ * `available_at <= $now` and `ORDER BY available_at` are STRING comparisons.
+ * ISO-8601 is only lexicographically ordered within one representation, so an
+ * offset-form value (`2026-01-01T01:30:00-05:00`, i.e. 06:30Z) sorts before a
+ * `Z` value naming an earlier instant and gets claimed hours before it is due —
+ * while the memory adapter, which parses to a `Date`, gets it right. That is
+ * the worst kind of adapter divergence: silent, and only in the retry paths.
+ *
+ * An unparsable value is REFUSED rather than stored. Storing it would poison
+ * every later comparison against that column (SQLite happily orders
+ * `"tomorrow"` against a timestamp), and the caller can still fix its input.
+ */
+function normalizeInstant(value: string, field: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new AgentKitHostError(
+      "invalid_timestamp",
+      `${field} is not a parsable instant: ${JSON.stringify(value)}.`,
+      { field, value },
+    );
+  }
+  return parsed.toISOString();
 }
 
 // ---------------------------------------------------------------------------
@@ -665,9 +701,14 @@ interface TxOwner {
  *   token. Every other caller queues behind {@link txGate} and gets its own
  *   BEGIN, so one caller's rollback can only ever discard that caller's work.
  *
- * What is left over is the port's documented isolation caveat, not a promise
- * this class breaks: an unrelated caller's SYNCHRONOUS port write, issued while
- * an async transaction sits on an `await`, still joins that transaction.
+ * That left one hole, which {@link whenFree} closes: an unrelated caller's
+ * SYNCHRONOUS port write, issued while an async transaction sat on an `await`,
+ * still joined that transaction on plain `withTx` — and was erased by a
+ * rollback it had nothing to do with. Every WRITE method of every sub-store now
+ * goes through `whenFree`, which waits out a transaction it does not own before
+ * opening its own. READS still join: they take no locks worth serializing, and
+ * a read that queued behind a transaction it is not part of would turn every
+ * `getTask` inside a busy host into a wait.
  *
  * ── SEVERAL HANDLES OVER ONE FILE ─────────────────────────────────────────
  *
@@ -811,6 +852,40 @@ class SqliteConnection {
   }
 
   /**
+   * Run `fn` in a synchronous transaction of its own, once this connection has
+   * no async transaction open that `owner` is not part of.
+   *
+   * THE GATE CHECK AND THE `withTx` ARE ONE TICK, and that is the whole point.
+   * The obvious shape — an `await ready()` helper followed by the caller's own
+   * `withTx` — leaves a microtask gap: a transaction already queued on
+   * {@link txGate} runs its BEGIN in that gap, and the write then flattens into
+   * the stranger's transaction after all. Here the `while` exits and
+   * `this.withTx(fn)` runs in the same synchronous continuation, so nothing can
+   * open a transaction in between.
+   *
+   * The caller that IS the open transaction passes its `owner` and never waits:
+   * the loop's condition is false for it, so `fn` runs immediately and
+   * {@link withTx} flattens it into the transaction it belongs to. That is what
+   * keeps `tx.conversations.updateChat(...)` inside its caller's unit — and
+   * what keeps `claimNext`'s own nested writes from waiting on the transaction
+   * they are running inside.
+   *
+   * A single-statement write is wrapped too. The BEGIN/COMMIT costs a pair of
+   * pragma-free statements and buys the one thing the bare `run` did not have:
+   * a blast radius of exactly this write.
+   */
+  async whenFree<T>(fn: () => T, owner?: TxOwner): Promise<T> {
+    while (this.currentOwner !== null && owner !== this.currentOwner) {
+      // Re-read each turn: `txGate` is the TAIL of the queue, so waiting on it
+      // also lets everything already queued go first — a write cannot jump the
+      // line, and cannot be starved by callers that arrive after it either
+      // (they chain onto the same promise this one is already waiting on).
+      await this.txGate;
+    }
+    return this.withTx(fn);
+  }
+
+  /**
    * One async transaction, with {@link txGate} already held by this call.
    *
    * Same BEGIN-then-increment ordering as {@link withTx}, for the same reason,
@@ -936,22 +1011,31 @@ class SqliteConversationStore implements ConversationStore {
     private readonly conn: SqliteConnection,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
+    /**
+     * Set only on the copy {@link SqliteAssistantStore.transaction} hands its
+     * callback: the identity of that transaction, so writes made through it
+     * join the caller's unit of work instead of queueing behind it. See
+     * {@link SqliteConnection.whenFree}.
+     */
+    private readonly txOwner?: TxOwner,
   ) {}
 
   async createChat(input: CreateChatInput): Promise<ChatRecord> {
     const now = this.clock.nowIso();
     const id = input.id ?? this.ids.chatId();
     const metadata = input.metadata ?? {};
-    this.conn.run(
-      `INSERT INTO chats (id, title, created_at, updated_at, metadata)
-       VALUES ($id, $title, $now, $now, $metadata)`,
-      {
-        $id: id,
-        $title: input.title ?? null,
-        $now: now,
-        $metadata: toJson(metadata),
-      },
-    );
+    await this.conn.whenFree(() => {
+      this.conn.run(
+        `INSERT INTO chats (id, title, created_at, updated_at, metadata)
+         VALUES ($id, $title, $now, $now, $metadata)`,
+        {
+          $id: id,
+          $title: input.title ?? null,
+          $now: now,
+          $metadata: toJson(metadata),
+        },
+      );
+    }, this.txOwner);
     return {
       id,
       ...(input.title === undefined ? {} : { title: input.title }),
@@ -1014,7 +1098,7 @@ class SqliteConversationStore implements ConversationStore {
     chatId: string,
     patch: UpdateChatPatch,
   ): Promise<ChatRecord> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const changes = this.conn.run(
         `UPDATE chats SET
            title = COALESCE($title, title),
@@ -1040,7 +1124,7 @@ class SqliteConversationStore implements ConversationStore {
         $id: chatId,
       }) as ChatRow;
       return chatFromRow(row);
-    });
+    }, this.txOwner);
   }
 
   /**
@@ -1058,7 +1142,7 @@ class SqliteConversationStore implements ConversationStore {
    * the index too.
    */
   async deleteChat(chatId: string): Promise<void> {
-    this.conn.withTx(() => {
+    await this.conn.whenFree(() => {
       this.conn.run(`DELETE FROM messages WHERE chat_id = $chatId`, {
         $chatId: chatId,
       });
@@ -1068,7 +1152,7 @@ class SqliteConversationStore implements ConversationStore {
       if (changes.changes === 0) {
         throw new RecordNotFoundError(`Chat not found: ${chatId}`);
       }
-    });
+    }, this.txOwner);
   }
 
   /**
@@ -1082,7 +1166,7 @@ class SqliteConversationStore implements ConversationStore {
    */
   async appendMessage(input: AppendMessageInput): Promise<MessageRecord> {
     assertAppendActivation(input);
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const chat = this.conn.get(`SELECT id FROM chats WHERE id = $id`, {
         $id: input.chatId,
       });
@@ -1188,7 +1272,7 @@ class SqliteConversationStore implements ConversationStore {
         metadata,
         createdAt: now,
       };
-    });
+    }, this.txOwner);
   }
 
   /** The chat's deepest active message, or null when nothing is active. */
@@ -1259,7 +1343,7 @@ class SqliteConversationStore implements ConversationStore {
     messageId: string,
     patch: UpdateMessagePatch,
   ): Promise<MessageRecord> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const existing = this.conn.get(`SELECT * FROM messages WHERE id = $id`, {
         $id: messageId,
       }) as MessageRow | null;
@@ -1300,7 +1384,7 @@ class SqliteConversationStore implements ConversationStore {
         metadata: metadataJson,
         tool_calls: toolCallsJson,
       });
-    });
+    }, this.txOwner);
   }
 
   /** The chat's ACTIVE PATH, `(depth, orderKey)` ascending — see the port. */
@@ -1353,10 +1437,10 @@ class SqliteConversationStore implements ConversationStore {
   }
 
   async activatePath(messageId: string): Promise<MessageRecord[]> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const record = this.requireMessage(messageId);
       return this.switchActivePath(record.chatId, messageId);
-    });
+    }, this.txOwner);
   }
 
   /**
@@ -1378,7 +1462,7 @@ class SqliteConversationStore implements ConversationStore {
     chatId: string,
     fromMessageId: string,
   ): Promise<ForkChatResult> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const sourceRow = this.conn.get(`SELECT * FROM chats WHERE id = $id`, {
         $id: chatId,
       }) as ChatRow | null;
@@ -1479,7 +1563,7 @@ class SqliteConversationStore implements ConversationStore {
         },
         messages,
       };
-    });
+    }, this.txOwner);
   }
 
   /**
@@ -1500,7 +1584,7 @@ class SqliteConversationStore implements ConversationStore {
   async importConversation(
     input: ImportConversationInput,
   ): Promise<ChatRecord> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const existing = this.conn.get(`SELECT id FROM chats WHERE id = $id`, {
         $id: input.chat.id,
       });
@@ -1573,7 +1657,7 @@ class SqliteConversationStore implements ConversationStore {
         metadata,
         archived,
       };
-    });
+    }, this.txOwner);
   }
 
   /**
@@ -1697,8 +1781,9 @@ class SqliteTaskStore implements TaskStore {
     aging: TaskAgingOptions = {},
     /**
      * Set only on the copy {@link SqliteAssistantStore.transaction} hands its
-     * callback: the identity of that transaction, so a `claimNext` made through
-     * it joins the caller's unit of work instead of queueing behind it.
+     * callback: the identity of that transaction, so writes made through it
+     * join the caller's unit of work instead of queueing behind it. See
+     * {@link SqliteConnection.whenFree}.
      */
     private readonly txOwner?: TxOwner,
   ) {
@@ -1707,7 +1792,12 @@ class SqliteTaskStore implements TaskStore {
 
   async createTask(input: CreateTaskInput): Promise<TaskRecord> {
     const now = this.clock.nowIso();
-    const availableAt = input.availableAt ?? now;
+    // Normalized before it is stored — `selectClaimCandidates` compares this
+    // column as TEXT; see `normalizeInstant`.
+    const availableAt =
+      input.availableAt === undefined
+        ? now
+        : normalizeInstant(input.availableAt, "availableAt");
     const priority = input.priority ?? 0;
     // Immutable after create, so the array is copied out of the caller's hands
     // before it is serialized — and normalized to NULL when absent, which is
@@ -1719,7 +1809,7 @@ class SqliteTaskStore implements TaskStore {
       // that relies on it must not be separated by another connection's commit,
       // or a concurrent delete between them would leave the dangling edge this
       // check exists to prevent.
-      this.conn.withTx(() => {
+      await this.conn.whenFree(() => {
         this.assertDependenciesExist(
           input.taskId,
           input.parentTaskId,
@@ -1744,7 +1834,7 @@ class SqliteTaskStore implements TaskStore {
             $dependsOn: dependsOn === null ? null : toJson(dependsOn),
           },
         );
-      });
+      }, this.txOwner);
     } catch (err) {
       // The PK collision IS the idempotency guard doing its job; leaking the
       // raw SQLite constraint error would make every caller match on a driver
@@ -1822,7 +1912,7 @@ class SqliteTaskStore implements TaskStore {
    * than swept up by a cascade that does not exist.
    */
   async deleteByScope(scopeId: string): Promise<number> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const scoped = `SELECT task_id FROM tasks WHERE scope_id = $scopeId`;
       const params: Params = { $scopeId: scopeId };
       // Same ordering as `listByScope`, so the ids and statuses this refusal
@@ -1849,7 +1939,7 @@ class SqliteTaskStore implements TaskStore {
         `DELETE FROM tasks WHERE scope_id = $scopeId`,
         params,
       ).changes;
-    });
+    }, this.txOwner);
   }
 
   async transitionTask(
@@ -1857,10 +1947,37 @@ class SqliteTaskStore implements TaskStore {
     from: TaskStatus[],
     to: TaskStatus,
     patch?: TaskPatch,
+    opts?: FencedWriteOptions,
   ): Promise<TaskRecord> {
-    return this.conn.withTx(() => {
+    return this.transitionTaskAs(this.txOwner, taskId, from, to, patch, opts);
+  }
+
+  /**
+   * {@link transitionTask}, told which transaction it belongs to.
+   *
+   * `claimNext` settles and claims candidates through this rather than through
+   * the public method: it is already inside its own async transaction, and the
+   * public method would gate on `this.txOwner` — undefined on the root store —
+   * and wait for the very transaction it is running in.
+   */
+  private async transitionTaskAs(
+    owner: TxOwner | undefined,
+    taskId: string,
+    from: TaskStatus[],
+    to: TaskStatus,
+    patch?: TaskPatch,
+    opts?: FencedWriteOptions,
+  ): Promise<TaskRecord> {
+    const availableAt =
+      patch?.availableAt === undefined
+        ? null
+        : normalizeInstant(patch.availableAt, "availableAt");
+    return this.conn.whenFree(() => {
       const row = this.selectTaskRow(taskId);
       if (!row) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+      if (opts?.leaseToken !== undefined) {
+        this.assertLeaseCurrent(taskId, opts.leaseToken);
+      }
       const current = row.status as TaskStatus;
       if (!from.includes(current)) {
         throw new InvalidTaskTransitionError(
@@ -1885,7 +2002,7 @@ class SqliteTaskStore implements TaskStore {
           $startedAt: patch?.startedAt ?? null,
           $finishedAt: patch?.finishedAt ?? null,
           $error: patch?.error ?? null,
-          $availableAt: patch?.availableAt ?? null,
+          $availableAt: availableAt,
           $priority: patch?.priority ?? null,
           $poisonCount: patch?.poisonCount ?? null,
           $payload: patch?.payload !== undefined ? toJson(patch.payload) : null,
@@ -1901,11 +2018,19 @@ class SqliteTaskStore implements TaskStore {
         );
       }
       return taskFromRow(this.selectTaskRow(taskId)!);
-    });
+    }, owner);
   }
 
   async createAttempt(input: CreateAttemptInput): Promise<AttemptRecord> {
-    return this.conn.withTx(() => {
+    return this.createAttemptAs(this.txOwner, input);
+  }
+
+  /** {@link createAttempt}, told which transaction it belongs to. */
+  private async createAttemptAs(
+    owner: TxOwner | undefined,
+    input: CreateAttemptInput,
+  ): Promise<AttemptRecord> {
+    return this.conn.whenFree(() => {
       const task = this.selectTaskRow(input.taskId);
       if (!task)
         throw new RecordNotFoundError(`Task not found: ${input.taskId}`);
@@ -1934,17 +2059,22 @@ class SqliteTaskStore implements TaskStore {
         ownerId: input.ownerId,
         startedAt,
       };
-    });
+    }, owner);
   }
 
   async endAttempt(input: EndAttemptInput): Promise<AttemptRecord> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const row = this.conn.get(
         `SELECT * FROM task_attempts WHERE attempt_id = $id`,
         { $id: input.attemptId },
       ) as AttemptRow | null;
       if (!row) {
         throw new RecordNotFoundError(`Attempt not found: ${input.attemptId}`);
+      }
+      // The attempt names its task, so the ownership proof is read from the
+      // same row the write is about — inside this transaction, next to it.
+      if (input.leaseToken !== undefined) {
+        this.assertLeaseCurrent(row.task_id, input.leaseToken);
       }
       const endedAt = this.clock.nowIso();
       this.conn.run(
@@ -1962,11 +2092,19 @@ class SqliteTaskStore implements TaskStore {
         ended_at: endedAt,
         error: input.error ?? row.error,
       });
-    });
+    }, this.txOwner);
   }
 
   async acquireLease(input: AcquireLeaseInput): Promise<Lease> {
-    return this.conn.withTx(() => {
+    return this.acquireLeaseAs(this.txOwner, input);
+  }
+
+  /** {@link acquireLease}, told which transaction it belongs to. */
+  private async acquireLeaseAs(
+    owner: TxOwner | undefined,
+    input: AcquireLeaseInput,
+  ): Promise<Lease> {
+    return this.conn.whenFree(() => {
       // Store-global monotonic fencing token, single-row counter table.
       this.conn.run(
         `UPDATE fencing_counter SET value = value + 1 WHERE id = 1`,
@@ -2007,11 +2145,23 @@ class SqliteTaskStore implements TaskStore {
         fencingToken,
         expiresAt,
       };
-    });
+    }, owner);
   }
 
+  /**
+   * Extend a lease that is still alive.
+   *
+   * AN EXPIRED LEASE IS NOT RENEWABLE, even while its row survives — the row
+   * only outlives the expiry until someone runs `expireStaleLeases`, and the
+   * whole point of an expiry is that another owner may act on it from that
+   * instant. Renewing across it would resurrect ownership recovery is entitled
+   * to consider gone, and it would break `renewLease`'s second job: the runner
+   * uses it as the fencing probe ("may I still write?"), and a probe that says
+   * yes on an expired lease is the wrong answer to that question.
+   */
   async renewLease(leaseToken: string, ttlMs: number): Promise<Lease> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
+      const now = this.clock.now();
       const row = this.conn.get(
         `SELECT * FROM leases WHERE lease_token = $token`,
         {
@@ -2023,19 +2173,25 @@ class SqliteTaskStore implements TaskStore {
           leaseToken,
         });
       }
-      const expiresAt = new Date(
-        this.clock.now().getTime() + ttlMs,
-      ).toISOString();
+      // `<=` matches `expireStaleLeases`, so the two never disagree about a
+      // lease that expires exactly on the instant being asked about.
+      if (new Date(row.expires_at).getTime() <= now.getTime()) {
+        throw new LeaseLostError(
+          `Lease token ${leaseToken} expired at ${row.expires_at}.`,
+          { leaseToken, expiresAt: row.expires_at },
+        );
+      }
+      const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
       this.conn.run(
         `UPDATE leases SET expires_at = $expiresAt WHERE lease_token = $token`,
         { $expiresAt: expiresAt, $token: leaseToken },
       );
       return leaseFromRow({ ...row, expires_at: expiresAt });
-    });
+    }, this.txOwner);
   }
 
   async releaseLease(leaseToken: string): Promise<void> {
-    this.conn.withTx(() => {
+    await this.conn.whenFree(() => {
       const result = this.conn.run(
         `DELETE FROM leases WHERE lease_token = $token`,
         {
@@ -2047,11 +2203,11 @@ class SqliteTaskStore implements TaskStore {
           leaseToken,
         });
       }
-    });
+    }, this.txOwner);
   }
 
   async expireStaleLeases(now: Date): Promise<Lease[]> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const nowIso = now.toISOString();
       const rows = this.conn.all(
         `SELECT * FROM leases WHERE expires_at <= $now`,
@@ -2065,7 +2221,7 @@ class SqliteTaskStore implements TaskStore {
         });
       }
       return rows.map(leaseFromRow);
-    });
+    }, this.txOwner);
   }
 
   async appendEvents(
@@ -2074,7 +2230,7 @@ class SqliteTaskStore implements TaskStore {
     opts: AppendEventsOptions,
   ): Promise<void> {
     if (events.length === 0) return;
-    this.conn.withTx(() => {
+    await this.conn.whenFree(() => {
       const lease = this.conn.get(
         `SELECT lease_token FROM leases WHERE task_id = $taskId`,
         { $taskId: taskId },
@@ -2125,7 +2281,7 @@ class SqliteTaskStore implements TaskStore {
           throw err;
         }
       }
-    });
+    }, this.txOwner);
   }
 
   async listEvents(
@@ -2160,7 +2316,7 @@ class SqliteTaskStore implements TaskStore {
     progress: Record<string, unknown>,
     opts: UpdateProgressOptions,
   ): Promise<TaskRecord> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const row = this.selectTaskRow(taskId);
       if (!row) throw new RecordNotFoundError(`Task not found: ${taskId}`);
       // The same ownership proof `appendEvents` demands, read inside the same
@@ -2185,7 +2341,7 @@ class SqliteTaskStore implements TaskStore {
         },
       );
       return taskFromRow(this.selectTaskRow(taskId)!);
-    });
+    }, this.txOwner);
   }
 
   /**
@@ -2207,7 +2363,11 @@ class SqliteTaskStore implements TaskStore {
    * a caller asked for one unit of work.
    */
   async claimNext(input: ClaimNextInput): Promise<ClaimedTask | null> {
-    return this.conn.withAsyncTx(async () => {
+    // `owner` is the transaction THIS call opened (or, on the flattened path,
+    // the caller's). Every write below is made through it, because they belong
+    // to the claim's own unit of work — a `whenFree` gated on `this.txOwner`
+    // would wait for the transaction it is already running inside.
+    return this.conn.withAsyncTx(async (owner) => {
       const nowIso = input.now.toISOString();
       const rows = this.selectClaimCandidates(
         nowIso,
@@ -2230,10 +2390,18 @@ class SqliteTaskStore implements TaskStore {
           // Settled here, on the claim path, instead of by a background sweep
           // — see TaskStore.claimNext. The scan then continues past it.
           try {
-            await this.transitionTask(row.task_id, ["queued"], verdict.to, {
-              finishedAt: this.clock.nowIso(),
-              ...(verdict.error === undefined ? {} : { error: verdict.error }),
-            });
+            await this.transitionTaskAs(
+              owner,
+              row.task_id,
+              ["queued"],
+              verdict.to,
+              {
+                finishedAt: this.clock.nowIso(),
+                ...(verdict.error === undefined
+                  ? {}
+                  : { error: verdict.error }),
+              },
+            );
           } catch (err) {
             if (!(err instanceof InvalidTaskTransitionError)) throw err;
           }
@@ -2241,19 +2409,23 @@ class SqliteTaskStore implements TaskStore {
         }
         let task: TaskRecord;
         try {
-          task = await this.transitionTask(row.task_id, ["queued"], "running", {
-            startedAt: this.clock.nowIso(),
-          });
+          task = await this.transitionTaskAs(
+            owner,
+            row.task_id,
+            ["queued"],
+            "running",
+            { startedAt: this.clock.nowIso() },
+          );
         } catch (err) {
           if (!(err instanceof InvalidTaskTransitionError)) throw err;
           continue;
         }
-        const attempt = await this.createAttempt({
+        const attempt = await this.createAttemptAs(owner, {
           attemptId: this.ids.attemptId(),
           taskId: task.taskId,
           ownerId: input.ownerId,
         });
-        const lease = await this.acquireLease({
+        const lease = await this.acquireLeaseAs(owner, {
           taskId: task.taskId,
           attemptId: attempt.attemptId,
           ownerId: input.ownerId,
@@ -2265,17 +2437,58 @@ class SqliteTaskStore implements TaskStore {
     }, this.txOwner);
   }
 
-  async markDeadLettered(taskId: string, reason: string): Promise<TaskRecord> {
-    return this.conn.withTx(() => {
+  async markDeadLettered(
+    taskId: string,
+    reason: string,
+    opts?: FencedWriteOptions,
+  ): Promise<TaskRecord> {
+    return this.conn.whenFree(() => {
       const row = this.selectTaskRow(taskId);
       if (!row) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+      if (opts?.leaseToken !== undefined) {
+        this.assertLeaseCurrent(taskId, opts.leaseToken);
+      }
       const at = this.clock.nowIso();
       this.conn.run(
         `UPDATE tasks SET dead_lettered_at = $at, dead_letter_reason = $reason WHERE task_id = $id`,
         { $at: at, $reason: reason, $id: taskId },
       );
       return taskFromRow(this.selectTaskRow(taskId)!);
-    });
+    }, this.txOwner);
+  }
+
+  /**
+   * Refuse a write whose `leaseToken` is not the task's CURRENT lease.
+   *
+   * READ INSIDE THE CALLER'S TRANSACTION, which is the entire point: a runner
+   * can only check ownership and then write across two awaits, and the gap is
+   * where a zombie attempt lands a verdict over the live one's. Here the proof
+   * and the write cannot be separated.
+   *
+   * The lease table is one row per task (PK on `task_id`, replaced by every
+   * `acquireLease`), so the row this reads always carries the HIGHEST fencing
+   * token ever issued for the task — matching the token therefore IS the
+   * fencing comparison, with no second value to compare. The token is reported
+   * in `details` so an operator can tell "your generation was superseded" from
+   * "there is no lease at all".
+   */
+  private assertLeaseCurrent(taskId: string, leaseToken: string): void {
+    const lease = this.conn.get(
+      `SELECT lease_token, fencing_token FROM leases WHERE task_id = $taskId`,
+      { $taskId: taskId },
+    ) as { lease_token: string; fencing_token: number } | null;
+    if (!lease || lease.lease_token !== leaseToken) {
+      throw new LeaseLostError(
+        `Lease token ${leaseToken} is not current for task ${taskId}.`,
+        {
+          taskId,
+          leaseToken,
+          ...(lease === null
+            ? {}
+            : { currentFencingToken: lease.fencing_token }),
+        },
+      );
+    }
   }
 
   private selectTaskRow(taskId: string): TaskRow | null {
@@ -2412,10 +2625,17 @@ class SqliteProposalStore implements ProposalStore {
   constructor(
     private readonly conn: SqliteConnection,
     private readonly clock: Clock,
+    /**
+     * Set only on the copy {@link SqliteAssistantStore.transaction} hands its
+     * callback: the identity of that transaction, so writes made through it
+     * join the caller's unit of work instead of queueing behind it. See
+     * {@link SqliteConnection.whenFree}.
+     */
+    private readonly txOwner?: TxOwner,
   ) {}
 
   async create(input: CreateProposalInput): Promise<ProposalRecord> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       try {
         this.conn.run(
           `INSERT INTO proposals
@@ -2451,7 +2671,7 @@ class SqliteProposalStore implements ProposalStore {
         throw err;
       }
       return proposalFromRow(this.selectProposalRow(input.id)!);
-    });
+    }, this.txOwner);
   }
 
   async get(proposalId: string): Promise<ProposalRecord | null> {
@@ -2511,7 +2731,7 @@ class SqliteProposalStore implements ProposalStore {
     to: ProposalStatus,
     patch?: ProposalPatch,
   ): Promise<ProposalRecord> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const row = this.selectProposalRow(proposalId);
       if (!row)
         throw new RecordNotFoundError(`Proposal not found: ${proposalId}`);
@@ -2551,14 +2771,14 @@ class SqliteProposalStore implements ProposalStore {
         );
       }
       return proposalFromRow(this.selectProposalRow(proposalId)!);
-    });
+    }, this.txOwner);
   }
 
   async recordOutcome(
     operationId: string,
     outcome: ApplyOutcome,
   ): Promise<ApplyOutcome> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const existing = this.conn.get(
         `SELECT * FROM proposal_outcomes WHERE operation_id = $id`,
         { $id: operationId },
@@ -2579,7 +2799,7 @@ class SqliteProposalStore implements ProposalStore {
         },
       );
       return outcome;
-    });
+    }, this.txOwner);
   }
 
   async getOutcome(operationId: string): Promise<ApplyOutcome | null> {
@@ -2594,7 +2814,7 @@ class SqliteProposalStore implements ProposalStore {
     scopeKey: string,
     newRevision: string,
   ): Promise<number> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const rows = this.conn.all(
         `SELECT * FROM proposals WHERE scope_key = $scopeKey AND status = 'pending'
            AND (revision_at_create IS NULL OR revision_at_create != $newRevision)`,
@@ -2610,7 +2830,7 @@ class SqliteProposalStore implements ProposalStore {
         );
       }
       return rows.length;
-    });
+    }, this.txOwner);
   }
 
   /**
@@ -2626,7 +2846,7 @@ class SqliteProposalStore implements ProposalStore {
    * can ever identify again.
    */
   async deleteByChat(chatId: string): Promise<number> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const params: Params = { $chatId: chatId };
       this.conn.run(
         `DELETE FROM proposal_outcomes WHERE operation_id IN (
@@ -2638,7 +2858,7 @@ class SqliteProposalStore implements ProposalStore {
         `DELETE FROM proposals WHERE chat_id = $chatId`,
         params,
       ).changes;
-    });
+    }, this.txOwner);
   }
 
   private selectProposalRow(proposalId: string): ProposalRow | null {
@@ -2655,7 +2875,16 @@ class SqliteProposalStore implements ProposalStore {
 // ---------------------------------------------------------------------------
 
 class SqliteProviderStore implements ProviderStore {
-  constructor(private readonly conn: SqliteConnection) {}
+  constructor(
+    private readonly conn: SqliteConnection,
+    /**
+     * Set only on the copy {@link SqliteAssistantStore.transaction} hands its
+     * callback: the identity of that transaction, so writes made through it
+     * join the caller's unit of work instead of queueing behind it. See
+     * {@link SqliteConnection.whenFree}.
+     */
+    private readonly txOwner?: TxOwner,
+  ) {}
 
   async listProviders(): Promise<AiProviderConfig[]> {
     const rows = this.conn.all(
@@ -2672,34 +2901,36 @@ class SqliteProviderStore implements ProviderStore {
   }
 
   async upsertProvider(config: AiProviderConfig): Promise<AiProviderConfig> {
-    this.conn.run(
-      `INSERT INTO providers (id, label, kind, base_url, api_key, default_model, enabled, extra_headers, metadata)
-       VALUES ($id, $label, $kind, $baseUrl, $apiKey, $defaultModel, $enabled, $extraHeaders, $metadata)
-       ON CONFLICT(id) DO UPDATE SET
-         label = excluded.label, kind = excluded.kind, base_url = excluded.base_url,
-         api_key = excluded.api_key, default_model = excluded.default_model, enabled = excluded.enabled,
-         extra_headers = excluded.extra_headers, metadata = excluded.metadata`,
-      {
-        $id: config.id,
-        $label: config.label,
-        $kind: config.kind,
-        $baseUrl: config.baseUrl,
-        $apiKey: config.apiKey ?? null,
-        $defaultModel: config.defaultModel,
-        $enabled: toIntBool(config.enabled),
-        $extraHeaders:
-          config.extraHeaders === undefined
-            ? null
-            : toJson(config.extraHeaders),
-        $metadata:
-          config.metadata === undefined ? null : toJson(config.metadata),
-      },
-    );
+    await this.conn.whenFree(() => {
+      this.conn.run(
+        `INSERT INTO providers (id, label, kind, base_url, api_key, default_model, enabled, extra_headers, metadata)
+         VALUES ($id, $label, $kind, $baseUrl, $apiKey, $defaultModel, $enabled, $extraHeaders, $metadata)
+         ON CONFLICT(id) DO UPDATE SET
+           label = excluded.label, kind = excluded.kind, base_url = excluded.base_url,
+           api_key = excluded.api_key, default_model = excluded.default_model, enabled = excluded.enabled,
+           extra_headers = excluded.extra_headers, metadata = excluded.metadata`,
+        {
+          $id: config.id,
+          $label: config.label,
+          $kind: config.kind,
+          $baseUrl: config.baseUrl,
+          $apiKey: config.apiKey ?? null,
+          $defaultModel: config.defaultModel,
+          $enabled: toIntBool(config.enabled),
+          $extraHeaders:
+            config.extraHeaders === undefined
+              ? null
+              : toJson(config.extraHeaders),
+          $metadata:
+            config.metadata === undefined ? null : toJson(config.metadata),
+        },
+      );
+    }, this.txOwner);
     return config;
   }
 
   async deleteProvider(providerId: string): Promise<void> {
-    this.conn.withTx(() => {
+    await this.conn.whenFree(() => {
       this.conn.run(`DELETE FROM providers WHERE id = $id`, {
         $id: providerId,
       });
@@ -2712,7 +2943,7 @@ class SqliteProviderStore implements ProviderStore {
           $id: providerId,
         },
       );
-    });
+    }, this.txOwner);
   }
 
   async listModels(providerId: string): Promise<AiProviderModel[]> {
@@ -2727,7 +2958,7 @@ class SqliteProviderStore implements ProviderStore {
     providerId: string,
     models: AiProviderModel[],
   ): Promise<void> {
-    this.conn.withTx(() => {
+    await this.conn.whenFree(() => {
       this.conn.run(`DELETE FROM provider_models WHERE provider_id = $id`, {
         $id: providerId,
       });
@@ -2746,7 +2977,7 @@ class SqliteProviderStore implements ProviderStore {
           },
         );
       }
-    });
+    }, this.txOwner);
   }
 
   async getCapabilities(
@@ -2763,31 +2994,42 @@ class SqliteProviderStore implements ProviderStore {
     providerId: string,
     capabilities: AiProviderCapabilities,
   ): Promise<void> {
-    this.conn.run(
-      `INSERT INTO provider_capabilities
-         (provider_id, streaming, tool_calling, model_list, vision, json_mode, max_context_tokens, checked_at, warning)
-       VALUES ($id, $streaming, $toolCalling, $modelList, $vision, $jsonMode, $maxContextTokens, $checkedAt, $warning)
-       ON CONFLICT(provider_id) DO UPDATE SET
-         streaming = excluded.streaming, tool_calling = excluded.tool_calling,
-         model_list = excluded.model_list, vision = excluded.vision, json_mode = excluded.json_mode,
-         max_context_tokens = excluded.max_context_tokens, checked_at = excluded.checked_at, warning = excluded.warning`,
-      {
-        $id: providerId,
-        $streaming: toIntBool(capabilities.streaming),
-        $toolCalling: toIntBool(capabilities.toolCalling),
-        $modelList: toIntBool(capabilities.modelList),
-        $vision: toOptionalIntBool(capabilities.vision),
-        $jsonMode: toOptionalIntBool(capabilities.jsonMode),
-        $maxContextTokens: capabilities.maxContextTokens ?? null,
-        $checkedAt: capabilities.checkedAt ?? null,
-        $warning: capabilities.warning ?? null,
-      },
-    );
+    await this.conn.whenFree(() => {
+      this.conn.run(
+        `INSERT INTO provider_capabilities
+           (provider_id, streaming, tool_calling, model_list, vision, json_mode, max_context_tokens, checked_at, warning)
+         VALUES ($id, $streaming, $toolCalling, $modelList, $vision, $jsonMode, $maxContextTokens, $checkedAt, $warning)
+         ON CONFLICT(provider_id) DO UPDATE SET
+           streaming = excluded.streaming, tool_calling = excluded.tool_calling,
+           model_list = excluded.model_list, vision = excluded.vision, json_mode = excluded.json_mode,
+           max_context_tokens = excluded.max_context_tokens, checked_at = excluded.checked_at, warning = excluded.warning`,
+        {
+          $id: providerId,
+          $streaming: toIntBool(capabilities.streaming),
+          $toolCalling: toIntBool(capabilities.toolCalling),
+          $modelList: toIntBool(capabilities.modelList),
+          $vision: toOptionalIntBool(capabilities.vision),
+          $jsonMode: toOptionalIntBool(capabilities.jsonMode),
+          $maxContextTokens: capabilities.maxContextTokens ?? null,
+          $checkedAt: capabilities.checkedAt ?? null,
+          $warning: capabilities.warning ?? null,
+        },
+      );
+    }, this.txOwner);
   }
 }
 
 class SqliteSettingsStore implements SettingsStore {
-  constructor(private readonly conn: SqliteConnection) {}
+  constructor(
+    private readonly conn: SqliteConnection,
+    /**
+     * Set only on the copy {@link SqliteAssistantStore.transaction} hands its
+     * callback: the identity of that transaction, so writes made through it
+     * join the caller's unit of work instead of queueing behind it. See
+     * {@link SqliteConnection.whenFree}.
+     */
+    private readonly txOwner?: TxOwner,
+  ) {}
 
   async getSettings(): Promise<AssistantSettings> {
     const row = this.conn.get(
@@ -2799,7 +3041,7 @@ class SqliteSettingsStore implements SettingsStore {
   async updateSettings(
     patch: Partial<AssistantSettings>,
   ): Promise<AssistantSettings> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const row = this.conn.get(
         `SELECT * FROM settings WHERE id = 1`,
       ) as SettingsRow;
@@ -2825,7 +3067,7 @@ class SqliteSettingsStore implements SettingsStore {
         },
       );
       return merged;
-    });
+    }, this.txOwner);
   }
 }
 
@@ -2834,24 +3076,39 @@ class SqliteOutboxStore implements OutboxStore {
     private readonly conn: SqliteConnection,
     private readonly clock: Clock,
     private readonly claimVisibilityMs: number = DEFAULT_OUTBOX_CLAIM_VISIBILITY_MS,
+    private readonly maxAttempts: number = DEFAULT_OUTBOX_MAX_ATTEMPTS,
+    /**
+     * Set only on the copy {@link SqliteAssistantStore.transaction} hands its
+     * callback: the identity of that transaction, so writes made through it
+     * join the caller's unit of work instead of queueing behind it. See
+     * {@link SqliteConnection.whenFree}.
+     */
+    private readonly txOwner?: TxOwner,
   ) {}
 
   async enqueue(input: OutboxAppendInput): Promise<OutboxRecord> {
     const now = this.clock.nowIso();
     const id = input.id ?? `outbox_${crypto.randomUUID()}`;
-    const availableAt = input.availableAt ?? now;
-    this.conn.run(
-      `INSERT INTO outbox (id, topic, run_id, payload, created_at, available_at, attempts)
-       VALUES ($id, $topic, $runId, $payload, $now, $availableAt, 0)`,
-      {
-        $id: id,
-        $topic: input.topic,
-        $runId: input.runId ?? null,
-        $payload: toJson(input.payload),
-        $now: now,
-        $availableAt: availableAt,
-      },
-    );
+    // Normalized because `claimBatch` compares this column as TEXT — see
+    // `normalizeInstant`.
+    const availableAt =
+      input.availableAt === undefined
+        ? now
+        : normalizeInstant(input.availableAt, "availableAt");
+    await this.conn.whenFree(() => {
+      this.conn.run(
+        `INSERT INTO outbox (id, topic, run_id, payload, created_at, available_at, attempts)
+         VALUES ($id, $topic, $runId, $payload, $now, $availableAt, 0)`,
+        {
+          $id: id,
+          $topic: input.topic,
+          $runId: input.runId ?? null,
+          $payload: toJson(input.payload),
+          $now: now,
+          $availableAt: availableAt,
+        },
+      );
+    }, this.txOwner);
     return {
       id,
       topic: input.topic,
@@ -2864,12 +3121,17 @@ class SqliteOutboxStore implements OutboxStore {
   }
 
   async claimBatch(input: OutboxClaimInput): Promise<OutboxRecord[]> {
-    return this.conn.withTx(() => {
+    return this.conn.whenFree(() => {
       const nowIso = input.now.toISOString();
+      // `attempts < $maxAttempts` is the cap, and it needs no column of its
+      // own: `attempts` already counts deliveries, so a record that has used
+      // its budget simply stops matching the claim query and stays behind as an
+      // inspectable dead letter.
       const rows = this.conn.all(
-        `SELECT * FROM outbox WHERE published_at IS NULL AND available_at <= $now
-         ORDER BY available_at ASC, rowid ASC LIMIT $limit`,
-        { $now: nowIso, $limit: input.limit },
+        `SELECT * FROM outbox
+          WHERE published_at IS NULL AND available_at <= $now AND attempts < $maxAttempts
+          ORDER BY available_at ASC, rowid ASC LIMIT $limit`,
+        { $now: nowIso, $limit: input.limit, $maxAttempts: this.maxAttempts },
       ) as OutboxRow[];
       if (rows.length === 0) return [];
       // Push the visibility window forward so a concurrent claimBatch call
@@ -2891,21 +3153,60 @@ class SqliteOutboxStore implements OutboxStore {
         );
       }
       return claimed;
-    });
+    }, this.txOwner);
   }
 
   async markPublished(id: string, at: Date): Promise<void> {
-    this.conn.run(`UPDATE outbox SET published_at = $at WHERE id = $id`, {
-      $at: at.toISOString(),
-      $id: id,
-    });
+    await this.conn.whenFree(() => {
+      const result = this.conn.run(
+        `UPDATE outbox SET published_at = $at WHERE id = $id`,
+        { $at: at.toISOString(), $id: id },
+      );
+      assertOutboxRowTouched(result, id);
+    }, this.txOwner);
   }
 
   async markFailed(id: string, error: string, retryAt: Date): Promise<void> {
-    this.conn.run(
-      `UPDATE outbox SET last_error = $error, available_at = $retryAt WHERE id = $id`,
-      { $error: error, $retryAt: retryAt.toISOString(), $id: id },
-    );
+    await this.conn.whenFree(() => {
+      const result = this.conn.run(
+        `UPDATE outbox SET last_error = $error, available_at = $retryAt WHERE id = $id`,
+        { $error: error, $retryAt: retryAt.toISOString(), $id: id },
+      );
+      assertOutboxRowTouched(result, id);
+    }, this.txOwner);
+  }
+
+  /**
+   * Drop what can never be claimed again: published records older than
+   * `before`, and records that used up their attempt budget before it.
+   *
+   * The two halves compare DIFFERENT columns on purpose. A published record is
+   * retained for as long as someone might want to read what was sent, which is
+   * measured from when it was sent (`published_at`); an exhausted one was never
+   * sent at all, so the only age it has is its own (`created_at`).
+   */
+  async prune(before: Date): Promise<number> {
+    return this.conn.whenFree(() => {
+      const beforeIso = before.toISOString();
+      return this.conn.run(
+        `DELETE FROM outbox
+          WHERE (published_at IS NOT NULL AND published_at < $before)
+             OR (published_at IS NULL AND attempts >= $maxAttempts AND created_at < $before)`,
+        { $before: beforeIso, $maxAttempts: this.maxAttempts },
+      ).changes;
+    }, this.txOwner);
+  }
+}
+
+/**
+ * A `markPublished`/`markFailed` that matched no row is a caller naming an id
+ * this store does not have — a publisher resolving a record someone pruned, or
+ * a plain typo. It used to be a silent no-op, which made "the publisher says it
+ * published, the row says it did not" a mystery with no error anywhere.
+ */
+function assertOutboxRowTouched(result: Changes, id: string): void {
+  if (result.changes === 0) {
+    throw new RecordNotFoundError(`Outbox record not found: ${id}`, { id });
   }
 }
 
@@ -3032,6 +3333,9 @@ export function openAgentKitDatabase(
 // Aggregate
 // ---------------------------------------------------------------------------
 
+/** {@link AssistantStore} minus `transaction` — the six sub-stores alone. */
+type AssistantStoreStores = Omit<AssistantStore, "transaction">;
+
 export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
   /** Defaults to {@link defaultClock} (real wall-clock). */
   clock?: Clock;
@@ -3041,6 +3345,11 @@ export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
   leaseTtlMs?: number;
   /** Outbox claim-visibility window. Default 30s. */
   outboxClaimVisibilityMs?: number;
+  /**
+   * How many delivery attempts one outbox record gets before `claimBatch`
+   * stops offering it. Default 10 — see {@link OutboxStore.claimBatch}.
+   */
+  outboxMaxAttempts?: number;
   /**
    * How long a transaction waits for the write lock before giving up, when
    * another connection on the same file holds it. Default 5s.
@@ -3062,20 +3371,24 @@ export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
  * rather than nested — `bun:sqlite` has no savepoint support in this v1, so
  * re-entrant calls just run against the already-open transaction.
  *
- * TRANSACTIONS ARE SERIALIZED PER CONNECTION: a second caller's `transaction()`
- * (or a worker's `claimNext`) issued while one is open WAITS for it, and then
- * runs in a transaction of its own. It used to join the open one and be rolled
- * back by a stranger's throw. The corollary is that a callback must do its work
- * through the `tx` it is given: a call made on the ROOT store from inside the
- * callback is, by construction, indistinguishable from an unrelated caller's,
- * so awaiting a root-store `transaction()`/`claimNext` in there waits on a
- * transaction that cannot finish until the callback returns. See
- * {@link SqliteConnection}.
+ * WRITES ARE SERIALIZED PER CONNECTION: a second caller's `transaction()`, a
+ * worker's `claimNext`, and every ordinary WRITE method issued while a
+ * transaction is open all WAIT for it, and then run in a transaction of their
+ * own. They used to join the open one and be rolled back by a stranger's throw.
+ * Reads are exempt and still join, because they take no lock worth serializing.
+ *
+ * THE COROLLARY IS THAT A CALLBACK MUST DO ITS WORK THROUGH THE `tx` IT IS
+ * GIVEN. A write made on the ROOT store from inside the callback is, by
+ * construction, indistinguishable from an unrelated caller's, so awaiting one
+ * in there waits on a transaction that cannot finish until the callback
+ * returns. That was already true of a root-store `transaction()`/`claimNext`;
+ * it is now true of `store.conversations.updateChat(...)` and every other
+ * write. See {@link SqliteConnection}.
  */
 export class SqliteAssistantStore implements AssistantStore {
   private readonly conn: SqliteConnection;
-  /** {@link tasks}, bound to one open transaction — see {@link txView}. */
-  private readonly tasksInTransaction: (owner: TxOwner) => TaskStore;
+  /** Every sub-store, bound to one open transaction — see {@link txView}. */
+  private readonly viewFor: (owner: TxOwner) => AssistantStoreStores;
   readonly conversations: ConversationStore;
   readonly tasks: TaskStore;
   readonly proposals: ProposalStore;
@@ -3092,35 +3405,39 @@ export class SqliteAssistantStore implements AssistantStore {
     this.conn = new SqliteConnection(db, busyTimeoutMs);
     const clock = options.clock ?? defaultClock;
     const ids = options.ids ?? defaultIds;
-    this.conversations = new SqliteConversationStore(this.conn, clock, ids);
-    this.tasks = new SqliteTaskStore(
-      this.conn,
-      clock,
-      ids,
-      options.leaseTtlMs,
-      options,
-    );
-    // A second, identically-configured instance rather than a mutable field on
-    // the first: the token belongs to ONE transaction, and a field would leak
-    // it to every other caller of `store.tasks` for as long as that transaction
-    // is open — the exact confusion the token exists to end.
-    this.tasksInTransaction = (owner) =>
-      new SqliteTaskStore(
+    // SECOND, IDENTICALLY-CONFIGURED INSTANCES rather than a mutable field on
+    // the root ones: the token belongs to ONE transaction, and a field would
+    // leak it to every other caller of `store.tasks` for as long as that
+    // transaction is open — the exact confusion the token exists to end.
+    const build = (owner?: TxOwner): AssistantStoreStores => ({
+      conversations: new SqliteConversationStore(this.conn, clock, ids, owner),
+      tasks: new SqliteTaskStore(
         this.conn,
         clock,
         ids,
         options.leaseTtlMs,
         options,
         owner,
-      );
-    this.proposals = new SqliteProposalStore(this.conn, clock);
-    this.providers = new SqliteProviderStore(this.conn);
-    this.settings = new SqliteSettingsStore(this.conn);
-    this.outbox = new SqliteOutboxStore(
-      this.conn,
-      clock,
-      options.outboxClaimVisibilityMs,
-    );
+      ),
+      proposals: new SqliteProposalStore(this.conn, clock, owner),
+      providers: new SqliteProviderStore(this.conn, owner),
+      settings: new SqliteSettingsStore(this.conn, owner),
+      outbox: new SqliteOutboxStore(
+        this.conn,
+        clock,
+        options.outboxClaimVisibilityMs,
+        options.outboxMaxAttempts,
+        owner,
+      ),
+    });
+    const root = build();
+    this.conversations = root.conversations;
+    this.tasks = root.tasks;
+    this.proposals = root.proposals;
+    this.providers = root.providers;
+    this.settings = root.settings;
+    this.outbox = root.outbox;
+    this.viewFor = (owner) => build(owner);
   }
 
   async transaction<T>(fn: (tx: AssistantStore) => Promise<T>): Promise<T> {
@@ -3132,24 +3449,18 @@ export class SqliteAssistantStore implements AssistantStore {
    *
    * The port already says `transaction` hands its callback "a store view scoped
    * to that transaction"; this is that view, and it is no longer `this` because
-   * `this` carries no transaction identity. Only the two entry points that can
-   * open a SECOND transaction need scoping — `transaction` and `tasks.claimNext`
-   * — and both carry `owner` through it so they flatten into the caller's unit
-   * instead of queueing behind it.
-   *
-   * The other five stores are the root instances unchanged: every one of their
-   * methods reaches the database through the SYNCHRONOUS `withTx`, which
-   * flattens on depth and cannot be interleaved, so inside this callback they
-   * already write into this transaction.
+   * `this` carries no transaction identity. EVERY sub-store here is an
+   * owner-bearing copy, not the root instance: a write now waits out a
+   * transaction it does not own ({@link SqliteConnection.whenFree}), so a root
+   * instance used in here would queue behind the very transaction it is running
+   * inside and never finish. Carrying the owner is also what makes the
+   * distinction meaningful in the other direction — `store.conversations` while
+   * this transaction is open is a stranger's write, and waits.
    */
   private txView(owner: TxOwner): AssistantStore {
+    const view = this.viewFor(owner);
     return {
-      conversations: this.conversations,
-      tasks: this.tasksInTransaction(owner),
-      proposals: this.proposals,
-      providers: this.providers,
-      settings: this.settings,
-      outbox: this.outbox,
+      ...view,
       transaction: <T>(nested: (tx: AssistantStore) => Promise<T>) =>
         this.conn.withAsyncTx((nestedOwner) => {
           // `nestedOwner` is `owner` on the flattened path and a fresh token

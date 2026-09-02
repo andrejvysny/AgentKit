@@ -34,6 +34,19 @@ export interface EnqueueInput {
 export interface StartWorkerOptions {
   concurrency?: number;
   ownerId?: string;
+  /**
+   * Restrict this worker to these task kinds, forwarded verbatim as
+   * {@link ClaimNextInput.kinds}.
+   *
+   * The store has always been able to filter a claim by kind; without this
+   * option nothing could ask it to, so the documented multi-pool deployment (a
+   * GPU box registering `index.embed`, a web box registering `chat.turn`) was
+   * unreachable — every worker claimed everything and failed on
+   * `ExecutorNotFoundError` for work another process was there to run. Absent
+   * means "any kind"; an EMPTY array means "no kind", which is what a worker
+   * with an empty executor registry actually wants.
+   */
+  kinds?: string[];
 }
 
 export interface WorkerHandle {

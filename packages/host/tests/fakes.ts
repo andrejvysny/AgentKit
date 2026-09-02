@@ -57,6 +57,7 @@ import {
   type CreateTaskInput,
   type EndAttemptInput,
   type EnqueueInput,
+  type FencedWriteOptions,
   type ForkChatResult,
   type IdGenerator,
   type ImportConversationInput,
@@ -513,9 +514,13 @@ export class FakeTaskStore implements TaskStore {
     from: TaskStatus[],
     to: TaskStatus,
     patch?: TaskPatch,
+    opts?: FencedWriteOptions,
   ): Promise<TaskRecord> {
     const task = this.tasks.get(taskId);
     if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+    if (opts?.leaseToken !== undefined) {
+      this.assertLeaseCurrent(taskId, opts.leaseToken);
+    }
     if (!from.includes(task.status)) {
       throw new InvalidTaskTransitionError(
         `Task ${taskId} is ${task.status}, expected one of [${from.join(", ")}].`,
@@ -554,6 +559,9 @@ export class FakeTaskStore implements TaskStore {
     const attempt = this.attempts.get(input.attemptId);
     if (!attempt) {
       throw new RecordNotFoundError(`Attempt not found: ${input.attemptId}`);
+    }
+    if (input.leaseToken !== undefined) {
+      this.assertLeaseCurrent(attempt.taskId, input.leaseToken);
     }
     attempt.status = input.status;
     attempt.endedAt = this.clock.nowIso();
@@ -715,12 +723,34 @@ export class FakeTaskStore implements TaskStore {
     return null;
   }
 
-  async markDeadLettered(taskId: string, reason: string): Promise<TaskRecord> {
+  async markDeadLettered(
+    taskId: string,
+    reason: string,
+    opts?: FencedWriteOptions,
+  ): Promise<TaskRecord> {
     const task = this.tasks.get(taskId);
     if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
+    if (opts?.leaseToken !== undefined) {
+      this.assertLeaseCurrent(taskId, opts.leaseToken);
+    }
     task.deadLetteredAt = this.clock.nowIso();
     task.deadLetterReason = reason;
     return task;
+  }
+
+  /**
+   * The fence the real adapters apply inside their own transaction. Enforced
+   * here too, or a host test could not tell a write that proved ownership from
+   * one that only claimed it — which is the whole point of the option.
+   */
+  private assertLeaseCurrent(taskId: string, leaseToken: string): void {
+    const lease = this.leases.get(taskId);
+    if (!lease || lease.leaseToken !== leaseToken) {
+      throw new LeaseLostError(
+        `Lease token ${leaseToken} is not current for task ${taskId}.`,
+        { taskId, leaseToken },
+      );
+    }
   }
 
   private leaseByToken(leaseToken: string): Lease {
@@ -992,6 +1022,19 @@ export class FakeOutboxStore implements OutboxStore {
       record.lastError = error;
       record.availableAt = retryAt.toISOString();
     }
+  }
+
+  /** Published rows only: this fake has no attempt cap to exhaust. */
+  async prune(before: Date): Promise<number> {
+    const doomed = this.records.filter(
+      (r) =>
+        r.publishedAt !== undefined &&
+        new Date(r.publishedAt).getTime() < before.getTime(),
+    );
+    for (const record of doomed) {
+      this.records.splice(this.records.indexOf(record), 1);
+    }
+    return doomed.length;
   }
 }
 

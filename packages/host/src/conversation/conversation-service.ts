@@ -63,15 +63,16 @@ export class ConversationService {
    * makes the same refusal, atomically, and that is where the invariant
    * actually lives. The reason is that this method cannot enforce it: the
    * `listByScope` read and the `deleteByScope` write are separated by an
-   * `await`, and the store methods called on `tx` FLATTEN into this transaction
-   * rather than opening their own (see {@link AssistantStore.transaction}) — so
-   * a concurrent `claimNext` from a worker joins it too, and can move a task
-   * `queued → running` in the gap. A check-then-act invariant that spans an
-   * await inside a transaction is not atomic no matter how carefully the body
-   * is written; only a single synchronous statement or transaction inside the
-   * adapter is. This check survives because it refuses BEFORE the conversation
+   * `await`, and a check-then-act invariant that spans an await is not atomic
+   * no matter how carefully the body is written — only a single synchronous
+   * statement or transaction inside the adapter is. The reference adapters now
+   * make a concurrent `claimNext` (and every other unrelated write) QUEUE
+   * behind this transaction rather than join it, which closes the specific race
+   * where a worker moved a task `queued → running` inside the gap; but that is
+   * an adapter's courtesy, not something {@link AssistantStore} promises of
+   * every store. This check survives because it refuses BEFORE the conversation
    * is deleted, which is the better error for the overwhelmingly common case;
-   * the race is closed underneath it.
+   * the race is closed underneath it either way.
    *
    * All three deletes still share one transaction, and no foreign async work
    * happens in here: over `bun:sqlite`, awaiting anything else would let an

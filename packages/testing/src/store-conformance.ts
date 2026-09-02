@@ -15,6 +15,7 @@
 // (see packages/host/src/errors.ts) rather than on `instanceof` against an
 // imported class — the same code-not-message discipline host's own error
 // vocabulary asks every OTHER consumer to follow.
+import type { TaskEventEnvelope } from "@agentkit/contracts";
 import type { CreateProposalInput, CreateTaskInput } from "@agentkit/host";
 import {
   createConformanceClock,
@@ -40,6 +41,16 @@ export type {
   ConformanceTuning,
   DescribeAssistantStoreConformanceOptions,
 } from "./conformance-support.js";
+
+/**
+ * The `data.model` of a stamped `run.started`, read off the kind-agnostic
+ * envelope the store hands back. Cast rather than typed: `TaskEventEnvelope`
+ * deliberately knows nothing about the chat-turn vocabulary.
+ */
+function modelOf(event: TaskEventEnvelope | undefined): string | undefined {
+  return (event as unknown as { data?: { model?: string } } | undefined)?.data
+    ?.model;
+}
 
 /**
  * The full store-conformance suite. Call once per adapter with a fresh
@@ -458,6 +469,221 @@ export function describeAssistantStoreConformance(
       }
     });
 
+    it("refuses a fenced terminal write from an attempt whose lease moved on", async () => {
+      // THE ZOMBIE CASE. Attempt 1's lease expires mid-work; recovery starts
+      // attempt 2 on a fresh lease. Attempt 1 then finishes whatever it was
+      // doing and tries to land the task — and everything it writes would bury
+      // the verdict of the attempt that actually owns the run. `appendEvents`
+      // and `updateProgress` always refused such a writer; the TERMINAL writes
+      // did not, which made the fencing token a field nothing compared.
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(makeTaskInput());
+        const first = await store.tasks.createAttempt({
+          attemptId: uniqueId("att"),
+          taskId: task.taskId,
+          ownerId: "worker-1",
+        });
+        const lost = await store.tasks.acquireLease({
+          taskId: task.taskId,
+          attemptId: first.attemptId,
+          ownerId: "worker-1",
+          ttlMs: 60_000,
+        });
+        await store.tasks.transitionTask(task.taskId, ["queued"], "running");
+        await store.tasks.expireStaleLeases(new Date(Date.now() + 120_000));
+        const second = await store.tasks.createAttempt({
+          attemptId: uniqueId("att"),
+          taskId: task.taskId,
+          ownerId: "worker-2",
+        });
+        const current = await store.tasks.acquireLease({
+          taskId: task.taskId,
+          attemptId: second.attemptId,
+          ownerId: "worker-2",
+          ttlMs: 60_000,
+        });
+
+        await expectRejectsWithCode(
+          store.tasks.transitionTask(
+            task.taskId,
+            ["running"],
+            "completed",
+            { finishedAt: new Date().toISOString() },
+            { leaseToken: lost.leaseToken },
+          ),
+          "lease_lost",
+          expect,
+        );
+        await expectRejectsWithCode(
+          store.tasks.endAttempt({
+            attemptId: first.attemptId,
+            status: "completed",
+            leaseToken: lost.leaseToken,
+          }),
+          "lease_lost",
+          expect,
+        );
+        await expectRejectsWithCode(
+          store.tasks.markDeadLettered(task.taskId, "zombie", {
+            leaseToken: lost.leaseToken,
+          }),
+          "lease_lost",
+          expect,
+        );
+        // NOTHING LANDED. A refusal that still wrote half the change would be
+        // worse than no fence at all.
+        const untouched = await store.tasks.getTask(task.taskId);
+        expect(untouched?.status).toBe("running");
+        expect(untouched?.deadLetteredAt).toBeUndefined();
+
+        // The live attempt's own writes go through, with the same options.
+        await store.tasks.markDeadLettered(task.taskId, "poison", {
+          leaseToken: current.leaseToken,
+        });
+        await store.tasks.endAttempt({
+          attemptId: second.attemptId,
+          status: "failed",
+          leaseToken: current.leaseToken,
+        });
+        const landed = await store.tasks.transitionTask(
+          task.taskId,
+          ["running"],
+          "failed",
+          { finishedAt: new Date().toISOString() },
+          { leaseToken: current.leaseToken },
+        );
+        expect(landed.status).toBe("failed");
+        expect(landed.deadLetteredAt).toBeDefined();
+      } finally {
+        close?.();
+      }
+    });
+
+    it("refuses to renew a lease that has already expired", async () => {
+      // The runner asks `renewLease` AS its "may I still write?" probe, so a
+      // yes on an expired lease is not a courtesy — it is the wrong answer to
+      // the question. The record outlives the expiry until someone sweeps it;
+      // ownership does not.
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(makeTaskInput());
+        const attempt = await store.tasks.createAttempt({
+          attemptId: uniqueId("att"),
+          taskId: task.taskId,
+          ownerId: "worker-1",
+        });
+        // Expires on the instant it is issued: no sleeping, no clock injection.
+        const lease = await store.tasks.acquireLease({
+          taskId: task.taskId,
+          attemptId: attempt.attemptId,
+          ownerId: "worker-1",
+          ttlMs: 0,
+        });
+        await expectRejectsWithCode(
+          store.tasks.renewLease(lease.leaseToken, 60_000),
+          "lease_lost",
+          expect,
+        );
+      } finally {
+        close?.();
+      }
+    });
+
+    it("rejects a repeated eventId in the same task's log", async () => {
+      // The port promises dedup by `eventId`, and a store that quietly appended
+      // the same id twice would make a consumer's replay dedup the only thing
+      // standing between it and a doubled answer.
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(makeTaskInput());
+        const attempt = await store.tasks.createAttempt({
+          attemptId: uniqueId("att"),
+          taskId: task.taskId,
+          ownerId: "worker-1",
+        });
+        const lease = await store.tasks.acquireLease({
+          taskId: task.taskId,
+          attemptId: attempt.attemptId,
+          ownerId: "worker-1",
+          ttlMs: 60_000,
+        });
+        const stamp = createTestEventStamper();
+        const first = stamp({
+          type: "run.started",
+          runId: task.taskId,
+          timestamp: new Date().toISOString(),
+          data: { model: "m", toolCount: 0 },
+        });
+        await store.tasks.appendEvents(task.taskId, [first], {
+          leaseToken: lease.leaseToken,
+        });
+        // A later seq, so ONLY the repeated id can be what is refused.
+        const replayed = { ...first, seq: first.seq + 1 };
+        await expectRejectsWithCode(
+          store.tasks.appendEvents(task.taskId, [replayed], {
+            leaseToken: lease.leaseToken,
+          }),
+          "seq_conflict",
+          expect,
+        );
+        expect((await store.tasks.listEvents(task.taskId)).length).toBe(1);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("hands back snapshots a caller cannot mutate into the store", async () => {
+      // A store that returned its own live objects let a host corrupt it by
+      // holding on to a record — and the corruption looked exactly like a write
+      // the host had made on purpose, so every test still passed.
+      const { store, close } = await create();
+      try {
+        const payload: Record<string, unknown> = { nested: { n: 1 } };
+        const created = await store.tasks.createTask(
+          makeTaskInput({ payload }),
+        );
+        // Both directions: the object handed IN, and the record handed BACK.
+        (payload["nested"] as { n: number }).n = 2;
+        (created.payload["nested"] as { n: number }).n = 3;
+        const readBack = await store.tasks.getTask(created.taskId);
+        expect(readBack?.payload).toEqual({ nested: { n: 1 } });
+
+        const attempt = await store.tasks.createAttempt({
+          attemptId: uniqueId("att"),
+          taskId: created.taskId,
+          ownerId: "worker-1",
+        });
+        const lease = await store.tasks.acquireLease({
+          taskId: created.taskId,
+          attemptId: attempt.attemptId,
+          ownerId: "worker-1",
+          ttlMs: 60_000,
+        });
+        const stamp = createTestEventStamper();
+        const event = stamp({
+          type: "run.started",
+          runId: created.taskId,
+          timestamp: new Date().toISOString(),
+          data: { model: "m", toolCount: 0 },
+        });
+        await store.tasks.appendEvents(created.taskId, [event], {
+          leaseToken: lease.leaseToken,
+        });
+        (event as unknown as { data: { model: string } }).data.model = "edited";
+        const stored = await store.tasks.listEvents(created.taskId);
+        expect(modelOf(stored[0])).toBe("m");
+        // And what a READER was handed is a snapshot too.
+        (stored[0] as unknown as { data: { model: string } }).data.model =
+          "edited";
+        expect(modelOf((await store.tasks.listEvents(created.taskId))[0])).toBe(
+          "m",
+        );
+      } finally {
+        close?.();
+      }
+    });
+
     it("lists events after a seq and reports nextSeq", async () => {
       const { store, close } = await create();
       try {
@@ -539,6 +765,69 @@ export function describeAssistantStoreConformance(
           scopesBusy: [],
         });
         expect(claimed).toBeNull();
+      } finally {
+        close?.();
+      }
+    });
+
+    it("normalizes availableAt, so an offset-form instant is not claimed early", async () => {
+      // `2026-01-01T01:30:00-05:00` IS 06:30Z, but as TEXT it sorts before
+      // `2026-01-01T02:00:00.000Z`. A store comparing the raw string claims it
+      // hours before it is due, while one that parses to a Date does not — a
+      // silent divergence living in exactly the retry paths nobody watches.
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(
+          makeTaskInput({ availableAt: "2026-01-01T01:30:00-05:00" }),
+        );
+        expect(task.availableAt).toBe("2026-01-01T06:30:00.000Z");
+
+        const early = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: new Date("2026-01-01T06:00:00.000Z"),
+          scopesBusy: [],
+        });
+        expect(early).toBeNull();
+        const due = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: new Date("2026-01-01T07:00:00.000Z"),
+          scopesBusy: [],
+        });
+        expect(due?.task.taskId).toBe(task.taskId);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("normalizes an availableAt written through a transition patch", async () => {
+      // The backoff path writes this field, not `createTask` — so normalizing
+      // only on create would leave every retry comparing a raw string.
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(makeTaskInput());
+        const patched = await store.tasks.transitionTask(
+          task.taskId,
+          ["queued"],
+          "cancelled",
+          { availableAt: "2026-01-01T01:30:00-05:00" },
+        );
+        expect(patched.availableAt).toBe("2026-01-01T06:30:00.000Z");
+      } finally {
+        close?.();
+      }
+    });
+
+    it("refuses an unparsable availableAt instead of storing it", async () => {
+      // Stored, it would poison every later comparison against the column —
+      // and `new Date("soon")` is NaN, whose comparisons are all false, so the
+      // task would simply never be claimable again.
+      const { store, close } = await create();
+      try {
+        await expectRejectsWithCode(
+          store.tasks.createTask(makeTaskInput({ availableAt: "soon" })),
+          "invalid_timestamp",
+          expect,
+        );
       } finally {
         close?.();
       }
@@ -1334,6 +1623,93 @@ export function describeAssistantStoreConformance(
           ownerId: "publisher-2",
         });
         expect(afterRetry.map((r) => r.id)).toContain(enqueued.id);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("stops offering an outbox record once its attempts are exhausted", async () => {
+      // Uncapped, a payload no consumer can accept is redelivered on every
+      // claim for the life of the database. The cap is read off `attempts`,
+      // which `claimBatch` already maintains, so the exhausted record stays as
+      // an inspectable dead letter rather than vanishing.
+      const { store, close } = await create();
+      try {
+        const enqueued = await store.outbox.enqueue({
+          topic: "run.events",
+          payload: {},
+        });
+        const now = new Date();
+        // The documented default is 10; claim-and-fail past it and assert the
+        // record goes quiet, without pinning which attempt was the last.
+        let lastClaimed = 0;
+        for (let attempt = 1; attempt <= 12; attempt += 1) {
+          const batch = await store.outbox.claimBatch({
+            limit: 10,
+            now,
+            ownerId: "publisher-1",
+          });
+          if (batch.some((r) => r.id === enqueued.id)) lastClaimed = attempt;
+          // `retryAt = now` makes it due again immediately, so the loop is
+          // measuring the ATTEMPT cap and nothing else.
+          await store.outbox.markFailed(enqueued.id, "boom", now);
+        }
+        expect(lastClaimed).toBe(10);
+      } finally {
+        close?.();
+      }
+    });
+
+    it("markPublished and markFailed reject an unknown id", async () => {
+      // Silently doing nothing made "the publisher says it published, the row
+      // says it did not" a mystery with no error anywhere.
+      const { store, close } = await create();
+      try {
+        await expectRejectsWithCode(
+          store.outbox.markPublished("outbox-nope", new Date()),
+          "not_found",
+          expect,
+        );
+        await expectRejectsWithCode(
+          store.outbox.markFailed("outbox-nope", "boom", new Date()),
+          "not_found",
+          expect,
+        );
+      } finally {
+        close?.();
+      }
+    });
+
+    it("prune removes settled outbox records and never a claimable one", async () => {
+      const { store, close } = await create();
+      try {
+        const published = await store.outbox.enqueue({
+          topic: "run.events",
+          payload: {},
+        });
+        const pending = await store.outbox.enqueue({
+          topic: "run.events",
+          payload: {},
+        });
+        const now = new Date();
+        await store.outbox.markPublished(published.id, now);
+
+        expect(await store.outbox.prune(new Date(now.getTime() + 60_000))).toBe(
+          1,
+        );
+        // The pending one is still there, and still claimable: a pruner that
+        // could delete unpublished work would be a data-loss button.
+        const claimed = await store.outbox.claimBatch({
+          limit: 10,
+          now: new Date(now.getTime() + 120_000),
+          ownerId: "publisher-1",
+        });
+        expect(claimed.map((r) => r.id)).toEqual([pending.id]);
+        await expectRejectsWithCode(
+          store.outbox.markPublished(published.id, now),
+          "not_found",
+          expect,
+        );
       } finally {
         close?.();
       }

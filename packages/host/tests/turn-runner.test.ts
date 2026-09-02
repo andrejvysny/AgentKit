@@ -1163,7 +1163,15 @@ describe("TurnRunner.execute — cancellation and failure", () => {
     expect(f.taskRunner.cancelled).toEqual(["run-42"]);
   });
 
-  it("fails the run when the lease is not ours, and rethrows", async () => {
+  it("writes nothing and rethrows when the lease is not ours", async () => {
+    // A run driven with a token that is not the task's current lease is a
+    // ZOMBIE: some other owner holds this task, and the only correct amount of
+    // state for this attempt to write is none. It used to land the task
+    // `failed` — burying the live attempt's verdict under an attempt nobody was
+    // watching — because the terminal writes took no `leaseToken` and could not
+    // tell the two apart. Now `transitionTask`/`endAttempt` are fenced, so
+    // `failQuietly` refuses and the task is left exactly as its real owner has
+    // it: `running`, placeholder still open, error propagating to the queue.
     const f = await setupRunner();
     f.mock.setScript([{ steps: [{ kind: "text", content: "hi" }] }]);
     const submitted = await f.runner.submitMessage({
@@ -1175,8 +1183,12 @@ describe("TurnRunner.execute — cancellation and failure", () => {
     ).rejects.toThrow(LeaseLostError);
 
     const run = await f.store.tasks.getTask(submitted.runId);
-    expect(run?.status).toBe("failed");
-    expect(run?.error).toContain("lease");
+    expect(run?.status).toBe("running");
+    expect(run?.error).toBeUndefined();
+    const placeholder = messagesOf(f).find(
+      (m) => m.id === submitted.assistantMessageId,
+    );
+    expect(placeholder?.metadata["placeholder"]).toBe(true);
   });
 
   it("fails terminally when the task payload has no chatId", async () => {
