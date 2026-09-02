@@ -1760,6 +1760,90 @@ export function describeAssistantStoreConformance(
       }
     });
 
+    it("a nested transaction() through the tx view flattens into the open one", async () => {
+      const { store, close } = await create();
+      try {
+        // The `tx` a callback is handed carries the identity of the transaction
+        // it belongs to, so composing through it stays inside that unit. The
+        // alternative — a nested call that queues behind the callback holding
+        // the queue — is a deadlock this test would hang on, which is exactly
+        // what one adapter used to do while the other flattened.
+        const outer = uniqueId("chat-outer");
+        const inner = uniqueId("chat-inner");
+        const result = await store.transaction(async (tx) => {
+          await tx.conversations.createChat({ id: outer });
+          return tx.transaction(async (nested) => {
+            await nested.conversations.createChat({ id: inner });
+            return "flattened";
+          });
+        });
+        expect(result).toBe("flattened");
+        expect(await store.conversations.getChat(outer)).not.toBeNull();
+        expect(await store.conversations.getChat(inner)).not.toBeNull();
+      } finally {
+        close?.();
+      }
+    });
+
+    it("fails a root-store call made from inside a transaction callback instead of hanging", async () => {
+      if (!createTuned) return;
+      const { store, close } = await createTuned({
+        clock: createConformanceClock("2026-03-01T00:00:00.000Z"),
+        transactionGateTimeoutMs: 50,
+      });
+      try {
+        // A call on the ROOT store from inside a callback is, by construction,
+        // indistinguishable from an unrelated caller's — so it waits for the
+        // open transaction, which cannot finish until the callback returns.
+        // The wait is bounded precisely so that mistake is an ERROR naming its
+        // cause rather than a request that never comes back.
+        await expectRejectsWithCode(
+          store.transaction(async (tx) => {
+            await tx.conversations.createChat({});
+            await store.tasks.claimNext({
+              ownerId: "worker-1",
+              now: new Date(),
+              scopesBusy: [],
+            });
+          }),
+          "transaction_gate_timeout",
+          expect,
+        );
+        await expectRejectsWithCode(
+          store.transaction(async (tx) => {
+            await tx.conversations.createChat({});
+            await store.transaction(async () => undefined);
+          }),
+          "transaction_gate_timeout",
+          expect,
+        );
+      } finally {
+        close?.();
+      }
+    });
+
+    it("releases the gate when a transaction callback throws", async () => {
+      const { store, close } = await create();
+      try {
+        // A gate held by a dead caller is a store that never serves anyone
+        // again. Whatever the throw does to the writes (adapters differ), the
+        // NEXT caller must run.
+        await expectRejects(
+          store.transaction(async () => {
+            throw new Error("boom");
+          }),
+          expect,
+        );
+        const chatId = uniqueId("chat");
+        await store.transaction(async (tx) => {
+          await tx.conversations.createChat({ id: chatId });
+        });
+        expect(await store.conversations.getChat(chatId)).not.toBeNull();
+      } finally {
+        close?.();
+      }
+    });
+
     it("transaction() rolls back every write when fn throws", async () => {
       const { store, capabilities, close } = await create();
       try {

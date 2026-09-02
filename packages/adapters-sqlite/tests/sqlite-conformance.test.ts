@@ -12,8 +12,14 @@ describeAssistantStoreConformance({
       close: () => store.close(),
     };
   },
-  createTuned: async ({ clock, aging }) => {
-    const store = new SqliteAssistantStore(":memory:", { clock, ...aging });
+  createTuned: async ({ clock, aging, transactionGateTimeoutMs }) => {
+    const store = new SqliteAssistantStore(":memory:", {
+      clock,
+      ...aging,
+      ...(transactionGateTimeoutMs === undefined
+        ? {}
+        : { transactionGateTimeoutMs }),
+    });
     return {
       store,
       capabilities: { atomicTransactions: true, search: true },

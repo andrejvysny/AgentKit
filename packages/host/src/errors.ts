@@ -261,6 +261,36 @@ export class UnknownDependencyError extends NamedHostError {
 }
 
 /**
+ * A caller waited too long for another caller's open
+ * {@link AssistantStore.transaction} to finish, and gave up instead of hanging.
+ *
+ * ALMOST ALWAYS A CALLER BUG, not contention, which is why the message says so:
+ * a `transaction()` callback that awaits a ROOT-store call (or any other
+ * foreign async work that ends up back in the store) waits on the very
+ * transaction it is running inside — a wait nothing can end, because the
+ * transaction cannot finish until the callback returns. The adapters used to
+ * park on that forever, so a host saw a request that never came back and no
+ * error anywhere; a bounded wait turns the same mistake into a diagnosable
+ * failure with a stack trace pointing at the callback.
+ *
+ * The constructor takes the elapsed budget rather than a message — unlike its
+ * siblings here — because BOTH reference adapters raise it and the diagnosis is
+ * the same sentence in each; composing it once is what keeps them identical.
+ */
+export class TransactionGateTimeoutError extends NamedHostError {
+  constructor(timeoutMs: number, details?: Record<string, unknown>) {
+    super(
+      "transaction_gate_timeout",
+      `Timed out after ${timeoutMs}ms waiting for an open transaction() to finish. ` +
+        "The usual cause is a transaction() callback that awaited a root-store call " +
+        "or foreign async work: do that work through the `tx` the callback is handed, " +
+        "or before the transaction starts.",
+      { timeoutMs, ...details },
+    );
+  }
+}
+
+/**
  * The closed set of codes the named error classes above use — every literal
  * passed to a `super(...)` call in this file, and nothing else.
  *
@@ -295,6 +325,7 @@ export const HOST_ERROR_CODES = [
   "invalid_import",
   "unknown_dependency",
   "usage_denied",
+  "transaction_gate_timeout",
 ] as const;
 
 export type HostErrorCode = (typeof HOST_ERROR_CODES)[number];

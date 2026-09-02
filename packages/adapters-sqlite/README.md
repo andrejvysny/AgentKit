@@ -82,12 +82,21 @@ Redis, or similar) implementing the same ports — see
 
 ## Transaction isolation caveat
 
-`transaction()` gives atomicity, not isolation. Over `bun:sqlite`, concurrent
-store calls issued while a transaction callback awaits genuinely-async work
-JOIN that transaction and roll back with it — the connection has exactly one
-open transaction, and every statement issued on it belongs to that one. Keep
-transaction callbacks free of foreign async work: await the model, the
-applier, or another subsystem *outside*, then pass the results in.
+`transaction()` gives atomicity, not isolation. The connection has exactly one
+open transaction and every statement issued on it belongs to that one, so
+WRITES from other callers — a second `transaction()`, a worker's `claimNext`,
+an ordinary `updateChat` — wait for it and then run in a transaction of their
+own rather than joining one whose rollback would erase them. READS are exempt
+and still join.
+
+The corollary is that a callback must work through the `tx` it is handed: a
+call issued on the ROOT store from inside it is indistinguishable from an
+unrelated caller's, so it waits for the transaction it is running inside. That
+wait is bounded by `transactionGateTimeoutMs` (default 30s) and ends in
+`TransactionGateTimeoutError` (code `transaction_gate_timeout`) instead of
+hanging — the budget is a watchdog, never a knob to raise. Keep transaction
+callbacks free of foreign async work: await the model, the applier, or another
+subsystem *outside*, then pass the results in.
 
 ## Fencing and CAS
 

@@ -79,6 +79,17 @@ export interface ConformanceTuning {
     agingBonus?: number;
     agingMaxBonus?: number;
   };
+  /**
+   * How long a caller waits for another caller's open `transaction()` before
+   * failing with `transaction_gate_timeout`.
+   *
+   * Part of the tuning for the same reason the clock is: the behaviour is
+   * observable only by waiting for it, and an adapter's real budget (tens of
+   * seconds — it is a watchdog, not a policy) would make the test that pins it
+   * take tens of seconds. An adapter that has no such budget ignores it, and
+   * the case that needs it is skipped along with the rest of `createTuned`.
+   */
+  transactionGateTimeoutMs?: number;
 }
 
 export interface DescribeAssistantStoreConformanceOptions {
