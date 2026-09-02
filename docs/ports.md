@@ -356,11 +356,20 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
   `2026-01-01T01:30:00-05:00` (06:30Z) sorts before `2026-01-01T02:00:00.000Z`
   — an un-normalized offset-form backoff is claimed hours early on one adapter
   and not the other, silently, in the retry paths nobody watches.
-- `poisonCount` counts attempts that ended `abandoned`, written through
-  `TaskPatch.poisonCount` on the transition that LANDS the task — there is no
-  `running → running` edge to carry a mid-flight increment. It is the diagnosis
-  that travels with a dead letter ("three attempts, all abandoned" is a
-  crashing worker), not the dead-letter trigger; `attemptCount` is.
+- `poisonCount` counts attempts that ended `abandoned`, and the **store** does
+  the counting: `endAttempt({ status: "abandoned" })` MUST increment it by one,
+  atomically with the attempt write. An abandoned attempt IS the poison event,
+  so the count lives where that event is written rather than on a later
+  transition a caller has to remember — which is what it used to be, and that
+  version was exact only for the death immediately preceding a dead letter, lost
+  the count to a crash in between, and let two recoverers read-then-write over
+  each other. It is **idempotent per attempt**: ending an already-`abandoned`
+  attempt again reports one death, not two. `TaskPatch.poisonCount` remains, as
+  an OVERRIDE for a host reconstructing history — it is not how the normal path
+  writes the count. Only `abandoned` counts; an attempt that failed cleanly is a
+  different diagnosis. It is the diagnosis that travels with a dead letter
+  ("three attempts, all abandoned" is a crashing worker), not the dead-letter
+  trigger; `attemptCount` is.
 - `appendEvents`/`listEvents` are typed on `TaskEventEnvelope`
   (`@agentkit/contracts`) — the kind-agnostic shape the store actually
   orders (`seq`) and dedups (`eventId`); `AiRunEvent` is the `chat.turn`
@@ -450,6 +459,13 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
 > waits is bounded by `transactionGateTimeoutMs`: a caller that waits longer
 > rejects with `transaction_gate_timeout` and its queued turn cancels itself, so
 > the caller behind it still gets a gate with no transaction open under it.
+>
+> The defect this replaced, and why the shape of the fix matters, are in [ADR
+> 0014](adr/0014-hardening-tranche-2.md): a depth counter answers "is *someone's*
+> transaction open", not "is *mine*". The memory adapter mints owner tokens the
+> same way and raises the same typed timeout, but it does **not** queue ordinary
+> writes behind an open transaction — an adapter-**MAY**, because memory has no
+> rollback and so cannot produce the lost-write the queueing prevents.
 
 **`waiting_approval` is currently producer-less.** No code in this repository
 moves a task into it: a staged write returns `pending` to the model and the
@@ -521,6 +537,16 @@ Staged writes: `ProposalRecord`, `ProposalStatus`, and apply outcomes
   record answers a dedup check, since a released key can be reused.
 - `recordOutcome` is idempotent per `operationId`: a second call with the
   same id must return the *first* outcome, never overwrite it.
+- `claimedAt` is stamped when a proposal is CLAIMED for apply (the
+  `approved → applying` transition), and is what
+  `ProposalService.reconcileInterrupted({ staleAfterMs })` measures the staleness
+  window against. Before it existed the window fell back to the decision time,
+  which can be arbitrarily older than the claim — a proposal approved on Monday
+  and claimed on Friday was "stale" the instant it was claimed, so the
+  reconciler could take a live apply away from the worker running it. The
+  question the window asks is "how long has THIS apply been in flight", and only
+  `claimedAt` answers it. Optional on the record (a proposal that has never been
+  claimed has none) and published as an optional `ProposalDto.claimedAt`.
 - `deleteByChat(chatId)` deletes a chat's proposals **and the apply outcomes
   they claimed**, returning the number of proposals removed. **By `chatId`, not
   by `scopeKey`** — a proposal carries both, and they are not the same set: two

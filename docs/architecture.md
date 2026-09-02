@@ -316,7 +316,8 @@ still work: recovery acts on a lease it has just deleted, and a cancel from an
 HTTP handler never had one. `TurnRunner` orders its terminal block around the
 fence — fenced `transitionTask` → `endAttempt` → then the placeholder
 `updateMessage` — because `ConversationStore` is lease-unaware and ordering is
-the only thing keeping a fenced-out attempt off the live answer. A renewal is
+the only thing keeping a fenced-out attempt off the live answer. See [ADR
+0014](adr/0014-hardening-tranche-2.md). A renewal is
 refused once the lease has expired, since the runner asks `renewLease` *as* its
 "may I still write?" probe.
 
@@ -556,7 +557,10 @@ pass writes its own `run.started` … terminal pair onto the same log. The
 recovery passes are the chat-only retry (a provider that rejects a request with
 `tools` attached) and the empty-response retry (a turn that completed with no
 content and no tool calls); the correction harness adds one pass per round (see
-[ADR 0012](adr/0012-multi-pass-correction-harness.md)).
+[ADR 0012](adr/0012-multi-pass-correction-harness.md)). Why this is a contract
+rule and not a client detail — every serving surface had independently assumed
+the first terminal event ended the run — is [ADR
+0014](adr/0014-hardening-tranche-2.md).
 
 **Every pass after the first is announced first**, with a
 `run.warning { code: "retry_pass", pass, reason }` event written immediately
@@ -592,7 +596,8 @@ id, same event log, one more attempt. Two things make attempt 2 land correctly:
   `leaseToken` and goes FIRST, before `endAttempt` and before the placeholder is
   finalized, so an attempt that lost its lease cannot overwrite the live one's
   answer. A `LeaseLostError` stops the rest of the block, on the success path
-  and the failure path alike.
+  and the failure path alike. See [ADR
+  0014](adr/0014-hardening-tranche-2.md).
 
 **An unexpected throw is bookkept in full.** `TurnRunner.executeTask` records a
 terminal `run.failed` (or `run.cancelled` when the run was aborted) on the
@@ -607,7 +612,8 @@ nothing was coming back to finish.
 `submitMessage` and `regenerate` create their task with
 `CreateTaskInput.exclusiveScope`, so a submit into a chat that already holds an
 unfinished task is refused with `ChatBusyError` (`chat_busy`, HTTP 409) — by the
-STORE, in the same transaction that would have written the user message. A
+STORE, in the same transaction that would have written the user message (why it
+is on by default: [ADR 0014](adr/0014-hardening-tranche-2.md)). A
 second concurrent turn does not work: its user message takes the active-leaf
 slot under the live run's internal records, and the live run's next chain append
 then lands off the path (the same rule as above). A redelivered `taskId` is
@@ -621,7 +627,8 @@ unaffected. Hosts that queue turns deliberately opt out with
 `VerificationHook` are all host code the framework awaits inside a leased
 attempt. Each runs under a deadline from `TurnRunnerDeps.hookTimeoutsMs`
 (defaults: verify 30 s, context 10 s, attachments 10 s, contribute 15 s; a
-non-positive value turns one off). A deadline is a RACE, not a cancellation —
+non-positive value turns one off — [ADR
+0014](adr/0014-hardening-tranche-2.md)). A deadline is a RACE, not a cancellation —
 nothing can stop host code that is not watching a signal, so a late answer is
 discarded — and every one of them degrades rather than failing the turn:
 
@@ -641,7 +648,8 @@ PLACEHOLDER behind it is a projection of that log, so its `updateMessage` is
 throttled to at most one per 32 deltas or 50 ms, always flushed before any
 non-delta event (`run.message.completed` and every terminal included) and
 discarded by a pass reset. A 2000-delta answer costs 63 row writes instead of
-2000 (`scripts/bench-projection.ts`: 201.8 ms → 5.2 ms on sqlite). What a crash
+2000 (`scripts/bench-projection.ts`: 201.8 ms → 5.2 ms on sqlite; [ADR
+0014](adr/0014-hardening-tranche-2.md)). What a crash
 can cost is under 50 ms of half-written text in a record the next attempt
 overwrites anyway.
 

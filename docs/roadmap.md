@@ -158,6 +158,24 @@ blank page or re-learn fixed bugs.
   `useBranches`, `useProposals`, `useProviders`) over it — no components, no
   styling; never a dependency of the headless framework. Revises
   `docs/non-goals.md`'s "React / UI packages" entry.
+- **Hardening tranche 2** (2026-09-02). ADR
+  [0014](adr/0014-hardening-tranche-2.md), contract `0.4.0` → `0.5.0`: a
+  six-reviewer adversarial review of `0.4.0` found two CRITICALs — sqlite
+  `withAsyncTx` flattening any caller into a stranger's open transaction (lost
+  acknowledged writes, double claim) and a write-policy grant redirectable by a
+  body `chatId` overriding the authorized path chat — plus roughly twenty HIGH
+  defects, clustered in the seams a day-one migration walks through. Fixed:
+  transaction reentrancy by owner token and a bounded FIFO gate
+  (`transaction_gate_timeout`) on both adapters; optional `leaseToken` fencing
+  on `transitionTask`/`endAttempt`/`markDeadLettered` with `TurnRunner`'s
+  terminal block ordered around it; recovery resuming from `lastMessageOfRun`
+  instead of the placeholder; `chat_busy` (409) on a concurrent submit, by
+  default; **a run is not one pass** — `retry_pass` warnings, the SSE stream
+  closing on the TASK terminal, `runPhase()` letting the last terminal win —
+  as a contract rule rather than three client patches; hook deadlines; the chat
+  loop's cancellation, tool-call assembly, serialization and Ajv paths made
+  honest; transport and MCP bounds; sqlite `SCHEMA_V8` (`idx_messages_run`,
+  `proposals.claimed_at`, store-side exact `poisonCount`).
 
 ## P6 — Long-term memory
 
@@ -274,3 +292,37 @@ itself) creates real pressure for them.
   Not a bug in either adapter individually; an open question of how closely
   the two should be made to agree, or whether `capabilities.search` should
   say more than "search exists."
+- **`withHookDeadline` cannot cancel a hook, only stop waiting for it.** ADR
+  [0014](adr/0014-hardening-tranche-2.md)'s hook deadlines are a race: a late
+  `ContextProvider` or `ToolSetContributor.contribute` keeps running and its
+  answer is discarded. Real cancellation needs an `AbortSignal` on the hook
+  ports — a port-surface change the tranche deliberately did not take on.
+- **The memory adapter does not queue ordinary writes behind an open
+  transaction.** It mints owner tokens the same way sqlite does and raises the
+  same `transaction_gate_timeout`, but a root-level write does not wait
+  ([`docs/ports.md`](ports.md) records this as an adapter-MAY — memory has no
+  rollback, so the hazard the queueing prevents does not exist). Full parity
+  needs sub-store state injection.
+- **`TurnRunner`'s terminal `updateMessage` is unfenced.** The block is fenced
+  `transitionTask` → fenced `endAttempt` → **unfenced** `updateMessage`, so a
+  lease that moves between the first two awaits leaves the task terminal with
+  the placeholder still `placeholder: true`. Unreachable in a single process;
+  closing it properly means a lease-aware `ConversationStore` write.
+- **`SingleProcessTaskRunner.stillHoldsLease` probes by renewing**, so asking
+  whether the runner still holds the lease extends it as a side effect on the
+  settle path. Harmless where it is used today, but a read that writes.
+- **One write window between a pass's terminal event and its `retry_pass`.**
+  They are two separate appends in `packages/host/src/turn/turn-runner.ts`, and
+  a consumer reading the log in that instant sees `runPhase()` report `failed`
+  for a run that is about to continue. Batching the two appends host-side would
+  close it.
+- **`sse.ts`'s `roomAvailable()` has no idle deadline.** A reader that stops
+  reading without closing the socket parks the pump indefinitely; the
+  backpressure bound ([ADR 0006](adr/0006-hardening-tranche.md)) caps memory,
+  not time.
+- **`useChat.error` stays stale until the reconcile during pass 2**, and a
+  failed submit clears the run fields of a concurrently accepted run.
+- **MCP `toolAliases` values are not grammar-checked at the REST boundary.**
+  The server `alias` is (`^[a-z][a-z0-9-]*$`, restated in
+  `packages/transport-http/src/validate.ts`); the alias *values* inside
+  `toolAliases` are only checked as a string map.
