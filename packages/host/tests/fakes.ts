@@ -601,7 +601,7 @@ export class FakeTaskStore implements TaskStore {
     }
     // First terminal wins, and the fake owes the services the same rule as the
     // real stores — see `TaskStore.endAttempt`.
-    if (attempt.status !== "running") return attempt;
+    if (attempt.status !== "running") return { ...attempt };
     attempt.status = input.status;
     attempt.endedAt = this.clock.nowIso();
     if (input.error !== undefined) attempt.error = input.error;
@@ -611,7 +611,9 @@ export class FakeTaskStore implements TaskStore {
       const task = this.tasks.get(attempt.taskId);
       if (task) task.poisonCount += 1;
     }
-    return attempt;
+    // A copy, like both real adapters: a service mutating the record it got
+    // back must not be able to edit the fake's state behind its back.
+    return { ...attempt };
   }
 
   async acquireLease(input: AcquireLeaseInput): Promise<Lease> {
