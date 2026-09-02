@@ -17,7 +17,7 @@ Thirteen event types, all discriminated on `type`
 |---|---|
 | `run.started` | `{ model, toolCount }` — the run began; which model, how many tools were advertised. |
 | `run.message.delta` | `{ delta }` — one streamed content chunk. Display-only; not authoritative. |
-| `run.message.completed` | `{ content, toolCallCount, toolCalls?, reasoningContent?, finishReason? }` — the authoritative turn content and tool calls, for streaming and non-streaming providers alike. |
+| `run.message.completed` | `{ content, toolCallCount, toolCalls?, reasoningContent?, finishReason? }` — the authoritative turn content and tool calls, for streaming and non-streaming providers alike. `finishReason` may be the synthetic `"incomplete"` (see `stream_incomplete` below): the stream ended before the provider said why, and defaulting it to `"stop"` is what made a half answer look final. |
 | `run.tool.requested` | `{ toolCallId, toolName, argumentsJson }` — a tool call was announced, before execution. |
 | `run.tool.running` | `{ toolCallId, toolName }` — execution started. |
 | `run.tool.succeeded` | `{ toolCallId, toolName, resultJson, sources, truncated, warnings, status?, summary?, modelResultJson? }` — the tool ran and reported success (or `partial`). `resultJson` is the full data; `modelResultJson` is the slim envelope fed to the model. |
@@ -25,7 +25,7 @@ Thirteen event types, all discriminated on `type`
 | `run.warning` | `{ code, message, pass?, reason? }` — a non-fatal condition; see the warning-code table below. `pass`/`reason` carry pass context (set by `retry_pass`). |
 | `run.usage` | `{ callId, attempt, step, model, promptTokens?, completionTokens?, totalTokens?, source, finalForCall }` — token accounting for one provider call. See "usage" below. |
 | `run.verification` | `{ pass, status, deficiencies }` — the outcome of one post-run verification. `pass` is 0 for the run's own answer, then 1, 2, … per correction pass; `status` is `pass`/`partial` from the host's `DeficiencyReport`, or `unavailable` when the hook threw or answered `null`. **Emitted only under the correction harness** — a single-shot verification writes nothing, so absence is not evidence a run went unverified. See [`docs/ports.md`](ports.md#verification). |
-| `run.completed` | `{ iterations, finishReason? }` — the run ended with an answer. |
+| `run.completed` | `{ iterations, finishReason? }` — the run ended with an answer. Carries the same possibly-synthetic `"incomplete"` as `run.message.completed`. |
 | `run.failed` | `{ errorMessage, errorCode? }` — the run ended in a provider or transport error. |
 | `run.cancelled` | `{ reason? }` — the run was aborted. |
 
@@ -81,6 +81,10 @@ TS type narrows it to the union below while still accepting any string.
 | `multimodal_flattened` | core (`providers/openai-compatible.ts`) | A `system`/`tool` message arrived with content parts (only `user`/`assistant` can carry them); the provider client flattened the text parts to a string and dropped the image parts rather than failing the request. **At most one per run** — see [Message content parts](#message-content-parts). |
 | `attachment_unresolved` | host (`turn/turn-runner.ts`) | An image part carried a `ref` source the host could not turn into bytes for this pass — no `AttachmentResolver` is wired, or the resolver answered `null`. The part was dropped from what the provider was shown; the stored message keeps the ref. One warning per dropped part. |
 | `attachment_budget_exceeded` | host (`turn/turn-runner.ts`) | A `ref` image resolved, but sending it would have blown the pass's attachment budget (per-image bytes, total bytes, or image count). Dropped from the pass, kept in the store. One warning per dropped part; the message names the ref and the cap it hit. |
+| `stream_incomplete` | core (`providers/openai-compatible.ts`) | The provider's stream ended without a `[DONE]` sentinel and without any `finish_reason` — an idle proxy cut, a dropped socket. What arrived is a partial answer, and the turn's `finishReason` is the synthetic `"incomplete"` rather than the `"stop"` that would claim it finished. |
+| `result_unserializable` | core (`runs/run-loop.ts`) | A tool RAN, but its result could not be turned into JSON (a `BigInt`, a cycle), so the model was fed a failure envelope instead. Its side effects still happened; only the reporting failed. Also the `errorCode` on the matching `run.tool.failed`. |
+| `duplicate_tool_call_id` | core (`providers/openai-compatible.ts` and `runs/run-loop.ts`) | One streamed turn produced two tool calls with the same id — real providers do this. The later ones are re-keyed (`<id>#2`, `<id>#3`) so every call keeps a distinct, answerable `tool_call_id`. Emitted in the provider client and, for a host layering its own provider adapter, again in the loop. |
+| `tool_late_result` | **reserved — nothing emits it** | A tool that ignored its deadline settling after the run had already reported it as timed out. Today the late result is dropped without an event; the code is declared so a detector can be added without widening the vocabulary. |
 | `retry_pass` | host (`turn/turn-runner.ts`) | Written immediately BEFORE a recovery or correction pass. A run is not one pass — the host re-asks after a failed pass (`chat_only`), after a completed-but-empty one (`empty_response`), and once per correction round (`correction`) — and each pass writes its own `run.started` … terminal pair onto the same log. `data.pass` is the 1-based number of the pass about to run, `data.reason` is one of those three. Consumers must treat the run as live again (the terminal event they just saw was the previous pass's) and reset the text streamed so far, the way the host resets the stored answer. |
 | `hook_timeout` | host (`turn/turn-runner.ts`, `turn/hook-deadline.ts`) | One of the host's own hooks did not answer inside its deadline (`TurnRunnerDeps.hookTimeoutsMs`), so the turn went on without what it would have contributed — no bindings and no system prompt for `ContextProvider`, one contributor's tools missing for `ToolSetContributor.contribute`. The turn is degraded, not failed. A hook that settles after its deadline is not cancelled; its answer is discarded. `AttachmentResolver` timeouts report `attachment_unresolved` instead, because the outcome a consumer acts on is the dropped part. |
 | `empty_response` | host (`turn/turn-runner.ts`) | The model returned no visible content and no tool calls, even after recovery passes. Not produced by core. |
@@ -221,7 +225,7 @@ A failed call's `envelope.data` is `AiToolErrorData`:
 
 | Field | What it says |
 | --- | --- |
-| `errorCode` | Machine-readable cause — `tool_missing`, `bad_args`, `schema_invalid`, `exec_failed`, `tool_call_cap`, `cancelled`, `tool_guard_refused`, or a tool's own code. |
+| `errorCode` | Machine-readable cause — `tool_missing`, `bad_args`, `schema_invalid`, `exec_failed`, `tool_call_cap`, `cancelled`, `tool_guard_refused`, `result_unserializable`, or a tool's own code. A tool that blew its **deadline** reports `exec_failed` like any other executor failure; there is no distinct timeout code, and the deadline is named in `errorMessage` (`Tool <name> timed out after <n>ms`). |
 | `errorMessage` | The human/model-facing explanation; also the envelope's `summary`. |
 | `phase?` | `"validation" \| "guard" \| "execution"` — WHERE it died: the argument schema, the guard chain, or the tool's own body. |
 | `retryable?` | Whether another attempt could plausibly succeed. Advice for whoever is deciding; nothing in this repository retries a tool call by itself. |
@@ -234,8 +238,18 @@ producer actually knows them — absent means "unrecorded", never "false":
 | `AiToolRegistry` input-schema validation (`schema_invalid`) | `validation` | `false` — the same arguments fail the same way; the model must write different ones |
 | `ToolGuard.canExecute` refusal (`tool_guard_refused`) | `guard` | `false` — a decision, not a fault |
 | `ToolGuard.canExecute` THREW (`tool_guard_refused`, message `"guard error"`) | `guard` | `false` — the guard failed closed; the thrown message is deliberately not forwarded, since a guard's reason reaches the model verbatim |
-| A tool's `execute` threw (`exec_failed`) | `execution` | the error's own `retryable` property, default `false` |
+| A tool's `execute` threw, or blew its deadline (`exec_failed`) | `execution` | the error's own `retryable` property, default `false` |
+| The tool ran but its result would not serialize (`result_unserializable`) | `execution` | `false` — the same value fails the same way; the side effects already happened |
 | Everything else (`tool_missing`, `bad_args`, `tool_call_cap`, `cancelled`) | absent | absent |
+
+**`run.failed.errorCode`** is a different, smaller vocabulary — it names why the
+*run* ended, not why one call did. The core provider client sets it on every
+failure path it has (`packages/core/src/providers/openai-compatible.ts`):
+`network_error` (the request never completed), `empty_body` (a 2xx with nothing
+in it), `provider_error` (the stream was unreadable), and the **HTTP status as a
+string** for a non-2xx response. A `run.failed` written by the host instead
+carries the `AgentKitHostError.code` that caused it, or `internal_error`
+(`packages/host/src/turn/turn-runner.ts`).
 
 ## `run.usage` — per-call delta semantics
 
@@ -439,6 +453,23 @@ route, with one AgentKit extension member: `code`, the stable machine-readable
 code host errors already carry (`lease_lost`, `duplicate_action_id`,
 `revision_conflict`, `usage_denied`, …). A client branches on `code`;
 `type`/`title` are for humans.
+
+Four codes a `0.5.0` client should expect and did not have to handle before:
+
+- **`chat_busy` (409)** on `submitMessage` and `regenerateMessage`. A chat
+  serializes its turns, and the store refuses a second one inside the same
+  transaction that would have written the user message. A host that genuinely
+  wants concurrent turns opts out with `TurnRunnerDeps.allowConcurrentSubmit`.
+- **`idempotency_key_mismatch` (422)** when an `Idempotency-Key` the server has
+  already answered is replayed with a **different body**. 422 rather than 409
+  because nothing about the stored record moved, and retrying is not the fix —
+  the client sent two different requests under one key.
+- **`body_too_large` (413)** when a request body exceeds `maxBodyBytes`
+  (`RestHandlerDeps`, default 1 MiB), and `invalid_body` (400) when it nests
+  deeper than 64 levels. Both are transport bounds, applied before routing.
+- **`transaction_gate_timeout` (500)** when a store gave up waiting for someone
+  else's open transaction. A host-side fault, not a client one: nothing about
+  the request was wrong and repeating it verbatim will not help.
 
 Two codes in that member are decided by the *transport* rather than thrown by
 the host: `not_implemented` (501 — the route exists in the contract but this

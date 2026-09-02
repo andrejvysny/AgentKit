@@ -38,6 +38,17 @@ rather than upgraded in place. Pointing it at a database some other migrator
 owns means two tools fighting over one `user_version` — it will refuse to
 open, or it will be refused. A dedicated file is the whole contract.
 
+**The current version is 8** (`SCHEMA_VERSION` in `src/schema.ts`). Version 8
+added `idx_messages_run ON messages(chat_id, run_id, depth, order_key)` — the
+whole `ORDER BY` of `lastMessageOfRun`, which crash recovery reads on every
+resumed attempt, so the plan needs no temporary b-tree over the message table —
+and `proposals.claimed_at`, the instant an apply claim was taken, which
+`reconcileInterrupted`'s staleness window measures against (see [ADR
+0014](../../docs/adr/0014-hardening-tranche-2.md)). A file written by version 7
+is **refused**, not upgraded: delete the development database and let this
+adapter recreate it. There is nothing to migrate — the same policy every earlier
+bump used, and the reason the store insists on owning its file.
+
 ## Multiple handles over one file: supported and tested
 
 Two `SqliteAssistantStore` instances on the same path — two worker processes,

@@ -330,6 +330,62 @@ table already says so: "their `waiting` is `queued`, their `streaming` is
 `streaming`, their `paused` is `waiting_approval` — so migrating means deleting a
 state machine, not translating one."
 
+### Tranche 2 delta (0.5.0)
+
+What changed under the tables above between `0.4.0` and `0.5.0` (ADR
+[0014](../adr/0014-hardening-tranche-2.md)). Each of these is a behaviour a
+migrated OneMind has to account for, not just a new field.
+
+- **`chat_busy` (409) on `submitMessage` and `regenerateMessage`.** A chat
+  serializes its turns and the store refuses the second one inside the same
+  transaction that would have written the user message. OneMind serialized
+  submits with `ChatTaskLock`, an in-process `Map`
+  (`chat-task-lock.ts:19-22`) that a crash loses — §9 item 6 already flags that
+  AgentKit's serialization is durable instead. The tranche makes the refusal
+  **explicit and default**: the UI needs a "this chat is busy" path where it
+  previously had a queue position. Opt out with
+  `TurnRunnerDeps.allowConcurrentSubmit`; the chain corrupts without it.
+- **A run is not one pass.** `run.warning { code: "retry_pass", pass, reason }`
+  is written immediately before every recovery pass, a terminal run event no
+  longer ends the stream (the *task* terminal does), and `runPhase()` lets the
+  LAST terminal win, with `useChat` resetting the streamed text at a boundary.
+  This is what makes §6's [Phase mapping](#phase-mapping) table safe to read
+  from a live stream: OneMind's chat-only and empty-response retries now arrive
+  as announced passes rather than as a terminal followed by silence.
+- **Hook deadlines.** `ContextProvider` 10 s, `AttachmentResolver` 10 s,
+  `ToolSetContributor.contribute` 15 s, `verify` 30 s
+  (`TurnRunnerDeps.hookTimeoutsMs`); a timeout degrades the turn with
+  `hook_timeout` and is a race, not a cancellation. The file-blob
+  `AttachmentResolver` (§1a) and the tool contributors must answer inside those
+  or the deadline has to be raised — a chunked-upload read behind a cold cache
+  is the obvious risk.
+- **`includeUserRequest` defaults to `true`** in the correction harness. Not
+  binding for OneMind today (§3 leaves `verification`/`correction` unwired), but
+  it becomes the default the moment a verifier is added.
+- **`maxBodyBytes` defaults to 1 MiB and JSON to depth 64.** §3's table and §9
+  item 8 say "absent means no cap" — that no longer holds, and the default is
+  below what this app's inline-image path sends. A multipart message carrying a
+  `{kind:"data", base64}` image (§5.4) can exceed 1 MiB on its own and is
+  refused with **413** `body_too_large`. Raise the cap, or prefer
+  `{kind:"ref", ref: fileId}` sources so the bytes never ride the request.
+- **Tools get a real deadline.** `timeoutMs` on a tool definition used to be
+  advisory; it is a `Promise.race` now, with a loop-wide `defaultToolTimeoutMs`
+  for tools that declare none. A slow MCP-backed tool that used to overrun
+  silently now fails with `exec_failed`.
+- **`Idempotency-Key` is fingerprinted.** The same key replayed with a
+  different body is **422** `idempotency_key_mismatch`, not a silent replay of
+  the first answer — worth knowing for the retry behaviour §6 describes.
+- **sqlite `SCHEMA_V8`** (the `mcp_servers` table in §1c is now on v8, not v7):
+  `idx_messages_run`, `proposals.claimed_at`. No migrations by design — delete
+  and recreate a dev `agentkit.sqlite`; the one-shot import in §5 is unaffected
+  because it writes through the store's API.
+- **`poisonCount` is exact.** The store increments it on
+  `endAttempt({ status: "abandoned" })`, so it counts every abandoned attempt
+  rather than only the one preceding a dead letter.
+- **`ProposalRecord.claimedAt`** is stamped on the `approved → applying` claim
+  and is what `reconcileInterrupted({ staleAfterMs })` measures, rather than the
+  decision time.
+
 ---
 
 ## 5. Data migration spec

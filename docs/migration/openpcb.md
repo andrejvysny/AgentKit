@@ -387,6 +387,69 @@ A terminal **event** beats the status: the host appends the event and *then*
 transitions the task, so a client reading in that order can hold a `running`
 status beside an ended log. `runPhase` already handles it.
 
+### Tranche 2 delta (0.5.0)
+
+What changed under the tables above between `0.4.0` and `0.5.0` (ADR
+[0014](../adr/0014-hardening-tranche-2.md)). Each of these is a behaviour a
+migrated OpenPCB has to account for, not just a new field.
+
+- **`chat_busy` (409) on `submitMessage` and `regenerateMessage`.** A chat
+  serializes its turns and the store refuses the second one inside the same
+  transaction that would have written the user message. OpenPCB got this from
+  the task runtime's own scope serialization (`task-runtime.ts:103-108`, the
+  `waiting` status), which queued the second submit rather than refusing it —
+  so the composer has to grow a refusal path it never had. Opt out with
+  `TurnRunnerDeps.allowConcurrentSubmit` only if the queueing behaviour is
+  genuinely wanted; the chain corrupts without it.
+- **A run is not one pass.** `run.warning { code: "retry_pass", pass, reason }`
+  is written immediately before every recovery and correction pass, a terminal
+  run event no longer ends the stream (the *task* terminal does), and
+  `runPhase()` lets the LAST terminal win. `useChat` resets the streamed text
+  at a boundary. §6's [Phase mapping](#phase-mapping) table reads the same, but
+  what feeds it changed: the DoD harness's correction passes now arrive on the
+  same live stream rather than after it closed, so a phase derived from the
+  stream no longer settles early.
+- **Hook deadlines.** `ContextProvider` 10 s, `AttachmentResolver` 10 s,
+  `ToolSetContributor.contribute` 15 s, `verify` 30 s
+  (`TurnRunnerDeps.hookTimeoutsMs`); a timeout degrades the turn with
+  `hook_timeout` and is a race, not a cancellation. The mention resolver
+  (§2, `mention-content-resolver.ts`) and the tool contributors must fit inside
+  those or raise them — a cloud round-trip in `ContextProvider` will not fit 10 s
+  reliably.
+- **`includeUserRequest` defaults to `true`** in the correction harness — the
+  verifier pass is shown the user's request. **OpenPCB's harness did not do
+  this** (§2's `run-dod.ts` row). Set `correction: { maxPasses: 3,
+  includeUserRequest: false }` explicitly if byte-parity with the old DoD
+  behaviour is wanted; it is `false`, not absent, that turns it off.
+- **`maxBodyBytes` defaults to 1 MiB and JSON to depth 64.** §3's table already
+  says to set `maxBodyBytes` because mentions inline images; the default is now
+  a real cap rather than "absent means no cap", so an unset value refuses a
+  submit carrying an inline image with **413** `body_too_large`. Better still:
+  keep images as `{ kind: "ref" }` sources and let `AttachmentResolver` fetch
+  the bytes, which keeps them off the request entirely.
+- **Tools get a real deadline.** `timeoutMs` on a tool definition used to be
+  advisory; it is a `Promise.race` now, with a loop-wide `defaultToolTimeoutMs`
+  for tools that declare none. A long-running `designer_*` tool that used to
+  overrun its declared timeout silently will now fail with `exec_failed`.
+- **`Idempotency-Key` is fingerprinted.** The same key replayed with a
+  different body is **422** `idempotency_key_mismatch`, not a silent replay of
+  the first answer.
+- **sqlite `SCHEMA_V8`.** `idx_messages_run`, `proposals.claimed_at`. No
+  migrations by design — delete and recreate a dev `agentkit.sqlite`; the
+  one-shot import in §5 is unaffected because it writes through the store's API.
+- **MCP server caps** (relevant here, since OpenPCB mounts
+  `agentkit/mcp-server` at `/mcp`, §4b): 4 MiB per request, batches ≤ 8, 4
+  concurrent calls per session, `maxCallMs` 120 s, 64 sessions, 30 min idle TTL,
+  503 + `Retry-After` when nothing is evictable. `principal` is threaded to the
+  tool guards, so the shared `toolGuards` (§2) can decide on the caller.
+- **`poisonCount` is exact.** The store increments it on
+  `endAttempt({ status: "abandoned" })`, so it counts every abandoned attempt
+  rather than only the one preceding a dead letter.
+- **`ProposalRecord.claimedAt`** is stamped on the `approved → applying` claim
+  and is what `reconcileInterrupted({ staleAfterMs })` measures — not the
+  decision time, which for a design proposal approved long before it is applied
+  is arbitrarily older.
+
 ---
 
 ## 5. Data migration spec
