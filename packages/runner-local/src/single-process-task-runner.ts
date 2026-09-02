@@ -835,14 +835,14 @@ export class SingleProcessTaskRunner implements TaskRunner {
       return { kind: "done", landed: true };
     // A cancel that the worker swallowed still means cancelled, not completed.
     const status = entry.cancelRequested ? "cancelled" : "completed";
-    // FENCED. `stillHoldsLease` above is a pre-check, not the guarantee — it
-    // and these writes are separated by awaits, and the token is what makes the
-    // store refuse a verdict from an attempt that lost the task in the gap.
-    await this.store.tasks.endAttempt({
-      attemptId,
-      status,
-      leaseToken: lease.leaseToken,
-    });
+    // FENCED, AND THE TASK TRANSITION GOES FIRST — the order `TurnRunner` uses
+    // and `docs/architecture.md` documents. `stillHoldsLease` above is a
+    // pre-check, not the guarantee: it and these writes are separated by
+    // awaits, and the token is what makes the store refuse a verdict from an
+    // attempt that lost the task in the gap. Ending the attempt first left a
+    // window — one throw wide — where a TERMINAL attempt sat under a `running`
+    // task with a live lease, which is the state recovery reads as a crash and
+    // then tries to end `abandoned`.
     await this.store.tasks.transitionTask(
       taskId,
       ["running"],
@@ -850,6 +850,11 @@ export class SingleProcessTaskRunner implements TaskRunner {
       { finishedAt: this.clock.nowIso() },
       { leaseToken: lease.leaseToken },
     );
+    await this.store.tasks.endAttempt({
+      attemptId,
+      status,
+      leaseToken: lease.leaseToken,
+    });
     return { kind: "done", landed: true };
   }
 

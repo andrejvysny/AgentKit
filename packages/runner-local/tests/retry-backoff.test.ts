@@ -406,10 +406,13 @@ describe("SingleProcessTaskRunner — retry backoff", () => {
     expect(attempts(harness, "run-1")).toBe(1);
     await settle();
     expect(harness.attemptsFor("run-1")).toEqual([
-      // Attempt 1 ended `failed` when the worker threw, then `abandoned` when
-      // the recovery pass found its lease expired — the last word is honest:
-      // nobody knows whether that attempt's work landed.
-      { status: "abandoned", attemptNumber: 1 },
+      // Attempt 1 ended `failed` when the worker threw, and STAYS failed: the
+      // recovery pass that found its lease expired ends the attempt
+      // `abandoned`, but an attempt already terminal keeps its first verdict
+      // (`TaskStore.endAttempt`). The worker's own diagnosis is the better
+      // record — "abandoned / lease expired" would overwrite it with a guess,
+      // and count a clean diagnosis against the poison budget.
+      { status: "failed", attemptNumber: 1 },
       { status: "completed", attemptNumber: 2 },
     ]);
   });
@@ -478,7 +481,10 @@ describe("SingleProcessTaskRunner — retry backoff", () => {
     expect(attempts(harness, "run-1")).toBe(1);
     expect(next.worker.callsFor("run-1").length).toBe(1);
     expect(harness.attemptsFor("run-1")).toEqual([
-      { status: "abandoned", attemptNumber: 1 },
+      // `failed`, not `abandoned`: the recovery pass's `endAttempt` finds this
+      // attempt already terminal and leaves the worker's verdict alone — see
+      // the previous case.
+      { status: "failed", attemptNumber: 1 },
       { status: "completed", attemptNumber: 2 },
     ]);
   });

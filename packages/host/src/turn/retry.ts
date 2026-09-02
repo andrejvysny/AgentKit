@@ -7,7 +7,7 @@ export interface RetryDecisionInput {
   terminal: PassTerminal;
   /** Whether tools were advertised to the provider on the pass that just ran. */
   registryHadTools: boolean;
-  /** Distinct tool calls the run has made so far. */
+  /** Distinct tool calls the CURRENT pass has made — see `resetPass`. */
   toolCallCount: number;
   /** Whether the assistant produced any visible text. */
   hadContent: boolean;

@@ -459,6 +459,57 @@ export function describeAssistantStoreConformance(
       }
     });
 
+    it("keeps the FIRST terminal status an attempt was ended with", async () => {
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(makeTaskInput());
+        const attempt = async () =>
+          store.tasks.createAttempt({
+            attemptId: uniqueId("att"),
+            taskId: task.taskId,
+            ownerId: "worker-1",
+          });
+
+        // A worker that finished, and a recovery pass that then found the lease
+        // expired. The completion is what happened; re-ending it `abandoned`
+        // would count a clean turn against the poison budget and dead-letter a
+        // task that never crashed. Reachable in ONE process: a runner that ends
+        // the attempt before landing the task leaves exactly this pair behind
+        // when the transition throws.
+        const clean = await attempt();
+        await store.tasks.endAttempt({
+          attemptId: clean.attemptId,
+          status: "completed",
+        });
+        const reEnded = await store.tasks.endAttempt({
+          attemptId: clean.attemptId,
+          status: "abandoned",
+          error: "lease expired",
+        });
+        expect(reEnded.status).toBe("completed");
+        expect(reEnded.error).toBeUndefined();
+        expect((await store.tasks.getTask(task.taskId))?.poisonCount).toBe(0);
+
+        // The other direction: a death already reported is not talked out of by
+        // a late verdict from the attempt that died.
+        const crashed = await attempt();
+        await store.tasks.endAttempt({
+          attemptId: crashed.attemptId,
+          status: "abandoned",
+          error: "lease expired",
+        });
+        const late = await store.tasks.endAttempt({
+          attemptId: crashed.attemptId,
+          status: "completed",
+        });
+        expect(late.status).toBe("abandoned");
+        expect(late.error).toBe("lease expired");
+        expect((await store.tasks.getTask(task.taskId))?.poisonCount).toBe(1);
+      } finally {
+        close?.();
+      }
+    });
+
     it("counts the same abandoned attempt once, however often it is ended", async () => {
       const { store, close } = await create();
       try {

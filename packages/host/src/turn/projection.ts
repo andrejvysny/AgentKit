@@ -77,7 +77,13 @@ export interface RunProjectionState {
   content: string;
   /** Whether any delta arrived (a completed-only provider sends none). */
   streamed: boolean;
-  /** Distinct tool call ids seen this run — the "did it use tools?" signal. */
+  /**
+   * Distinct tool call ids seen SINCE THE LAST PASS BOUNDARY — the "did it use
+   * tools?" signal. `TurnRunner.resetPass` clears it with the rest of the
+   * answer-so-far, because every reader of it (the `empty_response` warning,
+   * the emulated-call detector, `VerificationInput.toolCallCount`) is asking
+   * about the pass that produced the answer, and a retry runs with no registry.
+   */
   toolCallIds: Set<string>;
   /** Internal assistant record awaiting its tool calls (see `project`). */
   pendingAssistantMessageId?: string;

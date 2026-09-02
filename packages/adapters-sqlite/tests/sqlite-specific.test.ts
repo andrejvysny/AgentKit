@@ -5,7 +5,7 @@
 import { describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import type { Changes } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SCHEMA_VERSION, SqliteAssistantStore } from "../src/index.js";
@@ -129,6 +129,38 @@ describe("SqliteAssistantStore — file-backed specifics", () => {
         code = (err as { code?: string }).code;
       }
       expect(code).toBe("sqlite_schema_version");
+    }),
+  );
+
+  it(
+    "closes the handle it opened when it refuses the database",
+    withTempDb(async (path) => {
+      // The refusal is DOCUMENTED and catchable — a host is invited to report
+      // it and point the user at another file — so it is a path that runs more
+      // than once. It used to leak the connection every time: the throw
+      // happened between `new Database(path)` and the return, and nothing owned
+      // the handle in between. An fd and its `-shm`/`-wal` sidecars per
+      // attempt, from an error that says "recreate the database".
+      const first = new SqliteAssistantStore(path);
+      await first.conversations.createChat({ id: "v7-era-chat" });
+      first.close();
+      const raw = new Database(path);
+      raw.exec("PRAGMA user_version = 7;");
+      raw.close();
+
+      // Descriptors this process holds. `/dev/fd` is the portable-enough
+      // in-process count (a symlink to `/proc/self/fd` on Linux), and counting
+      // is the only way to see a handle nothing gave us a reference to.
+      const openFds = (): number => readdirSync("/dev/fd").length;
+      const REFUSALS = 20;
+      const before = openFds();
+      for (let i = 0; i < REFUSALS; i += 1) {
+        expect(() => new SqliteAssistantStore(path)).toThrow();
+      }
+      // Measured: 2 descriptors per refusal under the leak (+40 here), 0 with
+      // the handle closed. The slack is for anything else the runtime opened
+      // in between, not for a leak an order of magnitude smaller.
+      expect(openFds() - before).toBeLessThanOrEqual(4);
     }),
   );
 
