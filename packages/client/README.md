@@ -91,6 +91,7 @@ What it does for you:
 | **Resume** | On a transport error, it reconnects with `Last-Event-ID` set to the last event it actually yielded. The server replays from **one past** that event, so every event is delivered exactly once and `seq` stays contiguous across the seam. |
 | **Backoff** | `retryDelayMs` (default 500 ms) until the server's own `retry:` hint arrives, which then wins. |
 | **Retry budget** | `maxRetries` (default 5), and it **resets on every event received** — what it bounds is a server that accepts a connection and immediately drops it, not a long run that drops occasionally. |
+| **Total budget** | `maxTotalReconnects` (default 50), and it **never resets** — it bounds the failure the per-stretch budget cannot see: a server that accepts a connection, delivers one frame and drops it earns its stretch budget back every time, so without this it could be reconnected to forever. |
 | **Heartbeats** | The server's `: hb` comment frames are consumed and ignored. |
 | **Abort** | `opts.signal` aborts the request and any pending backoff; no reconnect follows an abort. |
 | **Errors** | A problem response (a 404 for an unknown run) throws {@link AgentKitClientError} immediately — it is an answer, not a broken pipe, and will be the same answer on every retry. |

@@ -140,7 +140,18 @@ this hook renders all three, in order:
 3. **Reconciled.** Once the stream closes (the *task* is terminal), one resumed
    `drainRun` pass collects anything appended after it, then `listMessages`
    replaces the whole list with what the server stored. Anything the streaming
-   step got wrong survives for at most one round trip.
+   step got wrong survives for at most one round trip. The drain is best-effort
+   — a failure on that one extra request is ignored rather than reported as the
+   turn's outcome — and if the log ended without a terminal event (the host's
+   `failQuietly` writes one only best-effort) the run's own `status` decides the
+   final `phase`, with a message-only `error` where there is no `run.failed` to
+   quote.
+
+`finishReason` is the last pass's `run.completed`/`run.message.completed`
+`finishReason`, `null` before one arrives and at every pass boundary. Worth
+rendering: `"incomplete"` means the provider's stream was cut before it said
+why, and the contract never launders that into `"stop"` — so the run is
+`completed` and the answer is **truncated**. `useRun` exposes the same field.
 
 A failed submit **parks its `Idempotency-Key`**: calling `submit` again with the
 same content and the same `parentMessageId` replays that key instead of asking
