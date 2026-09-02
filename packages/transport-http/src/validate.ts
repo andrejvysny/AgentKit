@@ -411,7 +411,17 @@ function checkProviderId(value: unknown): string | null {
   if (typeof value !== "string") return null; // reported by checkOptionalString
   const trimmed = value.trim();
   if (trimmed === "") return null; // absent in effect; the route mints one
-  if (!PROVIDER_ID_RE.test(trimmed) || /^\.+$/.test(trimmed)) {
+  return providerIdIssue(trimmed);
+}
+
+/**
+ * The grammar as a reusable verdict, so the route that MINTS a secret ref from
+ * a path parameter (update) applies the same rule as the create body — a
+ * pre-existing row with an id outside the grammar must not keep the namespace
+ * escape alive on every later PATCH.
+ */
+export function providerIdIssue(id: string): string | null {
+  if (!PROVIDER_ID_RE.test(id) || /^\.+$/.test(id)) {
     return `\`id\` must match ${PROVIDER_ID_RE.source} and must not be only dots.`;
   }
   return null;

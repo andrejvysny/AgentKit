@@ -105,6 +105,14 @@ export function describeSecretStoreConformance(
       });
     });
 
+    it('an empty string is a value, not an absence — get answers "", never null', async () => {
+      await withStore(async (store) => {
+        await store.set("provider/p1/api-key", "");
+        expect(await store.get("provider/p1/api-key")).toBe("");
+        expect(await store.listRefs()).toContain("provider/p1/api-key");
+      });
+    });
+
     it("a value with unicode round-trips byte-exact", async () => {
       await withStore(async (store) => {
         const value = "sk-héllo-🔑-日本語";

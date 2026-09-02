@@ -111,7 +111,7 @@ jobs:
                    packages/testing; do
             test -d "$d/dist" || { echo "missing $d/dist"; exit 1; }
           done
-          ! grep -rE "require\(['\"]bun|from ['\"]bun:|import\(?['\"]bun:" \
+          ! grep -rE "require\(['\"]bun|from ['\"]bun:|import\s*\(?\s*['\"]bun:" \
             packages/contracts/dist \
             packages/client/dist \
             packages/react/dist \
