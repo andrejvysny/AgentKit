@@ -537,6 +537,36 @@ describe("write-policy allowances", () => {
     );
   });
 
+  it("a body chatId cannot redirect a grant to another chat", async () => {
+    const writePolicy = new SessionWritePolicy();
+    const { handler } = await createHandlerFixture({ writePolicy });
+
+    const granted = await handler(
+      request("POST", `/v1/chats/${TEST_CHAT_ID}/write-policy/allowances`, {
+        body: {
+          toolName: "notes_append",
+          proposalKind: "notes.append",
+          maxRisk: "destructive",
+          // Unknown members ride through validation; this one must not win.
+          chatId: "victim-chat",
+        },
+      }),
+    );
+    expect(granted.status).toBe(201);
+    const allowance = (await granted.json()) as WriteAllowanceDto;
+    expect(allowance.chatId).toBe(TEST_CHAT_ID);
+    expect(writePolicy.list("victim-chat")).toEqual([]);
+    expect(
+      writePolicy.isAutoApplyAllowed({
+        chatId: "victim-chat",
+        toolName: "notes_append",
+        proposalKind: "notes.append",
+        risk: "destructive",
+      }),
+    ).toBe(false);
+    expect(writePolicy.list(TEST_CHAT_ID).length).toBe(1);
+  });
+
   it("(p) grants, lists and revokes — all scoped to one chat", async () => {
     const writePolicy = new SessionWritePolicy();
     const { handler } = await createHandlerFixture({ writePolicy });

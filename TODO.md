@@ -1,34 +1,59 @@
-# TODO — finish the extraction (plan: ~/.claude/plans/act-as-a-principal-keen-cocoa.md)
+# TODO — hardening tranche 2 (plan: ~/.claude/plans/act-as-senior-software-linked-seal.md, ADR 0014, contract 0.4.0 → 0.5.0)
 
-## Phase A — library-ready
-- [x] A1 adapters promotion: `packages/adapters-memory`, `packages/adapters-sqlite`, `packages/runner-local`; `task-aging` → host; retry backoff; TaskRunner conformance; delete `internal/`
-- [x] A2 umbrella package `agentkit` + build/smoke scripts + release workflow + DEVELOPING.md
-- [x] A3 `examples/desktop-host` composition root + HTTP smoke (+ `ollama` preset)
-- [x] A4 wire `UsageAuthorizer` (TurnRunner) + `AuthorizationPort` (transport); `basePath`; CORS
-- [x] Phase A verifier (fresh context) ran — 2 CRITICAL (runner recovery/fencing) + 4 IMPORTANT; fix batch in flight
+## Phase 0 — stop the bleeding
+- [ ] 0.1 write-policy body `chatId` override (B1) — inline
+- [ ] 0.2 sqlite/memory transaction owner gate (D1, D2)
+- [ ] 0.3 transaction concurrency tests
 
-## Phase B — contract 0.4.0
-- [x] B1 content parts at persistence + `AttachmentResolver` + budgets; goldens re-recorded once
-- [x] B2 chat ops (update/delete/archive/ids), `importConversation`, `searchMessages` (FTS5), `beforeOrderKey`, `deleteByScope`, `ConversationService.deleteChat`
-- [x] B3 `TurnRunner.regenerate`, `McpServerConfigStore`, new REST routes (chat/regenerate/search/providers/settings/allowances/mcp configs)
-- [x] Phase B verifier + fixes (combined B+C verifier: 1 CRITICAL + 5 IMPORTANT closed)
+## Phase 1 — durability + fencing
+- [ ] 1.1 fenced terminal writes (C3/D4, D9) — ports + adapters + runner + TurnRunner reorder + conformance
+- [ ] 1.2 `availableAt` normalization (D3)
+- [ ] 1.3 memory adapter parity (D5, D6)
+- [ ] 1.4 runner hygiene (D7, D8, D10, D11)
+- [ ] 1.5 outbox bounds (D12)
 
-## Phase C — OpenPCB parity
-- [x] C1 tool governance (namespaces, guard chain, dispose, toolCalling override, AiToolError, ToolCatalog)
-- [x] C2 correction harness + `run.verification` event
-- [x] C3 `@agentkit/mcp-server`
-- [x] C4 `RunProjector` + `SubmitMessageInput.kind`
-- [x] Phase C verifier + fixes (combined with Phase B)
+## Phase 2 — core chat loop
+- [ ] 2.1 cancellation truth (A1, A6, A15)
+- [ ] 2.2 tool-call assembly (A4, A8, A7, A12)
+- [ ] 2.3 tool execution safety (A2, A3, A10, A14, default tool timeout)
+- [ ] 2.4 provider client bounds (A5, A11, A13)
+- [ ] 2.5 Ajv hardening (A9, F6)
+- [ ] 2.6 goldens replayed live for all 5 scenarios; re-record once (E3)
 
-## Phase D — client + react
-- [x] D1 `packages/client`
-- [x] D2 `packages/react`
-- [x] Phase D covered by client/react suites + combined verifier
+## Phase 3 — host orchestration
+- [ ] 3.1 recovery chain resume (C1)
+- [ ] 3.2 throw path finalize + run.failed/cancelled (C2, C12, C7, C10)
+- [ ] 3.3 pass-boundary `retry_pass` warning (F-OWN-1 host half)
+- [ ] 3.4 submit exclusivity `chat_busy` default ON (C5)
+- [ ] 3.5 hook deadlines (C6)
+- [ ] 3.6 proposals: scopeKey allowance, fixed strings, reconcile guard, key escape (C4, C8, C9, C14)
+- [ ] 3.7 emulated-call detector (C11)
+- [ ] 3.8 projection order (C13)
+- [ ] 3.9 delta write coalescing (F-OWN-4)
+- [ ] 3.10 harness `includeUserRequest` (F-OWN-5)
 
-## Phase E — playbooks + docs
-- [ ] `docs/migration/openpcb.md`, `docs/migration/onemind.md`
-- [x] ADRs 0008–0013, CHANGELOG 0.4.0, docs sync (roadmap/non-goals/architecture/ports/contracts/README)
-- [ ] memory update
+## Phase 4 — serving surfaces
+- [ ] 4.1 stream close rule + runPhase last-terminal + react reset (F-OWN-1)
+- [ ] 4.2 react hooks (B2, B8, B9, B12)
+- [ ] 4.3 client resume (B5)
+- [ ] 4.4 transport bounds + validation (B3, B4, B6, B10, B11, B13, B14, B15, E2, E6, F5)
+- [ ] 4.5 authz / privileged-resource docs (B7, F5, F14)
+- [ ] 4.6 MCP server (F1, F2, F3, F7, F9, F13)
+- [ ] 4.7 MCP client (F4, F10, F11, F12, F8)
 
-## Phase F — polish (go/no-go after E)
-- [ ] `chat.title` executor, token-budget windowing
+## Phase 5 — contracts, testing infra, packaging, docs
+- [ ] 5.1 contract 0.5.0 (E1, E11, E13, new codes, chat_busy, fenced options); CONTRACT_VERSION bump
+- [ ] 5.2 SecretStore conformance + reference impl (E5)
+- [ ] 5.3 CI (E4, E9, E7)
+- [ ] 5.4 packaging (E8, E10, E12)
+- [ ] 5.5 docs: ADR 0014, architecture/ports/contracts, CHANGELOG, roadmap, migration delta
+- [ ] 5.6 second-attempt + zombie E2E
+
+## Phase 6 — structure (last)
+- [ ] turn-runner.ts split
+- [ ] sqlite-assistant-store.ts split
+
+## Verifier passes
+- [ ] after Phase 0–2 wave
+- [ ] after Phase 3–4 wave
+- [ ] after Phase 5–6
