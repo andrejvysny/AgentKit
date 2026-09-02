@@ -5,15 +5,27 @@
  * once (a task, a user message, an assistant placeholder), and it is the reason
  * `Idempotency-Key` is mandatory rather than advisory — see below.
  */
-import type { ChatDto, MessagePageDto } from "@agentkit/contracts";
+import type {
+  ChatDto,
+  MessagePageDto,
+  RegenerateMessageRequest,
+  SubmitMessageRequest,
+} from "@agentkit/contracts";
+import type { MessageRecord, TaskRecord } from "@agentkit/host";
 import { jsonResponse, readJsonObject, readPositiveInt } from "../http.js";
 import {
   deriveIdempotentTaskId,
   deriveRegenerateTaskId,
   IDEMPOTENCY_KEY_HEADER,
+  turnFingerprint,
 } from "../idempotency.js";
 import { decodeMessageCursor, encodeMessageCursor } from "../cursor.js";
-import { badRequest, notFound, notImplemented } from "../problem.js";
+import {
+  badRequest,
+  notFound,
+  notImplemented,
+  unprocessable,
+} from "../problem.js";
 import { chatDto, messageDto } from "../projections.js";
 import { pathParam, type RouteContext } from "./context.js";
 import {
@@ -92,7 +104,7 @@ export async function listMessages(ctx: RouteContext): Promise<Response> {
     if (decoded === null) {
       return badRequest(
         "invalid_request",
-        "Query parameter `cursor` is not a cursor this server issued.",
+        "Query parameter `cursor` is not in the form this server issues.",
         ctx.instance,
       );
     }
@@ -173,6 +185,15 @@ export async function submitMessage(ctx: RouteContext): Promise<Response> {
 
   const taskId = await deriveIdempotentTaskId(chatId, key.trim());
   const existing = await ctx.deps.store.tasks.getTask(taskId);
+  if (existing !== null) {
+    const mismatch = await submitReplayMismatch(
+      ctx,
+      existing,
+      validated.value,
+      parentMessageId,
+    );
+    if (mismatch !== null) return mismatch;
+  }
 
   const result = await ctx.deps.turns.submitMessage({
     chatId,
@@ -191,6 +212,110 @@ export async function submitMessage(ctx: RouteContext): Promise<Response> {
   });
 
   return jsonResponse(result, existing === null ? 201 : 200);
+}
+
+/**
+ * The 422 a replayed `Idempotency-Key` carrying a DIFFERENT request answers
+ * with, or null when the two agree (or cannot be compared).
+ *
+ * Rebuilt from records rather than read from a stored fingerprint: nothing is
+ * written for this check (see {@link turnFingerprint}), so the first request's
+ * question is reconstructed from what it left behind — its user message for the
+ * body, the task payload for the model and provider it named.
+ *
+ * `parentMessageId` is compared only when THIS request names one. The store
+ * resolves an absent parent to whatever the active leaf was at the time, so a
+ * replay that omits it cannot be told apart, after the fact, from a first
+ * request that also omitted it. Naming a DIFFERENT parent than the recorded one
+ * is the case that matters, and that one is caught.
+ */
+async function submitReplayMismatch(
+  ctx: RouteContext,
+  existing: TaskRecord,
+  request: SubmitMessageRequest,
+  parentMessageId: string | undefined,
+): Promise<Response | null> {
+  const payload = existing.payload as Record<string, unknown>;
+  const userMessageId = payload["userMessageId"];
+  // A task under this id that this route did not create is not something to
+  // fingerprint; `TurnRunner.resubmitted` is what refuses those, louder.
+  if (typeof userMessageId !== "string") return null;
+  const stored = await messageOrNull(ctx, userMessageId);
+  if (stored === null) return null;
+
+  const asked = await turnFingerprint({
+    content: request.content,
+    metadata: request.metadata ?? {},
+    model: request.model ?? null,
+    providerId: request.providerId ?? null,
+    parentMessageId: parentMessageId ?? null,
+  });
+  const recorded = await turnFingerprint({
+    content: stored.content,
+    metadata: stored.metadata ?? {},
+    model: payload["model"] ?? null,
+    providerId: payload["providerId"] ?? null,
+    parentMessageId:
+      parentMessageId === undefined ? null : (stored.parentMessageId ?? null),
+  });
+  return asked === recorded ? null : keyMismatch(ctx);
+}
+
+/**
+ * The same for a regenerate — but the comparison is narrower, because a
+ * regenerate carries almost nothing to compare.
+ *
+ * Its TARGET is already inside the derived task id (`deriveRegenerateTaskId`
+ * hashes the message id), so two regenerates of two different answers can never
+ * reach this path at all. What is left is `model` and `providerId`, both of
+ * which the task payload records. `metadata` is not compared: the host merges
+ * it into the placeholder's own metadata bag alongside the `placeholder` flag,
+ * and unmerging that to recover what the caller sent would be guessing.
+ */
+async function regenerateReplayMismatch(
+  ctx: RouteContext,
+  existing: TaskRecord,
+  request: RegenerateMessageRequest,
+): Promise<Response | null> {
+  const payload = existing.payload as Record<string, unknown>;
+  if (typeof payload["assistantMessageId"] !== "string") return null;
+  const asked = await turnFingerprint({
+    model: request.model ?? null,
+    providerId: request.providerId ?? null,
+  });
+  const recorded = await turnFingerprint({
+    model: payload["model"] ?? null,
+    providerId: payload["providerId"] ?? null,
+  });
+  return asked === recorded ? null : keyMismatch(ctx);
+}
+
+function keyMismatch(ctx: RouteContext): Response {
+  return unprocessable(
+    "idempotency_key_mismatch",
+    "This `Idempotency-Key` was already used for a different request. A retry must send the same body; a new request needs a new key.",
+    ctx.instance,
+  );
+}
+
+/**
+ * One message by id, or null when nothing has that id.
+ *
+ * `listSiblings` is the port's only read that answers "this exact message" — it
+ * includes the message itself — and it RAISES for an unknown id, which on this
+ * path is not an error to report: a fingerprint that cannot be rebuilt means
+ * the check does not apply, not that the request is bad.
+ */
+async function messageOrNull(
+  ctx: RouteContext,
+  messageId: string,
+): Promise<MessageRecord | null> {
+  try {
+    const siblings = await ctx.deps.store.conversations.listSiblings(messageId);
+    return siblings.find((record) => record.id === messageId) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -285,6 +410,14 @@ export async function regenerateMessage(ctx: RouteContext): Promise<Response> {
 
   const taskId = await deriveRegenerateTaskId(chatId, messageId, key.trim());
   const existing = await ctx.deps.store.tasks.getTask(taskId);
+  if (existing !== null) {
+    const mismatch = await regenerateReplayMismatch(
+      ctx,
+      existing,
+      validated.value,
+    );
+    if (mismatch !== null) return mismatch;
+  }
 
   const result = await ctx.deps.turns.regenerate({
     chatId,

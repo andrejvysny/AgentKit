@@ -130,6 +130,47 @@ describe("regenerateMessage", () => {
     expect(siblings.length).toBe(2);
   });
 
+  it("(c2) 422s a key replayed with a different model, and adds no branch", async () => {
+    const f = await createHandlerFixture();
+    const first = await submit(f.handler, "k1");
+
+    const once = (await (
+      await f.handler(
+        regenerate(TEST_CHAT_ID, first.assistantMessageId, "r1", {
+          model: "m1",
+        }),
+      )
+    ).json()) as SubmitMessageResponse;
+
+    // Re-answering with a different model is a different request; answering it
+    // with the first run's ids would tell the caller the model was honoured.
+    await expectProblem(
+      await f.handler(
+        regenerate(TEST_CHAT_ID, first.assistantMessageId, "r1", {
+          model: "m-other",
+        }),
+      ),
+      422,
+      "idempotency_key_mismatch",
+    );
+
+    // The genuine retry still replays.
+    const replay = await f.handler(
+      regenerate(TEST_CHAT_ID, first.assistantMessageId, "r1", {
+        model: "m1",
+      }),
+    );
+    expect(replay.status).toBe(200);
+    expect((await replay.json()) as SubmitMessageResponse).toEqual(once);
+
+    const siblings = (await (
+      await f.handler(
+        request("GET", `/v1/messages/${first.assistantMessageId}/siblings`),
+      )
+    ).json()) as MessageDto[];
+    expect(siblings.length).toBe(2);
+  });
+
   it("(d) a submit and a regenerate under ONE key land on different runs", async () => {
     const f = await createHandlerFixture();
     const first = await submit(f.handler, "shared-key");

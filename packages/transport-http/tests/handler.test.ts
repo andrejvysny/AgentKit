@@ -183,6 +183,52 @@ describe("submitMessage", () => {
     expect(one.runId.startsWith("task_ik_")).toBe(true);
   });
 
+  it("(g2) 422s a key replayed with a different body, and writes nothing", async () => {
+    const { handler, store } = await createHandlerFixture();
+    const send = (body: unknown): Promise<Response> =>
+      handler(
+        request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+          body,
+          headers: { "idempotency-key": "key-reused" },
+        }),
+      );
+
+    expect((await send({ content: "first question" })).status).toBe(201);
+
+    // The failure this exists to stop: a 200 carrying the FIRST turn's ids,
+    // with the second message discarded in silence.
+    await expectProblem(
+      await send({ content: "an entirely different question" }),
+      422,
+      "idempotency_key_mismatch",
+    );
+    // Model and provider count as part of the request too.
+    await expectProblem(
+      await send({ content: "first question", model: "m-other" }),
+      422,
+      "idempotency_key_mismatch",
+    );
+    // …and so does metadata.
+    await expectProblem(
+      await send({ content: "first question", metadata: { source: "cli" } }),
+      422,
+      "idempotency_key_mismatch",
+    );
+
+    // A genuine retry — same body, keys in a different order — still replays.
+    const replay = await handler(
+      request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+        body: { metadata: {}, content: "first question" },
+        headers: { "idempotency-key": "key-reused" },
+      }),
+    );
+    expect(replay.status).toBe(200);
+
+    // One user message, from the one request that was accepted.
+    const stored = await store.conversations.listMessages(TEST_CHAT_ID);
+    expect(stored.filter((m) => m.role === "user").length).toBe(1);
+  });
+
   it("accepts a content-parts body, stores it, and projects it back unchanged", async () => {
     const { handler, store } = await createHandlerFixture();
     const content: AiContentPart[] = [
@@ -251,6 +297,21 @@ describe("submitMessage", () => {
       400,
       "invalid_request",
     );
+    // A `url` source reaches the provider verbatim, and the provider client
+    // runs in the HOST's network position — so the scheme is the contract's
+    // (`IMAGE_URL_PATTERN`), enforced here rather than restated.
+    for (const url of [
+      "file:///etc/passwd",
+      "javascript:alert(1)",
+      "data:image/png;base64,aGk=",
+    ]) {
+      await expectProblem(
+        await send([{ type: "image", source: { kind: "url", url } }]),
+        400,
+        "invalid_request",
+      );
+    }
+
     // The empty body is the empty STRING; `[]` is a caller bug.
     await expectProblem(await send([]), 400, "invalid_request");
 
@@ -334,6 +395,61 @@ describe("runs", () => {
       404,
       "not_found",
     );
+  });
+
+  it("(k2) pages the stream's resume scan at the configured readBatchSize", async () => {
+    const { handler, store } = await createHandlerFixture({
+      streaming: { readBatchSize: 3, pollIntervalMs: 2 },
+    });
+    const runId = "task-batch";
+    await store.tasks.createTask({
+      taskId: runId,
+      kind: "chat.turn",
+      scopeId: TEST_CHAT_ID,
+      payload: { chatId: TEST_CHAT_ID },
+    });
+    const lease = await store.tasks.acquireLease({
+      taskId: runId,
+      attemptId: "att-1",
+      ownerId: "owner",
+      ttlMs: 60_000,
+    });
+    await store.tasks.appendEvents(
+      runId,
+      Array.from({ length: 12 }, (_, seq) => ({
+        type: seq === 11 ? "run.completed" : "run.message.delta",
+        runId,
+        seq,
+        eventId: `evt-${seq}`,
+        timestamp: new Date(seq * 1000).toISOString(),
+        contractVersion: CONTRACT_VERSION,
+        data: {},
+      })) as never,
+      { leaseToken: lease.leaseToken },
+    );
+    await store.tasks.transitionTask(runId, ["queued"], "running");
+    await store.tasks.transitionTask(runId, ["running"], "completed");
+
+    const limits: (number | undefined)[] = [];
+    const real = store.tasks.listEvents.bind(store.tasks);
+    store.tasks.listEvents = async (taskId, opts) => {
+      limits.push(opts?.limit);
+      return real(taskId, opts);
+    };
+
+    const res = await handler(
+      request("GET", `/v1/runs/${runId}/stream`, {
+        // Unknown id: the scan walks the whole log before giving up, which is
+        // the read the batch size is supposed to bound.
+        headers: { "last-event-id": "evt-from-another-run" },
+      }),
+    );
+    await res.text();
+
+    // Every read — the resume scan's as well as the pump's — is the size the
+    // deployment configured. Before, the scan silently used the default.
+    expect(limits.length).toBeGreaterThan(1);
+    expect(limits.every((limit) => limit === 3)).toBe(true);
   });
 });
 
@@ -574,15 +690,100 @@ describe("maxBodyBytes", () => {
     ).toBe(true);
   });
 
-  it("(r3) is off by default: no cap, no 413", async () => {
+  it("(r3) defaults to 1 MiB rather than to no cap at all", async () => {
     const { handler } = await createHandlerFixture();
+    // Everything in the contract except an inline image fits well inside it…
     const res = await handler(
       request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
         body: big,
-        headers: { "idempotency-key": "key-uncapped" },
+        headers: { "idempotency-key": "key-default-small" },
       }),
     );
     expect(res.status).toBe(201);
+
+    // …and a deployment that forgot the option no longer lets an anonymous
+    // request make this process buffer a body of any size.
+    await expectProblem(
+      await handler(
+        request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+          body: { content: "x".repeat(2 * 1024 * 1024) },
+          headers: { "idempotency-key": "key-default-huge" },
+        }),
+      ),
+      413,
+      "body_too_large",
+    );
+
+    // A host that accepts inline images raises it, and the raise is honoured.
+    const raised = await createHandlerFixture({
+      maxBodyBytes: 8 * 1024 * 1024,
+    });
+    expect(
+      (
+        await raised.handler(
+          request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+            body: { content: "x".repeat(2 * 1024 * 1024) },
+            headers: { "idempotency-key": "key-raised" },
+          }),
+        )
+      ).status,
+    ).toBe(201);
+  });
+});
+
+describe("request bounds", () => {
+  it("(r4) 400s a body nested past the depth anything downstream can walk", async () => {
+    const { handler } = await createHandlerFixture();
+    const nest = (depth: number): unknown => {
+      let value: unknown = "bottom";
+      for (let i = 0; i < depth; i++) value = [value];
+      return value;
+    };
+
+    // A few hundred bytes of `[` is a stack overflow somewhere in the chain
+    // that walks this body — validation, `structuredClone`, the store's own
+    // serialization — and which frame it lands in depends on the runtime.
+    await expectProblem(
+      await handler(
+        request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+          body: { content: "Hi", metadata: { deep: nest(500) } },
+          headers: { "idempotency-key": "key-deep" },
+        }),
+      ),
+      400,
+      "invalid_body",
+    );
+    // A metadata bag of ordinary shape is untouched.
+    expect(
+      (
+        await handler(
+          request("POST", `/v1/chats/${TEST_CHAT_ID}/messages`, {
+            body: { content: "Hi", metadata: { deep: nest(8) } },
+            headers: { "idempotency-key": "key-shallow" },
+          }),
+        )
+      ).status,
+    ).toBe(201);
+  });
+
+  it("(r5) 400s a `limit` above the page ceiling instead of clamping it", async () => {
+    const { handler } = await createHandlerFixture();
+    for (const path of [
+      "/v1/chats?limit=100000",
+      `/v1/chats/${TEST_CHAT_ID}/messages?limit=1001`,
+      `/v1/chats/${TEST_CHAT_ID}/tool-events?limit=2000`,
+    ]) {
+      await expectProblem(
+        await handler(request("GET", path)),
+        400,
+        "invalid_request",
+      );
+    }
+    // Refused, not clamped: a client that asked for 100000 rows and silently
+    // got 1000 pages forever off a cursor it thinks it has already passed.
+    expect((await handler(request("GET", "/v1/chats?limit=1000"))).status).toBe(
+      200,
+    );
   });
 });
 

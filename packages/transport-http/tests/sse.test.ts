@@ -19,7 +19,7 @@ import {
   resolveStreamOptions,
   type RestStreamOptions,
 } from "../src/deps.js";
-import { createRunEventStream, resolveStartSeq } from "../src/sse.js";
+import { createRunEventStream, frameFor, resolveStartSeq } from "../src/sse.js";
 
 const TASK_ID = "task-stream";
 const CHAT_ID = "chat-stream";
@@ -298,6 +298,52 @@ describe("createRunEventStream", () => {
       "evt-3",
       "evt-4",
     ]);
+  });
+});
+
+describe("frameFor", () => {
+  it("strips CR and LF from the two fields it writes raw", () => {
+    // `data` is JSON, which escapes both; `id` and `event` are interpolated
+    // verbatim, so a newline in either ends the field, then the frame, and
+    // everything after it is read by the client as further SSE fields. Neither
+    // string is this adapter's — both come back from the store.
+    const frame = frameFor({
+      eventId: "evt-1\nevent: run.completed\ndata: {}\n",
+      type: "run.message.delta\rx",
+      seq: 1,
+      runId: TASK_ID,
+      timestamp: new Date(0).toISOString(),
+      contractVersion: CONTRACT_VERSION,
+      data: { delta: "hi" },
+    } as unknown as TaskEventEnvelope);
+
+    expect(frame.split("\n").filter((l) => l.startsWith("id: "))).toEqual([
+      "id: evt-1event: run.completeddata: {}",
+    ]);
+    expect(frame.split("\n").filter((l) => l.startsWith("event: "))).toEqual([
+      "event: run.message.deltax",
+    ]);
+    // One frame, not two: the blank line is still only at the end.
+    expect(parseFrames(frame)).toHaveLength(1);
+  });
+});
+
+describe("resolveStartSeq", () => {
+  it("pages the resume scan at the size the caller names", async () => {
+    const store = await seed(completedRun());
+    const limits: (number | undefined)[] = [];
+    const real = store.tasks.listEvents.bind(store.tasks);
+    store.tasks.listEvents = async (taskId, opts) => {
+      limits.push(opts?.limit);
+      return real(taskId, opts);
+    };
+
+    // The scan walks the log in pages, and the page size is the STREAM's — a
+    // deployment that tuned `readBatchSize` down tuned this read too. Passing
+    // nothing left the scan on the default while the stream used the setting.
+    await resolveStartSeq(store.tasks, TASK_ID, "evt-4", 2);
+    expect(limits.every((limit) => limit === 2)).toBe(true);
+    expect(limits.length).toBeGreaterThan(1);
   });
 });
 
