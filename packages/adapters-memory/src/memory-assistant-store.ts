@@ -1533,9 +1533,10 @@ export class MemoryOutboxStore implements OutboxStore {
 /**
  * Map-backed, complete {@link AssistantStore}.
  *
- * NO ROLLBACK: `transaction(fn)` simply runs `fn(this)` — every write inside
- * it lands on the live Maps immediately, and a throw after some writes leaves
- * those writes in place. That is fine for tests and single-process embedding
+ * NO ROLLBACK: `transaction(fn)` runs `fn(this)`, queued behind any
+ * transaction already in flight — every write inside it lands on the live Maps
+ * immediately, and a throw after some writes leaves those writes in place.
+ * That is fine for tests and single-process embedding
  * where "transaction" mostly means "these calls are logically one unit", but
  * it is NOT what a host relying on atomicity for crash-consistency should
  * reach for — see {@link SqliteAssistantStore} for a store with a real
@@ -1560,7 +1561,33 @@ export class MemoryAssistantStore implements AssistantStore {
     this.outbox = new MemoryOutboxStore(clock, options.outboxClaimVisibilityMs);
   }
 
+  /** The FIFO {@link transaction} queues on — one unit of work at a time. */
+  private txGate: Promise<void> = Promise.resolve();
+
+  /**
+   * Run `fn` as one logical unit, after every transaction already queued.
+   *
+   * STILL NO ROLLBACK — see the class doc; a throw leaves whatever `fn` wrote
+   * in the Maps. What the queue adds is the OTHER half of the port's promise,
+   * the half a Map-backed store can actually keep: two callers do not
+   * interleave. Without it, a second caller's writes landed in the middle of
+   * the first caller's unit, so a host reading its own writes back inside a
+   * callback could see a stranger's — and no test could tell that apart from
+   * the sqlite adapter's behaviour, which is what this store exists to
+   * approximate.
+   *
+   * `fn` is handed `this`, so a NESTED `transaction()` inside the callback
+   * would wait on a queue only that callback can drain. Compose inside one
+   * transaction instead — the same rule the sqlite adapter states.
+   */
   async transaction<T>(fn: (tx: AssistantStore) => Promise<T>): Promise<T> {
-    return fn(this);
+    const run = this.txGate.then(() => fn(this));
+    // The queue carries the SETTLED signal only: the next caller waits for this
+    // one to finish, and must not inherit its rejection.
+    this.txGate = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 }

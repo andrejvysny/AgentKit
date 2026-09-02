@@ -1339,6 +1339,51 @@ export function describeAssistantStoreConformance(
       }
     });
 
+    it("transaction() callers do not interleave", async () => {
+      const { store, close } = await create();
+      try {
+        // Whatever a store can or cannot roll back, `transaction` means "these
+        // calls are one unit" — and a unit another caller can write into the
+        // middle of is not one. Two callers, forced to overlap: the first parks
+        // on a promise the test resolves only once the second has been given
+        // every chance to run.
+        const order: string[] = [];
+        let release = (): void => undefined;
+        const parked = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let started = (): void => undefined;
+        const running = new Promise<void>((resolve) => {
+          started = resolve;
+        });
+
+        const first = store.transaction(async (tx) => {
+          await tx.conversations.createChat({ id: uniqueId("chat-first") });
+          order.push("first");
+          started();
+          await parked;
+        });
+        await running;
+        const second = store.transaction(async (tx) => {
+          order.push("second");
+          await tx.conversations.listChats();
+        });
+        // Macrotasks, not microtasks: a caller that JOINS runs to completion
+        // in here, and that is the state being ruled out.
+        for (let i = 0; i < 5; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        expect(order).toEqual(["first"]);
+
+        release();
+        await first;
+        await second;
+        expect(order).toEqual(["first", "second"]);
+      } finally {
+        close?.();
+      }
+    });
+
     it("transaction() rolls back every write when fn throws", async () => {
       const { store, capabilities, close } = await create();
       try {
