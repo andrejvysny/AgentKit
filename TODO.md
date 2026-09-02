@@ -2,8 +2,8 @@
 
 ## Phase 0 — stop the bleeding
 - [x] 0.1 write-policy body `chatId` override (B1) — inline
-- [ ] 0.2 sqlite/memory transaction owner gate (D1, D2)
-- [ ] 0.3 transaction concurrency tests
+- [x] 0.2 sqlite/memory transaction owner gate (D1, D2)
+- [x] 0.3 transaction concurrency tests
 
 ## Phase 1 — durability + fencing
 - [ ] 1.1 fenced terminal writes (C3/D4, D9) — ports + adapters + runner + TurnRunner reorder + conformance
