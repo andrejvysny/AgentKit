@@ -64,6 +64,13 @@ import {
   EMULATED_TOOL_CALL_MESSAGE,
   looksLikeEmulatedToolCall,
 } from "./emulated-tool-call.js";
+import {
+  isHookTimeout,
+  resolveHookTimeouts,
+  withHookDeadline,
+  type HookTimeouts,
+  type ResolvedHookTimeouts,
+} from "./hook-deadline.js";
 import { reconcileOrphanToolCalls } from "./history-reconcile.js";
 import { orderMessagesForProvider } from "./message-order.js";
 import {
@@ -243,6 +250,37 @@ export interface TurnRunnerDeps {
   attachmentBudgets?: AttachmentBudgets;
   /** Overrides the limits derived from settings + provider capabilities. */
   limits?: AiToolLimits;
+  /**
+   * Deadlines for the host's own hooks. Absent, the defaults in
+   * {@link DEFAULT_HOOK_TIMEOUTS_MS} apply; a non-positive value on any field
+   * turns that deadline off. See {@link HookTimeouts}.
+   */
+  hookTimeoutsMs?: HookTimeouts;
+  /**
+   * Let a chat run two turns at once. Default `false`, and the default is the
+   * safe one.
+   *
+   * With it off, {@link TurnRunner.submitMessage} and
+   * {@link TurnRunner.regenerate} create their task with
+   * `exclusiveScope: true`, so a submit into a chat that already has an
+   * unfinished turn is refused with `ChatBusyError` (`chat_busy`, HTTP 409) by
+   * the STORE, inside the same transaction that would have written it.
+   *
+   * WHY IT IS THE DEFAULT. Nothing about a second concurrent turn works: its
+   * user message takes the active-leaf slot underneath the live run's internal
+   * assistant record, so the live run's next chain append lands `active: false`
+   * (see `AppendMessageInput.activate`) and its tool results end up off the path
+   * every later turn replays — the run answers into a conversation nobody is
+   * reading. "The user typed while it was generating" is an everyday event, and
+   * a refusal a UI can render ("still answering") is a far better outcome than
+   * a conversation that quietly loses half a turn.
+   *
+   * Turning it ON is for a host that queues turns deliberately and has thought
+   * about the interleaving — the tasks still serialize per scope in the queue,
+   * so they run one at a time; what changes is that the SECOND one is accepted
+   * while the first is live, and its user message is written straight away.
+   */
+  allowConcurrentSubmit?: boolean;
   clock: Clock;
   ids: IdGenerator;
   logger?: Logger;
@@ -454,7 +492,11 @@ export class TurnRunner implements TaskWorker {
    */
   private readonly projector: RunProjector;
 
+  /** Resolved once: {@link TurnRunnerDeps.hookTimeoutsMs} over the defaults. */
+  private readonly hookTimeouts: ResolvedHookTimeouts;
+
   constructor(private readonly deps: TurnRunnerDeps) {
+    this.hookTimeouts = resolveHookTimeouts(deps.hookTimeoutsMs);
     this.projector = createRunProjector({
       store: deps.store,
       clock: deps.clock,
@@ -529,6 +571,10 @@ export class TurnRunner implements TaskWorker {
           // once, or they would interleave into the same message history.
           scopeId: input.chatId,
           payload: payload as unknown as Record<string, unknown>,
+          // And, by default, must not be ACCEPTED at once either — the refusal
+          // is the store's, inside this transaction, so two racing submits
+          // cannot both get past it. See `allowConcurrentSubmit`.
+          exclusiveScope: this.deps.allowConcurrentSubmit !== true,
           ...(input.priority === undefined ? {} : { priority: input.priority }),
         });
         await tx.conversations.appendMessage({
@@ -703,6 +749,10 @@ export class TurnRunner implements TaskWorker {
           kind,
           scopeId: input.chatId,
           payload: payload as unknown as Record<string, unknown>,
+          // Same exclusivity as a submit: re-rolling an answer while the chat
+          // is still producing one is the same interleaving, reached a
+          // different way. See `allowConcurrentSubmit`.
+          exclusiveScope: this.deps.allowConcurrentSubmit !== true,
           ...(input.priority === undefined ? {} : { priority: input.priority }),
         });
         await tx.conversations.appendMessage({
@@ -830,8 +880,10 @@ export class TurnRunner implements TaskWorker {
    *
    * Everything it can fail on is bookkept the same way: the original error
    * reaches the caller (the queue classifies it), and the task is landed
-   * `failed` on the way out so it is never left `running` with nobody executing
-   * it.
+   * `failed` (or `cancelled`) on the way out so it is never left `running` with
+   * nobody executing it — see {@link TurnRunner.landFailure} for the three
+   * writes that bookkeeping is, and why an unexpected throw must produce all of
+   * them and not just the task row.
    */
   async executeTask(ctx: TaskExecutionContext): Promise<void> {
     const { task } = ctx;
@@ -859,7 +911,10 @@ export class TurnRunner implements TaskWorker {
         )} in its payload; only TurnRunner.submitMessage may create tasks of this kind.`,
         { taskId: task.taskId, kind: task.kind, missing },
       );
-      await this.failQuietly(ctx, error.message);
+      // No placeholder is named: with `assistantMessageId` missing there is
+      // nothing to finalize, and with `chatId` missing we could not prove a
+      // named one belongs to this turn.
+      await this.landFailure(ctx, error, error.message);
       throw error;
     }
 
@@ -868,8 +923,103 @@ export class TurnRunner implements TaskWorker {
       await this.runTurn(ctx, chatId, request, assistantMessageId);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.failQuietly(ctx, message);
+      await this.landFailure(ctx, err, message, assistantMessageId);
       throw err;
+    }
+  }
+
+  /**
+   * Bookkeep an unexpected throw out of a turn: the durable log, the task row,
+   * the attempt, and the placeholder — in that order, all best-effort.
+   *
+   * THE THREE WRITES ARE NOT INTERCHANGEABLE, and before this existed only the
+   * middle one happened. A throw from anywhere in `runTurn` — a lease lost, an
+   * attachment resolver, the single-shot verifier, `providerFactory`, staging —
+   * landed the TASK `failed` and left everything a client can actually see
+   * untouched: no terminal event on the run's log, so an SSE consumer watched
+   * the stream stop with no explanation; and `placeholder: true` on the
+   * assistant record forever, so the UI kept a spinner on a message that will
+   * never finish. Worse, a worker that lands its own task opts out of the
+   * runner's retries, so nothing was ever coming back to repair it.
+   *
+   * ORDER, and why:
+   *
+   *  1. **The terminal event first**, because it is the only one of the three a
+   *     live consumer is watching, and it is the write most likely to be
+   *     refused (it is fenced, like every other write in an attempt) — sending
+   *     it first means a fenced-out attempt does not spend its one chance on
+   *     bookkeeping nobody reads.
+   *  2. **The fenced task transition**, which is where ownership is actually
+   *     proven. `LeaseLostError` here stops the rest: the owner that took this
+   *     task over is the one whose verdict counts.
+   *  3. **The placeholder**, last and only when the transition landed — the
+   *     same ordering the successful terminal block uses, for the same reason
+   *     (`ConversationStore` knows nothing about leases, so the only way to
+   *     keep a zombie attempt off the live answer is to make it prove ownership
+   *     on a write that CAN check, first).
+   *
+   * `cancelled` rather than `failed` when the run was aborted: a user pressing
+   * stop is not a failure, and a task landed `failed` for it shows up as an
+   * error in every UI and every retry decision downstream.
+   */
+  private async landFailure(
+    ctx: TaskExecutionContext,
+    err: unknown,
+    message: string,
+    assistantMessageId?: string,
+  ): Promise<void> {
+    const cancelled = ctx.signal.aborted;
+    // `usage_denied` already wrote its own `run.failed`, with the specific code
+    // a consumer acts on; a second terminal event here would only overwrite a
+    // precise diagnosis with a generic one.
+    if (!(err instanceof UsageDeniedError)) {
+      await this.emitTerminalQuietly(ctx, err, message, cancelled);
+    }
+    await this.failQuietly(ctx, message, assistantMessageId);
+  }
+
+  /**
+   * Put this run's terminal event on the durable log, best-effort.
+   *
+   * Swallows everything: the caller is already unwinding on a different error,
+   * and replacing that diagnosis with "and then the log write failed" helps
+   * nobody. The `errorCode` is the host error's own `code` when it has one —
+   * `no_model`, `lease_lost`, `invalid_task_payload` — because that is what a
+   * client switches on; anything else is `internal_error` rather than a message
+   * dressed up as a code.
+   */
+  private async emitTerminalQuietly(
+    ctx: TaskExecutionContext,
+    err: unknown,
+    message: string,
+    cancelled: boolean,
+  ): Promise<void> {
+    const draft: AiRunEventDraft = cancelled
+      ? {
+          type: "run.cancelled",
+          runId: ctx.task.taskId,
+          timestamp: this.deps.clock.nowIso(),
+          data: { reason: message },
+        }
+      : {
+          type: "run.failed",
+          runId: ctx.task.taskId,
+          timestamp: this.deps.clock.nowIso(),
+          data: {
+            errorMessage: message,
+            errorCode:
+              err instanceof AgentKitHostError ? err.code : "internal_error",
+          },
+        };
+    try {
+      await this.appendHostEvent(ctx, draft);
+    } catch (appendErr) {
+      this.deps.logger?.warn("could not record run terminal after error", {
+        taskId: ctx.task.taskId,
+        attemptId: ctx.attemptId,
+        error:
+          appendErr instanceof Error ? appendErr.message : String(appendErr),
+      });
     }
   }
 
@@ -902,9 +1052,7 @@ export class TurnRunner implements TaskWorker {
           : { modelContextTokens: capabilities.maxContextTokens }),
       });
 
-    await this.deps.context?.refresh?.(chatId, ctx.signal);
-    const bindings =
-      (await this.deps.context?.listBindings(chatId, ctx.signal)) ?? [];
+    const bindings = await this.resolveBindings(ctx, chatId);
     const hasPrimaryBinding = bindings.some(
       (binding) => binding.role === "primary" && binding.status === "active",
     );
@@ -918,33 +1066,56 @@ export class TurnRunner implements TaskWorker {
       toolCalling === "off"
         ? false
         : toolCalling === "on" || capabilities?.toolCalling !== false;
-    const registry = stageTools
-      ? (
-          await stageRegistry({
-            contributors: this.deps.contributors,
-            ctx: {
-              chatId,
-              runId: task.taskId,
-              scopeId: task.scopeId,
-              bindings,
-              limits,
-              signal: ctx.signal,
-              ...(this.deps.logger === undefined
-                ? {}
-                : { logger: this.deps.logger }),
-            },
-            hasPrimaryBinding,
-            ...(this.deps.toolGuards === undefined
+    const staged = stageTools
+      ? await stageRegistry({
+          contributors: this.deps.contributors,
+          ctx: {
+            chatId,
+            runId: task.taskId,
+            scopeId: task.scopeId,
+            bindings,
+            limits,
+            signal: ctx.signal,
+            ...(this.deps.logger === undefined
               ? {}
-              : { guards: this.deps.toolGuards }),
-          })
-        ).registry
-      : new AiToolRegistry();
+              : { logger: this.deps.logger }),
+          },
+          hasPrimaryBinding,
+          contributeTimeoutMs: this.hookTimeouts.contribute,
+          ...(this.deps.toolGuards === undefined
+            ? {}
+            : { guards: this.deps.toolGuards }),
+        })
+      : {
+          registry: new AiToolRegistry(),
+          namespaces: new Map<string, string>(),
+          failed: [],
+        };
+    const registry = staged.registry;
+    // A contributor that could not answer costs its tools and nothing else
+    // (see `stageRegistry`), and `stageRegistry` has already logged why. A
+    // TIMED-OUT one additionally goes on the durable log: `hook_timeout` is the
+    // vocabulary for "the turn went on without what a hook would have
+    // contributed", and a shrunken tool set looks, to the user reading the
+    // conversation, exactly like a model that stopped bothering to use its
+    // tools. A contributor that THREW stays a log line: the thrown text is host
+    // code's, and this warning is read by clients.
+    for (const contributor of staged.failed) {
+      if (!contributor.timedOut) continue;
+      await this.emitWarning(
+        ctx,
+        "hook_timeout",
+        `Tools from "${contributor.namespace}" are not available for this turn: it did not finish contributing in time.`,
+      );
+    }
     const registryHadTools = registry.size() > 0;
+    // The names actually staged — what the emulated-call detector checks a
+    // printed call against, so a model quoting a `{"name", "parameters"}`
+    // example for something that is not a tool here is not reported as one.
+    const stagedToolNames = new Set(staged.namespaces.keys());
 
     const client = this.deps.providerFactory(await this.withSecret(provider));
-    const systemPrompt =
-      (await this.deps.context?.systemPrompt?.(chatId, ctx.signal)) ?? null;
+    const systemPrompt = await this.resolveSystemPrompt(ctx, chatId);
     const assembled = await this.assembleMessages(
       chatId,
       assistantMessageId,
@@ -960,6 +1131,19 @@ export class TurnRunner implements TaskWorker {
       assistantMessageId,
       providerId: provider.id,
     });
+    // RESUME THIS RUN'S OWN CHAIN. On attempt 1 the deepest record carrying
+    // this run id IS the placeholder the projector already seeded, so nothing
+    // changes. On attempt 2 of a crashed turn it is whatever attempt 1 wrote
+    // last, and chaining there is what keeps attempt 2's records on the active
+    // path — the placeholder by then has an active child, and a chain append
+    // under a parent that already has one lands `active: false`, taking every
+    // record after it off the path each later turn replays. See
+    // `ConversationStore.lastMessageOfRun`.
+    const resumed = await store.conversations.lastMessageOfRun(
+      chatId,
+      task.taskId,
+    );
+    if (resumed !== null) state.lastMessageId = resumed.id;
     const basePass = {
       task,
       chatId,
@@ -982,8 +1166,20 @@ export class TurnRunner implements TaskWorker {
         : { maxToolIterations: this.deps.maxToolIterations }),
     });
     let terminal: PassTerminal = first.terminal;
+    // How many provider passes this run has made. The pass just run is 1; every
+    // recovery and correction pass announces itself as the next number, so a
+    // log reader can tell which terminal event belongs to which attempt at the
+    // answer. See `emitPassBoundary`.
+    let passesRun = 1;
 
     if (shouldRetryChatOnly({ terminal, registryHadTools })) {
+      passesRun += 1;
+      await this.emitPassBoundary(
+        ctx,
+        passesRun,
+        "chat_only",
+        "The provider rejected the request with tools attached; re-asking without them.",
+      );
       // Start the answer over: the failed pass may have streamed half a
       // sentence, and appending a second attempt to it would read as one
       // rambling reply.
@@ -1009,6 +1205,13 @@ export class TurnRunner implements TaskWorker {
         hadContent: hasContent(state),
       })
     ) {
+      passesRun += 1;
+      await this.emitPassBoundary(
+        ctx,
+        passesRun,
+        "empty_response",
+        "The model completed the turn without an answer; asking the original question once more.",
+      );
       this.resetPass(state);
       const retry = await this.runPass({
         ...basePass,
@@ -1035,7 +1238,7 @@ export class TurnRunner implements TaskWorker {
     if (
       registryHadTools &&
       toolCallCount === 0 &&
-      looksLikeEmulatedToolCall(finalContent)
+      looksLikeEmulatedToolCall(finalContent, stagedToolNames)
     ) {
       await this.emitWarning(
         ctx,
@@ -1063,18 +1266,27 @@ export class TurnRunner implements TaskWorker {
     // one `verify()`, a banner if it did not pass, no events, no second
     // provider call — a `verify()` that throws still fails the turn, because
     // that is what it did before and a host relying on it has not asked for
-    // anything else. With `deps.correction` the harness takes over and the
-    // rules change deliberately; see `runCorrectionHarness`.
+    // anything else — it is now BOUNDED by `hookTimeoutsMs.verify`, so a
+    // verifier that hangs fails the turn instead of holding the lease forever,
+    // but a verifier that answers behaves exactly as before. With
+    // `deps.correction` the harness takes over and the rules change
+    // deliberately; see `runCorrectionHarness`.
     if (this.deps.verification && toolCallCount > 0) {
       if (this.deps.correction === undefined) {
-        const report = await this.deps.verification.verify({
-          runId: task.taskId,
-          chatId,
-          scopeId: task.scopeId,
-          attemptId: ctx.attemptId,
-          toolCallCount,
-          finalContent,
-          signal: ctx.signal,
+        const verification = this.deps.verification;
+        const report = await withHookDeadline({
+          hook: "verify",
+          timeoutMs: this.hookTimeouts.verify,
+          run: () =>
+            verification.verify({
+              runId: task.taskId,
+              chatId,
+              scopeId: task.scopeId,
+              attemptId: ctx.attemptId,
+              toolCallCount,
+              finalContent,
+              signal: ctx.signal,
+            }),
         });
         if (report && report.status !== "pass") {
           state.lastMessageId = (
@@ -1094,9 +1306,20 @@ export class TurnRunner implements TaskWorker {
           basePass,
           registry,
           systemPrompt,
+          // The request this run is answering, so a correction pass knows WHAT
+          // was asked and not only that its answer fell short. Read off the
+          // assembled history rather than the payload's `userMessageId`,
+          // because that is the message the provider actually saw — a
+          // regenerate has no user message of its own, and a history window
+          // that moved past the question would leave nothing to replay.
+          userRequest:
+            this.deps.correction.includeUserRequest === false
+              ? null
+              : lastUserRequestOf(assembled),
           verification: this.deps.verification,
           maxPasses: resolveMaxCorrectionPasses(this.deps.correction),
           terminal,
+          passesRun,
         });
       }
     }
@@ -1179,9 +1402,13 @@ export class TurnRunner implements TaskWorker {
     basePass: Omit<PassInput, "messages" | "registry" | "maxToolIterations">;
     registry: AiToolRegistry;
     systemPrompt: string | null;
+    /** The turn's originating request, or null — see `CorrectionConfig.includeUserRequest`. */
+    userRequest: string | null;
     verification: VerificationHook;
     maxPasses: number;
     terminal: PassTerminal;
+    /** Provider passes the run has already made; the boundary warning names the next. */
+    passesRun: number;
   }): Promise<PassTerminal> {
     const { basePass, registry, systemPrompt, verification, maxPasses } = input;
     const { ctx, state, chatId, task, assistantMessageId } = basePass;
@@ -1228,9 +1455,20 @@ export class TurnRunner implements TaskWorker {
 
       previousDeficiencies = report.deficiencies;
       pass += 1;
+      // The boundary goes on the log BEFORE the pass's own events, and before
+      // the placeholder is blanked below: a consumer that has been streaming
+      // the superseded answer has to be told to drop it, and it learns that
+      // from this event. See `emitPassBoundary`.
+      await this.emitPassBoundary(
+        ctx,
+        input.passesRun + pass,
+        "correction",
+        `Verification found ${report.deficiencies.length} unresolved item(s); correcting them (pass ${pass} of ${maxPasses}).`,
+      );
       const writeBack = buildDeficiencyWriteBack(report.deficiencies);
       const messages = buildCorrectionMessages({
         systemPrompt,
+        userRequest: input.userRequest,
         previousContent: state.content,
         writeBack,
       });
@@ -1301,20 +1539,26 @@ export class TurnRunner implements TaskWorker {
   }
 
   /**
-   * `verify()`, with a throw folded into the `null` answer.
+   * `verify()`, under its deadline, with a throw folded into the `null` answer.
    *
    * Only the harness calls this. The single-shot path deliberately lets a throw
    * out (a host wired that check before this existed and gets the failure it
    * always got); inside the harness a broken verifier must not take a run down
    * that already produced an answer, so the fault is logged, reported as
-   * `"unavailable"` on the durable log, and the harness stops.
+   * `"unavailable"` on the durable log, and the harness stops. A verifier that
+   * runs past its deadline is the same case — "could not answer" — and takes
+   * the same fail-closed path, which is why the timeout needs no branch here.
    */
   private async verifyQuietly(
     verification: VerificationHook,
     input: VerificationInput,
   ): Promise<DeficiencyReport | null> {
     try {
-      return await verification.verify(input);
+      return await withHookDeadline({
+        hook: "verify",
+        timeoutMs: this.hookTimeouts.verify,
+        run: () => verification.verify(input),
+      });
     } catch (err) {
       this.deps.logger?.warn("verification hook failed", {
         taskId: input.runId,
@@ -1472,6 +1716,82 @@ export class TurnRunner implements TaskWorker {
   }
 
   /**
+   * The chat's context bindings, under the context hook's deadline.
+   *
+   * A `ContextProvider` is host code reading host state — a document index, a
+   * workspace, an editor — and before it was bounded, one blocked on a socket
+   * parked the turn indefinitely with the lease renewing underneath it, which
+   * also made the chat undeletable. The DEGRADED answer is no bindings, which
+   * is a state the rest of this class already handles: it is what a host with
+   * no `ContextProvider` wired gets, and `hasPrimaryBinding` false prunes the
+   * tools that need a target. The warning is what stops that reading as "the
+   * user had nothing open".
+   *
+   * `refresh` and `listBindings` share ONE deadline rather than getting one
+   * each, because they are one logical read: refreshing and then listing is how
+   * a provider is asked "what is open right now", and giving the pair 2× the
+   * budget would make the configured number mean something other than what it
+   * says.
+   */
+  private async resolveBindings(
+    ctx: TaskExecutionContext,
+    chatId: string,
+  ): Promise<AiContextBinding[]> {
+    const context = this.deps.context;
+    if (context === undefined) return [];
+    try {
+      return await withHookDeadline({
+        hook: "context.listBindings",
+        timeoutMs: this.hookTimeouts.context,
+        run: async () => {
+          await context.refresh?.(chatId, ctx.signal);
+          return (await context.listBindings(chatId, ctx.signal)) ?? [];
+        },
+      });
+    } catch (err) {
+      if (!isHookTimeout(err)) throw err;
+      await this.emitWarning(
+        ctx,
+        "hook_timeout",
+        "The context provider did not answer in time; this turn ran with no context bindings.",
+      );
+      return [];
+    }
+  }
+
+  /**
+   * The chat's system prompt, under the same deadline as the bindings.
+   *
+   * Degrades to NO system prompt, which is the same shape a host that never
+   * wired `systemPrompt` produces — a turn without instructions is a worse turn
+   * but still a turn, where a turn that never returns is neither.
+   */
+  private async resolveSystemPrompt(
+    ctx: TaskExecutionContext,
+    chatId: string,
+  ): Promise<string | null> {
+    const systemPrompt = this.deps.context?.systemPrompt;
+    if (systemPrompt === undefined) return null;
+    const context = this.deps.context as ContextProvider;
+    try {
+      return await withHookDeadline({
+        hook: "context.systemPrompt",
+        timeoutMs: this.hookTimeouts.context,
+        run: async () =>
+          (await systemPrompt.call(context, chatId, ctx.signal)) ?? null,
+      });
+    } catch (err) {
+      if (!isHookTimeout(err)) throw err;
+      await this.emitWarning(
+        ctx,
+        "hook_timeout",
+        "The context provider did not produce a system prompt in time; this turn ran without one.",
+      );
+      return null;
+    }
+  }
+
+  /**
    * Replace every `ref` image source in this pass's history with the bytes
    * behind it — in memory, for this pass only.
    *
@@ -1537,7 +1857,16 @@ export class TurnRunner implements TaskWorker {
           // The chat is passed so a multi-tenant host can SCOPE the lookup:
           // refs come from the client, so "may this chat see it" is the actual
           // question — see {@link AttachmentResolver.resolve}.
-          cache.set(ref, await resolver.resolve(ref, { chatId: input.chatId }));
+          //
+          // UNDER A DEADLINE, and a timeout reads as "no bytes": a resolver
+          // that has not answered is not a resolver that said yes, and the
+          // drop path below is exactly the degradation this port already
+          // documents. The `null` is cached with it, so a history mentioning
+          // the same ref five times waits once rather than five times.
+          cache.set(
+            ref,
+            await this.resolveAttachmentQuietly(resolver, ref, input.chatId),
+          );
         }
         const attachment = cache.get(ref) ?? null;
         if (attachment === null) {
@@ -1577,6 +1906,36 @@ export class TurnRunner implements TaskWorker {
       resolved.push({ ...message, content: parts.length === 0 ? "" : parts });
     }
     return resolved;
+  }
+
+  /**
+   * One `resolve()` under the attachment deadline; a timeout answers `null`.
+   *
+   * Only the DEADLINE is folded — a resolver that THROWS still throws, exactly
+   * as before, because a host that raised an authorization error from this port
+   * meant the turn to stop. What is folded is the one outcome that used to have
+   * no answer at all.
+   */
+  private async resolveAttachmentQuietly(
+    resolver: AttachmentResolver,
+    ref: string,
+    chatId: string,
+  ): Promise<ResolvedAttachment | null> {
+    try {
+      return await withHookDeadline({
+        hook: "attachments.resolve",
+        timeoutMs: this.hookTimeouts.attachments,
+        run: () => resolver.resolve(ref, { chatId }),
+      });
+    } catch (err) {
+      if (!isHookTimeout(err)) throw err;
+      this.deps.logger?.warn("attachment resolver timed out", {
+        chatId,
+        ref,
+        timeoutMs: this.hookTimeouts.attachments,
+      });
+      return null;
+    }
   }
 
   private resolveBudgets(): ResolvedBudgets {
@@ -1632,12 +1991,49 @@ export class TurnRunner implements TaskWorker {
     });
   }
 
+  /**
+   * Announce the pass about to run, on the durable log, BEFORE it runs.
+   *
+   * A run is not one pass, and every pass writes its own `run.started` …
+   * terminal pair onto the same log. Without a marker between them a consumer
+   * following the stream reads the FIRST terminal as the run's answer: a turn
+   * whose pass 1 failed and whose pass 2 completed is reported failed, and a
+   * UI that has been concatenating deltas shows pass 1's half-sentence glued to
+   * pass 2's answer. This event is the boundary — `data.pass` is the 1-based
+   * number of the pass about to run, `data.reason` says why it is running — and
+   * a consumer treats it as "the run is live again, drop the text so far",
+   * mirroring the reset this class performs on the stored placeholder
+   * immediately afterwards.
+   *
+   * Emitted BEFORE `resetPass` and before the pass's own events, so the order
+   * on the log is the order a consumer has to apply them in.
+   */
+  private async emitPassBoundary(
+    ctx: TaskExecutionContext,
+    pass: number,
+    reason: "chat_only" | "empty_response" | "correction",
+    message: string,
+  ): Promise<void> {
+    await this.appendHostEvent(ctx, {
+      type: "run.warning",
+      runId: ctx.task.taskId,
+      timestamp: this.deps.clock.nowIso(),
+      data: { code: "retry_pass", message, pass, reason },
+    });
+  }
+
   /** Clear the answer-so-far before a recovery pass re-answers from scratch. */
   private resetPass(state: PassState): void {
     state.content = "";
     state.streamed = false;
     delete state.pendingAssistantMessageId;
     state.pendingToolCalls = [];
+    state.announcedToolCalls = [];
+    // DISCARD the coalesced placeholder write rather than letting it land: the
+    // caller blanks the record right after this, and a pending flush applied
+    // afterwards would put the abandoned pass's text straight back. See
+    // `RunProjectionState.unflushedDeltas`.
+    state.unflushedDeltas = 0;
   }
 
   /**
@@ -1778,19 +2174,33 @@ export class TurnRunner implements TaskWorker {
   private async failQuietly(
     ctx: TaskExecutionContext,
     message: string,
+    /**
+     * The placeholder to finalize once the transition proves this attempt still
+     * owns the task. Omitted when there is none to name.
+     */
+    assistantMessageId?: string,
   ): Promise<void> {
     const { store, clock, logger } = this.deps;
     const taskId = ctx.task.taskId;
+    // A cancelled turn is not a failed one. The signal is the same one the
+    // provider call was watching, so "aborted" here means the user (or the
+    // queue) stopped this run, and landing it `failed` reports a user action as
+    // an error to every consumer downstream.
+    const status: TaskStatus = ctx.signal.aborted ? "cancelled" : "failed";
+    // Whether THIS attempt actually landed the task — the only proof available
+    // that it still owns it, and therefore that it may touch the placeholder.
+    let landed = false;
     try {
       const task = await store.tasks.getTask(taskId);
       if (task?.status === "running") {
         await store.tasks.transitionTask(
           taskId,
           ["running"],
-          "failed",
+          status,
           { finishedAt: clock.nowIso(), error: message },
           { leaseToken: ctx.leaseToken },
         );
+        landed = true;
       }
     } catch (err) {
       logger?.warn("could not fail task after error", {
@@ -1802,7 +2212,7 @@ export class TurnRunner implements TaskWorker {
     try {
       await store.tasks.endAttempt({
         attemptId: ctx.attemptId,
-        status: "failed",
+        status,
         error: message,
         leaseToken: ctx.leaseToken,
       });
@@ -1810,6 +2220,27 @@ export class TurnRunner implements TaskWorker {
       logger?.warn("could not end attempt after failure", {
         taskId,
         attemptId: ctx.attemptId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    // LAST, and only when the fenced transition proved this attempt owns the
+    // task. A task somebody else already landed is a task whose placeholder
+    // somebody else is responsible for, and a `LeaseLostError` above has
+    // already returned — so `landed` is what separates "I ended this turn" from
+    // "I found it ended".
+    if (!landed || assistantMessageId === undefined) return;
+    try {
+      // Whatever the run streamed before it broke is KEPT — a half-written
+      // answer plus a terminal event explaining the stop is more use to a
+      // reader than a blank bubble — but `placeholder` has to come off, or the
+      // UI spins forever on a message nothing is coming back to finish.
+      await store.conversations.updateMessage(assistantMessageId, {
+        metadata: { placeholder: false },
+      });
+    } catch (err) {
+      logger?.warn("could not finalize placeholder after failure", {
+        taskId,
+        assistantMessageId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -1840,6 +2271,27 @@ function isPresent(value: unknown): value is string {
 
 function hasContent(state: PassState): boolean {
   return state.content.trim().length > 0;
+}
+
+/**
+ * The request an assembled history is asking about: its LAST `role: "user"`
+ * message, as text. Null when there is none, or when it carries no text.
+ *
+ * The last rather than the first, because a chat is a sequence of questions and
+ * the one being answered is the most recent — every earlier user turn already
+ * has its answer in the history. Text only, via `messageContentToText`: the one
+ * caller is the correction harness, whose messages are built rather than
+ * assembled, so an image part here would reach the provider as an unresolved
+ * `ref`. See {@link CorrectionMessagesInput.userRequest}.
+ */
+function lastUserRequestOf(messages: readonly AiChatMessage[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "user") continue;
+    const text = messageContentToText(message.content);
+    return text.trim().length > 0 ? text : null;
+  }
+  return null;
 }
 
 /**

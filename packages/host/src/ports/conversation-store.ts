@@ -515,6 +515,35 @@ export interface ConversationStore {
     opts?: ListMessagesOptions,
   ): Promise<MessageRecord[]>;
   /**
+   * The DEEPEST message a given run wrote in a chat, or `null` when the run has
+   * written nothing there.
+   *
+   * "Deepest" is `(depth DESC, orderKey DESC)` — the end of the chain this run
+   * built, whether or not that chain is still the active path. It is NOT scoped
+   * to the active path on purpose: a run whose branch was abandoned mid-turn
+   * must keep writing onto its own branch, and a lookup that only saw the live
+   * path would hand it a link into somebody else's conversation.
+   *
+   * THE CALLER IS A SECOND ATTEMPT. `TurnRunner` seeds
+   * `RunProjectionState.lastMessageId` from this on every attempt, so attempt 2
+   * of a crashed turn CONTINUES attempt 1's chain instead of starting a second
+   * one off the placeholder. That distinction is not cosmetic: by the time
+   * attempt 2 runs, the placeholder already HAS an active child (attempt 1's
+   * internal assistant record), and a chain append under a parent that already
+   * has an active child lands `active: false` — so attempt 2's tool calls, its
+   * tool results and everything after them would be written off the path that
+   * every later turn replays. See {@link AppendMessageInput.activate}.
+   *
+   * On attempt 1 it answers the placeholder itself (the submit writes it with
+   * `runId` set), which is exactly the seed the projector uses anyway — so the
+   * ordinary turn is unchanged. A host executor that never wrote a record
+   * carrying `runId` gets `null` and the same fallback.
+   */
+  lastMessageOfRun(
+    chatId: string,
+    runId: string,
+  ): Promise<MessageRecord | null>;
+  /**
    * The messages sharing a message's parent, INCLUDING the message itself,
    * ordered by `branchIndex` ascending. For a root, the chat's roots.
    *

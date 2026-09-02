@@ -83,6 +83,32 @@ export interface RunProjectionState {
   pendingAssistantMessageId?: string;
   pendingToolCalls: AiToolCall[];
   /**
+   * Tool calls announced BEFORE the assistant turn that declared them was
+   * completed — a client that emits `run.tool.requested` DURING the message
+   * rather than after it.
+   *
+   * `runChat` never does this (it completes the turn, then announces), but the
+   * projector is a public seam a host drives from its own executor, and a
+   * bridge mapping some other provider's frames may well see the calls first.
+   * Without this buffer that ordering persists the assistant record with no
+   * `toolCalls` at all, and every tool result after it replays as an orphan
+   * `tool_call_id` — which providers reject outright.
+   */
+  announcedToolCalls: AiToolCall[];
+  /**
+   * Placeholder-write coalescing state — see {@link createRunProjector}.
+   *
+   * `content` is updated on every delta; the DURABLE write behind it is
+   * throttled, and these two fields are the throttle. `unflushedDeltas > 0`
+   * means the stored record is behind `content`. Public because
+   * `TurnRunner.resetPass` has to DISCARD a pending write it is about to
+   * supersede with an empty answer — writing it afterwards would put the
+   * abandoned pass's text back.
+   */
+  unflushedDeltas: number;
+  /** {@link Clock.now} in epoch ms at the last durable placeholder write. */
+  lastFlushAtMs: number;
+  /**
    * The last message THIS RUN wrote — the link every further append chains off.
    *
    * Seeded with the placeholder, so the run's records descend from the answer
@@ -149,6 +175,20 @@ export interface RunProjector {
 }
 
 /**
+ * A durable placeholder write happens at most once per this many deltas…
+ *
+ * 32 tokens is a fraction of a sentence, so a reader watching the message grow
+ * sees no difference; the DB does 30× fewer writes for a long answer. The event
+ * log is untouched by this — every delta is still appended, in order, before
+ * anything here runs — so the coalescing is invisible to a consumer following
+ * the stream, and the placeholder it lags is reconstructible from the log at
+ * any point.
+ */
+const DELTA_FLUSH_MAX_DELTAS = 32;
+/** …or this many milliseconds, whichever comes first (a slow trickle still lands). */
+const DELTA_FLUSH_INTERVAL_MS = 50;
+
+/**
  * Build the projection seam `TurnRunner` uses, over the same ports it takes.
  *
  * Every message it writes is a CHAIN append — `parentMessageId` is the id this
@@ -157,9 +197,37 @@ export interface RunProjector {
  * branch switch that is byte-identically what an unparented append produced:
  * the run's last write IS the active leaf, so the chain and the path are the
  * same messages. See {@link RunProjectionState.lastMessageId}.
+ *
+ * DELTA WRITES ARE COALESCED. `run.message.delta` used to mean one
+ * `updateMessage` each — a 2000-token answer is 2000 UPDATEs on the same row,
+ * for a value only the last of which anybody reads. The stored placeholder is a
+ * PROJECTION of the log, not the record of what happened, so it is safe to let
+ * it lag: it is rewritten at most every {@link DELTA_FLUSH_MAX_DELTAS} deltas
+ * or {@link DELTA_FLUSH_INTERVAL_MS} milliseconds, and flushed before ANY
+ * non-delta event (which includes `run.message.completed` and every terminal),
+ * so nothing that reads state — the retry decisions, the terminal placeholder
+ * write, a `listMessages` after the turn — can ever see a stale answer. What a
+ * crash can cost is under 50 ms of half-written text in a record the next
+ * attempt overwrites anyway, and the log still has every delta.
  */
 export function createRunProjector(deps: RunProjectorDeps): RunProjector {
   const { store } = deps;
+
+  /**
+   * Write the answer-so-far, if it is not already written. Cheap and idempotent
+   * — `unflushedDeltas === 0` means the record already matches `content`.
+   */
+  async function flushContent(state: RunProjectionState): Promise<void> {
+    if (state.unflushedDeltas === 0) return;
+    await store.conversations.updateMessage(state.assistantMessageId, {
+      content: state.content,
+    });
+    // AFTER the write, not before: "unflushed" has to stay true while the write
+    // is outstanding, or a throw here would leave the state claiming a durable
+    // answer that was never written.
+    state.unflushedDeltas = 0;
+    state.lastFlushAtMs = deps.clock.now().getTime();
+  }
 
   async function reflect(
     ctx: RunProjectionContext,
@@ -169,13 +237,25 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
     const { task } = ctx;
     const chatId = state.chatId;
 
+    // Anything that is not a delta is a decision point — the turn completed, a
+    // tool ran, the run ended — and every one of them either reads the answer
+    // or hands it to somebody who will. Flushing here rather than in each case
+    // is what makes "the placeholder is never stale outside a delta burst" true
+    // by construction instead of by remembering to add a flush to each branch.
+    if (event.type !== "run.message.delta") await flushContent(state);
+
     switch (event.type) {
       case "run.message.delta": {
         state.content += event.data.delta;
         state.streamed = true;
-        await store.conversations.updateMessage(state.assistantMessageId, {
-          content: state.content,
-        });
+        state.unflushedDeltas += 1;
+        const elapsed = deps.clock.now().getTime() - state.lastFlushAtMs;
+        if (
+          state.unflushedDeltas >= DELTA_FLUSH_MAX_DELTAS ||
+          elapsed >= DELTA_FLUSH_INTERVAL_MS
+        ) {
+          await flushContent(state);
+        }
         break;
       }
       case "run.message.completed": {
@@ -183,8 +263,17 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
         // late `run.tool.requested` events belong to THIS turn, not the last one.
         delete state.pendingAssistantMessageId;
         state.pendingToolCalls = [];
+        // Calls announced during THIS message, before it completed. Taken
+        // (and cleared) whether or not they end up used, so they cannot leak
+        // into the next assistant turn.
+        const announced = state.announcedToolCalls;
+        state.announcedToolCalls = [];
         if (event.data.toolCallCount > 0) {
-          const toolCalls = event.data.toolCalls ?? [];
+          // The event's own list wins when it has one — it is the authoritative
+          // report of what the turn asked for. The buffer is the fallback for a
+          // client that announced the calls instead of carrying them here.
+          const toolCalls =
+            event.data.toolCalls ?? (announced.length > 0 ? announced : []);
           const record = await store.conversations.appendMessage({
             chatId,
             runId: task.taskId,
@@ -197,14 +286,15 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
           });
           state.lastMessageId = record.id;
           for (const call of toolCalls) state.toolCallIds.add(call.id);
-          if (toolCalls.length === 0) {
+          if (toolCalls.length < event.data.toolCallCount) {
             // A streaming provider reports the COUNT here and the calls
             // themselves in the `run.tool.requested` events that follow. Hold
             // the record open and fill them in as they arrive: an assistant
             // turn persisted without its tool_calls leaves every tool result
-            // after it an orphan on the next replay.
+            // after it an orphan on the next replay. Also covers the partial
+            // case — some calls announced early, the rest still to come.
             state.pendingAssistantMessageId = record.id;
-            state.pendingToolCalls = [];
+            state.pendingToolCalls = [...toolCalls];
           }
         } else if (!state.streamed && event.data.content.length > 0) {
           // Non-streaming provider: the visible answer exists only here.
@@ -226,40 +316,62 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
         // most needs to know about. `finalForCall`/`source`/`step` ride along
         // so the recorder can tell those two kinds apart — reporting the
         // interim numbers without them is just double counting.
-        await deps.usage?.record({
-          runId: task.taskId,
-          callId: event.data.callId,
-          attempt: event.data.attempt,
-          providerId: state.providerId ?? "",
-          model: event.data.model,
-          finalForCall: event.data.finalForCall,
-          source: event.data.source,
-          step: event.data.step,
-          ...(event.data.promptTokens === undefined
-            ? {}
-            : { promptTokens: event.data.promptTokens }),
-          ...(event.data.completionTokens === undefined
-            ? {}
-            : { completionTokens: event.data.completionTokens }),
-          ...(event.data.totalTokens === undefined
-            ? {}
-            : { totalTokens: event.data.totalTokens }),
-          at: event.timestamp,
-        });
+        //
+        // GUARDED. `record()` is host bookkeeping — a counter, an HTTP call to
+        // a metering service — and it runs mid-stream, inside the run's own
+        // event loop. A throw out of here does not fail an accounting job; it
+        // fails the TURN, after the provider has already been paid, taking the
+        // answer down with it. The event is already durable on the log by the
+        // time this runs, so a host that missed a `record()` can replay it; a
+        // user whose answer vanished cannot.
+        try {
+          await deps.usage?.record({
+            runId: task.taskId,
+            callId: event.data.callId,
+            attempt: event.data.attempt,
+            providerId: state.providerId ?? "",
+            model: event.data.model,
+            finalForCall: event.data.finalForCall,
+            source: event.data.source,
+            step: event.data.step,
+            ...(event.data.promptTokens === undefined
+              ? {}
+              : { promptTokens: event.data.promptTokens }),
+            ...(event.data.completionTokens === undefined
+              ? {}
+              : { completionTokens: event.data.completionTokens }),
+            ...(event.data.totalTokens === undefined
+              ? {}
+              : { totalTokens: event.data.totalTokens }),
+            at: event.timestamp,
+          });
+        } catch (err) {
+          deps.logger?.warn("usage record failed", {
+            taskId: task.taskId,
+            callId: event.data.callId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
         break;
       }
       case "run.tool.requested": {
         state.toolCallIds.add(event.data.toolCallId);
+        const call = {
+          id: event.data.toolCallId,
+          name: event.data.toolName,
+          argumentsJson: event.data.argumentsJson,
+        };
         if (state.pendingAssistantMessageId !== undefined) {
-          state.pendingToolCalls.push({
-            id: event.data.toolCallId,
-            name: event.data.toolName,
-            argumentsJson: event.data.argumentsJson,
-          });
+          state.pendingToolCalls.push(call);
           await store.conversations.updateMessage(
             state.pendingAssistantMessageId,
             { toolCalls: [...state.pendingToolCalls] },
           );
+        } else {
+          // No assistant record is open: this call was announced DURING the
+          // message that declared it. Hold it until `run.message.completed`
+          // creates the record — see `RunProjectionState.announcedToolCalls`.
+          state.announcedToolCalls.push(call);
         }
         break;
       }
@@ -329,6 +441,9 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
         streamed: false,
         toolCallIds: new Set<string>(),
         pendingToolCalls: [],
+        announcedToolCalls: [],
+        unflushedDeltas: 0,
+        lastFlushAtMs: deps.clock.now().getTime(),
         // Seeded with the placeholder: the run's records descend from the
         // answer they belong to.
         lastMessageId: input.assistantMessageId,

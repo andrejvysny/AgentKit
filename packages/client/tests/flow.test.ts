@@ -142,6 +142,16 @@ describe("idempotency", () => {
       { chatId: TEST_CHAT_ID },
       { content: "one" },
     );
+    // A chat answers one turn at a time (`chat_busy`, 409, is the host default
+    // — see `TurnRunnerDeps.allowConcurrentSubmit`), so the second submit waits
+    // for the first the way a UI does. The assertion is unchanged: a fresh key
+    // is a fresh run, never a replay of the one before it.
+    await waitFor(
+      async () =>
+        (await client.getRun({ runId: first.result.runId })).status ===
+        "completed",
+      "the first run to complete",
+    );
     const second = await client.submitMessage(
       { chatId: TEST_CHAT_ID },
       { content: "two" },

@@ -105,6 +105,97 @@ describe("SessionWritePolicy", () => {
     expect(policy.list("chat-2")).toHaveLength(1);
   });
 
+  // C4: the scope comes from MODEL-SUPPLIED tool input, so a grant that
+  // ignored it turns "yes, edit this document" into a standing yes for every
+  // document the tool can reach.
+  describe("scoped allowances", () => {
+    it("confines a scoped grant to the scope it was given for", () => {
+      const policy = new SessionWritePolicy();
+      policy.allow({
+        chatId: "chat-1",
+        toolName: "write_items",
+        proposalKind: "items.write",
+        scopeKey: "doc-a",
+        maxRisk: "destructive",
+      });
+      expect(policy.isAutoApplyAllowed({ ...QUERY, scopeKey: "doc-a" })).toBe(
+        true,
+      );
+      expect(policy.isAutoApplyAllowed({ ...QUERY, scopeKey: "doc-b" })).toBe(
+        false,
+      );
+      // And a query that names no scope does not inherit a scoped grant.
+      expect(policy.isAutoApplyAllowed(QUERY)).toBe(false);
+    });
+
+    it("keeps an UNSCOPED grant covering every scope — what every grant meant before", () => {
+      const policy = new SessionWritePolicy();
+      policy.allow({
+        chatId: "chat-1",
+        toolName: "write_items",
+        proposalKind: "items.write",
+        maxRisk: "destructive",
+      });
+      expect(policy.isAutoApplyAllowed({ ...QUERY, scopeKey: "doc-a" })).toBe(
+        true,
+      );
+      expect(policy.isAutoApplyAllowed({ ...QUERY, scopeKey: "doc-b" })).toBe(
+        true,
+      );
+    });
+
+    it("keeps a scoped and an unscoped grant apart, and applies each ceiling", () => {
+      const policy = new SessionWritePolicy();
+      policy.allow({
+        chatId: "chat-1",
+        toolName: "write_items",
+        proposalKind: "items.write",
+        maxRisk: "low",
+      });
+      const scoped = policy.allow({
+        chatId: "chat-1",
+        toolName: "write_items",
+        proposalKind: "items.write",
+        scopeKey: "doc-a",
+        maxRisk: "destructive",
+      });
+      expect(policy.list("chat-1")).toHaveLength(2);
+      expect(scoped.scopeKey).toBe("doc-a");
+      // The narrow grant wins where it applies…
+      expect(
+        policy.isAutoApplyAllowed({
+          ...QUERY,
+          scopeKey: "doc-a",
+          risk: "destructive",
+        }),
+      ).toBe(true);
+      // …and elsewhere only the broad, low-risk one does.
+      expect(
+        policy.isAutoApplyAllowed({
+          ...QUERY,
+          scopeKey: "doc-b",
+          risk: "destructive",
+        }),
+      ).toBe(false);
+      expect(
+        policy.isAutoApplyAllowed({ ...QUERY, scopeKey: "doc-b", risk: "low" }),
+      ).toBe(true);
+    });
+
+    // C14: every member of the key is caller or model data, so a `:`-joined
+    // string lets two different grants collide on one key.
+    it("escapes separators inside the key's members", () => {
+      expect(writeAllowanceKey("doc:1", "t", "edits")).not.toBe(
+        writeAllowanceKey("doc", "t", "1:edits"),
+      );
+      // "no scope" and "a scope literally named the empty string" are not the
+      // same grant either.
+      expect(writeAllowanceKey("c", "t", "k")).not.toBe(
+        writeAllowanceKey("c", "t", "k", ""),
+      );
+    });
+  });
+
   it("ranks risk low < medium < high < destructive", () => {
     expect(RISK_RANK.low).toBeLessThan(RISK_RANK.medium);
     expect(RISK_RANK.medium).toBeLessThan(RISK_RANK.high);

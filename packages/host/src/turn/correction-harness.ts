@@ -33,6 +33,23 @@ export interface CorrectionConfig {
    * Zero is legal and means "verify, report on the log, correct nothing".
    */
   maxPasses?: number;
+  /**
+   * Show the correction pass the request the run was answering. Default `true`.
+   *
+   * The minimal re-context below sends the system prompt, the previous answer
+   * and the write-back — which leaves the model correcting work without knowing
+   * what was asked for. "Add the decoupling capacitors" and "add the decoupling
+   * capacitors to U3 only" produce the same previous answer and the same
+   * deficiency list, and a model that cannot see which one it was asked can
+   * only guess. One extra message is the cheapest possible fix for that, and it
+   * is the message the whole turn exists to answer.
+   *
+   * OFF is for a host whose deficiency lines are already self-contained and
+   * whose requests are long enough that replaying one is a real cost. It is
+   * `false` rather than absent that turns it off; see
+   * {@link CorrectionMessagesInput.userRequest} for what is sent.
+   */
+  includeUserRequest?: boolean;
 }
 
 /** Correction passes allowed when {@link CorrectionConfig.maxPasses} is absent. */
@@ -118,6 +135,19 @@ export function buildDeficiencyWriteBack(
 export interface CorrectionMessagesInput {
   /** The chat's system prompt, or `null` when the host has none. */
   systemPrompt: string | null;
+  /**
+   * The request this run is answering — the turn's own user message — or `null`
+   * when there is none to replay or {@link CorrectionConfig.includeUserRequest}
+   * is off.
+   *
+   * TEXT ONLY, deliberately. A multimodal request contributes its text parts;
+   * its images do not travel into the correction pass, because these messages
+   * are built directly rather than assembled from stored history, so an image
+   * `ref` here would reach the provider unresolved — and re-sending megabytes
+   * of pictures on every correction round is the cost the minimal re-context
+   * exists to avoid.
+   */
+  userRequest: string | null;
   /** The visible answer the previous pass finished with. */
   previousContent: string;
   /** {@link buildDeficiencyWriteBack} of the deficiencies being corrected. */
@@ -125,8 +155,8 @@ export interface CorrectionMessagesInput {
 }
 
 /**
- * MINIMAL RE-CONTEXT: the system prompt, the previous pass's visible answer, and
- * the write-back. Nothing else.
+ * MINIMAL RE-CONTEXT: the system prompt, the request being answered, the
+ * previous pass's visible answer, and the write-back. Nothing else.
  *
  * The obvious alternative — replay the whole conversation and append the
  * write-back — is what makes a correction harness unaffordable. The run that
@@ -135,16 +165,22 @@ export interface CorrectionMessagesInput {
  * for the entire turn again on every attempt, growing with each one, precisely
  * when the model needs to be looking at a short list of specific problems.
  *
- * What the three messages preserve is what the model actually needs: who it is
- * (the system prompt), what it just claimed to have done (its own answer), and
- * what is wrong with it (the write-back). The tools are staged exactly as they
- * were, so it can re-read anything it needs from the domain rather than from a
- * transcript — which is also the more honest source, since the deficiencies were
- * found in the domain and not in the transcript.
+ * What the four messages preserve is what the model actually needs: who it is
+ * (the system prompt), what it was asked for (the request), what it just
+ * claimed to have done (its own answer), and what is wrong with it (the
+ * write-back). The tools are staged exactly as they were, so it can re-read
+ * anything it needs from the domain rather than from a transcript — which is
+ * also the more honest source, since the deficiencies were found in the domain
+ * and not in the transcript.
+ *
+ * ORDER: the request goes BEFORE the previous answer, because that is the order
+ * the exchange happened in and a history that puts the answer before its
+ * question replays as a different conversation.
  *
  * The assistant message is omitted when the previous pass produced no visible
  * text: an empty assistant turn is a shape several providers reject outright,
- * and it carries nothing the write-back does not already say.
+ * and it carries nothing the write-back does not already say. The request is
+ * omitted the same way, and for the same reason, when it is absent or blank.
  */
 export function buildCorrectionMessages(
   input: CorrectionMessagesInput,
@@ -152,6 +188,9 @@ export function buildCorrectionMessages(
   const messages: AiChatMessage[] = [];
   if (input.systemPrompt) {
     messages.push({ role: "system", content: input.systemPrompt });
+  }
+  if (input.userRequest && input.userRequest.trim().length > 0) {
+    messages.push({ role: "user", content: input.userRequest });
   }
   if (input.previousContent.trim().length > 0) {
     messages.push({ role: "assistant", content: input.previousContent });

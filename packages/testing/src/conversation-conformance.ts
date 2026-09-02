@@ -548,5 +548,138 @@ export function describeConversationBranching(
         close?.();
       }
     });
+
+    // C1: what a SECOND attempt at a crashed turn reads to find where its own
+    // chain got to. Getting this wrong lands every record after the crash off
+    // the active path — see `ConversationStore.lastMessageOfRun`.
+    describe("lastMessageOfRun", () => {
+      it("answers the deepest record the run wrote, not the newest in the chat", async () => {
+        const { store, close } = await create();
+        try {
+          const chat = await store.conversations.createChat({});
+          const question = await store.conversations.appendMessage({
+            chatId: chat.id,
+            role: "user",
+            content: "q",
+          });
+          // The placeholder a submit writes: the run's first record, and the
+          // fallback answer while the run has written nothing else.
+          const placeholder = await store.conversations.appendMessage({
+            chatId: chat.id,
+            runId: "run-1",
+            role: "assistant",
+            content: "",
+            parentMessageId: question.id,
+          });
+          expect(
+            (await store.conversations.lastMessageOfRun(chat.id, "run-1"))?.id,
+          ).toBe(placeholder.id);
+
+          // Attempt 1 chains two records off it, as the projector does.
+          const internal = await store.conversations.appendMessage({
+            chatId: chat.id,
+            runId: "run-1",
+            role: "assistant",
+            content: "",
+            parentMessageId: placeholder.id,
+            activate: false,
+            metadata: { internal: true },
+          });
+          const toolResult = await store.conversations.appendMessage({
+            chatId: chat.id,
+            runId: "run-1",
+            role: "tool",
+            content: "{}",
+            toolCallId: "call-1",
+            parentMessageId: internal.id,
+            activate: false,
+            metadata: { internal: true },
+          });
+          // A record from ANOTHER run, appended later and therefore with a
+          // higher orderKey — the deepest record OF THIS RUN is still the
+          // answer.
+          await store.conversations.appendMessage({
+            chatId: chat.id,
+            runId: "run-2",
+            role: "assistant",
+            content: "someone else's turn",
+            parentMessageId: toolResult.id,
+            activate: false,
+          });
+          expect(
+            (await store.conversations.lastMessageOfRun(chat.id, "run-1"))?.id,
+          ).toBe(toolResult.id);
+        } finally {
+          close?.();
+        }
+      });
+
+      it("answers off the run's own branch even when that branch is inactive", async () => {
+        const { store, close } = await create();
+        try {
+          const chat = await store.conversations.createChat({});
+          const root = await store.conversations.appendMessage({
+            chatId: chat.id,
+            role: "user",
+            content: "q",
+          });
+          const placeholder = await store.conversations.appendMessage({
+            chatId: chat.id,
+            runId: "run-1",
+            role: "assistant",
+            content: "",
+            parentMessageId: root.id,
+          });
+          const written = await store.conversations.appendMessage({
+            chatId: chat.id,
+            runId: "run-1",
+            role: "assistant",
+            content: "",
+            parentMessageId: placeholder.id,
+            activate: false,
+            metadata: { internal: true },
+          });
+          // The user switches to another branch mid-run: the run's records are
+          // now off the active path, and a lookup restricted to that path would
+          // hand the run a link into a conversation it never wrote in.
+          const elsewhere = await store.conversations.appendMessage({
+            chatId: chat.id,
+            role: "assistant",
+            content: "another answer",
+            parentMessageId: root.id,
+          });
+          expect(elsewhere.active).toBe(true);
+          expect(
+            (await store.conversations.lastMessageOfRun(chat.id, "run-1"))?.id,
+          ).toBe(written.id);
+        } finally {
+          close?.();
+        }
+      });
+
+      it("answers null for a run that wrote nothing, and for another chat's run", async () => {
+        const { store, close } = await create();
+        try {
+          const chat = await store.conversations.createChat({});
+          const other = await store.conversations.createChat({});
+          await store.conversations.appendMessage({
+            chatId: chat.id,
+            runId: "run-1",
+            role: "assistant",
+            content: "",
+          });
+          expect(
+            await store.conversations.lastMessageOfRun(chat.id, "run-nope"),
+          ).toBeNull();
+          // Scoped to the chat: the same run id in another conversation is not
+          // this conversation's chain.
+          expect(
+            await store.conversations.lastMessageOfRun(other.id, "run-1"),
+          ).toBeNull();
+        } finally {
+          close?.();
+        }
+      });
+    });
   });
 }

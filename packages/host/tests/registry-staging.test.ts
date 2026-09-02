@@ -490,3 +490,81 @@ describe("stageRegistry — a guard that throws fails closed", () => {
     expect((await call("b")).ok).toBe(true);
   });
 });
+
+// C10 + 3.5: contributors fail closed PER CONTRIBUTOR, not per run. One
+// unreachable MCP server used to take every turn in every chat down with it.
+describe("stageRegistry — a contributor that fails contributes nothing", () => {
+  it("keeps the other contributors' tools when one throws, and reports it", async () => {
+    const warnings: { message: string; fields?: Record<string, unknown> }[] =
+      [];
+    const staged = await stageRegistry({
+      contributors: [
+        contributor("broken", [], {
+          contribute: async () => {
+            throw new Error("mcp server is down");
+          },
+        }),
+        contributor("alpha", [tool("a"), tool("b")]),
+      ],
+      ctx: {
+        ...CTX,
+        logger: {
+          debug: () => {},
+          info: () => {},
+          warn: (message, fields) => warnings.push({ message, fields }),
+          error: () => {},
+        },
+      },
+      hasPrimaryBinding: true,
+    });
+
+    expect(staged.registry.size()).toBe(2);
+    expect(staged.registry.has("a")).toBe(true);
+    expect(staged.failed).toEqual([
+      { namespace: "broken", reason: "mcp server is down", timedOut: false },
+    ]);
+    expect(warnings[0]?.message).toBe(
+      "tool contributor failed; contributing nothing",
+    );
+  });
+
+  it("bounds a contributor that never answers, and marks it timed out", async () => {
+    const staged = await stageRegistry({
+      contributors: [
+        contributor("hanging", [], { contribute: () => new Promise(() => {}) }),
+        contributor("alpha", [tool("a")]),
+      ],
+      ctx: CTX,
+      hasPrimaryBinding: true,
+      contributeTimeoutMs: 15,
+    });
+
+    expect(staged.registry.size()).toBe(1);
+    // `timedOut` is what lets the caller put `hook_timeout` on the durable log
+    // for a slow dependency, while a thrown contributor stays a log line.
+    expect(staged.failed).toEqual([
+      {
+        namespace: "hanging",
+        reason: 'Host hook "contribute(hanging)" did not answer within 15 ms.',
+        timedOut: true,
+      },
+    ]);
+  });
+
+  it("awaits a slow contributor unbounded when no deadline is configured", async () => {
+    const staged = await stageRegistry({
+      contributors: [
+        contributor("slow", [], {
+          contribute: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            return [tool("a")];
+          },
+        }),
+      ],
+      ctx: CTX,
+      hasPrimaryBinding: true,
+    });
+    expect(staged.registry.has("a")).toBe(true);
+    expect(staged.failed).toEqual([]);
+  });
+});

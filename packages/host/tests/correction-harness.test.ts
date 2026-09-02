@@ -346,10 +346,40 @@ describe("correction harness — the stopping rule", () => {
     expect(
       buildCorrectionMessages({
         systemPrompt: null,
+        userRequest: null,
         previousContent: "   ",
         writeBack: "fix it",
       }).map((m) => m.role),
     ).toEqual(["user"]);
+  });
+
+  // F-OWN-5: the minimal re-context used to omit the one thing the model is
+  // being asked to correct AGAINST — what was asked for.
+  it("puts the originating request between the system prompt and the previous answer", () => {
+    expect(
+      buildCorrectionMessages({
+        systemPrompt: "you are an EDA assistant",
+        userRequest: "add decoupling caps to U3",
+        previousContent: "done, added them everywhere",
+        writeBack: "fix it",
+      }),
+    ).toEqual([
+      { role: "system", content: "you are an EDA assistant" },
+      { role: "user", content: "add decoupling caps to U3" },
+      { role: "assistant", content: "done, added them everywhere" },
+      { role: "user", content: "fix it" },
+    ]);
+  });
+
+  it("omits a blank request the same way it omits a blank answer", () => {
+    expect(
+      buildCorrectionMessages({
+        systemPrompt: null,
+        userRequest: "   ",
+        previousContent: "an answer",
+        writeBack: "fix it",
+      }).map((m) => m.role),
+    ).toEqual(["assistant", "user"]);
   });
 });
 
@@ -495,7 +525,7 @@ describe("TurnRunner + correction harness", () => {
     expect(assistant?.content).toBe("all set");
   });
 
-  it("sends MINIMAL re-context — system, the last answer, the write-back", async () => {
+  it("sends MINIMAL re-context — system, the request, the last answer, the write-back", async () => {
     const verification = new ScriptedVerification([partial(["x", "y"]), clean]);
     const f = await setup({
       verification,
@@ -513,22 +543,45 @@ describe("TurnRunner + correction harness", () => {
     const correction = f.client.messagesPerCall[2] ?? [];
     expect(correction.map((m) => m.role)).toEqual([
       "system",
+      "user",
       "assistant",
       "user",
     ]);
     expect(correction[0]?.content).toBe("SYSTEM PROMPT");
-    expect(correction[1]?.content).toBe("all set");
-    const writeBack = String(correction[2]?.content ?? "");
+    // F-OWN-5: the originating request, so the model correcting its work knows
+    // what was asked. Four messages, not three — still nothing like the full
+    // history.
+    expect(correction[1]?.content).toBe("go");
+    expect(correction[2]?.content).toBe("all set");
+    const writeBack = String(correction[3]?.content ?? "");
     expect(writeBack).toContain("- x");
     expect(writeBack).toContain("- y");
-    // NOT the full history: no tool turns, and not the original question.
+    // NOT the full history: no tool turns, no tool results.
     expect(correction.some((m) => m.role === "tool")).toBe(false);
-    expect(correction.some((m) => m.content === "go")).toBe(false);
     expect(
       correction.some(
         (m) => m.toolCalls !== undefined && m.toolCalls.length > 0,
       ),
     ).toBe(false);
+  });
+
+  it("omits the request when includeUserRequest is off", async () => {
+    const verification = new ScriptedVerification([partial(["x", "y"]), clean]);
+    const f = await setup({
+      verification,
+      correction: { maxPasses: 3, includeUserRequest: false },
+      systemPrompt: "SYSTEM PROMPT",
+    });
+    scriptToolThen(f.mock, ["fixed"]);
+    await run(f);
+
+    const correction = f.client.messagesPerCall[2] ?? [];
+    expect(correction.map((m) => m.role)).toEqual([
+      "system",
+      "assistant",
+      "user",
+    ]);
+    expect(correction.some((m) => m.content === "go")).toBe(false);
   });
 
   it("asks the usage authorizer once per pass, corrections included", async () => {
