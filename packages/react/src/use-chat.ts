@@ -286,20 +286,22 @@ export function useChat(
         })) {
           events.push(event);
           lastEventId = event.eventId;
+          const phase = tracker.observe(event);
+          // A new pass throws away what the last one said — the host clears the
+          // stored answer at this exact seam — so the placeholder starts over
+          // and so does the "did this pass stream?" flag the
+          // `run.message.completed` rule below reads.
+          const boundary = tracker.startedNewPass();
+          if (boundary) streamed = false;
           if (event.type === "run.message.delta") streamed = true;
           if (!owns()) return;
-          applyEvent(
-            update,
-            placeholderId,
-            event,
-            tracker.observe(event),
-            streamed,
-          );
+          applyEvent(update, placeholderId, event, phase, streamed, boundary);
         }
-        // The host appends `run.verification` AFTER the terminal event, so a
-        // live stream is closed before those exist. One resumed pass collects
-        // them; without it a corrected run reports the phase it had before the
-        // correction ran.
+        // The stream closed because the TASK is terminal, and anything written
+        // in the same breath as that transition — the harness's
+        // `run.verification`, a late warning — may be on the log without having
+        // been delivered. One resumed pass collects it; without it a corrected
+        // run reports the phase it had before the correction ran.
         const drained = await client.drainRun(runId, lastEventId, {
           signal: controller.signal,
         });
@@ -580,9 +582,20 @@ function applyEvent(
   event: AiRunEvent,
   phase: RunPhase,
   streamed: boolean,
+  boundary: boolean,
 ): void {
   update((prev) => {
     let messages = prev.messages;
+    if (boundary) {
+      // Mirrors `TurnRunner.resetPass` + its `updateMessage({ content: "" })`:
+      // the previous pass's half sentence is not part of the answer the server
+      // will hand back, and appending pass 2 to it reads as one rambling reply
+      // until the reconcile lands.
+      messages = replaceMessage(messages, placeholderId, (message) => ({
+        ...message,
+        content: "",
+      }));
+    }
     if (event.type === "run.message.delta") {
       messages = replaceMessage(messages, placeholderId, (message) =>
         appendDelta(message, event.data.delta),
@@ -603,15 +616,24 @@ function applyEvent(
       ...prev,
       messages,
       phase,
-      status: prev.status === "error" ? "error" : "streaming",
+      // A boundary is proof the run is live again, so it clears a `status` a
+      // terminal event of the previous pass (or a failed reconcile) had set.
+      status: !boundary && prev.status === "error" ? "error" : "streaming",
     };
   });
 }
 
-/** The `run.failed` event's own message, so `error` says what the RUN said. */
+/**
+ * The `run.failed` event's own message, so `error` says what the RUN said.
+ *
+ * Scanned from the END, because a run can hold several: only the last one is
+ * the outcome the phase reports, and an earlier pass's failure is a step on the
+ * way to it.
+ */
 function runFailure(events: readonly AiRunEvent[]): Error | null {
-  for (const event of events) {
-    if (event.type !== "run.failed") continue;
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at];
+    if (event === undefined || event.type !== "run.failed") continue;
     const error = new Error(event.data.errorMessage);
     error.name = event.data.errorCode ?? "RunFailed";
     return error;

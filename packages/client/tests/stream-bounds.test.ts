@@ -25,7 +25,11 @@ import {
 
 const BASE_URL = "http://stream.test";
 
-function event(type: AiRunEvent["type"], seq: number): AiRunEvent {
+function event(
+  type: AiRunEvent["type"],
+  seq: number,
+  data?: Record<string, unknown>,
+): AiRunEvent {
   return {
     type,
     runId: "run-1",
@@ -33,7 +37,7 @@ function event(type: AiRunEvent["type"], seq: number): AiRunEvent {
     contractVersion: CONTRACT_VERSION,
     eventId: `evt-${seq}`,
     seq,
-    data: type === "run.message.delta" ? { delta: `tok-${seq}` } : {},
+    data: data ?? (type === "run.message.delta" ? { delta: `tok-${seq}` } : {}),
   } as AiRunEvent;
 }
 
@@ -162,5 +166,62 @@ describe("streamRun bounds a server that misbehaves", () => {
     expect(opened).toBe(2);
     expect(resumeHeaders[1]).toBe("evt-1");
     expect(seen.map((e) => e.eventId)).toEqual(log.map((e) => e.eventId));
+  });
+});
+
+/**
+ * A scripted server here for the opposite reason to the ones above: this is
+ * what a CORRECT server does, and the shape is hard to hit reliably against the
+ * real one. The host runs a recovery pass after a failed pass, so `run.failed`
+ * can be followed by a `retry_pass` warning and a whole second pass on the same
+ * log — and the connection can break in between, as connections do.
+ */
+describe("streamRun keeps going past a terminal event", () => {
+  test("a break after run.failed reconnects and delivers the retry pass", async () => {
+    const passOne = [
+      event("run.started", 0, { model: "m", toolCount: 1 }),
+      event("run.message.delta", 1),
+      event("run.failed", 2, { errorMessage: "the provider said no" }),
+    ];
+    const passTwo = [
+      event("run.warning", 3, {
+        code: "retry_pass",
+        message: "Retrying without tools.",
+        pass: 2,
+        reason: "chat_only",
+      }),
+      event("run.started", 4, { model: "m", toolCount: 0 }),
+      event("run.message.delta", 5),
+      event("run.completed", 6, { iterations: 1 }),
+    ];
+    const resumeHeaders: (string | null)[] = [];
+    let opened = 0;
+    const fetchImpl: FetchLike = async (_url, init) => {
+      opened += 1;
+      resumeHeaders.push(new Headers(init?.headers ?? {}).get("last-event-id"));
+      // The task is still `running` when the pipe breaks — the server has not
+      // closed anything, the connection died.
+      if (opened === 1) return sse(frames(...passOne), "error");
+      return sse(frames(...passTwo), "close");
+    };
+    const client = createAgentKitClient({
+      baseUrl: BASE_URL,
+      fetch: fetchImpl,
+    });
+
+    const seen: AiRunEvent[] = [];
+    for await (const e of client.streamRun("run-1", { retryDelayMs: 1 })) {
+      seen.push(e);
+    }
+
+    // Stopping at `run.failed` reported pass 1's failure as the run's answer
+    // while pass 2 was writing the real one.
+    expect(opened).toBe(2);
+    expect(resumeHeaders[1]).toBe("evt-2");
+    expect(seen.map((e) => e.eventId)).toEqual([
+      ...passOne.map((e) => e.eventId),
+      ...passTwo.map((e) => e.eventId),
+    ]);
+    expect(seen.at(-1)?.type).toBe("run.completed");
   });
 });

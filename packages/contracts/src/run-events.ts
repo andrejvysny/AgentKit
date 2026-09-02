@@ -228,6 +228,16 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  * - `tool_late_result` — reserved: a tool that ignored its deadline settled
  *   after the run had already reported it as timed out. Not emitted today (the
  *   late result is dropped without an event).
+ * - `retry_pass` — host-emitted immediately BEFORE a recovery or correction
+ *   pass. A run is NOT one pass: the host re-asks after a failed pass
+ *   (`chat_only`), after a completed-but-empty one (`empty_response`), and once
+ *   more per correction round (`correction`), and each pass writes its own
+ *   `run.started` … terminal pair onto the same log. This warning is the
+ *   boundary between them: `data.pass` is the 1-based number of the pass about
+ *   to run and `data.reason` is `"chat_only" | "empty_response" |
+ *   "correction"`. A consumer must treat the run as LIVE again — the terminal
+ *   event it just saw belonged to the previous pass — and RESET the text it has
+ *   streamed so far, mirroring the host's own reset of the stored answer.
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
  *   produce them, but hosts layering their own provider adapters on top of this
  *   contract do, so they are part of the shared vocabulary.
@@ -249,6 +259,7 @@ export type AiRunWarningCode =
   | "result_unserializable"
   | "duplicate_tool_call_id"
   | "tool_late_result"
+  | "retry_pass"
   | "empty_response"
   | "emulated_tool_call";
 
@@ -261,6 +272,21 @@ export const AiRunWarningEventSchema = Type.Object({
         "Open warning code; see AiRunWarningCode for the recognised vocabulary.",
     }),
     message: Type.String(),
+    // Both optional and both open, for the same reason `code` is: a warning
+    // that carries no pass context is still a valid warning, and a code this
+    // consumer has never heard of may carry fields it has never heard of.
+    pass: Type.Optional(
+      Type.Number({
+        description:
+          "1-based pass this warning is about; set by retry_pass on the pass it opens.",
+      }),
+    ),
+    reason: Type.Optional(
+      Type.String({
+        description:
+          'Why the pass ran: "chat_only" | "empty_response" | "correction" for retry_pass.',
+      }),
+    ),
   }),
 });
 
@@ -275,7 +301,12 @@ export type AiRunWarningEvent = Omit<
   Static<typeof AiRunWarningEventSchema>,
   "data"
 > & {
-  data: { code: AiRunWarningCode | (string & {}); message: string };
+  data: {
+    code: AiRunWarningCode | (string & {});
+    message: string;
+    pass?: number;
+    reason?: string;
+  };
 };
 
 /**

@@ -425,11 +425,17 @@ failing — a client holding an id from another run cannot be resumed from, and 
 full replay is the only answer that leaves it consistent (and one a client can
 dedupe by `eventId`, which a partial stream is not).
 
-**Closing.** The stream ends when a terminal run event (`run.completed`,
-`run.failed`, `run.cancelled`) is emitted — and also when the task itself is
-terminal but its log holds no terminal event, which happens to a crashed
-attempt or a run cancelled before its worker wrote anything. Without that second
-rule such a stream would poll forever against a run that will never speak again.
+**Closing.** The stream ends when the **task** is terminal (or gone), not when a
+terminal run event is emitted. A run is not one pass: the host re-asks after a
+failed pass, after a completed-but-empty one, and once per correction round, and
+every pass writes its own `run.started` … `run.completed`/`run.failed` pair onto
+the same log (see the `retry_pass` warning). A terminal run event therefore
+triggers an *immediate* status read — no poll sleep, so a finished run still
+closes at once — and the stream keeps following when the status says `running`.
+The same rule closes a stream whose log holds no terminal event at all, which
+happens to a crashed attempt or a run cancelled before its worker wrote
+anything; without it such a stream would poll forever against a run that will
+never speak again.
 
 **Liveness and cancellation.** A `: hb` comment goes out after every
 `heartbeatIntervalMs` of idleness, so proxies do not reap a connection that is
