@@ -2,7 +2,9 @@
 
 Updated: 2026-09-02 (session 2)
 
-## Now (plan: ~/.claude/plans/snappy-munching-wren.md — waves A→E)
+## Now (plan: ~/.claude/plans/snappy-munching-wren.md — waves A→E) — TRANCHE COMPLETE
+
+- [ ] user decision: cut `v0.5.0` (tag + push per DEVELOPING.md) — or start the OpenPCB migration / P6
 
 - [x] Wave A — A1 inline: `errorCode` on 2 `run.failed` sites (core provider) + flaky e2e `waitFor` budgets (react/client)
 - [x] Wave A — A2 (impl-critical): sqlite `SCHEMA_VERSION` 7→8 (`idx_messages_run`, `proposals.claimed_at`), `ProposalRecord.claimedAt`, store-side `poisonCount` on `endAttempt(abandoned)`, conformance ×2 adapters
