@@ -44,6 +44,16 @@ const usage = () =>
     finalForCall: true,
   });
 const completed = () => event("run.completed", { iterations: 1 });
+/** The host's pass boundary: everything before it belonged to the last pass. */
+const retryPass = () =>
+  event("run.warning", {
+    code: "retry_pass",
+    message: "Retrying without tools.",
+    pass: 2,
+    reason: "chat_only",
+  });
+const otherWarning = () =>
+  event("run.warning", { code: "truncated", message: "cut off" });
 const failed = () => event("run.failed", { errorMessage: "boom" });
 const cancelled = () => event("run.cancelled", {});
 
@@ -147,6 +157,46 @@ const TABLE: Row[] = [
     events: [completed()],
     expected: "completed",
   },
+
+  // --- multi-pass: the LAST terminal wins ----------------------------------
+  {
+    name: "a failed pass the host retried into a completed one is completed",
+    status: "completed",
+    events: [
+      started(),
+      delta(),
+      failed(),
+      retryPass(),
+      started(),
+      delta(),
+      completed(),
+    ],
+    expected: "completed",
+  },
+  {
+    name: "a run typing its second pass is streaming, not the first's failure",
+    status: "running",
+    events: [started(), delta(), failed(), retryPass(), started(), delta()],
+    expected: "streaming",
+  },
+  {
+    name: "a second run.started is a boundary on its own — older hosts emit no warning",
+    status: "running",
+    events: [started(), delta(), failed(), started(), delta()],
+    expected: "streaming",
+  },
+  {
+    name: "the LAST pass's failure is the run's failure",
+    status: "running",
+    events: [started(), failed(), retryPass(), started(), failed()],
+    expected: "failed",
+  },
+  {
+    name: "a warning that is not retry_pass moves nothing",
+    status: "running",
+    events: [started(), delta(), completed(), otherWarning()],
+    expected: "completed",
+  },
 ];
 
 describe("runPhase", () => {
@@ -189,6 +239,56 @@ describe("createRunPhaseTracker", () => {
     expect(running.observe(usage())).toBe("running");
     const streaming = createRunPhaseTracker();
     expect(streaming.observe(started())).toBe("streaming");
+  });
+
+  test("every prefix of a MULTI-PASS log agrees with runPhase too", () => {
+    const log = [
+      started(),
+      delta(),
+      failed(),
+      retryPass(),
+      started(),
+      delta(),
+      completed(),
+    ];
+    const tracker = createRunPhaseTracker();
+    const folded = log.map((e) => tracker.observe(e));
+    expect(folded).toEqual(
+      log.map((_e, i) => runPhase({ events: log.slice(0, i + 1) })),
+    );
+    // Spelled out, because this is the sequence the bug lived in: the failure
+    // stands until the boundary, and the run is live again after it.
+    expect(folded).toEqual([
+      "streaming",
+      "streaming",
+      "failed",
+      "streaming",
+      "streaming",
+      "streaming",
+      "completed",
+    ]);
+  });
+
+  test("startedNewPass marks the boundary, and only the boundary", () => {
+    const log = [
+      started(),
+      delta(),
+      failed(),
+      retryPass(),
+      started(),
+      otherWarning(),
+      completed(),
+    ];
+    const tracker = createRunPhaseTracker();
+    const boundaries = log.map((e) => {
+      tracker.observe(e);
+      return tracker.startedNewPass();
+    });
+    // The warning opens pass 2; the `run.started` that follows it is the same
+    // boundary reported twice, which is what a consumer resetting its streamed
+    // text wants — the reset is idempotent, and a host that emits no warning
+    // still gets one.
+    expect(boundaries).toEqual([false, false, false, true, true, false, false]);
   });
 
   test("a terminal event is the last word, whatever the log carries after it", () => {

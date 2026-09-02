@@ -132,11 +132,15 @@ this hook renders all three, in order:
 2. **Streaming.** Deltas are applied to the placeholder as they arrive, by the
    same rule the host's own projector uses (`packages/host/src/turn/projection.ts`):
    deltas accumulate, and a `run.message.completed` overwrites the text only for
-   a provider that streamed nothing.
-3. **Reconciled.** On the run's terminal event, one resumed `drainRun` pass
-   collects the `run.verification` events a live stream closes before seeing,
-   then `listMessages` replaces the whole list with what the server stored.
-   Anything the streaming step got wrong survives for at most one round trip.
+   a provider that streamed nothing. At a **pass boundary** — a `retry_pass`
+   warning, or a second `run.started`, i.e. the host abandoning that pass and
+   asking again — the placeholder is emptied and the run is live again, mirroring
+   the host's own reset. `phase` follows the run's LAST pass, so a turn whose
+   first pass failed and whose retry answered is `completed`, not `failed`.
+3. **Reconciled.** Once the stream closes (the *task* is terminal), one resumed
+   `drainRun` pass collects anything appended after it, then `listMessages`
+   replaces the whole list with what the server stored. Anything the streaming
+   step got wrong survives for at most one round trip.
 
 A failed submit **parks its `Idempotency-Key`**: calling `submit` again with the
 same content and the same `parentMessageId` replays that key instead of asking

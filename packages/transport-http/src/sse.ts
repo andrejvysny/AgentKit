@@ -21,10 +21,19 @@
  * consistent. It is also cheap to make idempotent client-side, which a partial
  * stream is not.
  *
- * Closing: the stream ends when a terminal run event is emitted, and also when
- * the task is terminal but its log holds no terminal event (a crashed attempt,
- * a task cancelled before its worker ever wrote one) — otherwise that stream
- * would poll forever against a run that will never speak again.
+ * Closing: THE TASK'S STATUS ENDS THE STREAM, NOT A TERMINAL RUN EVENT. A run
+ * is not one pass — the host re-asks after a failed pass, after a
+ * completed-but-empty one, and once per correction round, and every pass writes
+ * its own `run.started` … `run.completed`/`run.failed` pair onto the SAME log
+ * (see the `retry_pass` warning in `@agentkit/contracts`). Closing at the first
+ * terminal event therefore ended a live stream in the middle of a run, and the
+ * client rendered pass 1's failure as the answer. So a terminal event only
+ * triggers an IMMEDIATE status read — no sleep, so a genuinely finished run
+ * still closes on the same tick it always did — and the stream ends when the
+ * task is terminal (or gone). That also covers the log that holds no terminal
+ * event at all (a crashed attempt, a task cancelled before its worker ever
+ * wrote one); without it that stream would poll forever against a run that will
+ * never speak again.
  *
  * BOTH ENDS OF THE PIPE ARE BOUNDED, and by the same number
  * (`RestStreamOptions.readBatchSize`). Reads take a `limit`, so replaying a
@@ -50,7 +59,10 @@ import type { TaskEventEnvelope } from "@agentkit/contracts";
 import type { Logger, TaskStatus, TaskStore } from "@agentkit/host";
 import { DEFAULT_STREAM_OPTIONS, type RestStreamOptions } from "./deps.js";
 
-/** Run events after which nothing else is coming. */
+/**
+ * Run events that end a PASS. Not necessarily the run: the host may open
+ * another pass after one, so only the task's status says the run is over.
+ */
 export const TERMINAL_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
   "run.completed",
   "run.failed",
@@ -269,16 +281,27 @@ export function createRunEventStream(
           };
 
           while (!closed) {
-            if ((await drain()) !== "current") return;
+            const outcome = await drain();
+            if (outcome === "closed") return;
 
+            // Read the status on a terminal run event too, and read it RIGHT
+            // HERE rather than after the poll sleep: a finished run must still
+            // close immediately, and a run whose host is starting another pass
+            // must not be closed on at all.
             const task = await tasks.getTask(taskId);
             if (task === null || TERMINAL_TASK_STATUSES.has(task.status)) {
-              // One last read. The worker appends its terminal event and THEN
-              // transitions the task, so a status read that lands between the
-              // two must not close over an event already written.
-              await drain();
-              return;
+              // One last read, until the log is genuinely walked out. The
+              // worker appends its terminal event and THEN transitions the
+              // task, so a status read that lands between the two must not
+              // close over an event already written — and a multi-pass log has
+              // more than one terminal event for that read to stop at.
+              for (;;) {
+                if ((await drain()) !== "terminal") return;
+              }
             }
+            // The pass ended but the run did not: back to the log with no
+            // pause, because the next pass's events are already being written.
+            if (outcome === "terminal") continue;
 
             await sleep(options.pollIntervalMs);
             if (closed) return;
