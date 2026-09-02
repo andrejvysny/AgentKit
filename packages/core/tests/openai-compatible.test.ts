@@ -364,3 +364,32 @@ describe("OpenAiCompatibleClient capability probe", () => {
     expect(caps.toolCalling).toBe(false);
   });
 });
+
+describe("OpenAiCompatibleClient run.failed error codes", () => {
+  const failedEvent = (events: AiRunEvent[]) =>
+    events.find((e) => e.type === "run.failed") as
+      | (AiRunEvent & { data: { errorMessage: string; errorCode?: string } })
+      | undefined;
+
+  it("codes a request that never produced a response as network_error", async () => {
+    const client = makeClient((async () => {
+      throw new Error("ECONNREFUSED 127.0.0.1:1");
+    }) as unknown as typeof fetch);
+
+    const failed = failedEvent(await collectStream(client));
+    expect(failed).toBeDefined();
+    expect(failed!.data.errorMessage).toContain("ECONNREFUSED");
+    expect(failed!.data.errorCode).toBe("network_error");
+  });
+
+  it("codes a 200 with no body as empty_body", async () => {
+    const bodiless = { ok: true, status: 200, body: null };
+    const client = makeClient(
+      (async () => bodiless) as unknown as typeof fetch,
+    );
+
+    const failed = failedEvent(await collectStream(client));
+    expect(failed).toBeDefined();
+    expect(failed!.data.errorCode).toBe("empty_body");
+  });
+});

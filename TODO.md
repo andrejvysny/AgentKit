@@ -1,5 +1,17 @@
 # TODO — hardening tranche 2 (plan: ~/.claude/plans/act-as-senior-software-linked-seal.md, ADR 0014, contract 0.4.0 → 0.5.0)
 
+Updated: 2026-09-02 (session 2)
+
+## Now (plan: ~/.claude/plans/snappy-munching-wren.md — waves A→E)
+
+- [ ] Wave A — A1 inline: `errorCode` on 2 `run.failed` sites (core provider) + flaky e2e `waitFor` budgets (react/client)
+- [ ] Wave A — A2 (impl-critical): sqlite `SCHEMA_VERSION` 7→8 (`idx_messages_run`, `proposals.claimed_at`), `ProposalRecord.claimedAt`, store-side `poisonCount` on `endAttempt(abandoned)`, conformance ×2 adapters
+- [ ] Wave A — A3 (impl-critical): 5.6 E2E — crash after internal assistant record → recover → attempt 2 on active path; zombie cannot land terminal
+- [ ] Wave B — 5.1: `CONTRACT_VERSION` 0.5.0, 4 Phase-2 golden scenarios, re-record goldens once, release prep (umbrella 0.5.0, `#v0.5.0` snippets), CHANGELOG 0.5.0
+- [ ] Wave C — 5.5 docs (ADR 0014, contracts.md, roadmap, migration deltas, ports/architecture, sqlite README) ∥ verifier wave 2 (host/adapters/runner + 4.1 client/react); fix findings
+- [ ] Wave D — Phase 6: `turn-runner.ts` split ∥ `sqlite-assistant-store.ts` split (pure moves)
+- [ ] Wave E — verifier wave 3 (pure-move check + A2/A3/B), final gate, handoff files + memory + Run log
+
 ## Phase 0 — stop the bleeding
 - [x] 0.1 write-policy body `chatId` override (B1) — inline
 - [x] 0.2 sqlite/memory transaction owner gate (D1, D2)
@@ -53,7 +65,19 @@
 - [ ] turn-runner.ts split
 - [ ] sqlite-assistant-store.ts split
 
-## Verifier passes
-- [ ] after Phase 0–2 wave
-- [ ] after Phase 3–4 wave
-- [ ] after Phase 5–6
+## Verifier passes (fresh-context `reviewer-critical`, read-only, 2 agents per wave)
+- [x] wave 1 — Phase 0/2/4 + 5.2–5.4 (25 findings, all closed: V1–V14, W1–W11)
+- [ ] wave 2 — Phase 1 (fencing), Phase 3 (host), adapters V7–V9, 4.1 multi-pass
+- [ ] wave 3 — after Phase 5–6
+
+## Follow-ups surfaced by agents/verifiers (not in plan; decide before or after 5.5)
+- [ ] `poisonCount` exact only if incremented on `endAttempt(abandoned)` store-side
+- [ ] `idx_messages_run ON messages(chat_id, run_id, depth)` + `ProposalRecord.claimedAt` at next sqlite `SCHEMA_VERSION` bump
+- [ ] two other `run.failed` sites in `openai-compatible.ts` still lack `errorCode`
+- [ ] `docs/contracts.md` warning table lacks Phase-2 codes (folds into 5.5)
+- [ ] memory adapter does NOT queue ordinary writes behind an open tx (documented adapter-MAY); full parity needs sub-store state injection
+- [ ] react/client real-socket e2e tests flake under concurrent test load (~1 s `waitFor`); raise budgets or serialize
+- [ ] `useChat.error` stale until reconcile during pass 2; failed submit clears run fields of a concurrently accepted run
+- [ ] MCP `toolAliases` values ungrammatical at REST boundary; `withHookDeadline` cannot cancel hooks (needs AbortSignal on hook ports)
+- [ ] no golden scenario covers Phase-2 paths (byte cap, dup ids, timeout, `incomplete`)
+- [ ] `resume.test.ts` now ~2.8 s (retry floor 250 ms)

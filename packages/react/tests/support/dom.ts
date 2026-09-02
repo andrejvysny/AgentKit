@@ -100,3 +100,11 @@ if (typeof global["document"] === "undefined") {
  * not something a lint pass or a refactor can drop as unused.
  */
 export const domReady = true;
+
+// Imported dynamically, AFTER registration: `@testing-library/react` binds
+// `document.body` at import time, so it must not be hoisted above the DOM.
+// The real-socket cases in this suite have flaked under concurrent test load
+// with testing-library's 1 s default; a generous ceiling costs nothing when
+// the expectation holds early.
+const { configure } = await import("@testing-library/react");
+configure({ asyncUtilTimeout: 10_000 });
