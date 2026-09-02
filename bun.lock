@@ -106,6 +106,7 @@
       "dependencies": {
         "@agentkit/contracts": "workspace:*",
         "ajv": "^8.17.1",
+        "ajv-formats": "^3.0.1",
       },
       "devDependencies": {
         "@agentkit/testing": "workspace:*",
