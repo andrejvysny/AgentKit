@@ -67,7 +67,7 @@ Updated: 2026-09-02 (session 2)
 
 ## Verifier passes (fresh-context `reviewer-critical`, read-only, 2 agents per wave)
 - [x] wave 1 — Phase 0/2/4 + 5.2–5.4 (25 findings, all closed: V1–V14, W1–W11)
-- [ ] wave 2 — Phase 1 (fencing), Phase 3 (host), adapters V7–V9, 4.1 multi-pass
+- [x] wave 2 — Phase 1 (fencing), Phase 3 (host), adapters V7–V9, 4.1 multi-pass (2a: 7 findings, 2b: 9 findings — all HIGH/MED fixed; F6/F9 of 2b deferred)
 - [ ] wave 3 — after Phase 5–6
 
 ## Follow-ups surfaced by agents/verifiers (not in plan; decide before or after 5.5)
