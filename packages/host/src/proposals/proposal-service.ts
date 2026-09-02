@@ -73,6 +73,25 @@ export interface InvalidateForRevisionInput {
   newRevision: string;
 }
 
+export interface ReconcileOptions {
+  /**
+   * Leave an `applying` record alone until it has looked stuck for this long.
+   * Default `0` — reconcile everything, which is correct at boot and is what
+   * this method did before the option existed.
+   *
+   * WHAT IT MEASURES, precisely, because the limitation matters more than the
+   * option: a proposal record carries no "claimed at" stamp, so the age used is
+   * the newest timestamp the record HAS — `appliedAt`, else `decidedAt`, else
+   * `createdAt`. For the auto-apply path those are within milliseconds of the
+   * claim and the window means what it says. For a write a human approved and
+   * something applied much later, `decidedAt` is older than the claim, so a
+   * live apply can look stale and be reconciled out from under itself. That is
+   * the case {@link ProposalService.reconcileInterrupted} being boot-only
+   * exists to rule out, and no window here can rule it out instead.
+   */
+  staleAfterMs?: number;
+}
+
 export interface ReconcileReport {
   /** Proposals found stuck in `applying`. */
   reconciled: number;
@@ -305,7 +324,8 @@ export class ProposalService {
   }
 
   /**
-   * Resolve every proposal left in `applying` by a crash.
+   * Resolve every proposal left in `applying` by a crash. **CALL IT AT BOOT,
+   * before any apply of this process can be in flight.**
    *
    * The applier — not this service — is the authority on whether the side effects
    * landed, so each stuck record is settled by looking its operation id up. When
@@ -313,10 +333,33 @@ export class ProposalService {
    * `interrupted`: "we cannot prove it landed" must be treated exactly like "it
    * did not", because a retry of a write that silently succeeded is the one
    * outcome nobody can undo.
+   *
+   * WHY BOOT-ONLY. `applying` means "an apply claimed this record", and nothing
+   * on the record distinguishes "a process that died" from "a process that is
+   * inside `applier.apply` right now". Called while a live apply is running,
+   * this writes a `failed` outcome under that apply's own `operationId` — and
+   * the real apply then throws when it tries to finalize a record that is
+   * already terminal, after its side effects have happened.
+   *
+   * {@link ReconcileOptions.staleAfterMs} is the guard for a host that cannot
+   * keep the call at boot (a periodic sweep, a shared database). It is a
+   * SAFETY MARGIN, not a substitute: see that field for what it can and cannot
+   * measure.
    */
-  async reconcileInterrupted(): Promise<ReconcileReport> {
+  async reconcileInterrupted(
+    options: ReconcileOptions = {},
+  ): Promise<ReconcileReport> {
     const proposals = this.deps.store.proposals;
-    const stuck = await proposals.listByStatus("applying");
+    const staleAfterMs = options.staleAfterMs ?? 0;
+    const all = await proposals.listByStatus("applying");
+    const now = this.deps.clock.now().getTime();
+    // Skipped records are not "reconciled" and are not counted as such: the
+    // caller reads this report to decide whether a sweep found anything, and
+    // counting a record it deliberately left alone would say it did.
+    const stuck =
+      staleAfterMs <= 0
+        ? all
+        : all.filter((proposal) => now - lastStampMs(proposal) >= staleAfterMs);
     const report: ReconcileReport = {
       reconciled: stuck.length,
       applied: 0,
@@ -455,6 +498,19 @@ export class ProposalService {
       details,
     );
   }
+}
+
+/**
+ * The newest instant a proposal record carries, in epoch ms — the best
+ * available answer to "how long has this looked stuck?". See
+ * {@link ReconcileOptions.staleAfterMs} for why that is not the same as when
+ * the apply claimed it. An unparsable stamp reads as epoch 0, i.e. maximally
+ * old, so a corrupt record is reconciled rather than skipped forever.
+ */
+function lastStampMs(proposal: ProposalRecord): number {
+  const stamp = proposal.appliedAt ?? proposal.decidedAt ?? proposal.createdAt;
+  const parsed = new Date(stamp).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 /** One line describing a failed outcome, for the record's `reason`. */

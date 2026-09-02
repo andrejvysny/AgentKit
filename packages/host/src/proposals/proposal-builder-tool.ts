@@ -73,6 +73,17 @@ export interface ProposalBuilderToolOptions<TInput> {
 const DEFAULT_POLICY_ID = "session-write-policy";
 
 /**
+ * What the model is told when an auto-apply threw. Fixed text: the thrown
+ * message comes from host code and goes into the model's context verbatim, and
+ * the actionable part of it ("staged, did not land, look at the state before
+ * retrying") does not depend on which line of the applier failed. The full
+ * message goes to {@link ProposalBuilderToolOptions.logger}.
+ */
+export const AUTO_APPLY_FAILED_MESSAGE =
+  "Auto-apply failed: the write was staged but did not land. Check the current " +
+  "state before retrying, and use a new action_id for whatever still needs doing.";
+
+/**
  * Build a write tool that stages a proposal and — only when the policy says so —
  * applies it in the same call.
  *
@@ -189,6 +200,11 @@ export function createProposalBuilderTool<TInput>(
           chatId,
           toolName,
           proposalKind: built.kind,
+          // The scope the staged proposal actually writes to, so a standing
+          // "yes" given for one document cannot auto-apply a write the model
+          // aimed at another — `scopeKey` is derived from tool input, which is
+          // model-supplied. See `AutoApplyQuery.scopeKey`.
+          scopeKey: proposal.scopeKey,
           risk: built.risk,
         });
 
@@ -227,6 +243,13 @@ export function createProposalBuilderTool<TInput>(
         });
         return applyResult(proposal, outcome, buildSkipped, allWarnings, ctx);
       } catch (err) {
+        // FIXED MODEL-FACING TEXT, full message to the logger. `err` here comes
+        // from the host's applier or its store — a stack trace, a connection
+        // string, a row of somebody else's data — and `summary`/`warnings`/
+        // `modelData` are all read verbatim by the model on the next turn.
+        // Staging already refuses to hand a guard's thrown message to the model
+        // for exactly this reason; the apply path is the same trust boundary.
+        // What the model can act on is "it did not land", which this says.
         const message = err instanceof Error ? err.message : String(err);
         options.logger?.warn("write tool auto-apply failed", {
           toolName,
@@ -236,15 +259,18 @@ export function createProposalBuilderTool<TInput>(
         return {
           ok: false,
           status: "partial",
-          summary: `Auto-apply failed: ${message}`,
+          summary: AUTO_APPLY_FAILED_MESSAGE,
           data: projectProposal({ ...proposal, status: "failed" }),
           modelData: {
             status: "partial",
             appliedCount: 0,
-            skipped: [...buildSkipped, { id: "apply", reason: message }],
+            skipped: [
+              ...buildSkipped,
+              { id: "apply", reason: AUTO_APPLY_FAILED_MESSAGE },
+            ],
           } satisfies WriteToolModelData,
           sources: [],
-          warnings: [...allWarnings, `Auto-apply failed: ${message}`],
+          warnings: [...allWarnings, AUTO_APPLY_FAILED_MESSAGE],
           truncated: built.truncated,
           limits: ctx.limits,
         };

@@ -21,16 +21,16 @@
 - [x] 2.6 goldens replayed live for all 5 scenarios; re-record once (E3)
 
 ## Phase 3 — host orchestration
-- [ ] 3.1 recovery chain resume (C1)
-- [ ] 3.2 throw path finalize + run.failed/cancelled (C2, C12, C7, C10)
-- [ ] 3.3 pass-boundary `retry_pass` warning (F-OWN-1 host half)
-- [ ] 3.4 submit exclusivity `chat_busy` default ON (C5)
-- [ ] 3.5 hook deadlines (C6)
-- [ ] 3.6 proposals: scopeKey allowance, fixed strings, reconcile guard, key escape (C4, C8, C9, C14)
-- [ ] 3.7 emulated-call detector (C11)
-- [ ] 3.8 projection order (C13)
-- [ ] 3.9 delta write coalescing (F-OWN-4)
-- [ ] 3.10 harness `includeUserRequest` (F-OWN-5)
+- [x] 3.1 recovery chain resume (C1)
+- [x] 3.2 throw path finalize + run.failed/cancelled (C2, C12, C7, C10)
+- [x] 3.3 pass-boundary `retry_pass` warning (F-OWN-1 host half)
+- [x] 3.4 submit exclusivity `chat_busy` default ON (C5)
+- [x] 3.5 hook deadlines (C6)
+- [x] 3.6 proposals: scopeKey allowance, fixed strings, reconcile guard, key escape (C4, C8, C9, C14)
+- [x] 3.7 emulated-call detector (C11)
+- [x] 3.8 projection order (C13)
+- [x] 3.9 delta write coalescing (F-OWN-4)
+- [x] 3.10 harness `includeUserRequest` (F-OWN-5)
 
 ## Phase 4 — serving surfaces
 - [x] 4.1 stream close rule + runPhase last-terminal + react reset (F-OWN-1)
