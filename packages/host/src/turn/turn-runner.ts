@@ -72,6 +72,7 @@ import {
   type RunProjectionState,
   type RunProjector,
 } from "./projection.js";
+import type { PassInput, PassResult, PassState } from "./pass-types.js";
 import { stageRegistry } from "./registry-staging.js";
 import {
   RETRY_MAX_TOOL_ITERATIONS,
@@ -209,40 +210,6 @@ export interface TurnRunnerDeps {
   logger?: Logger;
   maxToolIterations?: number;
   historyLimit?: number;
-}
-
-/**
- * Mutable state accumulated across one provider pass.
- *
- * It is the projection seam's own state — see {@link RunProjectionState} — not
- * a second model beside it: every field this class reads between passes
- * (`content` and `toolCallIds` for the retry decisions, `lastMessageId` for the
- * banners it chains) is one the projector maintains, and two structures
- * tracking the same run would be two answers to "what has this turn written".
- */
-export type PassState = RunProjectionState;
-
-export interface PassInput {
-  task: TaskRecord;
-  /** The conversation this turn belongs to, read once from the payload. */
-  chatId: string;
-  ctx: TaskExecutionContext;
-  client: AiProviderClient;
-  /** The resolved provider's id — what the usage port bills against. */
-  providerId: string;
-  model: string;
-  messages: AiChatMessage[];
-  registry: AiToolRegistry;
-  bindings: AiContextBinding[];
-  limits: AiToolLimits;
-  assistantMessageId: string;
-  state: PassState;
-  maxToolIterations?: number;
-}
-
-export interface PassResult {
-  terminal: PassTerminal;
-  appendedMessages: readonly AiChatMessage[];
 }
 
 /**
