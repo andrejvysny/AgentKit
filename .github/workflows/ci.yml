@@ -100,8 +100,18 @@ jobs:
       # `bun:` import would fail by design. Every OTHER published package is
       # listed here and must stay plain, portable JavaScript.
       - name: shippable dists import nothing from bun
+        # `! grep` alone is vacuous when a dist is missing: grep exits 2 on a
+        # missing path and the negation turns that into success. Prove every
+        # dist exists first, then grep every import form (`from`, side-effect
+        # `import "bun:x"`, dynamic `import("bun:x")`, `require`).
         run: |
-          ! grep -rE "require\(['\"]bun|from ['\"]bun:" \
+          for d in packages/contracts packages/client packages/react packages/core \
+                   packages/host packages/adapters-memory packages/runner-local \
+                   packages/mcp-client packages/transport-http packages/mcp-server \
+                   packages/testing; do
+            test -d "$d/dist" || { echo "missing $d/dist"; exit 1; }
+          done
+          ! grep -rE "require\(['\"]bun|from ['\"]bun:|import\(?['\"]bun:" \
             packages/contracts/dist \
             packages/client/dist \
             packages/react/dist \

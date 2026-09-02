@@ -25,7 +25,7 @@
  * below.
  */
 import { Type, type Static } from "@sinclair/typebox";
-import { AiContentPartSchema } from "./content.js";
+import { AiMessageContentSchema } from "./content.js";
 import {
   AiProviderKindSchema,
   AiProviderModelSchema,
@@ -331,7 +331,7 @@ export const MessageDtoSchema = Type.Object({
    * them; one that does not ignores the part, exactly as it would ignore a part
    * type from a later contract version.
    */
-  content: Type.Union([Type.String(), Type.Array(AiContentPartSchema)]),
+  content: AiMessageContentSchema,
   toolCalls: Type.Optional(Type.Array(AiToolCallSchema)),
   toolCallId: Type.Optional(Type.String()),
   /** The message this one answers. Absent on a root — and on a pre-branching server. */
@@ -715,7 +715,7 @@ export const SubmitMessageRequestSchema = Type.Object({
    * attachment is. The host resolves refs per provider pass; see
    * `AttachmentResolver` in `@agentkit/host`.
    */
-  content: Type.Union([Type.String(), Type.Array(AiContentPartSchema)]),
+  content: AiMessageContentSchema,
   /** Overrides the provider's default model for this turn only. */
   model: Type.Optional(Type.String()),
   /**
