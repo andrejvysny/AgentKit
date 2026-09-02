@@ -36,6 +36,18 @@ or rolls all of it back on a throw. An adapter that cannot roll back (a
 plain in-memory store) must declare `capabilities.atomicTransactions: false`
 to the conformance harness rather than silently pass a weaker guarantee.
 
+**Callers are serialized per store handle.** A `transaction()` (or a worker's
+`claimNext`) issued while another caller's transaction is open WAITS for it and
+then runs in a transaction of its own, so a throw rolls back only that caller's
+writes — it used to join whatever was open and be discarded by a stranger's
+rollback. Port calls the callback makes through the `tx` it is handed join that
+transaction, and a nested `tx.transaction(...)` flattens into it rather than
+nesting. The corollary is that a callback must do its work through `tx`: a call
+made on the ROOT store from inside the callback is indistinguishable from an
+unrelated caller's, so awaiting a root-store `transaction()`/`claimNext` in
+there waits on a transaction that cannot finish until the callback returns.
+Both reference adapters do this, and the conformance suite grades it.
+
 **Reference / conformance**: `MemoryAssistantStore` in
 [`packages/adapters-memory/src/`](../packages/adapters-memory/src/) and
 `SqliteAssistantStore` in
@@ -324,13 +336,15 @@ attempt: it survives a failed attempt and a retry, so attempt 2 reads attempt
   with the previous attempt's snapshot still in place until it writes one.
 
 > **Hazard class: check-then-act across an `await` inside a transaction.**
-> In a single-event-loop host, a concurrent store call **flattens into an
-> in-flight async transaction** rather than opening its own (that is the
-> documented semantics of `AssistantStore.transaction`, and of
-> `SqliteConnection`'s `txDepth`). So an invariant checked before an `await`
-> and acted on after it is *not* atomic, however well-wrapped the transaction
-> is: a verifier drove exactly this against `ConversationService.deleteChat`
-> and got a `claimNext` claiming a task the committed transaction had deleted.
+> In a single-event-loop host, a concurrent SYNCHRONOUS store call still
+> **flattens into an in-flight async transaction** rather than opening its own
+> (over `bun:sqlite` there are no savepoints, and the same handle is what lets
+> the MCP config store write inside a host transaction at all). Only the
+> transaction-opening calls — `transaction` and `claimNext` — queue instead. So
+> an invariant checked before an `await` and acted on after it is *not* atomic,
+> however well-wrapped the transaction is: a verifier drove exactly this
+> against `ConversationService.deleteChat` and got a `claimNext` claiming a
+> task the committed transaction had deleted.
 > Any invariant of that shape must be enforced by a **single synchronous
 > statement or transaction inside the adapter** — which is why the busy check
 > now lives in `deleteByScope` and is pinned there by the shared conformance
@@ -380,9 +394,10 @@ it there (never two live claims for one task, fencing strictly monotonic,
 adapters also support and are tested against **multiple store handles over
 one backing file/store** — two `SqliteAssistantStore` instances on one
 sqlite file, or two `MemoryTaskStore`s over the same in-memory-equivalent
-topology — a real deployment shape a single per-instance claim mutex cannot
-cover; SQLite's own transactionality (a busy-wait strategy tuned separately
-for synchronous vs. `await`-holding transactions) does the work instead.
+topology — a real deployment shape a single per-handle transaction queue
+cannot cover; SQLite's own transactionality (a busy-wait strategy tuned
+separately for synchronous vs. `await`-holding transactions) does the work
+instead.
 One gap remains, documented rather than fixed: a synchronous transaction on
 one handle cannot event-loop-wait for another handle's in-flight
 *asynchronous* claim in the same process (see ADR 0006's Consequences and
