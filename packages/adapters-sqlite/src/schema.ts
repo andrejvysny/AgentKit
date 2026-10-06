@@ -40,7 +40,7 @@
  * stored as TEXT; the store (de)serializes them, SQLite never inspects their
  * contents.
  */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * The text {@link SCHEMA_V8}'s search index sees for one message row, as SQL.
@@ -70,20 +70,13 @@ function messageSearchText(alias: string): string {
 }
 
 /**
- * The DDL for {@link SCHEMA_VERSION}. There are NO migrations in this
- * workspace-private adapter: {@link SqliteAssistantStore} stamps
- * `PRAGMA user_version` on a fresh database and refuses to open one written by
- * a different version, because a reference adapter that shipped half-tested
- * migration scripts would be claiming a durability guarantee it does not have.
- * A host that needs upgrades in place owns that story with its own store.
- *
-
- * That refusal IS the v7 → v8 upgrade path, exactly as it was the v6 → v7 and
- * v5 → v6 ones: a database stamped 7 raises `sqlite_schema_version` and is
- * recreated. The `DEFAULT` clauses on the newer columns (`chats.archived`,
- * `messages.content_format`, `settings.tool_calling_mode`) are therefore not
- * migration aids — they are what keeps the DDL re-appliable over a database
- * this build already wrote, which is the property every statement here has.
+ * The original v8 baseline DDL, shared by Bun and Node drivers. Database opens
+ * initialize this baseline and apply registered incremental migrations in one
+ * transaction before stamping `PRAGMA user_version`. No pre-v8 development
+ * migrations ship: those files raise `sqlite_schema_version` without deletion
+ * or recreation. Original v8 files remain supported after layout validation.
+ * The `DEFAULT` clauses keep this baseline re-appliable over an existing v8
+ * database; future version changes belong to the migration registry.
  *
  * v8 adds two things, both durability follow-ups rather than features:
  * `idx_messages_run` on `messages(chat_id, run_id, depth, order_key)`, which is
@@ -200,8 +193,8 @@ SELECT m.rowid AS rowid, ${messageSearchText("m")} AS body FROM messages AS m;
 -- without telling FTS5, so every posting silently starts naming a different
 -- message -- wrong hits and snippets cut from bodies that never held the term,
 -- with nothing that raises and no later write that repairs it. Rebuilding means
--- recreating the database, or re-running the backfill at the bottom of this
--- block by hand. See the VACUUM caveat in this package's README.
+-- backing up the file and re-running the backfill at the bottom of this block
+-- by hand. See the VACUUM caveat in this package's README.
 --
 -- unicode61 with diacritic folding is the tokenizer a chat search wants: it
 -- splits on punctuation and case, and makes "resume" find "résumé". No stemmer

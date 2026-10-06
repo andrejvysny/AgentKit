@@ -7,7 +7,7 @@
       "model": "gpt-golden",
       "toolCount": 0
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_f13f6084-7dce-4372-a4bf-7c333a701cf8",
     "seq": 0
   },
@@ -18,7 +18,7 @@
     "data": {
       "delta": "half an ans"
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_cba4bf21-199f-4288-87bc-0198d7730d62",
     "seq": 1
   },
@@ -30,7 +30,7 @@
       "errorMessage": "socket hang up",
       "errorCode": "provider_error"
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_e99c4f1b-b364-4330-bdcf-2c136bca4020",
     "seq": 2
   }

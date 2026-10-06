@@ -7,7 +7,7 @@
  */
 import type { RunDto } from "@agentkit/contracts";
 import { jsonResponse } from "../http.js";
-import { notFound } from "../problem.js";
+import { notFound, notImplemented, problemResponse } from "../problem.js";
 import { chatIdOfTask, runDto } from "../projections.js";
 import { resolveStreamOptions } from "../deps.js";
 import { createRunEventStream, resolveStartSeq, SSE_HEADERS } from "../sse.js";
@@ -35,6 +35,28 @@ export async function cancelRun(ctx: RouteContext): Promise<Response> {
   await ctx.deps.tasks.cancelTask(runId);
   const after = await readRun(ctx, runId);
   return jsonResponse(after ?? before, 202);
+}
+
+export async function resumeRun(ctx: RouteContext): Promise<Response> {
+  const runId = pathParam(ctx, "runId");
+  const before = await readRun(ctx, runId);
+  if (before === null) return notFound(`Run not found: ${runId}`, ctx.instance);
+  if (ctx.deps.tasks.resumeTask === undefined) {
+    return notImplemented(
+      "This deployment does not support explicit run resume.",
+      ctx.instance,
+    );
+  }
+  if (before.status !== "interrupted") {
+    return problemResponse({
+      status: 409,
+      code: "run_not_interrupted",
+      detail: "Only an interrupted run can be resumed.",
+      instance: ctx.instance,
+    });
+  }
+  await ctx.deps.tasks.resumeTask(runId);
+  return jsonResponse((await readRun(ctx, runId)) ?? before, 202);
 }
 
 /**

@@ -35,7 +35,11 @@ import {
 import { SingleProcessTaskRunner } from "@agentkit/runner-local";
 import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
 import type { FetchLike } from "@agentkit/client";
-import { CONTRACT_VERSION, type AiRunEvent } from "@agentkit/contracts";
+import {
+  CONTRACT_VERSION,
+  type AiRunEvent,
+  type RunStatusDto,
+} from "@agentkit/contracts";
 import {
   createTestEventStamper,
   MockProviderClient,
@@ -243,7 +247,18 @@ export class RetryingProvider extends MockProviderClient {
     await new Promise((resolve) =>
       setTimeout(resolve, RetryingProvider.PASS_GAP_MS),
     );
-    if (pass === 1) throw new Error("this endpoint cannot take tools");
+    if (pass === 1) {
+      yield stamp({
+        type: "run.failed",
+        runId: input.runId,
+        timestamp: nowIso(),
+        data: {
+          errorCode: "unsupported_tools",
+          errorMessage: "this endpoint cannot take tools",
+        },
+      });
+      return;
+    }
     yield stamp({
       type: "run.message.completed",
       runId: input.runId,
@@ -274,7 +289,7 @@ export function scriptedStreamFetch(options: {
   /** The events every stream request answers with, before a CLEAN close. */
   events: (runId: string) => AiRunEvent[];
   /** What `getRun` should report instead of the run's real status. */
-  runStatus?: "failed" | "cancelled" | "completed";
+  runStatus?: RunStatusDto;
 }): ScriptedStream {
   const encoder = new TextEncoder();
   let opened = 0;

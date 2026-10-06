@@ -1,7 +1,7 @@
 # @agentkit/adapters-sqlite
 
 **The durable `AssistantStore` for a single-process host: every
-`@agentkit/host` port over `bun:sqlite`, with real transactions, lease
+`@agentkit/host` port over Bun or Node SQLite, with real transactions, lease
 fencing, and compare-and-set transitions.**
 
 This is the **production** store for a host that runs in one process — a
@@ -17,37 +17,75 @@ const store = new SqliteAssistantStore("./data/agentkit.sqlite");
 // ... use it as an AssistantStore; call store.close() on shutdown.
 ```
 
-## Bun only
+## Bun and Node drivers
 
-`bun:sqlite` is a Bun built-in, so this package **does not load under plain
-Node** — that is why its `engines` names `bun` and no `node`, and why it is
-the one published `@agentkit/*` package excluded from the repo's
-Node-loadability checks (`scripts/node-smoke.mjs` and CI's "shippable dists
-import nothing from bun" grep; it is still packed and installed by
-`scripts/pack-smoke.mjs`). Everything else in the workspace stays plain,
-portable JavaScript. A host that must run on Node wants a different adapter
-over the same ports; the port surface is unchanged, so only the construction
-site moves.
+The default entry point uses Bun's built-in `bun:sqlite`. Node 22 or newer
+uses the explicit `@agentkit/adapters-sqlite/node` entry point and the optional
+`better-sqlite3` native dependency. The published umbrella package exposes
+these as `agentkit/adapters-sqlite` and `agentkit/adapters-sqlite/node`.
+
+```ts
+import { NodeSqliteAssistantStore } from "agentkit/adapters-sqlite/node";
+
+const store = new NodeSqliteAssistantStore("./data/agentkit.sqlite");
+```
+
+Both drivers share every store implementation, the transaction gate, schema
+checks, and migrations. Their database files are interchangeable, including
+the FTS5 index. Install optional dependencies when packaging a Node host;
+applications that relocate native binaries can provide `nativeBinding` in
+`NodeSqliteAssistantStoreOptions`. Importing the Node entry point never loads
+`bun:sqlite`; importing the default entry point still requires Bun.
+
+Bindings preserve null and blob values and convert booleans to SQLite integers.
+Stored integers outside JavaScript's safe integer range are rejected rather
+than rounded. Node accepts `$`, `:`, and `@` named parameter prefixes, but
+rejects a binding bag containing several prefixes for the same name.
 
 ## It owns its database file
 
 **Give it a path nothing else manages.** The store applies its own schema on
-open and guards the file with `PRAGMA user_version`: a database written by a
-different schema version is refused, and a stale *dev* database is recreated
-rather than upgraded in place. Pointing it at a database some other migrator
-owns means two tools fighting over one `user_version` — it will refuse to
-open, or it will be refused. A dedicated file is the whole contract.
+open and guards the file with `PRAGMA user_version`. It initializes an empty
+file, recognizes the complete original v8 table layout, and applies registered
+incremental migrations in one `BEGIN IMMEDIATE` transaction. Unsupported
+versions, foreign `application_id` values, extra foreign tables, malformed
+baseline tables, and integrity failures are refused before persistent writes.
+The original v8 layout has no application marker and remains supported with
+`application_id = 0`. Valid FTS5 shadow tables are recognized explicitly.
+Pointing the adapter at a file managed by another migrator is unsupported.
 
-**The current version is 8** (`SCHEMA_VERSION` in `src/schema.ts`). Version 8
+**The current version is 9** (`SCHEMA_VERSION` in `src/schema.ts`). The v8-to-v9
+migration adds private `provider_run_scopes` and `provider_continuations` tables.
+Original v8 files upgrade transactionally; fresh databases initialize the same
+immutable v8 baseline and apply that migration. Migrated table definitions are
+checked on reopen, so a version marker alone cannot authorize a foreign layout.
+Continuation state is limited to 1 MiB UTF-8 and 1024 input items, bound to a run's
+provider/model/connection generation/chat/branch, and written only under its live
+lease. It is never stored in messages, run events, or REST DTOs. Task, message,
+and chat foreign keys remove obsolete state automatically.
+Each bound run starts with `state_required = 0`, so a failed or cancelled request
+that never saves state can be followed normally. A successful save writes state
+and sets the marker to 1 in the same transaction. Missing state thereafter fails
+closed with `provider_continuation_state_missing`. Chat or anchor deletion retains
+that marker while the task exists; task deletion removes the binding and marker.
+Every saved anchor must belong to both the bound chat and run.
+
+Version 8
 added `idx_messages_run ON messages(chat_id, run_id, depth, order_key)` — the
 whole `ORDER BY` of `lastMessageOfRun`, which crash recovery reads on every
 resumed attempt, so the plan needs no temporary b-tree over the message table —
 and `proposals.claimed_at`, the instant an apply claim was taken, which
 `reconcileInterrupted`'s staleness window measures against (see [ADR
 0014](../../docs/adr/0014-hardening-tranche-2.md)). A file written by version 7
-is **refused**, not upgraded: delete the development database and let this
-adapter recreate it. There is nothing to migrate — the same policy every earlier
-bump used, and the reason the store insists on owning its file.
+is **refused**, because no migrations exist for pre-v8 development schemas.
+Use a compatible release or restore a verified backup. The adapter never
+deletes, recreates, or silently downgrades a refused database.
+
+The production registry contains the v8-to-v9 step; v8 remains the minimum
+supported baseline. Each step advances exactly one version. A failed step rolls
+back DDL, data, and `user_version`; a subsequent open can retry it. The version
+is stamped only after all steps and integrity checks pass. Schema refusal or
+migration failure closes the newly opened handle.
 
 ## Multiple handles over one file: supported and tested
 
@@ -98,7 +136,9 @@ open transaction and every statement issued on it belongs to that one, so
 WRITES from other callers — a second `transaction()`, a worker's `claimNext`,
 an ordinary `updateChat`, and a `SqliteMcpServerConfigStore` sharing the handle
 — wait for it and then run in a transaction of their own rather than joining
-one whose rollback would erase them. READS are exempt and still join.
+one whose rollback would erase them. Durable task, event, projected-message, and
+private-continuation reads also wait for unrelated transactions to commit; their
+transaction-owner views can read their own writes.
 
 **The queue is FIFO across both kinds.** A transaction and a root write take a
 slot in the same queue when they are issued, and run in that order. Re-checking
@@ -135,15 +175,17 @@ key. With the default `agingBonus = 0` the term folds to zero and the ordering
 is plain `priority DESC, enqueued_at ASC`. See
 [ADR 0003](../../docs/adr/0003-task-dependencies-and-subagents.md).
 
-## Schema (v8)
+## Schema (v9)
 
-Single-file DDL in `src/schema.ts` (`SCHEMA_V8`), applied idempotently
-(`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). No migrations ship — see
-"It owns its database file" above.
+The immutable baseline DDL in `src/schema.ts` (`SCHEMA_V8`) is applied idempotently
+(`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). The transactional migration
+registry then adds the private v9 continuation tables — see "It owns its database
+file" above. Unsupported older or future versions are refused without reset,
+downgrade, or destructive recovery.
 
-**v8 needs a fresh dev database.** A file stamped `user_version = 7` is refused
-with `sqlite_schema_version`, not upgraded — that refusal *is* the upgrade path
-here, by design. Delete the old file and let the store recreate it.
+Original v8 databases remain supported. A file stamped `user_version = 7` is
+refused with `sqlite_schema_version`; use a compatible release or a verified
+backup. No destructive recovery runs automatically.
 
 v8 adds two durability follow-ups: `idx_messages_run` on
 `messages(chat_id, run_id, depth)` — `lastMessageOfRun`'s whole query, the
@@ -235,6 +277,7 @@ v6 added chat lifecycle and full-text search:
 | `settings` (single row, `id = 1`) | `SettingsStore` |
 | `mcp_servers` | `McpServerConfigStore` (`@agentkit/mcp-client`) — served by the standalone `SqliteMcpServerConfigStore`, not by the aggregate. |
 | `outbox` | `OutboxStore` |
+| `provider_run_scopes`, `provider_continuations` | Private `ProviderContinuationStore`; never REST DTOs. |
 | `fencing_counter` (single row) | *not a port record* — backs `TaskStore.acquireLease`'s store-global monotonic fencing token. |
 
 Notes:
@@ -276,9 +319,8 @@ repairs it — the triggers only maintain rows that change *after* the fact.
 
 Nothing in this adapter emits `VACUUM`; this caveat is about a DBA, a backup
 script, or a "compact the database" button reaching for the file. If one has
-already run, the index has to be rebuilt from the content table — in dev, by
-deleting and recreating the database (this adapter's answer to schema drift
-too), or by re-running the DDL's own backfill against the file:
+already run, back up the file and rebuild the index from the content table
+using the DDL's backfill through the ordinary SQL path:
 
 ```sql
 INSERT INTO message_search(message_search) VALUES('delete-all');

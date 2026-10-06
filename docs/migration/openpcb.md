@@ -12,19 +12,28 @@ in it was modified. Line numbers were taken against the working tree at the time
 of writing; if a cited line has drifted, the symbol name in the same row is the
 durable anchor.
 
-**AgentKit at the time of writing:** `master` @ `702434d`, umbrella package
-version `0.5.0` (`packages/agentkit/package.json:3`), `CONTRACT_VERSION`
-`"0.5.0"` (`packages/contracts/src/version.ts:10`), REST v1 = **38 operations**
-(`packages/contracts/src/rest.ts:85-199`, enumerated by
-`Object.keys(REST_ROUTES).length`). The install pin is:
+**Historical source baseline:** `master` @ `702434d`, prepared umbrella
+version `0.5.0` and contract version `0.5.0`. The original file/line citations
+below describe that inspected source tree, not a current release acceptance.
+No local or remote release tag, or GitHub release, was found in the 2026-10-06
+read-only audit. The previous speculative `#v0.5.0` install pin is withdrawn.
 
-```jsonc
-// OpenPCB/package.json
-"dependencies": { "agentkit": "github:andrejvysny/AgentKit#v0.5.0" }
-```
+Use an exact qualified Release A tarball for migration foundation work; use a
+separate immutable Release B candidate when adding Responses. Each needs its own
+source manifest, package version, tarball SHA-256, clean npm/Bun consumer evidence,
+and acceptance review. Prepared source metadata does not authorize publication.
+See [the qualification procedure](../../DEVELOPING.md#qualifying-a-release-candidate).
 
-Twelve subpaths, of which OpenPCB uses nine: `agentkit/{contracts,core,host,
-adapters-sqlite,runner-local,transport-http,mcp-client,mcp-server,client,react}`.
+For a Node/Electron backend, select `agentkit/adapters-sqlite-node` and install
+`better-sqlite3@13.0.3` explicitly. Node >=22 is required for this driver.
+The Bun host retains `agentkit/adapters-sqlite`. The generic Node fixture in
+[examples/desktop-host](../../examples/desktop-host/README.md) uses a fake provider,
+real HTTP/SSE, and a durable file reopened after shutdown. An external native
+addon in a CommonJS Node bundle is only an Electron-style packaging check;
+a pinned actual Electron RunAsNode native load/reopen gate is also
+available in the qualification script. Application UI/renderer/installer
+qualification and migration remain consumer gates. This playbook does not claim OpenPCB UI, PCB tools, OAuth,
+restricted DevKit, or production data migration was executed.
 
 ---
 

@@ -60,6 +60,52 @@ export function normalizeActionId(
   return trimmed;
 }
 
+/** Canonical JSON hashing keeps object key order from changing consent identity. */
+export async function writePayloadFingerprint(input: unknown): Promise<string> {
+  const payload =
+    typeof input === "object" && input !== null && !Array.isArray(input)
+      ? Object.fromEntries(
+          Object.entries(input).filter(([key]) => key !== "action_id"),
+        )
+      : input;
+  return hashCanonical(payload);
+}
+
+/** Actor keys preserve the domain scope used by revision checks and application. */
+export async function invocationActionId(
+  actionId: string,
+  identity: {
+    actorId: string;
+    chatId: string;
+    scopeKey: string;
+    toolName: string;
+    payloadFingerprint: string;
+    revision: string | null;
+  },
+): Promise<string> {
+  return `mcp_${await hashCanonical([identity, actionId])}`;
+}
+
+async function hashCanonical(value: unknown): Promise<string> {
+  const encoded = new TextEncoder().encode(
+    JSON.stringify(canonicalValue(value)),
+  );
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, entry]) => [key, canonicalValue(entry)]),
+  );
+}
+
 /**
  * Prompt text explaining the key to the model. Host-neutral: "scope" is whatever
  * the host's write tools operate on, and the host substitutes its own noun when

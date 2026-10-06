@@ -1,6 +1,6 @@
 {
   "name": "agentkit",
-  "version": "0.5.0",
+  "version": "0.7.0",
   "description": "Embeddable AI-assistant framework: chat-with-tools loop, durable task orchestration, and storage/transport adapters, as one installable package with subpath imports.",
   "license": "MIT",
   "type": "module",
@@ -67,6 +67,10 @@
     "./runner-local": {
       "types": "./dist/runner-local/index.d.ts",
       "import": "./dist/runner-local/index.js"
+    },
+    "./adapters-sqlite-node": {
+      "types": "./dist/adapters-sqlite/node.d.ts",
+      "import": "./dist/adapters-sqlite/node.js"
     }
   },
   "repository": {
@@ -81,10 +85,14 @@
     "ajv-formats": "^3.0.1"
   },
   "peerDependencies": {
-    "react": ">=18"
+    "react": ">=18",
+    "better-sqlite3": "^13.0.3"
   },
   "peerDependenciesMeta": {
     "react": {
+      "optional": true
+    },
+    "better-sqlite3": {
       "optional": true
     }
   }

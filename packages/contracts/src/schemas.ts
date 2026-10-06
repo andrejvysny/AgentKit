@@ -120,3 +120,5 @@ export {
   ProblemDetailsDtoSchema,
   RunEventFrameDtoSchema,
 } from "./rest.js";
+
+export { AiProviderContinuationSchema } from "./provider-continuation.js";

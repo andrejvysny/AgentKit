@@ -74,6 +74,9 @@ export interface TaskRunner {
    */
   recover(): Promise<void>;
 
+  /** Explicitly resume an interrupted run using its original identity. */
+  resume?(taskId: string): Promise<void>;
+
   startWorker(
     worker: TaskWorker,
     opts?: StartWorkerOptions,

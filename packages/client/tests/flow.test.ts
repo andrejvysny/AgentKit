@@ -60,10 +60,11 @@ describe("a full chat turn", () => {
     expect(events.map((e) => e.seq)).toEqual(events.map((_e, i) => i));
     expect(events.at(-1)?.type).toBe("run.completed");
     expect(isTerminalRunEvent(events.at(-1)!)).toBe(true);
-    expect(runPhase({ events })).toBe("completed");
+    expect(runPhase({ events })).toBe("settling");
 
     const run = await client.getRun({ runId: submitted.result.runId });
     expect(run.status).toBe("completed");
+    expect(runPhase({ status: run.status, events })).toBe("completed");
     expect(run.chatId).toBe(chat.id);
 
     const page = await client.listMessages({ chatId: chat.id });

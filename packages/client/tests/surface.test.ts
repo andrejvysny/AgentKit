@@ -88,6 +88,7 @@ const DRIVERS = {
     }
   },
   cancelRun: (c) => c.cancelRun({ runId: "r-1" }),
+  resumeRun: (c) => c.resumeRun({ runId: "r-1" }),
   listToolEvents: (c) => c.listToolEvents({ chatId: "c-1" }),
   listProposals: (c) => c.listProposals({ chatId: "c-1" }),
   approveProposal: (c) => c.approveProposal({ proposalId: "pr-1" }),
@@ -153,9 +154,9 @@ describe("every route in the contract has a client method", () => {
       (op) => typeof (client as Record<string, unknown>)[op] === "function",
     );
     expect(clientOps).toEqual(contractOps);
-    // 38 operations, and the number is asserted so a route quietly disappearing
+    // 39 operations, and the number is asserted so a route quietly disappearing
     // from the contract does not quietly shrink this test with it.
-    expect(contractOps).toHaveLength(38);
+    expect(contractOps).toHaveLength(39);
   });
 
   for (const operation of Object.keys(REST_ROUTES) as RestOperation[]) {

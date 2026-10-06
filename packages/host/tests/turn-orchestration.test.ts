@@ -530,7 +530,21 @@ describe("TurnRunner — every recovery pass announces itself (3.3)", () => {
       listModels: async () => [],
       async *streamChat(input) {
         calls += 1;
-        if (calls === 1) throw new Error("tools not supported here");
+        if (calls === 1) {
+          yield {
+            contractVersion: "1",
+            eventId: "schema-rejection",
+            seq: 0,
+            type: "run.failed",
+            runId: input.runId,
+            timestamp: new Date().toISOString(),
+            data: {
+              errorCode: "unsupported_tools",
+              errorMessage: "tools not supported here",
+            },
+          };
+          return;
+        }
         yield* inner.streamChat(input);
       },
     };

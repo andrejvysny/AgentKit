@@ -1,5 +1,11 @@
 import type { AiToolEnvelope } from "@agentkit/contracts";
 import type { Clock, Logger, ToolCatalog } from "@agentkit/host";
+import type {
+  Resource,
+  ReadResourceResult,
+  Prompt,
+  GetPromptResult,
+} from "@modelcontextprotocol/sdk/types.js";
 
 /**
  * The scope one MCP session works in.
@@ -10,6 +16,10 @@ import type { Clock, Logger, ToolCatalog } from "@agentkit/host";
  * call is a `chatId` a client can name someone else's.
  */
 export interface McpSessionScope {
+  /** Minted by the server, never taken from a client name or request body. */
+  actorId?: string;
+  /** Server session lifetime; aborted before ephemeral grants are revoked. */
+  signal?: AbortSignal;
   chatId?: string;
   /**
    * Who this session belongs to, as the HOST names principals.
@@ -57,6 +67,23 @@ export interface McpToolSource {
     args: unknown,
     scope?: McpSessionScope,
   ): Promise<AiToolEnvelope>;
+  /** Release actor-local grants and state on DELETE, expiry, eviction or shutdown. */
+  closeSession?(scope: McpSessionScope): void | Promise<void>;
+}
+
+/** Optional host-owned, read-only MCP extension seams. No model is invoked. */
+export interface McpResourceSource {
+  list(scope: McpSessionScope): Promise<Resource[]>;
+  read(uri: string, scope: McpSessionScope): Promise<ReadResourceResult>;
+}
+
+export interface McpPromptSource {
+  list(scope: McpSessionScope): Promise<Prompt[]>;
+  get(
+    name: string,
+    args: Record<string, string>,
+    scope: McpSessionScope,
+  ): Promise<GetPromptResult>;
 }
 
 /**
@@ -75,6 +102,8 @@ export type McpServerAuth =
 
 export interface McpServerHandlerOptions {
   tools: McpToolSource;
+  resources?: McpResourceSource;
+  prompts?: McpPromptSource;
   auth: McpServerAuth;
   /**
    * Exact origins (`scheme://host[:port]`) a browser-originated request may

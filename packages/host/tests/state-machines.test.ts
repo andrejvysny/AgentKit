@@ -28,6 +28,7 @@ const TASK_STATUSES: TaskStatus[] = [
   "queued",
   "running",
   "waiting_approval",
+  "interrupted",
   "completed",
   "failed",
   "cancelled",
@@ -125,15 +126,22 @@ describe("TASK_TRANSITIONS — exhaustive matrix", () => {
         }
       }
     }
-    // queued(3) + running(4) + waiting_approval(4) = 11 legal of 36 pairs.
+    // queued(4) + running(5) + waiting_approval(4) + interrupted(2).
     // queued's third edge is `failed`, which exists only for the dependency
     // cascade in `claimNext` — see the table's own comment.
-    expect(legal).toBe(11);
+    expect(legal).toBe(15);
   });
 
   it("declares exactly the documented edges", () => {
-    expect(TASK_TRANSITIONS.queued).toEqual(["running", "cancelled", "failed"]);
+    expect(TASK_TRANSITIONS.queued).toEqual([
+      "running",
+      "cancelled",
+      "failed",
+      "interrupted",
+    ]);
+    expect(TASK_TRANSITIONS.interrupted).toEqual(["queued", "cancelled"]);
     expect(TASK_TRANSITIONS.running).toEqual([
+      "interrupted",
       "waiting_approval",
       "completed",
       "failed",
@@ -185,8 +193,8 @@ describe("RunStatusDto ↔ TaskStatus — the mirrored enumeration", () => {
     // The assignments above ARE the assertion; this keeps the test honest
     // about having executed, and pins the member count so an addition on
     // either side has to be made deliberately.
-    expect(backToHost).toHaveLength(6);
-    expect(new Set(backToHost).size).toBe(6);
+    expect(backToHost).toHaveLength(7);
+    expect(new Set(backToHost).size).toBe(7);
   });
 });
 

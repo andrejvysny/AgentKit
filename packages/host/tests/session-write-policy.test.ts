@@ -202,4 +202,40 @@ describe("SessionWritePolicy", () => {
     expect(RISK_RANK.high).toBeLessThan(RISK_RANK.destructive);
     expect(Object.isFrozen(RISK_RANK)).toBe(true);
   });
+
+  it("requires exact actor, payload, revision and design scope, even under auto_all", () => {
+    const policy = new SessionWritePolicy({ mode: "auto_all" });
+    const query = {
+      ...QUERY,
+      actorId: "session-a",
+      scopeKey: "doc-a",
+      payloadFingerprint: "hash-a",
+      revision: "rev-1",
+    };
+    policy.allow({ ...QUERY, maxRisk: "destructive" });
+    expect(policy.isAutoApplyAllowed(query)).toBe(false);
+    policy.allow({ ...query, maxRisk: "destructive" });
+    expect(policy.isAutoApplyAllowed(query)).toBe(true);
+    for (const changed of [
+      { actorId: "session-b" },
+      { chatId: "chat-2" },
+      { toolName: "other" },
+      { scopeKey: "doc-b" },
+      { payloadFingerprint: "hash-b" },
+      { revision: "rev-2" },
+    ])
+      expect(policy.isAutoApplyAllowed({ ...query, ...changed })).toBe(false);
+    policy.revokeActor("session-a");
+    expect(policy.isAutoApplyAllowed(query)).toBe(false);
+    expect(policy.list(QUERY.chatId)).toHaveLength(1);
+  });
+
+  it("refuses incomplete actor grants instead of broadening them", () => {
+    const policy = new SessionWritePolicy();
+    expect(() =>
+      policy.allow({ ...QUERY, actorId: "session-a", maxRisk: "low" }),
+    ).toThrow(
+      "Actor write allowances require scopeKey, payloadFingerprint and revision",
+    );
+  });
 });

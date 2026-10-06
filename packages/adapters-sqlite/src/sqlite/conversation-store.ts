@@ -18,6 +18,7 @@ import {
   planForkedMessages,
   planImportedMessages,
   RecordNotFoundError,
+  LeaseLostError,
   SEARCH_MATCH_END,
   SEARCH_MATCH_START,
   SEARCH_SNIPPET_ELLIPSIS,
@@ -36,7 +37,9 @@ import {
   type SearchMessagesOptions,
   type UpdateChatPatch,
   type UpdateMessagePatch,
+  type RunWriteFence,
 } from "@agentkit/host";
+import { assertRunLease } from "./lease-fence.js";
 import type { Params, SqliteConnection, TxOwner } from "./connection.js";
 import {
   type ChatRow,
@@ -239,9 +242,19 @@ export class SqliteConversationStore implements ConversationStore {
    * has to be computed, which on the append-to-the-active-leaf path — every
    * append a non-branching caller makes — is never.
    */
-  async appendMessage(input: AppendMessageInput): Promise<MessageRecord> {
+  async appendMessage(
+    input: AppendMessageInput,
+    fence?: RunWriteFence,
+  ): Promise<MessageRecord> {
     assertAppendActivation(input);
     return this.conn.whenFree(() => {
+      if (fence) {
+        assertRunLease(this.conn, this.clock, fence);
+        if (input.runId !== fence.taskId)
+          throw new LeaseLostError(
+            "Message does not belong to the fenced run.",
+          );
+      }
       const chat = this.conn.get(`SELECT id FROM chats WHERE id = $id`, {
         $id: input.chatId,
       });
@@ -417,14 +430,18 @@ export class SqliteConversationStore implements ConversationStore {
   async updateMessage(
     messageId: string,
     patch: UpdateMessagePatch,
+    fence?: RunWriteFence,
   ): Promise<MessageRecord> {
     return this.conn.whenFree(() => {
+      if (fence) assertRunLease(this.conn, this.clock, fence);
       const existing = this.conn.get(`SELECT * FROM messages WHERE id = $id`, {
         $id: messageId,
       }) as MessageRow | null;
       if (!existing) {
         throw new RecordNotFoundError(`Message not found: ${messageId}`);
       }
+      if (fence && existing.run_id !== fence.taskId)
+        throw new LeaseLostError("Message does not belong to the fenced run.");
       // Re-encoded when the patch carries a body, carried through as the stored
       // columns when it does not. Both halves move together or not at all: a
       // string patch landing on a `'parts'` row that kept its old format tag
@@ -479,11 +496,11 @@ export class SqliteConversationStore implements ConversationStore {
       params.$before = opts.beforeOrderKey;
     }
     sql += ` ORDER BY depth ASC, order_key ASC`;
-    const rows = this.conn.all(sql, params) as MessageRow[];
-    const mapped = rows.map(messageFromRow);
-    // The LAST `limit` in either direction: a scroll-back wants the page
-    // nearest its cursor, exactly as a plain listing wants the newest page.
-    return opts?.limit !== undefined ? mapped.slice(-opts.limit) : mapped;
+    return this.conn.readCommitted(() => {
+      const rows = this.conn.all(sql, params) as MessageRow[];
+      const mapped = rows.map(messageFromRow);
+      return opts?.limit !== undefined ? mapped.slice(-opts.limit) : mapped;
+    }, this.txOwner);
   }
 
   /**
@@ -494,6 +511,15 @@ export class SqliteConversationStore implements ConversationStore {
    * continue its own chain, and a lookup that only saw the live path would hand
    * it a link into somebody else's conversation.
    */
+  async getMessage(messageId: string): Promise<MessageRecord | null> {
+    return this.conn.readCommitted(() => {
+      const row = this.conn.get("SELECT * FROM messages WHERE id = $id", {
+        $id: messageId,
+      }) as MessageRow | null;
+      return row ? messageFromRow(row) : null;
+    }, this.txOwner);
+  }
+
   async lastMessageOfRun(
     chatId: string,
     runId: string,

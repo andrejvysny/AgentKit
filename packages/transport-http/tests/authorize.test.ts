@@ -257,6 +257,7 @@ describe("resourceForOperation — over the whole route table", () => {
       getRun: "run",
       streamRun: "run",
       cancelRun: "run",
+      resumeRun: "run",
       listToolEvents: "chat",
       listProposals: "chat",
       approveProposal: "proposal",

@@ -30,6 +30,8 @@ export interface ToolGuardContext {
    * rather than only "does this chat have the binding".
    */
   principal?: string;
+  /** Server-generated invocation actor; distinct for each inbound session. */
+  actorId?: string;
 }
 
 /** A refusal must say why: the reason is fed back to the model verbatim. */

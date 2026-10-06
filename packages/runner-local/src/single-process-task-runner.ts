@@ -99,6 +99,10 @@ interface ResolvedRetryBackoff {
 }
 
 export interface SingleProcessTaskRunnerDeps {
+  /** Manual mode never redispatches interrupted work without resume(). */
+  recoveryMode?: "automatic" | "manual";
+  /** Cancel in-flight execution on stop; drain preserves the historic behavior. */
+  shutdownMode?: "drain" | "cancel";
   store: AssistantStore;
   /** Defaults to {@link defaultClock}. Injectable so lease expiry is testable. */
   clock?: Clock;
@@ -209,6 +213,9 @@ export class SingleProcessTaskRunner implements TaskRunner {
    */
   private readonly pendingRedispatch = new Set<string>();
 
+  private readonly shutdownMode: "drain" | "cancel";
+  private readonly recoveryMode: "automatic" | "manual";
+  private manualBootReconciled = false;
   private worker: TaskWorker | null = null;
   private ownerId = "";
   private concurrency = DEFAULT_CONCURRENCY;
@@ -222,6 +229,8 @@ export class SingleProcessTaskRunner implements TaskRunner {
   private wakeRequested = false;
 
   constructor(deps: SingleProcessTaskRunnerDeps) {
+    this.shutdownMode = deps.shutdownMode ?? "drain";
+    this.recoveryMode = deps.recoveryMode ?? "automatic";
     this.store = deps.store;
     this.clock = deps.clock ?? defaultClock;
     this.logger = deps.logger;
@@ -303,7 +312,11 @@ export class SingleProcessTaskRunner implements TaskRunner {
     const task = await this.store.tasks.getTask(taskId);
     if (!task) return;
 
-    if (task.status === "queued" || task.status === "waiting_approval") {
+    if (
+      task.status === "queued" ||
+      task.status === "waiting_approval" ||
+      task.status === "interrupted"
+    ) {
       // `waiting_approval` is included because the transition table allows it
       // and nothing else in this runner can reach it: a task parked on a human
       // is exactly the kind a user cancels.
@@ -379,6 +392,15 @@ export class SingleProcessTaskRunner implements TaskRunner {
 
   /** {@link recover}, with a summary of what the pass did. */
   async recoverWithReport(): Promise<RecoveryReport> {
+    if (this.recoveryMode === "manual" && !this.manualBootReconciled) {
+      if (!this.store.tasks.interruptQueued)
+        throw new AgentKitHostError(
+          "manual_recovery_unsupported",
+          "Store must implement interruptQueued for manual recovery.",
+        );
+      await this.store.tasks.interruptQueued(this.clock.nowIso());
+      this.manualBootReconciled = true;
+    }
     const expired = await this.store.tasks.expireStaleLeases(this.clock.now());
     const report: RecoveryReport = {
       expired: expired.length,
@@ -409,6 +431,16 @@ export class SingleProcessTaskRunner implements TaskRunner {
           attemptId: lease.attemptId,
           error: errorMessage(err),
         });
+      }
+
+      if (this.recoveryMode === "manual") {
+        await this.store.tasks.transitionTask(
+          task.taskId,
+          ["running"],
+          "interrupted",
+          { error: "manual_recovery" },
+        );
+        continue;
       }
 
       if (task.attemptCount >= this.maxAttempts) {
@@ -503,6 +535,11 @@ export class SingleProcessTaskRunner implements TaskRunner {
     worker: TaskWorker,
     opts: StartWorkerOptions = {},
   ): Promise<WorkerHandle> {
+    if (this.recoveryMode === "manual" && !this.manualBootReconciled)
+      throw new AgentKitHostError(
+        "recovery_required",
+        "Call recoverOnBoot before starting a manual-recovery worker.",
+      );
     if (this.worker) {
       throw new AgentKitHostError(
         "worker_already_started",
@@ -526,12 +563,26 @@ export class SingleProcessTaskRunner implements TaskRunner {
     return { stop: () => this.stop() };
   }
 
+  /** Explicit user intent; retains task identity, operation IDs and budget progress. */
+  async resume(taskId: string): Promise<void> {
+    const task = await this.store.tasks.getTask(taskId);
+    if (!task) throw new RecordNotFoundError("Task not found");
+    await this.store.tasks.transitionTask(taskId, ["interrupted"], "queued", {
+      error: "",
+      availableAt: this.clock.nowIso(),
+    });
+    await this.enqueue({ taskId, scopeId: task.scopeId });
+  }
+
   // ────────────────────────────── dispatch ───────────────────────────────
 
   /** Stop claiming, then wait for everything in flight to settle. */
   private async stop(): Promise<void> {
     this.stopped = true;
     this.worker = null;
+    if (this.shutdownMode === "cancel") {
+      for (const taskId of this.active.keys()) this.abortActive(taskId);
+    }
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;

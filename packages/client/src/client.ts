@@ -218,6 +218,10 @@ export function createAgentKitClient(options: AgentKitClientOptions) {
     cancelRun: (params: { runId: string }, opts?: RequestOptions) =>
       transport.json<RunDto>("cancelRun", { path: params, options: opts }),
 
+    /** Explicitly resume an interrupted run with its original identity. */
+    resumeRun: (params: { runId: string }, opts?: RequestOptions) =>
+      transport.json<RunDto>("resumeRun", { path: params, options: opts }),
+
     /** A chat's tool history, projected out of its runs' event logs. */
     listToolEvents: (
       params: { chatId: string; limit?: number },

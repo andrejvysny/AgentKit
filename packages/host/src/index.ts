@@ -21,6 +21,7 @@ export * from "./bootstrap.js";
 // Proposals: the staged-write pipeline.
 export * from "./proposals/state-machine.js";
 export * from "./proposals/action-id.js";
+export * from "./continuations/validation.js";
 export * from "./proposals/proposal-service.js";
 export * from "./proposals/proposal-builder-tool.js";
 

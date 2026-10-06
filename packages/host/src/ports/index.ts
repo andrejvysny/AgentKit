@@ -9,6 +9,7 @@ export * from "./task-store.js";
 export * from "./task-aging.js";
 export * from "./proposal-store.js";
 export * from "./provider-store.js";
+export * from "./provider-continuation-store.js";
 export * from "./settings-store.js";
 export * from "./outbox-store.js";
 export * from "./secret-store.js";

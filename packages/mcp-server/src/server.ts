@@ -6,12 +6,14 @@ import {
   ListToolsRequestSchema,
   McpError,
   isInitializeRequest,
+  SUPPORTED_PROTOCOL_VERSIONS,
   type CallToolResult,
   type ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { defaultClock, type ToolCatalogEntry } from "@agentkit/host";
 import { authFingerprint, resolveAuth, timingSafeEqualString } from "./auth.js";
 import { checkRebindingGuard } from "./guard.js";
+import { installHostExtensions } from "./extensions.js";
 import {
   projectEnvelope,
   projectToolDefinition,
@@ -70,13 +72,15 @@ interface SessionRuntime {
   waiters: (() => void)[];
   /** One shared catalogue staging for every handler that wants one right now. */
   listing: Promise<ToolCatalogEntry[]> | undefined;
+  controller: AbortController;
+  closed: boolean;
 }
 
 /** One live MCP client: its transport, its server, and the scope it is pinned to. */
 interface SessionEntry {
   server: Server;
   transport: WebStandardStreamableHTTPServerTransport;
-  scope: McpSessionScope | undefined;
+  scope: McpSessionScope;
   /**
    * The principal this session belongs to — see {@link authFingerprint}. Fixed
    * at initialize; every later request must present the same one.
@@ -89,6 +93,7 @@ interface SessionEntry {
    * a 503 — see {@link evictForCapacity}.
    */
   capacityRefused: boolean;
+  cleanup?: Promise<void>;
 }
 
 /**
@@ -163,11 +168,15 @@ export function createMcpServerHandler(
    * variable the handlers have to look up and could look up wrong.
    */
   function buildServer(
-    scope: McpSessionScope | undefined,
+    scope: McpSessionScope,
     runtime: SessionRuntime,
   ): Server {
     const server = new Server(serverInfo, {
-      capabilities: { tools: { listChanged: false } },
+      capabilities: {
+        tools: { listChanged: false },
+        ...(options.resources === undefined ? {} : { resources: {} }),
+        ...(options.prompts === undefined ? {} : { prompts: {} }),
+      },
     });
 
     server.setRequestHandler(
@@ -186,6 +195,11 @@ export function createMcpServerHandler(
         }
       },
     );
+
+    installHostExtensions(server, options, scope, {
+      begin: () => beginRequest(runtime),
+      finish: () => finishRequest(runtime),
+    });
 
     server.setRequestHandler(
       CallToolRequestSchema,
@@ -216,6 +230,8 @@ export function createMcpServerHandler(
     scope: McpSessionScope | undefined,
     runtime: SessionRuntime,
   ): Promise<CallToolResult> {
+    if (runtime.closed)
+      throw new McpError(ErrorCode.InvalidRequest, "MCP session is closed");
     const name = params.name;
     const entries = visibleEntries(
       await listCatalog(runtime, scope),
@@ -251,6 +267,7 @@ export function createMcpServerHandler(
       const correlationId = crypto.randomUUID().slice(0, 8);
       logger?.error("mcp tool source threw", {
         tool: name,
+        actorId: scope?.actorId,
         correlationId,
         errorMessage,
       });
@@ -288,7 +305,18 @@ export function createMcpServerHandler(
   ): Promise<ToolCatalogEntry[]> {
     const inFlight = runtime.listing;
     if (inFlight) return inFlight;
-    const started = tools.catalog.listTools(scope);
+    const started = Promise.resolve()
+      .then(() => tools.catalog.listTools(scope))
+      .catch((err: unknown) => {
+        logger?.error("mcp tool catalogue failed", {
+          actorId: scope?.actorId,
+          error: String(err),
+        });
+        throw new McpError(
+          ErrorCode.InternalError,
+          "Host tool catalogue failed",
+        );
+      });
     const tracked = started.finally(() => {
       if (runtime.listing === tracked) runtime.listing = undefined;
     });
@@ -374,6 +402,7 @@ export function createMcpServerHandler(
     reason: "expired" | "evicted",
   ): void {
     sessions.delete(sessionId);
+    releaseSession(entry);
     logger?.debug("mcp session closed", { sessionId, reason });
     void entry.server.close().catch((err) => {
       logger?.warn("mcp session failed to close", {
@@ -382,6 +411,30 @@ export function createMcpServerHandler(
         error: err instanceof Error ? err.message : String(err),
       });
     });
+  }
+
+  /** Idempotent across DELETE, transport close, eviction and shutdown. */
+  function releaseSession(entry: SessionEntry): Promise<void> {
+    if (entry.runtime.closed) return entry.cleanup ?? Promise.resolve();
+    entry.runtime.closed = true;
+    entry.runtime.controller.abort(new Error("MCP session is closed"));
+    try {
+      entry.cleanup = Promise.resolve(tools.closeSession?.(entry.scope)).catch(
+        (err) => {
+          logger?.warn("mcp actor cleanup failed", {
+            actorId: entry.scope.actorId,
+            error: String(err),
+          });
+        },
+      );
+    } catch (err) {
+      logger?.warn("mcp actor cleanup failed", {
+        actorId: entry.scope.actorId,
+        error: String(err),
+      });
+      entry.cleanup = Promise.resolve();
+    }
+    return entry.cleanup;
   }
 
   /**
@@ -499,7 +552,17 @@ export function createMcpServerHandler(
     // exists, for the same reason the scope is: it is what the caller proved
     // with, not something a later message can restate.
     const fingerprint = await authFingerprint(headers.get("authorization"));
-    const scope = (await options.sessionScope?.(headers)) ?? undefined;
+    const resolved = await options.sessionScope?.(headers);
+    const actorId = crypto.randomUUID();
+    const controller = new AbortController();
+    const scope: McpSessionScope = Object.freeze({
+      ...(resolved?.chatId === undefined ? {} : { chatId: resolved.chatId }),
+      ...(resolved?.principal === undefined
+        ? {}
+        : { principal: resolved.principal }),
+      actorId,
+      signal: controller.signal,
+    });
     const runtime: SessionRuntime = {
       lastUsedAt: clock.now().getTime(),
       inFlight: 0,
@@ -507,15 +570,18 @@ export function createMcpServerHandler(
       running: 0,
       waiters: [],
       listing: undefined,
+      controller,
+      closed: false,
     };
     const server = buildServer(scope, runtime);
     const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => crypto.randomUUID(),
+      sessionIdGenerator: () => actorId,
       onsessioninitialized: (sessionId) => {
         // `dispose()` can land while this initialize was in flight (resolving
         // the scope, connecting). Registering now would leak a live session
         // past a shutdown that already swept the map.
         if (disposed) {
+          releaseSession(entry);
           void server.close();
           return;
         }
@@ -525,6 +591,7 @@ export function createMcpServerHandler(
         if (!evictForCapacity(fingerprint)) {
           logger?.warn("mcp session refused: capacity full", { sessionId });
           entry.capacityRefused = true;
+          releaseSession(entry);
           void server.close();
           return;
         }
@@ -533,6 +600,7 @@ export function createMcpServerHandler(
       },
       onsessionclosed: (sessionId) => {
         sessions.delete(sessionId);
+        releaseSession(entry);
         logger?.debug("mcp session closed", { sessionId });
       },
     });
@@ -549,6 +617,7 @@ export function createMcpServerHandler(
     transport.onclose = () => {
       const sessionId = transport.sessionId;
       if (sessionId !== undefined) sessions.delete(sessionId);
+      releaseSession(entry);
     };
     await server.connect(transport);
     return entry;
@@ -556,10 +625,6 @@ export function createMcpServerHandler(
 
   return {
     async fetch(request: Request): Promise<Response> {
-      if (disposed) {
-        return jsonRpcError(503, -32000, "Server is shutting down");
-      }
-
       if (!(await authorized(request))) {
         // No body, no hint about which half was wrong.
         return new Response(null, {
@@ -577,6 +642,16 @@ export function createMcpServerHandler(
           reason: refusal,
         });
         return new Response(null, { status: 403 });
+      }
+      if (disposed) return jsonRpcError(503, -32000, "Server is shutting down");
+      if (!["GET", "POST", "DELETE"].includes(request.method)) {
+        return jsonRpcError(405, -32000, "Unsupported MCP transport method", {
+          Allow: "GET, POST, DELETE",
+        });
+      }
+      const version = request.headers.get("mcp-protocol-version");
+      if (version !== null && !SUPPORTED_PROTOCOL_VERSIONS.includes(version)) {
+        return jsonRpcError(400, -32600, "Unsupported MCP protocol version");
       }
 
       // Housekeeping runs after auth, on a request that has already proved it
@@ -650,10 +725,18 @@ export function createMcpServerHandler(
         );
       }
 
+      if (!SUPPORTED_PROTOCOL_VERSIONS.includes(body.params.protocolVersion)) {
+        return jsonRpcError(400, -32600, "Unsupported MCP protocol version");
+      }
+
       const entry = await openSession(request.headers);
       const response = await entry.transport.handleRequest(request, {
         parsedBody: body,
       });
+      if (entry.transport.sessionId === undefined) {
+        releaseSession(entry);
+        await entry.server.close();
+      }
       // The capacity verdict is only known once the transport has minted the id
       // and called back (see `onsessioninitialized`), which happens inside that
       // call — so the initialize answer is built and then discarded. A refused
@@ -668,6 +751,7 @@ export function createMcpServerHandler(
       const open = [...sessions.values()];
       sessions.clear();
       for (const entry of open) {
+        await releaseSession(entry);
         // `Server.close()` closes the transport it is connected to, which ends
         // every SSE stream that session holds open. A throw from one session
         // must not strand the rest of the shutdown.

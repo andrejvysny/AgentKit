@@ -337,3 +337,52 @@ describe("TaskService.cancelTask", () => {
     await f.service.cancelTask("task-never-existed");
   });
 });
+
+describe("TaskService explicit recovery", () => {
+  it("refuses unsupported resume without enqueueing replacement work", async () => {
+    const f = setup();
+    await expect(f.service.resumeTask("original-run")).rejects.toMatchObject({
+      code: "resume_unsupported",
+    });
+    expect(f.enqueueCalls()).toBe(0);
+  });
+
+  it("forwards the original task ID to the recovery-capable runner", async () => {
+    const f = setup();
+    const resumed: string[] = [];
+    const runner = Object.assign(f.taskRunner, {
+      resume: async (taskId: string): Promise<void> => {
+        resumed.push(taskId);
+      },
+    });
+    const service = new TaskService({
+      store: f.store,
+      taskRunner: runner,
+      ids: createTestIds(),
+      clock: f.clock,
+    });
+    await service.resumeTask("original-run");
+    expect(resumed).toEqual(["original-run"]);
+    expect(f.enqueueCalls()).toBe(0);
+  });
+
+  it("cancels an interrupted task without inference or dispatch", async () => {
+    const f = setup();
+    await f.service.createTask(f.store, {
+      taskId: "interrupted",
+      kind: "echo",
+      scopeId: "scope",
+      payload: {},
+    });
+    await f.store.tasks.transitionTask(
+      "interrupted",
+      ["queued"],
+      "interrupted",
+    );
+    await f.service.cancelTask("interrupted");
+    expect((await f.store.tasks.getTask("interrupted"))?.status).toBe(
+      "cancelled",
+    );
+    expect(f.enqueueCalls()).toBe(0);
+  });
+});

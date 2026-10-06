@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0 — Unpublished Responses candidate
+
+Adds an independently authored Responses provider using an injected trusted
+transport. Connection identity is fixed per run; encrypted continuation is
+stored privately with a transactional v8-to-v9 SQLite migration. Canonical
+assistant/tool history survives reopen and correction passes. Truncated,
+incomplete and late-failed responses never dispatch speculative tools.
+Contract version is 0.7.0. Authentication and consumer-specific parity fixtures
+remain the embedding application's responsibility.
+
+## 0.6.0 — Unpublished migration foundation candidate
+
+Adds a Node/better-sqlite3 entry sharing storage logic with Bun; transactional
+schema migration infrastructure; cumulative execution budgets; explicit manual
+recovery; lease-fenced message publication and replay; headless reconnect and
+host settlement; and isolated inbound MCP actors. Contract version is 0.6.0.
+The foundation snapshot remains on SQLite schema v8 and does not require
+Responses support. Exact packed artifacts are qualified separately; these
+entries do not claim a published tag or registry release.
+
 Versions track `CONTRACT_VERSION` (the event/DTO shape version in
 `@agentkit/contracts`), not npm releases — nothing is published yet. Each
 entry links the architecture decision records (`docs/adr/`) that carry the

@@ -446,6 +446,12 @@ export interface ForkChatResult {
   messages: MessageRecord[];
 }
 
+/** Checked inside the same operation as each run-owned message mutation. */
+export interface RunWriteFence {
+  taskId: string;
+  leaseToken: string;
+}
+
 export interface ConversationStore {
   createChat(input: CreateChatInput): Promise<ChatRecord>;
   getChat(chatId: string): Promise<ChatRecord | null>;
@@ -490,10 +496,14 @@ export interface ConversationStore {
    * `activate: false` suppresses that switch entirely; see
    * {@link AppendMessageInput.activate}.
    */
-  appendMessage(input: AppendMessageInput): Promise<MessageRecord>;
+  appendMessage(
+    input: AppendMessageInput,
+    fence?: RunWriteFence,
+  ): Promise<MessageRecord>;
   updateMessage(
     messageId: string,
     patch: UpdateMessagePatch,
+    fence?: RunWriteFence,
   ): Promise<MessageRecord>;
   /**
    * The chat's ACTIVE PATH, root first, ordered `(depth ASC, orderKey ASC)`.
@@ -514,6 +524,8 @@ export interface ConversationStore {
     chatId: string,
     opts?: ListMessagesOptions,
   ): Promise<MessageRecord[]>;
+  /** Fetch one record across branches; projection replay uses its stable identity. */
+  getMessage(messageId: string): Promise<MessageRecord | null>;
   /**
    * The DEEPEST message a given run wrote in a chat, or `null` when the run has
    * written nothing there.

@@ -7,7 +7,7 @@
       "model": "gpt-golden",
       "toolCount": 1
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_d1ef90e4-6f6e-46d1-93c5-1037ba729f9d",
     "seq": 0
   },
@@ -19,7 +19,7 @@
       "content": "",
       "toolCallCount": 2
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_5feb12a3-509b-4859-b08d-fe66c2625ba1",
     "seq": 1
   },
@@ -32,7 +32,7 @@
       "toolName": "echo",
       "argumentsJson": "{\"text\":\"a\"}"
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_0bacb899-b014-4cf9-b75f-92a0dc8679b2",
     "seq": 2
   },
@@ -45,7 +45,7 @@
       "toolName": "echo",
       "argumentsJson": "{\"text\":\"b\"}"
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_6a793c15-3e66-4d8b-89ff-e928c244ee7e",
     "seq": 3
   },
@@ -57,7 +57,7 @@
       "code": "tool_call_cap",
       "message": "Truncated 2 tool calls to 1 per iteration."
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_8ad6a9f8-0b8a-4c5f-aff2-c3f369662dd2",
     "seq": 4
   },
@@ -69,7 +69,7 @@
       "toolCallId": "call-golden-cap-1",
       "toolName": "echo"
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_bf75c26c-c8b6-4983-a7c8-6c6f67da6ee8",
     "seq": 5
   },
@@ -87,7 +87,7 @@
       "status": "ok",
       "modelResultJson": "{\"ok\":true,\"status\":\"ok\",\"warnings\":[],\"truncated\":false,\"data\":{\"echoed\":\"a\"}}"
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_1c1f62cc-f008-4aba-86ba-c2f59439cfb0",
     "seq": 6
   },
@@ -101,7 +101,7 @@
       "errorMessage": "Skipped: exceeded maxToolCallsPerIteration=1.",
       "errorCode": "tool_call_cap"
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_c6daf107-d5c1-406b-adcd-86af99a29643",
     "seq": 7
   },
@@ -112,7 +112,7 @@
     "data": {
       "delta": "Done."
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_c3dac5ee-476a-47d5-a607-01b6bda34cf6",
     "seq": 8
   },
@@ -124,7 +124,7 @@
       "content": "Done.",
       "toolCallCount": 0
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_368a7c95-3894-408e-8f96-5f83b95fb981",
     "seq": 9
   },
@@ -136,7 +136,7 @@
       "iterations": 2,
       "finishReason": "stop"
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_b9ed35f2-d5c2-4b59-96c2-a584a9005426",
     "seq": 10
   }

@@ -987,6 +987,17 @@ async function projectorFixture(): Promise<ProjectorFixture> {
     metadata: { placeholder: true },
   });
 
+  const attempt = await harness.store.tasks.createAttempt({
+    taskId: task.taskId,
+    attemptId: "att-p",
+    ownerId: "owner-p",
+  });
+  const lease = await harness.store.tasks.acquireLease({
+    taskId: task.taskId,
+    attemptId: attempt.attemptId,
+    ownerId: "owner-p",
+    ttlMs: 30_000,
+  });
   const updates: { messageId: string; content?: unknown }[] = [];
   const conversations = harness.store.conversations;
   const update = conversations.updateMessage.bind(conversations);
@@ -1009,7 +1020,7 @@ async function projectorFixture(): Promise<ProjectorFixture> {
   return {
     ...harness,
     projector,
-    ctx: { task, attemptId: "att-p", leaseToken: "lease-p" },
+    ctx: { task, attemptId: attempt.attemptId, leaseToken: lease.leaseToken },
     state,
     updates,
     stamp: createEventStamper({ firstSeq: 0, attemptId: "att-p" }),

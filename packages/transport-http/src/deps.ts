@@ -47,6 +47,8 @@ export interface TurnSubmitter {
 /** `TaskService`, narrowed to the one call `cancelRun` makes. */
 export interface RunCanceller {
   cancelTask(taskId: string): Promise<void>;
+  /** Explicitly resume the same interrupted run. Optional for older hosts. */
+  resumeTask?(taskId: string): Promise<void>;
 }
 
 /** `ProposalService`, narrowed to the three decision routes. */

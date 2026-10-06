@@ -113,24 +113,24 @@ const TABLE: Row[] = [
     expected: "waiting_approval",
   },
 
-  // --- terminal events win over the status ---------------------------------
+  // --- provider-pass completion waits for durable task settlement ----------
   {
-    name: "run.completed on the log beats a status that has not caught up",
+    name: "run.completed while the task is running is settling",
     status: "running",
     events: [started(), delta(), completed()],
-    expected: "completed",
+    expected: "settling",
   },
   {
-    name: "run.failed on the log beats a running status",
+    name: "run.failed while the task is running is settling",
     status: "running",
     events: [started(), failed()],
-    expected: "failed",
+    expected: "settling",
   },
   {
-    name: "run.cancelled on the log beats a running status",
+    name: "run.cancelled while the task is running is settling",
     status: "running",
     events: [started(), cancelled()],
-    expected: "cancelled",
+    expected: "settling",
   },
   {
     name: "a terminal status with no terminal event still terminates",
@@ -155,7 +155,7 @@ const TABLE: Row[] = [
   {
     name: "a terminal event with no status at all",
     events: [completed()],
-    expected: "completed",
+    expected: "settling",
   },
 
   // --- multi-pass: the LAST terminal wins ----------------------------------
@@ -186,16 +186,16 @@ const TABLE: Row[] = [
     expected: "streaming",
   },
   {
-    name: "the LAST pass's failure is the run's failure",
+    name: "the LAST pass's failure still awaits task settlement",
     status: "running",
     events: [started(), failed(), retryPass(), started(), failed()],
-    expected: "failed",
+    expected: "settling",
   },
   {
     name: "a warning that is not retry_pass moves nothing",
     status: "running",
     events: [started(), delta(), completed(), otherWarning()],
-    expected: "completed",
+    expected: "settling",
   },
 ];
 
@@ -231,7 +231,8 @@ describe("createRunPhaseTracker", () => {
     expect(folded).toEqual(
       log.map((_e, i) => runPhase({ events: log.slice(0, i + 1) })),
     );
-    expect(tracker.phase()).toBe("completed");
+    expect(tracker.phase()).toBe("settling");
+    expect(tracker.outcome()).toBe("completed");
   });
 
   test("output alone is streaming; anything else is only running", () => {
@@ -261,11 +262,11 @@ describe("createRunPhaseTracker", () => {
     expect(folded).toEqual([
       "streaming",
       "streaming",
-      "failed",
+      "settling",
       "streaming",
       "streaming",
       "streaming",
-      "completed",
+      "settling",
     ]);
   });
 
@@ -302,7 +303,8 @@ describe("createRunPhaseTracker", () => {
       // `run.verification` is appended AFTER the terminal event by the host's
       // correction harness; it must not move the phase back off it.
       tracker.observe(verification());
-      expect(tracker.phase()).toBe(expected);
+      expect(tracker.phase()).toBe("settling");
+      expect(tracker.outcome()).toBe(expected);
     }
   });
 });

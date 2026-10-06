@@ -5,7 +5,12 @@ import type {
   AiProviderCapabilities,
   AiRunEvent,
 } from "@agentkit/contracts";
-import type { AiChatRequest, AiProviderClient, AiTool } from "@agentkit/core";
+import {
+  createEventStamper,
+  type AiChatRequest,
+  type AiProviderClient,
+  type AiTool,
+} from "@agentkit/core";
 import {
   CompletedOnlyProviderClient,
   MockProviderClient,
@@ -61,7 +66,16 @@ class TestClient implements AiProviderClient {
     this.toolNamesPerCall.push((input.tools ?? []).map((t) => t.name));
     this.messagesPerCall.push([...input.messages]);
     if (this.failCalls.has(this.calls)) {
-      throw new Error("provider rejected the request");
+      yield createEventStamper()({
+        type: "run.failed",
+        runId: input.runId,
+        timestamp: new Date().toISOString(),
+        data: {
+          errorCode: "unsupported_tools",
+          errorMessage: "provider rejected the tools schema",
+        },
+      });
+      return;
     }
     yield* this.inner.streamChat(input);
   }
@@ -979,13 +993,8 @@ describe("TurnRunner.execute — retries", () => {
     );
   });
 
-  it("warns when a CHAT-ONLY retry answers with nothing, tool calls or not", async () => {
-    // The retry runs with an EMPTY registry and one round-trip: it cannot call
-    // a tool, so pass 1's tool call says nothing about it. Carrying those ids
-    // across `resetPass` made `toolCallCount > 0` for the retry, which
-    // suppressed this warning (and the emulated-call detector) for a pass that
-    // answered with nothing at all — leaving the user an empty bubble and a
-    // clean log.
+  it("refuses chat-only recovery after tool work has already happened", async () => {
+    // Re-asking after tool execution would discard evidence and risk repeating side effects.
     const inner = new MockProviderClient();
     inner.setScript([
       // Round-trip 1: the model asks for a tool. The loop runs it and calls
@@ -1034,7 +1043,13 @@ describe("TurnRunner.execute — retries", () => {
     await drive(f, submitted.runId);
 
     const events = await eventsOf(f, submitted.runId);
-    // The chat-only retry did run, and it is the pass being judged.
+    expect(calls).toBe(2);
+    expect((await f.store.tasks.getTask(submitted.runId))?.status).toBe(
+      "failed",
+    );
+    expect(events.some((event) => event.type === "run.tool.succeeded")).toBe(
+      true,
+    );
     expect(
       events.some(
         (e) =>
@@ -1042,15 +1057,43 @@ describe("TurnRunner.execute — retries", () => {
           e.data.code === "retry_pass" &&
           e.data.reason === "chat_only",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       events.some(
         (e) => e.type === "run.warning" && e.data.code === "empty_response",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       messagesOf(f).find((m) => m.id === submitted.assistantMessageId)?.content,
     ).toBe("");
+  });
+
+  it("never retries a generic transport failure as chat-only", async () => {
+    const f = await setupRunner({ contributors: [echoContributor] });
+    f.mock.streamChat = async function* (input) {
+      yield createEventStamper()({
+        type: "run.started",
+        runId: input.runId,
+        timestamp: new Date().toISOString(),
+        data: { model: input.model, toolCount: input.tools?.length ?? 0 },
+      });
+      throw new Error("ECONNRESET");
+    };
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hi",
+    });
+    await drive(f, submitted.runId);
+    expect(f.client.calls).toBe(1);
+    expect((await f.store.tasks.getTask(submitted.runId))?.status).toBe(
+      "failed",
+    );
+    expect(
+      (await eventsOf(f, submitted.runId)).some(
+        (event) =>
+          event.type === "run.warning" && event.data.code === "retry_pass",
+      ),
+    ).toBe(false);
   });
 
   it("does not warn when the retry produces an answer", async () => {

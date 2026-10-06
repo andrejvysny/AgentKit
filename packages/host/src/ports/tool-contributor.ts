@@ -16,6 +16,8 @@ export interface ToolContributionContext {
   chatId?: string;
   runId?: string;
   scopeId?: string;
+  principal?: string;
+  actorId?: string;
   bindings: AiContextBinding[];
   limits: AiToolLimits;
   signal?: AbortSignal;

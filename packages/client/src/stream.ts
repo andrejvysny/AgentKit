@@ -166,10 +166,8 @@ async function* iterate(
         // The frame's `id` is the server's own `eventId` for this event; the
         // event body is the fallback so a proxy that stripped the field cannot
         // silently disable resume.
-        lastEventId = frame.id ?? event.eventId;
         // Progress earns back the budget: the failure this bounds is a
         // connection that never delivers, not a long run that drops twice.
-        attempts = 0;
         // A `seq` at or below the highest already handed to the caller is a
         // REPLAY, not news: a server that did not recognise the `Last-Event-ID`
         // answers from the start of the log, and a UI that appended the tail
@@ -188,6 +186,10 @@ async function* iterate(
           }
           maxSeqYielded = event.seq;
         }
+        // Replayed frames cannot move a reconnect cursor backwards or earn
+        // more retries without advancing the durable event log.
+        lastEventId = frame.id ?? event.eventId;
+        attempts = 0;
         yield event;
       }
       // The server closed: the task is terminal and its log is exhausted, so
@@ -242,7 +244,10 @@ async function* connect(
       `The response to GET the stream of run ${deps.runId} carried no body.`,
     );
   }
-  yield* parseSseStream(response.body);
+  yield* parseSseStream(
+    response.body,
+    options.signal === undefined ? {} : { signal: options.signal },
+  );
 }
 
 /**

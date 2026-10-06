@@ -349,6 +349,11 @@ export class FakeConversationStore implements ConversationStore {
   }
 
   /** The deepest record a run wrote — `(depth, orderKey)` desc, see the port. */
+  async getMessage(messageId: string): Promise<MessageRecord | null> {
+    const record = this.messages.find((message) => message.id === messageId);
+    return record ? { ...record } : null;
+  }
+
   async lastMessageOfRun(
     chatId: string,
     runId: string,

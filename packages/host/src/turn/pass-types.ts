@@ -15,6 +15,7 @@ import type { AiProviderClient, AiToolRegistry } from "@agentkit/core";
 import type { TaskRecord } from "../ports/task-store.js";
 import type { TaskExecutionContext } from "../tasks/task-executor.js";
 import type { RunProjectionState } from "./projection.js";
+import type { ProviderContinuationSession } from "./provider-continuation.js";
 import type { PassTerminal } from "./retry.js";
 
 /**
@@ -29,6 +30,7 @@ import type { PassTerminal } from "./retry.js";
 export type PassState = RunProjectionState;
 
 export interface PassInput {
+  providerContinuation?: ProviderContinuationSession;
   task: TaskRecord;
   /** The conversation this turn belongs to, read once from the payload. */
   chatId: string;
@@ -48,5 +50,6 @@ export interface PassInput {
 
 export interface PassResult {
   terminal: PassTerminal;
+  failureCode?: string;
   appendedMessages: readonly AiChatMessage[];
 }

@@ -5,22 +5,29 @@ The single installable package for AgentKit: every `@agentkit/*` package
 `transport-http`, `mcp-server`, `adapters-memory`, `adapters-sqlite`,
 `runner-local`), built and exposed as subpath imports of one `agentkit` package.
 No `@agentkit/*` scope, no internal dependency wiring for a consumer to get
-right — one install, one version, twelve entry points.
+right — one install, one version, explicit runtime entry points.
 
 ## Install
 
-```jsonc
-// package.json
-"dependencies": {
-  // No release tag exists yet — `v0.5.0` lands once the hardening tranche
-  // ships. Until then, pin a commit SHA, or track the branch with `#master`.
-  "agentkit": "github:andrejvysny/AgentKit#master"
-}
+The current source is the unpublished `0.7.0` Responses candidate; `0.6.0` is
+the separately captured migration foundation candidate. Install only an exact
+qualified artifact and verify its digest. No release tag was published here.
+
+No installable release tag was found in the 2026-10-06 audit. The earlier `0.5.0`
+source version was prepared metadata, not a published artifact. Install an exact
+qualified tarball; do not use the private workspace root on `#master` as a
+package.
+
+```sh
+npm install /absolute/path/agentkit-VERSION.tgz
+# or: bun add /absolute/path/agentkit-VERSION.tgz
+# For the Node SQLite subpath:
+npm install better-sqlite3@13.0.3
 ```
 
-Then `npm install` or `bun install`. The pinned tag's branch ships a
-committed `dist/` — no build step, no `prepare` script, nothing else to
-run. Works under both npm and Bun.
+Retain the artifact SHA-256 and corresponding qualification evidence. See
+[DEVELOPING.md](../../DEVELOPING.md) for the frozen snapshot and qualification
+procedure. Publication remains a separate approved action.
 
 ## Root import
 
@@ -32,7 +39,7 @@ Reach for a subpath for anything else — `agentkit/core`, `agentkit/host`, etc.
 
 ## Subpaths
 
-Twelve subpaths, each resolving to that package's public barrel:
+Subpaths, each resolving to that package's public barrel:
 
 | Subpath                     | What                                                  |
 | ---------------------------- | ------------------------------------------------------ |
@@ -47,6 +54,7 @@ Twelve subpaths, each resolving to that package's public barrel:
 | `agentkit/mcp-server`          | The host's tools exposed AS an MCP server over streamable HTTP. |
 | `agentkit/adapters-memory`      | Map-backed `AssistantStore` for tests and local dev.    |
 | `agentkit/adapters-sqlite`      | Durable `bun:sqlite` `AssistantStore`. **Bun only.**     |
+| `agentkit/adapters-sqlite-node` | Durable `better-sqlite3` storage: `NodeSqliteAssistantStore` and `NodeSqliteMcpServerConfigStore`. Node >=22; explicit optional native peer. |
 | `agentkit/runner-local`         | Single-process `TaskRunner`.                            |
 
 ```ts
@@ -55,17 +63,21 @@ import { TurnRunner } from "agentkit/host";
 import { MemoryAssistantStore } from "agentkit/adapters-memory";
 ```
 
-`agentkit/adapters-sqlite` is built on `bun:sqlite` and only loads under
-Bun — every other subpath is plain, portable JavaScript that loads under
-Node ≥20 or Bun ≥1.3. `package.json`'s top-level `engines` (`node >=20, bun
->=1.3`) describes the package as a whole, not this one subpath: an installer
-targeting Node alone can use every subpath except `agentkit/adapters-sqlite`,
-which needs Bun regardless of what `engines` says.
+`agentkit/adapters-sqlite` preserves the Bun `bun:sqlite` entry point.
+`agentkit/adapters-sqlite-node` is a separate Node entry point and requires
+`better-sqlite3@^13.0.3`, whose engine requires Node >=22. Neither the root
+barrel nor browser client/React graphs import either SQLite driver. The umbrella's
+Node >=20 engine applies to portable subpaths; it does not relax the native
+peer's Node requirement.
 
-`agentkit/react` is the one subpath with a peer dependency: `react >=18`,
-declared OPTIONAL so an installer that only wants `agentkit/host` is not told
-it is missing something. Install React yourself if you import the hooks —
-npm does not install an optional peer for you.
+React >=18 and better-sqlite3 ^13.0.3 are optional peers. Consumers install the
+peer they use explicitly. Electron must rebuild and package the native addon for
+its own runtime/ABI; Node CommonJS bundle checks alone do not establish Electron runtime
+support. Exact-tarball qualification can additionally execute a pinned Electron
+binary in RunAsNode mode, record ABI/Node-API and binary hashes, and check
+`npm rebuild` plus reopen. Driver 13.0.3 uses Node-API 10 prebuilds; no
+per-Electron source recompilation is claimed by that lifecycle check. The Node fake-provider host example proves HTTP/SSE wiring, shutdown,
+and file reopen without any paid provider credentials.
 
 ## Developing AgentKit itself
 

@@ -463,6 +463,12 @@ describe("SingleProcessTaskRunner — retry backoff", () => {
 
     // Now let the ORIGINAL backoff finish, with the recovered attempt still
     // running. Nothing may start here.
+    // Keep the recovered owner alive across the fake-clock jump; its original
+    // 1s lease would otherwise expire before it is allowed to finish.
+    await harness.store.tasks.renewLease(
+      next.worker.callsFor("run-1")[0]!.leaseToken,
+      20_000,
+    );
     harness.clock.advance(10_000);
     await settle(100);
     expect(attempts(harness, "run-1")).toBe(1);

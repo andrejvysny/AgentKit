@@ -35,7 +35,7 @@ export async function* parseSseStream(
 ): AsyncGenerator<SseLine, void, unknown> {
   const reader: StreamReader = stream.getReader();
   const decoder = new TextDecoder();
-  const frame: FrameState = { data: [] };
+  const frame: FrameState = { data: [], chars: 0 };
   let buffer = "";
   try {
     while (true) {
@@ -72,7 +72,8 @@ export async function* parseSseStream(
     if (last) yield last;
   } finally {
     try {
-      await reader.cancel();
+      // A transport may never settle cancellation; cleanup must not hold an aborted run.
+      void reader.cancel().catch(() => {});
     } catch {
       // ignore
     }
@@ -129,10 +130,15 @@ async function readOrAbort(
 interface FrameState {
   data: string[];
   event?: string;
+  chars: number;
 }
 
 /** Apply one non-blank SSE line to the in-progress frame. */
 function appendField(frame: FrameState, rawLine: string): void {
+  frame.chars += rawLine.length;
+  if (frame.chars > MAX_BUFFER_CHARS) {
+    throw new Error(`sse_parse: frame exceeds ${MAX_BUFFER_CHARS} characters.`);
+  }
   if (rawLine.startsWith(":")) return; // comment
   if (rawLine.startsWith("data:")) {
     // The spec strips exactly one leading space, not all whitespace: the rest
@@ -153,6 +159,7 @@ function flushFrame(frame: FrameState): SseLine | null {
   const hadData = frame.data.length > 0;
   const event = frame.event;
   frame.data = [];
+  frame.chars = 0;
   frame.event = undefined;
   if (!hadData) return null;
   if (data === "[DONE]") return { data: "", done: true };

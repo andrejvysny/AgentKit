@@ -25,7 +25,6 @@
  */
 import {
   createRunPhaseTracker,
-  newIdempotencyKey,
   type AgentKitClient,
   type AgentKitClientError,
   type RunPhase,
@@ -40,8 +39,14 @@ import { useCallback, useEffect, useRef } from "react";
 import { useAgentKitClient, useAgentKitContext } from "./context.js";
 import { chatTopic, nextOrigin } from "./emitter.js";
 import {
+  canReplaySubmission,
+  submitOnce,
+  submissionSignature,
+} from "./submissions.js";
+import {
   finishReasonOf,
   isAbort,
+  isTerminalPhase,
   quietFailure,
   settlePhase,
   toError,
@@ -105,6 +110,8 @@ export interface UseChatOptions extends PagingOptions {
 }
 
 export interface SubmitOptions {
+  /** Override the provider for this immutable turn request. */
+  providerId?: string;
   /** Override the provider's default model for this turn. */
   model?: string;
   /**
@@ -174,6 +181,8 @@ export interface UseChatResult extends ChatState {
    * would leave a cancelled run rendered as if it were still typing.
    */
   cancel(): Promise<void>;
+  /** Resume the original interrupted run; never submits a replacement turn. */
+  resume(): Promise<void>;
   /** Re-read the active path from the server. */
   reload(): Promise<void>;
 }
@@ -208,6 +217,10 @@ export function useChat(
 
   /** The live run's stream, so a new turn or an unmount can end it. */
   const streamRef = useRef<AbortController | null>(null);
+  const followedRunRef = useRef<string | null>(null);
+  const followRef = useRef<
+    (runId: string, placeholderId: string) => Promise<void>
+  >(async () => {});
   /**
    * The chat this hook is CURRENTLY rendering, readable from a follow that
    * started under a different one. Written at commit rather than during render,
@@ -215,8 +228,15 @@ export function useChat(
    * away must not be able to move it.
    */
   const chatIdRef = useRef<string | null>(chatId);
+  const clientRef = useRef(client);
   /** A failed submit's key, held for the retry of the SAME question. */
-  const parkedRef = useRef<{ key: string; signature: string } | null>(null);
+  const submissionRef = useRef(0);
+  const pendingRef = useRef<{
+    signature: string;
+    promise: Promise<unknown>;
+    signal: AbortSignal;
+  } | null>(null);
+  const refreshRef = useRef(0);
   /**
    * The abort scope of the chat currently on screen, replaced when the hook
    * leaves it. A write's own `await` is not what has to be cancelled — the READ
@@ -240,29 +260,51 @@ export function useChat(
    * nobody.
    */
   const stillOwns = useCallback(
-    (chat: string): boolean => alive.current && chatIdRef.current === chat,
-    [alive],
+    (chat: string): boolean =>
+      alive.current &&
+      chatIdRef.current === chat &&
+      clientRef.current === client,
+    [alive, client],
   );
 
   const refresh = useCallback(
     async (signal?: AbortSignal): Promise<void> => {
       if (chatId === null) return;
+      const scope = chatScope();
+      const generation = ++refreshRef.current;
+      const owns = (): boolean =>
+        stillOwns(chatId) &&
+        !scope.aborted &&
+        signal?.aborted !== true &&
+        generation === refreshRef.current;
       update((prev) =>
         prev.status === "idle" || prev.status === "error"
           ? { ...prev, status: "loading" }
           : prev,
       );
       try {
-        const path = await loadActivePath(
-          client,
-          chatId,
-          {
-            ...(pageSize === undefined ? {} : { pageSize }),
-            ...(maxPages === undefined ? {} : { maxPages }),
-          },
-          signal,
-        );
-        if (signal?.aborted === true) return;
+        const [path, chat] = await Promise.all([
+          loadActivePath(
+            client,
+            chatId,
+            {
+              ...(pageSize === undefined ? {} : { pageSize }),
+              ...(maxPages === undefined ? {} : { maxPages }),
+            },
+            signal ?? scope,
+          ),
+          client.getChat({ chatId }, { signal: signal ?? scope }),
+        ]);
+        if (!owns()) return;
+        const activeRunId = chat.activeRunId ?? null;
+        const run =
+          activeRunId === null
+            ? null
+            : await client.getRun(
+                { runId: activeRunId },
+                { signal: signal ?? scope },
+              );
+        if (!owns()) return;
         update((prev) => ({
           ...prev,
           messages: path.items,
@@ -270,12 +312,36 @@ export function useChat(
           // Only the read this call OWNS settles back to idle: a reconcile in
           // the middle of a live run must leave `streaming` alone, and the
           // error it clears is the one the retry just disproved.
-          ...(prev.status === "loading"
+          ...(prev.status === "loading" && pendingRef.current === null
             ? { status: "idle" as const, error: null }
             : {}),
+          ...(run === null
+            ? {}
+            : {
+                activeRunId,
+                phase: run.status,
+                status:
+                  run.status === "interrupted"
+                    ? ("idle" as const)
+                    : ("streaming" as const),
+              }),
         }));
+        if (
+          run !== null &&
+          run.status !== "interrupted" &&
+          followedRunRef.current !== activeRunId &&
+          activeRunId !== null
+        ) {
+          const placeholder = path.items.find(
+            (message) =>
+              message.runId === activeRunId &&
+              message.role === "assistant" &&
+              message.metadata["internal"] !== true,
+          );
+          void followRef.current(activeRunId, placeholder?.id ?? "");
+        }
       } catch (cause) {
-        if (isAbort(cause, signal)) return;
+        if (isAbort(cause, signal) || !owns()) return;
         update((prev) => ({
           ...prev,
           status: "error",
@@ -283,7 +349,7 @@ export function useChat(
         }));
       }
     },
-    [client, chatId, pageSize, maxPages, update],
+    [client, chatId, pageSize, maxPages, update, chatScope, stillOwns],
   );
 
   /**
@@ -312,6 +378,17 @@ export function useChat(
       streamRef.current?.abort();
       const controller = new AbortController();
       streamRef.current = controller;
+      followedRunRef.current = runId;
+      update((prev) => ({
+        ...prev,
+        activeRunId: runId,
+        status: "streaming",
+        messages: replaceMessage(prev.messages, placeholderId, (message) =>
+          message.metadata["placeholder"] === true
+            ? { ...message, content: "" }
+            : message,
+        ),
+      }));
 
       /** Still this hook's chat, still mounted, still the live stream. */
       const owns = (): boolean =>
@@ -332,6 +409,7 @@ export function useChat(
           signal: controller.signal,
         })) {
           events.push(event);
+          if (events.length > 10_000) events.shift();
           lastEventId = event.eventId;
           const phase = tracker.observe(event);
           // A new pass throws away what the last one said — the host clears the
@@ -405,15 +483,22 @@ export function useChat(
           settled.fromStatus && (phase === "failed" || phase === "cancelled");
         const failure =
           phase === "failed" || quiet
-            ? (runFailure(events) ?? (quiet ? quietFailure() : null))
-            : null;
+            ? (settled.error ??
+              runFailure(events) ??
+              (quiet ? quietFailure() : null))
+            : settled.error;
         update((prev) => ({
           ...prev,
           phase,
           finishReason,
-          activeRunId: null,
-          status: phase === "failed" ? "error" : "idle",
-          error: failure ?? (phase === "failed" ? prev.error : null),
+          activeRunId: isTerminalPhase(phase) ? null : runId,
+          status:
+            phase === "failed" || failure !== null
+              ? "error"
+              : phase === "interrupted" || isTerminalPhase(phase)
+                ? "idle"
+                : "streaming",
+          error: failure,
         }));
       } catch (cause) {
         if (isAbort(cause, controller.signal) || !owns()) return;
@@ -422,15 +507,22 @@ export function useChat(
           status: "error",
           error: toError(cause),
           phase: tracker.phase(),
-          activeRunId: null,
+          activeRunId: runId,
         }));
       } finally {
-        if (streamRef.current === controller) streamRef.current = null;
+        if (streamRef.current === controller) {
+          streamRef.current = null;
+          followedRunRef.current = null;
+        }
         if (alive.current) emitter.emit(chatTopic(chat), { origin });
       }
     },
     [client, chatId, refresh, update, alive, emitter, origin],
   );
+
+  useEffect(() => {
+    followRef.current = followRun;
+  }, [followRun]);
 
   const submit = useCallback<UseChatResult["submit"]>(
     async (content, opts = {}) => {
@@ -440,7 +532,35 @@ export function useChat(
       }
       // The chat this write belongs to, captured before the first `await`.
       const chat = chatId;
-
+      const scope = chatScope();
+      if (!stillOwns(chat) || scope.aborted) return;
+      const body: SubmitMessageRequest = {
+        content,
+        ...(opts.providerId === undefined
+          ? {}
+          : { providerId: opts.providerId }),
+        ...(opts.model === undefined ? {} : { model: opts.model }),
+        ...(opts.parentMessageId === undefined
+          ? {}
+          : { parentMessageId: opts.parentMessageId }),
+        ...(opts.metadata === undefined ? {} : { metadata: opts.metadata }),
+      };
+      const signature = submissionSignature(body, opts.idempotencyKey);
+      if (
+        read().activeRunId !== null &&
+        !canReplaySubmission(client, chat, body, opts.idempotencyKey)
+      )
+        return;
+      const existing = pendingRef.current;
+      if (existing?.signature === signature && !existing.signal.aborted) {
+        await existing.promise.catch(() => undefined);
+        return;
+      }
+      const generation = ++submissionRef.current;
+      const owns = (): boolean =>
+        stillOwns(chat) &&
+        !scope.aborted &&
+        generation === submissionRef.current;
       const ids = nextOptimisticIds();
       const before = read().messages;
       const base =
@@ -471,37 +591,16 @@ export function useChat(
         finishReason: null,
       }));
 
-      // The key is minted HERE rather than left to the client, which mints one
-      // too — but only returns it with a successful answer, and the call this
-      // needs a key for is the one that did not answer.
-      const signature = submitSignature(content, opts.parentMessageId);
-      const parked = parkedRef.current;
-      const idempotencyKey =
-        opts.idempotencyKey ??
-        (parked !== null && parked.signature === signature
-          ? parked.key
-          : newIdempotencyKey());
-
+      const pending = submitOnce(client, chat, body, opts.idempotencyKey);
+      pendingRef.current = { signature, promise: pending, signal: scope };
       try {
-        const submitted = await client.submitMessage(
-          { chatId: chat },
-          {
-            content,
-            ...(opts.model === undefined ? {} : { model: opts.model }),
-            ...(opts.parentMessageId === undefined
-              ? {}
-              : { parentMessageId: opts.parentMessageId }),
-            ...(opts.metadata === undefined ? {} : { metadata: opts.metadata }),
-          },
-          { idempotencyKey },
-        );
-        parkedRef.current = null;
+        const submitted = await pending;
         // The run was accepted, but for a chat this hook has left: adopting the
         // ids here wrote chat A's `activeRunId` and `status: "streaming"` into
         // chat B, and the follow that came after streamed A's answer into B's
         // placeholder. The run itself is fine — a remount of chat A picks it up
         // from the server.
-        if (!stillOwns(chat)) return;
+        if (!owns()) return;
 
         const { result } = submitted;
         update((prev) => ({
@@ -526,15 +625,23 @@ export function useChat(
         // this chat: the read takes a round trip the user is free to leave in,
         // and its answer is chat A's message list.
         if (opts.parentMessageId !== undefined) await refresh(chatScope());
-        if (!stillOwns(chat)) return;
+        if (!owns()) return;
         void followRun(result.runId, result.assistantMessageId);
       } catch (cause) {
-        // The key survives the failure so the retry lands on the same turn.
-        parkedRef.current = { key: idempotencyKey, signature };
         // The rollback is chat A's too: removing A's optimistic pair from B's
         // list is a no-op, but `status: "error"` and a wiped `activeRunId`
         // would land on whatever B is doing.
-        if (!stillOwns(chat)) return;
+        if (!stillOwns(chat) || scope.aborted) return;
+        if (!owns()) {
+          update((prev) => ({
+            ...prev,
+            messages: prev.messages.filter(
+              (message) =>
+                message.id !== ids.user && message.id !== ids.assistant,
+            ),
+          }));
+          return;
+        }
         update((prev) => {
           // Rollback: the two optimistic records described a write that never
           // happened. Removed BY ID rather than by restoring the list as it was
@@ -564,6 +671,8 @@ export function useChat(
             error: toError(cause),
           };
         });
+      } finally {
+        if (pendingRef.current?.promise === pending) pendingRef.current = null;
       }
     },
     [
@@ -582,12 +691,19 @@ export function useChat(
 
   const regenerate = useCallback<UseChatResult["regenerate"]>(
     async (messageId, opts = {}) => {
+      if (read().activeRunId !== null) return;
       if (chatId === null) {
         update((prev) => ({ ...prev, status: "error", error: noChatId() }));
         return;
       }
       // The chat this write belongs to, captured before the first `await`.
       const chat = chatId;
+      const scope = chatScope();
+      const generation = ++submissionRef.current;
+      const owns = (): boolean =>
+        stillOwns(chat) &&
+        !scope.aborted &&
+        generation === submissionRef.current;
       update((prev) => ({
         ...prev,
         status: "loading",
@@ -604,7 +720,7 @@ export function useChat(
         );
         // Same rule as `submit`: a run accepted for a chat this hook has left
         // is not this hook's run any more.
-        if (!stillOwns(chat)) return;
+        if (!owns()) return;
         update((prev) => ({
           ...prev,
           activeRunId: result.runId,
@@ -615,10 +731,10 @@ export function useChat(
         // hook is holding — there is nothing optimistic to show, so read. Under
         // this chat's scope: the answer is chat A's message list.
         await refresh(chatScope());
-        if (!stillOwns(chat)) return;
+        if (!owns()) return;
         void followRun(result.runId, result.assistantMessageId);
       } catch (cause) {
-        if (!stillOwns(chat)) return;
+        if (!owns()) return;
         update((prev) => ({
           ...prev,
           status: "error",
@@ -631,6 +747,7 @@ export function useChat(
     [
       chatId,
       client,
+      read,
       update,
       stillOwns,
       chatScope,
@@ -653,18 +770,39 @@ export function useChat(
     // The chat the cancelled run belongs to: a failure to cancel A's run is not
     // an error to show under B.
     const chat = chatIdRef.current;
+    const scope = chatScope();
     try {
-      await client.cancelRun({ runId });
+      await client.cancelRun({ runId }, { signal: scope });
     } catch (cause) {
-      if (!alive.current || chatIdRef.current !== chat) return;
+      if (
+        isAbort(cause, scope) ||
+        !alive.current ||
+        chatIdRef.current !== chat ||
+        read().activeRunId !== runId
+      )
+        return;
       update((prev) => ({ ...prev, status: "error", error: toError(cause) }));
     }
-  }, [client, read, update, alive]);
+  }, [client, read, update, alive, chatScope]);
 
   const reload = useCallback<UseChatResult["reload"]>(
     () => refresh(),
     [refresh],
   );
+
+  const resume = useCallback<UseChatResult["resume"]>(async () => {
+    const runId = read().activeRunId;
+    if (runId === null || chatId === null) return;
+    const scope = chatScope();
+    try {
+      await client.resumeRun({ runId }, { signal: scope });
+      if (!stillOwns(chatId) || scope.aborted) return;
+      await refresh(scope);
+    } catch (cause) {
+      if (!stillOwns(chatId) || isAbort(cause, scope)) return;
+      update((prev) => ({ ...prev, status: "error", error: toError(cause) }));
+    }
+  }, [client, chatId, read, chatScope, stillOwns, refresh, update]);
 
   // The initial read, and every re-read a changed chat id calls for. The abort
   // makes it StrictMode-safe: the first effect's fetch is discarded rather than
@@ -711,9 +849,11 @@ export function useChat(
   // instead of a stale one.
   useEffect(() => {
     chatIdRef.current = chatId;
+    clientRef.current = client;
     return () => {
       streamRef.current?.abort();
       streamRef.current = null;
+      followedRunRef.current = null;
       // The scope is aborted on the way OUT and rebuilt lazily, not swapped on
       // the way in: under `<StrictMode>` the effect runs, tears down and runs
       // again, and a scope created by the setup half would be the one the
@@ -732,7 +872,7 @@ export function useChat(
         finishReason: null,
       }));
     };
-  }, [chatId, update]);
+  }, [chatId, client, update]);
 
   return {
     ...value,
@@ -740,6 +880,7 @@ export function useChat(
     regenerate,
     editAndResubmit,
     cancel,
+    resume,
     reload,
   };
 }
@@ -857,14 +998,6 @@ function adopt(
 ): MessageDto {
   const { optimistic: _dropped, ...rest } = message.metadata;
   return { ...message, id, runId, metadata: { ...rest, ...metadata } };
-}
-
-/** What makes two submits "the same question" for idempotency-key reuse. */
-function submitSignature(
-  content: SubmitMessageRequest["content"],
-  parentMessageId: string | undefined,
-): string {
-  return JSON.stringify([content, parentMessageId ?? null]);
 }
 
 function noChatId(): Error {

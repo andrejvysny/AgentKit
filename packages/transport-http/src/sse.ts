@@ -295,7 +295,11 @@ export function createRunEventStream(
             // close immediately, and a run whose host is starting another pass
             // must not be closed on at all.
             const task = await tasks.getTask(taskId);
-            if (task === null || TERMINAL_TASK_STATUSES.has(task.status)) {
+            if (
+              task === null ||
+              task.status === "interrupted" ||
+              TERMINAL_TASK_STATUSES.has(task.status)
+            ) {
               // One last read, until the log is genuinely walked out. The
               // worker appends its terminal event and THEN transitions the
               // task, so a status read that lands between the two must not

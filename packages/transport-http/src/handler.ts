@@ -63,7 +63,7 @@ import {
   testProvider,
   updateProvider,
 } from "./routes/providers.js";
-import { cancelRun, getRun, streamRun } from "./routes/runs.js";
+import { cancelRun, getRun, resumeRun, streamRun } from "./routes/runs.js";
 import { searchMessages } from "./routes/search.js";
 import { getSettings, updateSettings } from "./routes/settings.js";
 import { listToolEvents } from "./routes/tool-events.js";
@@ -91,6 +91,7 @@ const HANDLERS: Readonly<Record<RestOperation, RouteHandler>> = Object.freeze({
   getRun,
   streamRun,
   cancelRun,
+  resumeRun,
   listToolEvents,
   listProposals,
   approveProposal,

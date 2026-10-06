@@ -2,6 +2,7 @@ import { newCallId, nowIso } from "../ids.js";
 import { createEventStamper } from "../events.js";
 import { messageContentToText } from "../messages/content.js";
 import { parseSseStream } from "./sse.js";
+import { providerDiagnostic } from "./diagnostics.js";
 import { truncateString } from "../tools/limits.js";
 import { dedupeToolCallIds } from "../tools/tool-calls.js";
 import type { AiChatRequest, AiProviderClient } from "./client.js";
@@ -44,6 +45,7 @@ export interface OpenAiCompatibleClientOptions {
 }
 
 export class OpenAiCompatibleClient implements AiProviderClient {
+  readonly tracksTransportRequests = true;
   readonly id: string;
   readonly kind: AiProviderKind;
   private readonly baseUrl: string;
@@ -62,6 +64,15 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     this.appReferer = options.appReferer;
     this.appTitle = options.appTitle;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  }
+
+  private diagnostic(error: unknown): string {
+    const secrets = this.apiKey ? [this.apiKey] : [];
+    for (const [name, value] of Object.entries(this.extraHeaders ?? {})) {
+      if (/authorization|api[-_]?key|token|secret|password/i.test(name))
+        secrets.push(value);
+    }
+    return providerDiagnostic(error, secrets);
   }
 
   static fromConfig(
@@ -93,7 +104,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       const models = await this.listModels(signal);
       modelList = models.length > 0;
     } catch (err) {
-      warning = `Model list failed: ${errMsg(err)}`;
+      warning = `Model list failed: ${this.diagnostic(err)}`;
     }
     let toolCalling = false;
     let streaming = true;
@@ -103,7 +114,8 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       streaming = probe.streaming;
       if (probe.warning && !warning) warning = probe.warning;
     } catch (err) {
-      if (!warning) warning = `Capability probe failed: ${errMsg(err)}`;
+      if (!warning)
+        warning = `Capability probe failed: ${this.diagnostic(err)}`;
     }
     return {
       streaming,
@@ -122,7 +134,9 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     });
     if (!response.ok) {
       throw new Error(
-        `GET /models -> ${response.status}: ${await safeBody(response)}`,
+        this.diagnostic(
+          `GET /models -> ${response.status}: ${await safeBody(response)}`,
+        ),
       );
     }
     const payload = (await response.json()) as {
@@ -177,14 +191,18 @@ export class OpenAiCompatibleClient implements AiProviderClient {
 
     let response: Response;
     try {
-      response = await this.postChatCompletions(body, input.signal);
+      response = await this.postChatCompletions(
+        body,
+        input.signal,
+        input.beforeRequest,
+      );
     } catch (err) {
       if (input.signal?.aborted) {
         yield stamp({
           type: "run.cancelled",
           runId,
           timestamp: nowIso(),
-          data: { reason: errMsg(err) },
+          data: { reason: this.diagnostic(err) },
         });
         return;
       }
@@ -195,13 +213,18 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         // The request never produced a response (DNS, refused connection,
         // TLS, a fetch double that threw): distinct from a provider that
         // answered with an error status.
-        data: { errorMessage: errMsg(err), errorCode: "network_error" },
+        data: {
+          errorMessage: this.diagnostic(err),
+          errorCode: "network_error",
+        },
       });
       return;
     }
 
     if (!response.ok) {
-      const errorMessage = `POST /chat/completions -> ${response.status}: ${await safeBody(response)}`;
+      const errorMessage = this.diagnostic(
+        `POST /chat/completions -> ${response.status}: ${await safeBody(response)}`,
+      );
       yield stamp({
         type: "run.failed",
         runId,
@@ -270,6 +293,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           droppedSseLines += 1;
           continue;
         }
+        input.onActivity?.();
         // Usage may ride on its own trailing chunk (choices empty/absent) or
         // alongside choices — read it before the choice guard so the former
         // isn't skipped.
@@ -317,7 +341,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           type: "run.cancelled",
           runId,
           timestamp: nowIso(),
-          data: { reason: errMsg(err) },
+          data: { reason: this.diagnostic(err) },
         });
         return;
       }
@@ -329,13 +353,33 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         // non-2xx path carries the HTTP status): a consumer branching on
         // `errorCode` must not have to parse the `sse_parse:` sentence the
         // parser's buffer cap throws to know this was the provider's fault.
-        data: { errorMessage: errMsg(err), errorCode: "provider_error" },
+        data: {
+          errorMessage: this.diagnostic(err),
+          errorCode: "provider_error",
+        },
       });
       return;
     }
 
     // Token accounting for THIS provider call. Emitted only when the server
     // actually reported usage — a fabricated zero would be worse than silence.
+    if (
+      (finishReason === undefined && !sawDone) ||
+      (droppedSseLines > 0 && toolCallState.order.length > 0)
+    ) {
+      if (usage) yield usageEvent(usage, false);
+      yield stamp({
+        type: "run.failed",
+        runId,
+        timestamp: nowIso(),
+        data: {
+          errorCode: "incomplete_stream",
+          errorMessage:
+            "Provider stream ended without a complete response or contained malformed tool frames.",
+        },
+      });
+      return;
+    }
     if (usage) yield usageEvent(usage, true);
 
     const assembled = assembleToolCalls(toolCallState);
@@ -366,23 +410,6 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         data: {
           code: "sse_parse",
           message: `Dropped ${droppedSseLines} malformed SSE line(s); response may be incomplete.`,
-        },
-      });
-    }
-
-    // A stream that stopped without saying why (idle proxy cut, dropped socket)
-    // used to default to "stop" downstream, committing half an answer as the
-    // final one. Say "incomplete" instead, and warn.
-    if (finishReason === undefined && !sawDone) {
-      finishReason = "incomplete";
-      yield stamp({
-        type: "run.warning",
-        runId,
-        timestamp: nowIso(),
-        data: {
-          code: "stream_incomplete",
-          message:
-            "Provider stream ended without [DONE] or a finish_reason; the response is incomplete.",
         },
       });
     }
@@ -438,14 +465,18 @@ export class OpenAiCompatibleClient implements AiProviderClient {
   private async postChatCompletions(
     body: Record<string, unknown>,
     signal?: AbortSignal,
+    beforeRequest?: AiChatRequest["beforeRequest"],
   ): Promise<Response> {
-    const send = (b: Record<string, unknown>): Promise<Response> =>
-      this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+    const send = async (b: Record<string, unknown>): Promise<Response> => {
+      await beforeRequest?.();
+      signal?.throwIfAborted();
+      return this.fetchImpl(`${this.baseUrl}/chat/completions`, {
         method: "POST",
         headers: this.buildHeaders("application/json"),
         body: JSON.stringify(b),
         signal,
       });
+    };
 
     const response = await send(body);
     if (
@@ -557,7 +588,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       return {
         toolCalling: false,
         streaming: true,
-        warning: `Probe failed: ${errMsg(err)}`,
+        warning: `Probe failed: ${this.diagnostic(err)}`,
       };
     }
   }
@@ -848,10 +879,6 @@ function readStringMetadata(
 
 function stripTrailingSlash(url: string): string {
   return url.endsWith("/") ? url.slice(0, -1) : url;
-}
-
-function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /**
