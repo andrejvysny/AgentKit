@@ -1,6 +1,8 @@
+import { boundedRun } from "./bounded-run.js";
+import type { ExecutionBudget, ExecutionBudgets } from "./execution-budget.js";
 import { newRunId, newToolEventId, nowIso } from "../ids.js";
 import { createEventStamper, type EventStamper } from "../events.js";
-import type { AiProviderClient } from "../providers/client.js";
+import type { AiProviderClient, AiChatRequest } from "../providers/client.js";
 import type { AiToolRegistry } from "../tools/registry.js";
 import type { AiTool } from "../tools/tool.js";
 import type {
@@ -21,7 +23,16 @@ import {
 import { truncateString } from "../tools/limits.js";
 import { dedupeToolCallIds } from "../tools/tool-calls.js";
 
-export interface RunChatInput {
+export interface RunChatInput
+  extends Pick<
+    AiChatRequest,
+    | "continuation"
+    | "continuationScope"
+    | "continuationRequired"
+    | "onContinuation"
+  > {
+  budgets?: ExecutionBudgets;
+  executionBudget?: ExecutionBudget;
   client: AiProviderClient;
   registry: AiToolRegistry;
   model: string;
@@ -95,7 +106,15 @@ const DEFAULT_MAX_TOOL_CALLS_PER_ITERATION = 8;
  * made a run impossible to retry, fan out, or run twice from the same history —
  * the second attempt would start from a conversation the first one had rewritten.
  */
-export async function* runChat(
+export function runChat(
+  input: RunChatInput,
+): AsyncGenerator<AiRunEvent, RunChatResult, unknown> {
+  return input.budgets || input.executionBudget
+    ? boundedRun(input, runChatUnchecked)
+    : runChatUnchecked(input);
+}
+
+async function* runChatUnchecked(
   input: RunChatInput,
 ): AsyncGenerator<AiRunEvent, RunChatResult, unknown> {
   const runId = input.runId ?? newRunId();
@@ -119,6 +138,13 @@ export async function* runChat(
     firstSeq: input.firstSeq,
     attemptId: input.attemptId,
   });
+  let continuation = input.continuation;
+  const onContinuation: AiChatRequest["onContinuation"] = input.onContinuation
+    ? async (state) => {
+        await input.onContinuation?.(state);
+        continuation = state;
+      }
+    : undefined;
   let iteration = 0;
   let finishReason: string | undefined;
 
@@ -173,6 +199,11 @@ export async function* runChat(
         temperature: input.temperature,
         maxOutputTokens: input.maxOutputTokens,
         signal: input.signal,
+        continuation,
+        continuationScope: input.continuationScope,
+        continuationRequired:
+          input.continuationRequired || continuation !== undefined,
+        onContinuation,
       })) {
         // Re-yield provider events with the canonical runId.
         const stamped = { ...event, runId } as AiRunEvent;

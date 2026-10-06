@@ -149,6 +149,20 @@ async function logOf(runId: string): Promise<AiRunEvent[]> {
 }
 
 describe("useRun", () => {
+  test("event retention is bounded without losing the final phase", async () => {
+    const client = createAgentKitClient({ baseUrl: server.baseUrl });
+    const runId = await startRun(client);
+    const { result } = renderHook(() => useRun(runId, { maxEvents: 3 }), {
+      wrapper: wrapper(client),
+    });
+    await waitFor(() => expect(result.current.phase).toBe("completed"));
+    expect(result.current.events).toHaveLength(3);
+    expect(result.current.truncated).toBe(true);
+    const log = await logOf(runId);
+    expect(result.current.events.map((event) => event.eventId)).toEqual(
+      log.slice(-3).map((event) => event.eventId),
+    );
+  });
   test("streams a run to its terminal event", async () => {
     const client = createAgentKitClient({ baseUrl: server.baseUrl });
     const runId = await startRun(client);
@@ -208,12 +222,13 @@ describe("useRun", () => {
     });
 
     expect(severing.cuts()).toBe(1);
-    // Two connections: the first was severed, the second carried a resume.
-    expect(severing.resumeHeaders).toHaveLength(2);
+    // The third connection drains verification after task-status settlement.
+    expect(severing.resumeHeaders).toHaveLength(3);
     expect(severing.resumeHeaders[0]).toBeNull();
     expect(severing.resumeHeaders[1]).toBeString();
 
     const log = await logOf(runId);
+    expect(severing.resumeHeaders[2]).toBe(log.at(-1)?.eventId);
     const seen = result.current.events;
     expect(seen.map((e) => e.eventId)).toEqual(log.map((e) => e.eventId));
     expect(seen.map((e) => e.seq)).toEqual(seen.map((_e, i) => i));
@@ -353,10 +368,11 @@ describe("useRun", () => {
     const { result } = renderHook(() => useRun(runId), {
       wrapper: wrapper(client),
     });
-    await waitFor(() => expect(result.current.phase).toBe("completed"), {
+    await waitFor(() => expect(result.current.phase).toBe("incomplete"), {
       timeout: 10_000,
     });
     expect(result.current.finishReason).toBe("incomplete");
+    expect(result.current.phase).toBe("incomplete");
   });
 
   test("an event that lost its seq is appended, not spliced to the front", async () => {

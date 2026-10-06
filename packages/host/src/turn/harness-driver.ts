@@ -1,3 +1,5 @@
+import { continuationFollowup } from "./provider-continuation.js";
+import { fencedConversations } from "./fenced-conversations.js";
 /**
  * Driving {@link VerificationHook} across possibly several provider passes:
  * the multi-pass correction loop ({@link runCorrectionHarness}), the
@@ -151,6 +153,7 @@ export async function runCorrectionHarness(
   const { basePass, registry, systemPrompt, verification, maxPasses } = input;
   const { ctx, state, chatId, task, assistantMessageId } = basePass;
   const { store } = context.deps;
+  const conversations = fencedConversations(store, ctx);
 
   let terminal = input.terminal;
   let pass = 0;
@@ -158,6 +161,7 @@ export async function runCorrectionHarness(
   let lastReport: DeficiencyReport | null = null;
 
   for (;;) {
+    ctx.signal.throwIfAborted();
     const report = await verifyQuietly(context, verification, {
       runId: task.taskId,
       chatId,
@@ -167,6 +171,7 @@ export async function runCorrectionHarness(
       finalContent: state.content,
       signal: ctx.signal,
     });
+    ctx.signal.throwIfAborted();
     if (report === null) {
       await emitVerification(context, ctx, pass, "unavailable", []);
       break;
@@ -205,25 +210,33 @@ export async function runCorrectionHarness(
       `Verification found ${report.deficiencies.length} unresolved item(s); correcting them (pass ${pass} of ${maxPasses}).`,
     );
     const writeBack = buildDeficiencyWriteBack(report.deficiencies);
-    const messages = buildCorrectionMessages({
-      systemPrompt,
-      userRequest: input.userRequest,
-      previousContent: state.content,
-      writeBack,
-    });
+    const messages = basePass.providerContinuation
+      ? continuationFollowup(basePass.providerContinuation, writeBack)
+      : buildCorrectionMessages({
+          systemPrompt,
+          userRequest: input.userRequest,
+          previousContent: state.content,
+          writeBack,
+        });
     // The write-back is persisted like every other record this run writes: a
     // CHAIN append off the run's own last write. It is `role: "user"` because
     // that is the role it was sent as, and a stored history that claims the
     // model corrected itself unprompted is a history that replays wrong.
     state.lastMessageId = (
-      await store.conversations.appendMessage({
+      await conversations.appendMessage({
         chatId,
         runId: task.taskId,
         role: "user",
         content: writeBack,
         parentMessageId: state.lastMessageId,
         activate: false,
-        metadata: { internal: true, correctionPass: pass },
+        metadata: {
+          internal: true,
+          correctionPass: pass,
+          ...(basePass.providerContinuation
+            ? { canonicalProviderTurn: true }
+            : {}),
+        },
       })
     ).id;
 
@@ -235,7 +248,7 @@ export async function runCorrectionHarness(
     // own tool calls and results are on the log.
     const supersededContent = state.content;
     context.resetPass(state);
-    await store.conversations.updateMessage(assistantMessageId, {
+    await conversations.updateMessage(assistantMessageId, {
       content: "",
     });
     const corrected = await context.runPass({
@@ -252,7 +265,7 @@ export async function runCorrectionHarness(
     // superseded rather than replacing a real answer with nothing.
     if (state.content.trim().length === 0) {
       state.content = supersededContent;
-      await store.conversations.updateMessage(assistantMessageId, {
+      await conversations.updateMessage(assistantMessageId, {
         content: state.content,
       });
     }
@@ -263,7 +276,7 @@ export async function runCorrectionHarness(
   // problems tells a reader less than the list that survived.
   if (lastReport !== null && lastReport.status !== "pass") {
     state.lastMessageId = (
-      await store.conversations.appendMessage({
+      await conversations.appendMessage({
         chatId,
         runId: task.taskId,
         role: "system",

@@ -1,3 +1,18 @@
+import {
+  prepareProviderContinuation,
+  continuationRequest,
+  rememberContinuationMessages,
+  continuationFollowup,
+} from "./provider-continuation.js";
+import { runWithSignal } from "./run-with-signal.js";
+import { publicErrorMessage } from "./error-message.js";
+import { fencedConversations } from "./fenced-conversations.js";
+import { createTurnBudget } from "./execution-budget.js";
+import {
+  ExecutionBudgetError,
+  type ExecutionBudget,
+  type ExecutionBudgets,
+} from "@agentkit/core";
 import type {
   AiContextBinding,
   AiProviderConfig,
@@ -109,6 +124,8 @@ export const PROVIDER_SECRET_REF_KEY = "apiKeySecretRef";
  * disagree with the first.
  */
 export interface TurnRunnerDeps {
+  /** Shared deadlines/counters persisted across retries and correction passes. */
+  executionBudgets?: ExecutionBudgets;
   store: AssistantStore;
   taskRunner: TaskRunner;
   /** Builds a client for a resolved provider config (key already injected). */
@@ -229,6 +246,10 @@ export interface TurnRunnerDeps {
  * mid-retry still sees one unbroken, gap-detectable stream.
  */
 export class TurnRunner implements TaskWorker {
+  private readonly executionBudgets = new WeakMap<
+    TaskExecutionContext,
+    ExecutionBudget
+  >();
   /**
    * Whether {@link disposeContributors} has already run. A host wires the call
    * into a signal handler, and a signal can arrive twice.
@@ -378,48 +399,44 @@ export class TurnRunner implements TaskWorker {
     }
 
     const request = payload as TurnRequest;
+    let budget: ExecutionBudget | undefined;
     try {
-      await this.runTurn(ctx, chatId, request, assistantMessageId);
+      if (this.deps.executionBudgets) {
+        budget = await createTurnBudget(
+          this.deps.store,
+          ctx,
+          this.deps.executionBudgets,
+        );
+        ctx = { ...ctx, signal: budget.signal };
+        this.executionBudgets.set(ctx, budget);
+      }
+      if (budget)
+        await budget.race(() =>
+          this.runTurn(ctx, chatId, request, assistantMessageId),
+        );
+      else
+        await runWithSignal(ctx.signal, () =>
+          this.runTurn(ctx, chatId, request, assistantMessageId),
+        );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = publicErrorMessage(err);
       await this.landFailure(ctx, err, message, assistantMessageId);
+      if (
+        ctx.signal.aborted &&
+        !(ctx.signal.reason instanceof ExecutionBudgetError) &&
+        !(err instanceof LeaseLostError)
+      )
+        return;
       throw err;
+    } finally {
+      this.executionBudgets.delete(ctx);
+      budget?.dispose();
     }
   }
 
   /**
-   * Bookkeep an unexpected throw out of a turn: the durable log, the task row,
-   * the attempt, and the placeholder — in that order, all best-effort.
-   *
-   * THE THREE WRITES ARE NOT INTERCHANGEABLE, and before this existed only the
-   * middle one happened. A throw from anywhere in `runTurn` — a lease lost, an
-   * attachment resolver, the single-shot verifier, `providerFactory`, staging —
-   * landed the TASK `failed` and left everything a client can actually see
-   * untouched: no terminal event on the run's log, so an SSE consumer watched
-   * the stream stop with no explanation; and `placeholder: true` on the
-   * assistant record forever, so the UI kept a spinner on a message that will
-   * never finish. Worse, a worker that lands its own task opts out of the
-   * runner's retries, so nothing was ever coming back to repair it.
-   *
-   * ORDER, and why:
-   *
-   *  1. **The terminal event first**, because it is the only one of the three a
-   *     live consumer is watching, and it is the write most likely to be
-   *     refused (it is fenced, like every other write in an attempt) — sending
-   *     it first means a fenced-out attempt does not spend its one chance on
-   *     bookkeeping nobody reads.
-   *  2. **The fenced task transition**, which is where ownership is actually
-   *     proven. `LeaseLostError` here stops the rest: the owner that took this
-   *     task over is the one whose verdict counts.
-   *  3. **The placeholder**, last and only when the transition landed — the
-   *     same ordering the successful terminal block uses, for the same reason
-   *     (`ConversationStore` knows nothing about leases, so the only way to
-   *     keep a zombie attempt off the live answer is to make it prove ownership
-   *     on a write that CAN check, first).
-   *
-   * `cancelled` rather than `failed` when the run was aborted: a user pressing
-   * stop is not a failure, and a task landed `failed` for it shows up as an
-   * error in every UI and every retry decision downstream.
+   * Persist a bounded terminal diagnosis, then finalize under the same lease.
+   * The original error remains the caller's diagnosis if bookkeeping fails.
    */
   private async landFailure(
     ctx: TaskExecutionContext,
@@ -427,7 +444,9 @@ export class TurnRunner implements TaskWorker {
     message: string,
     assistantMessageId?: string,
   ): Promise<void> {
-    const cancelled = ctx.signal.aborted;
+    const cancelled =
+      ctx.signal.aborted &&
+      !(ctx.signal.reason instanceof ExecutionBudgetError);
     // `usage_denied` already wrote its own `run.failed`, with the specific code
     // a consumer acts on; a second terminal event here would only overwrite a
     // precise diagnosis with a generic one.
@@ -467,7 +486,10 @@ export class TurnRunner implements TaskWorker {
           data: {
             errorMessage: message,
             errorCode:
-              err instanceof AgentKitHostError ? err.code : "internal_error",
+              err instanceof AgentKitHostError ||
+              err instanceof ExecutionBudgetError
+                ? err.code
+                : "internal_error",
           },
         };
     try {
@@ -490,6 +512,8 @@ export class TurnRunner implements TaskWorker {
   ): Promise<void> {
     const { store, clock } = this.deps;
     const { task } = ctx;
+    const conversations = fencedConversations(store, ctx);
+    ctx.signal.throwIfAborted();
     const settings = await store.settings.getSettings();
     const provider = await this.resolveProvider(request, settings);
     const model =
@@ -510,6 +534,19 @@ export class TurnRunner implements TaskWorker {
           ? {}
           : { modelContextTokens: capabilities.maxContextTokens }),
       });
+
+    const configuredProvider = await this.withSecret(provider);
+    ctx.signal.throwIfAborted();
+    const client = this.deps.providerFactory(configuredProvider);
+    const providerContinuation = await prepareProviderContinuation({
+      store,
+      ctx,
+      client,
+      providerId: provider.id,
+      model,
+      chatId,
+      anchorMessageId: assistantMessageId,
+    });
 
     const bindings = await this.resolveBindings(ctx, chatId);
     const hasPrimaryBinding = bindings.some(
@@ -550,6 +587,7 @@ export class TurnRunner implements TaskWorker {
           namespaces: new Map<string, string>(),
           failed: [],
         };
+    ctx.signal.throwIfAborted();
     const registry = staged.registry;
     // A contributor that could not answer costs its tools and nothing else
     // (see `stageRegistry`), and `stageRegistry` has already logged why. A
@@ -573,20 +611,9 @@ export class TurnRunner implements TaskWorker {
     // example for something that is not a tool here is not reported as one.
     const stagedToolNames = new Set(staged.namespaces.keys());
 
-    const client = this.deps.providerFactory(await this.withSecret(provider));
     const systemPrompt = await this.resolveSystemPrompt(ctx, chatId);
-    const assembled = await assembleMessages(
-      this.deps,
-      chatId,
-      assistantMessageId,
-      systemPrompt,
-    );
-    // Snapshot before the first pass: the empty-response retry re-asks the
-    // ORIGINAL question, not the question plus whatever the failed turn left
-    // behind.
-    const initialMessages = assembled.slice();
-
     const state: PassState = this.projector.createState({
+      preserveCanonicalTurns: providerContinuation !== undefined,
       chatId,
       assistantMessageId,
       providerId: provider.id,
@@ -599,12 +626,30 @@ export class TurnRunner implements TaskWorker {
     // under a parent that already has one lands `active: false`, taking every
     // record after it off the path each later turn replays. See
     // `ConversationStore.lastMessageOfRun`.
+    if (task.attemptCount > 1) {
+      await this.projector.replay(ctx, state);
+      this.resetPass(state);
+      await conversations.updateMessage(assistantMessageId, { content: "" });
+    }
     const resumed = await store.conversations.lastMessageOfRun(
       chatId,
       task.taskId,
     );
     if (resumed !== null) state.lastMessageId = resumed.id;
+    const assembled = await assembleMessages(
+      this.deps,
+      chatId,
+      assistantMessageId,
+      systemPrompt,
+    );
+    // Snapshot before the first pass: the empty-response retry re-asks the
+    // ORIGINAL question, not the question plus whatever the failed turn left
+    // behind.
+    ctx.signal.throwIfAborted();
+    const initialMessages = assembled.slice();
+
     const basePass = {
+      providerContinuation,
       task,
       chatId,
       ctx,
@@ -632,7 +677,15 @@ export class TurnRunner implements TaskWorker {
     // answer. See `emitPassBoundary`.
     let passesRun = 1;
 
-    if (shouldRetryChatOnly({ terminal, registryHadTools })) {
+    if (
+      client.protocol !== "responses" &&
+      shouldRetryChatOnly({ terminal, registryHadTools }) &&
+      !ctx.signal.aborted &&
+      state.toolCallIds.size === 0 &&
+      ["400", "422", "unsupported_tools", "invalid_tool_schema"].includes(
+        first.failureCode ?? "",
+      )
+    ) {
       passesRun += 1;
       await this.emitPassBoundary(
         ctx,
@@ -644,7 +697,7 @@ export class TurnRunner implements TaskWorker {
       // sentence, and appending a second attempt to it would read as one
       // rambling reply.
       this.resetPass(state);
-      await this.deps.store.conversations.updateMessage(assistantMessageId, {
+      await conversations.updateMessage(assistantMessageId, {
         content: "",
       });
       const retryMessages = filterToolTurns([
@@ -672,10 +725,26 @@ export class TurnRunner implements TaskWorker {
         "empty_response",
         "The model completed the turn without an answer; asking the original question once more.",
       );
+      let retryMessages = filterToolTurns(initialMessages);
+      if (providerContinuation) {
+        const followup = "Please provide an answer to the previous request.";
+        retryMessages = continuationFollowup(providerContinuation, followup);
+        state.lastMessageId = (
+          await conversations.appendMessage({
+            chatId,
+            runId: task.taskId,
+            role: "user",
+            content: followup,
+            parentMessageId: state.lastMessageId,
+            activate: false,
+            metadata: { internal: true, canonicalProviderTurn: true },
+          })
+        ).id;
+      }
       this.resetPass(state);
       const retry = await this.runPass({
         ...basePass,
-        messages: filterToolTurns(initialMessages),
+        messages: retryMessages,
         registry: new AiToolRegistry(),
         maxToolIterations: RETRY_MAX_TOOL_ITERATIONS,
       });
@@ -706,7 +775,7 @@ export class TurnRunner implements TaskWorker {
         EMULATED_TOOL_CALL_MESSAGE,
       );
       state.lastMessageId = (
-        await store.conversations.appendMessage({
+        await conversations.appendMessage({
           chatId,
           runId: task.taskId,
           role: "system",
@@ -731,7 +800,11 @@ export class TurnRunner implements TaskWorker {
     // but a verifier that answers behaves exactly as before. With
     // `deps.correction` the harness takes over and the rules change
     // deliberately; see `runCorrectionHarness`.
-    if (this.deps.verification && toolCallCount > 0) {
+    if (
+      terminal === "completed" &&
+      this.deps.verification &&
+      toolCallCount > 0
+    ) {
       if (this.deps.correction === undefined) {
         const verification = this.deps.verification;
         const report = await withHookDeadline({
@@ -748,9 +821,10 @@ export class TurnRunner implements TaskWorker {
               signal: ctx.signal,
             }),
         });
+        ctx.signal.throwIfAborted();
         if (report && report.status !== "pass") {
           state.lastMessageId = (
-            await store.conversations.appendMessage({
+            await conversations.appendMessage({
               chatId,
               runId: task.taskId,
               role: "system",
@@ -794,40 +868,35 @@ export class TurnRunner implements TaskWorker {
       }
     }
 
+    // Cancellation may arrive after the provider finishes or while verification is pending.
+    ctx.signal.throwIfAborted();
     const finalStatus: TaskStatus =
       terminal === "completed"
         ? "completed"
         : terminal === "cancelled"
           ? "cancelled"
           : "failed";
-    // THE FENCED TASK TRANSITION GOES FIRST, and the placeholder write last.
-    // `ConversationStore` knows nothing about leases, so the only way to keep a
-    // zombie attempt — one whose lease expired mid-tool-call, with recovery
-    // already running attempt 2 — from overwriting the live attempt's answer is
-    // to make it prove ownership on a write that CAN check, before it touches
-    // the message. `LeaseLostError` from here therefore aborts the whole block:
-    // the placeholder is left for the owner that actually holds the task, and
-    // the error propagates so the queue classifies this attempt as lost rather
-    // than finished.
-    await store.tasks.transitionTask(
-      task.taskId,
-      ["running"],
-      finalStatus,
-      { finishedAt: clock.nowIso() },
-      { leaseToken: ctx.leaseToken },
-    );
-    await store.tasks.endAttempt({
-      attemptId: ctx.attemptId,
-      status: finalStatus,
-      leaseToken: ctx.leaseToken,
-    });
-    // `state.content` rather than the `finalContent` snapshot above: a
-    // correction pass rewrites the visible answer, and the snapshot predates it.
-    // With no harness the two are the same string — nothing between them touches
-    // the state — so this is not a behaviour change for anyone not using it.
-    await store.conversations.updateMessage(assistantMessageId, {
-      content: state.content,
-      metadata: { placeholder: false },
+    await store.transaction(async (tx) => {
+      await fencedConversations(tx, ctx).updateMessage(assistantMessageId, {
+        content: state.content,
+        metadata: {
+          ...(await tx.conversations.getMessage(assistantMessageId))?.metadata,
+          placeholder: false,
+        },
+      });
+      await tx.tasks.endAttempt({
+        attemptId: ctx.attemptId,
+        status: finalStatus,
+        leaseToken: ctx.leaseToken,
+      });
+      // A terminal task is the stream-close marker; all visible state must precede it.
+      await tx.tasks.transitionTask(
+        task.taskId,
+        ["running"],
+        finalStatus,
+        { finishedAt: clock.nowIso() },
+        { leaseToken: ctx.leaseToken },
+      );
     });
   }
 
@@ -845,7 +914,10 @@ export class TurnRunner implements TaskWorker {
    * than by remembering to add a check to each of the three call sites.
    */
   private async runPass(input: PassInput): Promise<PassResult> {
+    this.executionBudgets.get(input.ctx)?.check();
+    input.ctx.signal.throwIfAborted();
     await this.authorizeUsage(input);
+    input.ctx.signal.throwIfAborted();
     // Before `firstSeq` is taken, because resolving may emit warnings of its
     // own and those must land BEFORE the pass's events — the sequence is one
     // unbroken run of numbers, and a warning stamped after `runChat` reserved
@@ -860,8 +932,10 @@ export class TurnRunner implements TaskWorker {
       input.chatId,
       input.messages,
     );
+    input.ctx.signal.throwIfAborted();
     const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
     const generator = runChat({
+      ...continuationRequest(input.providerContinuation),
       client: input.client,
       registry: input.registry,
       model: input.model,
@@ -877,19 +951,29 @@ export class TurnRunner implements TaskWorker {
       attemptId: input.ctx.attemptId,
       firstSeq,
       signal: input.ctx.signal,
+      executionBudget: this.executionBudgets.get(input.ctx),
       ...(input.maxToolIterations === undefined
         ? {}
         : { maxToolIterations: input.maxToolIterations }),
     });
 
+    let failureCode: string | undefined;
     for (;;) {
       const next = await generator.next();
       if (next.done) {
+        rememberContinuationMessages(
+          input.providerContinuation,
+          messages,
+          next.value.appendedMessages,
+        );
         return {
           terminal: next.value.terminal,
           appendedMessages: next.value.appendedMessages,
+          ...(failureCode === undefined ? {} : { failureCode }),
         };
       }
+      if (next.value.type === "run.failed")
+        failureCode = next.value.data.errorCode;
       await this.projectEvent(next.value, input);
     }
   }
@@ -960,6 +1044,7 @@ export class TurnRunner implements TaskWorker {
     event: AiRunEvent,
     input: PassInput,
   ): Promise<void> {
+    input.ctx.signal.throwIfAborted();
     await this.projector.project(
       {
         task: input.task,
@@ -1001,6 +1086,7 @@ export class TurnRunner implements TaskWorker {
         timeoutMs: this.hookTimeouts.context,
         run: async () => {
           await context.refresh?.(chatId, ctx.signal);
+          ctx.signal.throwIfAborted();
           return (await context.listBindings(chatId, ctx.signal)) ?? [];
         },
       });
@@ -1079,6 +1165,12 @@ export class TurnRunner implements TaskWorker {
     ctx: TaskExecutionContext,
     draft: AiRunEventDraft,
   ): Promise<void> {
+    if (
+      ctx.signal.aborted &&
+      draft.type !== "run.failed" &&
+      draft.type !== "run.cancelled"
+    )
+      ctx.signal.throwIfAborted();
     const taskId = ctx.task.taskId;
     const firstSeq = await this.deps.store.tasks.nextSeq(taskId);
     const stamp = createEventStamper({
@@ -1113,6 +1205,9 @@ export class TurnRunner implements TaskWorker {
     reason: "chat_only" | "empty_response" | "correction",
     message: string,
   ): Promise<void> {
+    await this.executionBudgets
+      .get(ctx)
+      ?.consume(reason === "correction" ? "correctionPasses" : "retries");
     await this.appendHostEvent(ctx, {
       type: "run.warning",
       runId: ctx.task.taskId,
@@ -1194,110 +1289,66 @@ export class TurnRunner implements TaskWorker {
     return apiKey === null ? provider : { ...provider, apiKey };
   }
 
-  /**
-   * Best-effort failure bookkeeping on an unexpected throw. Every step is
-   * guarded: the original error is what the caller must see, and a secondary
-   * failure while recording it would replace the diagnosis with noise.
-   *
-   * SAME ORDER AS THE TERMINAL BLOCK, for the same reason: the fenced task
-   * transition is the one write that can prove this attempt still owns the
-   * task, so it goes first, and a `LeaseLostError` from it stops the rest. An
-   * attempt that has been fenced out must record nothing — not even a failure —
-   * because the owner that took the task over is the one whose verdict counts,
-   * and `abandoned` (which recovery already wrote for this attempt) is the
-   * honest description of what happened here.
-   *
-   * THE PLACEHOLDER IS FINALIZED ON EITHER PROOF OF OWNERSHIP: this attempt
-   * landed the task, or the fenced `endAttempt` succeeded on a task somebody
-   * landed OUT OF BAND (a host transition, an operator cancel). Requiring the
-   * first alone left the second case with `placeholder: true` forever — the
-   * task cancelled, the run over, and a UI still spinning on a message nothing
-   * was coming back to finish.
-   */
+  /** Finalize visible state and the attempt before publishing the terminal task. */
   private async failQuietly(
     ctx: TaskExecutionContext,
     message: string,
-    /**
-     * The placeholder to finalize once the transition proves this attempt still
-     * owns the task. Omitted when there is none to name.
-     */
     assistantMessageId?: string,
   ): Promise<void> {
     const { store, clock, logger } = this.deps;
-    const taskId = ctx.task.taskId;
-    // A cancelled turn is not a failed one. The signal is the same one the
-    // provider call was watching, so "aborted" here means the user (or the
-    // queue) stopped this run, and landing it `failed` reports a user action as
-    // an error to every consumer downstream.
-    const status: TaskStatus = ctx.signal.aborted ? "cancelled" : "failed";
-    // Whether THIS attempt actually landed the task — one of two proofs that it
-    // still owns it, and therefore that it may touch the placeholder.
-    let landed = false;
-    // The other proof, for the task that was landed OUT OF BAND: a host
-    // transition, an operator cancel, a `waiting_approval` host that settled it
-    // while this turn was breaking. `endAttempt` below is fenced, so its
-    // SUCCESS says the lease is still this attempt's — nobody else has taken
-    // the task over, and nobody else will finalize the placeholder.
-    let leaseCurrent = false;
+    const status: TaskStatus =
+      ctx.signal.aborted && !(ctx.signal.reason instanceof ExecutionBudgetError)
+        ? "cancelled"
+        : "failed";
     try {
-      const task = await store.tasks.getTask(taskId);
-      if (task?.status === "running") {
-        await store.tasks.transitionTask(
-          taskId,
-          ["running"],
-          status,
-          { finishedAt: clock.nowIso(), error: message },
-          { leaseToken: ctx.leaseToken },
-        );
-        landed = true;
+      const chatId = ctx.task.payload.chatId;
+      if (assistantMessageId !== undefined && typeof chatId === "string") {
+        const placeholder =
+          await store.conversations.getMessage(assistantMessageId);
+        const state = this.projector.createState({
+          chatId,
+          assistantMessageId,
+          preserveCanonicalTurns:
+            placeholder?.metadata["canonicalProviderDisplay"] === true,
+        });
+        // Cancellation can arrive before coalesced deltas reach the placeholder.
+        await this.projector.replay(ctx, state);
       }
-    } catch (err) {
-      logger?.warn("could not fail task after error", {
-        taskId,
-        error: err instanceof Error ? err.message : String(err),
+      await store.transaction(async (tx) => {
+        // This fenced snapshot proves ownership even when no placeholder is named.
+        const task = await tx.tasks.getTask(ctx.task.taskId);
+        await tx.tasks.updateProgress(ctx.task.taskId, task?.progress ?? {}, {
+          leaseToken: ctx.leaseToken,
+        });
+        if (assistantMessageId !== undefined) {
+          await fencedConversations(tx, ctx).updateMessage(assistantMessageId, {
+            metadata: {
+              ...(await tx.conversations.getMessage(assistantMessageId))
+                ?.metadata,
+              placeholder: false,
+            },
+          });
+        }
+        await tx.tasks.endAttempt({
+          attemptId: ctx.attemptId,
+          status,
+          error: message,
+          leaseToken: ctx.leaseToken,
+        });
+        if (task?.status === "running") {
+          await tx.tasks.transitionTask(
+            ctx.task.taskId,
+            ["running"],
+            status,
+            { finishedAt: clock.nowIso(), error: message },
+            { leaseToken: ctx.leaseToken },
+          );
+        }
       });
-      if (err instanceof LeaseLostError) return;
-    }
-    try {
-      await store.tasks.endAttempt({
-        attemptId: ctx.attemptId,
-        status,
-        error: message,
-        leaseToken: ctx.leaseToken,
-      });
-      leaseCurrent = true;
-    } catch (err) {
-      logger?.warn("could not end attempt after failure", {
-        taskId,
-        attemptId: ctx.attemptId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    // LAST, and only with ownership proved. A task somebody ELSE took over is a
-    // task whose placeholder somebody else is responsible for — a
-    // `LeaseLostError` from the transition has already returned, and one from
-    // the fenced `endAttempt` leaves `leaseCurrent` false.
-    //
-    // `landed` alone was not enough. A task landed out of band — a host
-    // transition, an operator cancel — is terminal before this block runs, so
-    // the transition above is skipped and nothing else was ever going to take
-    // the `placeholder: true` flag off: the run's answer stayed a spinner
-    // forever, with the task long since cancelled. Nobody else can write it,
-    // because the lease proves the task is still this attempt's.
-    if (!(landed || leaseCurrent) || assistantMessageId === undefined) return;
-    try {
-      // Whatever the run streamed before it broke is KEPT — a half-written
-      // answer plus a terminal event explaining the stop is more use to a
-      // reader than a blank bubble — but `placeholder` has to come off, or the
-      // UI spins forever on a message nothing is coming back to finish.
-      await store.conversations.updateMessage(assistantMessageId, {
-        metadata: { placeholder: false },
-      });
-    } catch (err) {
-      logger?.warn("could not finalize placeholder after failure", {
-        taskId,
-        assistantMessageId,
-        error: err instanceof Error ? err.message : String(err),
+    } catch (error) {
+      logger?.warn("could not finalize failed turn", {
+        taskId: ctx.task.taskId,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }

@@ -334,7 +334,11 @@ export async function assembleMessages(
    */
   const declaredToolCallIds = new Set<string>();
   for (const record of ordered) {
-    if (record.id === assistantMessageId) continue;
+    if (
+      record.id === assistantMessageId ||
+      record.metadata["canonicalProviderDisplay"] === true
+    )
+      continue;
     // A correction write-back is an instruction the harness aimed at ONE pass
     // of ONE run ("fix these three items now, by calling your tools"). It is
     // persisted for the audit trail — the stored history has to say why the
@@ -342,7 +346,11 @@ export async function assembleMessages(
     // turn a dangling order about deficiencies that were already addressed,
     // with nothing left in view to address. The harness's own passes are
     // unaffected: they build their messages directly, not from this history.
-    if (record.metadata["correctionPass"] !== undefined) continue;
+    if (
+      record.metadata["correctionPass"] !== undefined &&
+      record.metadata["canonicalProviderTurn"] !== true
+    )
+      continue;
     if (record.role === "user") {
       messages.push({ role: "user", content: record.content });
     } else if (record.role === "assistant") {

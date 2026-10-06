@@ -8,7 +8,13 @@
  * aggregate itself depend on {@link SqliteConnection} and {@link TxOwner}, so
  * this is the one file with no dependency back on the rest of the package.
  */
-import type { Changes, Database } from "bun:sqlite";
+import {
+  normalizeRow,
+  normalizeChanges,
+  normalizeBindings,
+  type SqliteChanges as Changes,
+  type SqliteDatabase as Database,
+} from "./driver.js";
 import { TransactionGateTimeoutError } from "@agentkit/host";
 
 /**
@@ -52,7 +58,7 @@ function isBusyError(err: unknown): boolean {
 // ---------------------------------------------------------------------------
 
 /** Bound-parameter bag: `$name` keys, scalar/null values — the named-params style used throughout this file. */
-export type Params = Record<string, string | number | boolean | bigint | null>;
+export type Params = import("./driver.js").SqliteParams;
 
 /**
  * Identity of one open async transaction — a token, not a counter.
@@ -231,31 +237,25 @@ export class SqliteConnection {
   }
 
   run(sql: string, params?: Params): Changes {
-    // bun-types' generic for Database.run (`...bindings: ParamsType[]` where
-    // `ParamsType extends SQLQueryBindings[]`) models an array of bindings
-    // ARRAYS, which does not match its own documented single-object calling
-    // convention (`db.run(sql, { $name: "foo" })`, per the class's own
-    // JSDoc). Re-typing `this.db` sidesteps that mismatched generic while
-    // still calling `run` AS A METHOD on the same instance (not a detached
-    // function reference — bun:sqlite's native binding needs `this` bound to
-    // the Database instance, so extracting `db.run` into a bare variable and
-    // calling it unbound breaks at runtime even though it type-checks).
-    const db = this.db as unknown as {
-      run(sql: string, params?: Params): Changes;
-    };
-    return params === undefined ? db.run(sql) : db.run(sql, params);
+    return normalizeChanges(
+      params === undefined
+        ? this.db.run(sql)
+        : this.db.run(sql, normalizeBindings(params)),
+    );
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: driver boundary — bun:sqlite rows are untyped; every call site casts to its own Row type immediately
-  get(sql: string, params?: Params): any {
+  get(sql: string, params?: Params): unknown {
     const stmt = this.db.query(sql);
-    return params === undefined ? stmt.get() : stmt.get(params);
+    return normalizeRow(
+      params === undefined ? stmt.get() : stmt.get(normalizeBindings(params)),
+    );
   }
 
-  // biome-ignore lint/suspicious/noExplicitAny: driver boundary — see get()
-  all(sql: string, params?: Params): any[] {
+  all(sql: string, params?: Params): unknown[] {
     const stmt = this.db.query(sql);
-    return params === undefined ? stmt.all() : stmt.all(params);
+    return (
+      params === undefined ? stmt.all() : stmt.all(normalizeBindings(params))
+    ).map(normalizeRow);
   }
 
   exec(sql: string): void {
@@ -402,6 +402,18 @@ export class SqliteConnection {
       // not orphaned.
       waited.arrive();
       return this.withTx(fn);
+    });
+    this.enqueue(run);
+    return waited.race(run);
+  }
+
+  /** Durable publication reads must not observe a transaction before it commits. */
+  async readCommitted<T>(fn: () => T, owner?: TxOwner): Promise<T> {
+    if (owner !== undefined && owner === this.currentOwner) return fn();
+    const waited = new GateWait(this.gateTimeoutMs);
+    const run = this.txGate.then(() => {
+      waited.arrive();
+      return fn();
     });
     this.enqueue(run);
     return waited.race(run);

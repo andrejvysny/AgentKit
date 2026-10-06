@@ -93,6 +93,7 @@ const STATUS_BY_HOST_CODE = {
 const STATUS_BY_CODE: Readonly<Record<string, number>> = Object.freeze({
   ...STATUS_BY_HOST_CODE,
   invalid_decision: 400,
+  resume_unsupported: 501,
 });
 
 const TITLE_BY_STATUS: Readonly<Record<number, string>> = Object.freeze({

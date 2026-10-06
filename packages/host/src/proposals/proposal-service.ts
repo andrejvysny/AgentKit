@@ -66,6 +66,8 @@ export interface ApplyProposalRequest {
   /** Idempotency key for this apply attempt; replaying it replays the outcome. */
   operationId: string;
   signal?: AbortSignal;
+  /** Re-check ephemeral authority immediately before the applier starts. */
+  authorize?(proposal: ProposalRecord): boolean;
 }
 
 export interface InvalidateForRevisionInput {
@@ -282,6 +284,7 @@ export class ProposalService {
     }
 
     await this.guardRevision(proposal, input.operationId);
+    const authorized = input.authorize?.(proposal) !== false;
 
     const claimed = await proposals.transition(
       input.proposalId,
@@ -292,6 +295,10 @@ export class ProposalService {
 
     let outcome: ApplyOutcome;
     try {
+      // Claiming can await IO; authority may have been revoked during it.
+      if (!authorized || input.authorize?.(claimed) === false) {
+        throw new Error("Proposal apply authorization revoked");
+      }
       outcome = await this.deps.applier.apply({
         proposal: claimed,
         operationId: input.operationId,

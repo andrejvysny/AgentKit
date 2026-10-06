@@ -27,6 +27,11 @@ export * from "./runs/run-loop.js";
 
 // Providers
 export * from "./providers/client.js";
+export { redactDiagnostic } from "./providers/diagnostics.js";
 export * from "./providers/presets.js";
 export * from "./providers/sse.js";
 export * from "./providers/openai-compatible.js";
+
+export * from "./runs/execution-budget.js";
+export * from "./providers/responses-types.js";
+export * from "./providers/responses.js";

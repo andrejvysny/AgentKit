@@ -46,6 +46,10 @@ function isReplayPrefix(record: MessageRecord): boolean {
  * carries the LOWEST order key of the whole run.
  */
 function orderRunRecords(records: readonly MessageRecord[]): MessageRecord[] {
+  if (
+    records.some((record) => record.metadata["canonicalProviderTurn"] === true)
+  )
+    return [...records];
   const prefix = records.filter(isReplayPrefix);
   const tail = records.filter((record) => !isReplayPrefix(record));
   if (prefix.length === 0) return tail;

@@ -4,6 +4,7 @@ import type { ProposalStore } from "./proposal-store.js";
 import type { ProviderStore } from "./provider-store.js";
 import type { SettingsStore } from "./settings-store.js";
 import type { TaskStore } from "./task-store.js";
+import type { ProviderContinuationStore } from "./provider-continuation-store.js";
 
 /**
  * The host's persistence, as one aggregate.
@@ -22,6 +23,8 @@ export interface AssistantStore {
   providers: ProviderStore;
   settings: SettingsStore;
   outbox: OutboxStore;
+  /** Trusted provider state; optional so existing host stores remain compatible. */
+  continuations?: ProviderContinuationStore;
 
   /**
    * Run `fn` in a transaction, handing it a store view scoped to that
@@ -48,16 +51,18 @@ export interface AssistantStore {
    * callback entirely: do the awaiting outside and pass the results in.
    *
    * ISOLATION CAVEAT: what `transaction()` promises is atomicity and the
-   * serialization above, NOT snapshot isolation. READS from other callers still
-   * see the store mid-transaction (they take no lock worth serializing), and an
+   * serialization above, NOT snapshot isolation. Most reads from other callers still
+   * see the store mid-transaction. Durable task status, event, and projected message reads must
+   * wait for commit or rollback because transports publish their results. An
    * adapter may let an ordinary single-call WRITE from another caller queue
    * behind an open transaction — `SqliteAssistantStore` does exactly that, so
    * such a write is delayed rather than joined and rolled back.
    *
    * Both reference adapters now answer the four questions above the same way:
    * `MemoryAssistantStore` has no rollback (it declares
-   * `capabilities.atomicTransactions: false`) and does not queue ordinary
-   * writes, but serializes, flattens and times out exactly as
+   * `capabilities.atomicTransactions: false`) and queues task mutations,
+   * including lease changes. Other ordinary writes remain immediate. It
+   * serializes, flattens and times out exactly as
    * `SqliteAssistantStore` does. The shared conformance suite in
    * `@agentkit/testing` pins that for any adapter a host writes later.
    */

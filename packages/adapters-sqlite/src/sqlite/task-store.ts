@@ -1,3 +1,4 @@
+import { assertRunLease } from "./lease-fence.js";
 /**
  * `bun:sqlite`-backed {@link TaskStore}: tasks, attempts, leases (with the
  * store-global fencing counter), task events, and the `claimNext` walk with
@@ -72,6 +73,7 @@ const DEFAULT_LEASE_TTL_MS = 30_000;
 const BUSY_TASK_STATUSES: readonly TaskStatus[] = Object.freeze([
   "running",
   "waiting_approval",
+  "interrupted",
 ]);
 
 /**
@@ -248,8 +250,10 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   async getTask(taskId: string): Promise<TaskRecord | null> {
-    const row = this.selectTaskRow(taskId);
-    return row ? taskFromRow(row) : null;
+    return this.conn.readCommitted(() => {
+      const row = this.selectTaskRow(taskId);
+      return row ? taskFromRow(row) : null;
+    }, this.txOwner);
   }
 
   async listChildren(taskId: string): Promise<TaskRecord[]> {
@@ -319,6 +323,18 @@ export class SqliteTaskStore implements TaskStore {
         params,
       ).changes;
     }, this.txOwner);
+  }
+
+  async interruptQueued(before: string): Promise<number> {
+    const instant = normalizeInstant(before, "before");
+    return this.conn.whenFree(
+      () =>
+        this.conn.run(
+          "UPDATE tasks SET status = 'interrupted', error = 'manual_recovery' WHERE status = 'queued' AND enqueued_at <= $before",
+          { $before: instant },
+        ).changes,
+      this.txOwner,
+    );
   }
 
   async transitionTask(
@@ -631,18 +647,9 @@ export class SqliteTaskStore implements TaskStore {
     events: TaskEventEnvelope[],
     opts: AppendEventsOptions,
   ): Promise<void> {
-    if (events.length === 0) return;
     await this.conn.whenFree(() => {
-      const lease = this.conn.get(
-        `SELECT lease_token FROM leases WHERE task_id = $taskId`,
-        { $taskId: taskId },
-      ) as { lease_token: string } | null;
-      if (!lease || lease.lease_token !== opts.leaseToken) {
-        throw new LeaseLostError(
-          `Lease token ${opts.leaseToken} is not current for task ${taskId}.`,
-          { taskId, leaseToken: opts.leaseToken },
-        );
-      }
+      this.assertLeaseCurrent(taskId, opts.leaseToken);
+      if (events.length === 0) return;
       const lastRow = this.conn.get(
         `SELECT MAX(seq) as maxSeq FROM task_events WHERE task_id = $taskId`,
         { $taskId: taskId },
@@ -701,8 +708,10 @@ export class SqliteTaskStore implements TaskStore {
       sql += ` LIMIT $limit`;
       params.$limit = opts.limit;
     }
-    const rows = this.conn.all(sql, params) as TaskEventRow[];
-    return rows.map((row) => parseJson<TaskEventEnvelope>(row.payload));
+    return this.conn.readCommitted(() => {
+      const rows = this.conn.all(sql, params) as TaskEventRow[];
+      return rows.map((row) => parseJson<TaskEventEnvelope>(row.payload));
+    }, this.txOwner);
   }
 
   async nextSeq(taskId: string): Promise<number> {
@@ -723,16 +732,7 @@ export class SqliteTaskStore implements TaskStore {
       if (!row) throw new RecordNotFoundError(`Task not found: ${taskId}`);
       // The same ownership proof `appendEvents` demands, read inside the same
       // transaction as the write it guards.
-      const lease = this.conn.get(
-        `SELECT lease_token FROM leases WHERE task_id = $taskId`,
-        { $taskId: taskId },
-      ) as { lease_token: string } | null;
-      if (!lease || lease.lease_token !== opts.leaseToken) {
-        throw new LeaseLostError(
-          `Lease token ${opts.leaseToken} is not current for task ${taskId}.`,
-          { taskId, leaseToken: opts.leaseToken },
-        );
-      }
+      this.assertLeaseCurrent(taskId, opts.leaseToken);
       // Plain assignment, not COALESCE: progress is an overwritten snapshot,
       // and the whole shape belongs to the latest writer.
       this.conn.run(
@@ -875,22 +875,7 @@ export class SqliteTaskStore implements TaskStore {
    * "there is no lease at all".
    */
   private assertLeaseCurrent(taskId: string, leaseToken: string): void {
-    const lease = this.conn.get(
-      `SELECT lease_token, fencing_token FROM leases WHERE task_id = $taskId`,
-      { $taskId: taskId },
-    ) as { lease_token: string; fencing_token: number } | null;
-    if (!lease || lease.lease_token !== leaseToken) {
-      throw new LeaseLostError(
-        `Lease token ${leaseToken} is not current for task ${taskId}.`,
-        {
-          taskId,
-          leaseToken,
-          ...(lease === null
-            ? {}
-            : { currentFencingToken: lease.fencing_token }),
-        },
-      );
-    }
+    assertRunLease(this.conn, this.clock, { taskId, leaseToken });
   }
 
   private selectTaskRow(taskId: string): TaskRow | null {

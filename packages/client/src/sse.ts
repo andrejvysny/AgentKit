@@ -25,6 +25,14 @@ export interface SseFrame {
   retry?: number;
 }
 
+export interface SseParserOptions {
+  signal?: AbortSignal;
+  /** Maximum decoded characters in one frame, including unfinished lines. */
+  maxFrameChars?: number;
+}
+
+export const DEFAULT_SSE_MAX_FRAME_CHARS = 1_048_576;
+
 /**
  * Frames, in order, until the stream ends.
  *
@@ -35,13 +43,22 @@ export interface SseFrame {
  */
 export async function* parseSseStream(
   body: ReadableStream<Uint8Array>,
+  options: SseParserOptions = {},
 ): AsyncGenerator<SseFrame> {
+  const limit = options.maxFrameChars ?? DEFAULT_SSE_MAX_FRAME_CHARS;
+  if (!Number.isSafeInteger(limit) || limit < 1)
+    throw new RangeError("maxFrameChars must be a positive safe integer");
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let frame: SseFrame = {};
   let data: string[] = [];
   let sawField = false;
+  let frameChars = 0;
+  const onAbort = (): void => {
+    void reader.cancel().catch(() => undefined);
+  };
+  options.signal?.addEventListener("abort", onAbort, { once: true });
 
   const dispatch = (): SseFrame | null => {
     const out = data.length === 0 ? frame : { ...frame, data: data.join("\n") };
@@ -49,12 +66,15 @@ export async function* parseSseStream(
     frame = {};
     data = [];
     sawField = false;
+    frameChars = 0;
     return dispatched;
   };
 
   try {
     for (;;) {
+      options.signal?.throwIfAborted();
       const chunk = await reader.read();
+      options.signal?.throwIfAborted();
       if (chunk.done) break;
       buffer += decoder.decode(chunk.value, { stream: true });
 
@@ -64,6 +84,9 @@ export async function* parseSseStream(
         if (match === null) break;
         const line = buffer.slice(0, match.index);
         buffer = buffer.slice(match.index + match[0].length);
+        frameChars += line.length;
+        if (frameChars > limit)
+          throw new RangeError("SSE frame exceeds maxFrameChars");
 
         if (line === "") {
           const dispatched = dispatch();
@@ -103,8 +126,11 @@ export async function* parseSseStream(
             break;
         }
       }
+      if (frameChars + buffer.length > limit)
+        throw new RangeError("SSE frame exceeds maxFrameChars");
     }
   } finally {
+    options.signal?.removeEventListener("abort", onAbort);
     // Cancels the underlying body when the consumer stops early — a `break` out
     // of `for await`, an abort, or a throw. Without it the response body stays
     // open and the server keeps polling for a reader that has gone.

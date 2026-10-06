@@ -166,6 +166,7 @@ export const RESOURCE_BY_OPERATION = {
   getRun: run,
   streamRun: run,
   cancelRun: run,
+  resumeRun: run,
 
   listToolEvents: chat,
 

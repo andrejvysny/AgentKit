@@ -28,6 +28,7 @@ import type {
   AiProviderModel,
   TaskEventEnvelope,
 } from "@agentkit/contracts";
+import { MemoryProviderContinuationStore } from "./memory-provider-continuation-store.js";
 import {
   ACTION_ID_RELEASING_STATUSES,
   AgentKitHostError,
@@ -113,6 +114,7 @@ import {
   type TaskStatus,
   type TaskStore,
   type UpdateMessagePatch,
+  type RunWriteFence,
   type UpdateProgressOptions,
   effectivePriority,
   resolveTaskAging,
@@ -411,7 +413,17 @@ export class MemoryConversationStore implements ConversationStore {
   constructor(
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
+    private readonly checkFence?: (fence: RunWriteFence) => void,
+    private readonly onDeleteChat?: (chatId: string) => void,
   ) {}
+
+  private requireFence(fence: RunWriteFence): void {
+    if (!this.checkFence)
+      throw new LeaseLostError(
+        "Standalone conversation store has no lease authority.",
+      );
+    this.checkFence(fence);
+  }
 
   async createChat(input: CreateChatInput): Promise<ChatRecord> {
     const now = this.clock.nowIso();
@@ -489,9 +501,18 @@ export class MemoryConversationStore implements ConversationStore {
     this.messagesByChat.delete(chatId);
     this.orderKeys.delete(chatId);
     this.chats.delete(chatId);
+    this.onDeleteChat?.(chatId);
   }
 
-  async appendMessage(input: AppendMessageInput): Promise<MessageRecord> {
+  async appendMessage(
+    input: AppendMessageInput,
+    fence?: RunWriteFence,
+  ): Promise<MessageRecord> {
+    if (fence) {
+      this.requireFence(fence);
+      if (input.runId !== fence.taskId)
+        throw new LeaseLostError("Message does not belong to the fenced run.");
+    }
     assertAppendActivation(input);
     const chat = this.chats.get(input.chatId);
     if (chat === undefined) {
@@ -574,11 +595,15 @@ export class MemoryConversationStore implements ConversationStore {
   async updateMessage(
     messageId: string,
     patch: UpdateMessagePatch,
+    fence?: RunWriteFence,
   ): Promise<MessageRecord> {
+    if (fence) this.requireFence(fence);
     const record = this.messagesById.get(messageId);
     if (!record) {
       throw new RecordNotFoundError(`Message not found: ${messageId}`);
     }
+    if (fence && record.runId !== fence.taskId)
+      throw new LeaseLostError("Message does not belong to the fenced run.");
     if (patch.content !== undefined) {
       record.content = copyMessageContent(patch.content);
     }
@@ -621,6 +646,20 @@ export class MemoryConversationStore implements ConversationStore {
    * `(depth, orderKey)` descending, and NOT filtered on `active`: a run whose
    * branch was abandoned mid-turn still has to continue its own chain.
    */
+  async getMessage(messageId: string): Promise<MessageRecord | null> {
+    const record = this.messagesById.get(messageId);
+    return record ? copyMessage(record) : null;
+  }
+
+  /** Synchronous lookup keeps continuation validation and mutation in one tick. */
+  messageChatIdOf(messageId: string): string | null {
+    return this.messagesById.get(messageId)?.chatId ?? null;
+  }
+
+  messageRunIdOf(messageId: string): string | null {
+    return this.messagesById.get(messageId)?.runId ?? null;
+  }
+
   async lastMessageOfRun(
     chatId: string,
     runId: string,
@@ -935,6 +974,7 @@ function countOccurrences(haystack: string, needle: string): number {
 const BUSY_TASK_STATUSES: readonly TaskStatus[] = Object.freeze([
   "running",
   "waiting_approval",
+  "interrupted",
 ]);
 
 /**
@@ -999,6 +1039,7 @@ export class MemoryTaskStore implements TaskStore {
     private readonly gate: MemoryTxGate = new MemoryTxGate(
       DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
     ),
+    private readonly onDeleteTasks?: () => void,
   ) {
     this.aging = resolveTaskAging(aging);
   }
@@ -1130,7 +1171,20 @@ export class MemoryTaskStore implements TaskStore {
       this.eventIds.delete(task.taskId);
       this.tasks.delete(task.taskId);
     }
+    this.onDeleteTasks?.();
     return doomed.length;
+  }
+
+  async interruptQueued(before: string): Promise<number> {
+    const instant = normalizeInstant(before, "before");
+    let count = 0;
+    for (const task of this.tasks.values()) {
+      if (task.status !== "queued" || task.enqueuedAt > instant) continue;
+      task.status = "interrupted";
+      task.error = "manual_recovery";
+      count++;
+    }
+    return count;
   }
 
   async transitionTask(
@@ -1293,13 +1347,7 @@ export class MemoryTaskStore implements TaskStore {
     events: TaskEventEnvelope[],
     opts: AppendEventsOptions,
   ): Promise<void> {
-    const lease = this.leases.get(taskId);
-    if (!lease || lease.leaseToken !== opts.leaseToken) {
-      throw new LeaseLostError(
-        `Lease token ${opts.leaseToken} is not current for task ${taskId}.`,
-        { taskId, leaseToken: opts.leaseToken },
-      );
-    }
+    this.assertLeaseCurrent(taskId, opts.leaseToken);
     if (events.length === 0) return;
     const log = this.events.get(taskId) ?? [];
     const ids = this.eventIds.get(taskId) ?? new Set<string>();
@@ -1366,13 +1414,7 @@ export class MemoryTaskStore implements TaskStore {
     if (!task) throw new RecordNotFoundError(`Task not found: ${taskId}`);
     // The same ownership proof `appendEvents` demands, for the same reason: a
     // fenced-out worker must not overwrite the live attempt's snapshot.
-    const lease = this.leases.get(taskId);
-    if (!lease || lease.leaseToken !== opts.leaseToken) {
-      throw new LeaseLostError(
-        `Lease token ${opts.leaseToken} is not current for task ${taskId}.`,
-        { taskId, leaseToken: opts.leaseToken },
-      );
-    }
+    this.assertLeaseCurrent(taskId, opts.leaseToken);
     // Overwrite, and store a copy — a caller that keeps mutating the object it
     // reported would otherwise keep editing the stored snapshot.
     task.progress = structuredClone(progress);
@@ -1528,9 +1570,13 @@ export class MemoryTaskStore implements TaskStore {
    * to compare. Mirrors `SqliteTaskStore.assertLeaseCurrent`, down to the
    * message, so a caller cannot tell the two adapters apart by their refusal.
    */
-  private assertLeaseCurrent(taskId: string, leaseToken: string): void {
+  assertLeaseCurrent(taskId: string, leaseToken: string): void {
     const lease = this.leases.get(taskId);
-    if (!lease || lease.leaseToken !== leaseToken) {
+    if (
+      !lease ||
+      lease.leaseToken !== leaseToken ||
+      new Date(lease.expiresAt).getTime() <= this.clock.now().getTime()
+    ) {
       throw new LeaseLostError(
         `Lease token ${leaseToken} is not current for task ${taskId}.`,
         {
@@ -2000,7 +2046,8 @@ export class MemoryOutboxStore implements OutboxStore {
 /**
  * `tasks` as seen from INSIDE the transaction `owner` opened.
  *
- * Only `claimNext` differs — it is the one method of this store that takes the
+ * `claimNext` uses the owner token while other methods use the raw store.
+ * Root task writes queue on the aggregate gate; this view bypasses that
  * gate — and only the OBJECT IDENTITY makes that difference expressible: a
  * claim issued through `tx.tasks` belongs to the open unit, while the very same
  * call on `store.tasks` is a stranger's and waits. Every other method forwards
@@ -2015,6 +2062,7 @@ function taskStoreInTransaction(
   return {
     createTask: (input) => tasks.createTask(input),
     getTask: (taskId) => tasks.getTask(taskId),
+    interruptQueued: (before) => tasks.interruptQueued(before),
     listChildren: (taskId) => tasks.listChildren(taskId),
     listByScope: (scopeId) => tasks.listByScope(scopeId),
     deleteByScope: (scopeId) => tasks.deleteByScope(scopeId),
@@ -2061,7 +2109,11 @@ function taskStoreInTransaction(
  * adapter's answer to all four questions, pinned for both by the shared
  * conformance suite.
  *
- * The one place the two still differ is the blast radius of an ORDINARY write:
+ * Task writes, including lease changes, queue behind open transactions so a
+ * new owner cannot interleave with fenced publication. Other ordinary writes
+ * retain their immediate semantics.
+ *
+ * The remaining difference is the blast radius of an ORDINARY conversation write:
  * `SqliteAssistantStore` makes every write method wait out a transaction it is
  * not part of, because joining one means being erased by a stranger's
  * rollback. There are no rollbacks here, so an unrelated
@@ -2071,10 +2123,12 @@ function taskStoreInTransaction(
 export class MemoryAssistantStore implements AssistantStore {
   readonly conversations: MemoryConversationStore;
   readonly tasks: MemoryTaskStore;
+  private readonly rawTasks: MemoryTaskStore;
   readonly proposals: MemoryProposalStore;
   readonly providers = new MemoryProviderStore();
   readonly settings = new MemorySettingsStore();
   readonly outbox: MemoryOutboxStore;
+  readonly continuations: MemoryProviderContinuationStore;
 
   /** The FIFO {@link transaction} and `claimNext` queue on — one unit of work at a time. */
   private readonly gate: MemoryTxGate;
@@ -2085,15 +2139,74 @@ export class MemoryAssistantStore implements AssistantStore {
     this.gate = new MemoryTxGate(
       options.transactionGateTimeoutMs ?? DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
     );
-    this.conversations = new MemoryConversationStore(clock, ids);
-    this.tasks = new MemoryTaskStore(
+    this.conversations = new MemoryConversationStore(
+      clock,
+      ids,
+      (fence) => this.tasks.assertLeaseCurrent(fence.taskId, fence.leaseToken),
+      (chatId) => this.continuations.deleteByChat(chatId),
+    );
+    this.rawTasks = new MemoryTaskStore(
       clock,
       ids,
       options.leaseTtlMs,
       options,
       this.gate,
+      () => this.continuations.pruneDeletedRuns(),
     );
+    const fencedWrites = new Set([
+      "createTask",
+      "interruptQueued",
+      "deleteByScope",
+      "transitionTask",
+      "createAttempt",
+      "endAttempt",
+      "acquireLease",
+      "renewLease",
+      "releaseLease",
+      "expireStaleLeases",
+      "appendEvents",
+      "updateProgress",
+      "markDeadLettered",
+    ]);
+    const rootOverrides = new Map<PropertyKey, unknown>();
+    // Root instrumentation must not replace the methods called inside a claim or transaction.
+    this.tasks = new Proxy(this.rawTasks, {
+      get: (target, key, receiver) => {
+        if (rootOverrides.has(key)) {
+          const override = rootOverrides.get(key);
+          return typeof override === "function"
+            ? override.bind(receiver)
+            : override;
+        }
+        const value: unknown = Reflect.get(target, key);
+        if (typeof value !== "function") return value;
+        if (typeof key === "string" && fencedWrites.has(key)) {
+          return (...args: unknown[]) =>
+            this.gate.runExclusive(async () =>
+              Reflect.apply(value, target, args),
+            );
+        }
+        return value.bind(target);
+      },
+      set: (target, key, value) => {
+        if (typeof value !== "function") return Reflect.set(target, key, value);
+        rootOverrides.set(key, value);
+        return true;
+      },
+    });
     this.proposals = new MemoryProposalStore(clock);
+    this.continuations = new MemoryProviderContinuationStore({
+      withGate: (operation) => this.gate.runExclusive(async () => operation()),
+      assertFence: (fence) =>
+        this.rawTasks.assertLeaseCurrent(fence.taskId, fence.leaseToken),
+      taskScope: (runId) => this.rawTasks.tasks.get(runId)?.scopeId ?? null,
+      taskChat: (runId) => this.rawTasks.tasks.get(runId)?.payload["chatId"],
+      chatExists: (chatId) => this.conversations.chats.has(chatId),
+      anchorChat: (anchorMessageId) =>
+        this.conversations.messageChatIdOf(anchorMessageId),
+      anchorRun: (anchorMessageId) =>
+        this.conversations.messageRunIdOf(anchorMessageId),
+    });
     this.outbox = new MemoryOutboxStore(
       clock,
       options.outboxClaimVisibilityMs,
@@ -2134,11 +2247,14 @@ export class MemoryAssistantStore implements AssistantStore {
   private txView(owner: TxOwner): AssistantStore {
     return {
       conversations: this.conversations,
-      tasks: taskStoreInTransaction(this.tasks, owner),
+      tasks: taskStoreInTransaction(this.rawTasks, owner),
       proposals: this.proposals,
       providers: this.providers,
       settings: this.settings,
       outbox: this.outbox,
+      continuations: this.continuations.withGate((operation) =>
+        this.gate.runExclusive(async () => operation(), owner),
+      ),
       transaction: <T>(nested: (tx: AssistantStore) => Promise<T>) =>
         this.gate.runExclusive(
           // `nestedOwner` is `owner` on the flattened path, and a fresh token

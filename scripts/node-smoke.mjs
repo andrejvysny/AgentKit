@@ -244,9 +244,23 @@ check(
     clientPkg.runPhase({ status: "queued" }) === "queued" &&
     clientPkg.runPhase({
       status: "running",
-      events: [{ type: "run.completed" }],
+      events: [
+        {
+          type: "run.completed",
+          data: { iterations: 1, finishReason: "stop" },
+        },
+      ],
+    }) === "settling" &&
+    clientPkg.runPhase({
+      status: "completed",
+      events: [
+        {
+          type: "run.completed",
+          data: { iterations: 1, finishReason: "stop" },
+        },
+      ],
     }) === "completed",
-  "runPhase derives streaming, mirrors a status, and lets a terminal event win",
+  "runPhase waits for authoritative host settlement after provider completion",
 );
 check(
   clientPkg.isTerminalRunEvent({ type: "run.failed" }) === true &&

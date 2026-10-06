@@ -20,7 +20,12 @@ export {
   type RunPhaseInput,
   type RunPhaseTracker,
 } from "./phase.js";
-export { parseSseStream, type SseFrame } from "./sse.js";
+export {
+  parseSseStream,
+  DEFAULT_SSE_MAX_FRAME_CHARS,
+  type SseFrame,
+  type SseParserOptions,
+} from "./sse.js";
 export {
   isTerminalRunEvent,
   TERMINAL_RUN_EVENT_TYPES,

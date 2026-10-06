@@ -6,6 +6,7 @@ import type {
   WriteAllowanceInput,
   WritePolicy,
   WritePolicyMode,
+  WriteInvocationScope,
 } from "../ports/write-policy.js";
 
 /**
@@ -41,7 +42,19 @@ export function writeAllowanceKey(
   toolName: string,
   proposalKind: string,
   scopeKey?: string,
+  invocation?: WriteInvocationScope,
 ): string {
+  if (invocation?.actorId !== undefined) {
+    return JSON.stringify([
+      chatId,
+      toolName,
+      proposalKind,
+      scopeKey ?? null,
+      invocation.actorId,
+      invocation.payloadFingerprint ?? null,
+      invocation.revision ?? null,
+    ]);
+  }
   return JSON.stringify([chatId, toolName, proposalKind, scopeKey ?? null]);
 }
 
@@ -96,6 +109,28 @@ export class SessionWritePolicy implements WritePolicy {
     // turning confirmation back off must not silently re-arm grants the user
     // gave before, and turning it on must take effect immediately.
     if (this.currentMode === "confirm_all_writes") return false;
+    // Inbound actors require explicit, exact consent even under auto_all.
+    if (query.actorId !== undefined) {
+      if (
+        query.scopeKey === undefined ||
+        query.payloadFingerprint === undefined ||
+        query.revision === undefined
+      )
+        return false;
+      const allowance = this.allowances.get(
+        writeAllowanceKey(
+          query.chatId,
+          query.toolName,
+          query.proposalKind,
+          query.scopeKey,
+          query,
+        ),
+      );
+      return (
+        allowance !== undefined &&
+        RISK_RANK[query.risk] <= RISK_RANK[allowance.maxRisk]
+      );
+    }
     if (this.currentMode === "auto_all") return true;
     const scoped =
       query.scopeKey === undefined
@@ -119,11 +154,22 @@ export class SessionWritePolicy implements WritePolicy {
   }
 
   allow(input: WriteAllowanceInput): WriteAllowance {
+    if (
+      input.actorId !== undefined &&
+      (input.scopeKey === undefined ||
+        input.payloadFingerprint === undefined ||
+        input.revision === undefined)
+    ) {
+      throw new Error(
+        "Actor write allowances require scopeKey, payloadFingerprint and revision",
+      );
+    }
     const key = writeAllowanceKey(
       input.chatId,
       input.toolName,
       input.proposalKind,
       input.scopeKey,
+      input,
     );
     const allowance: WriteAllowance = {
       key,
@@ -131,6 +177,11 @@ export class SessionWritePolicy implements WritePolicy {
       toolName: input.toolName,
       proposalKind: input.proposalKind,
       ...(input.scopeKey === undefined ? {} : { scopeKey: input.scopeKey }),
+      ...(input.actorId === undefined ? {} : { actorId: input.actorId }),
+      ...(input.payloadFingerprint === undefined
+        ? {}
+        : { payloadFingerprint: input.payloadFingerprint }),
+      ...(input.revision === undefined ? {} : { revision: input.revision }),
       maxRisk: input.maxRisk,
       createdAt: this.clock.nowIso(),
     };
@@ -151,5 +202,11 @@ export class SessionWritePolicy implements WritePolicy {
     return [...this.allowances.values()].filter(
       (allowance) => allowance.chatId === chatId,
     );
+  }
+
+  revokeActor(actorId: string): void {
+    for (const [key, allowance] of this.allowances) {
+      if (allowance.actorId === actorId) this.allowances.delete(key);
+    }
   }
 }

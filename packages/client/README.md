@@ -140,21 +140,33 @@ on the event log.
 | `queued` | `status: "queued"`, or nothing known at all. |
 | `running` | `status: "running"` with no `run.started`/delta yet — claimed, not yet answering. |
 | `streaming` | Any `run.started` or `run.message.delta` seen, and the run is not terminal. |
+| `settling` | A provider pass ended; host verification or task settlement is still pending. |
 | `waiting_approval` | `status: "waiting_approval"` — checked before `streaming`; the user has to act. |
-| `completed` / `failed` / `cancelled` | The **last** terminal event, or the matching status. |
+| `interrupted` | The server parked the original task for explicit resume or cancellation. |
+| `incomplete` | The final provider pass ended with `finishReason: "incomplete"`. |
+| `completed` / `failed` / `cancelled` | The authoritative task status. |
 
-A terminal **event** beats the status, because the host appends the event and
-*then* transitions the task: a client that read the two in that order holds a
-`running` status next to a log that has already ended, and believing the status
-would strand a finished run in a spinner.
+A pass's terminal event produces `settling` until the task settles. Authoritative
+`interrupted`, `waiting_approval`, `failed`, and `cancelled` statuses take priority.
+At stream EOF, read `getRun` to reconcile the task's final status: provider-pass
+completion does not prove that host verification succeeded.
 
-**Events are read in log order, and the LAST terminal event wins.** A multi-pass
+`getChat` exposes `activeRunId` for remount recovery. `resumeRun({ runId })`
+requests explicit continuation of an interrupted task under its original ID.
+It answers 409 for a non-interrupted run and 501 when explicit resume is unsupported.
+
+`parseSseStream` caps unfinished frames at 1,048,576 decoded characters by
+default (`maxFrameChars` can override this). Its optional abort signal cancels
+a stalled reader even when a custom fetch implementation ignores cancellation.
+
+**Events are read in log order, and the LAST terminal event records the pass outcome.** A multi-pass
 run holds one per pass, and a *pass boundary* after one — a `retry_pass` warning,
 or a second `run.started` — clears it, because the run is live again. So a log
 ending `run.failed`, `retry_pass`, `run.started`, deltas… is `streaming`, and the
-same run reported `failed` only if its final pass failed. `createRunPhaseTracker()`
+same run reports `failed` only when task status confirms failure. `createRunPhaseTracker()`
 folds this one event at a time (`observe`, `phase`, and `startedNewPass()` for the
-boundary a UI must reset its streamed text on).
+boundary a UI must reset its streamed text on). Its `outcome()` exposes the last
+provider-pass outcome without claiming that the host task has settled.
 
 Consuming apps' own enums map onto this directly — their `waiting` is `queued`,
 their `streaming` is `streaming`, their `paused` is `waiting_approval` — so

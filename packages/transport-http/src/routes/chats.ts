@@ -26,7 +26,8 @@ import {
   notImplemented,
   unprocessable,
 } from "../problem.js";
-import { chatDto, messageDto } from "../projections.js";
+import { chatDto, chatIdOfTask, messageDto } from "../projections.js";
+import { isTerminalTaskStatus } from "@agentkit/host";
 import { pathParam, type RouteContext } from "./context.js";
 import {
   validateCreateChatRequest,
@@ -74,7 +75,30 @@ export async function getChat(ctx: RouteContext): Promise<Response> {
   const chatId = pathParam(ctx, "chatId");
   const chat = await ctx.deps.store.conversations.getChat(chatId);
   if (chat === null) return notFound(`Chat not found: ${chatId}`, ctx.instance);
-  return jsonResponse(chatDto(chat));
+  const tasks = await ctx.deps.store.tasks.listByScope(chatId);
+  // A host may serialize on a document rather than the chat. The newest
+  // placeholder still names that original task without scanning other scopes.
+  const tail = await ctx.deps.store.conversations.listMessages(chatId, {
+    limit: 1,
+  });
+  const tailRunId = tail.at(-1)?.runId;
+  if (
+    tailRunId !== undefined &&
+    !tasks.some((task) => task.taskId === tailRunId)
+  ) {
+    const task = await ctx.deps.store.tasks.getTask(tailRunId);
+    if (task !== null) tasks.push(task);
+  }
+  const active = tasks
+    .filter(
+      (task) =>
+        chatIdOfTask(task) === chatId && !isTerminalTaskStatus(task.status),
+    )
+    .sort((left, right) => right.enqueuedAt.localeCompare(left.enqueuedAt))[0];
+  return jsonResponse({
+    ...chatDto(chat),
+    activeRunId: active?.taskId ?? null,
+  });
 }
 
 /**

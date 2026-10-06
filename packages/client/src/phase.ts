@@ -42,6 +42,9 @@ export type RunPhase =
   | "queued"
   | "running"
   | "streaming"
+  | "settling"
+  | "interrupted"
+  | "incomplete"
   | "waiting_approval"
   | "completed"
   | "failed"
@@ -79,28 +82,19 @@ export function runPhase(input: RunPhaseInput): RunPhase {
   const tracker = createRunPhaseTracker();
   for (const event of events) tracker.observe(event);
   const fromEvents = tracker.phase();
-
-  // A TERMINAL EVENT WINS over the status, and the ordering in the host is why:
-  // the worker appends `run.completed` to the log and THEN transitions the task,
-  // so a client that read the two in the other order holds a `running` status
-  // next to a log that has already ended. Believing the status there would
-  // strand a finished run in a spinner until the next poll.
-  if (
-    fromEvents === "completed" ||
-    fromEvents === "failed" ||
-    fromEvents === "cancelled"
-  ) {
-    return fromEvents;
-  }
+  if (input.status === "interrupted" || input.status === "waiting_approval")
+    return input.status;
+  if (input.status === "failed" || input.status === "cancelled")
+    return input.status;
 
   const status = input.status;
-  if (status === "completed" || status === "failed" || status === "cancelled") {
-    return status;
+  if (status === "completed") {
+    return tracker.outcome() === "incomplete" ? "incomplete" : "completed";
   }
-  // Checked before `streaming`: a run parked on an approval has produced output
-  // and is still not running, and "typing" would be a lie about what the user
-  // has to do next.
-  if (status === "waiting_approval") return "waiting_approval";
+
+  // Provider completion says nothing about pending host verification or a
+  // correction pass. Only the durable task can settle a logical run.
+  if (fromEvents === "settling") return "settling";
 
   if (fromEvents === "streaming") return "streaming";
 
@@ -160,6 +154,8 @@ export interface RunPhaseTracker {
   observe(event: AiRunEvent): RunPhase;
   /** The phase as of the last event observed. */
   phase(): RunPhase;
+  /** The last provider-pass outcome; it does not settle the host task. */
+  outcome(): RunPhase | null;
   /**
    * Whether the event last handed to {@link observe} opened a NEW PASS.
    *
@@ -178,7 +174,7 @@ export function createRunPhaseTracker(): RunPhaseTracker {
   let boundary = false;
 
   const phase = (): RunPhase => {
-    if (terminal !== null) return terminal;
+    if (terminal !== null) return "settling";
     if (streaming) return "streaming";
     return seen ? "running" : "queued";
   };
@@ -200,7 +196,9 @@ export function createRunPhaseTracker(): RunPhaseTracker {
         // reported the failure of a turn the user is reading the answer to.
         terminal =
           event.type === "run.completed"
-            ? "completed"
+            ? event.data.finishReason === "incomplete"
+              ? "incomplete"
+              : "completed"
             : event.type === "run.failed"
               ? "failed"
               : "cancelled";
@@ -212,5 +210,6 @@ export function createRunPhaseTracker(): RunPhaseTracker {
       return boundary;
     },
     phase,
+    outcome: () => terminal,
   };
 }

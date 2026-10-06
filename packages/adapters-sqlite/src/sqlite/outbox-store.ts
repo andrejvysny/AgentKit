@@ -5,7 +5,7 @@
  * Split out of `sqlite-assistant-store.ts` — one sub-store per file, sharing
  * {@link SqliteConnection} and the row mappers in `rows.js`.
  */
-import type { Changes } from "bun:sqlite";
+import type { SqliteChanges as Changes } from "./driver.js";
 import {
   type Clock,
   type OutboxAppendInput,

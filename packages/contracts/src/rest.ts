@@ -135,6 +135,7 @@ export const REST_ROUTES = {
   /** SSE. Resumes from `Last-Event-ID` (an `AiRunEvent.eventId`). */
   streamRun: { method: "GET", path: "/v1/runs/:runId/stream" },
   cancelRun: { method: "POST", path: "/v1/runs/:runId/cancel" },
+  resumeRun: { method: "POST", path: "/v1/runs/:runId/resume" },
 
   listToolEvents: { method: "GET", path: "/v1/chats/:chatId/tool-events" },
 
@@ -216,6 +217,7 @@ export const RunStatusDtoSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
   Type.Literal("waiting_approval"),
+  Type.Literal("interrupted"),
   Type.Literal("completed"),
   Type.Literal("failed"),
   Type.Literal("cancelled"),
@@ -270,6 +272,8 @@ export type ToolCallingModeDto = Static<typeof ToolCallingModeDtoSchema>;
 /** A conversation. Projection of `ChatRecord`. */
 export const ChatDtoSchema = Type.Object({
   id: Type.String(),
+  /** Original live run identity, including an interrupted run awaiting resume. */
+  activeRunId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   title: Type.Optional(Type.String()),
   createdAt: Type.String({ description: "ISO-8601." }),
   updatedAt: Type.String({ description: "ISO-8601." }),

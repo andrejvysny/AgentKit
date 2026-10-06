@@ -29,6 +29,11 @@ export type AiJsonPrimitiveType = Static<typeof AiJsonPrimitiveTypeSchema>;
 export interface AiJsonSchemaObject {
   type?: AiJsonPrimitiveType | AiJsonPrimitiveType[];
   description?: string;
+  title?: string;
+  anyOf?: AiJsonSchemaObject[];
+  oneOf?: AiJsonSchemaObject[];
+  allOf?: AiJsonSchemaObject[];
+  const?: unknown;
   properties?: Record<string, AiJsonSchemaObject>;
   required?: string[];
   items?: AiJsonSchemaObject;
@@ -37,6 +42,8 @@ export interface AiJsonSchemaObject {
   default?: unknown;
   minimum?: number;
   maximum?: number;
+  exclusiveMinimum?: number;
+  exclusiveMaximum?: number;
   minLength?: number;
   maxLength?: number;
   minItems?: number;

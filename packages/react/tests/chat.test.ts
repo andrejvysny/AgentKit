@@ -320,7 +320,9 @@ describe("a submit the server refuses", () => {
     });
 
     // The failed turn's two records are gone; the accepted one is untouched.
-    expect(result.current.status).toBe("error");
+    expect(result.current.status).toBe("streaming");
+    expect(result.current.activeRunId).toBe(runId);
+    expect(result.current.error).toBeNull();
     expect(result.current.messages.map((m) => m.role)).toEqual([
       "user",
       "assistant",
@@ -785,10 +787,11 @@ describe("a run whose log never said how it ended", () => {
       await result.current.submit("cut me off");
     });
 
-    await waitFor(() => expect(result.current.phase).toBe("completed"), {
+    await waitFor(() => expect(result.current.phase).toBe("incomplete"), {
       timeout: 10_000,
     });
     expect(result.current.finishReason).toBe("incomplete");
+    expect(result.current.phase).toBe("incomplete");
   });
 });
 

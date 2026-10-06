@@ -185,3 +185,40 @@ then drives it over real HTTP: create a chat, submit a message with an
 `Idempotency-Key`, follow the SSE stream to `run.completed`, read the answer
 back, and (separately) round-trip the `example_echo` tool. It cleans up its
 temp directory and server on every run.
+
+## Node fake-provider counterpart
+
+`node-host.mjs` is a separate minimal composition root using published
+`agentkit/*` imports and `NodeSqliteAssistantStore`. The existing Bun sample is
+unchanged. This counterpart binds only loopback on an ephemeral port, uses a
+scripted local provider, and requires no API key or remote service.
+
+Copy `node-host.mjs` and `node-main.mjs` to a clean consumer directory, then:
+
+```sh
+npm init -y
+npm install /absolute/path/agentkit-VERSION.tgz better-sqlite3@13.0.3
+node node-main.mjs
+```
+
+Node >=22 is required by the native peer. The command prints the actual origin.
+Use the same `/v1/chats` and `/v1/chats/:id/messages` REST/SSE routes shown above,
+without the Bun sample's `/api/agentkit` prefix. `SIGINT` or `SIGTERM` stops the
+server and worker, disposes contributors, and closes SQLite. Reusing
+`AGENTKIT_DB` reopens the same file. This fixture has no authentication and
+therefore offers no non-loopback bind option.
+
+`exerciseNodeHost(dbPath)` creates a chat with the published typed client,
+submits a message, follows the real SSE stream to `run.completed`, reads the
+fake answer, shuts down, and verifies the chat after reopening the file. The
+exact-tarball qualification script copies and runs this fixture in both clean
+npm and Bun consumer projects; it does not import monorepo source.
+
+This is a generic Node host and an Electron-style CommonJS packaging exercise.
+The example itself does not implement Electron UI, PCB operations, OAuth, or
+restricted DevKit integration. The package qualification script can separately
+run a pinned actual Electron binary in RunAsNode mode, load the CommonJS native
+external, record ABI/Node-API/binary hashes, and reopen before and after an npm
+rebuild lifecycle check. That does not qualify a renderer or packaged installer. Consumers must rebuild
+and package `better-sqlite3` for their actual Electron runtime before claiming
+that qualification.

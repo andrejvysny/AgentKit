@@ -10,8 +10,9 @@ depend on `host` and nothing depends on them.
 packages/adapters-memory       @agentkit/adapters-memory (reference adapter)
   every host storage port over in-memory Maps; tests and local dev
 
-packages/adapters-sqlite       @agentkit/adapters-sqlite (reference adapter, Bun only)
-  every host storage port over bun:sqlite; the durable store for a
+packages/adapters-sqlite       @agentkit/adapters-sqlite (reference adapter)
+  shared storage logic over bun:sqlite or the explicit Node/better-sqlite3 entry;
+  the durable store for a
   single-process host (multiple handles over one file: supported, tested)
 
 packages/runner-local          @agentkit/runner-local (reference adapter)
@@ -255,6 +256,8 @@ skip any of them and write the equivalent itself:
   queued            ──▶ running
   queued            ──▶ cancelled
   queued            ──▶ failed        (dependency cascade only — see below)
+  queued / running  ──▶ interrupted  (manual recovery)
+  interrupted       ──▶ queued | cancelled
 
   running           ──▶ waiting_approval
   running           ──▶ completed | failed | cancelled
@@ -313,12 +316,13 @@ burying the live attempt's verdict; a runner cannot close that from outside,
 because its `renewLease` pre-check and the write it guards are separated by
 awaits. The option is optional so the paths that have no token by construction
 still work: recovery acts on a lease it has just deleted, and a cancel from an
-HTTP handler never had one. `TurnRunner` orders its terminal block around the
-fence — fenced `transitionTask` → `endAttempt` → then the placeholder
-`updateMessage` — because `ConversationStore` is lease-unaware and ordering is
-the only thing keeping a fenced-out attempt off the live answer (see [ADR
-0014](adr/0014-hardening-tranche-2.md)).
-`SingleProcessTaskRunner` settles in the same order, for a second reason: an
+HTTP handler never had one. Conversation mutations now accept a `RunWriteFence`
+and validate the current, unexpired lease inside the mutation transaction.
+`TurnRunner` finalizes the message and attempt, then transitions the task, in
+one transaction. SQLite publication reads wait for commit or rollback, so a
+terminal task cannot expose a partially committed conversation.
+The generic `SingleProcessTaskRunner` fallback transitions the task before
+ending its attempt: an
 attempt row closed under a task still `running` with a live lease is exactly
 what recovery reads as a crash, and ending the attempt first left that state
 behind whenever the transition threw. It cannot be misread now anyway —
@@ -327,12 +331,10 @@ nothing on a second call — but the order is what stops the pair from existing.
 A renewal is refused once the lease has expired, since the runner asks
 `renewLease` *as* its "may I still write?" probe.
 
-*Consequence for consumers*: the task reaches its terminal status a moment
-BEFORE the placeholder is finalized, so a client that polls `getTask` and reads
-the message in the same breath can catch `placeholder: true` with empty content.
-The run event log is the authority on what the answer is — the placeholder is a
-projection of it — and the ordering is deliberate: a fenced-out attempt must be
-refused before it can touch a message no store can fence.
+The durable event log remains the source for rebuilding projections. Stable
+event-backed message IDs make replay idempotent; replay never re-executes a
+domain operation. Memory preserves fencing and serialization but does not
+promise durable storage or rollback. See [execution lifecycle](execution-lifecycle.md).
 
 ## Task kinds and executors
 
@@ -580,8 +582,9 @@ concatenating deltas shows pass 1's half-sentence glued to pass 2's answer.
 
 Everything downstream is built on that rule: `transport-http` closes an SSE
 stream only when the TASK is terminal (not on the first terminal run event),
-`client`'s run phase folds to the LAST terminal, and `useChat`/`useRun` reset
-streamed text on the boundary.
+`client` reports provider outcomes as `settling`, and `useChat`/`useRun` reset
+streamed text on the boundary. Clean EOF is reconciled against task status and
+a final event drain so verification and host failures remain visible.
 
 ## A run is not one attempt, either
 
@@ -598,20 +601,16 @@ id, same event log, one more attempt. Two things make attempt 2 land correctly:
   lands `active: false`; seeding from the placeholder therefore wrote attempt
   2's whole turn onto a dead branch, leaving the conversation replaying attempt
   1's unanswered tool calls forever.
-- **Terminal writes are fenced.** The task transition carries the attempt's
-  `leaseToken` and goes FIRST, before `endAttempt` and before the placeholder is
-  finalized, so an attempt that lost its lease cannot overwrite the live one's
-  answer. A `LeaseLostError` stops the rest of the block, on the success path
-  and the failure path alike. See [ADR
-  0014](adr/0014-hardening-tranche-2.md).
+- **Terminal writes are fenced.** Message mutation, attempt finalization and
+  terminal task transition share one transaction and the current lease. Task
+  status is written last. Expiry is sufficient to reject a worker, even before
+  a replacement owner acquires the lease.
 
 **An unexpected throw is bookkept in full.** `TurnRunner.executeTask` records a
 terminal `run.failed` (or `run.cancelled` when the run was aborted) on the
-durable log, lands the task fenced, and finalizes the placeholder
-(`placeholder: false`, keeping whatever streamed) — in that order, all
-best-effort. Only the task transition used to happen, which left an SSE consumer
-watching the stream stop with no terminal event and a UI spinning on a message
-nothing was coming back to finish.
+durable log, replays committed partial output, then finalizes the placeholder,
+attempt and task under one fence. Bookkeeping is best-effort when storage or
+ownership is lost; a failed write never establishes a successful outcome.
 
 ## One live turn per chat
 

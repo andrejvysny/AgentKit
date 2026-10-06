@@ -66,16 +66,17 @@ describe("release.yml — no expression interpolation into a shell", () => {
     );
   });
 
-  it("still reads the values it needs — through env:", async () => {
+  it("records immutable source values and has no publishing permission", async () => {
     const yaml = await Bun.file(WORKFLOW).text();
     // The guard above is satisfiable by deleting the steps; this says the tag
     // and branch are still plumbed in, as env vars.
-    expect(yaml).toContain("TAG: ${{ steps.meta.outputs.tag }}");
-    expect(yaml).toContain(
-      "RELEASE_BRANCH: ${{ steps.meta.outputs.release_branch }}",
+    expect(yaml).toContain("SOURCE_COMMIT: ${{ github.sha }}");
+    expect(yaml).toContain("SOURCE_REF: ${{ github.ref }}");
+    expect(yaml).toContain("contents: read");
+    expect(yaml).not.toMatch(
+      /git (?:push|tag|commit)|npm publish|contents: write/,
     );
-    expect(yaml).toContain('git push -f origin "$TAG"');
-    expect(yaml).toContain('git push -f origin "$RELEASE_BRANCH"');
+    expect(yaml).toContain("scripts/qualify-package.mjs --tarball");
   });
 
   it("recognises both run: forms", () => {

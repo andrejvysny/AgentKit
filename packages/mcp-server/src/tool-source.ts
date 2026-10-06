@@ -19,6 +19,7 @@ import {
   type ToolCatalog,
   type ToolGuard,
   type ToolSetContributor,
+  type WritePolicy,
 } from "@agentkit/host";
 import { toolEnvelopeFromResult, toolErrorEnvelope } from "./envelope.js";
 import {
@@ -34,6 +35,8 @@ export interface StagedToolSourceOptions {
   context?: ContextProvider;
   /** The same guards the turn runner uses — see the note on drift below. */
   guards?: readonly ToolGuard[];
+  /** Actor grants are revoked when the owning MCP session closes. */
+  writePolicy?: Pick<WritePolicy, "revokeActor">;
   /** Budget handed to `contribute` and to `execute`. Defaults to the `small` profile. */
   limits?: AiToolLimits;
   /**
@@ -92,11 +95,13 @@ export function createStagedToolSource(
 ): McpToolSource {
   const limits = options.limits ?? resolveToolLimits({ preference: "small" });
   const maxCallMs = options.maxCallMs ?? DEFAULT_MAX_CALL_MS;
+  const writeCalls = new Map<string, Promise<void>>();
   const buildCatalog = (
     guards: readonly ToolGuard[] | undefined,
+    scope?: McpSessionScope,
   ): ToolCatalog =>
     createContributorToolCatalog({
-      contributors: options.contributors,
+      contributors: withInvocationContributors(options.contributors, scope),
       ...(options.context === undefined ? {} : { context: options.context }),
       ...(guards === undefined ? {} : { guards }),
       limits,
@@ -112,11 +117,13 @@ export function createStagedToolSource(
     // `tools/call` then refuses.
     catalog: {
       listTools(scope?: McpSessionScope) {
-        const principal = scope?.principal;
-        if (principal === undefined) return baseCatalog.listTools(scope);
-        return buildCatalog(withPrincipal(options.guards, principal)).listTools(
+        if (scope?.signal?.aborted) return Promise.resolve([]);
+        if (scope?.principal === undefined && scope?.actorId === undefined)
+          return baseCatalog.listTools(scope);
+        return buildCatalog(
+          withInvocation(options.guards, scope),
           scope,
-        );
+        ).listTools(scope);
       },
     },
     async execute(
@@ -126,15 +133,23 @@ export function createStagedToolSource(
     ): Promise<AiToolEnvelope> {
       const chatId = scope?.chatId;
       const principal = scope?.principal;
+      const actorId = scope?.actorId;
+      if (scope?.signal?.aborted)
+        return toolErrorEnvelope("session_closed", "MCP session is closed.", {
+          phase: "guard",
+          retryable: false,
+        });
       const bindings =
         chatId === undefined
           ? []
           : ((await options.context?.listBindings(chatId)) ?? []);
-      const guards = withPrincipal(options.guards, principal);
+      const guards = withInvocation(options.guards, scope);
       const staged = await stageRegistry({
-        contributors: options.contributors,
+        contributors: withInvocationContributors(options.contributors, scope),
         ctx: {
           ...(chatId === undefined ? {} : { chatId }),
+          ...(principal === undefined ? {} : { principal }),
+          ...(actorId === undefined ? {} : { actorId }),
           bindings,
           limits,
           ...(options.logger === undefined ? {} : { logger: options.logger }),
@@ -179,16 +194,25 @@ export function createStagedToolSource(
         ...(chatId === undefined ? {} : { chatId }),
         bindings,
         limits,
+        ...(scope?.signal === undefined ? {} : { signal: scope.signal }),
         metadata: {
           source: "mcp-server",
           calledAt: options.clock.nowIso(),
           ...(principal === undefined ? {} : { principal }),
+          ...(actorId === undefined ? {} : { actorId }),
         },
       };
 
       try {
         return toolEnvelopeFromResult(
-          await runWithDeadline(tool, ctx, args, maxCallMs),
+          await runSerializedWrite(
+            tool,
+            ctx,
+            args,
+            maxCallMs,
+            actorId,
+            writeCalls,
+          ),
         );
       } catch (err) {
         if (err instanceof ToolCallTimeout) {
@@ -227,6 +251,10 @@ export function createStagedToolSource(
         );
       }
     },
+    closeSession(scope) {
+      if (scope.actorId !== undefined)
+        options.writePolicy?.revokeActor?.(scope.actorId);
+    },
   };
 }
 
@@ -254,8 +282,10 @@ async function runWithDeadline(
   args: unknown,
   maxCallMs: number,
 ): Promise<AiToolResult<unknown>> {
-  if (maxCallMs <= 0) return tool.execute(ctx, args);
+  ctx.signal?.throwIfAborted();
   const controller = new AbortController();
+  const onAbort = () => controller.abort(ctx.signal?.reason);
+  ctx.signal?.addEventListener("abort", onAbort, { once: true });
   const running = (async () =>
     tool.execute({ ...ctx, signal: controller.signal }, args))();
   running.catch(() => {});
@@ -264,14 +294,24 @@ async function runWithDeadline(
     return await Promise.race([
       running,
       new Promise<never>((_resolve, reject) => {
+        controller.signal.addEventListener(
+          "abort",
+          () => reject(controller.signal.reason),
+          { once: true },
+        );
+      }),
+      new Promise<never>((_resolve, reject) => {
+        if (maxCallMs <= 0) return;
         timer = setTimeout(() => {
-          controller.abort();
-          reject(new ToolCallTimeout(maxCallMs));
+          const timeout = new ToolCallTimeout(maxCallMs);
+          controller.abort(timeout);
+          reject(timeout);
         }, maxCallMs);
       }),
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+    ctx.signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -285,23 +325,87 @@ async function runWithDeadline(
  * a type every host implements. `isVisible` gets it too: which tools a caller
  * may even SEE is the cheaper half of the same question.
  */
-function withPrincipal(
+function withInvocation(
   guards: readonly ToolGuard[] | undefined,
-  principal: string | undefined,
+  scope: McpSessionScope | undefined,
 ): readonly ToolGuard[] | undefined {
-  if (guards === undefined || principal === undefined) return guards;
+  if (guards === undefined || scope === undefined) return guards;
+  const identity = {
+    ...(scope.principal === undefined ? {} : { principal: scope.principal }),
+    ...(scope.actorId === undefined ? {} : { actorId: scope.actorId }),
+  };
   return guards.map((guard) => {
     const wrapped: ToolGuard = {};
     if (guard.isVisible !== undefined) {
       const isVisible = guard.isVisible.bind(guard);
-      wrapped.isVisible = (ctx) => isVisible({ ...ctx, principal });
+      wrapped.isVisible = (ctx) =>
+        !scope.signal?.aborted && isVisible({ ...ctx, ...identity });
     }
     if (guard.canExecute !== undefined) {
       const canExecute = guard.canExecute.bind(guard);
-      wrapped.canExecute = (ctx) => canExecute({ ...ctx, principal });
+      wrapped.canExecute = (ctx) =>
+        scope.signal?.aborted
+          ? { allowed: false, reason: "MCP session is closed." }
+          : canExecute({ ...ctx, ...identity });
     }
     return wrapped;
   });
+}
+
+function withInvocationContributors(
+  contributors: readonly ToolSetContributor[],
+  scope?: McpSessionScope,
+): readonly ToolSetContributor[] {
+  if (scope === undefined) return contributors;
+  return contributors.map((contributor) => ({
+    namespace: contributor.namespace,
+    ...(contributor.privileged === undefined
+      ? {}
+      : { privileged: contributor.privileged }),
+    ...(contributor.unboundToolNames === undefined
+      ? {}
+      : { unboundToolNames: () => contributor.unboundToolNames!() }),
+    ...(contributor.dispose === undefined
+      ? {}
+      : { dispose: () => contributor.dispose!() }),
+    contribute: (ctx) =>
+      contributor.contribute({
+        ...ctx,
+        ...(scope.principal === undefined
+          ? {}
+          : { principal: scope.principal }),
+        ...(scope.actorId === undefined ? {} : { actorId: scope.actorId }),
+        ...(scope.signal === undefined ? {} : { signal: scope.signal }),
+      }),
+  }));
+}
+
+/** Serial writes for one actor prevent check-then-stage dedup races. */
+async function runSerializedWrite(
+  tool: AiTool<unknown, unknown>,
+  ctx: AiToolExecutionContext,
+  args: unknown,
+  maxCallMs: number,
+  actorId: string | undefined,
+  calls: Map<string, Promise<void>>,
+): Promise<AiToolResult<unknown>> {
+  if (actorId === undefined || tool.definition.effect !== "write") {
+    return runWithDeadline(tool, ctx, args, maxCallMs);
+  }
+  const prior = calls.get(actorId) ?? Promise.resolve();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = prior.then(() => pending);
+  calls.set(actorId, queued);
+  try {
+    await prior;
+    return await runWithDeadline(tool, ctx, args, maxCallMs);
+  } finally {
+    release();
+    if (calls.get(actorId) === queued) calls.delete(actorId);
+  }
 }
 
 /** Same wording as the run loop's: say what is wrong and that a retry is possible. */

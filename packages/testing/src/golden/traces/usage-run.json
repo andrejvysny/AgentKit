@@ -7,7 +7,7 @@
       "model": "gpt-golden",
       "toolCount": 0
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_e1dae509-399a-4a01-a79c-7cf4ce3f8577",
     "seq": 0
   },
@@ -18,7 +18,7 @@
     "data": {
       "delta": "Usage-tracked answer."
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_3dab7a32-7bcc-45c4-a943-956fd2c09dae",
     "seq": 1
   },
@@ -30,7 +30,7 @@
       "content": "Usage-tracked answer.",
       "toolCallCount": 0
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_a33e7791-0853-4763-8dca-ae37c2a81c9b",
     "seq": 2
   },
@@ -49,7 +49,7 @@
       "source": "stream",
       "finalForCall": true
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_a0218e2b-1d1a-4683-a51f-9a7fdb976f7f",
     "seq": 3
   },
@@ -61,7 +61,7 @@
       "iterations": 1,
       "finishReason": "stop"
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_af22ffda-3b74-4546-a6da-19cdb612c41f",
     "seq": 4
   }

@@ -252,12 +252,20 @@ describe("OpenAiCompatibleClient stream completeness", () => {
         c.close();
       })) as unknown as typeof fetch);
     const events = await collectStream(client);
-    const completed = events.find(
-      (e) => e.type === "run.message.completed",
-    ) as AiRunEvent & { data: { finishReason?: string } };
-    // "stop" here would claim a cut-off answer had finished.
-    expect(completed.data.finishReason).toBe("incomplete");
-    expect(warningCodes(events)).toContain("stream_incomplete");
+    expect(events.some((event) => event.type === "run.message.completed")).toBe(
+      false,
+    );
+    expect(events.at(-1)).toMatchObject({
+      type: "run.failed",
+      data: { errorCode: "incomplete_stream" },
+    });
+    expect(
+      events.some(
+        (event) =>
+          event.type === "run.message.delta" &&
+          event.data.delta === "half an ans",
+      ),
+    ).toBe(true);
   });
 
   it("does not say incomplete when the provider sent [DONE]", async () => {

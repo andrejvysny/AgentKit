@@ -137,7 +137,12 @@ export function useTopicSubscription(
 
 /** The phases that mean the run is over and will say nothing more. */
 export function isTerminalPhase(phase: RunPhase): boolean {
-  return phase === "completed" || phase === "failed" || phase === "cancelled";
+  return (
+    phase === "completed" ||
+    phase === "incomplete" ||
+    phase === "failed" ||
+    phase === "cancelled"
+  );
 }
 
 export interface SettledPhase {
@@ -148,24 +153,14 @@ export interface SettledPhase {
    * case: there is no `run.failed` to take a message from.
    */
   fromStatus: boolean;
+  error: Error | null;
 }
 
 /**
- * The phase a closed stream really ended on, asking the server when the log
- * cannot say.
- *
- * A TERMINAL TASK NEED NOT HAVE WRITTEN A TERMINAL EVENT. The host's
- * `failQuietly` lands the task `failed`/`cancelled` on an unexpected throw and
- * the matching `run.failed` write is best-effort — and `sse.ts` closes the
- * stream on the task's status precisely so that log can still end. A hook that
- * derived its final phase from events alone therefore sat on `streaming`
- * forever for the one failure the user most needs told about. One `getRun` at
- * the seam settles it; a terminal EVENT still wins over the status, per
- * {@link runPhase}, because the worker writes the event first.
- *
- * A failing `getRun` leaves the phase where the events left it: the stream
- * itself succeeded, and reporting a status probe's 503 as the run's outcome
- * would replace one wrong answer with a worse one.
+ * Reconcile every clean EOF against task status. A provider pass's terminal
+ * event can precede host verification, failure, or manual interruption.
+ * Bounded polling covers a server that closes before its task settles; a
+ * failed status probe retains the observed phase and exposes its own error.
  */
 export async function settlePhase(
   client: AgentKitClient,
@@ -175,16 +170,58 @@ export async function settlePhase(
   signal?: AbortSignal,
 ): Promise<SettledPhase> {
   const phase = tracker.phase();
-  if (isTerminalPhase(phase)) return { phase, fromStatus: false };
   try {
-    const run = await client.getRun(
+    let run = await client.getRun(
       { runId },
       signal === undefined ? {} : { signal },
     );
-    const settled = runPhase({ status: run.status, events });
-    return { phase: settled, fromStatus: isTerminalPhase(settled) };
-  } catch {
-    return { phase, fromStatus: false };
+    for (
+      let attempt = 0;
+      attempt < 200 && (run.status === "queued" || run.status === "running");
+      attempt += 1
+    ) {
+      await new Promise<void>((resolve) => {
+        const onAbort = (): void => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, 25);
+        signal?.addEventListener("abort", onAbort, { once: true });
+        if (signal?.aborted === true) onAbort();
+      });
+      signal?.throwIfAborted();
+      run = await client.getRun(
+        { runId },
+        signal === undefined ? {} : { signal },
+      );
+    }
+    // EOF reconciles the task, not a provider pass. A completed pass can be
+    // followed by a harness failure or interruption before task settlement.
+    const settled =
+      run.status === "completed" && tracker.outcome() === "incomplete"
+        ? "incomplete"
+        : runPhase({ status: run.status, events });
+    return {
+      phase: settled,
+      fromStatus:
+        run.status !== tracker.outcome() &&
+        !(run.status === "completed" && tracker.outcome() === "incomplete"),
+      error:
+        run.status === "cancelled" && tracker.outcome() === "cancelled"
+          ? null
+          : run.error === undefined
+            ? run.status === "queued" || run.status === "running"
+              ? new Error("run stream ended while task is still active")
+              : null
+            : new Error(run.error),
+    };
+  } catch (cause) {
+    if (isAbort(cause, signal))
+      return { phase, fromStatus: false, error: null };
+    return { phase, fromStatus: false, error: toError(cause) };
   }
 }
 

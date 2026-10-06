@@ -20,6 +20,7 @@ import { ChatBusyError, InvalidTaskTransitionError } from "../errors.js";
 export type TaskStatus =
   | "queued"
   | "running"
+  | "interrupted"
   | "waiting_approval"
   | "completed"
   | "failed"
@@ -58,8 +59,15 @@ export const TASK_TRANSITIONS: Readonly<
   // become runnable, so the claim settles it where it stands instead of
   // claiming it, and a task that never started still has to be able to end
   // `failed` — see {@link evaluateTaskDependencies}.
-  queued: Object.freeze(["running", "cancelled", "failed"] as const),
+  queued: Object.freeze([
+    "running",
+    "cancelled",
+    "failed",
+    "interrupted",
+  ] as const),
+  interrupted: Object.freeze(["queued", "cancelled"] as const),
   running: Object.freeze([
+    "interrupted",
     "waiting_approval",
     "completed",
     "failed",
@@ -537,6 +545,8 @@ export interface TaskStore {
    */
   createTask(input: CreateTaskInput): Promise<TaskRecord>;
   getTask(taskId: string): Promise<TaskRecord | null>;
+  /** Park pre-boot queued work for explicit user resume. Optional for custom adapters. */
+  interruptQueued?(before: string): Promise<number>;
 
   /**
    * Tasks whose `parentTaskId` is `taskId` — one level, not the whole subtree.

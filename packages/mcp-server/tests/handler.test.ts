@@ -462,6 +462,75 @@ function initSessionRaw(
   );
 }
 
+it("rejects unsupported transports and versions only after authenticating", async () => {
+  const handler = build();
+  for (const method of ["PUT", "PATCH", "OPTIONS"]) {
+    expect(
+      (
+        await handler.fetch(
+          new Request("http://localhost/mcp", {
+            method,
+            headers: { host: "localhost" },
+          }),
+        )
+      ).status,
+    ).toBe(401);
+    const response = await handler.fetch(
+      new Request("http://localhost/mcp", {
+        method,
+        headers: { host: "localhost", ...authHeaders() },
+      }),
+    );
+    expect(response.status).toBe(405);
+  }
+  const invalidHeader = await initSessionRaw(
+    handler,
+    authHeaders({ "mcp-protocol-version": "3000-01-01" }),
+  );
+  expect(invalidHeader.status).toBe(400);
+  const unsupported = await handler.fetch(
+    new Request("http://localhost/mcp", {
+      method: "POST",
+      headers: {
+        host: "localhost",
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        ...authHeaders(),
+      },
+      body: INIT_BODY.replace("2025-06-18", "3000-01-01"),
+    }),
+  );
+  expect(unsupported.status).toBe(400);
+  expect(await unsupported.text()).toContain(
+    "Unsupported MCP protocol version",
+  );
+});
+
+it("releases each actor exactly once on eviction and awaited shutdown", async () => {
+  const source = createStagedToolSource({
+    contributors: [],
+    clock: defaultClock,
+    ids: defaultIds,
+  });
+  const closed: string[] = [];
+  const handler = build({
+    maxSessions: 1,
+    tools: {
+      ...source,
+      closeSession: async (scope) => {
+        await Promise.resolve();
+        closed.push(scope.actorId!);
+      },
+    },
+  });
+  const first = await initSession(handler);
+  const second = await initSession(handler);
+  expect(closed).toEqual([first]);
+  await handler.dispose();
+  await handler.dispose();
+  expect(closed).toEqual([first, second]);
+});
+
 /** Open a session over raw fetch and return the id the server minted. */
 async function initSession(
   handler: McpServerHandler,

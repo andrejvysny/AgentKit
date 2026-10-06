@@ -9,7 +9,7 @@ import {
   type ToolSetContributor,
 } from "@agentkit/host";
 import { createStagedToolSource, EXEC_FAILED_TEXT } from "../src/index.js";
-import { demoContributor, echoTool } from "./helpers.js";
+import { demoContributor, echoTool, writeTool } from "./helpers.js";
 
 const PRIMARY: AiContextBinding = {
   id: "bind-1",
@@ -36,6 +36,27 @@ function source(
 }
 
 describe("createStagedToolSource", () => {
+  it("preserves class contributor pruning hooks when adding actor scope", async () => {
+    class Contributor implements ToolSetContributor {
+      namespace = "demo";
+      async contribute(): Promise<AiTool[]> {
+        return [echoTool(), writeTool()];
+      }
+      unboundToolNames(): string[] {
+        return ["demo_echo"];
+      }
+    }
+    const tools = source([new Contributor()]);
+    const scope = { chatId: "chat-1", actorId: "session-a" };
+    expect(
+      (await tools.catalog.listTools(scope)).map(
+        (entry) => entry.definition.name,
+      ),
+    ).toEqual(["demo_echo"]);
+    expect((await tools.execute("demo_write", {}, scope)).data).toMatchObject({
+      errorCode: "tool_not_found",
+    });
+  });
   it("lists what the contributors stage, per scope", async () => {
     const tools = source([demoContributor()]);
     const unscoped = await tools.catalog.listTools();
@@ -218,5 +239,48 @@ describe("createStagedToolSource call deadline", () => {
     });
     const envelope = await tools.execute("demo_echo", { text: "hi" });
     expect(envelope.ok).toBe(true);
+  });
+
+  it("aborts a running call and refuses queued writes when the session closes", async () => {
+    const controller = new AbortController();
+    let executions = 0;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const tool: AiTool = {
+      definition: {
+        ...echoTool().definition,
+        effect: "write",
+        inputSchema: { type: "object" },
+      },
+      execute: async (ctx) => {
+        executions += 1;
+        entered();
+        return new Promise((_resolve, reject) => {
+          ctx.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("closed")),
+            { once: true },
+          );
+        });
+      },
+    };
+    const tools = source([
+      { namespace: "demo", contribute: async () => [tool] },
+    ]);
+    const scope = {
+      chatId: "chat-1",
+      actorId: "session-a",
+      signal: controller.signal,
+    };
+    const running = tools.execute(tool.definition.name, {}, scope);
+    await started;
+    const queued = tools.execute(tool.definition.name, {}, scope);
+    controller.abort();
+    expect((await running).ok).toBe(false);
+    expect((await queued).ok).toBe(false);
+    expect(executions).toBe(1);
+    expect(await tools.catalog.listTools(scope)).toEqual([]);
   });
 });

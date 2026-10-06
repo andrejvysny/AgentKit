@@ -1,124 +1,72 @@
-name: Release agentkit
+name: Qualify agentkit candidate
 
-# Triggered on version tag pushes (`vX.Y.Z`). Builds the umbrella `agentkit`
-# package, commits its dist into a throwaway commit on top of the tagged
-# tree, subtree-splits `packages/agentkit` into a `release/<tag>` branch (so
-# a git install resolves a flat package root — the branch's repo root IS
-# `packages/agentkit`), then re-points the tag at the split commit. Model:
-# the sibling `shared` repo's `.github/workflows/release.yml` +
-# `shared/DEVELOPING.md`.
-#
-# The release branch and the tag are FORCE-MOVED by this workflow every time
-# it runs for a given tag — never treat either as a stable ref to build on.
-# They exist only so `npm install "github:<repo>#<tag>"` (or the bun
-# equivalent) resolves a flat, already-built `agentkit` package.
-
+# Qualification never changes tags, branches, or publishes a package. A source
+# tag remains immutable; distribution artifacts carry their own SHA-256 proof.
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+  qualification:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            electron: ""
+          - os: macos-latest
+            electron: "44.5.1"
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout (full history for subtree split)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-
+        with:
+          bun-version: "1.4.0"
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-
+          node-version: "22.23.2"
       - run: bun install --frozen-lockfile
-
-      - name: Parse tag + assert it matches packages/agentkit/package.json's version
-        id: meta
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="$(node -p "require('./packages/agentkit/package.json').version")"
-          if [ "$TAG" != "v$VERSION" ]; then
-            echo "ERROR: tag $TAG does not match packages/agentkit/package.json's version (v$VERSION)." >&2
-            echo "Bump packages/agentkit/package.json's version to the release version and re-tag — see DEVELOPING.md's release ritual. A tag is never adjusted (e.g. -dev is not stripped) to match; the tagged version must already be the release version." >&2
-            exit 1
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "release_branch=release/$TAG" >> "$GITHUB_OUTPUT"
-
       - run: bun run typecheck
-
+      - run: bun run lint
       - run: bun test
-
+      - name: Record source provenance
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          node scripts/source-digest.mjs . /tmp/agentkit-source-manifest.json
+          mkdir candidate
+          printf '%s\n%s\n' "$SOURCE_COMMIT" "$SOURCE_REF" > candidate/source-ref.txt
+          cp /tmp/agentkit-source-manifest.json candidate/source-manifest.json
       - run: bun run build
-
       - run: bun run build:umbrella
-
-      - run: bun run smoke:umbrella
-
-      - name: Configure git
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
-
-      # Every step below reads the tag and branch through `env:` rather than
-      # interpolating `${{ ... }}` straight into the shell. `${{ }}` is textual
-      # substitution performed BEFORE the shell sees the script, so a ref name
-      # carrying shell metacharacters would be executed rather than quoted —
-      # and a tag name is attacker-influenceable input on a public repo.
-      # Through `env:` it is only ever a variable's VALUE, and `"$TAG"` is
-      # inert whatever it contains.
-      - name: Commit the built umbrella dist
+      - run: node scripts/node-smoke.mjs
+      - run: node --test scripts/node-sqlite-conformance.mjs scripts/sqlite-durability.mjs
+      - run: AGENTKIT_SQLITE_DRIVER=bun bun test ./scripts/sqlite-durability.mjs
+      - name: Pack once, qualify exact artifact
         env:
-          TAG: ${{ steps.meta.outputs.tag }}
+          ELECTRON_VERSION: ${{ matrix.electron }}
         run: |
-          git add -f packages/agentkit/dist
-          git commit -m "release: $TAG dist"
-
-      - name: Subtree split packages/agentkit
-        env:
-          RELEASE_BRANCH: ${{ steps.meta.outputs.release_branch }}
-        run: |
-          git subtree split --prefix=packages/agentkit -b "$RELEASE_BRANCH"
-
-      - name: Push release branch
-        env:
-          RELEASE_BRANCH: ${{ steps.meta.outputs.release_branch }}
-        run: git push -f origin "$RELEASE_BRANCH"
-
-      - name: Re-point tag at the subtree-split commit
-        env:
-          TAG: ${{ steps.meta.outputs.tag }}
-          RELEASE_BRANCH: ${{ steps.meta.outputs.release_branch }}
-        run: |
-          SPLIT_COMMIT="$(git rev-parse "$RELEASE_BRANCH")"
-          git tag -f "$TAG" "$SPLIT_COMMIT"
-          git push -f origin "$TAG"
-
-      - name: Verify install (smoke)
-        env:
-          TAG: ${{ steps.meta.outputs.tag }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          mkdir -p /tmp/install-smoke
-          cd /tmp/install-smoke
-          npm init -y >/dev/null
-          npm install "github:$REPOSITORY#$TAG" --no-save --silent
-          node -e "import('agentkit/contracts').then((m) => { if (typeof m.CONTRACT_VERSION !== 'string') throw new Error('CONTRACT_VERSION missing'); console.log('agentkit/contracts OK, CONTRACT_VERSION =', m.CONTRACT_VERSION); })"
-
-      - name: Summarize
-        env:
-          TAG: ${{ steps.meta.outputs.tag }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          echo "## Released" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Package**: \`agentkit\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Version**: \`$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Tag**: \`$TAG\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Install**: \`npm install \"github:$REPOSITORY#$TAG\"\`" >> "$GITHUB_STEP_SUMMARY"
+          npm pack ./packages/agentkit --pack-destination candidate --json > candidate/pack.json
+          TARBALL="$(node -p "require('./candidate/pack.json')[0].filename")"
+          SOURCE_DIGEST="$(node -p "require('./candidate/source-manifest.json').sha256")"
+          set -- node scripts/qualify-package.mjs --tarball "candidate/$TARBALL" --source-digest "$SOURCE_DIGEST" --output /tmp/agentkit-qualification
+          if [ -f packages/core/src/providers/responses.ts ]; then set -- "$@" --responses true; fi
+          if [ -n "$ELECTRON_VERSION" ]; then set -- "$@" --electron "$ELECTRON_VERSION"; fi
+          "$@"
+      - name: Preserve artifact and qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentkit-candidate-${{ github.sha }}-${{ matrix.os }}
+          path: |
+            candidate/
+            /tmp/agentkit-qualification/qualification.json
+            /tmp/agentkit-qualification/*.log
+            /tmp/agentkit-qualification/*-consumer/*metafile.json
+            /tmp/agentkit-qualification/*-consumer/*lock*
+          if-no-files-found: error

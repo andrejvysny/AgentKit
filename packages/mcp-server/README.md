@@ -26,6 +26,7 @@ const mcp = createMcpServerHandler({
     contributors,      // the same array the TurnRunner gets
     context,           // optional ContextProvider, for chat bindings
     guards,            // optional ToolGuards — the same ones the runner uses
+    writePolicy,       // SessionWritePolicy used by proposal builders; revokes actor grants
     clock,
     ids,
     logger,
@@ -33,16 +34,9 @@ const mcp = createMcpServerHandler({
   auth: { bearerToken: process.env.AGENTKIT_MCP_SERVER_TOKEN! },
   // Loopback on any port by default; name your own list to widen it.
   allowedHosts: ["localhost", "127.0.0.1"],
-  // Which chat an MCP session works in — and, optionally, who it belongs to —
-  // from ITS OWN headers, once, at init.
-  sessionScope: (headers) => {
-    const chatId = headers.get("x-agentkit-chat");
-    const principal = headers.get("x-agentkit-principal");
-    return {
-      ...(chatId === null ? {} : { chatId }),
-      ...(principal === null ? {} : { principal }),
-    };
-  },
+  // Host authorizes the chat/principal from credentials or trusted middleware.
+  // Do not accept arbitrary client-supplied identity headers without validation.
+  sessionScope: (headers) => resolveAuthorizedMcpScope(headers),
   writesEnabled: false, // default; see "Writes" below
   // Session lifetime — both defaults shown; see "Session lifetime" below.
   maxSessions: 64,               // PER PRINCIPAL
@@ -264,6 +258,51 @@ a proposal, and applies it if the `WritePolicy` allows — but no chat UI is
 watching and nothing prompts a human. Turning writes on is a decision per
 server, and it belongs in the host's wiring where someone can see it.
 
+Each initialized session receives a fresh server-generated `actorId`, also used
+as its protocol session ID. Client names and supplied actor fields never choose
+this identity. The actor reaches contributor and guard contexts, execution
+metadata, proposal audit envelopes (`__agentkitInvocation`), and policy approval
+reasons. Two clients with the same name, credential, principal, and chat still
+have separate grants and action keys.
+
+For inbound actors, `SessionWritePolicy` requires an exact allowance for
+`actorId`, chat, tool, proposal kind, design `scopeKey`, `payloadFingerprint`, and
+`revision`. Use exported `writePayloadFingerprint(validatedArguments)` to compute
+the fingerprint; object-key order and the `action_id` field do not change it.
+Use `revision: null` when the host has no revision. Chat-wide grants and
+`auto_all` do not authorize inbound actors. Missing or malformed action IDs may
+stage proposals but never auto-apply for an inbound actor. Existing native chat
+policy behavior remains unchanged.
+
+The proposal builder namespaces valid action keys by actor, chat, tool, design,
+payload, and revision while preserving the proposal's real design scope for
+revision checks and application. Concurrent writes for one actor are serialized;
+repeated authorized calls reuse the stored result. Changed arguments or revisions
+produce a distinct intent and require matching consent. Authorization is checked
+again after asynchronous proposal claims, immediately before mutation starts.
+
+Pass the same policy as `createStagedToolSource({ writePolicy })` to revoke its
+ephemeral actor grants on DELETE, idle expiry, eviction, or shutdown. Closing a
+session also aborts its execution signals. Abort is cooperative: an applier that
+has already started must honor its signal; the server cannot undo side effects.
+Hosts implementing `McpToolSource` directly must enforce equivalent write policy,
+audit, deduplication, and implement `closeSession(scope)` for actor cleanup.
+
+## Resources and prompts
+
+Optional `resources: { list(scope), read(uri, scope) }` and
+`prompts: { list(scope), get(name, arguments, scope) }` expose host-owned,
+read-only extension sources. Capabilities are advertised only when supplied.
+All calls require the authenticated session, receive its pinned actor scope,
+and check visibility against the host's current catalogue before resolving a
+resource or prompt. Required and unknown prompt arguments are checked. Host
+faults are logged locally and returned with fixed error text.
+
+These seams never choose a model, load API credentials, invoke a provider,
+sample, or elicit approval. The host owns content, visibility, and authorization.
+Only streamable HTTP GET, POST, and DELETE are accepted; unsupported protocol
+versions are refused rather than silently negotiated.
+
 ## `createStagedToolSource`
 
 The default `McpToolSource`. It is in **this** package rather than in
@@ -295,8 +334,7 @@ is two members, `{ catalog, execute }`.
 - **stdio transport.** This package is HTTP-only. A stdio MCP server is a
   process a client spawns, which is a different lifecycle from a host that is
   already running and already has state.
-- **Resources, prompts, sampling, elicitation.** Tools only. The other MCP
-  capabilities have no AgentKit port behind them yet.
+- **Sampling and elicitation.** No implicit model calls or client-driven approval.
 - **A server.** `fetch` and `dispose`, nothing else: ports, TLS and lifecycle
   are the host's, and a transport package that started owning them would stop
   being optional.

@@ -6,7 +6,7 @@
     "data": {
       "reason": "aborted"
     },
-    "contractVersion": "0.5.0",
+    "contractVersion": "0.7.0",
     "eventId": "evt_5d92f2b8-2ee6-472e-9237-3c5da1f71d78",
     "seq": 0
   }

@@ -1,4 +1,8 @@
-import { DuplicateTaskError, InvalidTaskTransitionError } from "../errors.js";
+import {
+  AgentKitHostError,
+  DuplicateTaskError,
+  InvalidTaskTransitionError,
+} from "../errors.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { Clock, IdGenerator } from "../ports/system.js";
 import type { TaskRunner } from "../ports/task-runner.js";
@@ -108,6 +112,17 @@ export class TaskService {
     });
   }
 
+  /** Resume the original interrupted task only through an explicit host action. */
+  async resumeTask(taskId: string): Promise<void> {
+    if (!this.deps.taskRunner.resume) {
+      throw new AgentKitHostError(
+        "resume_unsupported",
+        "This task runner does not support explicit recovery.",
+      );
+    }
+    await this.deps.taskRunner.resume(taskId);
+  }
+
   /**
    * Create a task and hand it to the queue.
    *
@@ -191,14 +206,19 @@ export class TaskService {
       await this.deps.taskRunner.requestCancel(taskId);
       return;
     }
-    if (task.status !== "queued") return;
+    if (task.status !== "queued" && task.status !== "interrupted") return;
     // A queued task is cancelled in the STORE, not through the runner: nobody
     // has claimed it, so there is no execution to stop, and the row is the only
     // thing that decides whether it ever starts.
     try {
-      await tasks.transitionTask(taskId, ["queued"], "cancelled", {
-        finishedAt: this.deps.clock.nowIso(),
-      });
+      await tasks.transitionTask(
+        taskId,
+        ["queued", "interrupted"],
+        "cancelled",
+        {
+          finishedAt: this.deps.clock.nowIso(),
+        },
+      );
     } catch (err) {
       // A claim or another cancel won the race between the read above and this
       // write. Anything else is a real store failure and must not be swallowed.

@@ -1,9 +1,10 @@
 {
   "name": "@agentkit/adapters-sqlite",
   "version": "0.1.0-dev",
-  "description": "bun:sqlite AssistantStore for @agentkit/host: durable, transactional, lease-fenced storage for a single-process host. Bun-only.",
+  "description": "Shared durable SQLite AssistantStore with Bun and Node drivers.",
   "license": "MIT",
   "engines": {
+    "node": ">=22",
     "bun": ">=1.3"
   },
   "type": "module",
@@ -14,6 +15,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./node": {
+      "types": "./src/node.ts",
+      "default": "./src/node.ts"
     }
   },
   "publishConfig": {
@@ -21,6 +26,10 @@
       ".": {
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js"
+      },
+      "./node": {
+        "types": "./dist/node.d.ts",
+        "import": "./dist/node.js"
       }
     },
     "main": "./dist/index.js",
@@ -51,7 +60,11 @@
   "devDependencies": {
     "@agentkit/adapters-memory": "workspace:*",
     "@agentkit/testing": "workspace:*",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/bun": "^1.3.5",
     "typescript": "^5.8.3"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^13.0.3"
   }
 }

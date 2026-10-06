@@ -1,5 +1,14 @@
 import type { RiskLevel } from "./proposal-store.js";
 
+/** Trusted invocation identity; actor grants never inherit chat-wide consent. */
+export interface WriteInvocationScope {
+  actorId?: string;
+  /** Hash of validated tool arguments, excluding the idempotency key. */
+  payloadFingerprint?: string;
+  /** Exact revision consent covered; null means the host has no revision. */
+  revision?: string | null;
+}
+
 /**
  * How much a chat may write without asking.
  *
@@ -22,7 +31,7 @@ export type WritePolicyMode =
  * for this tool has not thereby approved a destructive one, and a model cannot
  * escalate by re-labelling its own proposal.
  */
-export interface WriteAllowance {
+export interface WriteAllowance extends WriteInvocationScope {
   key: string;
   chatId: string;
   toolName: string;
@@ -37,7 +46,7 @@ export interface WriteAllowance {
   createdAt: string;
 }
 
-export interface WriteAllowanceInput {
+export interface WriteAllowanceInput extends WriteInvocationScope {
   chatId: string;
   toolName: string;
   proposalKind: string;
@@ -50,7 +59,7 @@ export interface WriteAllowanceInput {
   maxRisk: RiskLevel;
 }
 
-export interface AutoApplyQuery {
+export interface AutoApplyQuery extends WriteInvocationScope {
   chatId: string;
   toolName: string;
   proposalKind: string;
@@ -82,4 +91,6 @@ export interface WritePolicy {
   allow(input: WriteAllowanceInput): WriteAllowance;
   revoke(chatId: string, key: string): void;
   list(chatId: string): WriteAllowance[];
+  /** Revoke ephemeral grants when a trusted invocation actor disconnects. */
+  revokeActor?(actorId: string): void;
 }

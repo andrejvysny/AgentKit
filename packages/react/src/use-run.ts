@@ -58,10 +58,14 @@ export interface RunState {
    * phase presents that as a finished reply.
    */
   finishReason: string | null;
+  /** Older events were omitted because maxEvents was reached. */
+  truncated: boolean;
 }
 
 export interface UseRunOptions {
   client?: AgentKitClient;
+  /** Retained event window. Defaults to 10,000; the phase folds all events. */
+  maxEvents?: number;
 }
 
 export interface UseRunResult extends RunState {
@@ -78,6 +82,7 @@ const EMPTY: RunState = {
   phase: null,
   error: null,
   finishReason: null,
+  truncated: false,
 };
 
 export function useRun(
@@ -85,23 +90,41 @@ export function useRun(
   options: UseRunOptions = {},
 ): UseRunResult {
   const client = useAgentKitClient(options.client);
+  const maxEvents = options.maxEvents ?? 10_000;
+  if (!Number.isSafeInteger(maxEvents) || maxEvents < 1) {
+    throw new RangeError("maxEvents must be a positive safe integer");
+  }
   const alive = useAliveRef();
   const { value, read, update } = useMirroredState<RunState>(EMPTY);
 
   /** eventIds already appended — the de-dup a doubled effect needs. */
   const seenRef = useRef<Set<string>>(new Set());
+  const maxSeqRef = useRef<number | undefined>(undefined);
   /** The phase as a running tally, so no arrival costs a rescan of the log. */
   const trackerRef = useRef<RunPhaseTracker>(createRunPhaseTracker());
   /** The last pass's `finishReason`; a pass boundary is what clears it. */
   const finishReasonRef = useRef<string | null>(null);
+  const scopeRef = useRef<AbortController | null>(null);
 
   const ingest = useCallback(
     (incoming: readonly AiRunEvent[]): void => {
-      const fresh = incoming.filter(
-        (event) => !seenRef.current.has(event.eventId),
-      );
+      const fresh: AiRunEvent[] = [];
+      for (const event of incoming) {
+        if (Number.isFinite(event.seq)) {
+          if (maxSeqRef.current !== undefined && event.seq <= maxSeqRef.current)
+            continue;
+          maxSeqRef.current = event.seq;
+        }
+        if (seenRef.current.has(event.eventId)) continue;
+        seenRef.current.add(event.eventId);
+        fresh.push(event);
+      }
       if (fresh.length === 0) return;
-      for (const event of fresh) seenRef.current.add(event.eventId);
+      while (seenRef.current.size > maxEvents * 2) {
+        const first = seenRef.current.values().next().value;
+        if (first === undefined) break;
+        seenRef.current.delete(first);
+      }
       for (const event of fresh) {
         trackerRef.current.observe(event);
         // The previous pass's reason is not this pass's: the host abandoned
@@ -118,20 +141,29 @@ export function useRun(
         // the whole log per token makes a long run quadratic.
         const events = [...prev.events];
         for (const event of fresh) insertBySeq(events, event);
-        return { ...prev, events, phase, finishReason };
+        const truncated = prev.truncated || events.length > maxEvents;
+        return {
+          ...prev,
+          events: events.slice(-maxEvents),
+          phase,
+          finishReason,
+          truncated,
+        };
       });
     },
-    [update],
+    [update, maxEvents],
   );
 
   useEffect(() => {
     seenRef.current = new Set();
+    maxSeqRef.current = undefined;
     trackerRef.current = createRunPhaseTracker();
     finishReasonRef.current = null;
     update(() => EMPTY);
     if (runId === null) return;
 
     const controller = new AbortController();
+    scopeRef.current = controller;
     void (async () => {
       const events: AiRunEvent[] = [];
       try {
@@ -140,6 +172,7 @@ export function useRun(
         })) {
           if (controller.signal.aborted || !alive.current) return;
           events.push(event);
+          if (events.length > maxEvents) events.shift();
           ingest([event]);
         }
       } catch (cause) {
@@ -158,6 +191,17 @@ export function useRun(
         controller.signal,
       );
       if (controller.signal.aborted || !alive.current) return;
+      try {
+        const trailing = await client.drainRun(
+          runId,
+          read().events.at(-1)?.eventId,
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted || !alive.current) return;
+        ingest(trailing);
+      } catch {
+        if (controller.signal.aborted || !alive.current) return;
+      }
       // A status-decided failure has no `run.failed` to quote, so the hook owes
       // an `error` of its own: `phase: "failed"` next to `error: null` reads as
       // "it failed and nobody knows anything", which is worse than saying so.
@@ -167,20 +211,37 @@ export function useRun(
       update((prev) => ({
         ...prev,
         phase: settled.phase,
-        error: quiet && prev.error === null ? quietFailure() : prev.error,
+        error:
+          settled.error ??
+          (quiet && prev.error === null ? quietFailure() : prev.error),
       }));
     })();
 
-    return () => controller.abort();
-  }, [runId, client, ingest, update, alive]);
+    return () => {
+      controller.abort();
+      if (scopeRef.current === controller) scopeRef.current = null;
+    };
+  }, [runId, client, ingest, update, alive, maxEvents, read]);
 
   const drain = useCallback<UseRunResult["drain"]>(async () => {
     if (runId === null) return;
+    const scope = scopeRef.current;
+    if (scope === null || scope.signal.aborted) return;
     const lastEventId = read().events.at(-1)?.eventId;
     try {
-      ingest(await client.drainRun(runId, lastEventId));
+      const events = await client.drainRun(runId, lastEventId, {
+        signal: scope.signal,
+      });
+      if (scope.signal.aborted || scopeRef.current !== scope || !alive.current)
+        return;
+      ingest(events);
     } catch (cause) {
-      if (!alive.current) return;
+      if (
+        isAbort(cause, scope.signal) ||
+        scopeRef.current !== scope ||
+        !alive.current
+      )
+        return;
       update((prev) => ({ ...prev, error: toError(cause) }));
     }
   }, [runId, client, read, ingest, update, alive]);

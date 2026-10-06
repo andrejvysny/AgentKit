@@ -56,7 +56,7 @@ export function App({ chatId }: { chatId: string }) {
 }
 
 function Conversation({ chatId }: { chatId: string }) {
-  const { messages, status, phase, submit, cancel, error } = useChat(chatId);
+  const { messages, status, phase, activeRunId, submit, cancel, error } = useChat(chatId);
 
   return (
     <>
@@ -78,8 +78,8 @@ function Conversation({ chatId }: { chatId: string }) {
           event.currentTarget.reset();
         }}
       >
-        <input name="q" disabled={status === "streaming"} />
-        {status === "streaming" ? (
+        <input name="q" disabled={activeRunId !== null || status === "loading"} />
+        {activeRunId !== null ? (
           <button type="button" onClick={() => void cancel()}>
             Stop ({phase})
           </button>
@@ -101,7 +101,7 @@ the rest.
 
 | Hook                     | Renders                                                                                  |
 | ------------------------ | ---------------------------------------------------------------------------------------- |
-| `useChat(chatId)`        | the chat's active path, plus `submit` / `regenerate` / `editAndResubmit` / `cancel` / `reload` |
+| `useChat(chatId)`        | the chat's active path, plus `submit` / `regenerate` / `editAndResubmit` / `cancel` / `resume` / `reload` |
 | `useRun(runId)`          | one run's event log, live and resuming, plus `drain`                                     |
 | `useBranches(messageId)` | a message's siblings, which one is active, and `activate`                                |
 | `useProposals(chatId)`   | the staged-write queue, plus `approve` / `reject` / `apply`                               |
@@ -142,8 +142,8 @@ this hook renders all three, in order:
    replaces the whole list with what the server stored. Anything the streaming
    step got wrong survives for at most one round trip. The drain is best-effort
    — a failure on that one extra request is ignored rather than reported as the
-   turn's outcome — and if the log ended without a terminal event (the host's
-   `failQuietly` writes one only best-effort) the run's own `status` decides the
+   turn's outcome. Every clean EOF reconciles the run's authoritative task
+   status, including a harness failure after a completed provider pass. The status decides the
    final `phase`, with a message-only `error` where there is no `run.failed` to
    quote.
 
@@ -151,13 +151,28 @@ this hook renders all three, in order:
 `finishReason`, `null` before one arrives and at every pass boundary. Worth
 rendering: `"incomplete"` means the provider's stream was cut before it said
 why, and the contract never launders that into `"stop"` — so the run is
-`completed` and the answer is **truncated**. `useRun` exposes the same field.
+`completed` in storage while its derived phase is `incomplete` and the answer is
+**truncated**. `useRun` exposes the same fields.
 
 A failed submit **parks its `Idempotency-Key`**: calling `submit` again with the
-same content and the same `parentMessageId` replays that key instead of asking
+same complete request (content, parent, model, and metadata) replays that key instead of asking
 the question twice, which is what a "send failed — retry?" button needs.
-Different content mints a fresh key, because a replayed key against a different
-question answers the old one.
+Changing any request field mints a fresh key. The request body is snapshotted
+before dispatch; simultaneous identical clicks share one POST. Unknown outcomes
+retain that immutable request and key across hook remounts using the same client
+instance. A full page reload or a different client instance needs application
+persistence of an explicit `idempotencyKey`.
+
+`activeRunId` comes from the server on mount and reload. It survives transport
+errors, so Stop continues to target the original run even when its reader has
+failed. `phase: "interrupted"` keeps that identity for `resume()` or `cancel()`;
+resume requests explicit continuation of the same task and never creates a turn.
+Keep the client instance stable across remounts. Older hosts without
+`ChatDto.activeRunId` cannot provide this recovery capability.
+
+`useRun` retains at most `maxEvents` events (default 10,000), reporting
+`truncated` when older events are omitted. Phase tracking still observes every
+event. Its final status reconciliation also drains trailing verification.
 
 `cancel()` asks the server to stop and does **not** tear down the local stream:
 the run answers with its own `run.cancelled`, and letting that arrive is what

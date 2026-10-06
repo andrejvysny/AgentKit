@@ -9,7 +9,11 @@ import type {
 } from "../ports/proposal-store.js";
 import type { IdGenerator, Logger } from "../ports/system.js";
 import type { WritePolicy } from "../ports/write-policy.js";
-import { normalizeActionId } from "./action-id.js";
+import {
+  invocationActionId,
+  normalizeActionId,
+  writePayloadFingerprint,
+} from "./action-id.js";
 import type { ProposalService } from "./proposal-service.js";
 
 /**
@@ -145,10 +149,40 @@ export function createProposalBuilderTool<TInput>(
       }
 
       const scopeKey = options.scopeKeyOf(ctx, input);
-      const actionId = normalizeActionId(
+      const actorId =
+        typeof ctx.metadata?.actorId === "string"
+          ? ctx.metadata.actorId
+          : undefined;
+      if (ctx.metadata?.source === "mcp-server" && actorId === undefined) {
+        throw new Error(
+          "MCP proposal execution requires a trusted actor identity",
+        );
+      }
+      let revisionAtCreate =
+        actorId !== undefined && options.currentRevision
+          ? ((await options.currentRevision(scopeKey)) ?? undefined)
+          : undefined;
+      const invocation =
+        actorId === undefined
+          ? undefined
+          : {
+              actorId,
+              payloadFingerprint: await writePayloadFingerprint(input),
+              revision: revisionAtCreate ?? null,
+            };
+      const rawActionId = normalizeActionId(
         (input as { action_id?: unknown } | null)?.action_id,
         warnings,
       );
+      const actionId =
+        rawActionId !== undefined && invocation !== undefined
+          ? await invocationActionId(rawActionId, {
+              ...invocation,
+              chatId,
+              scopeKey,
+              toolName,
+            })
+          : rawActionId;
 
       // 1. Idempotency: has this exact intent already been written?
       if (actionId !== undefined) {
@@ -164,9 +198,10 @@ export function createProposalBuilderTool<TInput>(
 
       // 2. Build, then stage — in that order, and unconditionally.
       const built = await options.build(ctx, input);
-      const revisionAtCreate = options.currentRevision
-        ? ((await options.currentRevision(scopeKey)) ?? undefined)
-        : undefined;
+      if (actorId === undefined && options.currentRevision) {
+        revisionAtCreate =
+          (await options.currentRevision(scopeKey)) ?? undefined;
+      }
       const proposal = await options.service.stage({
         chatId,
         ...(ctx.runId === undefined ? {} : { runId: ctx.runId }),
@@ -175,7 +210,19 @@ export function createProposalBuilderTool<TInput>(
         toolName,
         kind: built.kind,
         risk: built.risk,
-        envelope: built.envelope ?? {},
+        envelope: {
+          ...built.envelope,
+          ...(invocation === undefined
+            ? {}
+            : {
+                __agentkitInvocation: {
+                  ...invocation,
+                  ...(typeof ctx.metadata?.principal === "string"
+                    ? { principal: ctx.metadata.principal }
+                    : {}),
+                },
+              }),
+        },
         operations: built.operations,
         warnings: built.warnings,
         truncated: built.truncated,
@@ -187,6 +234,16 @@ export function createProposalBuilderTool<TInput>(
         id: "build",
         reason,
       }));
+      const isAuthorized = () =>
+        !ctx.signal?.aborted &&
+        options.policy.isAutoApplyAllowed({
+          chatId,
+          toolName,
+          proposalKind: built.kind,
+          scopeKey: proposal.scopeKey,
+          risk: built.risk,
+          ...invocation,
+        });
 
       // 3. The auto-apply gate. Every clause is a reason to stop and ask:
       //    nothing to do; a build that dropped operations (applying half a write
@@ -195,18 +252,9 @@ export function createProposalBuilderTool<TInput>(
       const autoApply =
         built.operations.length > 0 &&
         !built.truncated &&
+        (actorId === undefined || actionId !== undefined) &&
         (built.risk !== "destructive" || allWarnings.length === 0) &&
-        options.policy.isAutoApplyAllowed({
-          chatId,
-          toolName,
-          proposalKind: built.kind,
-          // The scope the staged proposal actually writes to, so a standing
-          // "yes" given for one document cannot auto-apply a write the model
-          // aimed at another — `scopeKey` is derived from tool input, which is
-          // model-supplied. See `AutoApplyQuery.scopeKey`.
-          scopeKey: proposal.scopeKey,
-          risk: built.risk,
-        });
+        isAuthorized();
 
       if (!autoApply) {
         return {
@@ -234,11 +282,12 @@ export function createProposalBuilderTool<TInput>(
           proposalId: proposal.id,
           actor: "policy",
           policyId,
-          reason: `auto-apply allowed for ${toolName}/${built.kind}`,
+          reason: `auto-apply allowed for ${toolName}/${built.kind}${actorId === undefined ? "" : `; actor=${actorId}`}`,
         });
         const outcome = await options.service.apply({
           proposalId: proposal.id,
           operationId: options.ids.operationId(),
+          ...(actorId === undefined ? {} : { authorize: isAuthorized }),
           ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
         });
         return applyResult(proposal, outcome, buildSkipped, allWarnings, ctx);
@@ -256,11 +305,12 @@ export function createProposalBuilderTool<TInput>(
           proposalId: proposal.id,
           error: message,
         });
+        const recorded = await options.store.proposals.get(proposal.id);
         return {
           ok: false,
           status: "partial",
           summary: AUTO_APPLY_FAILED_MESSAGE,
-          data: projectProposal({ ...proposal, status: "failed" }),
+          data: projectProposal(recorded ?? proposal),
           modelData: {
             status: "partial",
             appliedCount: 0,
@@ -314,15 +364,20 @@ async function dedupResult<TInput>(
     const outcome = prior.operationId
       ? await options.store.proposals.getOutcome(prior.operationId)
       : null;
+    const partial = outcome?.status === "partial";
     return {
-      ok: true,
-      status: "ok",
+      ok: !partial,
+      status: partial ? "partial" : "ok",
       summary: `already_applied: ${actionId}`,
       data: projectProposal(prior),
       modelData: {
         status: "already_applied",
         appliedCount: outcome?.appliedOps ?? 0,
-        skipped: [],
+        skipped:
+          outcome?.failedOps.map((op) => ({
+            id: `op:${op.opIndex}`,
+            reason: op.error,
+          })) ?? [],
       } satisfies WriteToolModelData,
       sources: [],
       warnings,
