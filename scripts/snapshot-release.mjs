@@ -1,16 +1,21 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  foundationExclusions,
+  projectFoundation,
+  sha256,
+} from "./release/foundation.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const [destination, version, release] = process.argv.slice(2);
@@ -24,15 +29,15 @@ if (
   );
 }
 const output = resolve(destination);
+const outputRelative = relative(root, output);
 if (
-  release === "foundation" &&
-  existsSync(join(root, "packages/host/src/turn/provider-continuation.ts"))
+  !(
+    outputRelative === ".." ||
+    outputRelative.startsWith("../") ||
+    isAbsolute(outputRelative)
+  ) ||
+  existsSync(output)
 ) {
-  throw new Error(
-    "Foundation snapshot must precede provider continuation integration. Use the captured schema8 foundation source and reviewed foundation-only patches.",
-  );
-}
-if (!relative(root, output).startsWith("..") || existsSync(output)) {
   throw new Error("Snapshot must use a new directory outside the checkout");
 }
 
@@ -46,43 +51,24 @@ function git(args) {
   return result.stdout;
 }
 
-function sha256(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-const excluded =
-  release === "foundation"
-    ? [
-        "packages/core/src/providers/responses.ts",
-        "packages/core/src/providers/responses-types.ts",
-        "packages/core/src/providers/responses-tools.ts",
-        "packages/core/src/providers/responses-request.ts",
-        "packages/core/src/providers/responses-stream.ts",
-        "packages/core/tests/responses.test.ts",
-        "packages/core/tests/responses-request.test.ts",
-        "packages/core/tests/responses-continuation.test.ts",
-        "packages/core/tests/responses-accounting.test.ts",
-        "packages/core/tests/responses-helpers.ts",
-        "packages/contracts/src/provider-continuation.ts",
-      ]
-    : [];
 const baseline = git(["rev-parse", "HEAD"]).trim();
 const dirtyPatch = git(["diff", "--binary", "HEAD"]);
-const sources = git([
-  "ls-files",
-  "--cached",
-  "--others",
-  "--exclude-standard",
-  "-z",
-])
-  .split("\0")
-  .filter(
-    (path) => path && !excluded.includes(path) && existsSync(join(root, path)),
-  );
-mkdirSync(output, { recursive: true });
+function sourcePaths() {
+  return [
+    ...new Set(
+      git(["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
+        .split("\0")
+        .filter((path) => path && existsSync(join(root, path))),
+    ),
+  ].sort();
+}
+const sources = sourcePaths();
 const original = [];
+mkdirSync(output, { recursive: true });
 for (const path of [...new Set(sources)].sort()) {
   const input = join(root, path);
+  if (!lstatSync(input).isFile())
+    throw new Error(`Snapshot source must be a regular file: ${path}`);
   const bytes = readFileSync(input);
   original.push({ path, sha256: sha256(bytes) });
   mkdirSync(dirname(join(output, path)), { recursive: true });
@@ -90,55 +76,44 @@ for (const path of [...new Set(sources)].sort()) {
   if (sha256(readFileSync(join(output, path))) !== sha256(bytes))
     throw new Error(`Copy raced: ${path}`);
 }
+if (JSON.stringify(sources) !== JSON.stringify(sourcePaths()))
+  throw new Error("Source file listing changed during snapshot");
 for (const file of original) {
   if (sha256(readFileSync(join(root, file.path))) !== file.sha256)
     throw new Error(`Source changed during snapshot: ${file.path}`);
 }
+if (
+  baseline !== git(["rev-parse", "HEAD"]).trim() ||
+  dirtyPatch !== git(["diff", "--binary", "HEAD"])
+)
+  throw new Error("Git source changed during snapshot");
 
 function rewrite(path, transform) {
   const file = join(output, path);
   writeFileSync(file, transform(readFileSync(file, "utf8")));
 }
 
-if (release === "foundation") {
-  rewrite("packages/contracts/src/index.ts", (text) =>
-    text.replace(/^export \* from "\.\/provider-continuation\.js";\n?/m, ""),
-  );
-  rewrite("packages/core/src/index.ts", (text) =>
-    text.replace(
-      /^export \* from "\.\/providers\/responses(?:-types)?\.js";\n?/gm,
-      "",
-    ),
-  );
-  rewrite("packages/contracts/src/schemas.ts", (text) =>
-    text.replace(
-      /^export \{ AiProviderContinuationSchema \} from "\.\/provider-continuation\.js";\n?/m,
-      "",
-    ),
-  );
-  rewrite("packages/core/src/providers/client.ts", (text) =>
-    text
-      .replace(/^\s*AiProviderContinuation,\n/m, "")
-      .replace(
-        /^ {2}\/\*\* Trusted host continuation; never populated from a public request body\. \*\/\n/m,
-        "",
-      )
-      .replace(
-        /^ {2}(?:continuation|continuationScope|continuationRequired|onContinuation)\?.*\n/gm,
-        "",
-      ),
-  );
+function replaceExactly(text, pattern, replacement, label) {
+  const matches = [...text.matchAll(new RegExp(pattern.source, "g"))];
+  if (matches.length !== 1)
+    throw new Error(`Expected one ${label}, found ${matches.length}`);
+  return text.replace(pattern, replacement);
 }
+
+const patches = release === "foundation" ? projectFoundation(output) : [];
 rewrite("packages/contracts/src/version.ts", (text) =>
-  text.replace(
+  replaceExactly(
+    text,
     /export const CONTRACT_VERSION = "[^"]+";/,
     `export const CONTRACT_VERSION = "${version}";`,
+    "contract version",
   ),
 );
 const versionedFixtures = readdirSync(
   join(output, "packages/testing/src/golden/traces"),
 )
   .filter((path) => path.endsWith(".json"))
+  .sort()
   .map((path) => `packages/testing/src/golden/traces/${path}`);
 for (const path of versionedFixtures)
   rewrite(path, (text) => {
@@ -152,35 +127,36 @@ rewrite("packages/agentkit/package.json", (text) => {
   return `${JSON.stringify(manifest, null, 2)}\n`;
 });
 rewrite("bun.lock", (text) =>
-  text.replace(
+  replaceExactly(
+    text,
     /("packages\/agentkit": \{\s*"name": "agentkit",\s*"version": ")[^"]+/,
     `$1${version}`,
+    "umbrella workspace lock version",
   ),
 );
+const excluded = release === "foundation" ? foundationExclusions : [];
+const changedFiles = original.flatMap((file) => {
+  if (excluded.includes(file.path)) return [];
+  const after = sha256(readFileSync(join(output, file.path)));
+  return after === file.sha256
+    ? []
+    : [{ path: file.path, before: file.sha256, after }];
+});
 writeFileSync(
   join(output, "snapshot-provenance.json"),
   `${JSON.stringify(
     {
+      format: "agentkit-source-projection-v1",
       release,
       version,
       baseline,
       dirtyPatchSha256: sha256(dirtyPatch),
       originalFiles: original,
-      excluded,
+      requestedExclusions: excluded,
+      excluded: original.filter((file) => excluded.includes(file.path)),
+      patches,
+      changedFiles,
       versionedFixtures,
-      transformations:
-        release === "foundation"
-          ? [
-              "Remove Responses barrel exports and schema registration",
-              "Remove provider continuation type/request fields; retain onActivity",
-              "Retain hardened generic SSE",
-              "Set umbrella version and lock workspace metadata",
-              "Set wire contract version",
-            ]
-          : [
-              "Set umbrella version and lock workspace metadata",
-              "Set wire contract version",
-            ],
     },
     null,
     2,

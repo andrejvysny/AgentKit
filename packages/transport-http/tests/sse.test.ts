@@ -1,12 +1,8 @@
 /**
  * The stream, exercised directly against a seeded event log.
  *
- * These are the properties a resuming client depends on and that no route-level
- * assertion can see: the frames come out in `seq` order carrying `eventId` as
- * the SSE id, the TASK going terminal ends the stream (a terminal run event only
- * ends a pass — the host may open another), `Last-Event-ID` starts one past the
- * event it names, and neither an idle run nor an abandoned one leaves a
- * connection polling forever.
+ * Frames preserve durable order and resume cursors. Authoritative task status
+ * controls settlement; terminal pass events cannot close a live task.
  */
 import { describe, expect, it } from "bun:test";
 import {
@@ -169,7 +165,7 @@ describe("createRunEventStream", () => {
     const frames = parseFrames(text);
     expect(frames[0]?.retry).toBe(String(DEFAULT_STREAM_OPTIONS.retryHintMs));
 
-    const events = frames.slice(1);
+    const events = frames.filter((frame) => frame.id !== undefined);
     expect(events.map((f) => f.id)).toEqual([
       "evt-0",
       "evt-1",
@@ -202,7 +198,7 @@ describe("createRunEventStream", () => {
           options: options(),
         }),
       ),
-    ).slice(1);
+    ).filter((frame) => frame.id !== undefined);
     expect(frames.map((f) => f.id)).toEqual(["evt-3", "evt-4"]);
   });
 
@@ -230,7 +226,7 @@ describe("createRunEventStream", () => {
           options: options(),
         }),
       ),
-    ).slice(1);
+    ).filter((frame) => frame.id !== undefined);
     expect(frames.map((f) => f.id)).toEqual(["evt-0", "evt-1"]);
   });
 
@@ -321,7 +317,9 @@ describe("createRunEventStream", () => {
     // And the worker lands the task, which is what ends the stream: the
     // terminal EVENT only means the pass ended (see (h)).
     await store.tasks.transitionTask(TASK_ID, ["running"], "completed");
-    const frames = parseFrames(await drained).slice(1);
+    const frames = parseFrames(await drained).filter(
+      (frame) => frame.id !== undefined,
+    );
     expect(frames.map((f) => f.id)).toEqual([
       "evt-0",
       "evt-1",
@@ -365,7 +363,9 @@ describe("createRunEventStream", () => {
     );
     await store.tasks.transitionTask(TASK_ID, ["running"], "completed");
 
-    const frames = parseFrames(await drained).slice(1);
+    const frames = parseFrames(await drained).filter(
+      (frame) => frame.id !== undefined,
+    );
     expect(frames.map((f) => f.id)).toEqual([
       "evt-0",
       "evt-1",
@@ -387,12 +387,10 @@ describe("createRunEventStream", () => {
   });
 
   it("(i) errors the body when a store read fails, instead of closing it", async () => {
-    // A CLEAN END OF BODY is how this stream says "the task is terminal and its
-    // log is exhausted", and `@agentkit/client` takes it at face value: it
-    // returns, with no reconnect. So a `listEvents` that lost a race with
-    // `SQLITE_BUSY` used to be indistinguishable from a finished run — the UI
-    // reconciled a turn that was still typing as finished. The peer must see a
-    // broken body, which is a broken pipe, which resume already handles.
+    // Direct stream readers retain the actual store failure. Socket clients
+    // additionally require the settlement marker because older Bun servers
+    // serialize this error as clean EOF. This is an injected fault, not real
+    // SQLite contention.
     const store = await seed(completedRun().slice(0, 2), "running");
     const logged: string[] = [];
     let reads = 0;

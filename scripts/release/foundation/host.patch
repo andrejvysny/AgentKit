@@ -1,0 +1,307 @@
+diff --git a/packages/host/src/index.ts b/packages/host/src/index.ts
+--- a/packages/host/src/index.ts
++++ b/packages/host/src/index.ts
+@@ -21,7 +21,6 @@
+ // Proposals: the staged-write pipeline.
+ export * from "./proposals/state-machine.js";
+ export * from "./proposals/action-id.js";
+-export * from "./continuations/validation.js";
+ export * from "./proposals/proposal-service.js";
+ export * from "./proposals/proposal-builder-tool.js";
+ 
+diff --git a/packages/host/src/ports/assistant-store.ts b/packages/host/src/ports/assistant-store.ts
+--- a/packages/host/src/ports/assistant-store.ts
++++ b/packages/host/src/ports/assistant-store.ts
+@@ -4,7 +4,6 @@
+ import type { ProviderStore } from "./provider-store.js";
+ import type { SettingsStore } from "./settings-store.js";
+ import type { TaskStore } from "./task-store.js";
+-import type { ProviderContinuationStore } from "./provider-continuation-store.js";
+ 
+ /**
+  * The host's persistence, as one aggregate.
+@@ -23,8 +22,6 @@
+   providers: ProviderStore;
+   settings: SettingsStore;
+   outbox: OutboxStore;
+-  /** Trusted provider state; optional so existing host stores remain compatible. */
+-  continuations?: ProviderContinuationStore;
+ 
+   /**
+    * Run `fn` in a transaction, handing it a store view scoped to that
+diff --git a/packages/host/src/ports/index.ts b/packages/host/src/ports/index.ts
+--- a/packages/host/src/ports/index.ts
++++ b/packages/host/src/ports/index.ts
+@@ -9,7 +9,6 @@
+ export * from "./task-aging.js";
+ export * from "./proposal-store.js";
+ export * from "./provider-store.js";
+-export * from "./provider-continuation-store.js";
+ export * from "./settings-store.js";
+ export * from "./outbox-store.js";
+ export * from "./secret-store.js";
+diff --git a/packages/host/src/turn/harness-driver.ts b/packages/host/src/turn/harness-driver.ts
+--- a/packages/host/src/turn/harness-driver.ts
++++ b/packages/host/src/turn/harness-driver.ts
+@@ -1,4 +1,3 @@
+-import { continuationFollowup } from "./provider-continuation.js";
+ import { fencedConversations } from "./fenced-conversations.js";
+ /**
+  * Driving {@link VerificationHook} across possibly several provider passes:
+@@ -210,14 +209,12 @@
+       `Verification found ${report.deficiencies.length} unresolved item(s); correcting them (pass ${pass} of ${maxPasses}).`,
+     );
+     const writeBack = buildDeficiencyWriteBack(report.deficiencies);
+-    const messages = basePass.providerContinuation
+-      ? continuationFollowup(basePass.providerContinuation, writeBack)
+-      : buildCorrectionMessages({
+-          systemPrompt,
+-          userRequest: input.userRequest,
+-          previousContent: state.content,
+-          writeBack,
+-        });
++    const messages = buildCorrectionMessages({
++      systemPrompt,
++      userRequest: input.userRequest,
++      previousContent: state.content,
++      writeBack,
++    });
+     // The write-back is persisted like every other record this run writes: a
+     // CHAIN append off the run's own last write. It is `role: "user"` because
+     // that is the role it was sent as, and a stored history that claims the
+@@ -230,13 +227,7 @@
+         content: writeBack,
+         parentMessageId: state.lastMessageId,
+         activate: false,
+-        metadata: {
+-          internal: true,
+-          correctionPass: pass,
+-          ...(basePass.providerContinuation
+-            ? { canonicalProviderTurn: true }
+-            : {}),
+-        },
++        metadata: { internal: true, correctionPass: pass },
+       })
+     ).id;
+ 
+diff --git a/packages/host/src/turn/history-assembly.ts b/packages/host/src/turn/history-assembly.ts
+--- a/packages/host/src/turn/history-assembly.ts
++++ b/packages/host/src/turn/history-assembly.ts
+@@ -334,11 +334,7 @@
+    */
+   const declaredToolCallIds = new Set<string>();
+   for (const record of ordered) {
+-    if (
+-      record.id === assistantMessageId ||
+-      record.metadata["canonicalProviderDisplay"] === true
+-    )
+-      continue;
++    if (record.id === assistantMessageId) continue;
+     // A correction write-back is an instruction the harness aimed at ONE pass
+     // of ONE run ("fix these three items now, by calling your tools"). It is
+     // persisted for the audit trail — the stored history has to say why the
+@@ -346,11 +342,7 @@
+     // turn a dangling order about deficiencies that were already addressed,
+     // with nothing left in view to address. The harness's own passes are
+     // unaffected: they build their messages directly, not from this history.
+-    if (
+-      record.metadata["correctionPass"] !== undefined &&
+-      record.metadata["canonicalProviderTurn"] !== true
+-    )
+-      continue;
++    if (record.metadata["correctionPass"] !== undefined) continue;
+     if (record.role === "user") {
+       messages.push({ role: "user", content: record.content });
+     } else if (record.role === "assistant") {
+diff --git a/packages/host/src/turn/message-order.ts b/packages/host/src/turn/message-order.ts
+--- a/packages/host/src/turn/message-order.ts
++++ b/packages/host/src/turn/message-order.ts
+@@ -46,10 +46,6 @@
+  * carries the LOWEST order key of the whole run.
+  */
+ function orderRunRecords(records: readonly MessageRecord[]): MessageRecord[] {
+-  if (
+-    records.some((record) => record.metadata["canonicalProviderTurn"] === true)
+-  )
+-    return [...records];
+   const prefix = records.filter(isReplayPrefix);
+   const tail = records.filter((record) => !isReplayPrefix(record));
+   if (prefix.length === 0) return tail;
+diff --git a/packages/host/src/turn/pass-types.ts b/packages/host/src/turn/pass-types.ts
+--- a/packages/host/src/turn/pass-types.ts
++++ b/packages/host/src/turn/pass-types.ts
+@@ -15,7 +15,6 @@
+ import type { TaskRecord } from "../ports/task-store.js";
+ import type { TaskExecutionContext } from "../tasks/task-executor.js";
+ import type { RunProjectionState } from "./projection.js";
+-import type { ProviderContinuationSession } from "./provider-continuation.js";
+ import type { PassTerminal } from "./retry.js";
+ 
+ /**
+@@ -30,7 +29,6 @@
+ export type PassState = RunProjectionState;
+ 
+ export interface PassInput {
+-  providerContinuation?: ProviderContinuationSession;
+   task: TaskRecord;
+   /** The conversation this turn belongs to, read once from the payload. */
+   chatId: string;
+diff --git a/packages/host/src/turn/projection.ts b/packages/host/src/turn/projection.ts
+--- a/packages/host/src/turn/projection.ts
++++ b/packages/host/src/turn/projection.ts
+@@ -1,4 +1,3 @@
+-import { canonicalMessage } from "./canonical-projection.js";
+ import { recordRunUsage } from "./record-run-usage.js";
+ import type { AiRunEvent, AiToolCall } from "@agentkit/contracts";
+ import { AgentKitHostError } from "../errors.js";
+@@ -26,8 +25,6 @@
+ 
+ /** What {@link RunProjector.createState} is told about the turn it projects. */
+ export interface RunProjectionStateInput {
+-  /** Keep canonical Responses turns separately from the displayed answer. */
+-  preserveCanonicalTurns?: boolean;
+   chatId: string;
+   /** The empty assistant record this run streams its visible answer into. */
+   assistantMessageId: string;
+@@ -50,7 +47,6 @@
+  * what to write into the placeholder at the end.
+  */
+ export interface RunProjectionState {
+-  readonly preserveCanonicalTurns?: boolean;
+   readonly chatId: string;
+   readonly assistantMessageId: string;
+   readonly providerId?: string;
+@@ -256,10 +252,6 @@
+         break;
+       }
+       case "run.message.completed": {
+-        if (state.preserveCanonicalTurns) {
+-          await canonicalMessage(store, ctx, state, event, append);
+-          break;
+-        }
+         // A new assistant turn supersedes any turn still waiting for its calls:
+         // late `run.tool.requested` events belong to THIS turn, not the last one.
+         delete state.pendingAssistantMessageId;
+@@ -417,7 +409,6 @@
+   return {
+     createState(input: RunProjectionStateInput): RunProjectionState {
+       return {
+-        preserveCanonicalTurns: input.preserveCanonicalTurns,
+         chatId: input.chatId,
+         assistantMessageId: input.assistantMessageId,
+         ...(input.providerId === undefined
+diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn-runner.ts
+--- a/packages/host/src/turn/turn-runner.ts
++++ b/packages/host/src/turn/turn-runner.ts
+@@ -1,9 +1,3 @@
+-import {
+-  prepareProviderContinuation,
+-  continuationRequest,
+-  rememberContinuationMessages,
+-  continuationFollowup,
+-} from "./provider-continuation.js";
+ import { runWithSignal } from "./run-with-signal.js";
+ import { publicErrorMessage } from "./error-message.js";
+ import { fencedConversations } from "./fenced-conversations.js";
+@@ -538,15 +532,6 @@
+     const configuredProvider = await this.withSecret(provider);
+     ctx.signal.throwIfAborted();
+     const client = this.deps.providerFactory(configuredProvider);
+-    const providerContinuation = await prepareProviderContinuation({
+-      store,
+-      ctx,
+-      client,
+-      providerId: provider.id,
+-      model,
+-      chatId,
+-      anchorMessageId: assistantMessageId,
+-    });
+ 
+     const bindings = await this.resolveBindings(ctx, chatId);
+     const hasPrimaryBinding = bindings.some(
+@@ -613,7 +598,6 @@
+ 
+     const systemPrompt = await this.resolveSystemPrompt(ctx, chatId);
+     const state: PassState = this.projector.createState({
+-      preserveCanonicalTurns: providerContinuation !== undefined,
+       chatId,
+       assistantMessageId,
+       providerId: provider.id,
+@@ -649,7 +633,6 @@
+     const initialMessages = assembled.slice();
+ 
+     const basePass = {
+-      providerContinuation,
+       task,
+       chatId,
+       ctx,
+@@ -678,7 +661,6 @@
+     let passesRun = 1;
+ 
+     if (
+-      client.protocol !== "responses" &&
+       shouldRetryChatOnly({ terminal, registryHadTools }) &&
+       !ctx.signal.aborted &&
+       state.toolCallIds.size === 0 &&
+@@ -725,26 +707,10 @@
+         "empty_response",
+         "The model completed the turn without an answer; asking the original question once more.",
+       );
+-      let retryMessages = filterToolTurns(initialMessages);
+-      if (providerContinuation) {
+-        const followup = "Please provide an answer to the previous request.";
+-        retryMessages = continuationFollowup(providerContinuation, followup);
+-        state.lastMessageId = (
+-          await conversations.appendMessage({
+-            chatId,
+-            runId: task.taskId,
+-            role: "user",
+-            content: followup,
+-            parentMessageId: state.lastMessageId,
+-            activate: false,
+-            metadata: { internal: true, canonicalProviderTurn: true },
+-          })
+-        ).id;
+-      }
+       this.resetPass(state);
+       const retry = await this.runPass({
+         ...basePass,
+-        messages: retryMessages,
++        messages: filterToolTurns(initialMessages),
+         registry: new AiToolRegistry(),
+         maxToolIterations: RETRY_MAX_TOOL_ITERATIONS,
+       });
+@@ -935,7 +901,6 @@
+     input.ctx.signal.throwIfAborted();
+     const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
+     const generator = runChat({
+-      ...continuationRequest(input.providerContinuation),
+       client: input.client,
+       registry: input.registry,
+       model: input.model,
+@@ -961,11 +926,6 @@
+     for (;;) {
+       const next = await generator.next();
+       if (next.done) {
+-        rememberContinuationMessages(
+-          input.providerContinuation,
+-          messages,
+-          next.value.appendedMessages,
+-        );
+         return {
+           terminal: next.value.terminal,
+           appendedMessages: next.value.appendedMessages,
+@@ -1303,13 +1263,9 @@
+     try {
+       const chatId = ctx.task.payload.chatId;
+       if (assistantMessageId !== undefined && typeof chatId === "string") {
+-        const placeholder =
+-          await store.conversations.getMessage(assistantMessageId);
+         const state = this.projector.createState({
+           chatId,
+           assistantMessageId,
+-          preserveCanonicalTurns:
+-            placeholder?.metadata["canonicalProviderDisplay"] === true,
+         });
+         // Cancellation can arrive before coalesced deltas reach the placeholder.
+         await this.projector.replay(ctx, state);

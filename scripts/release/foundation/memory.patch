@@ -1,0 +1,126 @@
+diff --git a/packages/adapters-memory/src/index.ts b/packages/adapters-memory/src/index.ts
+--- a/packages/adapters-memory/src/index.ts
++++ b/packages/adapters-memory/src/index.ts
+@@ -9,4 +9,3 @@
+ export * from "./memory-assistant-store.js";
+ export * from "./memory-mcp-server-config-store.js";
+ export * from "./memory-secret-store.js";
+-export * from "./memory-provider-continuation-store.js";
+diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/adapters-memory/src/memory-assistant-store.ts
+--- a/packages/adapters-memory/src/memory-assistant-store.ts
++++ b/packages/adapters-memory/src/memory-assistant-store.ts
+@@ -28,7 +28,6 @@
+   AiProviderModel,
+   TaskEventEnvelope,
+ } from "@agentkit/contracts";
+-import { MemoryProviderContinuationStore } from "./memory-provider-continuation-store.js";
+ import {
+   ACTION_ID_RELEASING_STATUSES,
+   AgentKitHostError,
+@@ -414,7 +413,6 @@
+     private readonly clock: Clock,
+     private readonly ids: IdGenerator,
+     private readonly checkFence?: (fence: RunWriteFence) => void,
+-    private readonly onDeleteChat?: (chatId: string) => void,
+   ) {}
+ 
+   private requireFence(fence: RunWriteFence): void {
+@@ -501,7 +499,6 @@
+     this.messagesByChat.delete(chatId);
+     this.orderKeys.delete(chatId);
+     this.chats.delete(chatId);
+-    this.onDeleteChat?.(chatId);
+   }
+ 
+   async appendMessage(
+@@ -651,15 +648,6 @@
+     return record ? copyMessage(record) : null;
+   }
+ 
+-  /** Synchronous lookup keeps continuation validation and mutation in one tick. */
+-  messageChatIdOf(messageId: string): string | null {
+-    return this.messagesById.get(messageId)?.chatId ?? null;
+-  }
+-
+-  messageRunIdOf(messageId: string): string | null {
+-    return this.messagesById.get(messageId)?.runId ?? null;
+-  }
+-
+   async lastMessageOfRun(
+     chatId: string,
+     runId: string,
+@@ -1039,7 +1027,6 @@
+     private readonly gate: MemoryTxGate = new MemoryTxGate(
+       DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
+     ),
+-    private readonly onDeleteTasks?: () => void,
+   ) {
+     this.aging = resolveTaskAging(aging);
+   }
+@@ -1171,7 +1158,6 @@
+       this.eventIds.delete(task.taskId);
+       this.tasks.delete(task.taskId);
+     }
+-    this.onDeleteTasks?.();
+     return doomed.length;
+   }
+ 
+@@ -2128,7 +2114,6 @@
+   readonly providers = new MemoryProviderStore();
+   readonly settings = new MemorySettingsStore();
+   readonly outbox: MemoryOutboxStore;
+-  readonly continuations: MemoryProviderContinuationStore;
+ 
+   /** The FIFO {@link transaction} and `claimNext` queue on — one unit of work at a time. */
+   private readonly gate: MemoryTxGate;
+@@ -2139,11 +2124,8 @@
+     this.gate = new MemoryTxGate(
+       options.transactionGateTimeoutMs ?? DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
+     );
+-    this.conversations = new MemoryConversationStore(
+-      clock,
+-      ids,
+-      (fence) => this.tasks.assertLeaseCurrent(fence.taskId, fence.leaseToken),
+-      (chatId) => this.continuations.deleteByChat(chatId),
++    this.conversations = new MemoryConversationStore(clock, ids, (fence) =>
++      this.tasks.assertLeaseCurrent(fence.taskId, fence.leaseToken),
+     );
+     this.rawTasks = new MemoryTaskStore(
+       clock,
+@@ -2151,7 +2133,6 @@
+       options.leaseTtlMs,
+       options,
+       this.gate,
+-      () => this.continuations.pruneDeletedRuns(),
+     );
+     const fencedWrites = new Set([
+       "createTask",
+@@ -2195,18 +2176,6 @@
+       },
+     });
+     this.proposals = new MemoryProposalStore(clock);
+-    this.continuations = new MemoryProviderContinuationStore({
+-      withGate: (operation) => this.gate.runExclusive(async () => operation()),
+-      assertFence: (fence) =>
+-        this.rawTasks.assertLeaseCurrent(fence.taskId, fence.leaseToken),
+-      taskScope: (runId) => this.rawTasks.tasks.get(runId)?.scopeId ?? null,
+-      taskChat: (runId) => this.rawTasks.tasks.get(runId)?.payload["chatId"],
+-      chatExists: (chatId) => this.conversations.chats.has(chatId),
+-      anchorChat: (anchorMessageId) =>
+-        this.conversations.messageChatIdOf(anchorMessageId),
+-      anchorRun: (anchorMessageId) =>
+-        this.conversations.messageRunIdOf(anchorMessageId),
+-    });
+     this.outbox = new MemoryOutboxStore(
+       clock,
+       options.outboxClaimVisibilityMs,
+@@ -2252,9 +2221,6 @@
+       providers: this.providers,
+       settings: this.settings,
+       outbox: this.outbox,
+-      continuations: this.continuations.withGate((operation) =>
+-        this.gate.runExclusive(async () => operation(), owner),
+-      ),
+       transaction: <T>(nested: (tx: AssistantStore) => Promise<T>) =>
+         this.gate.runExclusive(
+           // `nestedOwner` is `owner` on the flattened path, and a fresh token

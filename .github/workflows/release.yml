@@ -1,12 +1,15 @@
 name: Qualify agentkit candidate
 
-# Qualification never changes tags, branches, or publishes a package. A source
-# tag remains immutable; distribution artifacts carry their own SHA-256 proof.
+# Qualification preserves exact artifacts; publication is a separate approval.
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+    inputs:
+      track:
+        description: Foundation is independent; Responses adds migration qualification
+        type: choice
+        options: [foundation, responses]
+        default: foundation
+        required: true
 
 permissions:
   contents: read
@@ -14,12 +17,13 @@ permissions:
 jobs:
   qualification:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             electron: ""
           - os: macos-latest
-            electron: "44.5.1"
+            electron: "41.6.1"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -29,44 +33,63 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22.23.2"
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run lint
-      - run: bun test
-      - name: Record source provenance
+      - name: Qualify selected independent release track
         env:
+          CANDIDATE_TRACK: ${{ inputs.track }}
+          ELECTRON_VERSION: ${{ matrix.electron }}
           SOURCE_COMMIT: ${{ github.sha }}
           SOURCE_REF: ${{ github.ref }}
         run: |
-          node scripts/source-digest.mjs . /tmp/agentkit-source-manifest.json
-          mkdir candidate
-          printf '%s\n%s\n' "$SOURCE_COMMIT" "$SOURCE_REF" > candidate/source-ref.txt
-          cp /tmp/agentkit-source-manifest.json candidate/source-manifest.json
-      - run: bun run build
-      - run: bun run build:umbrella
-      - run: node scripts/node-smoke.mjs
-      - run: node --test scripts/node-sqlite-conformance.mjs scripts/sqlite-durability.mjs
-      - run: AGENTKIT_SQLITE_DRIVER=bun bun test ./scripts/sqlite-durability.mjs
-      - name: Pack once, qualify exact artifact
-        env:
-          ELECTRON_VERSION: ${{ matrix.electron }}
-        run: |
-          npm pack ./packages/agentkit --pack-destination candidate --json > candidate/pack.json
-          TARBALL="$(node -p "require('./candidate/pack.json')[0].filename")"
-          SOURCE_DIGEST="$(node -p "require('./candidate/source-manifest.json').sha256")"
-          set -- node scripts/qualify-package.mjs --tarball "candidate/$TARBALL" --source-digest "$SOURCE_DIGEST" --output /tmp/agentkit-qualification
-          if [ -f packages/core/src/providers/responses.ts ]; then set -- "$@" --responses true; fi
-          if [ -n "$ELECTRON_VERSION" ]; then set -- "$@" --electron "$ELECTRON_VERSION"; fi
-          "$@"
-      - name: Preserve artifact and qualification evidence
+          node scripts/release/qualify-candidates.mjs "$RUNNER_TEMP/candidates"
+      - name: Preserve artifacts, frozen sources, and evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: agentkit-candidate-${{ github.sha }}-${{ matrix.os }}
+          name: agentkit-candidates-${{ inputs.track }}-${{ github.sha }}-${{ matrix.os }}
           path: |
-            candidate/
-            /tmp/agentkit-qualification/qualification.json
-            /tmp/agentkit-qualification/*.log
-            /tmp/agentkit-qualification/*-consumer/*metafile.json
-            /tmp/agentkit-qualification/*-consumer/*lock*
+            ${{ runner.temp }}/candidates/foundation/
+            ${{ runner.temp }}/candidates/responses/
           if-no-files-found: error
+          retention-days: 90
+
+  bun-minimum:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+      - name: Require selected track on minimum Bun
+        env:
+          CANDIDATE_TRACK: ${{ inputs.track }}
+          CANDIDATE_SOURCE_ONLY: "1"
+        run: node scripts/release/qualify-candidates.mjs "$RUNNER_TEMP/minimum-bun"
+      - name: Preserve minimum Bun failures and source proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentkit-minimum-bun-${{ inputs.track }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/minimum-bun/foundation/
+            ${{ runner.temp }}/minimum-bun/responses/
+          if-no-files-found: error
+
+  acceptance:
+    if: always()
+    needs: [qualification, bun-minimum]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every qualification platform and minimum Bun
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          # shellcheck disable=SC2016
+          node --input-type=module -e '
+            const jobs = Object.entries(JSON.parse(process.env.RESULTS));
+            const failed = jobs.filter(([, job]) => job.result !== "success");
+            for (const [name, job] of failed) console.error(`${name}: ${job.result}`);
+            if (jobs.length !== 2 || failed.length) process.exit(1);
+          '

@@ -84,9 +84,20 @@ These adapter obligations accompany the 0.6 contract change; an adapter that
 cannot fence writes must reject them rather than silently ignore ownership.
 
 SSE remains open through host verification until task settlement or manual
-interruption, then drains the committed log. A pump error rejects the response
-body. Clean EOF still requires a task-status check and final event drain. The
-headless hooks implement this protocol; an imperative consumer must do the same.
+interruption, then drains the committed log. Only after that drain does it emit
+`event: agentkit.stream.settled` with `data: {}`. This transport control frame
+has no event ID or sequence and is not a durable run event. It confirms that
+the log was exhausted; it does not mean the task succeeded. Read task status
+to distinguish completed, failed, cancelled and interrupted outcomes.
+
+A pump error still rejects the response body. Bun 1.3.14 can serialize that
+error as clean HTTP EOF, so EOF alone is never authoritative. `streamRun`
+requires the settlement frame and reconnects from its last delivered cursor
+when EOF lacks it, within the existing retry budgets. `drainRun` rejects an
+unmarked EOF rather than returning a partial tail. Deploy matching client and
+transport versions: older servers without this frame fail closed with the new
+client. The frame is part of the coordinated, unpublished 0.6/0.7 candidates.
+Headless hooks also reconcile task status and final verification.
 Unknown cursors replay the retained log, with stable IDs and monotonic sequence
 numbers suppressing duplicates. Bounded client buffers may omit old events but
 must not refold their replay as new progress.

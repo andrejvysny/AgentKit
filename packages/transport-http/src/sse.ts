@@ -35,11 +35,11 @@
  * wrote one); without it that stream would poll forever against a run that will
  * never speak again.
  *
- * A STORE FAILURE IS NOT A CLOSE. Because a clean end of body IS the "the run
- * is over" signal, a read that threw must end the body the other way — errored
- * — or a transient `SQLITE_BUSY` is indistinguishable from a finished run and
- * the client returns mid-pass with no reconnect. An errored body is a broken
- * pipe, which is exactly what `Last-Event-ID` exists to recover from.
+ * A STORE FAILURE IS NOT SETTLEMENT. Bun 1.3 serializes an errored response
+ * stream as a clean HTTP end, so EOF alone cannot prove the log was exhausted.
+ * Only an authoritative task close followed by the final drain writes the
+ * `agentkit.stream.settled` control frame. A failed read still errors the body;
+ * without that frame the client resumes even when the runtime hides the error.
  *
  * BOTH ENDS OF THE PIPE ARE BOUNDED, and by the same number
  * (`RestStreamOptions.readBatchSize`). Reads take a `limit`, so replaying a
@@ -306,7 +306,12 @@ export function createRunEventStream(
               // close over an event already written — and a multi-pass log has
               // more than one terminal event for that read to stop at.
               for (;;) {
-                if ((await drain()) !== "terminal") return;
+                const final = await drain();
+                if (final === "terminal") continue;
+                if (final === "current") {
+                  await write("event: agentkit.stream.settled\ndata: {}\n\n");
+                }
+                return;
               }
             }
             // The pass ended but the run did not: back to the log with no
@@ -330,13 +335,10 @@ export function createRunEventStream(
 
         /**
          * What the pump threw, if it threw. Held rather than swallowed because
-         * a CLEAN END OF BODY is the one signal the whole close rule rests on:
-         * the client reads it as "the task is terminal and its log is
-         * exhausted" and stops, with no reconnect. A `listEvents` that lost a
-         * race with `SQLITE_BUSY` closed the body exactly like a finished run,
-         * so a UI reported a live turn as finished mid-pass. Erroring the
-         * stream is what makes the two distinguishable: a broken body is a
-         * broken pipe, which the client already resumes from.
+         * a failed read must not write the settlement marker. Erroring the
+         * stream preserves the cause for direct readers and runtimes that
+         * propagate broken HTTP bodies; the missing marker also protects
+         * clients on runtimes that serialize the error as a clean EOF.
          */
         let failure: { cause: unknown } | null = null;
 

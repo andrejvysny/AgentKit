@@ -1,0 +1,94 @@
+diff --git a/packages/adapters-sqlite/src/schema.ts b/packages/adapters-sqlite/src/schema.ts
+--- a/packages/adapters-sqlite/src/schema.ts
++++ b/packages/adapters-sqlite/src/schema.ts
+@@ -40,7 +40,7 @@
+  * stored as TEXT; the store (de)serializes them, SQLite never inspects their
+  * contents.
+  */
+-export const SCHEMA_VERSION = 9;
++export const SCHEMA_VERSION = 8;
+ 
+ /**
+  * The text {@link SCHEMA_V8}'s search index sees for one message row, as SQL.
+diff --git a/packages/adapters-sqlite/src/shared-assistant-store.ts b/packages/adapters-sqlite/src/shared-assistant-store.ts
+--- a/packages/adapters-sqlite/src/shared-assistant-store.ts
++++ b/packages/adapters-sqlite/src/shared-assistant-store.ts
+@@ -30,7 +30,6 @@
+   type OutboxStore,
+   type ProposalStore,
+   type ProviderStore,
+-  type ProviderContinuationStore,
+   type SettingsStore,
+   type TaskAgingOptions,
+   type TaskStore,
+@@ -46,7 +45,6 @@
+ import { SqliteOutboxStore } from "./sqlite/outbox-store.js";
+ import { SqliteProposalStore } from "./sqlite/proposal-store.js";
+ import { SqliteProviderStore } from "./sqlite/provider-store.js";
+-import { SqliteProviderContinuationStore } from "./sqlite/provider-continuation-store.js";
+ import { SqliteSettingsStore } from "./sqlite/settings-store.js";
+ import { SqliteTaskStore } from "./sqlite/task-store.js";
+ 
+@@ -107,12 +105,7 @@
+ // ---------------------------------------------------------------------------
+ 
+ /** {@link AssistantStore} minus `transaction` — the six sub-stores alone. */
+-type AssistantStoreStores = Omit<
+-  AssistantStore,
+-  "transaction" | "continuations"
+-> & {
+-  continuations: ProviderContinuationStore;
+-};
++type AssistantStoreStores = Omit<AssistantStore, "transaction">;
+ 
+ export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
+   /** Defaults to {@link defaultClock} (real wall-clock). */
+@@ -187,7 +180,6 @@
+   readonly providers: ProviderStore;
+   readonly settings: SettingsStore;
+   readonly outbox: OutboxStore;
+-  readonly continuations: ProviderContinuationStore;
+ 
+   constructor(db: Database, options: SqliteAssistantStoreOptions = {}) {
+     const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
+@@ -214,11 +206,6 @@
+       ),
+       proposals: new SqliteProposalStore(this.conn, clock, owner),
+       providers: new SqliteProviderStore(this.conn, owner),
+-      continuations: new SqliteProviderContinuationStore(
+-        this.conn,
+-        clock,
+-        owner,
+-      ),
+       settings: new SqliteSettingsStore(this.conn, owner),
+       outbox: new SqliteOutboxStore(
+         this.conn,
+@@ -233,7 +220,6 @@
+     this.tasks = root.tasks;
+     this.proposals = root.proposals;
+     this.providers = root.providers;
+-    this.continuations = root.continuations;
+     this.settings = root.settings;
+     this.outbox = root.outbox;
+     this.viewFor = (owner) => build(owner);
+diff --git a/packages/adapters-sqlite/src/sqlite/migrations.ts b/packages/adapters-sqlite/src/sqlite/migrations.ts
+--- a/packages/adapters-sqlite/src/sqlite/migrations.ts
++++ b/packages/adapters-sqlite/src/sqlite/migrations.ts
+@@ -1,6 +1,5 @@
+ import { AgentKitHostError } from "@agentkit/host";
+ import { SCHEMA_V8, SCHEMA_VERSION } from "../schema.js";
+-import { SCHEMA_V9_PROVIDER_CONTINUATIONS } from "../provider-continuation-schema.js";
+ import { normalizeRow, type SqliteDatabase } from "./driver.js";
+ 
+ export interface SqliteMigration {
+@@ -10,9 +9,7 @@
+   readonly sql: string;
+ }
+ 
+-export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = Object.freeze([
+-  Object.freeze({ from: 8, to: 9, sql: SCHEMA_V9_PROVIDER_CONTINUATIONS }),
+-]);
++export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = Object.freeze([]);
+ export const MIN_SUPPORTED_SCHEMA_VERSION = 8;
+ 
+ function versionOf(db: SqliteDatabase): number {

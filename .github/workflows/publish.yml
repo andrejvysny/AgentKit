@@ -1,0 +1,87 @@
+name: Publish approved agentkit artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      qualification_run:
+        description: Successful manual release qualification run on default branch
+        required: true
+      candidate_artifact:
+        description: Exact macOS artifact ID from that run
+        required: true
+      version:
+        description: Exact candidate version
+        type: choice
+        options: ["0.6.0", "0.7.0"]
+        required: true
+      source_commit:
+        description: Expected full source commit SHA
+        required: true
+      source_digest:
+        description: Expected source manifest SHA-256
+        required: true
+      tarball_sha256:
+        description: Expected exact package tarball SHA-256
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: agentkit-publication-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    environment: agentkit-publication
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      QUALIFICATION_RUN: ${{ inputs.qualification_run }}
+      CANDIDATE_ARTIFACT: ${{ inputs.candidate_artifact }}
+      VERSION: ${{ inputs.version }}
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      SOURCE_DIGEST: ${{ inputs.source_digest }}
+      TARBALL_SHA256: ${{ inputs.tarball_sha256 }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+      - name: Verify trusted successful run and exact artifact identity
+        id: run
+        run: node scripts/release/publication.mjs run
+      - name: Download exact retained artifact ID without rebuilding
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.qualification_run }}
+          artifact-ids: ${{ inputs.candidate_artifact }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/approved-candidate
+      - name: Verify source, package bytes, all gates, and absent release
+        id: candidate
+        run: node scripts/release/publication.mjs candidate "$RUNNER_TEMP/approved-candidate"
+      - name: Create new immutable tag and release assets
+        env:
+          CANDIDATE_DIRECTORY: ${{ steps.candidate.outputs.candidate_directory }}
+          TAG: ${{ steps.candidate.outputs.tag }}
+          TARBALL: ${{ steps.candidate.outputs.tarball }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$SOURCE_COMMIT"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
+            --title "agentkit $TAG" --notes-file "$CANDIDATE_DIRECTORY/release-notes.md" \
+            "$CANDIDATE_DIRECTORY/$TARBALL" "$CANDIDATE_DIRECTORY/SHA256SUMS" \
+            "$CANDIDATE_DIRECTORY/candidate.json" "$CANDIDATE_DIRECTORY/source.tar.gz" \
+            "$CANDIDATE_DIRECTORY/source-manifest.json" "$CANDIDATE_DIRECTORY/snapshot-provenance.json" \
+            "$CANDIDATE_DIRECTORY/source-gates.json" "$CANDIDATE_DIRECTORY/qualification/qualification.json" \
+            "$CANDIDATE_DIRECTORY/qualification-evidence.tar.gz"

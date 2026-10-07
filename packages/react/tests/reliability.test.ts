@@ -1,5 +1,5 @@
 import "./support/dom.js";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createAgentKitClient, type FetchLike } from "@agentkit/client";
 import { HangingProviderClient } from "@agentkit/testing";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -19,9 +19,14 @@ beforeEach(async () => {
   provider = new HangingProviderClient({ deltas: ["Thinking"] });
   server = await startTestServer({ provider });
 });
-afterEach(async () => {
-  await server.stop();
-});
+async function dispose(): Promise<void> {
+  try {
+    cleanup();
+  } finally {
+    await server.stop();
+  }
+}
+afterEach(dispose);
 
 function connect(fetchImpl?: FetchLike) {
   return createAgentKitClient({
@@ -31,10 +36,39 @@ function connect(fetchImpl?: FetchLike) {
 }
 
 describe("headless submission ownership", () => {
+  test("failed checks still dispose the parked run and socket", async () => {
+    const client = connect();
+    const submitted = await client.submitMessage(
+      { chatId: TEST_CHAT_ID },
+      { content: "park" },
+    );
+    renderHook(() => useRun(submitted.result.runId), {
+      wrapper: wrapper(client),
+    });
+    await provider.whenBlocking();
+    const failAndDispose = async (): Promise<void> => {
+      try {
+        throw new Error("failed test check");
+      } finally {
+        await dispose();
+      }
+    };
+    await expect(failAndDispose()).rejects.toThrow("failed test check");
+    expect(
+      (await server.store.tasks.getTask(submitted.result.runId))?.status,
+    ).toBe("cancelled");
+    await expect(fetch(server.baseUrl)).rejects.toThrow();
+  });
+
   test("provider completion remains settling and busy until host settlement", async () => {
     let hostSettled = false;
     let statusReads = 0;
+    let releaseSettlement!: () => void;
+    const settlement = new Promise<void>((resolve) => {
+      releaseSettlement = resolve;
+    });
     const scripted = scriptedStreamFetch({
+      settlement,
       events: (runId) => [
         scriptedEvent(runId, 0, "run.completed", {
           iterations: 1,
@@ -54,25 +88,32 @@ describe("headless submission ownership", () => {
       }
       return scripted.fetch(url, init);
     });
-    const { result } = renderHook(() => useChat(TEST_CHAT_ID), {
+    const { result, unmount } = renderHook(() => useChat(TEST_CHAT_ID), {
       wrapper: wrapper(client),
     });
-    await waitFor(() => expect(result.current.status).toBe("idle"));
-    await act(async () => {
-      await result.current.submit("settle");
-    });
-    await waitFor(() => expect(statusReads).toBeGreaterThan(0));
-    expect(result.current.phase).toBe("settling");
-    expect(result.current.status).toBe("streaming");
-    const original = result.current.activeRunId!;
-    expect(original).toBeString();
-    await act(async () => {
-      hostSettled = true;
-    });
-    await waitFor(() => expect(result.current.phase).toBe("completed"));
-    expect(result.current.activeRunId).toBeNull();
-    await provider.whenBlocking();
-    await client.cancelRun({ runId: original });
+    try {
+      await waitFor(() => expect(result.current.status).toBe("idle"));
+      await act(async () => {
+        await result.current.submit("settle");
+      });
+      await waitFor(() => expect(result.current.phase).toBe("settling"));
+      expect(statusReads).toBe(0);
+      expect(result.current.status).toBe("streaming");
+      const original = result.current.activeRunId!;
+      expect(original).toBeString();
+      await act(async () => {
+        hostSettled = true;
+        releaseSettlement();
+      });
+      await waitFor(() => expect(result.current.phase).toBe("completed"));
+      expect(statusReads).toBeGreaterThan(0);
+      expect(result.current.activeRunId).toBeNull();
+      await provider.whenBlocking();
+      await client.cancelRun({ runId: original });
+    } finally {
+      releaseSettlement();
+      unmount();
+    }
   });
 
   test("clean EOF reconciles failure after a completed provider pass", async () => {
@@ -159,7 +200,10 @@ describe("headless submission ownership", () => {
                       (event) =>
                         `id: ${event.eventId}\ndata: ${JSON.stringify(event)}\n\n`,
                     )
-                    .join(""),
+                    .join("") +
+                    (first
+                      ? ""
+                      : "event: agentkit.stream.settled\ndata: {}\n\n"),
                 ),
               );
             },

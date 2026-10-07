@@ -52,10 +52,13 @@ function recordingClient(): {
       if (url.pathname.endsWith("/stream")) {
         // An SSE body that ends immediately: the iteration completes, the way
         // it does when the server has nothing left to send.
-        return new Response("retry: 10\n\n", {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        });
+        return new Response(
+          "retry: 10\n\nevent: agentkit.stream.settled\ndata: {}\n\n",
+          {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          },
+        );
       }
       return new Response("{}", {
         status: 200,

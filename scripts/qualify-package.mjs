@@ -18,9 +18,12 @@ if (
   !/^[a-f0-9]{64}$/.test(options["source-digest"] ?? "")
 ) {
   throw new Error(
-    "Usage: node scripts/qualify-package.mjs --tarball PATH --source-digest SHA256 [--output DIR] [--electron EXACT_VERSION] [--responses true] [--migration-from FOUNDATION_TARBALL]",
+    "Usage: node scripts/qualify-package.mjs --tarball PATH --source-digest SHA256 [--output DIR] [--sqlite EXACT_VERSION] [--electron EXACT_VERSION] [--responses true] [--migration-from FOUNDATION_TARBALL]",
   );
 }
+const sqliteVersion = options.sqlite ?? "13.0.3";
+if (!/^\d+\.\d+\.\d+$/.test(sqliteVersion))
+  throw new Error("SQLite driver version must be exact");
 const tarball = resolve(options.tarball);
 const output = options.output
   ? resolve(options.output)
@@ -50,6 +53,14 @@ if (options.responses)
       "responses-smoke.mjs",
       join(root, "scripts", "qualification", "responses-smoke.mjs"),
     ],
+    [
+      "responses-openpcb-smoke.mjs",
+      join(root, "scripts", "qualification", "responses-openpcb-smoke.mjs"),
+    ],
+    [
+      "openpcb-catalog.json",
+      join(root, "packages", "testing", "fixtures", "openpcb", "catalog.json"),
+    ],
   );
 const capturedFixtures = fixtureFiles.map(([name, path]) => ({
   name,
@@ -63,6 +74,7 @@ const evidence = {
   platform: process.platform,
   arch: process.arch,
   nodeAbi: process.versions.modules,
+  sqliteVersion,
   electronRuntimeQualified: false,
   checks: [],
   fixtures: capturedFixtures.map(({ name, bytes }) => ({
@@ -120,13 +132,14 @@ function writeConsumerManifest(directory, manager, artifact = tarball) {
         dependencies: {
           agentkit: `file:${artifact}`,
           react: "19.2.0",
-          "better-sqlite3": "13.0.3",
+          "better-sqlite3": sqliteVersion,
         },
         devDependencies: {
           esbuild: "0.25.12",
           typescript: "5.9.3",
           "@types/node": "^22",
           "@types/react": "^19",
+          "node-gyp": "10.3.1",
         },
       },
       null,
@@ -176,13 +189,21 @@ function qualify(manager) {
     directory,
     `${manager}-types`,
   );
-  if (options.responses)
+  qualifyNodeNative(directory, manager);
+  if (options.responses) {
     run(
       "node",
       ["responses-smoke.mjs"],
       directory,
       `${manager}-responses-reopen`,
     );
+    run(
+      "node",
+      ["responses-openpcb-smoke.mjs"],
+      directory,
+      `${manager}-responses-openpcb-reopen`,
+    );
+  }
   if (manager === "bun")
     run(
       "bun",
@@ -193,6 +214,33 @@ function qualify(manager) {
       directory,
       "bun-sqlite",
     );
+}
+
+function qualifyNodeNative(directory, manager) {
+  const runtime = { AGENTKIT_EXPECT_RUNTIME: "node" };
+  run(
+    "node",
+    ["electron-native.cjs", "node-native.sqlite", "seed"],
+    directory,
+    `${manager}-node-native-seed`,
+    runtime,
+  );
+  const reopened = parseRuntime(
+    run(
+      "node",
+      ["electron-native.cjs", "node-native.sqlite", "reopen"],
+      directory,
+      `${manager}-node-native-process-reopen`,
+      runtime,
+    ),
+  );
+  if (
+    reopened.nativePackage.version !== sqliteVersion ||
+    !reopened.processReopened
+  )
+    throw new Error("Unexpected Node native driver or reopen result");
+  evidence[`${manager}NativeRuntime`] = reopened;
+  record();
 }
 
 function qualifyMigration() {
@@ -237,14 +285,24 @@ function prepareElectronConsumer(version) {
   const directory = prepareConsumer("electron");
   run(
     "npm",
-    ["install", "--save-dev", `electron@${version}`, "--no-audit", "--no-fund"],
+    [
+      "install",
+      "--save-dev",
+      "--save-exact",
+      `electron@${version}`,
+      "--no-audit",
+      "--no-fund",
+    ],
     directory,
     "electron-install",
   );
   run("node", ["consumer.mjs"], directory, "electron-consumer-node-bundle");
   run(
-    "npx",
-    ["--no-install", "install-electron", "--no"],
+    "node",
+    [
+      "-e",
+      "const fs = require('node:fs'); const path = require('electron'); if (!fs.existsSync(path)) throw new Error('Electron executable missing'); console.log(fs.realpathSync(path));",
+    ],
     directory,
     "electron-binary-install",
   );
@@ -258,7 +316,7 @@ function qualifyElectron(version) {
   const before = parseRuntime(
     run(
       command,
-      ["electron-native.cjs", "electron-before.sqlite"],
+      ["electron-native.cjs", "electron-native.sqlite", "seed"],
       directory,
       "electron-native-before-rebuild",
       environment,
@@ -268,12 +326,12 @@ function qualifyElectron(version) {
     "npm",
     ["rebuild", "better-sqlite3", "--verbose"],
     directory,
-    "electron-napi-rebuild",
+    "electron-npm-rebuild",
   );
   const after = parseRuntime(
     run(
       command,
-      ["electron-native.cjs", "electron-after.sqlite"],
+      ["electron-native.cjs", "electron-native.sqlite", "reopen"],
       directory,
       "electron-native-after-rebuild",
       environment,
@@ -281,13 +339,19 @@ function qualifyElectron(version) {
   );
   if (before.electron !== version || after.electron !== version)
     throw new Error("Unexpected Electron version");
+  if (
+    before.nativePackage.version !== sqliteVersion ||
+    after.nativePackage.version !== sqliteVersion ||
+    !after.processReopened
+  )
+    throw new Error("Unexpected Electron native driver or reopen result");
   evidence.electron = {
     before,
     after,
     mode: "ELECTRON_RUN_AS_NODE=1",
     guiQualified: false,
     rebuild:
-      "npm rebuild; driver ships Node-API 10 prebuilds, gypfile=false, no install script; no ABI recompilation claimed",
+      "npm rebuild lifecycle check only; inspect logs and loaded binary metadata; no source recompilation claimed",
   };
   evidence.electronRuntimeQualified = true;
   record();

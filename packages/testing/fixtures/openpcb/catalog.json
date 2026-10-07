@@ -1,0 +1,1002 @@
+{
+  "provenance": {
+    "repository": "https://github.com/OpenPCB-app/OpenPCB",
+    "commit": "d69189fa88605e140af01c1246e2da54b04f2201",
+    "sourcePath": "src/core/backend/tests/fixtures/assistant-parity/catalog.current.json",
+    "sourceRawSha256": "77b48a68698c65ffc8a1a88a90fec11f7ba9192882b613ac8bee3dea39a2d4d6",
+    "sourceCanonicalDataSha256": "a64bdf2045794bd54b250887d6b6af2c4d42e16355e9681b0a41723325aefb01",
+    "toolsSha256": "22aa56a046f7c3000a3f894eaddb7959297a46e9252950ff1efac87a06e75eaa"
+  },
+  "tools": [
+    {
+      "name": "compile_circuit",
+      "version": "1",
+      "effect": "write",
+      "capability": "designer.write.schematic.compile",
+      "description": "Build a schematic from a declarative circuit-spec IR: block instances + port-level nets. Prefer this over hand placing+wiring for standard multi-part circuits — each block owns its own pin-accurate internal wiring and part values (Ohm's law etc.) are computed deterministically, so you connect only a few semantic ports and never touch pins. Part roles resolve to INSTALLED library components; a missing role is reported (import it) — parts are never substituted. The composed result is ERC-checked and auto-applied in one pass (revertible step-by-step via designer undo). Available block recipes: led_indicator (led_indicator ports: IN, GND; params: supplyV, vf, currentA). Connect nets by port ref \"<blockId>.<PORT>\" (e.g. \"led0.IN\"); name your vcc/gnd rails in `power`.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "designId": {
+            "type": "string",
+            "description": "Target design id. Omit to use the design bound to this chat."
+          },
+          "version": {
+            "type": "integer",
+            "enum": [1],
+            "description": "IR schema version — must be 1."
+          },
+          "blocks": {
+            "type": "array",
+            "description": "Block instances to place.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Unique handle within this IR (e.g. \"led0\")."
+                },
+                "recipe": {
+                  "type": "string",
+                  "description": "Block recipe name. Available: led_indicator."
+                },
+                "params": {
+                  "type": "object",
+                  "description": "Recipe parameters (e.g. supplyV, vf, currentA for led_indicator).",
+                  "additionalProperties": true
+                }
+              },
+              "required": ["id", "recipe"]
+            }
+          },
+          "nets": {
+            "type": "array",
+            "description": "Port-level nets. Each connects block ports named \"<blockId>.<PORT>\".",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "ports": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Port refs, e.g. [\"led0.IN\", \"led1.IN\"]."
+                }
+              },
+              "required": ["name", "ports"]
+            }
+          },
+          "power": {
+            "type": "object",
+            "description": "Names of the vcc/gnd rail nets — lowered to power/ground port symbols, not plain wires.",
+            "properties": {
+              "vcc": {
+                "type": "string"
+              },
+              "gnd": {
+                "type": "string"
+              }
+            },
+            "required": ["vcc", "gnd"]
+          }
+        },
+        "required": ["version", "blocks", "nets", "power"]
+      }
+    },
+    {
+      "name": "designer_arrange_schematic",
+      "version": "1",
+      "effect": "write",
+      "capability": "designer.write.schematic.arrange",
+      "description": "Tidy the whole schematic: deterministically group net-connected parts with routing channels, slide power/ground flags with their pins, and re-route every wire around bodies, flags and other wires. Non-destructive, auto-applies, single undo step. Use when the layout looks messy or overlapping.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "designId": {
+            "type": "string"
+          },
+          "action_id": {
+            "type": "string",
+            "description": "Stable idempotency key you generate: `<verb>_<primaryKey>_<designId>` (e.g. `place_R1_<designId>`, `wire_U1.OUT__R1.1_<designId>`). Re-using the same action_id is a safe no-op."
+          }
+        }
+      }
+    },
+    {
+      "name": "designer_create_design",
+      "version": "1",
+      "effect": "write",
+      "capability": "designer.write.create_design",
+      "description": "Create a new empty OpenPCB design and bind this chat to it. Use after the user has chosen a project direction and wants a new schematic canvas.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Short human-readable design name.",
+            "maxLength": 120
+          }
+        }
+      }
+    },
+    {
+      "name": "designer_get_design_summary",
+      "version": "1",
+      "effect": "read",
+      "capability": "designer.read",
+      "description": "Compact one-shot summary of a design: schematic part/net counts, PCB placement/trace counts, and top ERC violations. Uses the bound design if designId is omitted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "designId": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "name": "designer_get_part_detail",
+      "version": "1",
+      "effect": "read",
+      "capability": "designer.read",
+      "description": "Resolve a placed schematic part by reference (e.g. U1) within the bound design. Returns pin/net mapping and PCB placement if available.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "designId": {
+            "type": "string"
+          },
+          "referenceOrPartId": {
+            "type": "string"
+          }
+        },
+        "required": ["referenceOrPartId"]
+      }
+    },
+    {
+      "name": "designer_get_schematic_connectivity",
+      "version": "1",
+      "effect": "read",
+      "capability": "designer.read.schematic.connectivity",
+      "description": "Return compact schematic connectivity for the bound design: placed parts, exact pin IDs/coordinates, nets, wires, and primitive pin IDs for planning safe wiring proposals.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "designId": {
+            "type": "string"
+          },
+          "includePins": {
+            "type": "boolean"
+          },
+          "includeNets": {
+            "type": "boolean"
+          },
+          "includeWires": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    {
+      "name": "designer_place_components",
+      "version": "1",
+      "effect": "write",
+      "capability": "designer.write.schematic.place_components",
+      "description": "Place installed library components onto the bound design's schematic canvas. Non-destructive: auto-applies immediately and is undoable. Prefer designer_propose_schematic_edits for placement (it also adds labels/power ports and wires in one batch); use this only for a plain quantity-based drop.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "designId": {
+            "type": "string"
+          },
+          "action_id": {
+            "type": "string",
+            "description": "Stable idempotency key you generate: `<verb>_<primaryKey>_<designId>` (e.g. `place_R1_<designId>`, `wire_U1.OUT__R1.1_<designId>`). Re-using the same action_id is a safe no-op."
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "componentId": {
+                  "type": "string"
+                },
+                "quantity": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 20
+                },
+                "rotationDeg": {
+                  "type": "integer",
+                  "enum": [0, 90, 180, 270]
+                },
+                "mirrored": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Optional displayed part value/intended value, e.g. 330Ω, 10k, 10µF, red LED."
+                },
+                "properties": {
+                  "type": "object",
+                  "description": "Optional string metadata such as color, role, tolerance, voltage, current, or package intent."
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": ["componentId"]
+            }
+          },
+          "layout": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["auto-grid"]
+              },
+              "columns": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8
+              }
+            }
+          }
+        },
+        "required": ["components"]
+      }
+    },
+    {
+      "name": "designer_propose_schematic_deletions",
+      "version": "1",
+      "effect": "write",
+      "capability": "designer.write.schematic.propose_deletions",
+      "description": "Delete existing schematic parts, wires, labels, or primitives. Destructive: stays pending for explicit user confirmation (does NOT auto-apply). Parts may be addressed by reference (e.g. \"U1\") or ID; wires/labels/primitives by ID.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "designId": {
+            "type": "string"
+          },
+          "action_id": {
+            "type": "string",
+            "description": "Stable idempotency key you generate: `<verb>_<primaryKey>_<designId>` (e.g. `place_R1_<designId>`, `wire_U1.OUT__R1.1_<designId>`). Re-using the same action_id is a safe no-op."
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entityId": {
+                  "type": "string",
+                  "description": "Entity ID; for parts a reference like \"U1\" is also accepted."
+                },
+                "entityKind": {
+                  "type": "string",
+                  "enum": ["part", "wire", "label", "primitive"]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": ["entityId", "entityKind"]
+            }
+          }
+        },
+        "required": ["title", "summary", "entities"]
+      }
+    },
+    {
+      "name": "designer_propose_schematic_edits",
+      "version": "1",
+      "effect": "write",
+      "capability": "designer.write.schematic.propose_edits",
+      "description": "Batch small schematic edits: place library parts, add net labels / power ports / net portals, and wire existing pins. Do NOT pass coordinates — omit positionNm and wire geometry; the layout is auto-arranged from connectivity and wires are auto-routed when this proposal applies. Just choose components and how their pins connect. Non-destructive, so it auto-applies. To wire freshly-placed parts, run this once to place them, then call designer_get_schematic_connectivity and wire by REF.PIN.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "designId": {
+            "type": "string"
+          },
+          "action_id": {
+            "type": "string",
+            "description": "Stable idempotency key you generate: `<verb>_<primaryKey>_<designId>` (e.g. `place_R1_<designId>`, `wire_U1.OUT__R1.1_<designId>`). Re-using the same action_id is a safe no-op."
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "parts": {
+            "type": "array",
+            "description": "Library components to place.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "componentId": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "positionNm": {
+                  "type": "object",
+                  "description": "Optional. Omit it — placement is auto-arranged from connectivity after this proposal applies. Only pass coordinates to pin a specific part.",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["x", "y"]
+                },
+                "rotationDeg": {
+                  "type": "integer",
+                  "enum": [0, 90, 180, 270]
+                },
+                "mirrored": {
+                  "type": "boolean"
+                },
+                "properties": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": ["componentId"]
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "positionNm": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["x", "y"]
+                }
+              },
+              "required": ["text", "positionNm"]
+            }
+          },
+          "powerPorts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": ["gnd", "pwr", "net_portal"]
+                },
+                "text": {
+                  "type": "string",
+                  "description": "Rail/portal name (e.g. \"+5V\", \"SDA\"); ignored for gnd."
+                },
+                "positionNm": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["x", "y"]
+                },
+                "rotationDeg": {
+                  "type": "integer",
+                  "enum": [0, 90, 180, 270]
+                }
+              },
+              "required": ["kind", "positionNm"]
+            }
+          },
+          "wires": {
+            "type": "array",
+            "description": "Connect existing pins (or a pin to a named net). Geometry is auto-routed.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "description": "Pin or net. A pin: \"U1.VCC\" / \"U1.1\", or { ref, pin }, or { pinId }. A net: { net: \"GND\" } (auto-places a power/ground/net-portal primitive and wires to it).",
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "pin": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "pin"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "pinId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["pinId"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "net": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["net"]
+                    }
+                  ]
+                },
+                "target": {
+                  "description": "Pin or net. A pin: \"U1.VCC\" / \"U1.1\", or { ref, pin }, or { pinId }. A net: { net: \"GND\" } (auto-places a power/ground/net-portal primitive and wires to it).",
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "pin": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "pin"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "pinId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["pinId"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "net": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["net"]
+                    }
+                  ]
+                },
+                "netName": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": ["source", "target"]
+            }
+          }
+        },
+        "required": ["title", "summary"]
+      }
+    },
+    {
+      "name": "designer_propose_schematic_updates",
+      "version": "1",
+      "effect": "write",
+      "capability": "designer.write.schematic.propose_updates",
+      "description": "Move/rotate/mirror schematic parts, edit part value/reference/properties, move/rename labels, or move/rotate/retext power & net-portal primitives. Address parts by \"partId\" or reference \"ref\" (e.g. \"U1\"). Connected wires reflow automatically on move/rotate/mirror. Non-destructive, so it auto-applies.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "designId": {
+            "type": "string"
+          },
+          "action_id": {
+            "type": "string",
+            "description": "Stable idempotency key you generate: `<verb>_<primaryKey>_<designId>` (e.g. `place_R1_<designId>`, `wire_U1.OUT__R1.1_<designId>`). Re-using the same action_id is a safe no-op."
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "partUpdates": {
+            "type": "array",
+            "description": "Changes to existing parts. Each entry needs partId or ref.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "partId": {
+                  "type": "string",
+                  "description": "Part UUID (from connectivity)."
+                },
+                "ref": {
+                  "type": "string",
+                  "description": "Reference designator, e.g. \"U1\". Alternative to partId."
+                },
+                "positionNm": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["x", "y"],
+                  "description": "New position (nanometers). Connected wires reflow automatically."
+                },
+                "rotationDeg": {
+                  "type": "integer",
+                  "enum": [0, 90, 180, 270]
+                },
+                "mirrored": {
+                  "type": "boolean"
+                },
+                "reference": {
+                  "type": "string",
+                  "description": "New reference designator."
+                },
+                "value": {
+                  "type": "string"
+                },
+                "properties": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "reason": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "labelUpdates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "labelId": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "positionNm": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["x", "y"]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": ["labelId"]
+            }
+          },
+          "primitiveUpdates": {
+            "type": "array",
+            "description": "Changes to gnd/pwr/net-portal primitives.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "primitiveId": {
+                  "type": "string"
+                },
+                "positionNm": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["x", "y"]
+                },
+                "rotationDeg": {
+                  "type": "integer",
+                  "enum": [0, 90, 180, 270]
+                },
+                "text": {
+                  "type": "string",
+                  "description": "Rail/portal text (ignored for gnd)."
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": ["primitiveId"]
+            }
+          }
+        },
+        "required": ["title", "summary"]
+      }
+    },
+    {
+      "name": "designer_propose_schematic_wires",
+      "version": "1",
+      "effect": "write",
+      "capability": "designer.write.schematic.propose_wires",
+      "description": "Wire schematic pins together, or connect a pin to a named net. Address pins by \"REF.PIN\" (e.g. \"U1.VCC\", \"R1.2\") — call designer_get_schematic_connectivity first to learn references and pin names. Do NOT pass coordinates: routing is automatic and obstacle-aware. After wiring, the whole sheet is auto-arranged — components are MOVED to group what is now connected and wires re-routed cleanly. Non-destructive, so it auto-applies.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "designId": {
+            "type": "string"
+          },
+          "action_id": {
+            "type": "string",
+            "description": "Stable idempotency key you generate: `<verb>_<primaryKey>_<designId>` (e.g. `place_R1_<designId>`, `wire_U1.OUT__R1.1_<designId>`). Re-using the same action_id is a safe no-op."
+          },
+          "title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "wires": {
+            "type": "array",
+            "description": "Connections to make. Each joins a source to a target; geometry is auto-routed.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "description": "Pin or net. A pin: \"U1.VCC\" / \"U1.1\", or { ref, pin }, or { pinId }. A net: { net: \"GND\" } (auto-places a power/ground/net-portal primitive and wires to it).",
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "pin": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "pin"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "pinId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["pinId"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "net": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["net"]
+                    }
+                  ]
+                },
+                "target": {
+                  "description": "Pin or net. A pin: \"U1.VCC\" / \"U1.1\", or { ref, pin }, or { pinId }. A net: { net: \"GND\" } (auto-places a power/ground/net-portal primitive and wires to it).",
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "pin": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "pin"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "pinId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["pinId"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "net": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["net"]
+                    }
+                  ]
+                },
+                "netName": {
+                  "type": "string",
+                  "description": "Optional display label for the resulting net."
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": ["source", "target"]
+            }
+          },
+          "junctions": {
+            "type": "array",
+            "description": "Tap a pin onto an existing wire at an exact on-wire point (creates a junction).",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "description": "A pin: \"U1.VCC\" / \"U1.1\", or { ref, pin }, or { pinId }.",
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string"
+                        },
+                        "pin": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["ref", "pin"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "pinId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["pinId"]
+                    }
+                  ]
+                },
+                "wireId": {
+                  "type": "string",
+                  "description": "ID of the existing wire to tap (from connectivity)."
+                },
+                "targetPointNm": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "y": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["x", "y"],
+                  "description": "A point lying on the target wire (nanometers)."
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": ["source", "wireId", "targetPointNm"]
+            }
+          }
+        },
+        "required": ["title", "summary"]
+      }
+    },
+    {
+      "name": "designer_resolve_design",
+      "version": "1",
+      "effect": "read",
+      "capability": "designer.read",
+      "description": "Resolve a design by natural-language name. On a clean unambiguous match in an unbound chat, binds the chat to that design.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "allowAlreadyBound": {
+            "type": "boolean"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "library_get_component_detail",
+      "version": "1",
+      "effect": "read",
+      "capability": "library.read",
+      "description": "Fetch full compact detail for one installed library component (symbol summary, footprint summary, variants, provenance). `componentId` may be the UUID returned by library_search_components OR the component name (e.g. \"ATMEGA16U4-AU\"); name lookup falls back to a library search.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "description": "Component UUID (preferred) or exact/partial component name. Name lookup will use library_search_components and pick the best match."
+          },
+          "includeRaw": {
+            "type": "boolean"
+          }
+        },
+        "required": ["componentId"]
+      }
+    },
+    {
+      "name": "library_resolve_bom",
+      "version": "1",
+      "effect": "read",
+      "capability": "library.read.bom",
+      "description": "Resolve a multi-item circuit BOM against the local OpenPCB library. Use this for circuit creation/planning before creating a design or placing components. Treat values/colors as instance properties when only generic components exist.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "goal": {
+            "type": "string"
+          },
+          "defaults": {
+            "type": "object",
+            "properties": {
+              "supplyVoltage": {
+                "type": "string"
+              },
+              "blinkRate": {
+                "type": "string"
+              },
+              "packagePreference": {
+                "type": "string"
+              }
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string"
+                },
+                "query": {
+                  "type": "string"
+                },
+                "quantity": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 50
+                },
+                "value": {
+                  "type": "string"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "attributes": {
+                  "type": "object"
+                },
+                "requirements": {
+                  "type": "object"
+                }
+              },
+              "required": ["role", "query"]
+            }
+          },
+          "limitPerItem": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          }
+        },
+        "required": ["items"]
+      }
+    },
+    {
+      "name": "library_search_components",
+      "version": "1",
+      "effect": "read",
+      "capability": "library.read",
+      "description": "Search the local OpenPCB component library by query, or list all installed components when query is omitted. Supports optional requirements (voltage/current/package/etc.). Returns ranked matches paginated by limit (default 10, max 50). If none match, returns generic suggestions and import guidance.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Natural-language description of the component. Omit (or leave empty) to list all installed components."
+          },
+          "requirements": {
+            "type": "object",
+            "properties": {
+              "function": {
+                "type": "string"
+              },
+              "voltage": {
+                "type": "string"
+              },
+              "current": {
+                "type": "string"
+              },
+              "package": {
+                "type": "string"
+              },
+              "mountType": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              },
+              "tolerance": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "required": []
+      }
+    }
+  ]
+}
