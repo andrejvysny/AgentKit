@@ -96,13 +96,20 @@ What it does for you:
 | **Abort** | `opts.signal` aborts the request and any pending backoff; no reconnect follows an abort. |
 | **Errors** | A problem response (a 404 for an unknown run) throws {@link AgentKitClientError} immediately — it is an answer, not a broken pipe, and will be the same answer on every retry. |
 
-**Iteration ends when the SERVER closes the stream**, which it does when the
-**task** is terminal and its log is exhausted — not at a terminal run event. A
+**Iteration ends after the server's `agentkit.stream.settled` frame and EOF**.
+The server writes this control frame only after the **task** is terminal or
+interrupted and its log is exhausted, not at a terminal run event. A
 run is not one pass: the host re-asks after a failed pass, after a
 completed-but-empty one, and once per correction round, and each pass writes its
 own `run.started` … terminal pair onto the same log (the `retry_pass` warning
 marks the seam). So a break just after `run.failed` is reconnected to like any
 other, and `isTerminalRunEvent(event)` tests the end of a *pass*.
+
+EOF without that marker is a transport interruption and uses the same bounded
+resume policy as a rejected body read. This includes Bun 1.3.14, which can turn
+server stream errors into clean HTTP EOF. The control frame has no cursor and
+is never yielded as a run event. Deploy matching client and server versions;
+older servers without this marker fail closed with this client.
 
 A run's own failure is **not** an exception: `run.failed` is yielded like any
 other event. An exception from the iterable always means the *call* failed.
@@ -124,8 +131,10 @@ for await (const event of client.streamRun(runId)) events.push(event);
 const trailing = await client.drainRun(runId, events.at(-1)?.eventId);
 ```
 
-It reads once and returns when the server closes — it does not follow, and does
-not reconnect. Called without a `lastEventId` it returns the whole log.
+It makes one streaming request and does not reconnect. Call it after task
+settlement; against a live task it follows until settlement. It requires the
+same settlement marker and rejects an unmarked EOF instead of returning a
+partial tail. Without a `lastEventId`, it returns the whole retained log.
 
 ## Run phases
 

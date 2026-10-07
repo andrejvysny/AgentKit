@@ -1,2 +1,6 @@
+[install]
+# Keep native install scripts on the pinned local node-gyp, including clean installs.
+linker = "hoisted"
+
 [test]
 timeout = 30000

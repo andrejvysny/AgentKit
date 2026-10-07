@@ -1,0 +1,97 @@
+diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
+--- a/packages/core/src/index.ts
++++ b/packages/core/src/index.ts
+@@ -33,5 +33,3 @@
+ export * from "./providers/openai-compatible.js";
+ 
+ export * from "./runs/execution-budget.js";
+-export * from "./providers/responses-types.js";
+-export * from "./providers/responses.js";
+diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers/client.ts
+--- a/packages/core/src/providers/client.ts
++++ b/packages/core/src/providers/client.ts
+@@ -1,8 +1,6 @@
+-import type { AiProviderConnectionIdentity } from "./responses-types.js";
+ import type { AiRunEvent } from "@agentkit/contracts";
+ import type {
+   AiChatMessage,
+-  AiProviderContinuation,
+   AiProviderCapabilities,
+   AiProviderKind,
+   AiProviderModel,
+@@ -12,11 +10,6 @@
+ export interface AiChatRequest {
+   /** Reserve a durable request budget immediately before each transport dispatch. */
+   beforeRequest?: () => Promise<void>;
+-  /** Trusted host continuation; never populated from a public request body. */
+-  continuation?: AiProviderContinuation;
+-  continuationScope?: { chatId: string; branchId: string };
+-  continuationRequired?: boolean;
+-  onContinuation?: (state: AiProviderContinuation) => void | Promise<void>;
+   /** Valid provider stream activity, including non-visible reasoning/tool fragments. */
+   onActivity?: () => void;
+   runId: string;
+@@ -31,9 +24,6 @@
+ export interface AiProviderClient {
+   /** Calls beforeRequest for each network attempt, including internal retries. */
+   readonly tracksTransportRequests?: boolean;
+-  /** Trusted transport metadata, when the client requires durable provider state. */
+-  readonly protocol?: string;
+-  readonly connectionIdentity?: AiProviderConnectionIdentity;
+   id: string;
+   kind: AiProviderKind;
+   capabilities(
+diff --git a/packages/core/src/runs/run-loop.ts b/packages/core/src/runs/run-loop.ts
+--- a/packages/core/src/runs/run-loop.ts
++++ b/packages/core/src/runs/run-loop.ts
+@@ -2,7 +2,7 @@
+ import type { ExecutionBudget, ExecutionBudgets } from "./execution-budget.js";
+ import { newRunId, newToolEventId, nowIso } from "../ids.js";
+ import { createEventStamper, type EventStamper } from "../events.js";
+-import type { AiProviderClient, AiChatRequest } from "../providers/client.js";
++import type { AiProviderClient } from "../providers/client.js";
+ import type { AiToolRegistry } from "../tools/registry.js";
+ import type { AiTool } from "../tools/tool.js";
+ import type {
+@@ -23,14 +23,7 @@
+ import { truncateString } from "../tools/limits.js";
+ import { dedupeToolCallIds } from "../tools/tool-calls.js";
+ 
+-export interface RunChatInput
+-  extends Pick<
+-    AiChatRequest,
+-    | "continuation"
+-    | "continuationScope"
+-    | "continuationRequired"
+-    | "onContinuation"
+-  > {
++export interface RunChatInput {
+   budgets?: ExecutionBudgets;
+   executionBudget?: ExecutionBudget;
+   client: AiProviderClient;
+@@ -138,13 +131,6 @@
+     firstSeq: input.firstSeq,
+     attemptId: input.attemptId,
+   });
+-  let continuation = input.continuation;
+-  const onContinuation: AiChatRequest["onContinuation"] = input.onContinuation
+-    ? async (state) => {
+-        await input.onContinuation?.(state);
+-        continuation = state;
+-      }
+-    : undefined;
+   let iteration = 0;
+   let finishReason: string | undefined;
+ 
+@@ -199,11 +185,6 @@
+         temperature: input.temperature,
+         maxOutputTokens: input.maxOutputTokens,
+         signal: input.signal,
+-        continuation,
+-        continuationScope: input.continuationScope,
+-        continuationRequired:
+-          input.continuationRequired || continuation !== undefined,
+-        onContinuation,
+       })) {
+         // Re-yield provider events with the canonical runId.
+         const stamped = { ...event, runId } as AiRunEvent;

@@ -19,11 +19,11 @@
  * the life of the stream, not a window of ids that a long-enough replay can
  * still outrun.
  *
- * WHAT ENDS THE ITERATION is the SERVER closing the stream, and nothing else.
- * The server closes when the TASK is terminal — its log exhausted, whether or
- * not it holds a terminal event (a crashed attempt never writes one). A clean
- * end-of-body is therefore taken at face value; a transport ERROR is what
- * triggers the reconnect.
+ * WHAT ENDS THE ITERATION is the server's `agentkit.stream.settled` control
+ * frame followed by EOF. The server writes it only after the task is terminal
+ * or interrupted and its log is exhausted, even if no terminal run event was
+ * written. Some runtimes serialize an errored response body as clean EOF;
+ * an unmarked EOF therefore reconnects within the same transport retry budget.
  *
  * WHAT DOES NOT END IT is a terminal run EVENT. `run.failed` is not necessarily
  * the run's last word: the host re-asks after a failed pass, after a
@@ -192,8 +192,7 @@ async function* iterate(
         attempts = 0;
         yield event;
       }
-      // The server closed: the task is terminal and its log is exhausted, so
-      // it has said everything it has to say.
+      // `connect` accepted EOF only after the server confirmed settlement.
       return;
     } catch (err) {
       if (options.signal?.aborted === true) throw err;
@@ -244,10 +243,20 @@ async function* connect(
       `The response to GET the stream of run ${deps.runId} carried no body.`,
     );
   }
-  yield* parseSseStream(
+  let settled = false;
+  for await (const frame of parseSseStream(
     response.body,
     options.signal === undefined ? {} : { signal: options.signal },
-  );
+  )) {
+    if (frame.event === "agentkit.stream.settled") {
+      settled = true;
+      continue;
+    }
+    yield frame;
+  }
+  if (!settled) {
+    throw new Error("Run event stream ended without a settlement marker.");
+  }
 }
 
 /**
@@ -259,6 +268,7 @@ async function* connect(
  * is terminal by then, the server drains the remaining log and closes — so this
  * returns rather than following, and it does not reconnect: there is nothing to
  * wait for, and a caller that wants to keep watching wants {@link streamRun}.
+ * An unmarked EOF or broken body rejects instead of returning a partial tail.
  */
 export async function drainRun(
   deps: StreamDeps,

@@ -1,0 +1,109 @@
+diff --git a/packages/agentkit/README.md b/packages/agentkit/README.md
+--- a/packages/agentkit/README.md
++++ b/packages/agentkit/README.md
+@@ -9,10 +9,10 @@
+ 
+ ## Install
+ 
+-The current source is the unpublished `0.7.0` Responses candidate. The independent
+-`0.6.0` migration foundation candidate is projected reproducibly from the same Git
+-source using reviewed exclusions and inverse patches. Install only an exact
+-qualified artifact and verify its digest. No release tag was published here.
++This artifact is the unpublished `0.6.0` migration foundation candidate,
++projected from the integrated source without Responses or private provider
++continuation. Install only an exact qualified artifact and verify its digest.
++No release tag was published here.
+ 
+ No installable release tag was found in the 2026-10-06 audit. The earlier `0.5.0`
+ source version was prepared metadata, not a published artifact. Install an exact
+diff --git a/packages/adapters-sqlite/README.md b/packages/adapters-sqlite/README.md
+--- a/packages/adapters-sqlite/README.md
++++ b/packages/adapters-sqlite/README.md
+@@ -54,23 +54,7 @@
+ `application_id = 0`. Valid FTS5 shadow tables are recognized explicitly.
+ Pointing the adapter at a file managed by another migrator is unsupported.
+ 
+-**The current version is 9** (`SCHEMA_VERSION` in `src/schema.ts`). The v8-to-v9
+-migration adds private `provider_run_scopes` and `provider_continuations` tables.
+-Original v8 files upgrade transactionally; fresh databases initialize the same
+-immutable v8 baseline and apply that migration. Migrated table definitions are
+-checked on reopen, so a version marker alone cannot authorize a foreign layout.
+-Continuation state is limited to 1 MiB UTF-8 and 1024 input items, bound to a run's
+-provider/model/connection generation/chat/branch, and written only under its live
+-lease. It is never stored in messages, run events, or REST DTOs. Task, message,
+-and chat foreign keys remove obsolete state automatically.
+-Each bound run starts with `state_required = 0`, so a failed or cancelled request
+-that never saves state can be followed normally. A successful save writes state
+-and sets the marker to 1 in the same transaction. Missing state thereafter fails
+-closed with `provider_continuation_state_missing`. Chat or anchor deletion retains
+-that marker while the task exists; task deletion removes the binding and marker.
+-Every saved anchor must belong to both the bound chat and run.
+-
+-Version 8
++**The current version is 8** (`SCHEMA_VERSION` in `src/schema.ts`). Version 8
+ added `idx_messages_run ON messages(chat_id, run_id, depth, order_key)` — the
+ whole `ORDER BY` of `lastMessageOfRun`, which crash recovery reads on every
+ resumed attempt, so the plan needs no temporary b-tree over the message table —
+@@ -81,8 +65,8 @@
+ Use a compatible release or restore a verified backup. The adapter never
+ deletes, recreates, or silently downgrades a refused database.
+ 
+-The production registry contains the v8-to-v9 step; v8 remains the minimum
+-supported baseline. Each step advances exactly one version. A failed step rolls
++The migration registry currently has no production steps: v8 is the supported
++baseline. Each future step advances exactly one version. A failed step rolls
+ back DDL, data, and `user_version`; a subsequent open can retry it. The version
+ is stamped only after all steps and integrity checks pass. Schema refusal or
+ migration failure closes the newly opened handle.
+@@ -136,9 +120,9 @@
+ WRITES from other callers — a second `transaction()`, a worker's `claimNext`,
+ an ordinary `updateChat`, and a `SqliteMcpServerConfigStore` sharing the handle
+ — wait for it and then run in a transaction of their own rather than joining
+-one whose rollback would erase them. Durable task, event, projected-message, and
+-private-continuation reads also wait for unrelated transactions to commit; their
+-transaction-owner views can read their own writes.
++one whose rollback would erase them. Durable task, event, and projected-message
++reads also wait for unrelated transactions to commit; transaction-owner views
++can read their own writes.
+ 
+ **The queue is FIFO across both kinds.** A transaction and a root write take a
+ slot in the same queue when they are issued, and run in that order. Re-checking
+@@ -175,13 +159,12 @@
+ is plain `priority DESC, enqueued_at ASC`. See
+ [ADR 0003](../../docs/adr/0003-task-dependencies-and-subagents.md).
+ 
+-## Schema (v9)
++## Schema (v8)
+ 
+-The immutable baseline DDL in `src/schema.ts` (`SCHEMA_V8`) is applied idempotently
++Single-file DDL in `src/schema.ts` (`SCHEMA_V8`), applied idempotently
+ (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). The transactional migration
+-registry then adds the private v9 continuation tables — see "It owns its database
+-file" above. Unsupported older or future versions are refused without reset,
+-downgrade, or destructive recovery.
++registry currently has no production steps — see
++"It owns its database file" above.
+ 
+ Original v8 databases remain supported. A file stamped `user_version = 7` is
+ refused with `sqlite_schema_version`; use a compatible release or a verified
+@@ -277,7 +260,6 @@
+ | `settings` (single row, `id = 1`) | `SettingsStore` |
+ | `mcp_servers` | `McpServerConfigStore` (`@agentkit/mcp-client`) — served by the standalone `SqliteMcpServerConfigStore`, not by the aggregate. |
+ | `outbox` | `OutboxStore` |
+-| `provider_run_scopes`, `provider_continuations` | Private `ProviderContinuationStore`; never REST DTOs. |
+ | `fencing_counter` (single row) | *not a port record* — backs `TaskStore.acquireLease`'s store-global monotonic fencing token. |
+ 
+ Notes:
+diff --git a/docs/migration/openpcb.md b/docs/migration/openpcb.md
+--- a/docs/migration/openpcb.md
++++ b/docs/migration/openpcb.md
+@@ -87,7 +87,8 @@
+ provider registration per generation, submit its explicit ID and model, and retain it while a
+ run can resume. Renderer-supplied references must not select arbitrary vault entries. Validate
+ this adapter against OPENPCB-115's queued-run rotation/deletion fixtures. Responses clients also
+-freeze their trusted connection identity; see the [Responses protocol](../providers/responses.md).
++freeze their trusted connection identity; its protocol documentation ships with the
++separate Responses 0.7.0 track.
+ Foundation does not require that adapter.
+ 
+ ## Provider and domain ports

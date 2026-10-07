@@ -107,5 +107,15 @@ original finals and correction write-backs remain in chronological history.
 Empty-answer retry appends an explicit follow-up while retaining prior state.
 Other provider clients keep their existing projection behavior.
 
-Coverage uses generic mock streams and reference stores. OpenPCB consumer fixture
-acceptance remains pending; these mocks do not claim consumer provenance.
+Consumer coverage uses the 15 unchanged native tool definitions from
+[OpenPCB's pinned published catalog](https://github.com/OpenPCB-app/OpenPCB/blob/d69189fa88605e140af01c1246e2da54b04f2201/src/core/backend/tests/fixtures/assistant-parity/catalog.current.json).
+The sanitized fixture records upstream raw-file and canonical-data hashes plus
+an independently checked tool-definition digest. Both credential profiles pass
+that catalog through the actual `TurnRunner` with a mock transport. A native
+read-tool stub proves exact call/result IDs and private continuation; cancellation
+and text followed by late failure prove no late tool start or false completion.
+Exported-package Node qualification repeats catalog and continuation assertions
+through SQLite, the local worker, REST, and the client, then closes and reopens
+the database. Generic qualification separately covers proposals and migration.
+These checks do not execute OpenPCB or qualify PCB mutation, receipts, undo, or
+the consumer application integration.

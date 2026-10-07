@@ -72,10 +72,78 @@ function body(
 }
 
 function sse(text: string, then: "close" | "error"): Response {
-  return new Response(body(text, then), { status: 200 });
+  const marker =
+    then === "close" ? "event: agentkit.stream.settled\ndata: {}\n\n" : "";
+  return new Response(body(text + marker, then), { status: 200 });
 }
 
 describe("streamRun bounds a server that misbehaves", () => {
+  test("unmarked EOF after a terminal pass exhausts the retry budget", async () => {
+    let opened = 0;
+    const resumeHeaders: (string | null)[] = [];
+    const client = createAgentKitClient({
+      baseUrl: BASE_URL,
+      fetch: async (_url, init) => {
+        opened += 1;
+        resumeHeaders.push(new Headers(init?.headers).get("last-event-id"));
+        return new Response(body(frames(event("run.completed", 0)), "close"));
+      },
+    });
+    const seen: AiRunEvent[] = [];
+    const iterate = async (): Promise<void> => {
+      for await (const event of client.streamRun("run-1", {
+        maxRetries: 2,
+        retryDelayMs: 1,
+      }))
+        seen.push(event);
+    };
+    await expect(iterate()).rejects.toThrow(
+      "Run event stream ended without a settlement marker.",
+    );
+    expect(opened).toBe(3);
+    expect(resumeHeaders).toEqual([null, "evt-0", "evt-0"]);
+    expect(seen.map((event) => event.seq)).toEqual([0]);
+  });
+
+  test("unmarked EOF with fresh events still exhausts the total budget", async () => {
+    let opened = 0;
+    const client = createAgentKitClient({
+      baseUrl: BASE_URL,
+      fetch: async () => {
+        const seq = opened++;
+        return new Response(
+          body(frames(event("run.message.delta", seq)), "close"),
+        );
+      },
+    });
+    const iterate = async (): Promise<void> => {
+      for await (const _event of client.streamRun("run-1", {
+        maxTotalReconnects: 3,
+        retryDelayMs: 1,
+      })) {
+      }
+    };
+    await expect(iterate()).rejects.toThrow(
+      "Run event stream ended without a settlement marker.",
+    );
+    expect(opened).toBe(4);
+  });
+
+  test("drainRun rejects unmarked EOF without retrying", async () => {
+    let opened = 0;
+    const client = createAgentKitClient({
+      baseUrl: BASE_URL,
+      fetch: async () => {
+        opened += 1;
+        return new Response(body(frames(event("run.completed", 0)), "close"));
+      },
+    });
+    await expect(client.drainRun("run-1")).rejects.toThrow(
+      "Run event stream ended without a settlement marker.",
+    );
+    expect(opened).toBe(1);
+  });
+
   test("a retry hint below the floor is clamped, not obeyed", async () => {
     // `retry: 0` is a reconnect loop with no pause in it.
     const opened: number[] = [];

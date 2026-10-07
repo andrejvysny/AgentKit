@@ -62,6 +62,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
     "better-sqlite3": "13.0.3",
+    "node-gyp": "10.3.1",
     "typescript": "^5.8.3"
   }
 }

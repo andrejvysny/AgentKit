@@ -83,6 +83,7 @@ export async function startTestServer(
     clock: defaultClock,
     pollMs: 5,
     heartbeatMs: 60_000,
+    shutdownMode: "cancel",
   });
   const provider = options.provider ?? defaultProvider();
   const turns = new TurnRunner({
@@ -141,8 +142,11 @@ export async function startTestServer(
     proposals,
     secrets,
     async stop() {
-      await worker.stop();
-      await server.stop(true);
+      try {
+        await worker.stop();
+      } finally {
+        await server.stop(true);
+      }
     },
   };
 }
@@ -274,6 +278,33 @@ export interface ScriptedStream {
   readonly opened: () => number;
 }
 
+function settledStreamBody(
+  body: string,
+  settlement?: Promise<void>,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let sent = false;
+  let cancelled = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (!sent) {
+        sent = true;
+        controller.enqueue(encoder.encode(body));
+        return;
+      }
+      await settlement;
+      if (cancelled) return;
+      controller.enqueue(
+        encoder.encode("event: agentkit.stream.settled\ndata: {}\n\n"),
+      );
+      controller.close();
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+}
+
 /**
  * A `fetch` that scripts the RUN STREAM and leaves every other route real.
  *
@@ -286,12 +317,13 @@ export interface ScriptedStream {
  * what the HOOK does with a real reconcile around a scripted stream.
  */
 export function scriptedStreamFetch(options: {
-  /** The events every stream request answers with, before a CLEAN close. */
+  /** Events sent before the settlement control frame and clean EOF. */
   events: (runId: string) => AiRunEvent[];
   /** What `getRun` should report instead of the run's real status. */
   runStatus?: RunStatusDto;
+  /** Hold the stream open until the scripted host is ready to settle. */
+  settlement?: Promise<void>;
 }): ScriptedStream {
-  const encoder = new TextEncoder();
   let opened = 0;
   const wrapped: FetchLike = async (url, init) => {
     const stream = /\/runs\/([^/?]+)\/stream/.exec(url);
@@ -305,7 +337,7 @@ export function scriptedStreamFetch(options: {
             `data: ${JSON.stringify(event)}\n\n`,
         )
         .join("");
-      return new Response(encoder.encode(body), {
+      return new Response(settledStreamBody(body, options.settlement), {
         status: 200,
         headers: { "content-type": "text/event-stream" },
       });

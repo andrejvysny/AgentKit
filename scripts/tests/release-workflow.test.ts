@@ -76,7 +76,27 @@ describe("release.yml — no expression interpolation into a shell", () => {
     expect(yaml).not.toMatch(
       /git (?:push|tag|commit)|npm publish|contents: write/,
     );
-    expect(yaml).toContain("scripts/qualify-package.mjs --tarball");
+    expect(yaml).toContain("scripts/release/qualify-candidates.mjs");
+    expect(yaml).toContain("options: [foundation, responses]");
+    expect(yaml).toContain("default: foundation");
+    expect(yaml).toContain('bun-version: "1.3.14"');
+    expect(yaml).toContain("fail-fast: false");
+    expect(yaml).not.toContain("continue-on-error");
+  });
+
+  it("keeps publication manual, approved, and free of shell interpolation", async () => {
+    const yaml = await Bun.file(
+      new URL("../../.github/workflows/publish.yml", import.meta.url),
+    ).text();
+    expect(
+      runScriptLines(yaml).filter((entry) => entry.text.includes("${{")),
+    ).toEqual([]);
+    expect(yaml).toContain("workflow_dispatch:");
+    expect(yaml).toContain("environment: agentkit-publication");
+    expect(yaml).toContain("artifact-ids: ${{ inputs.candidate_artifact }}");
+    expect(yaml).not.toMatch(
+      /npm publish|npm pack|git (?:push|tag|commit)|build:umbrella/,
+    );
   });
 
   it("recognises both run: forms", () => {

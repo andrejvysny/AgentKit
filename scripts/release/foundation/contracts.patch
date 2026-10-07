@@ -1,0 +1,17 @@
+diff --git a/packages/contracts/src/index.ts b/packages/contracts/src/index.ts
+--- a/packages/contracts/src/index.ts
++++ b/packages/contracts/src/index.ts
+@@ -27,4 +27,3 @@
+ 
+ // The schema values again, as one enumerable barrel (validation/codegen/docs).
+ export * from "./schemas.js";
+-export * from "./provider-continuation.js";
+diff --git a/packages/contracts/src/schemas.ts b/packages/contracts/src/schemas.ts
+--- a/packages/contracts/src/schemas.ts
++++ b/packages/contracts/src/schemas.ts
+@@ -120,5 +120,3 @@
+   ProblemDetailsDtoSchema,
+   RunEventFrameDtoSchema,
+ } from "./rest.js";
+-
+-export { AiProviderContinuationSchema } from "./provider-continuation.js";

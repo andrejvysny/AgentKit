@@ -36,8 +36,9 @@ npm install better-sqlite3@13.0.3
 
 The Node SQLite subpath requires Node >=22 because of its native peer. The
 portable package engine remains Node >=20; the Bun SQLite subpath still requires
-Bun. An Electron consumer must rebuild/package the native addon for its own
-Electron version and ABI, then validate that actual runtime.
+Bun. An Electron consumer must package a compatible native addon and validate its
+actual Electron runtime. Rebuild from source only when the selected addon requires it;
+the qualified driver 13.0.3 uses a Node-API prebuild.
 
 ## 2. `npm link` (recommended for active development)
 
@@ -54,6 +55,14 @@ bun run build:umbrella   # assembles packages/agentkit/dist from the above
 cd packages/agentkit
 npm link
 ```
+
+Source installs pin `node-gyp` 10.3.1 and use Bun's hoisted linker. On fresh
+Bun 1.3.14 and 1.4.0 workspace installs, the isolated linker can start the native
+peer's implicit build before the local build tool is available, fall back to
+cached `bunx node-gyp`, and remove the failed optional driver while returning
+success. The checked-in install configuration avoids that order; required Node
+SQLite tests still prove the driver is installed and loadable. Clean package
+consumers are qualified separately with their own lockfiles.
 
 ### From the consumer:
 
@@ -120,42 +129,53 @@ developer.
 
 ## Qualifying a release candidate
 
-The umbrella package version is the lockstep artifact version. The individual
-`@agentkit/*` source packages retain their development versions. Release A is
-an immutable migration foundation snapshot; Release B is a later snapshot that
-adds Responses. Qualify each independently, using distinct source manifests,
-artifact versions, and tarball hashes. Neither snapshot implies publication.
+The umbrella package version is the lockstep artifact version. Individual
+`@agentkit/*` source packages retain their development versions. Foundation
+`0.6.0` and Responses `0.7.0` are separate, unpublished candidate tracks.
+Foundation does not wait for Responses tests or provider integration acceptance.
 
-Create the snapshot outside the live checkout so active work cannot change its
-build. Record the baseline Git commit, the dirty diff hash, all included source
-file hashes, and any deliberately excluded files/exports. Apply exclusions only
-to the snapshot. Compute its source digest after those edits and before building.
-The snapshot helper records explicit exclusions, copies tracked and untracked
-nonignored source, verifies source hashes during the copy, and changes umbrella,
-wire contract, and lockfile workspace versions only in that copy. Release B uses
-`0.7.0 responses` after continuation integration and final source validation.
-The source digest excludes generated `dist`, dependency directories, and Git
-metadata; it is not a substitute for recording the baseline commit and diff.
+Both are reproducible from the current integrated Git source. The snapshot helper
+copies tracked and untracked nonignored regular files, detects source and Git
+changes during the copy, and records each original file hash. Foundation applies
+the reviewed inverse patches in `scripts/release/foundation/` from that captured
+copy and removes the explicitly listed Responses and private-continuation files.
+It retains current generic stream, storage, budget, fencing, and recovery fixes,
+uses schema 8, and has no production v8-to-v9 migration. Responses retains the
+integrated implementation and schema 9. No temporary prior snapshot is an input.
+Patch drift fails closed: review and update the affected patch rather than restoring
+an old file or weakening the check.
 
-Create Release A only after all foundation source writers have frozen their changes:
+Each snapshot records its baseline commit, dirty diff hash, original file hashes,
+requested exclusions, present exclusions with hashes, patch hashes, and changed-file
+before/after hashes. Only the copy's umbrella, wire contract, workspace lock metadata,
+and golden trace versions change. The source manifest includes projection metadata
+and patches; it excludes generated dist, dependencies, Git metadata, and build info.
+Its digest supplements, rather than replaces, the Git and transformation evidence.
+
+Choose a new directory outside the checkout. Foundation qualification runs only its
+own projected source and exact package artifact:
+
+```sh
+CANDIDATE_TRACK=foundation node scripts/release/qualify-candidates.mjs \
+  /tmp/agentkit-foundation-candidates
+# On macOS, add the exact Electron native runtime gate:
+CANDIDATE_TRACK=foundation ELECTRON_VERSION=41.6.1 \
+  node scripts/release/qualify-candidates.mjs /tmp/agentkit-foundation-electron
+```
+
+For Responses, select `CANDIDATE_TRACK=responses`. That track first qualifies a fresh
+foundation artifact, then independently builds and packs `0.7.0` and uses the exact
+foundation bytes for populated schema-8-to-9 migration qualification. Each source
+is frozen and archived before its build, checked again afterward, and packed once.
+The output retains source manifests, provenance, source archives, package tarballs,
+source gates, package qualification, runtime logs, consumer locks, and bundle metafiles.
+The helper never tags, pushes, publishes, or repacks a supplied artifact.
+
+To inspect or build a source projection separately:
 
 ```sh
 node scripts/snapshot-release.mjs /tmp/agentkit-release-a 0.6.0 foundation
-cd /tmp/agentkit-release-a
-bun install --frozen-lockfile
-bun run typecheck
-bun test
-node scripts/source-digest.mjs . /tmp/source-manifest.json
-bun run build
-bun run build:umbrella
-mkdir -p /tmp/agentkit-candidate
-npm pack ./packages/agentkit --cache /tmp/agentkit-npm-cache \
-  --pack-destination /tmp/agentkit-candidate
-node scripts/qualify-package.mjs \
-  --tarball /tmp/agentkit-candidate/agentkit-VERSION.tgz \
-  --source-digest SOURCE_MANIFEST_SHA256 \
-  --output /tmp/agentkit-qualification \
-  --electron 44.5.1
+node scripts/snapshot-release.mjs /tmp/agentkit-release-b 0.7.0 responses
 ```
 
 Use the `sha256` value from `source-manifest.json`, not the hash of that JSON
@@ -170,7 +190,7 @@ peer's lifecycle script; it never edits `node_modules` manually.
 The retained evidence includes artifact/source digests, runtime versions,
 platform/architecture, Node ABI, commands and logs, dependency lockfiles, and
 bundle metafiles. CommonJS bundling under Node alone is not an Electron runtime qualification.
-The optional exact `--electron 44.5.1` gate installs a clean Electron consumer,
+The optional exact `--electron 41.6.1` gate installs a clean Electron consumer,
 executes its actual binary with `ELECTRON_RUN_AS_NODE=1`, loads the external
 native addon from the CommonJS bundle, and reopens its database before and after
 `npm rebuild better-sqlite3`. It records Electron/Node versions, module ABI,
@@ -182,13 +202,43 @@ renderer, signed installer, or arbitrary Electron version. See
 [Electron native module guidance](https://www.electronjs.org/docs/latest/tutorial/using-native-node-modules). No Electron GUI, PCB domain,
 OAuth provider, paid credential, or restricted DevKit is involved.
 
-`.github/workflows/release.yml` now performs candidate qualification with
-read-only repository permissions on Linux and macOS, runs the Electron gate
-on macOS, and uploads the exact tarball plus evidence. It
-does not move tags, create release branches, publish packages, or claim a release
-is accepted. Publication requires separate explicit authorization after evidence
-review. A final install pin must identify an actual immutable, installable
-artifact; source tags and prepared versions alone do not satisfy that gate.
+`.github/workflows/release.yml` is a read-only manual qualification workflow.
+Its `track` input defaults to `foundation`; selecting `responses` adds Responses
+and exact foundation migration checks. Linux and macOS qualify with Node 22.23.2
+and Bun 1.4.0; macOS additionally runs Electron 41.6.1. A separate required Bun
+1.3.14 source gate validates only the selected track. Platform jobs use
+`fail-fast: false`, and acceptance rejects failed, cancelled, or skipped jobs.
+Failure logs and partial evidence remain available. Qualification creates no
+release tags or externally installable package release.
+
+Foundation publication requires its own successful `foundation` track run; the
+foundation seed inside a Responses-track run is migration evidence only.
+
+The prepared publication route is `.github/workflows/publish.yml`; it publishes
+GitHub release assets, not an npm registry package. Before any dispatch, obtain
+explicit approval for the destination, candidate version, source commit, source
+manifest digest, exact tarball SHA-256, qualification run, and retained macOS
+artifact ID. Configure the `agentkit-publication` environment with required
+reviewers; existing self-review policy remains the repository owner's choice.
+The verifier refuses an environment without configured required reviewers.
+
+Publication accepts only a successful manually dispatched qualification run from
+this repository's default branch and the corresponding selected-track artifact.
+It downloads that immutable artifact ID and checks source archives/manifests,
+projection provenance, clean Git evidence, exact package bytes/version, all source
+and package checks, actual Node/native and Electron runtime evidence, and the
+populated migration proof when publishing Responses. It requires the Bun minimum
+and both platform jobs to have passed. No checkout build or package repack occurs.
+
+Approval creates a new `vVERSION` tag pointing to the recorded source commit and
+attaches the exact qualified tarball, SHA-256, frozen source, and evidence to a new
+GitHub release. A projected foundation source tag still names integrated source;
+install the release's tarball asset, not its source archive. Existing tags, releases,
+or assets are never replaced. A partial publication failure requires manual review;
+the workflow does not delete a created tag or reuse an existing release automatically.
+The final install pin must identify the actual immutable release asset and its digest.
+Versions and local candidate paths alone are not remote install pins. Neither
+prepared workflow authorizes publication without the explicit approval above.
 
 For a Responses candidate, append `--responses true`. This adds clean-consumer
 mock Responses host runs, tool dispatch, proposal auto-apply and rejection,

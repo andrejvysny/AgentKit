@@ -28,7 +28,12 @@ import {
   defaultIds,
 } from "@agentkit/host";
 import { SingleProcessTaskRunner } from "@agentkit/runner-local";
-import { MockProviderClient } from "@agentkit/testing";
+import {
+  createTestEventStamper,
+  MockProviderClient,
+  nowIso,
+} from "@agentkit/testing";
+import type { AiRunEvent } from "@agentkit/contracts";
 import {
   createRestHandler,
   type RestHandlerDeps,
@@ -62,6 +67,7 @@ export async function startTestServer(
     clock: defaultClock,
     pollMs: 5,
     heartbeatMs: 60_000,
+    shutdownMode: "cancel",
   });
   const provider = options.provider ?? defaultProvider();
   const turns = new TurnRunner({
@@ -112,8 +118,11 @@ export async function startTestServer(
     provider,
     secrets,
     async stop() {
-      await worker.stop();
-      await server.stop(true);
+      try {
+        await worker.stop();
+      } finally {
+        await server.stop(true);
+      }
     },
   };
 }
@@ -138,6 +147,62 @@ export function chattyProvider(count: number): MockProviderClient {
     },
   ]);
   return provider;
+}
+
+/**
+ * A provider that streams one delta and then PARKS until the run is cancelled.
+ *
+ * A `MockProviderClient` subclass rather than `@agentkit/testing`'s
+ * `HangingProviderClient` only because the fixture here is typed to the mock —
+ * the behaviour is the same, and it is what makes "the run was demonstrably
+ * still live" a fact of the test rather than a race against a fast provider.
+ */
+export class ParkingProvider extends MockProviderClient {
+  private announce!: () => void;
+  private announceStopped!: () => void;
+  /** Resolves the first time the stream parks. */
+  readonly parked: Promise<void> = new Promise<void>((resolve) => {
+    this.announce = resolve;
+  });
+  readonly stopped: Promise<void> = new Promise<void>((resolve) => {
+    this.announceStopped = resolve;
+  });
+  cancelled = false;
+
+  override async *streamChat(
+    input: Parameters<MockProviderClient["streamChat"]>[0],
+  ): AsyncIterable<AiRunEvent> {
+    const stamp = createTestEventStamper();
+    yield stamp({
+      type: "run.started",
+      runId: input.runId,
+      timestamp: nowIso(),
+      data: { model: input.model, toolCount: 0 },
+    });
+    yield stamp({
+      type: "run.message.delta",
+      runId: input.runId,
+      timestamp: nowIso(),
+      data: { delta: "one" },
+    });
+    try {
+      this.announce();
+      await new Promise<void>((resolve) => {
+        const signal = input.signal;
+        if (signal === undefined || signal.aborted) {
+          resolve();
+          return;
+        }
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      this.cancelled = input.signal?.aborted === true;
+      const aborted = new Error("The operation was aborted.");
+      aborted.name = "AbortError";
+      throw aborted;
+    } finally {
+      this.announceStopped();
+    }
+  }
 }
 
 /** The provider, settings and chat rows a host writes before any turn. */

@@ -9,8 +9,9 @@ right — one install, one version, explicit runtime entry points.
 
 ## Install
 
-The current source is the unpublished `0.7.0` Responses candidate; `0.6.0` is
-the separately captured migration foundation candidate. Install only an exact
+The current source is the unpublished `0.7.0` Responses candidate. The independent
+`0.6.0` migration foundation candidate is projected reproducibly from the same Git
+source using reviewed exclusions and inverse patches. Install only an exact
 qualified artifact and verify its digest. No release tag was published here.
 
 No installable release tag was found in the 2026-10-06 audit. The earlier `0.5.0`
