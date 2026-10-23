@@ -251,7 +251,7 @@ frame.
 | `{event:"task-started"}` (`:432`) | `run.started` `{ model, toolCount }` |
 | `{event:"model-loading", status:"loading"\|"ready"\|"error"}` (`:387`, `:415`, `:421`) | **No equivalent.** See §9 item 3 |
 | `{event:"token", delta}` (`:447`) | `run.message.delta` `{ delta }` |
-| `{event:"reasoning", delta}` (`:459`) | `run.message.completed` `{ reasoningContent }` — **buffered to the end of the turn, not streamed**. See §9 item 4 |
+| `{event:"reasoning", delta}` (`:459`) | `run.message.reasoning-delta` `{ delta }`; `run.message.completed.reasoningContent` reconciles the whole provider turn without duplicating deltas. See §9 item 4 |
 | `{event:"tool_call", …}` (`:488`) | `run.tool.requested` `{ toolCallId, toolName, argumentsJson }` → `run.tool.running` → `run.tool.succeeded`/`failed`. Three events where there was one |
 | `{event:"tool_result", …}` (`:500-503`) | `run.tool.succeeded` `{ resultJson, modelResultJson, sources, truncated, warnings, status }` |
 | `{event:"in-progress", status}` — the follow-up-task hand-off (`:526`) | **Nothing.** A tool round-trip is another iteration inside the same run; no terminal event is emitted between them |
@@ -592,10 +592,10 @@ token stream glued onto the first.
 
 - **`Idempotency-Key` on submit.** `client.submitMessage` mints one and returns
   it; `useChat` parks it on a failed submit so a retry replays the same key.
-- **Reasoning is buffered, not streamed.** `{event:"reasoning", delta}` has no
-  AgentKit counterpart; `reasoningContent` arrives whole on
-  `run.message.completed`. `src-react/src/hooks/useReasoning.ts` and any
-  live-reasoning panel need re-shaping. See §9 item 4.
+- **Reasoning streams separately from answer text.** Map `{event:"reasoning", delta}`
+  to `run.message.reasoning-delta`. `useChat` accumulates it in
+  `metadata.reasoningContent`; completed turn reasoning replaces that turn's
+  streamed suffix. Reload reads the same durable metadata. See §9 item 4.
 - **Orval-generated clients** (`orval.config.ts`, `src-react/src/generated/sdk/*`)
   are generated from `openapi.json`, which is built from `CoreRouter`'s per-route
   Zod schemas. The AgentKit routes are **not** in that OpenAPI document and
@@ -616,7 +616,7 @@ token stream glued onto the first.
 | `src-ts/src/domain/services/queue/task-executor.test.ts` | 1206 | The turn loop: tool calls, the follow-up chain, retry classification, abort | The richest oracle. Re-point at `TurnRunner` + a `MockProviderClient` from `agentkit/testing`. The follow-up-chain assertions become `maxToolIterations` assertions — read them carefully first, because the semantics change from "N tasks" to "N iterations" |
 | `src-ts/src/domain/services/stream-service.chain.test.ts` | — | The tool-call → follow-up → continuation hand-off across two tasks | **The most important one to port, and the one that changes most.** Its subject is the race in §1b. Rewrite the assertion as "one run, no terminal event between iterations, `seq` contiguous" |
 | `stream-service.replay.test.ts` | — | Replay correctness | Becomes a `Last-Event-ID` resume test. `@agentkit/client`'s own suite already does this against a real `transport-http` server with a `fetch` that severs the body mid-frame; a OneMind-level test only needs to prove its hook survives it |
-| `stream-service.reasoning.test.ts` | — | Reasoning deltas reach the client | Must be **rewritten, not ported** — reasoning is no longer streamed (§9 item 4). Rewrite it to pin the new behaviour deliberately, so the change is a decision in the diff and not a silent regression |
+| `stream-service.reasoning.test.ts` | `packages/react/tests/reasoning.test.ts` | Reasoning deltas reach the client | Provider SSE, durable host events, live React projection, SQLite reopen and replay preserve reasoning exactly once (§9 item 4) |
 | `stream-service.license.test.ts` | — | The 402 gate fires before a stream is created | Move to a `RestHandlerDeps.authenticate` test |
 | `src-ts/src/domain/services/task-system.test.ts` + `queue/task-orchestrator.test.ts` (693) + `queue/task-queue-manager.test.ts` (386) | — | Queue admission, concurrency, chat serialization, transitions | **Delete after reading.** `describeTaskRunnerConformance`, `describeAssistantStoreConformance` and the seeded `runTaskSchedule` invariant driver cover strictly more, against two adapters and a two-process contention test. Any scenario these cover that the conformance suites do not is a gap worth filing upstream |
 | `src-ts/src/domain/services/chat-service.tool-events.test.ts` | — | Tool events reach the chat record | Re-point at `listToolEvents` |
@@ -700,15 +700,12 @@ app tables kept moving.
    boundary, since `streamRun` is typed `AsyncIterable<AiRunEvent>`. **(a) is
    cleaner** — a model load is not part of the conversation — but it is one more
    poll. Decide before step 8.
-4. **Reasoning stops streaming.** `{event:"reasoning", delta}`
-   (`stream-service.ts:459`) has no AgentKit counterpart; `reasoningContent`
-   arrives once, whole, on `run.message.completed`
-   (`docs/contracts.md`, event table). For a slow reasoning model this is a
-   visible regression: a live "thinking…" panel becomes a post-hoc block. Options:
-   accept it; render the panel from `run.message.delta` timing alone; or propose
-   a `run.message.reasoning-delta` event upstream as an **additive** contract
-   change (a new event type is non-breaking). Worth raising before step 9,
-   because the answer shapes `useReasoning.ts`.
+4. **Preserve live reasoning.** `run.message.reasoning-delta` is an additive
+   event carrying public provider reasoning separately from answer deltas.
+   The host and React reconcile `run.message.completed.reasoningContent` once
+   per provider turn and persist the result in `metadata.reasoningContent`.
+   Adapt `useReasoning.ts` to that event/metadata pair. Responses summaries are
+   public text; opaque encrypted continuation remains private.
 5. **`GET /api/chats/:id/active-task` and `GET /api/chats/:id/branches` have no
    ops.** The first is answerable host-side via `TaskStore.listByScope` (the
    narrowest query that answers "is anything live here?"); the second has no

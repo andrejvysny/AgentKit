@@ -16,6 +16,7 @@ import type {
   ProviderContinuationStore,
 } from "../ports/provider-continuation-store.js";
 import type { TaskExecutionContext } from "../tasks/task-executor.js";
+import { anchoredHistory } from "./anchored-history.js";
 
 export interface ProviderContinuationSession {
   readonly scope: ProviderContinuationScope;
@@ -42,7 +43,12 @@ export async function prepareProviderContinuation(
   if (input.client.protocol !== "responses") return undefined;
   const port = input.store.continuations;
   if (!port) fail("provider_continuation_store_required");
-  const records = await input.store.conversations.listMessages(input.chatId);
+  const records = await anchoredHistory(
+    input.store.conversations,
+    input.chatId,
+    input.anchorMessageId,
+    Number.POSITIVE_INFINITY,
+  );
   const branchId = branchOf(records, input.anchorMessageId);
   const identity = input.client.connectionIdentity;
   if (!identity || identity.providerId !== input.providerId)
@@ -92,11 +98,11 @@ async function bindScope(
 }
 
 function branchOf(records: MessageRecord[], anchor: string): string {
-  if (!records.some((record) => record.id === anchor))
-    fail("provider_continuation_branch_mismatch");
+  const at = records.findIndex((record) => record.id === anchor);
+  if (at < 0) fail("provider_continuation_branch_mismatch");
+  const ancestors = records.slice(0, at + 1);
   const branch =
-    [...records].reverse().find((record) => record.branchIndex > 0) ??
-    records[0];
+    ancestors.reverse().find((record) => record.branchIndex > 0) ?? records[0];
   if (!branch) return fail("provider_continuation_branch_mismatch");
   return branch.id;
 }

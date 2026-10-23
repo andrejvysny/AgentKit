@@ -202,7 +202,9 @@ export function validateSubmitMessageRequest(
     checkMessageContent(body),
     checkOptionalString(body, "model"),
     checkOptionalString(body, "providerId"),
-    checkOptionalString(body, "parentMessageId"),
+    body["parentMessageId"] === null
+      ? null
+      : checkOptionalString(body, "parentMessageId"),
     checkOptionalMetadata(body, "metadata"),
   );
   if (issue !== null) return { ok: false, detail: issue };

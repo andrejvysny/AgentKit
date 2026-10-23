@@ -12,6 +12,8 @@
 // the `code` string rather than on `instanceof`.
 import type { AiContentPart } from "@agentkit/contracts";
 import type { AssistantStore, MessageRecord } from "@agentkit/host";
+import { describeRootBranching } from "./conversation-root-conformance.js";
+import { describeConversationArchiving } from "./conversation-archive-conformance.js";
 import {
   expectRejectsWithCode,
   type AssistantStoreConformanceHarness,
@@ -104,6 +106,8 @@ export function describeConversationBranching(
 ): void {
   const { create, test } = options;
   const { describe, it, expect } = test;
+  describeRootBranching(options);
+  describeConversationArchiving(options);
 
   describe("conversation branching", () => {
     it("appends a linear chain: parent links, rising depth, branchIndex 0, all active", async () => {

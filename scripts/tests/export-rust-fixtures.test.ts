@@ -25,7 +25,7 @@ describe("Rust parity fixture exporter", () => {
       routes.routes.map((route: { operation: string }) => route.operation),
     ).toEqual(Object.keys(REST_ROUTES));
     const events = JSON.parse(first.get("run-events.json")!);
-    expect(events.variants).toHaveLength(13);
+    expect(events.variants).toHaveLength(14);
     expect(first.size).toBe(14);
     const validator = TypeCompiler.Compile(AiRunEventSchema);
     for (const [path, body] of first) {

@@ -22,6 +22,7 @@ import { isHookTimeout, withHookDeadline } from "./hook-deadline.js";
 import { reconcileOrphanToolCalls } from "./history-reconcile.js";
 import { orderMessagesForProvider } from "./message-order.js";
 import type { TurnRunnerDeps } from "./turn-runner.js";
+import { anchoredHistory } from "./anchored-history.js";
 
 /** Default number of messages replayed to the provider. */
 const DEFAULT_HISTORY_LIMIT = 200;
@@ -299,12 +300,10 @@ export async function resolveAttachments(
  * prompt material — as are the correction harness's write-backs, which were
  * instructions to one pass of one run and not standing orders (below).
  *
- * The records come from `listMessages`, which reports the chat's ACTIVE PATH —
- * so a branch submit replays the branch and not the answer it replaced, with
- * no branch filtering needed here. `orderMessagesForProvider` runs over them
- * unchanged: `orderKey` increases with depth along any path, so ordering the
- * active path by `orderKey` and ordering it by depth are the same order, and
- * the run-scoped tool-call linkage it restores is untouched by branching.
+ * The records follow THIS placeholder's ancestors and its own run's internal
+ * descendants, independently of the chat's current active path. A later queued
+ * turn or branch switch must not change the question an older run answers.
+ * `orderMessagesForProvider` then restores the run-scoped tool-call linkage.
  *
  * The result is then balanced in BOTH directions before it leaves: a tool
  * result whose requesting turn fell outside the window is dropped (below), and
@@ -319,9 +318,12 @@ export async function assembleMessages(
   assistantMessageId: string,
   systemPrompt: string | null,
 ): Promise<AiChatMessage[]> {
-  const records = await deps.store.conversations.listMessages(chatId, {
-    limit: deps.historyLimit ?? DEFAULT_HISTORY_LIMIT,
-  });
+  const records = await anchoredHistory(
+    deps.store.conversations,
+    chatId,
+    assistantMessageId,
+    deps.historyLimit ?? DEFAULT_HISTORY_LIMIT,
+  );
   const ordered = orderMessagesForProvider(records);
   const messages: AiChatMessage[] = [];
   if (systemPrompt) messages.push({ role: "system", content: systemPrompt });

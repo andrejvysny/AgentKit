@@ -93,6 +93,24 @@ key — not `createdAt`, for the same reason `AiRunEvent.seq` orders events:
 several messages can be written in one transaction within the same
 millisecond.
 
+The optional `listTree(chatId, { includeArchived? })` capability returns the
+complete tree in creation order, without a history-window limit. Normal reads
+exclude archived records; `includeArchived: true` is an explicit audit read.
+The reference memory and SQLite stores implement it alongside the optional
+`archiveBranch(messageId)` capability. Archiving validates the entire subtree
+before changing anything and refuses an active target or active descendant
+with `active_branch_archive`. Its result is `{ archivedCount }`.
+
+`MessageRecord.archived` is an optional typed flag, defaulting to false. An
+archive retains message content, metadata, links, identifiers, and branch
+indices. Normal paths, siblings, provider history, forks, and search exclude
+the archived subtree; appending to or activating it is refused. `getMessage`
+still returns the flagged record for audit. New siblings use the maximum
+existing branch index plus one, including archived siblings, so indices are
+never reused. `ImportMessageInput.archived` propagates to descendants, and an
+import with any active archived message is rejected before writing a chat.
+Archived children do not prevent a live parent from being a leaf.
+
 **`MessageRecord.content` is `string | AiContentPart[]`** (`AiMessageContent`,
 `packages/contracts/src/content.ts`), and so are `AppendMessageInput.content`
 and `UpdateMessagePatch.content`. A store round-trips parts **losslessly** and

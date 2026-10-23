@@ -21,7 +21,13 @@ export async function canonicalMessage(
     ...(toolCalls.length ? { toolCalls } : {}),
     parentMessageId: state.lastMessageId,
     activate: false,
-    metadata: { internal: true, canonicalProviderTurn: true },
+    metadata: {
+      internal: true,
+      canonicalProviderTurn: true,
+      ...(event.data.reasoningContent === undefined
+        ? {}
+        : { reasoningContent: event.data.reasoningContent }),
+    },
   });
   state.lastMessageId = record.id;
   for (const call of toolCalls) state.toolCallIds.add(call.id);

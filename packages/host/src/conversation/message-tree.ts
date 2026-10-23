@@ -58,7 +58,9 @@ function byBranchIndexThenOrderKey(a: MessageRecord, b: MessageRecord): number {
 export function activePathOf(
   records: readonly MessageRecord[],
 ): MessageRecord[] {
-  return records.filter((record) => record.active).sort(byDepthThenOrderKey);
+  return records
+    .filter((record) => record.active && record.archived !== true)
+    .sort(byDepthThenOrderKey);
 }
 
 /** The deepest active message — what an unparented append hangs itself from. */
@@ -114,7 +116,10 @@ export function hasActiveChild(
   parentMessageId: string | undefined,
 ): boolean {
   return records.some(
-    (record) => record.parentMessageId === parentMessageId && record.active,
+    (record) =>
+      record.parentMessageId === parentMessageId &&
+      record.active &&
+      record.archived !== true,
   );
 }
 
@@ -123,7 +128,9 @@ export function siblingsOf(
   records: readonly MessageRecord[],
   record: MessageRecord,
 ): MessageRecord[] {
-  return childrenOf(records, record.parentMessageId);
+  return childrenOf(records, record.parentMessageId).filter(
+    (sibling) => sibling.archived !== true,
+  );
 }
 
 /**
@@ -149,7 +156,8 @@ export function activationSetOf(
   records: readonly MessageRecord[],
   messageId: string,
 ): Set<string> {
-  const byId = new Map(records.map((record) => [record.id, record]));
+  const available = records.filter((record) => record.archived !== true);
+  const byId = new Map(available.map((record) => [record.id, record]));
   const set = new Set<string>();
   let cursor = byId.get(messageId);
   while (cursor !== undefined && !set.has(cursor.id)) {
@@ -161,7 +169,7 @@ export function activationSetOf(
   }
   let node = byId.get(messageId);
   while (node !== undefined) {
-    const children = childrenOf(records, node.id);
+    const children = childrenOf(available, node.id);
     const next = children.find((child) => child.active) ?? children[0];
     if (next === undefined || set.has(next.id)) break;
     set.add(next.id);
@@ -183,7 +191,10 @@ export function activationSetOf(
 export function assertAppendActivation(
   input: Pick<AppendMessageInput, "activate" | "parentMessageId">,
 ): void {
-  if (input.activate === false && input.parentMessageId === undefined) {
+  if (
+    input.activate === false &&
+    (input.parentMessageId === undefined || input.parentMessageId === null)
+  ) {
     throw new AgentKitHostError(
       "invalid_append",
       "appendMessage with activate: false must name the parentMessageId to chain off.",
@@ -367,6 +378,7 @@ export interface ImportedMessagePlan {
   orderKey: number;
   depth: number;
   branchIndex: number;
+  archived: boolean;
   /** The resolved link; absent on a root (`undefined` and `null` both mean root). */
   parentMessageId?: string;
   /** The caller's bag, plus `internal: true` when the shorthand asked for it. */
@@ -381,7 +393,8 @@ export type ImportRejectionReason =
   | "forward_parent"
   | "no_active_path"
   | "broken_active_chain"
-  | "active_leaf_has_child";
+  | "active_leaf_has_child"
+  | "archived_active_message";
 
 function rejectImport(
   reason: ImportRejectionReason,
@@ -445,8 +458,16 @@ export function planImportedMessages(
           { chatId, messageId: input.id, parentMessageId: parentId },
         );
       }
-      childCounts.set(parentId, (childCounts.get(parentId) ?? 0) + 1);
     }
+    const archived = input.archived === true || parent?.archived === true;
+    if (archived && input.active)
+      rejectImport(
+        "archived_active_message",
+        `Import for chat ${chatId}: archived message ${input.id} cannot be active.`,
+        { chatId, messageId: input.id },
+      );
+    if (parentId !== undefined && !archived)
+      childCounts.set(parentId, (childCounts.get(parentId) ?? 0) + 1);
     const siblingKey = parentId ?? ROOT_PARENT_KEY;
     const branchIndex = siblingCounts.get(siblingKey) ?? 0;
     siblingCounts.set(siblingKey, branchIndex + 1);
@@ -455,6 +476,7 @@ export function planImportedMessages(
       orderKey: plans.length + 1,
       depth: parent === undefined ? 0 : parent.depth + 1,
       branchIndex,
+      archived,
       ...(parentId === undefined ? {} : { parentMessageId: parentId }),
       metadata: {
         ...(input.metadata ?? {}),

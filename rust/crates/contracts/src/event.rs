@@ -2,7 +2,7 @@ use crate::{AiRunEvent, CONTRACT_VERSION, Optional, validate_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Transport metadata shared by all thirteen run event variants.
+/// Transport metadata shared by all run event variants.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventMetadata {
@@ -47,6 +47,7 @@ impl AiRunEvent {
         match self {
             Self::Started(_) => "run.started",
             Self::MessageDelta(_) => "run.message.delta",
+            Self::MessageReasoningDelta(_) => "run.message.reasoning-delta",
             Self::MessageCompleted(_) => "run.message.completed",
             Self::ToolRequested(_) => "run.tool.requested",
             Self::ToolRunning(_) => "run.tool.running",

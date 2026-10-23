@@ -175,6 +175,7 @@ export interface MessageRow {
   depth: number;
   branch_index: number;
   active: number;
+  archived: number;
   metadata: string;
   created_at: string;
 }
@@ -346,6 +347,7 @@ export function messageFromRow(row: MessageRow): MessageRecord {
     depth: row.depth,
     branchIndex: row.branch_index,
     active: fromIntBool(row.active),
+    ...(row.archived === 1 ? { archived: true } : {}),
     metadata: parseJson<Record<string, unknown>>(row.metadata),
     createdAt: row.created_at,
   };

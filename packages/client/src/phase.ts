@@ -68,7 +68,7 @@ export interface RunPhaseInput {
 /** Events that prove the model has begun answering. */
 const STREAMING_EVENT_TYPES: ReadonlySet<AiRunEvent["type"]> = new Set<
   AiRunEvent["type"]
->(["run.started", "run.message.delta"]);
+>(["run.started", "run.message.delta", "run.message.reasoning-delta"]);
 
 /** The warning code the host writes immediately before a recovery pass. */
 const RETRY_PASS_CODE = "retry_pass";

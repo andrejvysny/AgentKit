@@ -32,12 +32,12 @@ function createV8(path: string): void {
   }
 }
 
-it("upgrades original v8 without changing baseline data and applies v9 on fresh open", async () => {
+it("upgrades original v8 without changing baseline data and applies current schema on fresh open", async () => {
   await temporary(async (path) => {
     createV8(path);
     const store = new SqliteAssistantStore(path);
     try {
-      expect(SCHEMA_VERSION).toBe(9);
+      expect(SCHEMA_VERSION).toBe(10);
       expect((await store.conversations.getChat("kept"))?.title).toBe(
         "Original chat",
       );
@@ -49,7 +49,7 @@ it("upgrades original v8 without changing baseline data and applies v9 on fresh 
             }
           ).user_version,
         ),
-      ).toBe(9);
+      ).toBe(SCHEMA_VERSION);
       const tables = store.database
         .query(
           "SELECT name FROM sqlite_master WHERE name LIKE 'provider_%' ORDER BY name",

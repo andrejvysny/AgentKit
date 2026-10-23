@@ -69,9 +69,26 @@ export function backoffDelayMs(
   return Math.min(max, Math.round(base * factor ** (attempt - 1)));
 }
 
-export function delay(ms: number): Promise<void> {
+export function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted)
+    return Promise.reject(
+      new McpError("mcp_request_aborted", "MCP retry wait was cancelled."),
+    );
   if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve, reject) => {
+    const aborted = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", aborted);
+      reject(
+        new McpError("mcp_request_aborted", "MCP retry wait was cancelled."),
+      );
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", aborted);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", aborted, { once: true });
+  });
 }
 
 /**

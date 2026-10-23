@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 pub enum AiRunEvent {
     Started(AiRunStartedEvent),
     MessageDelta(AiRunMessageDeltaEvent),
+    MessageReasoningDelta(AiRunMessageReasoningDeltaEvent),
     MessageCompleted(AiRunMessageCompletedEvent),
     ToolRequested(AiRunToolRequestedEvent),
     ToolRunning(AiRunToolRunningEvent),
@@ -29,6 +30,11 @@ crate::impl_json_deserialize!(AiRunEvent, |value: Value| {
     if let Ok(member) = <AiRunMessageDeltaEvent as crate::JsonDeserialize>::from_json(value.clone())
     {
         return Ok(Self::MessageDelta(member));
+    }
+    if let Ok(member) =
+        <AiRunMessageReasoningDeltaEvent as crate::JsonDeserialize>::from_json(value.clone())
+    {
+        return Ok(Self::MessageReasoningDelta(member));
     }
     if let Ok(member) =
         <AiRunMessageCompletedEvent as crate::JsonDeserialize>::from_json(value.clone())

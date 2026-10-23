@@ -249,7 +249,7 @@ describe("Responses stream conformance", () => {
         summary_index: 0,
         item_id: "reasoning",
         output_index: 0,
-        delta: "private thought",
+        delta: "public summary",
       },
       terminal([reasoning]),
     ]);
@@ -265,7 +265,15 @@ describe("Responses stream conformance", () => {
     });
     expect(failure(events)).toBeUndefined();
     expect(state?.inputItems.at(-1)).toEqual(reasoning);
-    expect(JSON.stringify(events)).not.toContain("private thought");
+    expect(
+      events
+        .filter((event) => event.type === "run.message.reasoning-delta")
+        .map((event) => event.data.delta),
+    ).toEqual(["public summary"]);
+    expect(
+      events.find((event) => event.type === "run.message.completed")?.data
+        .reasoningContent,
+    ).toBe("public summary");
     expect(JSON.stringify(events)).not.toContain("opaque-secret");
     expect(activity).toBe(3);
   });

@@ -34,6 +34,8 @@ export interface AssistantStoreConformanceHarness {
      * cannot quietly claim the capability and ship nothing.
      */
     search?: boolean;
+    /** False when the optional archiveBranch/listTree ports are not implemented. */
+    archiveBranches?: boolean;
   };
   /** Releases whatever `create()` opened (a db connection, a temp file handle, ...). Synchronous — mirrors `SqliteAssistantStore.close()`. */
   close?: () => void;

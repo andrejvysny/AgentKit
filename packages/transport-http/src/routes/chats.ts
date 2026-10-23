@@ -195,7 +195,7 @@ export async function submitMessage(ctx: RouteContext): Promise<Response> {
   // read that answers it — it includes the message itself, and raises
   // `not_found` (a 404) for an id nothing has.
   const parentMessageId = validated.value.parentMessageId;
-  if (parentMessageId !== undefined) {
+  if (typeof parentMessageId === "string") {
     const siblings =
       await ctx.deps.store.conversations.listSiblings(parentMessageId);
     const parent = siblings.find((record) => record.id === parentMessageId);
@@ -247,17 +247,16 @@ export async function submitMessage(ctx: RouteContext): Promise<Response> {
  * question is reconstructed from what it left behind — its user message for the
  * body, the task payload for the model and provider it named.
  *
- * `parentMessageId` is compared only when THIS request names one. The store
- * resolves an absent parent to whatever the active leaf was at the time, so a
- * replay that omits it cannot be told apart, after the fact, from a first
- * request that also omitted it. Naming a DIFFERENT parent than the recorded one
- * is the case that matters, and that one is caught.
+ * New tasks retain the requested parent in their payload, so explicit null
+ * (a root branch) stays distinct from an omitted parent (the active leaf).
+ * Older named-parent submissions predate that field; their stored user parent
+ * remains the compatibility fallback for a replay naming the same message.
  */
 async function submitReplayMismatch(
   ctx: RouteContext,
   existing: TaskRecord,
   request: SubmitMessageRequest,
-  parentMessageId: string | undefined,
+  parentMessageId: string | null | undefined,
 ): Promise<Response | null> {
   const payload = existing.payload as Record<string, unknown>;
   const userMessageId = payload["userMessageId"];
@@ -272,7 +271,10 @@ async function submitReplayMismatch(
     metadata: request.metadata ?? {},
     model: request.model ?? null,
     providerId: request.providerId ?? null,
-    parentMessageId: parentMessageId ?? null,
+    parentMessageId:
+      parentMessageId === undefined
+        ? { append: true }
+        : { parent: parentMessageId },
   });
   const recorded = await turnFingerprint({
     content: stored.content,
@@ -280,7 +282,11 @@ async function submitReplayMismatch(
     model: payload["model"] ?? null,
     providerId: payload["providerId"] ?? null,
     parentMessageId:
-      parentMessageId === undefined ? null : (stored.parentMessageId ?? null),
+      "parentMessageId" in payload
+        ? { parent: payload["parentMessageId"] }
+        : typeof parentMessageId === "string"
+          ? { parent: stored.parentMessageId ?? null }
+          : { append: true },
   });
   return asked === recorded ? null : keyMismatch(ctx);
 }

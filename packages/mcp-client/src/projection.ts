@@ -27,6 +27,8 @@ export interface McpToolCallOutcome {
   /** Every content part, untouched, for a UI that can render images/resources. */
   content: readonly unknown[];
   structuredContent?: Record<string, unknown>;
+  /** Standard MCP result metadata, preserved for host/UI consumers. */
+  resultMetadata?: Record<string, unknown>;
   /** Content-part types other than `text`, surfaced as a warning. */
   nonTextTypes: string[];
   /** The server reported the CALL failed. Not a transport fault. */
@@ -137,6 +139,7 @@ export function projectMcpCallResult(
     }
   }
   const structured = result["structuredContent"];
+  const metadata = result["_meta"];
   return {
     canonicalId: `mcp.${serverAlias}.${effectiveToolName}`,
     serverAlias,
@@ -144,6 +147,7 @@ export function projectMcpCallResult(
     text: texts.join("\n"),
     content,
     ...(isRecord(structured) ? { structuredContent: structured } : {}),
+    ...(isRecord(metadata) ? { resultMetadata: metadata } : {}),
     nonTextTypes: [...nonTextTypes],
     isError: result["isError"] === true,
   };

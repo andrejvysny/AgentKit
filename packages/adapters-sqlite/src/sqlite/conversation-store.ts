@@ -8,6 +8,7 @@
  */
 import {
   activationSetOf,
+  archiveSubtreeOf,
   activePathOf,
   assertAppendActivation,
   assertListMessagesCursors,
@@ -267,7 +268,9 @@ export class SqliteConversationStore implements ConversationStore {
       const parent =
         input.parentMessageId === undefined
           ? leaf
-          : this.requireParentRow(input.chatId, input.parentMessageId);
+          : input.parentMessageId === null
+            ? null
+            : this.requireParentRow(input.chatId, input.parentMessageId);
       const parentId = parent === null ? null : parent.id;
       // A CHAIN append moves no path and takes its `active` from the parent
       // instead. `assertAppendActivation` has already proved a parent was
@@ -286,7 +289,7 @@ export class SqliteConversationStore implements ConversationStore {
       // one message would end up with two active children.
       const branchRow = this.conn.get(
         `SELECT COALESCE(MAX(branch_index) + 1, 0) as nextIndex,
-                COALESCE(MAX(active), 0) as hasActiveChild
+                COALESCE(MAX(CASE WHEN archived = 0 THEN active ELSE 0 END), 0) as hasActiveChild
          FROM messages
          WHERE chat_id = $chatId AND parent_message_id IS $parentId`,
         { $chatId: input.chatId, $parentId: parentId },
@@ -366,7 +369,7 @@ export class SqliteConversationStore implements ConversationStore {
   /** The chat's deepest active message, or null when nothing is active. */
   private activeLeafRow(chatId: string): MessageRecord | null {
     const row = this.conn.get(
-      `SELECT * FROM messages WHERE chat_id = $chatId AND active = 1
+      `SELECT * FROM messages WHERE chat_id = $chatId AND active = 1 AND archived = 0
        ORDER BY depth DESC, order_key DESC LIMIT 1`,
       { $chatId: chatId },
     ) as MessageRow | null;
@@ -382,7 +385,7 @@ export class SqliteConversationStore implements ConversationStore {
       `SELECT * FROM messages WHERE id = $id AND chat_id = $chatId`,
       { $id: parentMessageId, $chatId: chatId },
     ) as MessageRow | null;
-    if (row === null) {
+    if (row === null || row.archived === 1) {
       throw new RecordNotFoundError(
         `Parent message not found in chat ${chatId}: ${parentMessageId}`,
       );
@@ -485,7 +488,7 @@ export class SqliteConversationStore implements ConversationStore {
     opts?: ListMessagesOptions,
   ): Promise<MessageRecord[]> {
     assertListMessagesCursors(opts);
-    let sql = `SELECT * FROM messages WHERE chat_id = $chatId AND active = 1`;
+    let sql = `SELECT * FROM messages WHERE chat_id = $chatId AND active = 1 AND archived = 0`;
     const params: Params = { $chatId: chatId };
     if (opts?.afterOrderKey !== undefined) {
       sql += ` AND order_key > $after`;
@@ -549,7 +552,7 @@ export class SqliteConversationStore implements ConversationStore {
       const record = this.requireMessage(messageId);
       const rows = this.conn.all(
         `SELECT * FROM messages
-         WHERE chat_id = $chatId AND parent_message_id IS $parentId
+         WHERE chat_id = $chatId AND parent_message_id IS $parentId AND archived = 0
          ORDER BY branch_index ASC, order_key ASC`,
         {
           $chatId: record.chatId,
@@ -564,6 +567,34 @@ export class SqliteConversationStore implements ConversationStore {
     return this.conn.whenFree(() => {
       const record = this.requireMessage(messageId);
       return this.switchActivePath(record.chatId, messageId);
+    }, this.txOwner);
+  }
+
+  async listTree(
+    chatId: string,
+    options?: { includeArchived?: boolean },
+  ): Promise<MessageRecord[]> {
+    return this.conn.readCommitted(() => {
+      const rows = this.conn.all(
+        `SELECT * FROM messages WHERE chat_id = $chatId ${options?.includeArchived === true ? "" : "AND archived = 0"} ORDER BY order_key ASC`,
+        { $chatId: chatId },
+      ) as MessageRow[];
+      return rows.map(messageFromRow);
+    }, this.txOwner);
+  }
+
+  async archiveBranch(messageId: string): Promise<{ archivedCount: number }> {
+    return this.conn.whenFree(() => {
+      const target = this.requireMessage(messageId);
+      const subtree = archiveSubtreeOf(
+        this.chatMessages(target.chatId),
+        messageId,
+      );
+      for (const record of subtree)
+        this.conn.run(`UPDATE messages SET archived = 1 WHERE id = $id`, {
+          $id: record.id,
+        });
+      return { archivedCount: subtree.length };
     }, this.txOwner);
   }
 
@@ -772,6 +803,10 @@ export class SqliteConversationStore implements ConversationStore {
             $createdAt: plan.createdAt,
           },
         );
+        if (plan.archived)
+          this.conn.run(`UPDATE messages SET archived = 1 WHERE id = $id`, {
+            $id: plan.input.id,
+          });
       }
       return {
         id: input.chat.id,
@@ -811,6 +846,7 @@ export class SqliteConversationStore implements ConversationStore {
          JOIN messages AS m ON m.rowid = message_search.rowid
         WHERE message_search MATCH $match
           AND ($chatId IS NULL OR m.chat_id = $chatId)
+          AND m.archived = 0
           AND COALESCE(json_extract(m.metadata, '$.internal'), 0) <> 1
           AND COALESCE(json_extract(m.metadata, '$.placeholder'), 0) <> 1
         ORDER BY bm25(message_search)
@@ -836,7 +872,7 @@ export class SqliteConversationStore implements ConversationStore {
     const row = this.conn.get(`SELECT * FROM messages WHERE id = $id`, {
       $id: messageId,
     }) as MessageRow | null;
-    if (row === null) {
+    if (row === null || row.archived === 1) {
       throw new RecordNotFoundError(`Message not found: ${messageId}`);
     }
     return messageFromRow(row);

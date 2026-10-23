@@ -119,7 +119,7 @@ export interface SubmitOptions {
    * edit-and-regenerate write. {@link UseChatResult.editAndResubmit} is the
    * named spelling of it.
    */
-  parentMessageId?: string;
+  parentMessageId?: string | null;
   metadata?: Record<string, unknown>;
   /**
    * Replay a specific `Idempotency-Key`. Rarely needed: a failed submit parks
@@ -401,6 +401,8 @@ export function useChat(
       // `createRunPhaseTracker`.
       const tracker = createRunPhaseTracker();
       let streamed = false;
+      let reasoningContent = "";
+      let reasoningTurnStart = 0;
       let finishReason: string | null = null;
       let lastEventId: string | undefined;
 
@@ -419,7 +421,19 @@ export function useChat(
           const boundary = tracker.startedNewPass();
           if (boundary) {
             streamed = false;
+            reasoningContent = "";
+            reasoningTurnStart = 0;
             finishReason = null;
+          }
+          if (event.type === "run.message.reasoning-delta") {
+            reasoningContent += event.data.delta;
+          } else if (event.type === "run.message.completed") {
+            if (event.data.reasoningContent !== undefined) {
+              reasoningContent =
+                reasoningContent.slice(0, reasoningTurnStart) +
+                event.data.reasoningContent;
+            }
+            reasoningTurnStart = reasoningContent.length;
           }
           if (event.type === "run.message.delta") streamed = true;
           const reason = finishReasonOf(event);
@@ -431,6 +445,7 @@ export function useChat(
             streamed,
             boundary,
             finishReason,
+            reasoningContent,
           });
         }
         // The stream closed because the TASK is terminal, and anything written
@@ -905,6 +920,7 @@ interface AppliedEvent {
   boundary: boolean;
   /** The pass's `finishReason` as of this event. */
   finishReason: string | null;
+  reasoningContent: string;
 }
 
 function applyEvent(
@@ -912,7 +928,8 @@ function applyEvent(
   placeholderId: string,
   applied: AppliedEvent,
 ): void {
-  const { event, phase, streamed, boundary, finishReason } = applied;
+  const { event, phase, streamed, boundary, finishReason, reasoningContent } =
+    applied;
   update((prev) => {
     let messages = prev.messages;
     if (boundary) {
@@ -924,6 +941,23 @@ function applyEvent(
         ...message,
         content: "",
       }));
+    }
+    if (
+      boundary ||
+      event.type === "run.message.reasoning-delta" ||
+      event.type === "run.message.completed"
+    ) {
+      messages = replaceMessage(messages, placeholderId, (message) => {
+        if (
+          !reasoningContent &&
+          message.metadata.reasoningContent === undefined
+        )
+          return message;
+        return {
+          ...message,
+          metadata: { ...message.metadata, reasoningContent },
+        };
+      });
     }
     if (event.type === "run.message.delta") {
       messages = replaceMessage(messages, placeholderId, (message) =>
@@ -981,9 +1015,11 @@ function runFailure(events: readonly AiRunEvent[]): Error | null {
  */
 function restoreTail(
   messages: readonly MessageDto[],
-  parentMessageId: string,
+  parentMessageId: string | null,
   tail: readonly MessageDto[],
 ): MessageDto[] {
+  if (parentMessageId === null)
+    return messages.length === 0 ? [...tail] : [...messages];
   const last = messages[messages.length - 1];
   if (last === undefined || last.id !== parentMessageId) return [...messages];
   return [...messages, ...tail];

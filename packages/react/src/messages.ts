@@ -137,8 +137,9 @@ export function optimisticPair(input: {
  */
 export function truncateAfter(
   messages: readonly MessageDto[],
-  parentMessageId: string,
+  parentMessageId: string | null,
 ): MessageDto[] {
+  if (parentMessageId === null) return [];
   const at = messages.findIndex((message) => message.id === parentMessageId);
   if (at === -1) return [...messages];
   return messages.slice(0, at + 1);
