@@ -14,6 +14,7 @@ const ignored = new Set([
   ".git",
   "node_modules",
   "dist",
+  "target",
   "coverage",
   ".DS_Store",
 ]);

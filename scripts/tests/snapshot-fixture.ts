@@ -6,6 +6,7 @@ const generated = new Set([
   ".git",
   "node_modules",
   "dist",
+  "target",
   "coverage",
   ".DS_Store",
   "snapshot-provenance.json",

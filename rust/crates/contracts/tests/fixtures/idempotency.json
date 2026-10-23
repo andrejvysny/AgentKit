@@ -1,0 +1,156 @@
+{
+  "encoding": "UTF-8",
+  "fingerprints": [
+    {
+      "fingerprint": "39c5d7f579d890194561ab5cc63f3762c00e5d648a93f5f755eb2fb3ddac57c1",
+      "input": {
+        "content": "hello",
+        "model": "m1",
+        "providerId": "p1"
+      }
+    },
+    {
+      "fingerprint": "39c5d7f579d890194561ab5cc63f3762c00e5d648a93f5f755eb2fb3ddac57c1",
+      "input": {
+        "content": "hello",
+        "model": "m1",
+        "providerId": "p1"
+      }
+    },
+    {
+      "fingerprint": "d061d54da87046f9191d04259faa6deaa8ecbf51af7f965f703913c770312609",
+      "input": {
+        "content": [
+          {
+            "text": "雪🙂",
+            "type": "text"
+          }
+        ],
+        "metadata": {
+          "a": null,
+          "z": 1
+        }
+      }
+    },
+    {
+      "fingerprint": "83804cec3d20e77ea7aa606ae3c303d55220590c6d77f3b3a608e12e6505426e",
+      "input": {
+        "content": "changed",
+        "model": "m1",
+        "providerId": "p1"
+      }
+    },
+    {
+      "fingerprint": "6e858c1e1a2d853496066ace387f50bede7cde7aca0e290fe513ced04d615f2c",
+      "input": {
+        "nested": {
+          "a": "é",
+          "z": false
+        },
+        "values": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "fingerprint": "7e19639df1fa85e634df6c60ccd75761dc6f6861b98ec63bd197e75e8ed1ee4d",
+      "input": {
+        "nested": {
+          "a": "é",
+          "z": false
+        },
+        "values": [
+          2,
+          1
+        ]
+      }
+    },
+    {
+      "fingerprint": "0511f3c097baf785724fb93477ea325fb7082e10ac07f855827f4753d3a3706d",
+      "input": {
+        "nullable": null
+      }
+    },
+    {
+      "fingerprint": "70f0f925940a75ca61b1aa73948bd52298729b72999cdc1011539d4fcd278421",
+      "input": {
+        "numbers": [
+          1,
+          0,
+          0.000001,
+          1e-7,
+          100000000000000000000,
+          1e+21
+        ]
+      }
+    },
+    {
+      "fingerprint": "8f82bf849fd8838f43d956d0abb195fd1f7ff776b6ce0491f82a51c4d882c9f4",
+      "input": {
+        "𐀀": "supplementary",
+        "": "BMP"
+      }
+    },
+    {
+      "fingerprint": "b71e124675fc80e7314688bffdb68e83515851fb51474125db9a0c4c8aca3808",
+      "input": {
+        "2": "two",
+        "10": "ten"
+      }
+    }
+  ],
+  "hash": "SHA-256",
+  "limitations": [
+    "Empty key tests derivation only; HTTP requires a non-empty key.",
+    "Colon-containing identities are not injective; shipped hosts generate colon-free identities.",
+    "Fingerprint vectors cover JSON inputs; JavaScript undefined properties are omitted."
+  ],
+  "regeneratePreimage": "<chatId>:<messageId>:<key>",
+  "source": "packages/transport-http/src/idempotency.ts",
+  "submitPreimage": "<chatId>:<key>",
+  "vectors": [
+    {
+      "chatId": "chat-1",
+      "key": "retry-1",
+      "messageId": "message-1",
+      "regenerateTaskId": "task_rk_8c9fd8afb8ba6d9c12d92fabbfde6f765e224ab5391e8fbd327c59f30f4caaec",
+      "submitTaskId": "task_ik_d2c2bfab71ae20e1e9edfa091178e5db92bae54310b8d2b3b758d83b41b57f2c"
+    },
+    {
+      "chatId": "chat-2",
+      "key": "retry-1",
+      "messageId": "message-1",
+      "regenerateTaskId": "task_rk_17c5bdf6e6480bea2221005a0ff0d7ae1bae7c1f4c35e72fac24b20d5a7bf8f9",
+      "submitTaskId": "task_ik_1e24671cd4dd84e432e8404013a6ad85ae95150db1c04a7e81b1396a713e17d7"
+    },
+    {
+      "chatId": "chat-1",
+      "key": "retry-1",
+      "messageId": "message-2",
+      "regenerateTaskId": "task_rk_46a591e7c18c67d4f600aeb0e780447f1816c96dc61c54d8b5efa890da37793d",
+      "submitTaskId": "task_ik_d2c2bfab71ae20e1e9edfa091178e5db92bae54310b8d2b3b758d83b41b57f2c"
+    },
+    {
+      "chatId": "chat-1",
+      "key": "message-1:retry-1",
+      "messageId": "message-1",
+      "regenerateTaskId": "task_rk_0578689b758e82e713ff4c6918a26d57446b5ef1a79b02db134bdd70c4ecc85e",
+      "submitTaskId": "task_ik_8c9fd8afb8ba6d9c12d92fabbfde6f765e224ab5391e8fbd327c59f30f4caaec"
+    },
+    {
+      "chatId": "chat-雪",
+      "key": "café:雪🙂",
+      "messageId": "message-🙂",
+      "regenerateTaskId": "task_rk_4b5a24e66eba5990325dc4d831a99251bd52c16ec608a81f8d6a331d83f4ce31",
+      "submitTaskId": "task_ik_8d391f876975e0a00e6a6df85ea9731626a560b9f23e53deeab6edf4893bfa6d"
+    },
+    {
+      "chatId": "chat-1",
+      "key": "",
+      "messageId": "message-1",
+      "regenerateTaskId": "task_rk_bc983c211ed8969559a654207808975781c10ae98dc86c61e3e3482a0bfc7984",
+      "submitTaskId": "task_ik_bbe000fd15e0e21cc836e030cbbcd5ce2812a757267f8689311b9d441f742ede"
+    }
+  ]
+}

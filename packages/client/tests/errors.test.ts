@@ -20,7 +20,7 @@ let client: ReturnType<typeof createAgentKitClient>;
 beforeEach(async () => {
   server = await startTestServer();
   client = createAgentKitClient({ baseUrl: server.baseUrl });
-});
+}, 60_000);
 
 afterEach(async () => {
   await server.stop();

@@ -1,0 +1,28 @@
+[package]
+name = "agentkit-core"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+description = "AgentKit provider streams and tool execution engine"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[dependencies]
+agentkit-contracts = { path = "../contracts", version = "0.1.0" }
+async-trait = "0.1"
+async-stream = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+futures-util = "0.3"
+reqwest = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+http = "1"

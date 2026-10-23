@@ -1,0 +1,68 @@
+[
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "model": "gpt-golden",
+      "toolCount": 0
+    },
+    "eventId": "evt_e1dae509-399a-4a01-a79c-7cf4ce3f8577",
+    "runId": "run-golden-usage-run",
+    "seq": 0,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.started"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "delta": "Usage-tracked answer."
+    },
+    "eventId": "evt_3dab7a32-7bcc-45c4-a943-956fd2c09dae",
+    "runId": "run-golden-usage-run",
+    "seq": 1,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.message.delta"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "content": "Usage-tracked answer.",
+      "toolCallCount": 0
+    },
+    "eventId": "evt_a33e7791-0853-4763-8dca-ae37c2a81c9b",
+    "runId": "run-golden-usage-run",
+    "seq": 2,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.message.completed"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "attempt": 1,
+      "callId": "call-usage-0",
+      "completionTokens": 5,
+      "finalForCall": true,
+      "model": "gpt-golden",
+      "promptTokens": 10,
+      "source": "stream",
+      "step": 1,
+      "totalTokens": 15
+    },
+    "eventId": "evt_a0218e2b-1d1a-4683-a51f-9a7fdb976f7f",
+    "runId": "run-golden-usage-run",
+    "seq": 3,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.usage"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "finishReason": "stop",
+      "iterations": 1
+    },
+    "eventId": "evt_af22ffda-3b74-4546-a6da-19cdb612c41f",
+    "runId": "run-golden-usage-run",
+    "seq": 4,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.completed"
+  }
+]

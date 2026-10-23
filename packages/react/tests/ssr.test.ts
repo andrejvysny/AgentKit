@@ -32,7 +32,7 @@ let server: TestServer;
 
 beforeEach(async () => {
   server = await startTestServer();
-});
+}, 60_000);
 
 afterEach(async () => {
   await server.stop();

@@ -51,6 +51,7 @@ export interface TestServer {
 }
 
 export interface TestServerOptions {
+  backend?: "typescript" | "rust";
   /** The turn the mock provider plays. Defaults to a single short answer. */
   provider?: MockProviderClient;
   /** Merged over the wiring — `authenticate` for the auth-header test. */
@@ -60,6 +61,10 @@ export interface TestServerOptions {
 export async function startTestServer(
   options: TestServerOptions = {},
 ): Promise<TestServer> {
+  if ((options.backend ?? process.env["AGENTKIT_TEST_BACKEND"]) === "rust") {
+    const { startRustClientServer } = await import("./rust-server.js");
+    return startRustClientServer(options);
+  }
   const store = new MemoryAssistantStore();
   const secrets = new MemorySecretStore();
   const taskRunner = new SingleProcessTaskRunner({

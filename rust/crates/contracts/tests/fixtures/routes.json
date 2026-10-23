@@ -1,0 +1,245 @@
+{
+  "apiVersion": "v1",
+  "routes": [
+    {
+      "method": "POST",
+      "operation": "createChat",
+      "path": "/v1/chats",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listChats",
+      "path": "/v1/chats",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "getChat",
+      "path": "/v1/chats/:chatId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "PATCH",
+      "operation": "updateChat",
+      "path": "/v1/chats/:chatId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "DELETE",
+      "operation": "deleteChat",
+      "path": "/v1/chats/:chatId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listMessages",
+      "path": "/v1/chats/:chatId/messages",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "submitMessage",
+      "path": "/v1/chats/:chatId/messages",
+      "requiredHeaders": [
+        "Idempotency-Key"
+      ]
+    },
+    {
+      "method": "POST",
+      "operation": "regenerateMessage",
+      "path": "/v1/chats/:chatId/messages/:messageId/regenerate",
+      "requiredHeaders": [
+        "Idempotency-Key"
+      ]
+    },
+    {
+      "method": "POST",
+      "operation": "forkChat",
+      "path": "/v1/chats/:chatId/fork",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "searchMessages",
+      "path": "/v1/search",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "activateBranch",
+      "path": "/v1/messages/:messageId/activate",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listSiblings",
+      "path": "/v1/messages/:messageId/siblings",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "getRun",
+      "path": "/v1/runs/:runId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "streamRun",
+      "path": "/v1/runs/:runId/stream",
+      "requiredHeaders": [],
+      "responseContentType": "text/event-stream",
+      "resumeHeader": "Last-Event-ID"
+    },
+    {
+      "method": "POST",
+      "operation": "cancelRun",
+      "path": "/v1/runs/:runId/cancel",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "resumeRun",
+      "path": "/v1/runs/:runId/resume",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listToolEvents",
+      "path": "/v1/chats/:chatId/tool-events",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listProposals",
+      "path": "/v1/chats/:chatId/proposals",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "approveProposal",
+      "path": "/v1/proposals/:proposalId/approve",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "rejectProposal",
+      "path": "/v1/proposals/:proposalId/reject",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "applyProposal",
+      "path": "/v1/proposals/:proposalId/apply",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listProviders",
+      "path": "/v1/providers",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "createProvider",
+      "path": "/v1/providers",
+      "requiredHeaders": []
+    },
+    {
+      "method": "PATCH",
+      "operation": "updateProvider",
+      "path": "/v1/providers/:providerId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "DELETE",
+      "operation": "deleteProvider",
+      "path": "/v1/providers/:providerId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listModels",
+      "path": "/v1/providers/:providerId/models",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "refreshProviderModels",
+      "path": "/v1/providers/:providerId/models/refresh",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "testProvider",
+      "path": "/v1/providers/:providerId/test",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "getSettings",
+      "path": "/v1/settings",
+      "requiredHeaders": []
+    },
+    {
+      "method": "PATCH",
+      "operation": "updateSettings",
+      "path": "/v1/settings",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listAllowances",
+      "path": "/v1/chats/:chatId/write-policy/allowances",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "grantAllowance",
+      "path": "/v1/chats/:chatId/write-policy/allowances",
+      "requiredHeaders": []
+    },
+    {
+      "method": "DELETE",
+      "operation": "revokeAllowance",
+      "path": "/v1/chats/:chatId/write-policy/allowances/:allowanceId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listMcpServers",
+      "path": "/v1/mcp/servers",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "createMcpServer",
+      "path": "/v1/mcp/servers",
+      "requiredHeaders": []
+    },
+    {
+      "method": "PATCH",
+      "operation": "updateMcpServer",
+      "path": "/v1/mcp/servers/:serverId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "DELETE",
+      "operation": "deleteMcpServer",
+      "path": "/v1/mcp/servers/:serverId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listTools",
+      "path": "/v1/tools",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "getVersion",
+      "path": "/v1/version",
+      "requiredHeaders": []
+    }
+  ]
+}

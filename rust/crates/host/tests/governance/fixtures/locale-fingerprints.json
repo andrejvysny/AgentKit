@@ -1,0 +1,36 @@
+{
+  "source": "packages/host/src/proposals/action-id.ts::writePayloadFingerprint",
+  "input": { "ä": 1, "z": 2 },
+  "evidence": [
+    {
+      "runtime": "Node 22.23.3",
+      "LANG": "en_US.UTF-8",
+      "LC_ALL": "en_US.UTF-8",
+      "resolvedLocale": "en-US",
+      "fingerprint": "597a8244534226f771781ce0ca794742e42396ae5a6761e182ae8c16ba485e0f"
+    },
+    {
+      "runtime": "Node 22.23.3",
+      "LANG": "sv_SE.UTF-8",
+      "LC_ALL": "sv_SE.UTF-8",
+      "resolvedLocale": "sv-SE",
+      "fingerprint": "896b8dd27b9b539d56c30c96acce8910a2293d7bef3fc3ef87195bc2eb778073"
+    },
+    {
+      "runtime": "Bun 1.4.0",
+      "LANG": "en_US.UTF-8",
+      "LC_ALL": "en_US.UTF-8",
+      "resolvedLocale": "en-US",
+      "fingerprint": "597a8244534226f771781ce0ca794742e42396ae5a6761e182ae8c16ba485e0f"
+    },
+    {
+      "runtime": "Bun 1.4.0",
+      "LANG": "sv_SE.UTF-8",
+      "LC_ALL": "sv_SE.UTF-8",
+      "resolvedLocale": "en-US",
+      "fingerprint": "597a8244534226f771781ce0ca794742e42396ae5a6761e182ae8c16ba485e0f"
+    }
+  ],
+  "nativeIdentityVersion": "native-governance-v1",
+  "nativeFingerprint": "native-governance-v1:896b8dd27b9b539d56c30c96acce8910a2293d7bef3fc3ef87195bc2eb778073"
+}

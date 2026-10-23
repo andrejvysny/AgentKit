@@ -64,6 +64,7 @@ export interface TestServer {
 }
 
 export interface TestServerOptions {
+  backend?: "typescript" | "rust";
   provider?: AiProviderClient;
   /**
    * Tools to stage for every turn. Only the multi-pass test needs them: the
@@ -77,6 +78,10 @@ export interface TestServerOptions {
 export async function startTestServer(
   options: TestServerOptions = {},
 ): Promise<TestServer> {
+  if ((options.backend ?? process.env["AGENTKIT_TEST_BACKEND"]) === "rust") {
+    const { startRustReactServer } = await import("./rust-server.js");
+    return startRustReactServer(options);
+  }
   const store = new MemoryAssistantStore();
   const taskRunner = new SingleProcessTaskRunner({
     store,
