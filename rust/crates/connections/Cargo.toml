@@ -1,0 +1,35 @@
+[package]
+name = "agentkit-connections"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+description = "App-isolated native connections, consent, and secure credential ports"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "README.md"
+
+[features]
+default = []
+os-keychain = ["dep:keyring"]
+http = ["dep:reqwest"]
+reqwest-transport = ["http"]
+
+[dependencies]
+agentkit-contracts = { path = "../contracts", version = "0.1.0" }
+async-trait = "0.1"
+keyring = { version = "3", optional = true, features = ["apple-native", "windows-native", "sync-secret-service"] }
+reqwest = { workspace = true, optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "sync"] }
+url = { version = "2", features = ["serde"] }
+zeroize = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }
+
+[[example]]
+name = "keychain_qualification"
+required-features = ["os-keychain"]

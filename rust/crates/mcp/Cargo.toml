@@ -1,0 +1,33 @@
+[package]
+name = "agentkit-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AgentKit MCP client and server transports"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "README.md"
+
+[dependencies]
+agentkit-contracts = { path = "../contracts", version = "0.1.0" }
+agentkit-core = { path = "../core", version = "0.1.0" }
+async-trait.workspace = true
+futures.workspace = true
+axum = "=0.8.8"
+http = "=1.5.0"
+reqwest.workspace = true
+rmcp = { version = "=3.5.0", default-features = false, features = ["server", "client", "transport-child-process", "transport-streamable-http-client-reqwest", "transport-streamable-http-server", "reqwest"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle = "=2.6.1"
+sse-stream = "=0.2.6"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tokio-util = "=0.7.20"
+tower = { version = "=0.5.3", features = ["util"] }
+uuid = { version = "=1.28.0", features = ["v4"] }
+url = "=2.5.8"
+
+[dev-dependencies]
+tempfile = "=3.27.0"

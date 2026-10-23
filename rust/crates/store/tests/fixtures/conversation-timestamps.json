@@ -1,0 +1,86 @@
+{
+  "evidence": {
+    "runtime": "1.4.0",
+    "locale": "en-US",
+    "source": "Actual MemoryAssistantStore and SqliteAssistantStore importConversation/listChats; Date.toISOString"
+  },
+  "imports": [
+    "2026-10-22T12:00:00.123456789Z",
+    "2026-10-22T14:00:00+02:00",
+    "invalid timestamp",
+    "9223372036854776000",
+    "+999999999-01-01T00:00:00.000Z"
+  ],
+  "importOrder": {
+    "memory": [
+      "invalid timestamp",
+      "9223372036854776000",
+      "2026-10-22T14:00:00+02:00",
+      "2026-10-22T12:00:00.123456789Z",
+      "+999999999-01-01T00:00:00.000Z"
+    ],
+    "sqlite": [
+      "invalid timestamp",
+      "9223372036854776000",
+      "2026-10-22T14:00:00+02:00",
+      "2026-10-22T12:00:00.123456789Z",
+      "+999999999-01-01T00:00:00.000Z"
+    ]
+  },
+  "localeDivergence": {
+    "input": ["ä", "z"],
+    "memory": ["z", "ä"],
+    "sqlite": ["ä", "z"]
+  },
+  "epochs": [
+    {
+      "milliseconds": -8640000000000000,
+      "text": "-271821-04-20T00:00:00.000Z"
+    },
+    {
+      "milliseconds": -62198755200000,
+      "text": "-000001-01-01T00:00:00.000Z"
+    },
+    {
+      "milliseconds": -62167219200000,
+      "text": "0000-01-01T00:00:00.000Z"
+    },
+    {
+      "milliseconds": -1,
+      "text": "1969-12-31T23:59:59.999Z"
+    },
+    {
+      "milliseconds": 0,
+      "text": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "milliseconds": 951782400000,
+      "text": "2000-02-29T00:00:00.000Z"
+    },
+    {
+      "milliseconds": 253402300800000,
+      "text": "+010000-01-01T00:00:00.000Z"
+    },
+    {
+      "milliseconds": 8640000000000000,
+      "text": "+275760-09-13T00:00:00.000Z"
+    }
+  ],
+  "timeClip": [
+    {
+      "input": "-0",
+      "milliseconds": 0,
+      "text": "1970-01-01T00:00:00.000Z"
+    },
+    {
+      "input": "1234.75",
+      "milliseconds": 1234,
+      "text": "1970-01-01T00:00:01.234Z"
+    },
+    {
+      "input": "-1234.75",
+      "milliseconds": -1234,
+      "text": "1969-12-31T23:59:58.766Z"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+[package]
+name = "agentkit-rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "AgentKit native SDK integration facade"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[features]
+default = []
+runtime = ["dep:agentkit-core", "dep:agentkit-connections"]
+durable = ["runtime", "dep:agentkit-host", "dep:agentkit-store"]
+client = ["dep:agentkit-client"]
+http = ["durable", "dep:agentkit-transport-http", "agentkit-host/http"]
+mcp = ["dep:agentkit-mcp"]
+keychain = ["runtime", "agentkit-connections/os-keychain"]
+
+[dependencies]
+agentkit-contracts = { path = "../contracts", version = "0.1.0" }
+agentkit-core = { path = "../core", version = "0.1.0", optional = true }
+agentkit-connections = { path = "../connections", version = "0.1.0", optional = true }
+agentkit-host = { path = "../host", version = "0.1.0", optional = true }
+agentkit-store = { path = "../store", version = "0.1.0", optional = true }
+agentkit-client = { path = "../client", version = "0.1.0", optional = true }
+agentkit-transport-http = { path = "../transport-http", version = "0.1.0", optional = true }
+agentkit-mcp = { path = "../mcp", version = "0.1.0", optional = true }

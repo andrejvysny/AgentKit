@@ -1,0 +1,740 @@
+{
+  "formatVersion": 1,
+  "startMs": 1000,
+  "leaseTtlMs": 1000,
+  "retryBaseMs": 200,
+  "scenarios": [
+    {
+      "name": "safe_retry",
+      "schedule": [
+        "execute at 1000; fail before dispatch with retryable=true",
+        "observe retry deadline 1200",
+        "advance to 1199; assert no dispatch",
+        "advance to 1200; complete"
+      ],
+      "delta": "TS stores the backoff deadline in runner memory and retains a live lease; Rust persists the deadline before releasing the attempt lease. The observable due time and dispatch trace agree.",
+      "expected": {
+        "typescript": [
+          {
+            "label": "backoff",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "retryDue": 1200,
+            "durableRetryDue": null
+          },
+          {
+            "label": "before_due",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          },
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 2,
+            "attempts": [
+              "failed",
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 2
+                }
+              },
+              {
+                "seq": 2,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          }
+        ],
+        "rust": [
+          {
+            "label": "backoff",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "retryDue": 1200,
+            "durableRetryDue": 1200
+          },
+          {
+            "label": "before_due",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          },
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 2,
+            "attempts": [
+              "failed",
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 2
+                }
+              },
+              {
+                "seq": 2,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "uncertain_write",
+      "schedule": [
+        "commit effect and evidence at 1000",
+        "throw raw ECONNRESET after commit",
+        "advance to 1200"
+      ],
+      "delta": "Approved safety correction: frozen TS classifies raw ECONNRESET as transient and repeats the committed write; Rust requires explicit safe-to-retry evidence and fails uncertain_outcome without replay.",
+      "expected": {
+        "typescript": [
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 2,
+            "attempts": [
+              "failed",
+              "completed"
+            ],
+            "effects": 2,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              },
+              {
+                "seq": 2,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 2
+                }
+              },
+              {
+                "seq": 3,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 2
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          }
+        ],
+        "rust": [
+          {
+            "label": "settled",
+            "status": "failed",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": "uncertain_outcome"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cancel_after_commit",
+      "schedule": [
+        "commit external effect; hold result publication",
+        "cancel running task",
+        "publish committed evidence and acknowledge cancellation"
+      ],
+      "expected": {
+        "typescript": [
+          {
+            "label": "committed_before_cancel",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "running"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          },
+          {
+            "label": "settled",
+            "status": "cancelled",
+            "attemptCount": 1,
+            "attempts": [
+              "cancelled"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          }
+        ],
+        "rust": [
+          {
+            "label": "committed_before_cancel",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "running"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          },
+          {
+            "label": "settled",
+            "status": "cancelled",
+            "attemptCount": 1,
+            "attempts": [
+              "cancelled"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "stale_publication",
+      "schedule": [
+        "start worker and hold publication",
+        "mint replacement lease",
+        "release stale worker; deny its event and terminal verdict"
+      ],
+      "expected": {
+        "typescript": [
+          {
+            "label": "stale_denied",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "running"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "staleDenied": true
+          }
+        ],
+        "rust": [
+          {
+            "label": "stale_denied",
+            "status": "running",
+            "attemptCount": 1,
+            "attempts": [
+              "running"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "staleDenied": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "verification",
+      "schedule": [
+        "commit effect and event",
+        "verify durable event while task is running",
+        "append verification before runner settlement"
+      ],
+      "expected": {
+        "typescript": [
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "run.verification",
+                "data": {
+                  "pass": 0,
+                  "status": "pass",
+                  "deficiencies": []
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "verification": {
+              "status": "running",
+              "eventTypes": [
+                "fault.committed"
+              ]
+            }
+          }
+        ],
+        "rust": [
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 1,
+            "attempts": [
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "run.verification",
+                "data": {
+                  "pass": 0,
+                  "status": "pass",
+                  "deficiencies": []
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null,
+            "verification": {
+              "status": "running",
+              "eventTypes": [
+                "fault.committed"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "crash_recovery",
+      "schedule": [
+        "child process executes safe failed attempt at 1000",
+        "SIGKILL after retry intent is observable",
+        "reopen at expiry 2000; manual recover",
+        "reopen at 2100; recover twice without redispatch",
+        "explicit resume at 2200; execute next attempt"
+      ],
+      "expected": {
+        "typescript": [
+          {
+            "label": "recovered",
+            "status": "interrupted",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          },
+          {
+            "label": "reopened_again",
+            "status": "interrupted",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          },
+          {
+            "label": "recovered_again",
+            "status": "interrupted",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          },
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 2,
+            "attempts": [
+              "failed",
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 2
+                }
+              },
+              {
+                "seq": 2,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          }
+        ],
+        "rust": [
+          {
+            "label": "recovered",
+            "status": "interrupted",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          },
+          {
+            "label": "reopened_again",
+            "status": "interrupted",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          },
+          {
+            "label": "recovered_again",
+            "status": "interrupted",
+            "attemptCount": 1,
+            "attempts": [
+              "failed"
+            ],
+            "effects": 0,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          },
+          {
+            "label": "settled",
+            "status": "completed",
+            "attemptCount": 2,
+            "attempts": [
+              "failed",
+              "completed"
+            ],
+            "effects": 1,
+            "events": [
+              {
+                "seq": 0,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 1
+                }
+              },
+              {
+                "seq": 1,
+                "type": "fault.started",
+                "data": {
+                  "attempt": 2
+                }
+              },
+              {
+                "seq": 2,
+                "type": "fault.committed",
+                "data": {
+                  "effect": 1
+                }
+              }
+            ],
+            "poisonCount": 0,
+            "deadLetter": false,
+            "failureReason": null
+          }
+        ]
+      }
+    }
+  ]
+}

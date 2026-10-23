@@ -61,6 +61,14 @@
   "overrides": [
     {
       "includes": [
+        "rust/fixtures/**",
+        "rust/crates/contracts/tests/fixtures/**",
+        "rust/crates/contracts/src/schema_bundle.json"
+      ],
+      "formatter": { "enabled": false }
+    },
+    {
+      "includes": [
         "packages/mcp-client/tests/**",
         "packages/testing/src/mcp-config-conformance.ts",
         "packages/transport-http/tests/management.test.ts",

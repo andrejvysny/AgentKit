@@ -1,0 +1,172 @@
+[
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "model": "gpt-golden",
+      "toolCount": 1
+    },
+    "eventId": "evt_6edcb042-c69c-4d40-a6a0-8caf1b08bbf0",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 0,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.started"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "content": "",
+      "toolCallCount": 2
+    },
+    "eventId": "evt_4495d8aa-400c-4f25-a54f-11db3400efe7",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 1,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.message.completed"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "argumentsJson": "{\"text\":\"one\"}",
+      "toolCallId": "call-golden-dup",
+      "toolName": "echo"
+    },
+    "eventId": "evt_21cf5bf4-b1bd-49d7-be05-6518de951bd7",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 2,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.tool.requested"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "argumentsJson": "{\"text\":\"two\"}",
+      "toolCallId": "call-golden-dup",
+      "toolName": "echo"
+    },
+    "eventId": "evt_d07022fd-6132-4999-9615-a0ecf5c3aa7e",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 3,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.tool.requested"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "code": "duplicate_tool_call_id",
+      "message": "Provider reused tool call id(s) call-golden-dup in one turn; the later call(s) were re-keyed so each stays answerable."
+    },
+    "eventId": "evt_40ee5dd7-b7b6-4d70-bcde-48b7b29bcc8c",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 4,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.warning"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "argumentsJson": "{\"text\":\"two\"}",
+      "toolCallId": "call-golden-dup#2",
+      "toolName": "echo"
+    },
+    "eventId": "evt_155c39bc-10c3-47e5-b60c-d721eeffac31",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 5,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.tool.requested"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "toolCallId": "call-golden-dup",
+      "toolName": "echo"
+    },
+    "eventId": "evt_5a6269db-1d46-44f8-ac68-4c7924455830",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 6,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.tool.running"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "modelResultJson": "{\"ok\":true,\"status\":\"ok\",\"warnings\":[],\"truncated\":false,\"data\":{\"echoed\":\"one\"}}",
+      "resultJson": "{\"echoed\":\"one\"}",
+      "sources": [],
+      "status": "ok",
+      "toolCallId": "call-golden-dup",
+      "toolName": "echo",
+      "truncated": false,
+      "warnings": []
+    },
+    "eventId": "evt_1f760add-9e04-46f7-8ca1-ae6c955fc1b7",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 7,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.tool.succeeded"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "toolCallId": "call-golden-dup#2",
+      "toolName": "echo"
+    },
+    "eventId": "evt_edf1c4e7-7439-4c9f-9fcb-62894b67117c",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 8,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.tool.running"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "modelResultJson": "{\"ok\":true,\"status\":\"ok\",\"warnings\":[],\"truncated\":false,\"data\":{\"echoed\":\"two\"}}",
+      "resultJson": "{\"echoed\":\"two\"}",
+      "sources": [],
+      "status": "ok",
+      "toolCallId": "call-golden-dup#2",
+      "toolName": "echo",
+      "truncated": false,
+      "warnings": []
+    },
+    "eventId": "evt_450048c8-fcec-4100-aa4f-1b1ceffc2161",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 9,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.tool.succeeded"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "delta": "Done."
+    },
+    "eventId": "evt_52700385-8693-4cba-b708-a201d16dab30",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 10,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.message.delta"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "content": "Done.",
+      "toolCallCount": 0
+    },
+    "eventId": "evt_9deb18b6-3937-42a2-95ea-6342df0bf7c4",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 11,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.message.completed"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "finishReason": "stop",
+      "iterations": 2
+    },
+    "eventId": "evt_9586f203-a3bd-4596-80f7-7c99ea3c259e",
+    "runId": "run-golden-duplicate-id-run",
+    "seq": 12,
+    "timestamp": "2026-09-02T14:03:41.481Z",
+    "type": "run.completed"
+  }
+]

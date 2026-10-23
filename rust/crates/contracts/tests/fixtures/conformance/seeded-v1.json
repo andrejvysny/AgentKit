@@ -1,0 +1,4715 @@
+{
+  "formatVersion": 1,
+  "seeds": [
+    1,
+    7,
+    42,
+    3735928559
+  ],
+  "scenarios": [
+    {
+      "name": "seed-1",
+      "seed": 1,
+      "steps": [
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "a",
+            "scope": "a",
+            "priority": 1
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "b",
+            "scope": "b",
+            "priority": 100,
+            "depends": [
+              "a"
+            ],
+            "parent": "a"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "d",
+            "scope": "d",
+            "priority": 11
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "c",
+            "scope": "c",
+            "priority": 11
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "delayed",
+            "scope": "delayed",
+            "priority": 300,
+            "available": 1050
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "unknown",
+            "scope": "unknown",
+            "priority": 0,
+            "depends": [
+              "missing"
+            ]
+          },
+          "expected": {
+            "error": "unknown_dependency"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "a",
+            "scope": "a",
+            "priority": 1
+          },
+          "expected": {
+            "error": "duplicate_task"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "exclusive",
+            "scope": "a",
+            "priority": 0,
+            "exclusive": true
+          },
+          "expected": {
+            "error": "chat_busy"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "root",
+            "busy": [
+              "c",
+              "d"
+            ]
+          },
+          "expected": "a"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 0,
+                "id": "a-0"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 1,
+                "id": "partial"
+              },
+              {
+                "seq": 1,
+                "id": "bad-seq"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 1,
+                "id": "a-0"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "delayed"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "running",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "queued",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "queued",
+              "priority": 11,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "queued",
+              "priority": 11,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "queued",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "root",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "dependent"
+          },
+          "expected": "b"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "dependent",
+            "status": "failed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "failed-child",
+            "scope": "failed-child",
+            "priority": 200,
+            "depends": [
+              "b"
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "kind-filter",
+            "kinds": [
+              "other"
+            ]
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "tie-first"
+          },
+          "expected": "d"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "tie-first",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "busy-filter",
+            "busy": [
+              "c"
+            ]
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "tie-second"
+          },
+          "expected": "c"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "cancel",
+            "id": "delayed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "tie-second",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "empty"
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "cancel-root",
+            "scope": "cancel-root",
+            "priority": 1
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "cancel-child",
+            "scope": "cancel-child",
+            "priority": 10,
+            "depends": [
+              "cancel-root"
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "cancel",
+            "id": "cancel-root"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "cancel-cascade"
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 11,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 11,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "submit",
+            "id": "crash",
+            "scope": "crash",
+            "priority": 0
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "claim",
+            "slot": "old"
+          },
+          "expected": "crash"
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 0,
+                "id": "crash-0"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1199,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 1,
+                "id": "crash-1"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 2,
+                "id": "expired"
+              }
+            ]
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "recover"
+          },
+          "expected": 1
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 11,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "interrupted",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                }
+              ],
+              "nextSeq": 2
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 11,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "before-resume"
+          },
+          "expected": null
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "resume",
+            "id": "crash"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "new"
+          },
+          "expected": "crash"
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 2,
+                "id": "stale"
+              }
+            ]
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "old",
+            "status": "failed"
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "new",
+            "events": [
+              {
+                "seq": 2,
+                "id": "crash-2"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "new",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "recover"
+          },
+          "expected": 0
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 11,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "completed",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 2,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                },
+                {
+                  "seq": 2,
+                  "id": "crash-2"
+                }
+              ],
+              "nextSeq": 3
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 11,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "import",
+            "chatId": "imported",
+            "messages": [
+              {
+                "id": "u1",
+                "role": "user",
+                "content": "question",
+                "active": true
+              },
+              {
+                "id": "a1",
+                "role": "assistant",
+                "content": "old",
+                "parentId": "u1",
+                "active": false
+              },
+              {
+                "id": "t1",
+                "role": "tool",
+                "content": "old evidence",
+                "parentId": "a1",
+                "active": false,
+                "internal": true
+              },
+              {
+                "id": "a2",
+                "role": "assistant",
+                "content": "new",
+                "parentId": "u1",
+                "active": true
+              },
+              {
+                "id": "t2",
+                "role": "tool",
+                "content": "new evidence",
+                "parentId": "a2",
+                "active": true,
+                "internal": true
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "readImport",
+            "chatId": "imported",
+            "ids": [
+              "u1",
+              "a1",
+              "t1",
+              "a2",
+              "t2"
+            ]
+          },
+          "expected": {
+            "exists": true,
+            "messages": [
+              {
+                "id": "u1",
+                "role": "user",
+                "content": "question",
+                "parentId": null,
+                "active": true,
+                "metadata": {},
+                "orderKey": 1,
+                "depth": 0,
+                "branchIndex": 0
+              },
+              {
+                "id": "a1",
+                "role": "assistant",
+                "content": "old",
+                "parentId": "u1",
+                "active": false,
+                "metadata": {},
+                "orderKey": 2,
+                "depth": 1,
+                "branchIndex": 0
+              },
+              {
+                "id": "t1",
+                "role": "tool",
+                "content": "old evidence",
+                "parentId": "a1",
+                "active": false,
+                "metadata": {
+                  "internal": true
+                },
+                "orderKey": 3,
+                "depth": 2,
+                "branchIndex": 0
+              },
+              {
+                "id": "a2",
+                "role": "assistant",
+                "content": "new",
+                "parentId": "u1",
+                "active": true,
+                "metadata": {},
+                "orderKey": 4,
+                "depth": 1,
+                "branchIndex": 1
+              },
+              {
+                "id": "t2",
+                "role": "tool",
+                "content": "new evidence",
+                "parentId": "a2",
+                "active": true,
+                "metadata": {
+                  "internal": true
+                },
+                "orderKey": 5,
+                "depth": 2,
+                "branchIndex": 0
+              }
+            ]
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "import",
+            "chatId": "invalid",
+            "messages": [
+              {
+                "id": "bad-child",
+                "role": "assistant",
+                "content": "child",
+                "parentId": "bad-parent",
+                "active": true
+              },
+              {
+                "id": "bad-parent",
+                "role": "user",
+                "content": "parent",
+                "active": true
+              }
+            ]
+          },
+          "expected": {
+            "error": "invalid_import"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "readImport",
+            "chatId": "invalid",
+            "ids": [
+              "bad-child",
+              "bad-parent"
+            ]
+          },
+          "expected": {
+            "exists": false,
+            "messages": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "seed-7",
+      "seed": 7,
+      "steps": [
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "a",
+            "scope": "a",
+            "priority": 1
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "b",
+            "scope": "b",
+            "priority": 100,
+            "depends": [
+              "a"
+            ],
+            "parent": "a"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "d",
+            "scope": "d",
+            "priority": 5
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "c",
+            "scope": "c",
+            "priority": 5
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "delayed",
+            "scope": "delayed",
+            "priority": 300,
+            "available": 1050
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "unknown",
+            "scope": "unknown",
+            "priority": 0,
+            "depends": [
+              "missing"
+            ]
+          },
+          "expected": {
+            "error": "unknown_dependency"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "a",
+            "scope": "a",
+            "priority": 1
+          },
+          "expected": {
+            "error": "duplicate_task"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "exclusive",
+            "scope": "a",
+            "priority": 0,
+            "exclusive": true
+          },
+          "expected": {
+            "error": "chat_busy"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "root",
+            "busy": [
+              "c",
+              "d"
+            ]
+          },
+          "expected": "a"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 0,
+                "id": "a-0"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 1,
+                "id": "partial"
+              },
+              {
+                "seq": 1,
+                "id": "bad-seq"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 1,
+                "id": "a-0"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "delayed"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "running",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "queued",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "queued",
+              "priority": 5,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "queued",
+              "priority": 5,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "queued",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "root",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "dependent"
+          },
+          "expected": "b"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "dependent",
+            "status": "failed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "failed-child",
+            "scope": "failed-child",
+            "priority": 200,
+            "depends": [
+              "b"
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "kind-filter",
+            "kinds": [
+              "other"
+            ]
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "tie-first"
+          },
+          "expected": "d"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "tie-first",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "busy-filter",
+            "busy": [
+              "c"
+            ]
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "tie-second"
+          },
+          "expected": "c"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "cancel",
+            "id": "delayed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "tie-second",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "empty"
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "cancel-root",
+            "scope": "cancel-root",
+            "priority": 1
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "cancel-child",
+            "scope": "cancel-child",
+            "priority": 10,
+            "depends": [
+              "cancel-root"
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "cancel",
+            "id": "cancel-root"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "cancel-cascade"
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 5,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 5,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "submit",
+            "id": "crash",
+            "scope": "crash",
+            "priority": 0
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "claim",
+            "slot": "old"
+          },
+          "expected": "crash"
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 0,
+                "id": "crash-0"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1199,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 1,
+                "id": "crash-1"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 2,
+                "id": "expired"
+              }
+            ]
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "recover"
+          },
+          "expected": 1
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 5,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "interrupted",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                }
+              ],
+              "nextSeq": 2
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 5,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "before-resume"
+          },
+          "expected": null
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "resume",
+            "id": "crash"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "new"
+          },
+          "expected": "crash"
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 2,
+                "id": "stale"
+              }
+            ]
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "old",
+            "status": "failed"
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "new",
+            "events": [
+              {
+                "seq": 2,
+                "id": "crash-2"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "new",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "recover"
+          },
+          "expected": 0
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 5,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "completed",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 2,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                },
+                {
+                  "seq": 2,
+                  "id": "crash-2"
+                }
+              ],
+              "nextSeq": 3
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 5,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "import",
+            "chatId": "imported",
+            "messages": [
+              {
+                "id": "u1",
+                "role": "user",
+                "content": "question",
+                "active": true
+              },
+              {
+                "id": "a1",
+                "role": "assistant",
+                "content": "old",
+                "parentId": "u1",
+                "active": false
+              },
+              {
+                "id": "t1",
+                "role": "tool",
+                "content": "old evidence",
+                "parentId": "a1",
+                "active": false,
+                "internal": true
+              },
+              {
+                "id": "a2",
+                "role": "assistant",
+                "content": "new",
+                "parentId": "u1",
+                "active": true
+              },
+              {
+                "id": "t2",
+                "role": "tool",
+                "content": "new evidence",
+                "parentId": "a2",
+                "active": true,
+                "internal": true
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "readImport",
+            "chatId": "imported",
+            "ids": [
+              "u1",
+              "a1",
+              "t1",
+              "a2",
+              "t2"
+            ]
+          },
+          "expected": {
+            "exists": true,
+            "messages": [
+              {
+                "id": "u1",
+                "role": "user",
+                "content": "question",
+                "parentId": null,
+                "active": true,
+                "metadata": {},
+                "orderKey": 1,
+                "depth": 0,
+                "branchIndex": 0
+              },
+              {
+                "id": "a1",
+                "role": "assistant",
+                "content": "old",
+                "parentId": "u1",
+                "active": false,
+                "metadata": {},
+                "orderKey": 2,
+                "depth": 1,
+                "branchIndex": 0
+              },
+              {
+                "id": "t1",
+                "role": "tool",
+                "content": "old evidence",
+                "parentId": "a1",
+                "active": false,
+                "metadata": {
+                  "internal": true
+                },
+                "orderKey": 3,
+                "depth": 2,
+                "branchIndex": 0
+              },
+              {
+                "id": "a2",
+                "role": "assistant",
+                "content": "new",
+                "parentId": "u1",
+                "active": true,
+                "metadata": {},
+                "orderKey": 4,
+                "depth": 1,
+                "branchIndex": 1
+              },
+              {
+                "id": "t2",
+                "role": "tool",
+                "content": "new evidence",
+                "parentId": "a2",
+                "active": true,
+                "metadata": {
+                  "internal": true
+                },
+                "orderKey": 5,
+                "depth": 2,
+                "branchIndex": 0
+              }
+            ]
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "import",
+            "chatId": "invalid",
+            "messages": [
+              {
+                "id": "bad-child",
+                "role": "assistant",
+                "content": "child",
+                "parentId": "bad-parent",
+                "active": true
+              },
+              {
+                "id": "bad-parent",
+                "role": "user",
+                "content": "parent",
+                "active": true
+              }
+            ]
+          },
+          "expected": {
+            "error": "invalid_import"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "readImport",
+            "chatId": "invalid",
+            "ids": [
+              "bad-child",
+              "bad-parent"
+            ]
+          },
+          "expected": {
+            "exists": false,
+            "messages": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "seed-42",
+      "seed": 42,
+      "steps": [
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "a",
+            "scope": "a",
+            "priority": 1
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "b",
+            "scope": "b",
+            "priority": 100,
+            "depends": [
+              "a"
+            ],
+            "parent": "a"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "c",
+            "scope": "c",
+            "priority": 14
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "d",
+            "scope": "d",
+            "priority": 14
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "delayed",
+            "scope": "delayed",
+            "priority": 300,
+            "available": 1050
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "unknown",
+            "scope": "unknown",
+            "priority": 0,
+            "depends": [
+              "missing"
+            ]
+          },
+          "expected": {
+            "error": "unknown_dependency"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "a",
+            "scope": "a",
+            "priority": 1
+          },
+          "expected": {
+            "error": "duplicate_task"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "exclusive",
+            "scope": "a",
+            "priority": 0,
+            "exclusive": true
+          },
+          "expected": {
+            "error": "chat_busy"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "root",
+            "busy": [
+              "c",
+              "d"
+            ]
+          },
+          "expected": "a"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 0,
+                "id": "a-0"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 1,
+                "id": "partial"
+              },
+              {
+                "seq": 1,
+                "id": "bad-seq"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 1,
+                "id": "a-0"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "delayed"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "running",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "queued",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "queued",
+              "priority": 14,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "queued",
+              "priority": 14,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "queued",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "root",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "dependent"
+          },
+          "expected": "b"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "dependent",
+            "status": "failed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "failed-child",
+            "scope": "failed-child",
+            "priority": 200,
+            "depends": [
+              "b"
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "kind-filter",
+            "kinds": [
+              "other"
+            ]
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "tie-first"
+          },
+          "expected": "c"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "tie-first",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "busy-filter",
+            "busy": [
+              "d"
+            ]
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "tie-second"
+          },
+          "expected": "d"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "cancel",
+            "id": "delayed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "tie-second",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "empty"
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "cancel-root",
+            "scope": "cancel-root",
+            "priority": 1
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "cancel-child",
+            "scope": "cancel-child",
+            "priority": 10,
+            "depends": [
+              "cancel-root"
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "cancel",
+            "id": "cancel-root"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "cancel-cascade"
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 14,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 14,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "submit",
+            "id": "crash",
+            "scope": "crash",
+            "priority": 0
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "claim",
+            "slot": "old"
+          },
+          "expected": "crash"
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 0,
+                "id": "crash-0"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1199,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 1,
+                "id": "crash-1"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 2,
+                "id": "expired"
+              }
+            ]
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "recover"
+          },
+          "expected": 1
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 14,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "interrupted",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                }
+              ],
+              "nextSeq": 2
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 14,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "before-resume"
+          },
+          "expected": null
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "resume",
+            "id": "crash"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "new"
+          },
+          "expected": "crash"
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 2,
+                "id": "stale"
+              }
+            ]
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "old",
+            "status": "failed"
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "new",
+            "events": [
+              {
+                "seq": 2,
+                "id": "crash-2"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "new",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "recover"
+          },
+          "expected": 0
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 14,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "completed",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 2,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                },
+                {
+                  "seq": 2,
+                  "id": "crash-2"
+                }
+              ],
+              "nextSeq": 3
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 14,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "import",
+            "chatId": "imported",
+            "messages": [
+              {
+                "id": "u1",
+                "role": "user",
+                "content": "question",
+                "active": true
+              },
+              {
+                "id": "a1",
+                "role": "assistant",
+                "content": "old",
+                "parentId": "u1",
+                "active": false
+              },
+              {
+                "id": "t1",
+                "role": "tool",
+                "content": "old evidence",
+                "parentId": "a1",
+                "active": false,
+                "internal": true
+              },
+              {
+                "id": "a2",
+                "role": "assistant",
+                "content": "new",
+                "parentId": "u1",
+                "active": true
+              },
+              {
+                "id": "t2",
+                "role": "tool",
+                "content": "new evidence",
+                "parentId": "a2",
+                "active": true,
+                "internal": true
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "readImport",
+            "chatId": "imported",
+            "ids": [
+              "u1",
+              "a1",
+              "t1",
+              "a2",
+              "t2"
+            ]
+          },
+          "expected": {
+            "exists": true,
+            "messages": [
+              {
+                "id": "u1",
+                "role": "user",
+                "content": "question",
+                "parentId": null,
+                "active": true,
+                "metadata": {},
+                "orderKey": 1,
+                "depth": 0,
+                "branchIndex": 0
+              },
+              {
+                "id": "a1",
+                "role": "assistant",
+                "content": "old",
+                "parentId": "u1",
+                "active": false,
+                "metadata": {},
+                "orderKey": 2,
+                "depth": 1,
+                "branchIndex": 0
+              },
+              {
+                "id": "t1",
+                "role": "tool",
+                "content": "old evidence",
+                "parentId": "a1",
+                "active": false,
+                "metadata": {
+                  "internal": true
+                },
+                "orderKey": 3,
+                "depth": 2,
+                "branchIndex": 0
+              },
+              {
+                "id": "a2",
+                "role": "assistant",
+                "content": "new",
+                "parentId": "u1",
+                "active": true,
+                "metadata": {},
+                "orderKey": 4,
+                "depth": 1,
+                "branchIndex": 1
+              },
+              {
+                "id": "t2",
+                "role": "tool",
+                "content": "new evidence",
+                "parentId": "a2",
+                "active": true,
+                "metadata": {
+                  "internal": true
+                },
+                "orderKey": 5,
+                "depth": 2,
+                "branchIndex": 0
+              }
+            ]
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "import",
+            "chatId": "invalid",
+            "messages": [
+              {
+                "id": "bad-child",
+                "role": "assistant",
+                "content": "child",
+                "parentId": "bad-parent",
+                "active": true
+              },
+              {
+                "id": "bad-parent",
+                "role": "user",
+                "content": "parent",
+                "active": true
+              }
+            ]
+          },
+          "expected": {
+            "error": "invalid_import"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "readImport",
+            "chatId": "invalid",
+            "ids": [
+              "bad-child",
+              "bad-parent"
+            ]
+          },
+          "expected": {
+            "exists": false,
+            "messages": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "seed-3735928559",
+      "seed": 3735928559,
+      "steps": [
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "a",
+            "scope": "a",
+            "priority": 1
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "b",
+            "scope": "b",
+            "priority": 100,
+            "depends": [
+              "a"
+            ],
+            "parent": "a"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "c",
+            "scope": "c",
+            "priority": 13
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "d",
+            "scope": "d",
+            "priority": 13
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "delayed",
+            "scope": "delayed",
+            "priority": 300,
+            "available": 1050
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "unknown",
+            "scope": "unknown",
+            "priority": 0,
+            "depends": [
+              "missing"
+            ]
+          },
+          "expected": {
+            "error": "unknown_dependency"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "a",
+            "scope": "a",
+            "priority": 1
+          },
+          "expected": {
+            "error": "duplicate_task"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "exclusive",
+            "scope": "a",
+            "priority": 0,
+            "exclusive": true
+          },
+          "expected": {
+            "error": "chat_busy"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "root",
+            "busy": [
+              "c",
+              "d"
+            ]
+          },
+          "expected": "a"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 0,
+                "id": "a-0"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 1,
+                "id": "partial"
+              },
+              {
+                "seq": 1,
+                "id": "bad-seq"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 1,
+                "id": "a-0"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "delayed"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "running",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "queued",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "queued",
+              "priority": 13,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "queued",
+              "priority": 13,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "queued",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "root",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "dependent"
+          },
+          "expected": "b"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "dependent",
+            "status": "failed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "failed-child",
+            "scope": "failed-child",
+            "priority": 200,
+            "depends": [
+              "b"
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "kind-filter",
+            "kinds": [
+              "other"
+            ]
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "tie-first"
+          },
+          "expected": "c"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "tie-first",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "busy-filter",
+            "busy": [
+              "d"
+            ]
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "tie-second"
+          },
+          "expected": "d"
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "cancel",
+            "id": "delayed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "settle",
+            "slot": "tie-second",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "empty"
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "cancel-root",
+            "scope": "cancel-root",
+            "priority": 1
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "submit",
+            "id": "cancel-child",
+            "scope": "cancel-child",
+            "priority": 10,
+            "depends": [
+              "cancel-root"
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "cancel",
+            "id": "cancel-root"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "claim",
+            "slot": "cancel-cascade"
+          },
+          "expected": null
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 13,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 13,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "submit",
+            "id": "crash",
+            "scope": "crash",
+            "priority": 0
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "claim",
+            "slot": "old"
+          },
+          "expected": "crash"
+        },
+        {
+          "at": 1100,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 0,
+                "id": "crash-0"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1199,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 1,
+                "id": "crash-1"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 2,
+                "id": "expired"
+              }
+            ]
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "recover"
+          },
+          "expected": 1
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 13,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "interrupted",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                }
+              ],
+              "nextSeq": 2
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 13,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "before-resume"
+          },
+          "expected": null
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "resume",
+            "id": "crash"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "new"
+          },
+          "expected": "crash"
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "old",
+            "events": [
+              {
+                "seq": 2,
+                "id": "stale"
+              }
+            ]
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "old",
+            "status": "failed"
+          },
+          "expected": {
+            "error": "lease_lost"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "new",
+            "events": [
+              {
+                "seq": 2,
+                "id": "crash-2"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "new",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "recover"
+          },
+          "expected": 0
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "a-0"
+                }
+              ],
+              "nextSeq": 1
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 13,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "completed",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 2,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                },
+                {
+                  "seq": 2,
+                  "id": "crash-2"
+                }
+              ],
+              "nextSeq": 3
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 13,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "import",
+            "chatId": "imported",
+            "messages": [
+              {
+                "id": "u1",
+                "role": "user",
+                "content": "question",
+                "active": true
+              },
+              {
+                "id": "a1",
+                "role": "assistant",
+                "content": "old",
+                "parentId": "u1",
+                "active": false
+              },
+              {
+                "id": "t1",
+                "role": "tool",
+                "content": "old evidence",
+                "parentId": "a1",
+                "active": false,
+                "internal": true
+              },
+              {
+                "id": "a2",
+                "role": "assistant",
+                "content": "new",
+                "parentId": "u1",
+                "active": true
+              },
+              {
+                "id": "t2",
+                "role": "tool",
+                "content": "new evidence",
+                "parentId": "a2",
+                "active": true,
+                "internal": true
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "readImport",
+            "chatId": "imported",
+            "ids": [
+              "u1",
+              "a1",
+              "t1",
+              "a2",
+              "t2"
+            ]
+          },
+          "expected": {
+            "exists": true,
+            "messages": [
+              {
+                "id": "u1",
+                "role": "user",
+                "content": "question",
+                "parentId": null,
+                "active": true,
+                "metadata": {},
+                "orderKey": 1,
+                "depth": 0,
+                "branchIndex": 0
+              },
+              {
+                "id": "a1",
+                "role": "assistant",
+                "content": "old",
+                "parentId": "u1",
+                "active": false,
+                "metadata": {},
+                "orderKey": 2,
+                "depth": 1,
+                "branchIndex": 0
+              },
+              {
+                "id": "t1",
+                "role": "tool",
+                "content": "old evidence",
+                "parentId": "a1",
+                "active": false,
+                "metadata": {
+                  "internal": true
+                },
+                "orderKey": 3,
+                "depth": 2,
+                "branchIndex": 0
+              },
+              {
+                "id": "a2",
+                "role": "assistant",
+                "content": "new",
+                "parentId": "u1",
+                "active": true,
+                "metadata": {},
+                "orderKey": 4,
+                "depth": 1,
+                "branchIndex": 1
+              },
+              {
+                "id": "t2",
+                "role": "tool",
+                "content": "new evidence",
+                "parentId": "a2",
+                "active": true,
+                "metadata": {
+                  "internal": true
+                },
+                "orderKey": 5,
+                "depth": 2,
+                "branchIndex": 0
+              }
+            ]
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "import",
+            "chatId": "invalid",
+            "messages": [
+              {
+                "id": "bad-child",
+                "role": "assistant",
+                "content": "child",
+                "parentId": "bad-parent",
+                "active": true
+              },
+              {
+                "id": "bad-parent",
+                "role": "user",
+                "content": "parent",
+                "active": true
+              }
+            ]
+          },
+          "expected": {
+            "error": "invalid_import"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "readImport",
+            "chatId": "invalid",
+            "ids": [
+              "bad-child",
+              "bad-parent"
+            ]
+          },
+          "expected": {
+            "exists": false,
+            "messages": []
+          }
+        }
+      ]
+    }
+  ]
+}

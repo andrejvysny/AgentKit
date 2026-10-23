@@ -1,0 +1,13 @@
+[
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "reason": "aborted"
+    },
+    "eventId": "evt_5d92f2b8-2ee6-472e-9237-3c5da1f71d78",
+    "runId": "run-golden-cancelled-run",
+    "seq": 0,
+    "timestamp": "2026-09-02T14:03:41.479Z",
+    "type": "run.cancelled"
+  }
+]

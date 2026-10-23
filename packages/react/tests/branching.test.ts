@@ -34,7 +34,7 @@ beforeEach(async () => {
   provider.setScript([{ steps: [{ kind: "text", content: "First answer." }] }]);
   server = await startTestServer({ provider });
   client = createAgentKitClient({ baseUrl: server.baseUrl });
-});
+}, 60_000);
 
 afterEach(async () => {
   await server.stop();

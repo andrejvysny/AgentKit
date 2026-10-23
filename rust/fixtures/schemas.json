@@ -1,0 +1,6622 @@
+{
+  "AiChatMessageSchema": {
+    "properties": {
+      "content": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "text",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "const": "auto",
+                          "type": "string"
+                        },
+                        {
+                          "const": "low",
+                          "type": "string"
+                        },
+                        {
+                          "const": "high",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "kind": {
+                              "const": "url",
+                              "type": "string"
+                            },
+                            "url": {
+                              "pattern": "^https?://",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "url"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "base64": {
+                              "description": "Raw base64 payload — no `data:` prefix, no media type.",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "const": "data",
+                              "type": "string"
+                            },
+                            "mediaType": {
+                              "description": "IANA media type of the payload, e.g. \"image/png\".",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "base64",
+                            "mediaType"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "kind": {
+                              "const": "ref",
+                              "type": "string"
+                            },
+                            "ref": {
+                              "description": "Host-resolved attachment handle. Never sent to a provider as-is.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "ref"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "type": {
+                      "const": "image",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "source"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        ]
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "name": {
+        "type": "string"
+      },
+      "role": {
+        "anyOf": [
+          {
+            "const": "system",
+            "type": "string"
+          },
+          {
+            "const": "user",
+            "type": "string"
+          },
+          {
+            "const": "assistant",
+            "type": "string"
+          },
+          {
+            "const": "tool",
+            "type": "string"
+          }
+        ]
+      },
+      "toolCallId": {
+        "type": "string"
+      },
+      "toolCalls": {
+        "items": {
+          "properties": {
+            "argumentsJson": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "argumentsJson"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "role",
+      "content"
+    ],
+    "type": "object"
+  },
+  "AiChatRoleSchema": {
+    "anyOf": [
+      {
+        "const": "system",
+        "type": "string"
+      },
+      {
+        "const": "user",
+        "type": "string"
+      },
+      {
+        "const": "assistant",
+        "type": "string"
+      },
+      {
+        "const": "tool",
+        "type": "string"
+      }
+    ]
+  },
+  "AiContentPartSchema": {
+    "anyOf": [
+      {
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "const": "auto",
+                "type": "string"
+              },
+              {
+                "const": "low",
+                "type": "string"
+              },
+              {
+                "const": "high",
+                "type": "string"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "url",
+                    "type": "string"
+                  },
+                  "url": {
+                    "pattern": "^https?://",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "url"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "base64": {
+                    "description": "Raw base64 payload — no `data:` prefix, no media type.",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "data",
+                    "type": "string"
+                  },
+                  "mediaType": {
+                    "description": "IANA media type of the payload, e.g. \"image/png\".",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "base64",
+                  "mediaType"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "ref",
+                    "type": "string"
+                  },
+                  "ref": {
+                    "description": "Host-resolved attachment handle. Never sent to a provider as-is.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ref"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "type": {
+            "const": "image",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "source"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "AiContextBindingRoleSchema": {
+    "anyOf": [
+      {
+        "const": "primary",
+        "type": "string"
+      },
+      {
+        "const": "reference",
+        "type": "string"
+      },
+      {
+        "const": "comparison",
+        "type": "string"
+      }
+    ]
+  },
+  "AiContextBindingSchema": {
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "kind": {
+        "description": "Host-defined binding kind. Open on the wire; narrowed at the type level via AiContextBinding<K>.",
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "refId": {
+        "type": "string"
+      },
+      "role": {
+        "anyOf": [
+          {
+            "const": "primary",
+            "type": "string"
+          },
+          {
+            "const": "reference",
+            "type": "string"
+          },
+          {
+            "const": "comparison",
+            "type": "string"
+          }
+        ]
+      },
+      "status": {
+        "anyOf": [
+          {
+            "const": "active",
+            "type": "string"
+          },
+          {
+            "const": "missing",
+            "type": "string"
+          },
+          {
+            "const": "stale",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "kind",
+      "refId",
+      "label",
+      "role",
+      "status"
+    ],
+    "type": "object"
+  },
+  "AiContextBindingStatusSchema": {
+    "anyOf": [
+      {
+        "const": "active",
+        "type": "string"
+      },
+      {
+        "const": "missing",
+        "type": "string"
+      },
+      {
+        "const": "stale",
+        "type": "string"
+      }
+    ]
+  },
+  "AiContextSizePreferenceSchema": {
+    "anyOf": [
+      {
+        "const": "small",
+        "type": "string"
+      },
+      {
+        "const": "medium",
+        "type": "string"
+      },
+      {
+        "const": "large",
+        "type": "string"
+      }
+    ]
+  },
+  "AiImagePartSchema": {
+    "properties": {
+      "detail": {
+        "anyOf": [
+          {
+            "const": "auto",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "type": "string"
+          }
+        ]
+      },
+      "source": {
+        "anyOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "url",
+                "type": "string"
+              },
+              "url": {
+                "pattern": "^https?://",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "base64": {
+                "description": "Raw base64 payload — no `data:` prefix, no media type.",
+                "type": "string"
+              },
+              "kind": {
+                "const": "data",
+                "type": "string"
+              },
+              "mediaType": {
+                "description": "IANA media type of the payload, e.g. \"image/png\".",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "base64",
+              "mediaType"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "ref",
+                "type": "string"
+              },
+              "ref": {
+                "description": "Host-resolved attachment handle. Never sent to a provider as-is.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "ref"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "type": {
+        "const": "image",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "source"
+    ],
+    "type": "object"
+  },
+  "AiImageSourceSchema": {
+    "anyOf": [
+      {
+        "properties": {
+          "kind": {
+            "const": "url",
+            "type": "string"
+          },
+          "url": {
+            "pattern": "^https?://",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "url"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "base64": {
+            "description": "Raw base64 payload — no `data:` prefix, no media type.",
+            "type": "string"
+          },
+          "kind": {
+            "const": "data",
+            "type": "string"
+          },
+          "mediaType": {
+            "description": "IANA media type of the payload, e.g. \"image/png\".",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "base64",
+          "mediaType"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "kind": {
+            "const": "ref",
+            "type": "string"
+          },
+          "ref": {
+            "description": "Host-resolved attachment handle. Never sent to a provider as-is.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "AiJsonPrimitiveTypeSchema": {
+    "anyOf": [
+      {
+        "const": "string",
+        "type": "string"
+      },
+      {
+        "const": "number",
+        "type": "string"
+      },
+      {
+        "const": "integer",
+        "type": "string"
+      },
+      {
+        "const": "boolean",
+        "type": "string"
+      },
+      {
+        "const": "object",
+        "type": "string"
+      },
+      {
+        "const": "array",
+        "type": "string"
+      },
+      {
+        "const": "null",
+        "type": "string"
+      }
+    ]
+  },
+  "AiJsonSchemaObjectSchema": {
+    "additionalProperties": true,
+    "description": "A JSON Schema document (see AiJsonSchemaObject).",
+    "type": "object"
+  },
+  "AiMessageContentSchema": {
+    "anyOf": [
+      {
+        "type": "string"
+      },
+      {
+        "items": {
+          "anyOf": [
+            {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "const": "auto",
+                      "type": "string"
+                    },
+                    {
+                      "const": "low",
+                      "type": "string"
+                    },
+                    {
+                      "const": "high",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "source": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "kind": {
+                          "const": "url",
+                          "type": "string"
+                        },
+                        "url": {
+                          "pattern": "^https?://",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "url"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "base64": {
+                          "description": "Raw base64 payload — no `data:` prefix, no media type.",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "data",
+                          "type": "string"
+                        },
+                        "mediaType": {
+                          "description": "IANA media type of the payload, e.g. \"image/png\".",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "base64",
+                        "mediaType"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "kind": {
+                          "const": "ref",
+                          "type": "string"
+                        },
+                        "ref": {
+                          "description": "Host-resolved attachment handle. Never sent to a provider as-is.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "ref"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "image",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "source"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "minItems": 1,
+        "type": "array"
+      }
+    ]
+  },
+  "AiPromptContextBlockSchema": {
+    "properties": {
+      "content": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "priority": {
+        "type": "number"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "title",
+      "content",
+      "priority"
+    ],
+    "type": "object"
+  },
+  "AiPromptPresetSchema": {
+    "properties": {
+      "description": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "systemText": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "label",
+      "description",
+      "systemText"
+    ],
+    "type": "object"
+  },
+  "AiProviderCapabilitiesSchema": {
+    "properties": {
+      "checkedAt": {
+        "type": "string"
+      },
+      "jsonMode": {
+        "type": "boolean"
+      },
+      "maxContextTokens": {
+        "type": "number"
+      },
+      "modelList": {
+        "type": "boolean"
+      },
+      "streaming": {
+        "type": "boolean"
+      },
+      "toolCalling": {
+        "type": "boolean"
+      },
+      "vision": {
+        "type": "boolean"
+      },
+      "warning": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "streaming",
+      "toolCalling",
+      "modelList"
+    ],
+    "type": "object"
+  },
+  "AiProviderConfigSchema": {
+    "properties": {
+      "apiKey": {
+        "type": "string"
+      },
+      "baseUrl": {
+        "type": "string"
+      },
+      "defaultModel": {
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "extraHeaders": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "id": {
+        "type": "string"
+      },
+      "kind": {
+        "description": "Open provider-kind discriminator; see KNOWN_PROVIDER_KINDS for the recognised vocabulary.",
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      }
+    },
+    "required": [
+      "id",
+      "label",
+      "kind",
+      "baseUrl",
+      "defaultModel",
+      "enabled"
+    ],
+    "type": "object"
+  },
+  "AiProviderContinuationSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "inputItems": {
+        "items": {
+          "patternProperties": {
+            "^(.*)$": {}
+          },
+          "type": "object"
+        },
+        "maxItems": 1024,
+        "type": "array"
+      },
+      "messageCount": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "messageDigest": {
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "scope": {
+        "additionalProperties": false,
+        "properties": {
+          "branchId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "chatId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "connectionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "generation": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "protocol": {
+            "const": "responses",
+            "type": "string"
+          },
+          "providerId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "providerId",
+          "protocol",
+          "connectionId",
+          "generation",
+          "chatId",
+          "branchId",
+          "model"
+        ],
+        "type": "object"
+      },
+      "version": {
+        "const": 1,
+        "type": "number"
+      }
+    },
+    "required": [
+      "version",
+      "scope",
+      "messageCount",
+      "messageDigest",
+      "inputItems"
+    ],
+    "type": "object"
+  },
+  "AiProviderKindSchema": {
+    "description": "Open provider-kind discriminator; see KNOWN_PROVIDER_KINDS for the recognised vocabulary.",
+    "type": "string"
+  },
+  "AiProviderModelSchema": {
+    "properties": {
+      "contextWindowTokens": {
+        "type": "number"
+      },
+      "displayName": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "fetchedAt": {
+        "type": "string"
+      },
+      "modelId": {
+        "type": "string"
+      },
+      "providerId": {
+        "type": "string"
+      },
+      "supportsToolCalling": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "providerId",
+      "modelId",
+      "displayName",
+      "fetchedAt"
+    ],
+    "type": "object"
+  },
+  "AiRunCancelledEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.cancelled",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunCompletedEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "finishReason": {
+            "type": "string"
+          },
+          "iterations": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "iterations"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.completed",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunEventBaseSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "anyOf": [
+          {
+            "const": "run.started",
+            "type": "string"
+          },
+          {
+            "const": "run.message.delta",
+            "type": "string"
+          },
+          {
+            "const": "run.message.completed",
+            "type": "string"
+          },
+          {
+            "const": "run.tool.requested",
+            "type": "string"
+          },
+          {
+            "const": "run.tool.running",
+            "type": "string"
+          },
+          {
+            "const": "run.tool.succeeded",
+            "type": "string"
+          },
+          {
+            "const": "run.tool.failed",
+            "type": "string"
+          },
+          {
+            "const": "run.warning",
+            "type": "string"
+          },
+          {
+            "const": "run.usage",
+            "type": "string"
+          },
+          {
+            "const": "run.verification",
+            "type": "string"
+          },
+          {
+            "const": "run.completed",
+            "type": "string"
+          },
+          {
+            "const": "run.failed",
+            "type": "string"
+          },
+          {
+            "const": "run.cancelled",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq"
+    ],
+    "type": "object"
+  },
+  "AiRunEventSchema": {
+    "anyOf": [
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "toolCount": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "model",
+              "toolCount"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.started",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "delta": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "delta"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.message.delta",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "finishReason": {
+                "description": "Raw provider finish_reason for this turn (e.g. \"stop\", \"length\", \"tool_calls\"), or the synthetic \"incomplete\" when the stream ended without one (see the stream_incomplete warning).",
+                "type": "string"
+              },
+              "reasoningContent": {
+                "description": "Chain-of-thought from reasoning models (OpenAI `reasoning_content`).",
+                "type": "string"
+              },
+              "toolCallCount": {
+                "type": "number"
+              },
+              "toolCalls": {
+                "items": {
+                  "properties": {
+                    "argumentsJson": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "argumentsJson"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "content",
+              "toolCallCount"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.message.completed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "argumentsJson": {
+                "type": "string"
+              },
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName",
+              "argumentsJson"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.running",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "modelResultJson": {
+                "description": "Slim payload fed to the model (Wave 0 §0.2). Full payload stays in resultJson for UI.",
+                "type": "string"
+              },
+              "resultJson": {
+                "type": "string"
+              },
+              "sources": {
+                "items": {
+                  "properties": {
+                    "excerpt": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "description": "Host-defined source kind. Open on the wire; narrowed at the type level via AiSourceRef<K>.",
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "metadata": {
+                      "patternProperties": {
+                        "^(.*)$": {}
+                      },
+                      "type": "object"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "refId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "const": "ok",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partial",
+                    "type": "string"
+                  }
+                ]
+              },
+              "summary": {
+                "type": "string"
+              },
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "warnings": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName",
+              "resultJson",
+              "sources",
+              "truncated",
+              "warnings"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.succeeded",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "errorCode": {
+                "type": "string"
+              },
+              "errorMessage": {
+                "type": "string"
+              },
+              "modelResultJson": {
+                "description": "When a tool RAN and reported failure, the balanced model envelope is carried here so consumers persist/replay it faithfully. Absent for pre-execution failures and exec throws.",
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "const": "error",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partial",
+                    "type": "string"
+                  }
+                ]
+              },
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName",
+              "errorMessage"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "code": {
+                "description": "Open warning code; see AiRunWarningCode for the recognised vocabulary.",
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "pass": {
+                "description": "1-based pass this warning is about; set by retry_pass on the pass it opens.",
+                "type": "number"
+              },
+              "reason": {
+                "description": "Why the pass ran: \"chat_only\" | \"empty_response\" | \"correction\" for retry_pass.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.warning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "attempt": {
+                "type": "number"
+              },
+              "callId": {
+                "type": "string"
+              },
+              "completionTokens": {
+                "type": "number"
+              },
+              "finalForCall": {
+                "type": "boolean"
+              },
+              "model": {
+                "type": "string"
+              },
+              "promptTokens": {
+                "type": "number"
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "const": "stream",
+                    "type": "string"
+                  },
+                  {
+                    "const": "response",
+                    "type": "string"
+                  }
+                ]
+              },
+              "step": {
+                "type": "number"
+              },
+              "totalTokens": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "callId",
+              "attempt",
+              "step",
+              "model",
+              "source",
+              "finalForCall"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.usage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "deficiencies": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "pass": {
+                "description": "0 for the run's own answer, then 1, 2, … per correction pass.",
+                "type": "number"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "const": "pass",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partial",
+                    "type": "string"
+                  },
+                  {
+                    "const": "unavailable",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "pass",
+              "status",
+              "deficiencies"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "finishReason": {
+                "type": "string"
+              },
+              "iterations": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "iterations"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.completed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "errorCode": {
+                "type": "string"
+              },
+              "errorMessage": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "errorMessage"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "reason": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.cancelled",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "AiRunEventTypeSchema": {
+    "anyOf": [
+      {
+        "const": "run.started",
+        "type": "string"
+      },
+      {
+        "const": "run.message.delta",
+        "type": "string"
+      },
+      {
+        "const": "run.message.completed",
+        "type": "string"
+      },
+      {
+        "const": "run.tool.requested",
+        "type": "string"
+      },
+      {
+        "const": "run.tool.running",
+        "type": "string"
+      },
+      {
+        "const": "run.tool.succeeded",
+        "type": "string"
+      },
+      {
+        "const": "run.tool.failed",
+        "type": "string"
+      },
+      {
+        "const": "run.warning",
+        "type": "string"
+      },
+      {
+        "const": "run.usage",
+        "type": "string"
+      },
+      {
+        "const": "run.verification",
+        "type": "string"
+      },
+      {
+        "const": "run.completed",
+        "type": "string"
+      },
+      {
+        "const": "run.failed",
+        "type": "string"
+      },
+      {
+        "const": "run.cancelled",
+        "type": "string"
+      }
+    ]
+  },
+  "AiRunFailedEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "errorCode": {
+            "type": "string"
+          },
+          "errorMessage": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "errorMessage"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.failed",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunMessageCompletedEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "finishReason": {
+            "description": "Raw provider finish_reason for this turn (e.g. \"stop\", \"length\", \"tool_calls\"), or the synthetic \"incomplete\" when the stream ended without one (see the stream_incomplete warning).",
+            "type": "string"
+          },
+          "reasoningContent": {
+            "description": "Chain-of-thought from reasoning models (OpenAI `reasoning_content`).",
+            "type": "string"
+          },
+          "toolCallCount": {
+            "type": "number"
+          },
+          "toolCalls": {
+            "items": {
+              "properties": {
+                "argumentsJson": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "argumentsJson"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "content",
+          "toolCallCount"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.message.completed",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunMessageDeltaEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "delta": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delta"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.message.delta",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunStartedEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "toolCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "model",
+          "toolCount"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.started",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunToolFailedEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "errorCode": {
+            "type": "string"
+          },
+          "errorMessage": {
+            "type": "string"
+          },
+          "modelResultJson": {
+            "description": "When a tool RAN and reported failure, the balanced model envelope is carried here so consumers persist/replay it faithfully. Absent for pre-execution failures and exec throws.",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "const": "error",
+                "type": "string"
+              },
+              {
+                "const": "partial",
+                "type": "string"
+              }
+            ]
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "toolCallId",
+          "toolName",
+          "errorMessage"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.tool.failed",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunToolRequestedEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "argumentsJson": {
+            "type": "string"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "toolCallId",
+          "toolName",
+          "argumentsJson"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.tool.requested",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunToolRunningEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "toolCallId",
+          "toolName"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.tool.running",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunToolSucceededEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "modelResultJson": {
+            "description": "Slim payload fed to the model (Wave 0 §0.2). Full payload stays in resultJson for UI.",
+            "type": "string"
+          },
+          "resultJson": {
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "properties": {
+                "excerpt": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "Host-defined source kind. Open on the wire; narrowed at the type level via AiSourceRef<K>.",
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "patternProperties": {
+                    "^(.*)$": {}
+                  },
+                  "type": "object"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "refId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "label"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "const": "ok",
+                "type": "string"
+              },
+              {
+                "const": "partial",
+                "type": "string"
+              }
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "toolCallId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "toolCallId",
+          "toolName",
+          "resultJson",
+          "sources",
+          "truncated",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.tool.succeeded",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunUsageEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "attempt": {
+            "type": "number"
+          },
+          "callId": {
+            "type": "string"
+          },
+          "completionTokens": {
+            "type": "number"
+          },
+          "finalForCall": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "promptTokens": {
+            "type": "number"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "const": "stream",
+                "type": "string"
+              },
+              {
+                "const": "response",
+                "type": "string"
+              }
+            ]
+          },
+          "step": {
+            "type": "number"
+          },
+          "totalTokens": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "callId",
+          "attempt",
+          "step",
+          "model",
+          "source",
+          "finalForCall"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.usage",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunVerificationEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "deficiencies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pass": {
+            "description": "0 for the run's own answer, then 1, 2, … per correction pass.",
+            "type": "number"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "const": "pass",
+                "type": "string"
+              },
+              {
+                "const": "partial",
+                "type": "string"
+              },
+              {
+                "const": "unavailable",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "pass",
+          "status",
+          "deficiencies"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.verification",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunWarningEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "code": {
+            "description": "Open warning code; see AiRunWarningCode for the recognised vocabulary.",
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "pass": {
+            "description": "1-based pass this warning is about; set by retry_pass on the pass it opens.",
+            "type": "number"
+          },
+          "reason": {
+            "description": "Why the pass ran: \"chat_only\" | \"empty_response\" | \"correction\" for retry_pass.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.warning",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiSourceRefSchema": {
+    "properties": {
+      "excerpt": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "kind": {
+        "description": "Host-defined source kind. Open on the wire; narrowed at the type level via AiSourceRef<K>.",
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "path": {
+        "type": "string"
+      },
+      "refId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "kind",
+      "label"
+    ],
+    "type": "object"
+  },
+  "AiTextPartSchema": {
+    "properties": {
+      "text": {
+        "type": "string"
+      },
+      "type": {
+        "const": "text",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "text"
+    ],
+    "type": "object"
+  },
+  "AiToolCallSchema": {
+    "properties": {
+      "argumentsJson": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "argumentsJson"
+    ],
+    "type": "object"
+  },
+  "AiToolDefinitionSchema": {
+    "properties": {
+      "capability": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "effect": {
+        "anyOf": [
+          {
+            "const": "read",
+            "type": "string"
+          },
+          {
+            "const": "write",
+            "type": "string"
+          }
+        ]
+      },
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "A JSON Schema document (see AiJsonSchemaObject).",
+        "type": "object"
+      },
+      "name": {
+        "type": "string"
+      },
+      "outputSchema": {
+        "additionalProperties": true,
+        "description": "A JSON Schema document (see AiJsonSchemaObject).",
+        "type": "object"
+      },
+      "timeoutMs": {
+        "description": "Optional per-tool execution timeout (ms). When set, the run-loop races execute() against the deadline via an AbortController linked to ctx.signal.",
+        "type": "number"
+      },
+      "version": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "version",
+      "effect",
+      "capability",
+      "description",
+      "inputSchema"
+    ],
+    "type": "object"
+  },
+  "AiToolEffectSchema": {
+    "anyOf": [
+      {
+        "const": "read",
+        "type": "string"
+      },
+      {
+        "const": "write",
+        "type": "string"
+      }
+    ]
+  },
+  "AiToolEnvelopeSchema": {
+    "properties": {
+      "data": {},
+      "ok": {
+        "type": "boolean"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "const": "ok",
+            "type": "string"
+          },
+          {
+            "const": "error",
+            "type": "string"
+          },
+          {
+            "const": "partial",
+            "type": "string"
+          }
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "ok",
+      "status",
+      "warnings",
+      "truncated",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiToolErrorDataSchema": {
+    "properties": {
+      "errorCode": {
+        "type": "string"
+      },
+      "errorMessage": {
+        "type": "string"
+      },
+      "phase": {
+        "anyOf": [
+          {
+            "const": "validation",
+            "type": "string"
+          },
+          {
+            "const": "guard",
+            "type": "string"
+          },
+          {
+            "const": "execution",
+            "type": "string"
+          }
+        ]
+      },
+      "retryable": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "errorCode",
+      "errorMessage"
+    ],
+    "type": "object"
+  },
+  "AiToolErrorPhaseSchema": {
+    "anyOf": [
+      {
+        "const": "validation",
+        "type": "string"
+      },
+      {
+        "const": "guard",
+        "type": "string"
+      },
+      {
+        "const": "execution",
+        "type": "string"
+      }
+    ]
+  },
+  "AiToolLimitsSchema": {
+    "properties": {
+      "maxBytes": {
+        "type": "number"
+      },
+      "maxItems": {
+        "type": "number"
+      },
+      "profile": {
+        "anyOf": [
+          {
+            "const": "small",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "type": "string"
+          },
+          {
+            "const": "large",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "profile",
+      "maxBytes"
+    ],
+    "type": "object"
+  },
+  "AiToolResultSchema": {
+    "properties": {
+      "data": {},
+      "limits": {
+        "properties": {
+          "maxBytes": {
+            "type": "number"
+          },
+          "maxItems": {
+            "type": "number"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "const": "small",
+                "type": "string"
+              },
+              {
+                "const": "medium",
+                "type": "string"
+              },
+              {
+                "const": "large",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "profile",
+          "maxBytes"
+        ],
+        "type": "object"
+      },
+      "modelData": {},
+      "ok": {
+        "type": "boolean"
+      },
+      "sources": {
+        "items": {
+          "properties": {
+            "excerpt": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "description": "Host-defined source kind. Open on the wire; narrowed at the type level via AiSourceRef<K>.",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "metadata": {
+              "patternProperties": {
+                "^(.*)$": {}
+              },
+              "type": "object"
+            },
+            "path": {
+              "type": "string"
+            },
+            "refId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "label"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "const": "ok",
+            "type": "string"
+          },
+          {
+            "const": "partial",
+            "type": "string"
+          }
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "ok",
+      "sources",
+      "warnings",
+      "truncated",
+      "limits"
+    ],
+    "type": "object"
+  },
+  "AiToolStatusSchema": {
+    "anyOf": [
+      {
+        "const": "requested",
+        "type": "string"
+      },
+      {
+        "const": "running",
+        "type": "string"
+      },
+      {
+        "const": "succeeded",
+        "type": "string"
+      },
+      {
+        "const": "failed",
+        "type": "string"
+      },
+      {
+        "const": "rejected",
+        "type": "string"
+      }
+    ]
+  },
+  "ApplyOutcomeDtoSchema": {
+    "properties": {
+      "appliedOps": {
+        "type": "number"
+      },
+      "failedOps": {
+        "items": {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "opIndex": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "opIndex",
+            "error"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "const": "applied",
+            "type": "string"
+          },
+          {
+            "const": "partial",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "status",
+      "appliedOps",
+      "failedOps"
+    ],
+    "type": "object"
+  },
+  "ApplyProposalRequestSchema": {
+    "properties": {
+      "operationId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "operationId"
+    ],
+    "type": "object"
+  },
+  "ChatDtoSchema": {
+    "properties": {
+      "activeRunId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "archived": {
+        "type": "boolean"
+      },
+      "createdAt": {
+        "description": "ISO-8601.",
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "title": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "description": "ISO-8601.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "createdAt",
+      "updatedAt",
+      "archived",
+      "metadata"
+    ],
+    "type": "object"
+  },
+  "CreateChatRequestSchema": {
+    "properties": {
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "CreateMcpServerRequestSchema": {
+    "properties": {
+      "alias": {
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "resilience": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "secretRefs": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "toolAliases": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "transport": {
+        "anyOf": [
+          {
+            "properties": {
+              "args": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "command": {
+                "type": "string"
+              },
+              "env": {
+                "patternProperties": {
+                  "^(.*)$": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "kind": {
+                "const": "stdio",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "command"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "headers": {
+                "patternProperties": {
+                  "^(.*)$": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "kind": {
+                "const": "http",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "required": [
+      "alias",
+      "transport"
+    ],
+    "type": "object"
+  },
+  "CreateProviderRequestSchema": {
+    "properties": {
+      "apiKey": {
+        "type": "string"
+      },
+      "baseUrl": {
+        "type": "string"
+      },
+      "defaultModel": {
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "extraHeaders": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "id": {
+        "type": "string"
+      },
+      "kind": {
+        "description": "Open provider-kind discriminator; see KNOWN_PROVIDER_KINDS for the recognised vocabulary.",
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      }
+    },
+    "required": [
+      "label",
+      "kind",
+      "baseUrl",
+      "defaultModel"
+    ],
+    "type": "object"
+  },
+  "ForkChatRequestSchema": {
+    "properties": {
+      "fromMessageId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "fromMessageId"
+    ],
+    "type": "object"
+  },
+  "GrantAllowanceRequestSchema": {
+    "properties": {
+      "maxRisk": {
+        "anyOf": [
+          {
+            "const": "low",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "type": "string"
+          },
+          {
+            "const": "destructive",
+            "type": "string"
+          }
+        ]
+      },
+      "proposalKind": {
+        "type": "string"
+      },
+      "toolName": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "toolName",
+      "proposalKind",
+      "maxRisk"
+    ],
+    "type": "object"
+  },
+  "McpHttpTransportDtoSchema": {
+    "properties": {
+      "headers": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "kind": {
+        "const": "http",
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "kind",
+      "url"
+    ],
+    "type": "object"
+  },
+  "McpServerDtoSchema": {
+    "properties": {
+      "alias": {
+        "description": "Tool namespace; `^[a-z][a-z0-9-]*$`.",
+        "type": "string"
+      },
+      "createdAt": {
+        "description": "ISO-8601.",
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "id": {
+        "type": "string"
+      },
+      "resilience": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "secretRefs": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "toolAliases": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "transport": {
+        "anyOf": [
+          {
+            "properties": {
+              "args": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "command": {
+                "type": "string"
+              },
+              "env": {
+                "patternProperties": {
+                  "^(.*)$": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "kind": {
+                "const": "stdio",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "command"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "headers": {
+                "patternProperties": {
+                  "^(.*)$": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "kind": {
+                "const": "http",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "updatedAt": {
+        "description": "ISO-8601.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "alias",
+      "transport",
+      "createdAt",
+      "updatedAt"
+    ],
+    "type": "object"
+  },
+  "McpStdioTransportDtoSchema": {
+    "properties": {
+      "args": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "command": {
+        "type": "string"
+      },
+      "env": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "kind": {
+        "const": "stdio",
+        "type": "string"
+      }
+    },
+    "required": [
+      "kind",
+      "command"
+    ],
+    "type": "object"
+  },
+  "McpTransportDtoSchema": {
+    "anyOf": [
+      {
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "type": "string"
+          },
+          "env": {
+            "patternProperties": {
+              "^(.*)$": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "kind": {
+            "const": "stdio",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "command"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "headers": {
+            "patternProperties": {
+              "^(.*)$": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "kind": {
+            "const": "http",
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "url"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "MessageDtoSchema": {
+    "properties": {
+      "active": {
+        "type": "boolean"
+      },
+      "branchIndex": {
+        "type": "number"
+      },
+      "chatId": {
+        "type": "string"
+      },
+      "content": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "text",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "const": "auto",
+                          "type": "string"
+                        },
+                        {
+                          "const": "low",
+                          "type": "string"
+                        },
+                        {
+                          "const": "high",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "kind": {
+                              "const": "url",
+                              "type": "string"
+                            },
+                            "url": {
+                              "pattern": "^https?://",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "url"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "base64": {
+                              "description": "Raw base64 payload — no `data:` prefix, no media type.",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "const": "data",
+                              "type": "string"
+                            },
+                            "mediaType": {
+                              "description": "IANA media type of the payload, e.g. \"image/png\".",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "base64",
+                            "mediaType"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "kind": {
+                              "const": "ref",
+                              "type": "string"
+                            },
+                            "ref": {
+                              "description": "Host-resolved attachment handle. Never sent to a provider as-is.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "ref"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "type": {
+                      "const": "image",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "source"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        ]
+      },
+      "createdAt": {
+        "description": "ISO-8601.",
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "parentMessageId": {
+        "type": "string"
+      },
+      "role": {
+        "anyOf": [
+          {
+            "const": "user",
+            "type": "string"
+          },
+          {
+            "const": "assistant",
+            "type": "string"
+          },
+          {
+            "const": "tool",
+            "type": "string"
+          },
+          {
+            "const": "system",
+            "type": "string"
+          }
+        ]
+      },
+      "runId": {
+        "type": "string"
+      },
+      "toolCallId": {
+        "type": "string"
+      },
+      "toolCalls": {
+        "items": {
+          "properties": {
+            "argumentsJson": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "argumentsJson"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "id",
+      "chatId",
+      "role",
+      "content",
+      "metadata",
+      "createdAt"
+    ],
+    "type": "object"
+  },
+  "MessagePageDtoSchema": {
+    "properties": {
+      "items": {
+        "items": {
+          "properties": {
+            "active": {
+              "type": "boolean"
+            },
+            "branchIndex": {
+              "type": "number"
+            },
+            "chatId": {
+              "type": "string"
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "text": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "const": "text",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "text"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "detail": {
+                            "anyOf": [
+                              {
+                                "const": "auto",
+                                "type": "string"
+                              },
+                              {
+                                "const": "low",
+                                "type": "string"
+                              },
+                              {
+                                "const": "high",
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          "source": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "kind": {
+                                    "const": "url",
+                                    "type": "string"
+                                  },
+                                  "url": {
+                                    "pattern": "^https?://",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "url"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "properties": {
+                                  "base64": {
+                                    "description": "Raw base64 payload — no `data:` prefix, no media type.",
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "const": "data",
+                                    "type": "string"
+                                  },
+                                  "mediaType": {
+                                    "description": "IANA media type of the payload, e.g. \"image/png\".",
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "base64",
+                                  "mediaType"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "properties": {
+                                  "kind": {
+                                    "const": "ref",
+                                    "type": "string"
+                                  },
+                                  "ref": {
+                                    "description": "Host-resolved attachment handle. Never sent to a provider as-is.",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "ref"
+                                ],
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "const": "image",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "source"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                }
+              ]
+            },
+            "createdAt": {
+              "description": "ISO-8601.",
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "metadata": {
+              "patternProperties": {
+                "^(.*)$": {}
+              },
+              "type": "object"
+            },
+            "parentMessageId": {
+              "type": "string"
+            },
+            "role": {
+              "anyOf": [
+                {
+                  "const": "user",
+                  "type": "string"
+                },
+                {
+                  "const": "assistant",
+                  "type": "string"
+                },
+                {
+                  "const": "tool",
+                  "type": "string"
+                },
+                {
+                  "const": "system",
+                  "type": "string"
+                }
+              ]
+            },
+            "runId": {
+              "type": "string"
+            },
+            "toolCallId": {
+              "type": "string"
+            },
+            "toolCalls": {
+              "items": {
+                "properties": {
+                  "argumentsJson": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "argumentsJson"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "chatId",
+            "role",
+            "content",
+            "metadata",
+            "createdAt"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "nextCursor": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "type": "object"
+  },
+  "MessageSearchHitDtoSchema": {
+    "properties": {
+      "chatId": {
+        "type": "string"
+      },
+      "messageId": {
+        "type": "string"
+      },
+      "snippet": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "chatId",
+      "messageId",
+      "snippet"
+    ],
+    "type": "object"
+  },
+  "MessageSearchResponseSchema": {
+    "properties": {
+      "hits": {
+        "items": {
+          "properties": {
+            "chatId": {
+              "type": "string"
+            },
+            "messageId": {
+              "type": "string"
+            },
+            "snippet": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "chatId",
+            "messageId",
+            "snippet"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "hits"
+    ],
+    "type": "object"
+  },
+  "ModelDtoSchema": {
+    "properties": {
+      "contextWindowTokens": {
+        "type": "number"
+      },
+      "displayName": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "fetchedAt": {
+        "type": "string"
+      },
+      "modelId": {
+        "type": "string"
+      },
+      "providerId": {
+        "type": "string"
+      },
+      "supportsToolCalling": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "providerId",
+      "modelId",
+      "displayName",
+      "fetchedAt"
+    ],
+    "type": "object"
+  },
+  "ProblemDetailsDtoSchema": {
+    "properties": {
+      "code": {
+        "description": "Stable machine-readable AgentKit error code.",
+        "type": "string"
+      },
+      "detail": {
+        "type": "string"
+      },
+      "instance": {
+        "type": "string"
+      },
+      "status": {
+        "description": "HTTP status code, repeated in the body.",
+        "type": "number"
+      },
+      "title": {
+        "type": "string"
+      },
+      "type": {
+        "description": "URI identifying the problem type.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "title",
+      "status"
+    ],
+    "type": "object"
+  },
+  "ProposalDecisionDtoSchema": {
+    "properties": {
+      "actor": {
+        "anyOf": [
+          {
+            "const": "user",
+            "type": "string"
+          },
+          {
+            "const": "policy",
+            "type": "string"
+          }
+        ]
+      },
+      "decidedAt": {
+        "description": "ISO-8601.",
+        "type": "string"
+      },
+      "decidedBy": {
+        "type": "string"
+      },
+      "policyId": {
+        "type": "string"
+      },
+      "reason": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "actor",
+      "decidedAt"
+    ],
+    "type": "object"
+  },
+  "ProposalDecisionRequestSchema": {
+    "properties": {
+      "reason": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "ProposalDtoSchema": {
+    "properties": {
+      "actionId": {
+        "type": "string"
+      },
+      "appliedAt": {
+        "type": "string"
+      },
+      "chatId": {
+        "type": "string"
+      },
+      "claimedAt": {
+        "type": "string"
+      },
+      "createdAt": {
+        "description": "ISO-8601.",
+        "type": "string"
+      },
+      "decidedAt": {
+        "type": "string"
+      },
+      "decision": {
+        "properties": {
+          "actor": {
+            "anyOf": [
+              {
+                "const": "user",
+                "type": "string"
+              },
+              {
+                "const": "policy",
+                "type": "string"
+              }
+            ]
+          },
+          "decidedAt": {
+            "description": "ISO-8601.",
+            "type": "string"
+          },
+          "decidedBy": {
+            "type": "string"
+          },
+          "policyId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "decidedAt"
+        ],
+        "type": "object"
+      },
+      "id": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "outcome": {
+        "properties": {
+          "appliedOps": {
+            "type": "number"
+          },
+          "failedOps": {
+            "items": {
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "opIndex": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "opIndex",
+                "error"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "const": "applied",
+                "type": "string"
+              },
+              {
+                "const": "partial",
+                "type": "string"
+              },
+              {
+                "const": "failed",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "appliedOps",
+          "failedOps"
+        ],
+        "type": "object"
+      },
+      "risk": {
+        "anyOf": [
+          {
+            "const": "low",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "type": "string"
+          },
+          {
+            "const": "destructive",
+            "type": "string"
+          }
+        ]
+      },
+      "runId": {
+        "type": "string"
+      },
+      "scopeKey": {
+        "type": "string"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "const": "pending",
+            "type": "string"
+          },
+          {
+            "const": "approved",
+            "type": "string"
+          },
+          {
+            "const": "applying",
+            "type": "string"
+          },
+          {
+            "const": "applied",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "type": "string"
+          },
+          {
+            "const": "rejected",
+            "type": "string"
+          },
+          {
+            "const": "invalidated",
+            "type": "string"
+          }
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "toolName": {
+        "type": "string"
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "id",
+      "chatId",
+      "scopeKey",
+      "toolName",
+      "kind",
+      "risk",
+      "status",
+      "warnings",
+      "truncated",
+      "createdAt"
+    ],
+    "type": "object"
+  },
+  "ProposalStatusDtoSchema": {
+    "anyOf": [
+      {
+        "const": "pending",
+        "type": "string"
+      },
+      {
+        "const": "approved",
+        "type": "string"
+      },
+      {
+        "const": "applying",
+        "type": "string"
+      },
+      {
+        "const": "applied",
+        "type": "string"
+      },
+      {
+        "const": "failed",
+        "type": "string"
+      },
+      {
+        "const": "rejected",
+        "type": "string"
+      },
+      {
+        "const": "invalidated",
+        "type": "string"
+      }
+    ]
+  },
+  "ProviderDtoSchema": {
+    "properties": {
+      "apiKeySecretRef": {
+        "type": "string"
+      },
+      "baseUrl": {
+        "type": "string"
+      },
+      "defaultModel": {
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "id": {
+        "type": "string"
+      },
+      "kind": {
+        "description": "Open provider-kind discriminator; see KNOWN_PROVIDER_KINDS for the recognised vocabulary.",
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "label",
+      "kind",
+      "baseUrl",
+      "defaultModel",
+      "enabled"
+    ],
+    "type": "object"
+  },
+  "RegenerateMessageRequestSchema": {
+    "properties": {
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "model": {
+        "type": "string"
+      },
+      "providerId": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "RiskLevelDtoSchema": {
+    "anyOf": [
+      {
+        "const": "low",
+        "type": "string"
+      },
+      {
+        "const": "medium",
+        "type": "string"
+      },
+      {
+        "const": "high",
+        "type": "string"
+      },
+      {
+        "const": "destructive",
+        "type": "string"
+      }
+    ]
+  },
+  "RunDtoSchema": {
+    "properties": {
+      "chatId": {
+        "type": "string"
+      },
+      "createdAt": {
+        "description": "ISO-8601; the record's enqueuedAt.",
+        "type": "string"
+      },
+      "error": {
+        "type": "string"
+      },
+      "finishedAt": {
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "scopeId": {
+        "type": "string"
+      },
+      "startedAt": {
+        "type": "string"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "const": "queued",
+            "type": "string"
+          },
+          {
+            "const": "running",
+            "type": "string"
+          },
+          {
+            "const": "waiting_approval",
+            "type": "string"
+          },
+          {
+            "const": "interrupted",
+            "type": "string"
+          },
+          {
+            "const": "completed",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "runId",
+      "chatId",
+      "scopeId",
+      "status",
+      "createdAt"
+    ],
+    "type": "object"
+  },
+  "RunEventFrameDtoSchema": {
+    "anyOf": [
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "toolCount": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "model",
+              "toolCount"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.started",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "delta": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "delta"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.message.delta",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "finishReason": {
+                "description": "Raw provider finish_reason for this turn (e.g. \"stop\", \"length\", \"tool_calls\"), or the synthetic \"incomplete\" when the stream ended without one (see the stream_incomplete warning).",
+                "type": "string"
+              },
+              "reasoningContent": {
+                "description": "Chain-of-thought from reasoning models (OpenAI `reasoning_content`).",
+                "type": "string"
+              },
+              "toolCallCount": {
+                "type": "number"
+              },
+              "toolCalls": {
+                "items": {
+                  "properties": {
+                    "argumentsJson": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "argumentsJson"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "content",
+              "toolCallCount"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.message.completed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "argumentsJson": {
+                "type": "string"
+              },
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName",
+              "argumentsJson"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.requested",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.running",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "modelResultJson": {
+                "description": "Slim payload fed to the model (Wave 0 §0.2). Full payload stays in resultJson for UI.",
+                "type": "string"
+              },
+              "resultJson": {
+                "type": "string"
+              },
+              "sources": {
+                "items": {
+                  "properties": {
+                    "excerpt": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "description": "Host-defined source kind. Open on the wire; narrowed at the type level via AiSourceRef<K>.",
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "metadata": {
+                      "patternProperties": {
+                        "^(.*)$": {}
+                      },
+                      "type": "object"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "refId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "const": "ok",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partial",
+                    "type": "string"
+                  }
+                ]
+              },
+              "summary": {
+                "type": "string"
+              },
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "warnings": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName",
+              "resultJson",
+              "sources",
+              "truncated",
+              "warnings"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.succeeded",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "errorCode": {
+                "type": "string"
+              },
+              "errorMessage": {
+                "type": "string"
+              },
+              "modelResultJson": {
+                "description": "When a tool RAN and reported failure, the balanced model envelope is carried here so consumers persist/replay it faithfully. Absent for pre-execution failures and exec throws.",
+                "type": "string"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "const": "error",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partial",
+                    "type": "string"
+                  }
+                ]
+              },
+              "toolCallId": {
+                "type": "string"
+              },
+              "toolName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "toolCallId",
+              "toolName",
+              "errorMessage"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.tool.failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "code": {
+                "description": "Open warning code; see AiRunWarningCode for the recognised vocabulary.",
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "pass": {
+                "description": "1-based pass this warning is about; set by retry_pass on the pass it opens.",
+                "type": "number"
+              },
+              "reason": {
+                "description": "Why the pass ran: \"chat_only\" | \"empty_response\" | \"correction\" for retry_pass.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.warning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "attempt": {
+                "type": "number"
+              },
+              "callId": {
+                "type": "string"
+              },
+              "completionTokens": {
+                "type": "number"
+              },
+              "finalForCall": {
+                "type": "boolean"
+              },
+              "model": {
+                "type": "string"
+              },
+              "promptTokens": {
+                "type": "number"
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "const": "stream",
+                    "type": "string"
+                  },
+                  {
+                    "const": "response",
+                    "type": "string"
+                  }
+                ]
+              },
+              "step": {
+                "type": "number"
+              },
+              "totalTokens": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "callId",
+              "attempt",
+              "step",
+              "model",
+              "source",
+              "finalForCall"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.usage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "deficiencies": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "pass": {
+                "description": "0 for the run's own answer, then 1, 2, … per correction pass.",
+                "type": "number"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "const": "pass",
+                    "type": "string"
+                  },
+                  {
+                    "const": "partial",
+                    "type": "string"
+                  },
+                  {
+                    "const": "unavailable",
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "pass",
+              "status",
+              "deficiencies"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.verification",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "finishReason": {
+                "type": "string"
+              },
+              "iterations": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "iterations"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.completed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "errorCode": {
+                "type": "string"
+              },
+              "errorMessage": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "errorMessage"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.failed",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "reason": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.cancelled",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "RunStatusDtoSchema": {
+    "anyOf": [
+      {
+        "const": "queued",
+        "type": "string"
+      },
+      {
+        "const": "running",
+        "type": "string"
+      },
+      {
+        "const": "waiting_approval",
+        "type": "string"
+      },
+      {
+        "const": "interrupted",
+        "type": "string"
+      },
+      {
+        "const": "completed",
+        "type": "string"
+      },
+      {
+        "const": "failed",
+        "type": "string"
+      },
+      {
+        "const": "cancelled",
+        "type": "string"
+      }
+    ]
+  },
+  "SettingsDtoSchema": {
+    "properties": {
+      "allowRawToolData": {
+        "type": "boolean"
+      },
+      "contextSizePreference": {
+        "anyOf": [
+          {
+            "const": "small",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "type": "string"
+          },
+          {
+            "const": "large",
+            "type": "string"
+          }
+        ]
+      },
+      "defaultModel": {
+        "type": "string"
+      },
+      "defaultProviderId": {
+        "type": "string"
+      },
+      "maxToolIterations": {
+        "type": "number"
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "toolCalling": {
+        "anyOf": [
+          {
+            "const": "auto",
+            "type": "string"
+          },
+          {
+            "const": "on",
+            "type": "string"
+          },
+          {
+            "const": "off",
+            "type": "string"
+          }
+        ]
+      },
+      "writePolicyMode": {
+        "anyOf": [
+          {
+            "const": "auto_readonly_confirm_writes",
+            "type": "string"
+          },
+          {
+            "const": "confirm_all_writes",
+            "type": "string"
+          },
+          {
+            "const": "auto_all",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "required": [
+      "contextSizePreference",
+      "writePolicyMode",
+      "allowRawToolData",
+      "metadata"
+    ],
+    "type": "object"
+  },
+  "SubmitMessageRequestSchema": {
+    "properties": {
+      "content": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "text",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "const": "auto",
+                          "type": "string"
+                        },
+                        {
+                          "const": "low",
+                          "type": "string"
+                        },
+                        {
+                          "const": "high",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "anyOf": [
+                        {
+                          "properties": {
+                            "kind": {
+                              "const": "url",
+                              "type": "string"
+                            },
+                            "url": {
+                              "pattern": "^https?://",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "url"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "base64": {
+                              "description": "Raw base64 payload — no `data:` prefix, no media type.",
+                              "type": "string"
+                            },
+                            "kind": {
+                              "const": "data",
+                              "type": "string"
+                            },
+                            "mediaType": {
+                              "description": "IANA media type of the payload, e.g. \"image/png\".",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "base64",
+                            "mediaType"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "kind": {
+                              "const": "ref",
+                              "type": "string"
+                            },
+                            "ref": {
+                              "description": "Host-resolved attachment handle. Never sent to a provider as-is.",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "ref"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "type": {
+                      "const": "image",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "source"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        ]
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "model": {
+        "type": "string"
+      },
+      "parentMessageId": {
+        "type": "string"
+      },
+      "providerId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "content"
+    ],
+    "type": "object"
+  },
+  "SubmitMessageResponseSchema": {
+    "properties": {
+      "assistantMessageId": {
+        "type": "string"
+      },
+      "chatId": {
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "userMessageId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "chatId",
+      "runId",
+      "userMessageId",
+      "assistantMessageId"
+    ],
+    "type": "object"
+  },
+  "TaskEventEnvelopeSchema": {
+    "additionalProperties": true,
+    "description": "Minimal durable task-event shape: ordered by seq, deduplicated by eventId.",
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a task is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a task; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "description": "Event type. Open here; the per-task-kind vocabulary closes it.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "seq",
+      "eventId",
+      "timestamp",
+      "contractVersion"
+    ],
+    "type": "object"
+  },
+  "TestProviderResponseSchema": {
+    "properties": {
+      "error": {
+        "type": "string"
+      },
+      "ok": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "type": "object"
+  },
+  "ToolCallingModeDtoSchema": {
+    "anyOf": [
+      {
+        "const": "auto",
+        "type": "string"
+      },
+      {
+        "const": "on",
+        "type": "string"
+      },
+      {
+        "const": "off",
+        "type": "string"
+      }
+    ]
+  },
+  "ToolDefinitionDtoSchema": {
+    "properties": {
+      "capability": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "effect": {
+        "anyOf": [
+          {
+            "const": "read",
+            "type": "string"
+          },
+          {
+            "const": "write",
+            "type": "string"
+          }
+        ]
+      },
+      "inputSchema": {
+        "additionalProperties": true,
+        "description": "A JSON Schema document (see AiJsonSchemaObject).",
+        "type": "object"
+      },
+      "name": {
+        "type": "string"
+      },
+      "outputSchema": {
+        "additionalProperties": true,
+        "description": "A JSON Schema document (see AiJsonSchemaObject).",
+        "type": "object"
+      },
+      "timeoutMs": {
+        "description": "Optional per-tool execution timeout (ms). When set, the run-loop races execute() against the deadline via an AbortController linked to ctx.signal.",
+        "type": "number"
+      },
+      "version": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "version",
+      "effect",
+      "capability",
+      "description",
+      "inputSchema"
+    ],
+    "type": "object"
+  },
+  "ToolEventDtoSchema": {
+    "properties": {
+      "argumentsJson": {
+        "type": "string"
+      },
+      "chatId": {
+        "type": "string"
+      },
+      "createdAt": {
+        "description": "ISO-8601.",
+        "type": "string"
+      },
+      "errorCode": {
+        "type": "string"
+      },
+      "errorMessage": {
+        "type": "string"
+      },
+      "id": {
+        "description": "The eventId of the originating run event.",
+        "type": "string"
+      },
+      "modelResultJson": {
+        "type": "string"
+      },
+      "resultJson": {
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "sources": {
+        "items": {
+          "properties": {
+            "excerpt": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "description": "Host-defined source kind. Open on the wire; narrowed at the type level via AiSourceRef<K>.",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "metadata": {
+              "patternProperties": {
+                "^(.*)$": {}
+              },
+              "type": "object"
+            },
+            "path": {
+              "type": "string"
+            },
+            "refId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "label"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "const": "requested",
+            "type": "string"
+          },
+          {
+            "const": "running",
+            "type": "string"
+          },
+          {
+            "const": "succeeded",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "type": "string"
+          },
+          {
+            "const": "rejected",
+            "type": "string"
+          }
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "toolCallId": {
+        "type": "string"
+      },
+      "toolName": {
+        "type": "string"
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "warnings": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "id",
+      "runId",
+      "chatId",
+      "toolCallId",
+      "toolName",
+      "status",
+      "createdAt"
+    ],
+    "type": "object"
+  },
+  "UpdateChatRequestSchema": {
+    "properties": {
+      "archived": {
+        "type": "boolean"
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "UpdateMcpServerRequestSchema": {
+    "properties": {
+      "alias": {
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "resilience": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "secretRefs": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "toolAliases": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "transport": {
+        "anyOf": [
+          {
+            "properties": {
+              "args": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "command": {
+                "type": "string"
+              },
+              "env": {
+                "patternProperties": {
+                  "^(.*)$": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "kind": {
+                "const": "stdio",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "command"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "headers": {
+                "patternProperties": {
+                  "^(.*)$": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "kind": {
+                "const": "http",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "type": "object"
+  },
+  "UpdateProviderRequestSchema": {
+    "properties": {
+      "apiKey": {
+        "type": "string"
+      },
+      "baseUrl": {
+        "type": "string"
+      },
+      "defaultModel": {
+        "type": "string"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "extraHeaders": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "kind": {
+        "description": "Open provider-kind discriminator; see KNOWN_PROVIDER_KINDS for the recognised vocabulary.",
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      }
+    },
+    "type": "object"
+  },
+  "UpdateSettingsRequestSchema": {
+    "properties": {
+      "allowRawToolData": {
+        "type": "boolean"
+      },
+      "contextSizePreference": {
+        "anyOf": [
+          {
+            "const": "small",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "type": "string"
+          },
+          {
+            "const": "large",
+            "type": "string"
+          }
+        ]
+      },
+      "defaultModel": {
+        "type": "string"
+      },
+      "defaultProviderId": {
+        "type": "string"
+      },
+      "maxToolIterations": {
+        "type": "number"
+      },
+      "metadata": {
+        "patternProperties": {
+          "^(.*)$": {}
+        },
+        "type": "object"
+      },
+      "toolCalling": {
+        "anyOf": [
+          {
+            "const": "auto",
+            "type": "string"
+          },
+          {
+            "const": "on",
+            "type": "string"
+          },
+          {
+            "const": "off",
+            "type": "string"
+          }
+        ]
+      },
+      "writePolicyMode": {
+        "anyOf": [
+          {
+            "const": "auto_readonly_confirm_writes",
+            "type": "string"
+          },
+          {
+            "const": "confirm_all_writes",
+            "type": "string"
+          },
+          {
+            "const": "auto_all",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "type": "object"
+  },
+  "VersionDtoSchema": {
+    "properties": {
+      "contractVersion": {
+        "type": "string"
+      },
+      "packages": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "restApiVersion": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "contractVersion",
+      "restApiVersion"
+    ],
+    "type": "object"
+  },
+  "WriteAllowanceDtoSchema": {
+    "properties": {
+      "chatId": {
+        "type": "string"
+      },
+      "createdAt": {
+        "description": "ISO-8601.",
+        "type": "string"
+      },
+      "key": {
+        "type": "string"
+      },
+      "maxRisk": {
+        "anyOf": [
+          {
+            "const": "low",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "type": "string"
+          },
+          {
+            "const": "destructive",
+            "type": "string"
+          }
+        ]
+      },
+      "proposalKind": {
+        "type": "string"
+      },
+      "toolName": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "key",
+      "chatId",
+      "toolName",
+      "proposalKind",
+      "maxRisk",
+      "createdAt"
+    ],
+    "type": "object"
+  },
+  "WriteAllowanceListResponseSchema": {
+    "properties": {
+      "allowances": {
+        "items": {
+          "properties": {
+            "chatId": {
+              "type": "string"
+            },
+            "createdAt": {
+              "description": "ISO-8601.",
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "maxRisk": {
+              "anyOf": [
+                {
+                  "const": "low",
+                  "type": "string"
+                },
+                {
+                  "const": "medium",
+                  "type": "string"
+                },
+                {
+                  "const": "high",
+                  "type": "string"
+                },
+                {
+                  "const": "destructive",
+                  "type": "string"
+                }
+              ]
+            },
+            "proposalKind": {
+              "type": "string"
+            },
+            "toolName": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "chatId",
+            "toolName",
+            "proposalKind",
+            "maxRisk",
+            "createdAt"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "allowances"
+    ],
+    "type": "object"
+  },
+  "WritePolicyModeDtoSchema": {
+    "anyOf": [
+      {
+        "const": "auto_readonly_confirm_writes",
+        "type": "string"
+      },
+      {
+        "const": "confirm_all_writes",
+        "type": "string"
+      },
+      {
+        "const": "auto_all",
+        "type": "string"
+      }
+    ]
+  }
+}

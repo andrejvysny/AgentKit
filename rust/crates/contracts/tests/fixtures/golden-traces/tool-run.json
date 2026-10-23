@@ -1,0 +1,104 @@
+[
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "model": "gpt-golden",
+      "toolCount": 1
+    },
+    "eventId": "evt_8099b928-3823-47e3-82da-dfcdbf2d8316",
+    "runId": "run-golden-tool-run",
+    "seq": 0,
+    "timestamp": "2026-09-02T14:03:41.479Z",
+    "type": "run.started"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "content": "",
+      "toolCallCount": 1
+    },
+    "eventId": "evt_ec889e87-4cce-4fcf-a4ab-d937a9189ab1",
+    "runId": "run-golden-tool-run",
+    "seq": 1,
+    "timestamp": "2026-09-02T14:03:41.479Z",
+    "type": "run.message.completed"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "argumentsJson": "{\"text\":\"golden\"}",
+      "toolCallId": "call-golden-1",
+      "toolName": "echo"
+    },
+    "eventId": "evt_4a4ee3c5-73b9-47e1-916f-ca8052a455e4",
+    "runId": "run-golden-tool-run",
+    "seq": 2,
+    "timestamp": "2026-09-02T14:03:41.479Z",
+    "type": "run.tool.requested"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "toolCallId": "call-golden-1",
+      "toolName": "echo"
+    },
+    "eventId": "evt_7e017f7d-4af2-4942-a615-3eea569f11d9",
+    "runId": "run-golden-tool-run",
+    "seq": 3,
+    "timestamp": "2026-09-02T14:03:41.479Z",
+    "type": "run.tool.running"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "modelResultJson": "{\"ok\":true,\"status\":\"ok\",\"warnings\":[],\"truncated\":false,\"data\":{\"echoed\":\"golden\"}}",
+      "resultJson": "{\"echoed\":\"golden\"}",
+      "sources": [],
+      "status": "ok",
+      "toolCallId": "call-golden-1",
+      "toolName": "echo",
+      "truncated": false,
+      "warnings": []
+    },
+    "eventId": "evt_fa9f1a48-d5c5-4557-8706-073bec896120",
+    "runId": "run-golden-tool-run",
+    "seq": 4,
+    "timestamp": "2026-09-02T14:03:41.479Z",
+    "type": "run.tool.succeeded"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "delta": "Done."
+    },
+    "eventId": "evt_c103e043-8ac6-4738-af36-231085159ae0",
+    "runId": "run-golden-tool-run",
+    "seq": 5,
+    "timestamp": "2026-09-02T14:03:41.479Z",
+    "type": "run.message.delta"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "content": "Done.",
+      "toolCallCount": 0
+    },
+    "eventId": "evt_7ab70dc4-18c1-4267-98e2-0bae2f9d5e85",
+    "runId": "run-golden-tool-run",
+    "seq": 6,
+    "timestamp": "2026-09-02T14:03:41.479Z",
+    "type": "run.message.completed"
+  },
+  {
+    "contractVersion": "0.7.0",
+    "data": {
+      "finishReason": "stop",
+      "iterations": 2
+    },
+    "eventId": "evt_9a901b89-f96a-44c3-af55-e24b9838b4d9",
+    "runId": "run-golden-tool-run",
+    "seq": 7,
+    "timestamp": "2026-09-02T14:03:41.479Z",
+    "type": "run.completed"
+  }
+]

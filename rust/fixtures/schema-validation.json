@@ -1,0 +1,3025 @@
+{
+  "version": 1,
+  "authority": {
+    "contracts": "packages/contracts/tests/schemas-compile.test.ts: Ajv strict=true allErrors=true",
+    "tools": "packages/core/src/tools/registry.ts: AiToolRegistry with ajv-formats",
+    "ajv": "8.20.0",
+    "ajvFormats": "3.0.1"
+  },
+  "schemas": {
+    "string": {
+      "type": "string"
+    },
+    "unicodeLength": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1
+    },
+    "unicodePattern": {
+      "type": "string",
+      "pattern": "^.$"
+    },
+    "integer": {
+      "type": "integer"
+    },
+    "boundedInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "number": {
+      "type": "number"
+    },
+    "numericBounds": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 1
+    },
+    "multipleOf": {
+      "type": "number",
+      "multipleOf": 0.1
+    },
+    "openObject": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "closedObject": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "optionalNullable": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "requiredNullable": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "value"
+      ]
+    },
+    "array": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      },
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true
+    },
+    "composition": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "oneOf": [
+            {
+              "const": "x"
+            },
+            {
+              "type": "integer",
+              "minimum": 1
+            }
+          ]
+        }
+      },
+      "required": [
+        "x"
+      ],
+      "additionalProperties": false
+    },
+    "localRef": {
+      "$defs": {
+        "name": {
+          "type": "string",
+          "minLength": 2
+        }
+      },
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "remoteRef": {
+      "$ref": "https://example.invalid/schema.json"
+    },
+    "invalidSchema": {
+      "type": "definitely-not-a-json-type"
+    },
+    "unknownKeyword": {
+      "type": "string",
+      "host-defined": true
+    },
+    "format:email": {
+      "type": "string",
+      "format": "email"
+    },
+    "format:hostname": {
+      "type": "string",
+      "format": "hostname"
+    },
+    "format:ipv4": {
+      "type": "string",
+      "format": "ipv4"
+    },
+    "format:ipv6": {
+      "type": "string",
+      "format": "ipv6"
+    },
+    "format:date": {
+      "type": "string",
+      "format": "date"
+    },
+    "format:time": {
+      "type": "string",
+      "format": "time"
+    },
+    "format:date-time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "format:uri": {
+      "type": "string",
+      "format": "uri"
+    },
+    "format:uri-reference": {
+      "type": "string",
+      "format": "uri-reference"
+    },
+    "format:uri-template": {
+      "type": "string",
+      "format": "uri-template"
+    },
+    "format:uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "format:regex": {
+      "type": "string",
+      "format": "regex"
+    },
+    "format:duration": {
+      "type": "string",
+      "format": "duration"
+    },
+    "format:byte": {
+      "type": "string",
+      "format": "byte"
+    },
+    "format:int32": {
+      "type": "number",
+      "format": "int32"
+    },
+    "format:int64": {
+      "type": "number",
+      "format": "int64"
+    },
+    "format:url": {
+      "type": "string",
+      "format": "url"
+    },
+    "format:unknown-host-format": {
+      "type": "string",
+      "format": "unknown-host-format"
+    },
+    "format:iso-time": {
+      "type": "string",
+      "format": "iso-time"
+    },
+    "format:iso-date-time": {
+      "type": "string",
+      "format": "iso-date-time"
+    },
+    "minimumOnly": {
+      "type": "number",
+      "minimum": 0
+    },
+    "maximumOnly": {
+      "type": "number",
+      "maximum": 0
+    },
+    "exclusiveMinimumOnly": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "exclusiveMaximumOnly": {
+      "type": "number",
+      "exclusiveMaximum": 0
+    },
+    "uniqueNumbers": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "uniqueItems": true
+    },
+    "roundedConst": {
+      "const": 9007199254740992
+    },
+    "plainObject": {
+      "type": "object"
+    },
+    "ecmaPatternProperties": {
+      "type": "object",
+      "patternProperties": {
+        "^.$": {
+          "type": "integer"
+        }
+      }
+    },
+    "rootIdPropertyRefs": {
+      "$id": "https://schemas.example.test/root.json",
+      "definitions": {
+        "positive": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "properties": {
+        "known": {
+          "$ref": "#/definitions/positive"
+        }
+      },
+      "patternProperties": {
+        "^x/[~]é$": {
+          "$ref": "#/definitions/positive"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/positive"
+      }
+    },
+    "recursivePropertyRefs": {
+      "$id": "https://schemas.example.test/tree.json",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "patternProperties": {
+        "^child$": {
+          "$ref": "#"
+        }
+      },
+      "additionalProperties": false
+    },
+    "overlapPropertyPatterns": {
+      "properties": {
+        "x": {
+          "minimum": 2
+        }
+      },
+      "patternProperties": {
+        "^.$": {
+          "type": "integer"
+        },
+        "^x": {
+          "maximum": 4
+        }
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "closedPropertyPatterns": {
+      "patternProperties": {
+        "^.$": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "nestedPropertyResource": {
+      "$id": "https://schemas.example.test/root.json",
+      "definitions": {
+        "positive": {
+          "$id": "positive.json",
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "patternProperties": {
+        "^branch$": {
+          "$id": "branch.json",
+          "definitions": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "patternProperties": {
+            "^text$": {
+              "$ref": "#/definitions/text"
+            },
+            "^count$": {
+              "$ref": "positive.json"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "vectors": [
+    {
+      "id": "unicode-length-ascii",
+      "profile": "tool",
+      "schema": "unicodeLength",
+      "instance": "x",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "unicode-pattern-ascii",
+      "profile": "tool",
+      "schema": "unicodePattern",
+      "instance": "x",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "unicode-length-supplementary",
+      "profile": "tool",
+      "schema": "unicodeLength",
+      "instance": "😀",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "unicode-pattern-supplementary",
+      "profile": "tool",
+      "schema": "unicodePattern",
+      "instance": "😀",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "unicode-length-combining",
+      "profile": "tool",
+      "schema": "unicodeLength",
+      "instance": "é",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "unicode-pattern-combining",
+      "profile": "tool",
+      "schema": "unicodePattern",
+      "instance": "é",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "unicode-length-empty",
+      "profile": "tool",
+      "schema": "unicodeLength",
+      "instance": "",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "unicode-pattern-empty",
+      "profile": "tool",
+      "schema": "unicodePattern",
+      "instance": "",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "unicode-length-flag",
+      "profile": "tool",
+      "schema": "unicodeLength",
+      "instance": "🇸🇰",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "unicode-pattern-flag",
+      "profile": "tool",
+      "schema": "unicodePattern",
+      "instance": "🇸🇰",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "integer-zero",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": 0,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "integer-negativeZero",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": 0,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "integer-integerFloat",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": 2,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "integer-fraction",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": 1.25,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "integer-safeMax",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": 9007199254740991,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "integer-unsafeInteger",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": 9007199254740992,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "integer-largeExponent",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": 1e+100,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "integer-tiny",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": 1e-100,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "integer-string",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": "2",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "safe-bound--1",
+      "profile": "tool",
+      "schema": "boundedInteger",
+      "instance": -1,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "safe-bound-0",
+      "profile": "tool",
+      "schema": "boundedInteger",
+      "instance": 0,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "safe-bound-1",
+      "profile": "tool",
+      "schema": "boundedInteger",
+      "instance": 1,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "safe-bound-9007199254740991",
+      "profile": "tool",
+      "schema": "boundedInteger",
+      "instance": 9007199254740991,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "safe-bound-9007199254740992",
+      "profile": "tool",
+      "schema": "boundedInteger",
+      "instance": 9007199254740992,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "numeric-bound--1",
+      "profile": "tool",
+      "schema": "numericBounds",
+      "instance": -1,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "numeric-bound-0",
+      "profile": "tool",
+      "schema": "numericBounds",
+      "instance": 0,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "numeric-bound-1e-100",
+      "profile": "tool",
+      "schema": "numericBounds",
+      "instance": 1e-100,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "numeric-bound-1",
+      "profile": "tool",
+      "schema": "numericBounds",
+      "instance": 1,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "numeric-bound-1.0000000000000002",
+      "profile": "tool",
+      "schema": "numericBounds",
+      "instance": 1.0000000000000002,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "multiple-of-0.1",
+      "profile": "tool",
+      "schema": "multipleOf",
+      "instance": 0.1,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "multiple-of-0.3",
+      "profile": "tool",
+      "schema": "multipleOf",
+      "instance": 0.3,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "multiple-of-0.30000000000000004",
+      "profile": "tool",
+      "schema": "multipleOf",
+      "instance": 0.30000000000000004,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "multiple-of-1.25",
+      "profile": "tool",
+      "schema": "multipleOf",
+      "instance": 1.25,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "multiple-of-100000000000000000000",
+      "profile": "tool",
+      "schema": "multipleOf",
+      "instance": 100000000000000000000,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "multiple-of-1e+21",
+      "profile": "tool",
+      "schema": "multipleOf",
+      "instance": 1e+21,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "open-object-known",
+      "profile": "tool",
+      "schema": "openObject",
+      "instance": {
+        "name": "x"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "closed-object-known",
+      "profile": "tool",
+      "schema": "closedObject",
+      "instance": {
+        "name": "x"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "open-object-unknown",
+      "profile": "tool",
+      "schema": "openObject",
+      "instance": {
+        "name": "x",
+        "future": [
+          1,
+          null
+        ]
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "closed-object-unknown",
+      "profile": "tool",
+      "schema": "closedObject",
+      "instance": {
+        "name": "x",
+        "future": [
+          1,
+          null
+        ]
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "open-object-missing",
+      "profile": "tool",
+      "schema": "openObject",
+      "instance": {},
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "closed-object-missing",
+      "profile": "tool",
+      "schema": "closedObject",
+      "instance": {},
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "open-object-nullValue",
+      "profile": "tool",
+      "schema": "openObject",
+      "instance": {
+        "name": null
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "closed-object-nullValue",
+      "profile": "tool",
+      "schema": "closedObject",
+      "instance": {
+        "name": null
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "open-object-wrongValue",
+      "profile": "tool",
+      "schema": "openObject",
+      "instance": {
+        "name": 2
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "closed-object-wrongValue",
+      "profile": "tool",
+      "schema": "closedObject",
+      "instance": {
+        "name": 2
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "optional-nullable-omitted",
+      "profile": "tool",
+      "schema": "optionalNullable",
+      "instance": {},
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "required-nullable-omitted",
+      "profile": "tool",
+      "schema": "requiredNullable",
+      "instance": {},
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "optional-nullable-null",
+      "profile": "tool",
+      "schema": "optionalNullable",
+      "instance": {
+        "value": null
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "required-nullable-null",
+      "profile": "tool",
+      "schema": "requiredNullable",
+      "instance": {
+        "value": null
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "optional-nullable-string",
+      "profile": "tool",
+      "schema": "optionalNullable",
+      "instance": {
+        "value": "x"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "required-nullable-string",
+      "profile": "tool",
+      "schema": "requiredNullable",
+      "instance": {
+        "value": "x"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "optional-nullable-wrong",
+      "profile": "tool",
+      "schema": "optionalNullable",
+      "instance": {
+        "value": 2
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "required-nullable-wrong",
+      "profile": "tool",
+      "schema": "requiredNullable",
+      "instance": {
+        "value": 2
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "array-empty",
+      "profile": "tool",
+      "schema": "array",
+      "instance": [],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "array-one",
+      "profile": "tool",
+      "schema": "array",
+      "instance": [
+        1
+      ],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "array-two",
+      "profile": "tool",
+      "schema": "array",
+      "instance": [
+        1,
+        2
+      ],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "array-duplicate",
+      "profile": "tool",
+      "schema": "array",
+      "instance": [
+        1,
+        1
+      ],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "array-floatSame",
+      "profile": "tool",
+      "schema": "array",
+      "instance": [
+        1,
+        1
+      ],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "array-tooMany",
+      "profile": "tool",
+      "schema": "array",
+      "instance": [
+        1,
+        2,
+        3
+      ],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "array-wrong",
+      "profile": "tool",
+      "schema": "array",
+      "instance": [
+        null
+      ],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "composition-string",
+      "profile": "tool",
+      "schema": "composition",
+      "instance": {
+        "x": "x"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "composition-number",
+      "profile": "tool",
+      "schema": "composition",
+      "instance": {
+        "x": 1
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "composition-wrong",
+      "profile": "tool",
+      "schema": "composition",
+      "instance": {
+        "x": 0
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "composition-unknown",
+      "profile": "tool",
+      "schema": "composition",
+      "instance": {
+        "x": 1,
+        "extra": true
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "local-ref-valid",
+      "profile": "tool",
+      "schema": "localRef",
+      "instance": {
+        "name": "ok"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "local-ref-short",
+      "profile": "tool",
+      "schema": "localRef",
+      "instance": {
+        "name": "x"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "unknown-keyword",
+      "profile": "tool",
+      "schema": "unknownKeyword",
+      "instance": "x",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "remote-ref-refused",
+      "profile": "tool",
+      "schema": "remoteRef",
+      "instance": {},
+      "expected": {
+        "decoded": true,
+        "compiled": false,
+        "valid": false
+      }
+    },
+    {
+      "id": "invalid-schema-refused",
+      "profile": "tool",
+      "schema": "invalidSchema",
+      "instance": "x",
+      "expected": {
+        "decoded": true,
+        "compiled": false,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-email-0",
+      "profile": "tool",
+      "schema": "format:email",
+      "instance": "a@example.com",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-email-1",
+      "profile": "tool",
+      "schema": "format:email",
+      "instance": "not-email",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-email-2",
+      "profile": "tool",
+      "schema": "format:email",
+      "instance": "a@localhost",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-email-3",
+      "profile": "tool",
+      "schema": "format:email",
+      "instance": "\"a\"@example.com",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-email-4",
+      "profile": "tool",
+      "schema": "format:email",
+      "instance": "a..b@example.com",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-hostname-0",
+      "profile": "tool",
+      "schema": "format:hostname",
+      "instance": "example.com",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-hostname-1",
+      "profile": "tool",
+      "schema": "format:hostname",
+      "instance": "localhost",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-hostname-2",
+      "profile": "tool",
+      "schema": "format:hostname",
+      "instance": "-bad.example",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-hostname-3",
+      "profile": "tool",
+      "schema": "format:hostname",
+      "instance": "éxample.com",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-hostname-4",
+      "profile": "tool",
+      "schema": "format:hostname",
+      "instance": "a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-ipv4-0",
+      "profile": "tool",
+      "schema": "format:ipv4",
+      "instance": "127.0.0.1",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-ipv4-1",
+      "profile": "tool",
+      "schema": "format:ipv4",
+      "instance": "256.0.0.1",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-ipv4-2",
+      "profile": "tool",
+      "schema": "format:ipv4",
+      "instance": "01.2.3.4",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-ipv6-0",
+      "profile": "tool",
+      "schema": "format:ipv6",
+      "instance": "::1",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-ipv6-1",
+      "profile": "tool",
+      "schema": "format:ipv6",
+      "instance": "2001:db8::1",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-ipv6-2",
+      "profile": "tool",
+      "schema": "format:ipv6",
+      "instance": "not:ipv6",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-ipv6-3",
+      "profile": "tool",
+      "schema": "format:ipv6",
+      "instance": "fe80::1%eth0",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-date-0",
+      "profile": "tool",
+      "schema": "format:date",
+      "instance": "2024-02-29",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-date-1",
+      "profile": "tool",
+      "schema": "format:date",
+      "instance": "2023-02-29",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-date-2",
+      "profile": "tool",
+      "schema": "format:date",
+      "instance": "2026-13-01",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-time-0",
+      "profile": "tool",
+      "schema": "format:time",
+      "instance": "23:59:59Z",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-time-1",
+      "profile": "tool",
+      "schema": "format:time",
+      "instance": "23:59:60Z",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-time-2",
+      "profile": "tool",
+      "schema": "format:time",
+      "instance": "12:00:00",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-time-3",
+      "profile": "tool",
+      "schema": "format:time",
+      "instance": "24:00:00Z",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-date-time-0",
+      "profile": "tool",
+      "schema": "format:date-time",
+      "instance": "2026-10-22T12:34:56Z",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-date-time-1",
+      "profile": "tool",
+      "schema": "format:date-time",
+      "instance": "2026-10-22T12:34:56+01:00",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-date-time-2",
+      "profile": "tool",
+      "schema": "format:date-time",
+      "instance": "2026-10-22 12:34:56Z",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-date-time-3",
+      "profile": "tool",
+      "schema": "format:date-time",
+      "instance": "2026-10-22T12:34:56",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-date-time-4",
+      "profile": "tool",
+      "schema": "format:date-time",
+      "instance": "2023-02-29T00:00:00Z",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-uri-0",
+      "profile": "tool",
+      "schema": "format:uri",
+      "instance": "https://example.com/a",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-uri-1",
+      "profile": "tool",
+      "schema": "format:uri",
+      "instance": "mailto:a@example.com",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-uri-2",
+      "profile": "tool",
+      "schema": "format:uri",
+      "instance": "relative/path",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-uri-3",
+      "profile": "tool",
+      "schema": "format:uri",
+      "instance": "https://example.com/a b",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-uri-reference-0",
+      "profile": "tool",
+      "schema": "format:uri-reference",
+      "instance": "../relative",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-uri-reference-1",
+      "profile": "tool",
+      "schema": "format:uri-reference",
+      "instance": "",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-uri-reference-2",
+      "profile": "tool",
+      "schema": "format:uri-reference",
+      "instance": "https://example.com/a b",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-uri-template-0",
+      "profile": "tool",
+      "schema": "format:uri-template",
+      "instance": "https://example.com/{id}",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-uri-template-1",
+      "profile": "tool",
+      "schema": "format:uri-template",
+      "instance": "{+path}",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-uri-template-2",
+      "profile": "tool",
+      "schema": "format:uri-template",
+      "instance": "{bad name}",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-uuid-0",
+      "profile": "tool",
+      "schema": "format:uuid",
+      "instance": "123e4567-e89b-12d3-a456-426614174000",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-uuid-1",
+      "profile": "tool",
+      "schema": "format:uuid",
+      "instance": "urn:uuid:123e4567-e89b-12d3-a456-426614174000",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-uuid-2",
+      "profile": "tool",
+      "schema": "format:uuid",
+      "instance": "invalid",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-regex-0",
+      "profile": "tool",
+      "schema": "format:regex",
+      "instance": "^[a-z]+$",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-regex-1",
+      "profile": "tool",
+      "schema": "format:regex",
+      "instance": "[invalid",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-duration-0",
+      "profile": "tool",
+      "schema": "format:duration",
+      "instance": "P1D",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-duration-1",
+      "profile": "tool",
+      "schema": "format:duration",
+      "instance": "PT1H",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-duration-2",
+      "profile": "tool",
+      "schema": "format:duration",
+      "instance": "P",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-duration-3",
+      "profile": "tool",
+      "schema": "format:duration",
+      "instance": "invalid",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-byte-0",
+      "profile": "tool",
+      "schema": "format:byte",
+      "instance": "aGVsbG8=",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-byte-1",
+      "profile": "tool",
+      "schema": "format:byte",
+      "instance": "%%%",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-byte-2",
+      "profile": "tool",
+      "schema": "format:byte",
+      "instance": "",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-int32-0",
+      "profile": "tool",
+      "schema": "format:int32",
+      "instance": 2147483647,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-int32-1",
+      "profile": "tool",
+      "schema": "format:int32",
+      "instance": 2147483648,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-int32-2",
+      "profile": "tool",
+      "schema": "format:int32",
+      "instance": -2147483648,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-int32-3",
+      "profile": "tool",
+      "schema": "format:int32",
+      "instance": -2147483649,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-int32-4",
+      "profile": "tool",
+      "schema": "format:int32",
+      "instance": 1.5,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-int64-0",
+      "profile": "tool",
+      "schema": "format:int64",
+      "instance": 9007199254740991,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-int64-1",
+      "profile": "tool",
+      "schema": "format:int64",
+      "instance": 100000000000000000000,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-int64-2",
+      "profile": "tool",
+      "schema": "format:int64",
+      "instance": 1.5,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-url-0",
+      "profile": "tool",
+      "schema": "format:url",
+      "instance": "https://example.com/a",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-url-1",
+      "profile": "tool",
+      "schema": "format:url",
+      "instance": "http://localhost/a",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-url-2",
+      "profile": "tool",
+      "schema": "format:url",
+      "instance": "file:///tmp/a",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "format-unknown-host-format-0",
+      "profile": "tool",
+      "schema": "format:unknown-host-format",
+      "instance": "anything",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-unknown-host-format-1",
+      "profile": "tool",
+      "schema": "format:unknown-host-format",
+      "instance": "",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-chat-base",
+      "profile": "contract",
+      "schema": "ChatDtoSchema",
+      "instance": {
+        "id": "chat",
+        "createdAt": "t",
+        "updatedAt": "t",
+        "archived": false,
+        "metadata": {}
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-chat-omitted",
+      "profile": "contract",
+      "schema": "ChatDtoSchema",
+      "instance": {
+        "id": "chat",
+        "createdAt": "t",
+        "updatedAt": "t",
+        "archived": false,
+        "metadata": {}
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-chat-nullRun",
+      "profile": "contract",
+      "schema": "ChatDtoSchema",
+      "instance": {
+        "id": "chat",
+        "createdAt": "t",
+        "updatedAt": "t",
+        "archived": false,
+        "metadata": {},
+        "activeRunId": null
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-chat-unknown",
+      "profile": "contract",
+      "schema": "ChatDtoSchema",
+      "instance": {
+        "id": "chat",
+        "createdAt": "t",
+        "updatedAt": "t",
+        "archived": false,
+        "metadata": {},
+        "future": {
+          "x": null
+        }
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-chat-nullTitle",
+      "profile": "contract",
+      "schema": "ChatDtoSchema",
+      "instance": {
+        "id": "chat",
+        "createdAt": "t",
+        "updatedAt": "t",
+        "archived": false,
+        "metadata": {},
+        "title": null
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "contract-chat-missingRequired",
+      "profile": "contract",
+      "schema": "ChatDtoSchema",
+      "instance": {
+        "id": "chat"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "contract-content-empty",
+      "profile": "contract",
+      "schema": "AiMessageContentSchema",
+      "instance": "",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-content-parts",
+      "profile": "contract",
+      "schema": "AiMessageContentSchema",
+      "instance": [],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "contract-content-text",
+      "profile": "contract",
+      "schema": "AiMessageContentSchema",
+      "instance": [
+        {
+          "type": "text",
+          "text": "😀"
+        }
+      ],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-content-future",
+      "profile": "contract",
+      "schema": "AiMessageContentSchema",
+      "instance": [
+        {
+          "type": "audio",
+          "text": "x"
+        }
+      ],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "contract-image-url",
+      "profile": "contract",
+      "schema": "AiImageSourceSchema",
+      "instance": {
+        "kind": "url",
+        "url": "https://example.com/a"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-image-file",
+      "profile": "contract",
+      "schema": "AiImageSourceSchema",
+      "instance": {
+        "kind": "url",
+        "url": "file:///etc/passwd"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "contract-image-data",
+      "profile": "contract",
+      "schema": "AiImageSourceSchema",
+      "instance": {
+        "kind": "data",
+        "base64": "AA==",
+        "mediaType": "image/png"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-image-smuggle",
+      "profile": "contract",
+      "schema": "AiImageSourceSchema",
+      "instance": {
+        "kind": "data",
+        "base64": "AA==",
+        "mediaType": "image/png;evil"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "json-unicode-loneHigh",
+      "profile": "tool",
+      "schema": "string",
+      "instance": null,
+      "inputJson": "\"\\ud800\"",
+      "knownDivergence": "rust-rejects-lone-surrogate",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "json-unicode-loneLow",
+      "profile": "tool",
+      "schema": "string",
+      "instance": null,
+      "inputJson": "\"\\udfff\"",
+      "knownDivergence": "rust-rejects-lone-surrogate",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "json-unicode-validPair",
+      "profile": "tool",
+      "schema": "string",
+      "instance": null,
+      "inputJson": "\"\\ud83d\\ude00\"",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-timezone-boundary-0",
+      "profile": "tool",
+      "schema": "format:iso-time",
+      "instance": "12:00:00",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-timezone-boundary-1",
+      "profile": "tool",
+      "schema": "format:iso-time",
+      "instance": "12:00:00+01",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-timezone-boundary-2",
+      "profile": "tool",
+      "schema": "format:iso-date-time",
+      "instance": "2026-10-22t12:34:56",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-timezone-boundary-3",
+      "profile": "tool",
+      "schema": "format:iso-date-time",
+      "instance": "2026-10-22 12:34:56",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-timezone-boundary-4",
+      "profile": "tool",
+      "schema": "format:time",
+      "instance": "12:00:00+01",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-timezone-boundary-5",
+      "profile": "tool",
+      "schema": "format:time",
+      "instance": "12:00:00+0100",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-timezone-boundary-6",
+      "profile": "tool",
+      "schema": "format:date-time",
+      "instance": "2026-10-22T12:34:56+01",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "format-timezone-boundary-7",
+      "profile": "tool",
+      "schema": "format:date-time",
+      "instance": "2026-10-2212:34:56Z",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "tool-number-overflow-positive",
+      "profile": "tool",
+      "schema": "number",
+      "instance": null,
+      "inputJson": "1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-number-overflow-positive",
+      "profile": "contract",
+      "schema": "AiPromptContextBlockSchema",
+      "instance": null,
+      "inputJson": "{\"id\":\"i\",\"title\":\"t\",\"content\":\"c\",\"priority\":1e400}",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "tool-number-overflow-negative",
+      "profile": "tool",
+      "schema": "number",
+      "instance": null,
+      "inputJson": "-1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "contract-number-overflow-negative",
+      "profile": "contract",
+      "schema": "AiPromptContextBlockSchema",
+      "instance": null,
+      "inputJson": "{\"id\":\"i\",\"title\":\"t\",\"content\":\"c\",\"priority\":-1e400}",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "tool-number-underflow",
+      "profile": "tool",
+      "schema": "number",
+      "instance": 0,
+      "inputJson": "1e-400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-number-boundary-0",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": null,
+      "inputJson": "1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-number-boundary-1",
+      "profile": "tool",
+      "schema": "integer",
+      "instance": null,
+      "inputJson": "-1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-number-boundary-2",
+      "profile": "tool",
+      "schema": "minimumOnly",
+      "instance": null,
+      "inputJson": "1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-number-boundary-3",
+      "profile": "tool",
+      "schema": "minimumOnly",
+      "instance": null,
+      "inputJson": "-1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-number-boundary-4",
+      "profile": "tool",
+      "schema": "maximumOnly",
+      "instance": null,
+      "inputJson": "1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-number-boundary-5",
+      "profile": "tool",
+      "schema": "maximumOnly",
+      "instance": null,
+      "inputJson": "-1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-number-boundary-6",
+      "profile": "tool",
+      "schema": "exclusiveMinimumOnly",
+      "instance": null,
+      "inputJson": "1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-number-boundary-7",
+      "profile": "tool",
+      "schema": "exclusiveMaximumOnly",
+      "instance": null,
+      "inputJson": "-1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-number-boundary-8",
+      "profile": "tool",
+      "schema": "multipleOf",
+      "instance": null,
+      "inputJson": "1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-number-boundary-9",
+      "profile": "tool",
+      "schema": "format:int32",
+      "instance": null,
+      "inputJson": "1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-number-boundary-10",
+      "profile": "tool",
+      "schema": "format:int64",
+      "instance": null,
+      "inputJson": "-1e400",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-number-boundary-11",
+      "profile": "tool",
+      "schema": "uniqueNumbers",
+      "instance": null,
+      "inputJson": "[1e400,1e999]",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-number-boundary-12",
+      "profile": "tool",
+      "schema": "uniqueNumbers",
+      "instance": null,
+      "inputJson": "[-1e400,1e400]",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-number-boundary-13",
+      "profile": "tool",
+      "schema": "roundedConst",
+      "instance": null,
+      "inputJson": "9007199254740993",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-number-boundary-14",
+      "profile": "tool",
+      "schema": "openObject",
+      "instance": null,
+      "inputJson": "{\"name\":\"x\",\"extra\":1e400}",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-schema-overflow-0",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"number\",\"minimum\":-1e400,\"maximum\":1e400}",
+      "inputJson": "1e400",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-schema-overflow-1",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"number\",\"minimum\":-1e400,\"maximum\":1e400}",
+      "inputJson": "-1e400",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-schema-overflow-2",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"number\",\"minimum\":1e400}",
+      "inputJson": "1",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-schema-overflow-3",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"number\",\"minimum\":1e400}",
+      "inputJson": "1e400",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-schema-overflow-4",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"number\",\"exclusiveMaximum\":1e400}",
+      "inputJson": "1e400",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-schema-overflow-5",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"number\",\"exclusiveMaximum\":1e400}",
+      "inputJson": "1",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-schema-overflow-6",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"number\",\"multipleOf\":1e400}",
+      "inputJson": "1",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-schema-overflow-7",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"number\",\"multipleOf\":1e400}",
+      "inputJson": "1e400",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-schema-overflow-8",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"enum\":[1e400]}",
+      "inputJson": "1e999",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-schema-overflow-9",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"const\":-1e400}",
+      "inputJson": "-1e999",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-size-schema-minItems-1e400",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"array\",\"minItems\":1e400}",
+      "instance": [],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-size-schema-minItems-1e30",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"array\",\"minItems\":1e30}",
+      "instance": [],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-size-schema-maxItems-1e400",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"array\",\"maxItems\":1e400}",
+      "instance": [],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-size-schema-maxItems-1e30",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"array\",\"maxItems\":1e30}",
+      "instance": [],
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-size-schema-minLength-1e400",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"string\",\"minLength\":1e400}",
+      "instance": "😀",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-size-schema-minLength-1e30",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"string\",\"minLength\":1e30}",
+      "instance": "😀",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-size-schema-maxLength-1e400",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"string\",\"maxLength\":1e400}",
+      "instance": "😀",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-size-schema-maxLength-1e30",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"string\",\"maxLength\":1e30}",
+      "instance": "😀",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-size-schema-minProperties-1e400",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"object\",\"minProperties\":1e400}",
+      "instance": {},
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-size-schema-minProperties-1e30",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"object\",\"minProperties\":1e30}",
+      "instance": {},
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "javascript-size-schema-maxProperties-1e400",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"object\",\"maxProperties\":1e400}",
+      "instance": {},
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-size-schema-maxProperties-1e30",
+      "profile": "tool",
+      "schema": "number",
+      "schemaJson": "{\"type\":\"object\",\"maxProperties\":1e30}",
+      "instance": {},
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-private-object-key-0",
+      "profile": "tool",
+      "schema": "plainObject",
+      "inputJson": "{\"$serde_json::private::Number\":\"123\"}",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-private-object-key-1",
+      "profile": "tool",
+      "schema": "plainObject",
+      "inputJson": "{\"$serde_json::private::RawValue\":\"123\"}",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "javascript-private-object-key-2",
+      "profile": "tool",
+      "schema": "plainObject",
+      "inputJson": "{\"nested\":{\"$serde_json::private::Number\":\"1e400\"}}",
+      "instance": null,
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "unicode-pattern-line-boundary-0",
+      "profile": "tool",
+      "schema": "unicodePattern",
+      "instance": "\n",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "unicode-pattern-line-boundary-1",
+      "profile": "tool",
+      "schema": "unicodePattern",
+      "instance": "\r",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "unicode-pattern-line-boundary-2",
+      "profile": "tool",
+      "schema": "unicodePattern",
+      "instance": " ",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "unicode-pattern-line-boundary-3",
+      "profile": "tool",
+      "schema": "unicodePattern",
+      "instance": " ",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "unicode-pattern-line-boundary-4",
+      "profile": "tool",
+      "schema": "unicodePattern",
+      "instance": "",
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "unicode-property-pattern-line-0",
+      "profile": "tool",
+      "schema": "ecmaPatternProperties",
+      "instance": {
+        "\r": "text"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "unicode-property-pattern-line-1",
+      "profile": "tool",
+      "schema": "ecmaPatternProperties",
+      "instance": {
+        " ": "text"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "unicode-property-pattern-line-2",
+      "profile": "tool",
+      "schema": "ecmaPatternProperties",
+      "instance": {
+        " ": "text"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "property-root-id-local-valid",
+      "profile": "tool",
+      "schema": "rootIdPropertyRefs",
+      "instance": {
+        "x/~é": 1,
+        "known": 2,
+        "extra": 3
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "property-root-id-local-invalid",
+      "profile": "tool",
+      "schema": "rootIdPropertyRefs",
+      "instance": {
+        "x/~é": 0
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "property-recursive-valid",
+      "profile": "tool",
+      "schema": "recursivePropertyRefs",
+      "instance": {
+        "name": "root",
+        "child": {
+          "name": "leaf"
+        }
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "property-recursive-invalid",
+      "profile": "tool",
+      "schema": "recursivePropertyRefs",
+      "instance": {
+        "child": {
+          "name": 1
+        }
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "property-overlap-valid",
+      "profile": "tool",
+      "schema": "overlapPropertyPatterns",
+      "instance": {
+        "x": 3,
+        "\r": "line"
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "property-overlap-invalid",
+      "profile": "tool",
+      "schema": "overlapPropertyPatterns",
+      "instance": {
+        "x": 5
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "property-additional-closed-valid",
+      "profile": "tool",
+      "schema": "closedPropertyPatterns",
+      "instance": {
+        "x": 1
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
+      }
+    },
+    {
+      "id": "property-additional-closed-invalid",
+      "profile": "tool",
+      "schema": "closedPropertyPatterns",
+      "instance": {
+        "\r": 1
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
+      }
+    },
+    {
+      "id": "property-nested-resource-valid",
+      "profile": "tool",
+      "schema": "nestedPropertyResource",
+      "instance": {
+        "branch": {
+          "text": "ok",
+          "count": 1
+        }
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": false,
+        "valid": false
+      }
+    },
+    {
+      "id": "property-nested-resource-invalid",
+      "profile": "tool",
+      "schema": "nestedPropertyResource",
+      "instance": {
+        "branch": {
+          "count": 0
+        }
+      },
+      "expected": {
+        "decoded": true,
+        "compiled": false,
+        "valid": false
+      }
+    }
+  ],
+  "compatibilityExceptions": [
+    {
+      "id": "rust-rejects-lone-surrogate",
+      "status": "user-approved",
+      "approvedOn": "2026-10-22",
+      "scope": "Native JSON input rejects unpaired UTF-16 surrogates. Valid surrogate pairs remain accepted.",
+      "evidence": "User explicitly approved this documented native UTF-8 compatibility exception."
+    }
+  ]
+}

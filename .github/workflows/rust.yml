@@ -1,0 +1,71 @@
+name: Rust native SDK
+
+on:
+  push:
+    paths: ["rust/**", "scripts/**", "packages/**", "bun.lock", "package.json", ".github/workflows/rust.yml"]
+  pull_request:
+    paths: ["rust/**", "scripts/**", "packages/**", "bun.lock", "package.json", ".github/workflows/rust.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux native build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libgl1-mesa-dev pkg-config
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: cargo fmt --all --check
+        working-directory: rust
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        working-directory: rust
+      - run: cargo test --workspace --all-features --locked
+        working-directory: rust
+      - name: Shared store and client interoperability
+        run: bun test scripts/tests/rust-store-conformance.test.ts scripts/tests/rust-runner-conformance.test.ts packages/client/tests/rust-interop.test.ts packages/client/tests/rust-stream-boundaries.test.ts packages/react/tests/rust-interop.test.ts packages/transport-http/tests/rust-interop.test.ts
+        env:
+          AGENTKIT_RUN_RUST_CONFORMANCE: "1"
+          AGENTKIT_RUN_RUST_RUNNER_CONFORMANCE: "1"
+      - name: Existing client and React behavior against Rust
+        run: bun test --timeout 60000 packages/client/tests packages/react/tests
+        env:
+          AGENTKIT_TEST_BACKEND: rust
+      - run: bun run typecheck
+      - run: bun test
+      - name: Verify packaged consumers
+        run: node rust/scripts/check-packages.mjs --offline
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/export-rust-fixtures.ts --check
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          targets: wasm32-unknown-unknown
+      - run: cargo check -p agentkit-contracts --target wasm32-unknown-unknown --locked
+        working-directory: rust

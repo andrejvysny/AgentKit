@@ -1,0 +1,25 @@
+[package]
+name = "agentkit-transport-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Authenticated AgentKit REST and resumable event-stream routes"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "../../../README.md"
+
+[dependencies]
+agentkit-contracts = { path = "../contracts", version = "0.1.0" }
+async-trait.workspace = true
+axum = "=0.8.8"
+async-stream = "=0.3.6"
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+percent-encoding = "=2.3.2"
+tokio.workspace = true
+url = "=2.5.8"
+
+[dev-dependencies]
+reqwest.workspace = true
+tower = { version = "=0.5.3", features = ["util"] }
