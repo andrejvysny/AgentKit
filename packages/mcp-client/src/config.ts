@@ -44,6 +44,7 @@ export interface McpServerConfig {
   /** Server tool name → the name the canonical id should use instead. */
   toolAliases?: Record<string, string>;
   resilience?: Partial<McpResilienceOptions>;
+  discovery?: { maxPages?: number; maxItems?: number; maxBytes?: number };
 }
 
 export function isServerEnabled(config: McpServerConfig): boolean {

@@ -28,3 +28,5 @@ export * from "./rest.js";
 // The schema values again, as one enumerable barrel (validation/codegen/docs).
 export * from "./schemas.js";
 export * from "./provider-continuation.js";
+
+export * from "./managed-content.js";

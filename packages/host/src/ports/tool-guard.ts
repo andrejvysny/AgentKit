@@ -2,6 +2,10 @@ import type { AiContextBinding, AiToolDefinition } from "@agentkit/contracts";
 
 /** What a guard is shown about the tool it is being asked to judge. */
 export interface ToolGuardContext {
+  /** Present at execution, after input validation. An immutable JSON snapshot. */
+  arguments?: unknown;
+  runId?: string;
+  signal?: AbortSignal;
   /** Absent when the question is chat-independent (`ToolCatalog.listTools()`). */
   chatId?: string;
   /**

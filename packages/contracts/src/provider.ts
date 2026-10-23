@@ -48,6 +48,7 @@ export const AiProviderCapabilitiesSchema = Type.Object({
   toolCalling: Type.Boolean(),
   modelList: Type.Boolean(),
   vision: Type.Optional(Type.Boolean()),
+  audio: Type.Optional(Type.Boolean()),
   jsonMode: Type.Optional(Type.Boolean()),
   maxContextTokens: Type.Optional(Type.Number()),
   checkedAt: Type.Optional(Type.String()),

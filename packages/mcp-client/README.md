@@ -216,3 +216,22 @@ everything the server sent, for a UI to render.
 `McpClientManagerDeps.transportFactory` is injectable, so tests drive real MCP
 servers over the SDK's `InMemoryTransport` instead of spawning processes or
 opening sockets. See `tests/helpers.ts`.
+
+## Managed integrations and invocation policy
+
+See [Managed connectors, skills and prompt templates](../../docs/connector-system.md)
+for `ConnectionService`, account-scoped OAuth, GitHub/Plane definitions, scoped
+remote context and the HTTP/client surfaces. The composition recipe is in
+`examples/desktop-host/src/managed-integrations.ts`.
+
+External calls through `createMcpToolSetContributor` now require host-owned
+classification and authorization. Unknown actions default to writes and are
+refused without an `authorize` callback; remote read-only hints do not grant
+permission. `ConnectionService.contributor` supplies this boundary from pinned
+connection grants and exact-action approval. The low-level manager remains a
+protocol adapter for application code.
+
+A lost acknowledgement after dispatch returns `mcp_outcome_uncertain` and is not
+replayed. `retryTimeouts` alone does not permit tool replay. A trusted low-level
+caller must explicitly attest `replaySafe: true` for an operation that may safely
+be repeated. Reconcile uncertain external mutations before retrying.

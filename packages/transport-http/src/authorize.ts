@@ -190,6 +190,30 @@ export const RESOURCE_BY_OPERATION = {
   grantAllowance: policy,
   revokeAllowance: policy,
 
+  listConnections: () => ({ kind: "mcp_config" }),
+  saveConnection: (params) => ({
+    kind: "mcp_config",
+    id: params["connectionId"],
+  }),
+  deleteConnection: (params) => ({
+    kind: "mcp_config",
+    id: params["connectionId"],
+  }),
+  connectionAction: (params) => ({
+    kind: "mcp_config",
+    id: params["connectionId"],
+  }),
+  listPromptTemplates: () => ({ kind: "prompt_template" }),
+  publishPromptTemplate: () => ({ kind: "prompt_template" }),
+  deletePromptTemplate: (params) => ({
+    kind: "prompt_template",
+    id: params["templateId"],
+  }),
+  renderPromptTemplate: (params) => ({
+    kind: "prompt_template",
+    id: params["templateId"],
+  }),
+  listSkills: () => ({ kind: "skill" }),
   listMcpServers: mcpConfig,
   createMcpServer: mcpConfig,
   updateMcpServer: mcpConfig,

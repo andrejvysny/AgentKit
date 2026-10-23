@@ -1,3 +1,4 @@
+import type { RunContentProvider } from "../prompts/run-content.js";
 import {
   prepareProviderContinuation,
   continuationRequest,
@@ -139,6 +140,7 @@ export interface TurnRunnerDeps {
    */
   toolGuards?: ToolGuard[];
   context?: ContextProvider;
+  runContent?: RunContentProvider;
   verification?: VerificationHook;
   /**
    * Opt into the multi-pass correction harness over {@link verification}.
@@ -611,7 +613,33 @@ export class TurnRunner implements TaskWorker {
     // example for something that is not a tool here is not reported as one.
     const stagedToolNames = new Set(staged.namespaces.keys());
 
-    const systemPrompt = await this.resolveSystemPrompt(ctx, chatId);
+    const selectedContent = request.contentSelection
+      ? await withHookDeadline({
+          hook: "runContent.resolve",
+          timeoutMs: this.hookTimeouts.context,
+          run: async () => {
+            if (!this.deps.runContent)
+              throw new Error(
+                "Run content selection requires a configured provider.",
+              );
+            return this.deps.runContent.resolve(request.contentSelection!, {
+              runId: task.taskId,
+              chatId,
+              signal: ctx.signal,
+            });
+          },
+        })
+      : { blocks: [], messages: [] };
+    const baseSystemPrompt = await this.resolveSystemPrompt(ctx, chatId);
+    const systemPrompt =
+      [
+        baseSystemPrompt ?? "",
+        ...selectedContent.blocks.map(
+          (block) => `\n## ${block.title}\n${block.content}`,
+        ),
+      ]
+        .join("\n")
+        .trim() || null;
     const state: PassState = this.projector.createState({
       preserveCanonicalTurns: providerContinuation !== undefined,
       chatId,
@@ -642,6 +670,10 @@ export class TurnRunner implements TaskWorker {
       assistantMessageId,
       systemPrompt,
     );
+    if (selectedContent.messages.length) {
+      const systemIndex = assembled[0]?.role === "system" ? 1 : 0;
+      assembled.splice(systemIndex, 0, ...selectedContent.messages);
+    }
     // Snapshot before the first pass: the empty-response retry re-asks the
     // ORIGINAL question, not the question plus whatever the failed turn left
     // behind.
@@ -1113,14 +1145,33 @@ export class TurnRunner implements TaskWorker {
     chatId: string,
   ): Promise<string | null> {
     const systemPrompt = this.deps.context?.systemPrompt;
-    if (systemPrompt === undefined) return null;
+    if (
+      systemPrompt === undefined &&
+      this.deps.context?.promptBlocks === undefined
+    )
+      return null;
     const context = this.deps.context as ContextProvider;
     try {
       return await withHookDeadline({
         hook: "context.systemPrompt",
         timeoutMs: this.hookTimeouts.context,
-        run: async () =>
-          (await systemPrompt.call(context, chatId, ctx.signal)) ?? null,
+        run: async () => {
+          const base =
+            (await systemPrompt?.call(context, chatId, ctx.signal)) ?? null;
+          if (
+            !context.promptBlocks ||
+            (systemPrompt && context.promptBlockMode !== "append")
+          )
+            return base;
+          const blocks = await context.promptBlocks(chatId, ctx.signal);
+          const parts = [
+            base ?? "",
+            ...[...blocks]
+              .sort((a, b) => a.priority - b.priority)
+              .map((block) => `\n## ${block.title}\n${block.content.trim()}`),
+          ];
+          return parts.join("\n").trim() || null;
+        },
       });
     } catch (err) {
       if (!isHookTimeout(err)) throw err;

@@ -15,6 +15,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./filesystem": {
+      "types": "./src/file-skill-source.ts",
+      "default": "./src/file-skill-source.ts"
     }
   },
   "publishConfig": {
@@ -22,6 +26,10 @@
       ".": {
         "types": "./dist/index.d.ts",
         "import": "./dist/index.js"
+      },
+      "./filesystem": {
+        "types": "./dist/file-skill-source.d.ts",
+        "import": "./dist/file-skill-source.js"
       }
     },
     "main": "./dist/index.js",

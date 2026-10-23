@@ -99,7 +99,7 @@ describe("MCP cancellation around connection waits", () => {
     const call = manager.callTool(
       "mcp.notes.echo",
       {},
-      { signal: abort.signal },
+      { signal: abort.signal, replaySafe: true },
     );
     await called.promise;
     await Bun.sleep(10);

@@ -125,6 +125,7 @@ export async function stageRegistry(
     { namespace: string; contributorIndex: number }
   >();
   for (const [index, contributor] of input.contributors.entries()) {
+    input.ctx.signal?.throwIfAborted();
     // PER CONTRIBUTOR, not per run. `contribute()` reaches out to whatever the
     // contributor is a bridge to — an MCP server over stdio, an HTTP catalog —
     // and one of those being down or hung used to fail the whole turn: no
@@ -167,6 +168,7 @@ export async function stageRegistry(
     }
   }
 
+  input.ctx.signal?.throwIfAborted();
   const guards = input.guards ?? [];
   const registry = new AiToolRegistry();
   const namespaces = new Map<string, string>();
@@ -316,6 +318,16 @@ function guarded(
   return {
     definition: tool.definition,
     async execute(ctx, args): Promise<AiToolResult<unknown>> {
+      ctx.signal?.throwIfAborted();
+      const snapshot = structuredClone(args);
+      const freeze = (value: unknown): unknown => {
+        if (value && typeof value === "object") {
+          Object.values(value).forEach(freeze);
+          Object.freeze(value);
+        }
+        return value;
+      };
+      freeze(snapshot);
       for (const guard of gates) {
         // A guard that throws REFUSES. Same reading as `isVisible`: a policy
         // hook that could not answer has not allowed anything. The reason is a
@@ -324,7 +336,12 @@ function guarded(
         // broken guard is not something to hand it.
         let verdict: ToolGuardVerdict;
         try {
-          verdict = await guard.canExecute!(guardCtx);
+          verdict = await guard.canExecute!({
+            ...guardCtx,
+            arguments: snapshot,
+            runId: ctx.runId,
+            signal: ctx.signal,
+          });
         } catch {
           verdict = { allowed: false, reason: TOOL_GUARD_ERROR_MESSAGE };
         }
@@ -352,7 +369,8 @@ function guarded(
           };
         }
       }
-      return tool.execute(ctx, args);
+      ctx.signal?.throwIfAborted();
+      return tool.execute(ctx, snapshot);
     },
   };
 }

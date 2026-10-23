@@ -232,22 +232,16 @@ describe("McpClientManager", () => {
     expect(tools.map((t) => t.canonicalId)).toEqual(["mcp.proto.constructor"]);
   });
 
-  it("still finds the identity of a tool the server listed with padding", async () => {
-    // The identity is normalized (trimmed); the listing is not. Matching the
-    // two by NAME loses the tool — and with it, the whole batch.
+  it("rejects padded remote names instead of silently changing their identity", async () => {
     const { manager } = setup(
-      [
-        {
-          alias: "pad",
-          transport: { kind: "stdio", command: "x" },
-          resilience: FAST,
-        },
-      ],
-      { pad: () => buildFakeServer("pad", [{ name: " read " }]) },
+      [{ alias: "fs", transport: { kind: "stdio", command: "x" } }],
+      {
+        fs: () => buildFakeServer("fs", [{ name: " read " }]),
+      },
     );
-    const tools = await manager.listTools("pad");
-    expect(tools).toHaveLength(1);
-    expect(tools[0]?.canonicalId).toBe("mcp.pad.read");
+    await expect(manager.listTools("fs")).rejects.toMatchObject({
+      code: "mcp_invalid_tool_name",
+    });
   });
 
   it("dispose closes every session", async () => {
@@ -283,7 +277,7 @@ describe("McpClientManager", () => {
 });
 
 describe("resilience", () => {
-  it("times out a slow request with mcp_request_timeout, running it ONCE", async () => {
+  it("reports an uncertain timeout, running the tool ONCE", async () => {
     // A timeout is an ambiguous delivery: the server may be halfway through the
     // write. Replaying it would run the tool again while the model is told the
     // call failed, so `mcp_request_timeout` is terminal by default however many
@@ -319,9 +313,9 @@ describe("resilience", () => {
       .callTool("mcp.slow.wait", {})
       .then(() => null)
       .catch((err: unknown) => err);
-    expect((failure as McpError).code).toBe("mcp_request_timeout");
-    // Still advisory-retryable for the host and the model to act on...
-    expect((failure as McpError).retryable).toBe(true);
+    expect((failure as McpError).code).toBe("mcp_outcome_uncertain");
+    // Uncertain mutations require reconciliation, not a blind retry.
+    expect((failure as McpError).retryable).toBe(false);
     // ...but the session did not act on it itself.
     expect(invocations).toBe(1);
     expect(harness.connects("slow")).toBe(1);
@@ -361,7 +355,7 @@ describe("resilience", () => {
       },
     );
     const failure = await manager
-      .callTool("mcp.slow.wait", {})
+      .callTool("mcp.slow.wait", {}, { replaySafe: true })
       .then(() => null)
       .catch((err: unknown) => err);
     expect((failure as McpError).code).toBe("mcp_reconnect_exhausted");
@@ -401,7 +395,7 @@ describe("resilience", () => {
     );
     setTimeout(() => controller.abort(), 10);
     const failure = await call.then(() => null).catch((err: unknown) => err);
-    expect((failure as McpError).code).toBe("mcp_request_aborted");
+    expect((failure as McpError).code).toBe("mcp_outcome_uncertain");
     expect((failure as McpError).retryable).toBe(false);
     pending.resolve({ content: [{ type: "text", text: "late" }] });
   });
@@ -506,8 +500,8 @@ describe("resilience", () => {
     );
 
     await manager.connect("flap");
-    const a = manager.callTool("mcp.flap.work", {});
-    const b = manager.callTool("mcp.flap.work", {});
+    const a = manager.callTool("mcp.flap.work", {}, { replaySafe: true });
+    const b = manager.callTool("mcp.flap.work", {}, { replaySafe: true });
     // Let both requests reach the (unresponsive) first server before it dies.
     await new Promise((resolve) => setTimeout(resolve, 5));
     await harness.dropCurrent("flap");
@@ -634,7 +628,7 @@ describe("resilience", () => {
 
     await manager.connect("flap");
     const call = manager
-      .callTool("mcp.flap.work", {})
+      .callTool("mcp.flap.work", {}, { replaySafe: true })
       .then(() => null)
       .catch((err: unknown) => err);
     await until(() => opened[0]?.entered === true);

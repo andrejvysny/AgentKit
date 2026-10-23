@@ -1,3 +1,4 @@
+import { RunContentSelectionSchema } from "./prompt.js";
 /**
  * The versioned HTTP surface — types and JSON Schemas only.
  *
@@ -190,6 +191,24 @@ export const REST_ROUTES = {
     path: "/v1/chats/:chatId/write-policy/allowances/:allowanceId",
   },
 
+  listConnections: { method: "GET", path: "/v1/connections" },
+  saveConnection: { method: "PATCH", path: "/v1/connections/:connectionId" },
+  deleteConnection: { method: "DELETE", path: "/v1/connections/:connectionId" },
+  connectionAction: {
+    method: "POST",
+    path: "/v1/connections/:connectionId/actions",
+  },
+  listPromptTemplates: { method: "GET", path: "/v1/prompt-templates" },
+  publishPromptTemplate: { method: "POST", path: "/v1/prompt-templates" },
+  deletePromptTemplate: {
+    method: "DELETE",
+    path: "/v1/prompt-templates/:templateId/:revision",
+  },
+  renderPromptTemplate: {
+    method: "POST",
+    path: "/v1/prompt-templates/:templateId/:revision/render",
+  },
+  listSkills: { method: "GET", path: "/v1/skills" },
   listMcpServers: { method: "GET", path: "/v1/mcp/servers" },
   createMcpServer: { method: "POST", path: "/v1/mcp/servers" },
   updateMcpServer: { method: "PATCH", path: "/v1/mcp/servers/:serverId" },
@@ -712,6 +731,7 @@ export type CreateChatRequest = Static<typeof CreateChatRequestSchema>;
  * the one write in the API that creates three records at once.
  */
 export const SubmitMessageRequestSchema = Type.Object({
+  contentSelection: Type.Optional(RunContentSelectionSchema),
   /**
    * The turn's body: a plain string, or content parts for a multimodal turn.
    *
@@ -830,6 +850,7 @@ export type UpdateChatRequest = Static<typeof UpdateChatRequestSchema>;
  * of marking an unfinished answer unfinished.
  */
 export const RegenerateMessageRequestSchema = Type.Object({
+  contentSelection: Type.Optional(RunContentSelectionSchema),
   /** Overrides the provider's default model for this attempt only. */
   model: Type.Optional(Type.String()),
   /** Answer with a DIFFERENT provider than the one that answered first. */

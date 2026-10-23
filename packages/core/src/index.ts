@@ -35,3 +35,5 @@ export * from "./providers/openai-compatible.js";
 export * from "./runs/execution-budget.js";
 export * from "./providers/responses-types.js";
 export * from "./providers/responses.js";
+export * from "./prompts/templates.js";
+export * from "./messages/tool-content.js";

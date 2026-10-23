@@ -10,3 +10,5 @@
 export * from "./schema.js";
 export * from "./sqlite-assistant-store.js";
 export * from "./sqlite-mcp-server-config-store.js";
+export * from "./shared-connection-store.js";
+export * from "./shared-prompt-template-store.js";

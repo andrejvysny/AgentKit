@@ -1,3 +1,8 @@
+import type {
+  ConnectionRecord,
+  SaveConnectionRequest,
+  PromptTemplate,
+} from "@agentkit/contracts";
 /**
  * The client: one method per operation in `REST_ROUTES`, typed with the
  * contract's own DTOs.
@@ -372,6 +377,70 @@ export function createAgentKitClient(options: AgentKitClientOptions) {
     // MCP servers, tools, version
     // -----------------------------------------------------------------------
 
+    listConnections: (opts?: RequestOptions) =>
+      transport.json<ConnectionRecord[]>("listConnections", { options: opts }),
+    saveConnection: (
+      params: { connectionId: string },
+      body: SaveConnectionRequest,
+      opts?: RequestOptions,
+    ) =>
+      transport.json<ConnectionRecord>("saveConnection", {
+        path: params,
+        body,
+        options: opts,
+      }),
+    deleteConnection: (
+      params: { connectionId: string },
+      opts?: RequestOptions,
+    ) => transport.empty("deleteConnection", { path: params, options: opts }),
+    connectionAction: (
+      params: { connectionId: string },
+      action: "connect" | "reconnect" | "disconnect" | "test",
+      opts?: RequestOptions,
+    ) =>
+      action === "disconnect"
+        ? transport.empty("connectionAction", {
+            path: params,
+            body: { action },
+            options: opts,
+          })
+        : transport.json<ConnectionRecord | { ok: boolean }>(
+            "connectionAction",
+            { path: params, body: { action }, options: opts },
+          ),
+    listPromptTemplates: (opts?: RequestOptions) =>
+      transport.json<PromptTemplate[]>("listPromptTemplates", {
+        options: opts,
+      }),
+    publishPromptTemplate: (body: PromptTemplate, opts?: RequestOptions) =>
+      transport.json<PromptTemplate>("publishPromptTemplate", {
+        body,
+        options: opts,
+      }),
+    deletePromptTemplate: (
+      params: { templateId: string; revision: string },
+      opts?: RequestOptions,
+    ) =>
+      transport.empty("deletePromptTemplate", { path: params, options: opts }),
+    renderPromptTemplate: (
+      params: { templateId: string; revision: string },
+      body: Record<string, unknown>,
+      opts?: RequestOptions,
+    ) =>
+      transport.json<{
+        messages: PromptTemplate["messages"];
+        provenance: { id: string; revision: string };
+      }>("renderPromptTemplate", { path: params, body, options: opts }),
+    listSkills: (opts?: RequestOptions) =>
+      transport.json<
+        {
+          id: string;
+          revision: string;
+          name: string;
+          description: string;
+          connectorRequirements: string[];
+        }[]
+      >("listSkills", { options: opts }),
     listMcpServers: (opts?: RequestOptions) =>
       transport.json<McpServerDto[]>("listMcpServers", { options: opts }),
 

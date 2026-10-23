@@ -10,3 +10,5 @@ export * from "./memory-assistant-store.js";
 export * from "./memory-mcp-server-config-store.js";
 export * from "./memory-secret-store.js";
 export * from "./memory-provider-continuation-store.js";
+export * from "./memory-connection-store.js";
+export * from "./memory-prompt-template-store.js";

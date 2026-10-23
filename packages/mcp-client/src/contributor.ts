@@ -1,6 +1,11 @@
-import type { AiToolResult } from "@agentkit/contracts";
+import {
+  projectMcpModelContent,
+  type McpModelContentCapabilities,
+} from "./model-content.js";
+import type { AiToolResult, AiToolEffect } from "@agentkit/contracts";
 import {
   truncateString,
+  AiToolRegistry,
   type AiTool,
   type AiToolExecutionContext,
 } from "@agentkit/core";
@@ -25,9 +30,15 @@ import type { McpToolCallOutcome, McpToolDescriptor } from "./projection.js";
  * the boundary where every server's ids become one namespace.
  */
 export interface McpToolSource {
-  connectAll(): Promise<McpConnectAllResult>;
+  connectAll(options?: {
+    signal?: AbortSignal;
+    aliases?: readonly string[];
+  }): Promise<McpConnectAllResult>;
   connectedAliases(): string[];
-  listTools(alias: string): Promise<McpToolDescriptor[]>;
+  listTools(
+    alias: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<McpToolDescriptor[]>;
   callTool(
     canonicalId: string,
     args: Record<string, unknown> | undefined,
@@ -51,6 +62,21 @@ export interface McpToolSetContributorOptions {
    * comes back this turn.
    */
   connectOnContribute?: boolean;
+  /** Explicit capabilities of the selected provider/model; modalities default off. */
+  modelContentCapabilities?: McpModelContentCapabilities;
+  selectedAliases?(ctx: ToolContributionContext): Promise<readonly string[]>;
+  /** Host-owned classification. Defaults to write; remote hints are descriptive. */
+  classify?(
+    descriptor: McpToolDescriptor,
+    args: Readonly<Record<string, unknown>>,
+  ): AiToolEffect;
+  /** Exact immutable validated action; absent means writes are refused. */
+  authorize?(invocation: {
+    descriptor: McpToolDescriptor;
+    arguments: Readonly<Record<string, unknown>>;
+    effect: AiToolEffect;
+    context: AiToolExecutionContext;
+  }): Promise<boolean>;
   logger?: Logger;
 }
 
@@ -98,9 +124,14 @@ export function createMcpToolSetContributor(
     namespace: "mcp",
     privileged: true,
     async contribute(ctx: ToolContributionContext): Promise<AiTool[]> {
+      ctx.signal?.throwIfAborted();
+      const selected = await options.selectedAliases?.(ctx);
       const logger = ctx.logger ?? options.logger;
       if (connectOnContribute) {
-        const outcome = await manager.connectAll();
+        const outcome = await manager.connectAll({
+          signal: ctx.signal,
+          aliases: selected,
+        });
         for (const failure of outcome.failed) {
           logger?.warn("mcp server skipped for this run", {
             alias: failure.alias,
@@ -115,9 +146,11 @@ export function createMcpToolSetContributor(
       const tools: AiTool[] = [];
 
       for (const alias of manager.connectedAliases()) {
+        ctx.signal?.throwIfAborted();
+        if (selected && !selected.includes(alias)) continue;
         let descriptors: McpToolDescriptor[];
         try {
-          descriptors = await manager.listTools(alias);
+          descriptors = await manager.listTools(alias, { signal: ctx.signal });
         } catch (err) {
           // One server's list failing costs that server's tools, not the run's.
           // A collision, by contrast, is re-thrown below: it is a wiring fault
@@ -141,7 +174,7 @@ export function createMcpToolSetContributor(
           if (clash) throw canonicalCollision(descriptor, clash);
           byCanonicalId.set(descriptor.canonicalId, descriptor);
           byRegistryName.set(descriptor.registryName, descriptor);
-          tools.push(createMcpTool(manager, descriptor));
+          tools.push(createMcpTool(manager, descriptor, options));
         }
       }
       return tools;
@@ -152,6 +185,7 @@ export function createMcpToolSetContributor(
 function createMcpTool(
   manager: McpToolSource,
   descriptor: McpToolDescriptor,
+  options: McpToolSetContributorOptions,
 ): AiTool<unknown, McpToolCallOutcome | McpToolErrorData> {
   return {
     definition: {
@@ -160,7 +194,7 @@ function createMcpTool(
       // `capability`, which is what identifies the tool across restarts.
       name: descriptor.registryName,
       version: TOOL_VERSION,
-      effect: descriptor.effect,
+      effect: "write",
       capability: descriptor.canonicalId,
       description: descriptor.description,
       inputSchema: descriptor.inputSchema,
@@ -173,14 +207,62 @@ function createMcpTool(
       input: unknown,
     ): Promise<AiToolResult<McpToolCallOutcome | McpToolErrorData>> {
       try {
+        ctx.signal?.throwIfAborted();
+        const snapshot = structuredClone(input);
+        const freeze = (value: unknown): void => {
+          if (value && typeof value === "object") {
+            Object.values(value).forEach(freeze);
+            Object.freeze(value);
+          }
+        };
+        freeze(snapshot);
+        const args = toArguments(snapshot);
+        const registry = new AiToolRegistry();
+        registry.register({
+          definition: {
+            name: descriptor.registryName,
+            version: TOOL_VERSION,
+            effect: "write",
+            capability: descriptor.canonicalId,
+            description: descriptor.description,
+            inputSchema: descriptor.inputSchema,
+          },
+          execute: async () => {
+            throw new Error("validation only");
+          },
+        });
+        if (registry.validateInput(descriptor.registryName, snapshot).length)
+          throw new McpError(
+            "mcp_invocation_refused",
+            "Invalid MCP tool arguments.",
+          );
+        const effect = options.classify?.(descriptor, args ?? {}) ?? "write";
+        let authorized = effect === "read";
+        try {
+          if (options.authorize)
+            authorized = await options.authorize({
+              descriptor,
+              arguments: args ?? {},
+              effect,
+              context: ctx,
+            });
+        } catch {
+          authorized = false;
+        }
+        if (!authorized)
+          throw new McpError(
+            "mcp_invocation_refused",
+            "The exact MCP invocation was not authorized.",
+          );
+        ctx.signal?.throwIfAborted();
         const outcome = await manager.callTool(
           descriptor.canonicalId,
-          toArguments(input),
+          args,
           ctx.signal === undefined ? undefined : { signal: ctx.signal },
         );
         return outcome.isError
           ? toolReportedFailure(ctx, descriptor, outcome)
-          : success(ctx, outcome);
+          : success(ctx, outcome, options.modelContentCapabilities);
       } catch (err) {
         const failure =
           err instanceof McpError
@@ -205,15 +287,17 @@ function toArguments(input: unknown): Record<string, unknown> | undefined {
 function success(
   ctx: AiToolExecutionContext,
   outcome: McpToolCallOutcome,
+  capabilities?: McpModelContentCapabilities,
 ): AiToolResult<McpToolCallOutcome> {
+  const mapped = projectMcpModelContent(outcome, capabilities);
   const warnings =
-    outcome.nonTextTypes.length > 0
+    mapped.unsupported.length > 0
       ? [
-          `MCP tool returned non-text content (${outcome.nonTextTypes.join(", ")}); ` +
+          `MCP tool returned non-text content (${mapped.unsupported.join(", ")}); ` +
             `only text parts were passed to the model.`,
         ]
       : [];
-  const text = capped(ctx, outcome.text);
+  const text = capped(ctx, mapped.text);
   if (text.truncated) {
     warnings.push(
       `MCP tool result was truncated to ${ctx.limits.maxBytes} bytes.`,
@@ -233,7 +317,8 @@ function success(
         ? {}
         : { structured: outcome.structuredContent }),
     },
-    sources: [],
+    sources: mapped.sources,
+    ...(mapped.attachments.length ? { modelContent: mapped.attachments } : {}),
     warnings,
     truncated: text.truncated,
     limits: ctx.limits,

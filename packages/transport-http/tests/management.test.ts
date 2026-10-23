@@ -835,75 +835,51 @@ describe("MCP server configs", () => {
     expect(await mcpConfigs.list()).toEqual([]);
   });
 
-  it("(s2) redacts a LITERAL env value and a header, and keeps the stored record whole", async () => {
+  it("(s2) moves literal credentials into SecretStore and preserves redacted edits", async () => {
     const mcpConfigs = new MemoryMcpServerConfigStore();
-    const { handler } = await createHandlerFixture({ mcpConfigs });
-
-    const created = (await (
-      await handler(
-        request("POST", "/v1/mcp/servers", {
-          body: {
-            alias: "gh",
-            transport: {
-              kind: "http",
-              url: "https://mcp.example/gh",
-              headers: {
-                authorization: "Bearer ghp-live-never-publish-me",
-                "x-trace": "on",
-              },
-            },
+    const secrets = new MemorySecretStore();
+    const { handler } = await createHandlerFixture({ mcpConfigs, secrets });
+    const response = await handler(
+      request("POST", "/v1/mcp/servers", {
+        body: {
+          alias: "gh",
+          transport: {
+            kind: "http",
+            url: "https://mcp.example/gh",
+            headers: { authorization: "Bearer private-token", "x-trace": "on" },
           },
-        }),
-      )
-    ).json()) as McpServerDto;
-
-    const asRead = await handler(request("GET", "/v1/mcp/servers"));
-    const text = await asRead.text();
-    expect(text).not.toContain("ghp-live-never-publish-me");
-    const listed = JSON.parse(text) as McpServerDto[];
-    expect(listed[0]?.transport).toEqual({
-      kind: "http",
-      url: "https://mcp.example/gh",
-      // Every value, not just the one that looks like a credential — a header
-      // this projection had to judge is a header it would eventually misjudge.
-      headers: { authorization: "***", "x-trace": "***" },
-    });
-
-    // The STORE still holds the real values; only the wire is redacted, which
-    // is what keeps the server able to connect.
-    const stored = await mcpConfigs.get(created.id);
-    expect(stored?.transport).toEqual({
-      kind: "http",
-      url: "https://mcp.example/gh",
-      headers: {
-        authorization: "Bearer ghp-live-never-publish-me",
-        "x-trace": "on",
-      },
-    });
-
-    // PATCH IS FIELD-LEVEL: an absent `transport` keeps the stored one, values
-    // included, so a client that only wants to disable a server need not
-    // resend anything it cannot read back.
-    await handler(
-      request("PATCH", `/v1/mcp/servers/${created.id}`, {
-        body: { enabled: false },
+        },
       }),
     );
-    expect((await mcpConfigs.get(created.id))?.transport).toMatchObject({
-      headers: { authorization: "Bearer ghp-live-never-publish-me" },
-    });
-
-    // A PRESENT `transport` replaces wholesale — so a client that resends what
-    // it read stores the redaction verbatim. That is the cost, and it is why
-    // full values must be resupplied on a transport patch.
-    await handler(
+    expect(response.status).toBe(201);
+    const created = (await response.json()) as McpServerDto;
+    expect(JSON.stringify(await mcpConfigs.list())).not.toContain(
+      "private-token",
+    );
+    expect(JSON.stringify(created)).not.toContain("private-token");
+    const refs = await secrets.listRefs();
+    expect(refs).toHaveLength(2);
+    expect(await Promise.all(refs.map((ref) => secrets.get(ref)))).toContain(
+      "Bearer private-token",
+    );
+    const before = await mcpConfigs.get(created.id);
+    const patched = await handler(
       request("PATCH", `/v1/mcp/servers/${created.id}`, {
-        body: { transport: listed[0]?.transport },
+        body: { transport: created.transport },
       }),
     );
-    expect((await mcpConfigs.get(created.id))?.transport).toMatchObject({
-      headers: { authorization: "***" },
-    });
+    expect(patched.status).toBe(200);
+    expect((await mcpConfigs.get(created.id))?.transport).toEqual(
+      before?.transport,
+    );
+    const changedTarget = await handler(
+      request("PATCH", `/v1/mcp/servers/${created.id}`, {
+        body: {
+          transport: { ...created.transport, url: "https://other.example/mcp" },
+        },
+      }),
+    );
+    expect(changedTarget.status).toBe(400);
   });
 
   it("(s3) stamps both timestamps from the INJECTED clock", async () => {

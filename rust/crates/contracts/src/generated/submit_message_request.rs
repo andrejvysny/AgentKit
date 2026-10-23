@@ -7,9 +7,19 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SubmitMessageRequest {
+    #[serde(
+        rename = "contentSelection",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub content_selection: Optional<RunContentSelection>,
     #[serde(rename = "content")]
     pub content: AiMessageContent,
-    #[serde(rename = "model", default, skip_serializing_if = "Optional::is_absent")]
+    #[serde(
+        rename = "model",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
     pub model: Optional<AiProviderKind>,
     #[serde(
         rename = "providerId",
@@ -35,6 +45,7 @@ pub struct SubmitMessageRequest {
 crate::impl_json_deserialize!(SubmitMessageRequest, |value: Value| {
     let mut object = crate::json_object(value)?;
     let output = Self {
+        content_selection: crate::optional_field(&mut object, "contentSelection")?,
         content: crate::required_field(&mut object, "content")?,
         model: crate::optional_field(&mut object, "model")?,
         provider_id: crate::optional_field(&mut object, "providerId")?,

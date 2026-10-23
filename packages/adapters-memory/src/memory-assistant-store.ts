@@ -193,9 +193,9 @@ function copyMessageContent(content: AiMessageContent): AiMessageContent {
 }
 
 function copyContentPart(part: AiContentPart): AiContentPart {
-  return part.type === "text"
-    ? { ...part }
-    : { ...part, source: { ...part.source } };
+  return part.type === "image"
+    ? { ...part, source: { ...part.source } }
+    : { ...part };
 }
 
 // ---------------------------------------------------------------------------

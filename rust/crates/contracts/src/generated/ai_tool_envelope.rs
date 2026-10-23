@@ -18,6 +18,12 @@ crate::impl_json_via_serde!(AiToolEnvelopeStatus);
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AiToolEnvelope {
+    #[serde(
+        rename = "modelContent",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub model_content: Optional<Vec<AiContentPart>>,
     #[serde(rename = "ok")]
     pub ok: bool,
     #[serde(rename = "status")]
@@ -40,6 +46,7 @@ pub struct AiToolEnvelope {
 crate::impl_json_deserialize!(AiToolEnvelope, |value: Value| {
     let mut object = crate::json_object(value)?;
     let output = Self {
+        model_content: crate::optional_field(&mut object, "modelContent")?,
         ok: crate::required_field(&mut object, "ok")?,
         status: crate::required_field(&mut object, "status")?,
         summary: crate::optional_field(&mut object, "summary")?,

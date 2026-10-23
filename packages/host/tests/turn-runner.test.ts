@@ -23,6 +23,8 @@ import {
   MISSING_TOOL_RESULT_CODE,
   TOOL_GUARD_REFUSED_CODE,
   TurnRunner,
+  type ContextProvider,
+  type RunContentProvider,
   type AssistantSettings,
   type AttachmentBudgets,
   type AttachmentResolveContext,
@@ -125,6 +127,8 @@ interface RunnerFixture extends TestHarness {
 async function setupRunner(
   options: {
     contributors?: ToolSetContributor[];
+    context?: ContextProvider;
+    runContent?: RunContentProvider;
     verification?: VerificationHook;
     /** Provider client to drive instead of the default streaming mock. */
     inner?: AiProviderClient;
@@ -162,6 +166,8 @@ async function setupRunner(
     taskRunner: harness.taskRunner,
     providerFactory: () => client,
     contributors: options.contributors ?? [],
+    context: options.context,
+    runContent: options.runContent,
     clock: harness.clock,
     ids: harness.ids,
     ...(options.toolGuards === undefined
@@ -2180,5 +2186,101 @@ describe("TurnRunner.disposeContributors", () => {
     await runner.disposeContributors();
     expect(log).toEqual(["good"]);
     expect(warnings).toEqual(["tool contributor dispose failed"]);
+  });
+});
+
+describe("selected run content", () => {
+  it("uses promptBlocks without a custom composer, and appends only when requested", async () => {
+    const block = {
+      id: "context",
+      title: "Context",
+      content: "UNIQUE_BLOCK",
+      priority: 1,
+    };
+    for (const mode of ["blocks", "legacy", "append"] as const) {
+      let calls = 0;
+      const f = await setupRunner({
+        context: {
+          listBindings: async () => [],
+          ...(mode !== "blocks"
+            ? { systemPrompt: async () => "SYSTEM_ALREADY_COMPOSED" }
+            : {}),
+          ...(mode === "append" ? { promptBlockMode: "append" as const } : {}),
+          promptBlocks: async () => {
+            calls++;
+            return [block];
+          },
+        },
+      });
+      f.mock.setScript([{ steps: [{ kind: "text", content: "answer" }] }]);
+      const submitted = await f.runner.submitMessage({
+        chatId: f.chatId,
+        content: "question",
+      });
+      await drive(f, submitted.runId);
+      const system = f.client.messagesPerCall[0]?.find(
+        (message) => message.role === "system",
+      )?.content;
+      if (mode === "legacy") {
+        expect(calls).toBe(0);
+        expect(system).toBe("SYSTEM_ALREADY_COMPOSED");
+      } else {
+        expect(calls).toBe(1);
+        expect(String(system).split("UNIQUE_BLOCK")).toHaveLength(2);
+      }
+    }
+  });
+  it("persists selected versions in the task and delivers roles exactly once", async () => {
+    let resolutions = 0;
+    const f = await setupRunner({
+      runContent: {
+        resolve: async (selection) => {
+          resolutions++;
+          expect(selection.template?.revision).toBe("1");
+          return {
+            blocks: [
+              {
+                id: "skill",
+                title: "Skill",
+                content: "SELECTED_SKILL",
+                priority: 1,
+              },
+            ],
+            messages: [
+              { role: "user", content: "TEMPLATE_USER" },
+              { role: "assistant", content: "TEMPLATE_ASSISTANT" },
+            ],
+          };
+        },
+      },
+    });
+    f.mock.setScript([{ steps: [{ kind: "text", content: "answer" }] }]);
+    const selection = {
+      template: { id: "template", revision: "1", arguments: { name: "value" } },
+    };
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "question",
+      contentSelection: selection,
+    });
+    selection.template.revision = "changed-after-submit";
+    expect(
+      (await f.store.tasks.getTask(submitted.runId))?.payload,
+    ).toMatchObject({ contentSelection: { template: { revision: "1" } } });
+    await drive(f, submitted.runId);
+    expect(resolutions).toBe(1);
+    const messages = f.client.messagesPerCall[0]!;
+    expect(
+      messages.filter((message) => message.content === "TEMPLATE_USER"),
+    ).toHaveLength(1);
+    expect(
+      messages.find((message) => message.content === "TEMPLATE_ASSISTANT")
+        ?.role,
+    ).toBe("assistant");
+    expect(
+      messages.filter((message) =>
+        String(message.content).includes("SELECTED_SKILL"),
+      ),
+    ).toHaveLength(1);
   });
 });

@@ -1,8 +1,15 @@
 import type { Clock, Logger, SecretStore } from "@agentkit/host";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   ErrorCode,
+  ElicitRequestSchema,
+  ToolListChangedNotificationSchema,
+  ResourceListChangedNotificationSchema,
+  PromptListChangedNotificationSchema,
+  type ElicitRequest,
+  type ElicitResult,
   McpError as SdkMcpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import { isServerEnabled, type McpServerConfig } from "./config.js";
@@ -39,6 +46,14 @@ export interface McpSessionDeps {
   transportFactory: McpTransportFactory;
   clock: Clock;
   logger?: Logger;
+  elicitation?(
+    params: ElicitRequest["params"],
+    context: { alias: string; signal: AbortSignal },
+  ): Promise<ElicitResult>;
+  onCatalogChanged?(
+    alias: string,
+    kind: "tools" | "resources" | "prompts",
+  ): void;
 }
 
 /**
@@ -106,6 +121,12 @@ export class McpSession {
       this.resilience,
       deps.clock,
     );
+    for (const [key, value] of Object.entries(config.discovery ?? {}))
+      if (!Number.isSafeInteger(value) || value < 1)
+        throw new McpError(
+          "mcp_invalid_config",
+          `Invalid discovery limit: ${key}.`,
+        );
     this.reverseAliases = buildReverseToolAliases(config);
   }
 
@@ -122,14 +143,29 @@ export class McpSession {
    * request path performs is the continuation of the old one. See
    * {@link disposed}.
    */
-  async connect(): Promise<void> {
+  async connect(options?: { signal?: AbortSignal }): Promise<void> {
+    if (options?.signal?.aborted)
+      throw new McpError(
+        "mcp_request_aborted",
+        "MCP request was cancelled before dispatch.",
+      );
     this.disposed = false;
     if (this.client) return;
     this.explicitConnectWaiters += 1;
     try {
-      await this.open();
+      await this.waitForConnection(
+        "explicit connect",
+        () => this.open(),
+        options?.signal,
+      );
     } finally {
       this.explicitConnectWaiters -= 1;
+      if (
+        options?.signal?.aborted &&
+        this.requestWaiters === 0 &&
+        this.explicitConnectWaiters === 0
+      )
+        this.connectionAbort?.abort();
     }
   }
 
@@ -152,18 +188,139 @@ export class McpSession {
     return this.open();
   }
 
-  async listTools(): Promise<McpToolDescriptor[]> {
-    const result = await this.withSession("tools/list", (client, signal) =>
-      client.listTools(undefined, {
-        signal,
-        timeout: this.resilience.requestTimeoutMs,
-      }),
+  async listTools(options?: {
+    signal?: AbortSignal;
+  }): Promise<McpToolDescriptor[]> {
+    const tools = await this.paginate(
+      "tools/list",
+      async (client, signal, cursor) => {
+        const result = await client.listTools(cursor ? { cursor } : undefined, {
+          signal,
+          timeout: this.resilience.requestTimeoutMs,
+        });
+        return { items: result.tools, nextCursor: result.nextCursor };
+      },
+      options,
     );
     return projectMcpTools(
       this.alias,
       this.config.toolAliases,
-      result.tools as readonly McpListedTool[],
+      tools as McpListedTool[],
     );
+  }
+
+  /** One bounded paginator shared by tool, resource, template and prompt catalogs. */
+  private async paginate<T>(
+    operation: string,
+    page: (
+      client: Client,
+      signal: AbortSignal,
+      cursor?: string,
+    ) => Promise<{ items: T[]; nextCursor?: string }>,
+    options?: { signal?: AbortSignal; replaySafe?: boolean },
+  ): Promise<T[]> {
+    const limits = {
+      maxPages: 100,
+      maxItems: 10_000,
+      maxBytes: 8_000_000,
+      ...this.config.discovery,
+    };
+    const seen = new Set<string>();
+    const items: T[] = [];
+    let cursor: string | undefined;
+    let bytes = 0;
+    for (let count = 0; count < limits.maxPages; count++) {
+      const result = await this.withSession(
+        operation,
+        (client, signal) => page(client, signal, cursor),
+        options,
+      );
+      bytes += new TextEncoder().encode(JSON.stringify(result)).byteLength;
+      if (
+        items.length + result.items.length > limits.maxItems ||
+        bytes > limits.maxBytes
+      )
+        throw new McpError(
+          "mcp_catalog_limit",
+          "MCP catalog exceeds configured limits.",
+        );
+      items.push(...result.items);
+      if (!result.nextCursor) return items;
+      if (seen.has(result.nextCursor))
+        throw new McpError(
+          "mcp_catalog_limit",
+          "MCP catalog repeated a cursor.",
+        );
+      seen.add(result.nextCursor);
+      cursor = result.nextCursor;
+    }
+    throw new McpError("mcp_catalog_limit", "MCP catalog exceeds page limit.");
+  }
+
+  async listResources(options?: { signal?: AbortSignal }) {
+    return this.paginate(
+      "resources/list",
+      async (client, signal, cursor) => {
+        const page = await client.listResources(
+          cursor ? { cursor } : undefined,
+          { signal },
+        );
+        return { items: page.resources, nextCursor: page.nextCursor };
+      },
+      options,
+    );
+  }
+  async listResourceTemplates(options?: { signal?: AbortSignal }) {
+    return this.paginate(
+      "resources/templates/list",
+      async (client, signal, cursor) => {
+        const page = await client.listResourceTemplates(
+          cursor ? { cursor } : undefined,
+          { signal },
+        );
+        return { items: page.resourceTemplates, nextCursor: page.nextCursor };
+      },
+      options,
+    );
+  }
+  async readResource(uri: string, options?: { signal?: AbortSignal }) {
+    const result = await this.withSession(
+      "resources/read",
+      (client, signal) => client.readResource({ uri }, { signal }),
+      options,
+    );
+    return {
+      ...result,
+      provenance: { serverAlias: this.alias, uri, trusted: false as const },
+    };
+  }
+  async listPrompts(options?: { signal?: AbortSignal }) {
+    return this.paginate(
+      "prompts/list",
+      async (client, signal, cursor) => {
+        const page = await client.listPrompts(cursor ? { cursor } : undefined, {
+          signal,
+        });
+        return { items: page.prompts, nextCursor: page.nextCursor };
+      },
+      options,
+    );
+  }
+  async getPrompt(
+    name: string,
+    args?: Record<string, string>,
+    options?: { signal?: AbortSignal },
+  ) {
+    const result = await this.withSession(
+      "prompts/get",
+      (client, signal) =>
+        client.getPrompt({ name, arguments: args }, { signal }),
+      options,
+    );
+    return {
+      ...result,
+      provenance: { serverAlias: this.alias, name, trusted: false as const },
+    };
   }
 
   /**
@@ -174,7 +331,7 @@ export class McpSession {
   async callTool(
     effectiveToolName: string,
     args: Record<string, unknown> | undefined,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; replaySafe?: boolean },
   ): Promise<McpToolCallOutcome> {
     const toolName =
       this.reverseAliases.get(effectiveToolName) ?? effectiveToolName;
@@ -302,6 +459,11 @@ export class McpSession {
         this.circuit.recordSuccess();
         return;
       } catch (err) {
+        if (err instanceof UnauthorizedError)
+          throw new McpError(
+            "mcp_auth_required",
+            "MCP authentication is required.",
+          );
         last = err;
         if (err instanceof McpError && !err.retryable) throw err;
         this.deps.logger?.debug("mcp connect attempt failed", {
@@ -375,7 +537,31 @@ export class McpSession {
             "MCP connection was cancelled.",
           );
         }
-        const client = new Client(CLIENT_INFO);
+        const client = new Client(
+          CLIENT_INFO,
+          this.deps.elicitation
+            ? { capabilities: { elicitation: { form: {}, url: {} } } }
+            : undefined,
+        );
+        if (this.deps.elicitation)
+          client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
+            this.deps.elicitation!(request.params, {
+              alias: this.alias,
+              signal: extra.signal,
+            }),
+          );
+        client.setNotificationHandler(
+          ToolListChangedNotificationSchema,
+          async () => this.deps.onCatalogChanged?.(this.alias, "tools"),
+        );
+        client.setNotificationHandler(
+          ResourceListChangedNotificationSchema,
+          async () => this.deps.onCatalogChanged?.(this.alias, "resources"),
+        );
+        client.setNotificationHandler(
+          PromptListChangedNotificationSchema,
+          async () => this.deps.onCatalogChanged?.(this.alias, "prompts"),
+        );
         // `Protocol.connect` overwrites `transport.onclose`, so the peer-closed
         // hook has to hang off the CLIENT, not the transport.
         client.onclose = () => this.handleClosed(client);
@@ -455,7 +641,7 @@ export class McpSession {
   private async withSession<T>(
     operation: string,
     fn: (client: Client, signal: AbortSignal) => Promise<T>,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; replaySafe?: boolean },
   ): Promise<T> {
     this.requestWaiters += 1;
     try {
@@ -497,16 +683,26 @@ export class McpSession {
   private async requestWithSession<T>(
     operation: string,
     fn: (client: Client, signal: AbortSignal) => Promise<T>,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; replaySafe?: boolean },
   ): Promise<T> {
     const { reconnectMaxAttempts } = this.resilience;
     let retries = 0;
     for (;;) {
+      if (options?.signal?.aborted)
+        throw new McpError(
+          "mcp_request_aborted",
+          "MCP request was cancelled before dispatch.",
+        );
       await this.waitForConnection(
         operation,
         () => this.ensureConnected(operation),
         options?.signal,
       );
+      if (options?.signal?.aborted)
+        throw new McpError(
+          "mcp_request_aborted",
+          "MCP request was cancelled before dispatch.",
+        );
       const client = this.client;
       const generation = this.generation;
       // Captured, not read from `this` in the catch: a CONCURRENT caller's
@@ -522,6 +718,7 @@ export class McpSession {
           { retryable: false },
         );
       }
+      let dispatched = false;
       try {
         return await withDeadline(
           {
@@ -533,10 +730,36 @@ export class McpSession {
             describe: `${operation} on MCP server "${this.alias}"`,
             redact,
           },
-          (signal) => fn(client, signal),
+          (signal) => {
+            dispatched = true;
+            return fn(client, signal);
+          },
         );
       } catch (err) {
         const failure = this.classify(err, operation, redact);
+        // Once dispatch began, delivery cannot be disproved. Remote annotations
+        // do not authorize replay; only a trusted host may attest replay safety.
+        if (
+          operation.startsWith("tools/call") &&
+          dispatched &&
+          !options?.replaySafe &&
+          ([
+            "mcp_not_connected",
+            "mcp_request_timeout",
+            "mcp_request_aborted",
+          ].includes(failure.code) ||
+            (failure.code === "mcp_remote_error" &&
+              !(err instanceof SdkMcpError)))
+        ) {
+          throw new McpError(
+            "mcp_outcome_uncertain",
+            `${operation} may have been applied. Reconcile with the service before retrying.`,
+            {
+              cause: failure,
+              details: { alias: this.alias, dispatched: true },
+            },
+          );
+        }
         if (!this.isAutoRetryable(failure)) throw failure;
         if (retries >= reconnectMaxAttempts) {
           // Nothing was ever retried (`reconnectMaxAttempts: 0`): report the
@@ -574,28 +797,8 @@ export class McpSession {
     }
   }
 
-  /**
-   * Whether this failure may be REPLAYED after a reconnect.
-   *
-   * Deliberately narrower than {@link McpError.retryable}, and not the same
-   * question. `retryable` is advisory — "could a retry succeed?" — and belongs
-   * to the host and the model, who know whether the tool they called was safe
-   * to run twice. This gate answers "may WE re-issue it without being asked?",
-   * and only a request that never reached the server qualifies:
-   * `mcp_not_connected`, where the session was already dead.
-   *
-   * A request TIMEOUT does not qualify. Our deadline firing says nothing about
-   * whether the server ran the tool, so replaying one makes a slow-but-
-   * successful write execute again — and the model is still told it failed.
-   * `retryTimeouts` opts a server back into the old behaviour, for a host that
-   * knows that server's tools are idempotent.
-   *
-   * Residual ambiguity, stated rather than hidden: a peer that closes the
-   * transport MID-CALL also surfaces as `mcp_not_connected`, and that one is
-   * only probably unsent. It is retried because a dropped session is the case
-   * this whole reconnect path exists for; a host that cannot tolerate even that
-   * sets `reconnectMaxAttempts: 0`.
-   */
+  /** Discovery/read recovery only, or tools explicitly attested replay-safe by
+   * trusted host code. withSession refuses uncertain tool delivery before this gate. */
   private isAutoRetryable(failure: McpError): boolean {
     if (failure.code === "mcp_not_connected") return failure.retryable;
     if (failure.code === "mcp_request_timeout") {
@@ -619,6 +822,11 @@ export class McpSession {
     redact: (text: string) => string,
   ): McpError {
     if (err instanceof McpError) return err;
+    if (err instanceof UnauthorizedError)
+      return new McpError(
+        "mcp_auth_required",
+        "MCP authentication is required.",
+      );
     if (err instanceof SdkMcpError) {
       if (err.code === ErrorCode.ConnectionClosed) {
         return new McpError(

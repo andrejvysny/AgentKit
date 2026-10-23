@@ -1,3 +1,4 @@
+import { secretizeMcpTransport } from "../mcp-secrets.js";
 /**
  * MCP server-config CRUD, over an `McpServerConfigStore` this package knows
  * only structurally (see {@link McpServerConfigOperations}).
@@ -95,8 +96,25 @@ export async function createMcpServer(ctx: RouteContext): Promise<Response> {
   // Through the injected clock, not `new Date()`: a host that pins time pins
   // this too, and a test can assert the stamp instead of parsing it back.
   const now = (ctx.deps.clock ?? defaultClock).nowIso();
+  const id = `mcp_${crypto.randomUUID()}`;
+  try {
+    const normalized = await secretizeMcpTransport(
+      id,
+      request.transport,
+      request.secretRefs,
+      ctx.deps.secrets,
+    );
+    request.transport = normalized.transport;
+    request.secretRefs = normalized.secretRefs;
+  } catch {
+    return badRequest(
+      "invalid_request",
+      "Literal MCP credentials require a SecretStore; redacted credentials require an existing transport.",
+      ctx.instance,
+    );
+  }
   const created = await resolved.store.create({
-    id: `mcp_${crypto.randomUUID()}`,
+    id,
     alias: request.alias,
     transport: request.transport,
     ...(request.secretRefs === undefined
@@ -135,9 +153,9 @@ export async function updateMcpServer(ctx: RouteContext): Promise<Response> {
   // Read before write: the store raises its own typed not-found, but it does so
   // as an `McpError` this package cannot recognize — so the 404 is decided here
   // where it can be an honest one.
-  if ((await resolved.store.get(serverId)) === null) {
+  const existing = await resolved.store.get(serverId);
+  if (existing === null)
     return notFound(`MCP server not found: ${serverId}`, ctx.instance);
-  }
   if (
     patch.alias !== undefined &&
     (await aliasTaken(resolved.store, patch.alias, serverId))
@@ -149,6 +167,25 @@ export async function updateMcpServer(ctx: RouteContext): Promise<Response> {
     );
   }
 
+  if (patch.transport) {
+    try {
+      const normalized = await secretizeMcpTransport(
+        serverId,
+        patch.transport,
+        patch.secretRefs ?? existing.secretRefs,
+        ctx.deps.secrets,
+        existing.transport as import("@agentkit/contracts").McpTransportDto,
+      );
+      patch.transport = normalized.transport;
+      patch.secretRefs = normalized.secretRefs;
+    } catch {
+      return badRequest(
+        "invalid_request",
+        "Literal MCP credentials require a SecretStore; redacted credentials require an unchanged transport.",
+        ctx.instance,
+      );
+    }
+  }
   const updated = await resolved.store.update(serverId, {
     ...(patch.alias === undefined ? {} : { alias: patch.alias }),
     ...(patch.transport === undefined ? {} : { transport: patch.transport }),

@@ -48,3 +48,6 @@ export * from "./turn/correction-harness.js";
 export * from "./turn/retry.js";
 export * from "./turn/projection.js";
 export * from "./turn/turn-runner.js";
+export * from "./prompts/template-service.js";
+export * from "./skills/skill-service.js";
+export * from "./prompts/run-content.js";

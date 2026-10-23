@@ -162,3 +162,8 @@ that fails on any `bun:` import in any of those nine dists.
 
 MIT — see [LICENSE](LICENSE). See [PROVENANCE.md](PROVENANCE.md) for the
 history of how this code was extracted and relicensed.
+
+Managed account connections, OAuth, GitHub/Plane reference connectors, selected
+skills and versioned prompt templates are described in the
+[connector system guide](docs/connector-system.md), including compatibility and
+qualification limits.

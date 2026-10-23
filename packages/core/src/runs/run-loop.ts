@@ -1,3 +1,4 @@
+import { expandToolResultContent } from "../messages/tool-content.js";
 import { boundedRun } from "./bounded-run.js";
 import type { ExecutionBudget, ExecutionBudgets } from "./execution-budget.js";
 import { newRunId, newToolEventId, nowIso } from "../ids.js";
@@ -194,7 +195,7 @@ async function* runChatUnchecked(
       for await (const event of input.client.streamChat({
         runId,
         model: input.model,
-        messages,
+        messages: expandToolResultContent(messages),
         tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
         temperature: input.temperature,
         maxOutputTokens: input.maxOutputTokens,
@@ -945,6 +946,9 @@ function buildEnvelope(
     truncated:
       result.truncated || (summary?.truncated ?? false) || warnings.truncated,
     data: result.modelData ?? result.data,
+    ...(result.modelContent?.length
+      ? { modelContent: result.modelContent }
+      : {}),
   };
   const measured = safeStringify(envelope);
   // Unserializable: hand it back as-is; the caller turns that into
@@ -952,6 +956,13 @@ function buildEnvelope(
   if (!measured.ok) return envelope;
   if (!truncateString(measured.json, limits.maxBytes).truncated)
     return envelope;
+  if (envelope.modelContent) {
+    delete envelope.modelContent;
+    envelope.truncated = true;
+    envelope.warnings.push(
+      "Tool attachments exceeded the result byte budget and were omitted.",
+    );
+  }
   return fitEnvelope(envelope, limits.maxBytes);
 }
 
