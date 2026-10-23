@@ -33,6 +33,7 @@ import {
   ACTION_ID_RELEASING_STATUSES,
   AgentKitHostError,
   activationSetOf,
+  archiveSubtreeOf,
   activeLeafOf,
   activePathOf,
   assertListMessagesCursors,
@@ -524,7 +525,9 @@ export class MemoryConversationStore implements ConversationStore {
     const parent =
       input.parentMessageId === undefined
         ? activeLeafOf(list)
-        : this.requireParent(input.chatId, input.parentMessageId);
+        : input.parentMessageId === null
+          ? undefined
+          : this.requireParent(input.chatId, input.parentMessageId);
     const parentId = parent?.id;
     // A CHAIN append: place the record and stop. `assertAppendActivation` has
     // already proved a parent was named, so the flag comes from a message the
@@ -584,7 +587,11 @@ export class MemoryConversationStore implements ConversationStore {
     parentMessageId: string,
   ): MessageRecord {
     const parent = this.messagesById.get(parentMessageId);
-    if (parent === undefined || parent.chatId !== chatId) {
+    if (
+      parent === undefined ||
+      parent.chatId !== chatId ||
+      parent.archived === true
+    ) {
       throw new RecordNotFoundError(
         `Parent message not found in chat ${chatId}: ${parentMessageId}`,
       );
@@ -682,6 +689,28 @@ export class MemoryConversationStore implements ConversationStore {
     const record = this.requireMessage(messageId);
     const list = this.messagesByChat.get(record.chatId) ?? [];
     return siblingsOf(list, record).map(copyMessage);
+  }
+
+  async listTree(
+    chatId: string,
+    options?: { includeArchived?: boolean },
+  ): Promise<MessageRecord[]> {
+    return (this.messagesByChat.get(chatId) ?? [])
+      .filter(
+        (record) =>
+          options?.includeArchived === true || record.archived !== true,
+      )
+      .map(copyMessage);
+  }
+
+  async archiveBranch(messageId: string): Promise<{ archivedCount: number }> {
+    const target = this.requireMessage(messageId);
+    const subtree = archiveSubtreeOf(
+      this.messagesByChat.get(target.chatId) ?? [],
+      messageId,
+    );
+    for (const record of subtree) record.archived = true;
+    return { archivedCount: subtree.length };
   }
 
   async activatePath(messageId: string): Promise<MessageRecord[]> {
@@ -826,6 +855,7 @@ export class MemoryConversationStore implements ConversationStore {
       depth: plan.depth,
       branchIndex: plan.branchIndex,
       active: plan.input.active,
+      ...(plan.archived ? { archived: true } : {}),
       metadata: plan.metadata,
       createdAt: plan.createdAt,
     }));
@@ -864,7 +894,11 @@ export class MemoryConversationStore implements ConversationStore {
     for (const [chatId, list] of this.messagesByChat) {
       if (opts?.chatId !== undefined && opts.chatId !== chatId) continue;
       for (const message of list) {
-        if (!isSearchableMetadata(message.metadata)) continue;
+        if (
+          message.archived === true ||
+          !isSearchableMetadata(message.metadata)
+        )
+          continue;
         // ALL text parts, never just the first — see `searchTextOf`.
         const text = searchTextOf(message.content);
         const at = text.toLowerCase().indexOf(needle);
@@ -886,7 +920,7 @@ export class MemoryConversationStore implements ConversationStore {
 
   private requireMessage(messageId: string): MessageRecord {
     const record = this.messagesById.get(messageId);
-    if (record === undefined) {
+    if (record === undefined || record.archived === true) {
       throw new RecordNotFoundError(`Message not found: ${messageId}`);
     }
     return record;

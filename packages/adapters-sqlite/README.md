@@ -54,7 +54,7 @@ The original v8 layout has no application marker and remains supported with
 `application_id = 0`. Valid FTS5 shadow tables are recognized explicitly.
 Pointing the adapter at a file managed by another migrator is unsupported.
 
-**The current version is 9** (`SCHEMA_VERSION` in `src/schema.ts`). The v8-to-v9
+**The current version is 10** (`SCHEMA_VERSION` in `src/schema.ts`). The v8-to-v9
 migration adds private `provider_run_scopes` and `provider_continuations` tables.
 Original v8 files upgrade transactionally; fresh databases initialize the same
 immutable v8 baseline and apply that migration. Migrated table definitions are
@@ -81,7 +81,7 @@ is **refused**, because no migrations exist for pre-v8 development schemas.
 Use a compatible release or restore a verified backup. The adapter never
 deletes, recreates, or silently downgrades a refused database.
 
-The production registry contains the v8-to-v9 step; v8 remains the minimum
+The production registry contains the v8-to-v9 and v9-to-v10 steps; v8 remains the minimum
 supported baseline. Each step advances exactly one version. A failed step rolls
 back DDL, data, and `user_version`; a subsequent open can retry it. The version
 is stamped only after all steps and integrity checks pass. Schema refusal or
@@ -175,11 +175,12 @@ key. With the default `agingBonus = 0` the term folds to zero and the ordering
 is plain `priority DESC, enqueued_at ASC`. See
 [ADR 0003](../../docs/adr/0003-task-dependencies-and-subagents.md).
 
-## Schema (v9)
+## Schema (v10)
 
 The immutable baseline DDL in `src/schema.ts` (`SCHEMA_V8`) is applied idempotently
 (`CREATE ... IF NOT EXISTS`, `INSERT OR IGNORE`). The transactional migration
-registry then adds the private v9 continuation tables — see "It owns its database
+registry then adds the private v9 continuation tables and the v10 message archive
+flag and index — see "It owns its database
 file" above. Unsupported older or future versions are refused without reset,
 downgrade, or destructive recovery.
 

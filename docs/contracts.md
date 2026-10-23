@@ -17,6 +17,7 @@ Thirteen event types, all discriminated on `type`
 |---|---|
 | `run.started` | `{ model, toolCount }` — the run began; which model, how many tools were advertised. |
 | `run.message.delta` | `{ delta }` — one streamed content chunk. Display-only; not authoritative. |
+| `run.message.reasoning-delta` | `{ delta }` — one provider-supplied public reasoning chunk, separate from answer content. The completed turn's `reasoningContent` replaces that turn's accumulated chunks rather than appending them again. |
 | `run.message.completed` | `{ content, toolCallCount, toolCalls?, reasoningContent?, finishReason? }` — the authoritative turn content and tool calls, for streaming and non-streaming providers alike. `finishReason` may be the synthetic `"incomplete"` (see `stream_incomplete` below): the stream ended before the provider said why, and defaulting it to `"stop"` is what made a half answer look final. |
 | `run.tool.requested` | `{ toolCallId, toolName, argumentsJson }` — a tool call was announced, before execution. |
 | `run.tool.running` | `{ toolCallId, toolName }` — execution started. |

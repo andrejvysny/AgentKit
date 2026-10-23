@@ -1,7 +1,7 @@
 {
   "baselineSha": "36577829cfbfd78e5b0492d826f46ba6131835b6",
   "contractVersion": "0.7.0",
-  "eventVariantCount": 13,
+  "eventVariantCount": 14,
   "formatVersion": 1,
   "goldenTraceCount": 9,
   "independentlyCheckedFixtures": [
@@ -9,7 +9,7 @@
     "schema-validation.json"
   ],
   "routeCount": 39,
-  "schemaCount": 90,
+  "schemaCount": 91,
   "sha256": {
     "golden-traces/cancelled-run.json": "eb4ef4c0ef63b82fa03bd5b88f808588f8c4c18e5c7e8af7b823249b0dcc7ce0",
     "golden-traces/chat-only.json": "a54fc9b3d37d6efe20fc22539e92349edaee0f80c8206dbc2b4c70f5841accc0",
@@ -22,7 +22,7 @@
     "golden-traces/usage-run.json": "2553a34bed205b18b89ebb4e4c2556beb88aaa3ee85f6a52eac5ec7826c795a7",
     "idempotency.json": "15c9f548e68b9a3b06ec004acf7de616200ab0f5f9d7a7bb231bac2f005bcc89",
     "routes.json": "bffbb4dd07676fdb368856e5f734a2d1b2c2854180e63c76dd0a8fcc489a8bad",
-    "run-events.json": "bfd3c77214982bcdba68ce6d5f71b42ef2399467bdaf6353de04ee8c9b0495e9",
-    "schemas.json": "df914dc3e3a9441c063c292eb0dce4ba3ef28f79ba04f4c85133d5f75b66b5b9"
+    "run-events.json": "360ad2f768319eecf51ee670bb2956293cc2ec18f59c92631ef214fbcfe3e660",
+    "schemas.json": "46a40843878749aeaad96a9adee52d3c24b619c15b2c52c96cf0bf975f3fe7bb"
   }
 }

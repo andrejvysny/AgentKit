@@ -120,6 +120,8 @@ export interface MessageRecord {
   branchIndex: number;
   /** Whether this message is on the chat's currently active path. */
   active: boolean;
+  /** Archived messages remain available by id for audit, never for replay. */
+  archived?: boolean;
   metadata: Record<string, unknown>;
   createdAt: string;
 }
@@ -160,10 +162,13 @@ export interface AppendMessageInput {
    * A message in another chat, or one that does not exist, is a
    * `RecordNotFoundError` — a parent is a structural claim, not a hint.
    *
+   * - **Null** — create another root and activate its path. Explicit root edits
+   *   must not append to whichever leaf happens to be active.
+   *
    * See {@link AppendMessageInput.activate} for the third case: naming a parent
    * WITHOUT switching to it.
    */
-  parentMessageId?: string;
+  parentMessageId?: string | null;
   /**
    * Whether this append also makes the new message's path the active one.
    * Default `true` — every case above.
@@ -428,6 +433,8 @@ export interface ImportMessageInput {
    * an importer that has both is expressing two different things.
    */
   internal?: boolean;
+  /** Archived ancestors archive their descendants; active archived imports fail. */
+  archived?: boolean;
   metadata?: Record<string, unknown>;
   /** Defaults to the chat's `createdAt`. */
   createdAt?: string;
@@ -526,6 +533,13 @@ export interface ConversationStore {
   ): Promise<MessageRecord[]>;
   /** Fetch one record across branches; projection replay uses its stable identity. */
   getMessage(messageId: string): Promise<MessageRecord | null>;
+  /** Full creation-ordered tree, without a hidden page limit. Audit may include archives. */
+  listTree?(
+    chatId: string,
+    options?: { includeArchived?: boolean },
+  ): Promise<MessageRecord[]>;
+  /** Archive an inactive subtree atomically, retaining its records and branch indices. */
+  archiveBranch?(messageId: string): Promise<{ archivedCount: number }>;
   /**
    * The DEEPEST message a given run wrote in a chat, or `null` when the run has
    * written nothing there.

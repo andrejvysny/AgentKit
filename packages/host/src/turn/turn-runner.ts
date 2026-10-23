@@ -1232,7 +1232,10 @@ export class TurnRunner implements TaskWorker {
    * own history.
    */
   private resetPass(state: PassState): void {
+    const hadReasoning = state.reasoningContent.length > 0;
     state.content = "";
+    state.reasoningContent = "";
+    state.reasoningTurnStart = 0;
     state.streamed = false;
     state.toolCallIds.clear();
     delete state.pendingAssistantMessageId;
@@ -1242,7 +1245,7 @@ export class TurnRunner implements TaskWorker {
     // caller blanks the record right after this, and a pending flush applied
     // afterwards would put the abandoned pass's text straight back. See
     // `RunProjectionState.unflushedDeltas`.
-    state.unflushedDeltas = 0;
+    state.unflushedDeltas = hadReasoning ? 1 : 0;
     // Re-stamped, so the next pass coalesces from NOW. Left alone, the
     // elapsed-since-last-flush check reads the moment the previous pass last
     // wrote — long past the interval by the time a retry starts — and every

@@ -1,5 +1,6 @@
 import type { AiToolCall, AiToolDefinition } from "@agentkit/contracts";
 import { responseToolCall } from "./responses-tools.js";
+import { ResponsesReasoning } from "./responses-reasoning.js";
 import {
   boundedJson,
   MAX_RESPONSES_ITEMS,
@@ -19,6 +20,7 @@ interface ItemState {
 export interface ResponsesResult {
   output: Record<string, unknown>[];
   content: string;
+  reasoningContent: string;
   tools: AiToolCall[];
   usage?: Record<string, unknown>;
 }
@@ -31,6 +33,11 @@ export class ResponsesStreamState {
   private emitted = "";
   private bytes = 0;
   private observedUsage?: Record<string, unknown>;
+  private readonly reasoning = new ResponsesReasoning();
+
+  takeReasoningDelta(): string {
+    return this.reasoning.takeDelta();
+  }
 
   usage(): Record<string, unknown> | undefined {
     return this.observedUsage;
@@ -123,6 +130,7 @@ export class ResponsesStreamState {
     return {
       output,
       content,
+      reasoningContent: this.reasoning.finish(output),
       tools: calls,
       ...(this.terminal.usage ? { usage: object(this.terminal.usage) } : {}),
     };
@@ -175,6 +183,7 @@ export class ResponsesStreamState {
     ) {
       responsesError("malformed_response");
     }
+    this.reasoning.accept(event);
   }
 
   private add(event: Record<string, unknown>): void {

@@ -5,6 +5,7 @@ import { AiToolCallSchema } from "./tool.js";
 export const AiRunEventTypeSchema = Type.Union([
   Type.Literal("run.started"),
   Type.Literal("run.message.delta"),
+  Type.Literal("run.message.reasoning-delta"),
   Type.Literal("run.message.completed"),
   Type.Literal("run.tool.requested"),
   Type.Literal("run.tool.running"),
@@ -80,6 +81,16 @@ export const AiRunMessageDeltaEventSchema = Type.Object({
 });
 export type AiRunMessageDeltaEvent = Static<
   typeof AiRunMessageDeltaEventSchema
+>;
+
+/** Provider-supplied public reasoning text, separate from the visible answer. */
+export const AiRunMessageReasoningDeltaEventSchema = Type.Object({
+  type: Type.Literal("run.message.reasoning-delta"),
+  ...runEventBaseFields,
+  data: Type.Object({ delta: Type.String() }),
+});
+export type AiRunMessageReasoningDeltaEvent = Static<
+  typeof AiRunMessageReasoningDeltaEventSchema
 >;
 
 export const AiRunMessageCompletedEventSchema = Type.Object({
@@ -427,6 +438,7 @@ export type AiRunCancelledEvent = Static<typeof AiRunCancelledEventSchema>;
 export const AiRunEventSchema = Type.Union([
   AiRunStartedEventSchema,
   AiRunMessageDeltaEventSchema,
+  AiRunMessageReasoningDeltaEventSchema,
   AiRunMessageCompletedEventSchema,
   AiRunToolRequestedEventSchema,
   AiRunToolRunningEventSchema,
@@ -449,6 +461,7 @@ export const AiRunEventSchema = Type.Union([
 export type AiRunEvent =
   | AiRunStartedEvent
   | AiRunMessageDeltaEvent
+  | AiRunMessageReasoningDeltaEvent
   | AiRunMessageCompletedEvent
   | AiRunToolRequestedEvent
   | AiRunToolRunningEvent

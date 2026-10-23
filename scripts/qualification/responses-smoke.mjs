@@ -226,7 +226,7 @@ const path = process.argv[2] ?? "responses.sqlite";
 const app = await start(path);
 assert.equal(
   app.store.database.query("PRAGMA user_version").get().user_version,
-  9,
+  10,
 );
 if (process.argv[3]) {
   const seed = JSON.parse(readFileSync(process.argv[3], "utf8"));

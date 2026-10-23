@@ -52,6 +52,8 @@ mod ai_run_message_completed_event;
 pub use ai_run_message_completed_event::*;
 mod ai_run_message_delta_event;
 pub use ai_run_message_delta_event::*;
+mod ai_run_message_reasoning_delta_event;
+pub use ai_run_message_reasoning_delta_event::*;
 mod ai_run_started_event;
 pub use ai_run_started_event::*;
 mod ai_run_tool_failed_event;

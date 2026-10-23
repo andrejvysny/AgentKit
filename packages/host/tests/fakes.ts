@@ -233,6 +233,7 @@ export class FakeConversationStore implements ConversationStore {
         depth: plan.depth,
         branchIndex: plan.branchIndex,
         active: plan.input.active,
+        ...(plan.archived ? { archived: true } : {}),
         metadata: plan.metadata,
         createdAt: plan.createdAt,
       });
@@ -249,7 +250,9 @@ export class FakeConversationStore implements ConversationStore {
     const parent =
       input.parentMessageId === undefined
         ? activeLeafOf(list)
-        : this.requireParent(input.chatId, input.parentMessageId);
+        : input.parentMessageId === null
+          ? undefined
+          : this.requireParent(input.chatId, input.parentMessageId);
     const parentId = parent?.id;
     // A chain append inherits its parent's flag and moves no path — see
     // `AppendMessageInput.activate`.

@@ -40,7 +40,7 @@
  * stored as TEXT; the store (de)serializes them, SQLite never inspects their
  * contents.
  */
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * The text {@link SCHEMA_V8}'s search index sees for one message row, as SQL.

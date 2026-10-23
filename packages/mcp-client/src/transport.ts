@@ -10,6 +10,8 @@ import { McpError } from "./errors.js";
 /** What the factory is asked to build: one server's transport, secrets already injected. */
 export interface McpTransportRequest {
   alias: string;
+  /** Connect cancellation; factories may opt in, and late transports are closed by the session. */
+  signal?: AbortSignal;
   /** Placeholders already substituted — treat every value as secret material. */
   transport: McpTransportConfig;
 }

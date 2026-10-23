@@ -66,6 +66,9 @@ export class McpSession {
   private material: McpSecretMaterial = EMPTY_SECRET_MATERIAL;
   private connecting: Promise<void> | undefined;
   private reconnecting: Promise<void> | undefined;
+  private connectionAbort: AbortController | undefined;
+  private requestWaiters = 0;
+  private explicitConnectWaiters = 0;
   /**
    * Bumped on every successful open. A caller that failed on generation N and
    * finds the session already at N+1 has nothing to reconnect — someone else
@@ -122,7 +125,12 @@ export class McpSession {
   async connect(): Promise<void> {
     this.disposed = false;
     if (this.client) return;
-    return this.open();
+    this.explicitConnectWaiters += 1;
+    try {
+      await this.open();
+    } finally {
+      this.explicitConnectWaiters -= 1;
+    }
   }
 
   /**
@@ -263,12 +271,15 @@ export class McpSession {
   private open(): Promise<void> {
     const inFlight = this.connecting;
     if (inFlight) return inFlight;
+    const controller = new AbortController();
+    this.connectionAbort = controller;
     const started = (async () => {
       this.circuit.assertClosed();
-      await this.runConnectCycle();
+      await this.runConnectCycle(controller.signal);
     })();
     const tracked = started.finally(() => {
       if (this.connecting === tracked) this.connecting = undefined;
+      if (this.connectionAbort === controller) this.connectionAbort = undefined;
     });
     this.connecting = tracked;
     return tracked;
@@ -282,12 +293,12 @@ export class McpSession {
    * precise error behind `mcp_circuit_open` for the next five seconds would cost
    * the operator the one message that says what to do.
    */
-  private async runConnectCycle(): Promise<void> {
+  private async runConnectCycle(signal: AbortSignal): Promise<void> {
     const { maxConnectAttempts } = this.resilience;
     let last: unknown;
     for (let attempt = 1; attempt <= maxConnectAttempts; attempt += 1) {
       try {
-        await this.openOnce();
+        await this.openOnce(signal);
         this.circuit.recordSuccess();
         return;
       } catch (err) {
@@ -306,6 +317,7 @@ export class McpSession {
               2,
               this.resilience.connectBackoffMaxMs,
             ),
+            signal,
           );
         }
       }
@@ -322,7 +334,7 @@ export class McpSession {
     );
   }
 
-  private async openOnce(): Promise<void> {
+  private async openOnce(connectSignal: AbortSignal): Promise<void> {
     if (!isServerEnabled(this.config)) {
       throw new McpError(
         "mcp_not_connected",
@@ -345,6 +357,7 @@ export class McpSession {
     await withDeadline(
       {
         timeoutMs: this.resilience.connectTimeoutMs,
+        signal: connectSignal,
         timeoutCode: "mcp_connect_failed",
         describe: `Connecting to MCP server "${this.alias}"`,
         redact: (text) => this.redact(text),
@@ -353,7 +366,15 @@ export class McpSession {
         const transport = await this.deps.transportFactory({
           alias: this.alias,
           transport: transportConfig,
+          signal,
         });
+        if (signal.aborted) {
+          await swallow(() => transport.close());
+          throw new McpError(
+            "mcp_request_aborted",
+            "MCP connection was cancelled.",
+          );
+        }
         const client = new Client(CLIENT_INFO);
         // `Protocol.connect` overwrites `transport.onclose`, so the peer-closed
         // hook has to hang off the CLIENT, not the transport.
@@ -409,7 +430,11 @@ export class McpSession {
       // catches a close that arrived while the open was in flight — `openOnce`
       // refuses to install into a disposed session, but a close landing after
       // it installed would otherwise leave the new transport unswept.
-      if (this.disposed) return;
+      if (
+        this.disposed ||
+        (this.requestWaiters === 0 && this.explicitConnectWaiters === 0)
+      )
+        return;
       await this.open();
       if (this.disposed) await this.teardown();
     })();
@@ -432,10 +457,56 @@ export class McpSession {
     fn: (client: Client, signal: AbortSignal) => Promise<T>,
     options?: { signal?: AbortSignal },
   ): Promise<T> {
+    this.requestWaiters += 1;
+    try {
+      return await this.requestWithSession(operation, fn, options);
+    } finally {
+      this.requestWaiters -= 1;
+      if (
+        options?.signal?.aborted &&
+        this.requestWaiters === 0 &&
+        this.explicitConnectWaiters === 0
+      ) {
+        this.connectionAbort?.abort();
+      }
+    }
+  }
+
+  private waitForConnection(
+    operation: string,
+    connect: () => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const timeoutMs =
+      this.resilience.maxConnectAttempts *
+        (this.resilience.connectTimeoutMs +
+          this.resilience.connectBackoffMaxMs) +
+      this.resilience.requestTimeoutMs;
+    return withDeadline(
+      {
+        timeoutMs,
+        signal,
+        timeoutCode: "mcp_connect_failed",
+        describe: `Connecting for ${operation} on MCP server "${this.alias}"`,
+        redact: (text) => this.redact(text),
+      },
+      connect,
+    );
+  }
+
+  private async requestWithSession<T>(
+    operation: string,
+    fn: (client: Client, signal: AbortSignal) => Promise<T>,
+    options?: { signal?: AbortSignal },
+  ): Promise<T> {
     const { reconnectMaxAttempts } = this.resilience;
     let retries = 0;
     for (;;) {
-      await this.ensureConnected(operation);
+      await this.waitForConnection(
+        operation,
+        () => this.ensureConnected(operation),
+        options?.signal,
+      );
       const client = this.client;
       const generation = this.generation;
       // Captured, not read from `this` in the catch: a CONCURRENT caller's
@@ -492,8 +563,13 @@ export class McpSession {
             this.resilience.reconnectBackoffFactor,
             this.resilience.connectBackoffMaxMs,
           ),
+          options?.signal,
         );
-        await this.reconnectFrom(generation);
+        await this.waitForConnection(
+          operation,
+          () => this.reconnectFrom(generation),
+          options?.signal,
+        );
       }
     }
   }

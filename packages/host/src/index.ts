@@ -35,6 +35,7 @@ export * from "./tools/contributor-tool-catalog.js";
 // adapter shares (active path, branch switching, fork flattening, import
 // validation), plus the chat lifecycle that spans three stores.
 export * from "./conversation/message-tree.js";
+export * from "./conversation/archive.js";
 export * from "./conversation/conversation-service.js";
 
 // Turn execution: the durable worker over core's run loop.

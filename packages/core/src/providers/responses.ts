@@ -188,6 +188,14 @@ export class ResponsesClient implements AiProviderClient {
         text += delta;
         yield stamp({ ...base, type: "run.message.delta", data: { delta } });
       }
+      const reasoningDelta = state.takeReasoningDelta();
+      if (reasoningDelta) {
+        yield stamp({
+          ...base,
+          type: "run.message.reasoning-delta",
+          data: { delta: reasoningDelta },
+        });
+      }
     }
     const result = state.finish(input.tools);
     await this.persistContinuation(input, body, result);
@@ -390,6 +398,9 @@ function* completionEvents(
       content: result.content,
       toolCallCount: result.tools.length,
       toolCalls: result.tools,
+      ...(result.reasoningContent
+        ? { reasoningContent: result.reasoningContent }
+        : {}),
       finishReason,
     },
   });

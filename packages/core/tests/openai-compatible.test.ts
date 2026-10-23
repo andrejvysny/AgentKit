@@ -87,6 +87,11 @@ describe("OpenAiCompatibleClient.streamChat", () => {
     expect(completed!.data.finishReason).toBe("stop");
     // Reasoning is NOT streamed as visible deltas.
     expect(events.filter((e) => e.type === "run.message.delta").length).toBe(0);
+    expect(
+      events
+        .filter((e) => e.type === "run.message.reasoning-delta")
+        .map((e) => e.data.delta),
+    ).toEqual(["thinking", " harder"]);
   });
 
   it("keeps content and reasoning separate", async () => {

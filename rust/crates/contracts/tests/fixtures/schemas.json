@@ -1121,6 +1121,10 @@
             "type": "string"
           },
           {
+            "const": "run.message.reasoning-delta",
+            "type": "string"
+          },
+          {
             "const": "run.message.completed",
             "type": "string"
           },
@@ -1273,6 +1277,58 @@
           },
           "type": {
             "const": "run.message.delta",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "delta": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "delta"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.message.reasoning-delta",
             "type": "string"
           }
         },
@@ -2101,6 +2157,10 @@
         "type": "string"
       },
       {
+        "const": "run.message.reasoning-delta",
+        "type": "string"
+      },
+      {
         "const": "run.message.completed",
         "type": "string"
       },
@@ -2325,6 +2385,58 @@
       },
       "type": {
         "const": "run.message.delta",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunMessageReasoningDeltaEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "delta": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "delta"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.message.reasoning-delta",
         "type": "string"
       }
     },
@@ -4945,6 +5057,58 @@
           },
           "data": {
             "properties": {
+              "delta": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "delta"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.message.reasoning-delta",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
               "content": {
                 "type": "string"
               },
@@ -5978,7 +6142,14 @@
         "type": "string"
       },
       "parentMessageId": {
-        "type": "string"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "providerId": {
         "type": "string"

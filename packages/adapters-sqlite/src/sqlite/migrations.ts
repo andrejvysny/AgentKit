@@ -1,6 +1,7 @@
 import { AgentKitHostError } from "@agentkit/host";
 import { SCHEMA_V8, SCHEMA_VERSION } from "../schema.js";
 import { SCHEMA_V9_PROVIDER_CONTINUATIONS } from "../provider-continuation-schema.js";
+import { SCHEMA_V10_MESSAGE_ARCHIVES } from "../message-archive-schema.js";
 import { normalizeRow, type SqliteDatabase } from "./driver.js";
 
 export interface SqliteMigration {
@@ -12,6 +13,7 @@ export interface SqliteMigration {
 
 export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = Object.freeze([
   Object.freeze({ from: 8, to: 9, sql: SCHEMA_V9_PROVIDER_CONTINUATIONS }),
+  Object.freeze({ from: 9, to: 10, sql: SCHEMA_V10_MESSAGE_ARCHIVES }),
 ]);
 export const MIN_SUPPORTED_SCHEMA_VERSION = 8;
 
@@ -95,7 +97,7 @@ function assertOwnership(
 }
 
 /** v8 predates an application-id marker; adopt only its complete table layout. */
-function assertBaseline(db: SqliteDatabase): void {
+function assertBaseline(db: SqliteDatabase, version: number): void {
   const statements =
     SCHEMA_V8.match(/CREATE TABLE IF NOT EXISTS \w+ \([\s\S]*?\n\);/g) ?? [];
   for (const sql of statements) {
@@ -105,7 +107,14 @@ function assertBaseline(db: SqliteDatabase): void {
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = $name",
       )
       .get({ $name: name ?? "" }) as { sql: string } | null;
-    if (!row || canonical(row.sql) !== canonical(sql)) {
+    const baseline =
+      name === "messages" && version >= 10
+        ? row?.sql.replace(
+            /,\s*archived INTEGER NOT NULL DEFAULT 0(?=\s*[,)])/,
+            "",
+          )
+        : row?.sql;
+    if (!baseline || canonical(baseline) !== canonical(sql)) {
       throw new AgentKitHostError(
         "sqlite_schema_integrity",
         `Unrecognized AgentKit table ${name}; refusing to change this database.`,
@@ -178,7 +187,7 @@ export function inspectSchema(
   if (version < MIN_SUPPORTED_SCHEMA_VERSION || version > target) {
     unsupportedVersion(version, target);
   }
-  assertBaseline(db);
+  assertBaseline(db, version);
   assertMigratedTables(db, version, migrations);
   assertIntegrity(db);
   return version;

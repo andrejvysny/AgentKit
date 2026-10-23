@@ -11,6 +11,8 @@ pub enum AiRunEventType {
     RunStarted,
     #[serde(rename = "run.message.delta")]
     RunMessageDelta,
+    #[serde(rename = "run.message.reasoning-delta")]
+    RunMessageReasoningDelta,
     #[serde(rename = "run.message.completed")]
     RunMessageCompleted,
     #[serde(rename = "run.tool.requested")]

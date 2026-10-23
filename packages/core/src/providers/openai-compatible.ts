@@ -315,6 +315,12 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         const reasoningDelta = delta.reasoning_content ?? delta.reasoning;
         if (typeof reasoningDelta === "string" && reasoningDelta.length > 0) {
           aggregatedReasoning += reasoningDelta;
+          yield stamp({
+            type: "run.message.reasoning-delta",
+            runId,
+            timestamp: nowIso(),
+            data: { delta: reasoningDelta },
+          });
         }
         if (delta.tool_calls) {
           for (const tcDelta of delta.tool_calls) {

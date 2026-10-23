@@ -57,6 +57,7 @@ export {
   AiRunEventBaseSchema,
   AiRunStartedEventSchema,
   AiRunMessageDeltaEventSchema,
+  AiRunMessageReasoningDeltaEventSchema,
   AiRunMessageCompletedEventSchema,
   AiRunToolRequestedEventSchema,
   AiRunToolRunningEventSchema,

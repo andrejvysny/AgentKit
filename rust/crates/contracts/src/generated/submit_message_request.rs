@@ -22,7 +22,7 @@ pub struct SubmitMessageRequest {
         default,
         skip_serializing_if = "Optional::is_absent"
     )]
-    pub parent_message_id: Optional<AiProviderKind>,
+    pub parent_message_id: Optional<Nullable<AiProviderKind>>,
     #[serde(
         rename = "metadata",
         default,

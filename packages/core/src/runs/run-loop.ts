@@ -208,6 +208,9 @@ async function* runChatUnchecked(
         // Re-yield provider events with the canonical runId.
         const stamped = { ...event, runId } as AiRunEvent;
         switch (stamped.type) {
+          case "run.message.reasoning-delta":
+            yield stamp(stamped);
+            break;
           case "run.message.delta":
             deltaContent += stamped.data.delta;
             yield stamp(stamped);

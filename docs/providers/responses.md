@@ -91,6 +91,12 @@ chat and branch. Its SHA-256 digest covers the normalized exact message prefix.
 The envelope is bounded to 1 MiB and 1024 input items. Opaque encrypted reasoning
 and raw provider items stay in private state, never visible text or error data.
 
+Public reasoning summary/text frames are separate from that private continuation.
+They stream as `run.message.reasoning-delta` and reconcile to the completed turn's
+`reasoningContent`. The host stores accumulated public reasoning in the visible
+message's `metadata.reasoningContent`, and `useChat` projects it while streaming
+and reloads it from that metadata. Encrypted continuation is never copied there.
+
 `TurnRunner` requires the optional private `AssistantStore.continuations` port
 for Responses. The memory and SQLite adapters implement it. Each run binds its
 identity before tool staging; fenced state writes require a live run lease.

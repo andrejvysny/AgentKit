@@ -40,7 +40,8 @@ export interface SubmitMessageInput {
    * second place deciding what "the conversation so far" means is a second place
    * that could disagree with the store.
    */
-  parentMessageId?: string;
+  /** Null starts a new root; omit to append to the current active leaf. */
+  parentMessageId?: string | null;
   /**
    * The caller's idempotency key for this submit, used verbatim as the task id.
    *
@@ -148,6 +149,8 @@ export interface TurnRequest {
   providerId?: string;
   assistantMessageId: string;
   userMessageId?: string;
+  /** Explicit null starts a root branch; absent appends to the active leaf. */
+  parentMessageId?: string | null;
 }
 
 /**
@@ -169,6 +172,9 @@ export async function submitMessage(
   const assistantMessageId = deps.ids.messageId();
   const payload: TurnRequest = {
     chatId: input.chatId,
+    ...(input.parentMessageId === undefined
+      ? {}
+      : { parentMessageId: input.parentMessageId }),
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.providerId === undefined ? {} : { providerId: input.providerId }),
     assistantMessageId,
@@ -274,6 +280,7 @@ async function resubmitted(
     chatId: string;
     taskId?: string;
     kind: string;
+    parentMessageId?: string | null;
     /**
      * The question the caller means to re-answer, when it HAS one. A submit
      * mints its user message here and so cannot check it; a regenerate does
@@ -307,6 +314,11 @@ async function resubmitted(
   ) {
     return null;
   }
+  if (
+    (input.parentMessageId === null || payload.parentMessageId === null) &&
+    input.parentMessageId !== payload.parentMessageId
+  )
+    return null;
   return {
     chatId: payload.chatId,
     runId: existing.taskId,

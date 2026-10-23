@@ -741,9 +741,9 @@ export const SubmitMessageRequestSchema = Type.Object({
    * `listMessages` reports the new branch and the run replays THAT history to
    * the provider. Omit it and the turn appends to the active leaf, which is what
    * every non-branching client does and what a linear conversation has always
-   * done.
+   * done. Explicit null starts a new root, preserving the old root's branch.
    */
-  parentMessageId: Type.Optional(Type.String()),
+  parentMessageId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 });
 export type SubmitMessageRequest = Static<typeof SubmitMessageRequestSchema>;

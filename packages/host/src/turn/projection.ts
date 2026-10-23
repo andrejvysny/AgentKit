@@ -1,4 +1,9 @@
 import { canonicalMessage } from "./canonical-projection.js";
+import {
+  completeReasoning,
+  flushProjectionContent,
+  reasoningPatch,
+} from "./reasoning-projection.js";
 import { recordRunUsage } from "./record-run-usage.js";
 import type { AiRunEvent, AiToolCall } from "@agentkit/contracts";
 import { AgentKitHostError } from "../errors.js";
@@ -55,6 +60,8 @@ export interface RunProjectionState {
   readonly assistantMessageId: string;
   readonly providerId?: string;
   content: string;
+  reasoningContent: string;
+  reasoningTurnStart: number;
   /** Bounded replay cursor; sequential events are applied at most once. */
   projectedSeq: number;
   streamed: boolean;
@@ -178,27 +185,6 @@ const DELTA_FLUSH_INTERVAL_MS = 50;
 export function createRunProjector(deps: RunProjectorDeps): RunProjector {
   const { store } = deps;
 
-  /** Flush only content that has not yet reached its durable projection. */
-  async function flushContent(
-    store: AssistantStore,
-    ctx: RunProjectionContext,
-    state: RunProjectionState,
-  ): Promise<void> {
-    if (state.unflushedDeltas === 0) return;
-    await store.conversations.updateMessage(
-      state.assistantMessageId,
-      {
-        content: state.content,
-      },
-      { taskId: ctx.task.taskId, leaseToken: ctx.leaseToken },
-    );
-    // AFTER the write, not before: "unflushed" has to stay true while the write
-    // is outstanding, or a throw here would leave the state claiming a durable
-    // answer that was never written.
-    state.unflushedDeltas = 0;
-    state.lastFlushAtMs = deps.clock.now().getTime();
-  }
-
   async function reflectEvent(
     store: AssistantStore,
     ctx: RunProjectionContext,
@@ -221,13 +207,18 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
     };
 
     // Decision events observe durable text even when the last delta was coalesced.
-    if (event.type !== "run.message.delta")
-      await flushContent(store, ctx, state);
+    if (
+      event.type !== "run.message.delta" &&
+      event.type !== "run.message.reasoning-delta"
+    )
+      await flushProjectionContent(store, ctx, state, deps.clock);
 
     switch (event.type) {
       case "run.warning": {
         if (event.data.code === "retry_pass") {
           state.content = "";
+          state.reasoningContent = "";
+          state.reasoningTurnStart = 0;
           state.streamed = false;
           state.toolCallIds.clear();
           state.unflushedDeltas = 0;
@@ -236,26 +227,30 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
           state.announcedToolCalls = [];
           await store.conversations.updateMessage(
             state.assistantMessageId,
-            { content: "" },
+            { content: "", ...(await reasoningPatch(store, state)) },
             fence,
           );
         }
         break;
       }
-      case "run.message.delta": {
-        state.content += event.data.delta;
-        state.streamed = true;
+      case "run.message.delta":
+      case "run.message.reasoning-delta": {
+        if (event.type === "run.message.delta") {
+          state.content += event.data.delta;
+          state.streamed = true;
+        } else state.reasoningContent += event.data.delta;
         state.unflushedDeltas += 1;
         const elapsed = deps.clock.now().getTime() - state.lastFlushAtMs;
         if (
           state.unflushedDeltas >= DELTA_FLUSH_MAX_DELTAS ||
           elapsed >= DELTA_FLUSH_INTERVAL_MS
         ) {
-          await flushContent(store, ctx, state);
+          await flushProjectionContent(store, ctx, state, deps.clock);
         }
         break;
       }
       case "run.message.completed": {
+        await completeReasoning(store, ctx, state, event.data.reasoningContent);
         if (state.preserveCanonicalTurns) {
           await canonicalMessage(store, ctx, state, event, append);
           break;
@@ -283,7 +278,12 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
             toolCalls,
             parentMessageId: state.lastMessageId,
             activate: false,
-            metadata: { internal: true },
+            metadata: {
+              internal: true,
+              ...(event.data.reasoningContent === undefined
+                ? {}
+                : { reasoningContent: event.data.reasoningContent }),
+            },
           });
           state.lastMessageId = record.id;
           for (const call of toolCalls) state.toolCallIds.add(call.id);
@@ -424,6 +424,8 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
           ? {}
           : { providerId: input.providerId }),
         content: "",
+        reasoningContent: "",
+        reasoningTurnStart: 0,
         projectedSeq: -1,
         streamed: false,
         toolCallIds: new Set<string>(),
@@ -474,7 +476,7 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
             await tx.tasks.appendEvents(ctx.task.taskId, [], {
               leaseToken: ctx.leaseToken,
             });
-            await flushContent(tx, ctx, state);
+            await flushProjectionContent(tx, ctx, state, deps.clock);
           });
           return;
         }
