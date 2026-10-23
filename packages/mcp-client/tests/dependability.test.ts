@@ -1,12 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
 import {
-  ListToolsRequestSchema,
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
-  ListPromptsRequestSchema,
-  GetPromptRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import {
   McpClientManager,
   createMcpToolSetContributor,
   assertSupportedMcpProtocol,
@@ -84,7 +77,7 @@ test("discovers all pages and preserves case-sensitive remote names through call
     { name: "DATA_EXPORT_v2" },
   ]);
   const cursors: unknown[] = [];
-  server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+  server.setRequestHandler("tools/list", async (request) => {
     cursors.push(request.params?.cursor);
     return request.params?.cursor
       ? { tools: [{ name: "DATA_EXPORT_v2", inputSchema: { type: "object" } }] }
@@ -104,7 +97,7 @@ test("discovers all pages and preserves case-sensitive remote names through call
 });
 test("repeated cursors and catalog bounds fail closed", async () => {
   const server = buildFakeServer("test", []);
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server.setRequestHandler("tools/list", async () => ({
     tools: [],
     nextCursor: "loop",
   }));
@@ -160,14 +153,15 @@ test("cancelled discovery never opens an unselected or cancelled connection", as
 });
 test("protocol matrix rejects unsupported revisions explicitly", () => {
   expect(() => assertSupportedMcpProtocol("2025-11-25")).not.toThrow();
-  expect(() => assertSupportedMcpProtocol("2026-07-28")).toThrow(
+  expect(() => assertSupportedMcpProtocol("2026-07-28")).not.toThrow();
+  expect(() => assertSupportedMcpProtocol("3000-01-01")).toThrow(
     "Unsupported MCP protocol",
   );
 });
 test("remote context catalogs paginate and preserve roles and untrusted provenance", async () => {
   const server = buildFakeServer("test", []);
   server.registerCapabilities({ resources: {}, prompts: {} });
-  server.setRequestHandler(ListResourcesRequestSchema, async (request) =>
+  server.setRequestHandler("resources/list", async (request) =>
     request.params?.cursor
       ? { resources: [{ uri: "remote://second", name: "second" }] }
       : {
@@ -175,13 +169,13 @@ test("remote context catalogs paginate and preserve roles and untrusted provenan
           nextCursor: "next",
         },
   );
-  server.setRequestHandler(ReadResourceRequestSchema, async (request) => ({
+  server.setRequestHandler("resources/read", async (request) => ({
     contents: [{ uri: request.params.uri, text: "source material" }],
   }));
-  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+  server.setRequestHandler("prompts/list", async () => ({
     prompts: [{ name: "review" }],
   }));
-  server.setRequestHandler(GetPromptRequestSchema, async () => ({
+  server.setRequestHandler("prompts/get", async () => ({
     messages: [
       { role: "user", content: { type: "text", text: "Review" } },
       { role: "assistant", content: { type: "text", text: "Ready" } },

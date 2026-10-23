@@ -24,9 +24,12 @@ framework build during installation or sibling checkout at runtime. Electron mai
 bundle; bundle AgentKit's JavaScript and keep `better-sqlite3` external. This does not promise
 direct `require('agentkit')` compatibility.
 
-Foundation 0.6.0 contains the migration runtime and schema 8. Responses 0.7.0 adds the provider
-and schema 9 continuation storage. These separate candidate tracks do not make foundation wait
-for Responses, OAuth or SIWC approval. Source versions and commits are not package releases.
+Foundation 0.6.0 contains the current migration runtime, archive support and schema 10.
+Responses 0.7.0 adds the provider and private continuation APIs. Both unpublished candidates
+retain the identical v8-to-v9-to-v10 storage migration history; foundation keeps the v9 table
+DDL inert. The earlier schema-8 foundation projection is superseded. These separate candidate
+tracks do not make foundation wait for Responses, OAuth or SIWC approval. Source versions
+and commits are not package releases.
 
 Follow the [release procedure](../../DEVELOPING.md#qualifying-a-release-candidate): snapshot,
 build and pack once, then qualify those exact bytes. Install only the reviewed versioned tarball

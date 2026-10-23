@@ -288,7 +288,7 @@ function verifyPackage(directory, proof, expected, readPackedManifest) {
   return tarball;
 }
 
-function verifyMigration(directory, qualification) {
+export function verifyMigration(directory, qualification) {
   successfulChecks(qualification.checks, [
     "npm-responses-reopen",
     "npm-responses-openpcb-reopen",
@@ -301,8 +301,9 @@ function verifyMigration(directory, qualification) {
   const foundation = json(join(directory, "../foundation"), "candidate.json");
   const migration = qualification.migration;
   requireProof(
-    migration?.from === 8 &&
-      migration.to === 9 &&
+    migration?.kind === "candidate-continuity" &&
+      migration.from === 10 &&
+      migration.to === 10 &&
       migration.populated === true &&
       migration.reopened === true &&
       migration.sha256 === foundation.tarballSha256 &&
@@ -310,7 +311,7 @@ function verifyMigration(directory, qualification) {
         sha256(
           readFileSync(join(directory, "../foundation/agentkit-0.6.0.tgz")),
         ),
-    "exact populated foundation migration is missing",
+    "exact populated foundation continuity proof is missing",
   );
 }
 

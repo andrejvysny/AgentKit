@@ -1,17 +1,14 @@
 import type { Clock, Logger, SecretStore } from "@agentkit/host";
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
-  ErrorCode,
-  ElicitRequestSchema,
-  ToolListChangedNotificationSchema,
-  ResourceListChangedNotificationSchema,
-  PromptListChangedNotificationSchema,
+  Client,
+  UnauthorizedError,
+  type Transport,
+  SdkErrorCode,
+  ProtocolError,
   type ElicitRequest,
   type ElicitResult,
-  McpError as SdkMcpError,
-} from "@modelcontextprotocol/sdk/types.js";
+  SdkError as SdkMcpError,
+} from "@modelcontextprotocol/client";
 import { isServerEnabled, type McpServerConfig } from "./config.js";
 import { describeCause, McpError, redactedCause } from "./errors.js";
 import {
@@ -194,10 +191,13 @@ export class McpSession {
     const tools = await this.paginate(
       "tools/list",
       async (client, signal, cursor) => {
-        const result = await client.listTools(cursor ? { cursor } : undefined, {
-          signal,
-          timeout: this.resilience.requestTimeoutMs,
-        });
+        const result = await client.request(
+          { method: "tools/list", params: cursor ? { cursor } : undefined },
+          {
+            signal,
+            timeout: this.resilience.requestTimeoutMs,
+          },
+        );
         return { items: result.tools, nextCursor: result.nextCursor };
       },
       options,
@@ -261,8 +261,8 @@ export class McpSession {
     return this.paginate(
       "resources/list",
       async (client, signal, cursor) => {
-        const page = await client.listResources(
-          cursor ? { cursor } : undefined,
+        const page = await client.request(
+          { method: "resources/list", params: cursor ? { cursor } : undefined },
           { signal },
         );
         return { items: page.resources, nextCursor: page.nextCursor };
@@ -274,8 +274,11 @@ export class McpSession {
     return this.paginate(
       "resources/templates/list",
       async (client, signal, cursor) => {
-        const page = await client.listResourceTemplates(
-          cursor ? { cursor } : undefined,
+        const page = await client.request(
+          {
+            method: "resources/templates/list",
+            params: cursor ? { cursor } : undefined,
+          },
           { signal },
         );
         return { items: page.resourceTemplates, nextCursor: page.nextCursor };
@@ -298,9 +301,12 @@ export class McpSession {
     return this.paginate(
       "prompts/list",
       async (client, signal, cursor) => {
-        const page = await client.listPrompts(cursor ? { cursor } : undefined, {
-          signal,
-        });
+        const page = await client.request(
+          { method: "prompts/list", params: cursor ? { cursor } : undefined },
+          {
+            signal,
+          },
+        );
         return { items: page.prompts, nextCursor: page.nextCursor };
       },
       options,
@@ -343,7 +349,6 @@ export class McpSession {
             name: toolName,
             ...(args === undefined ? {} : { arguments: args }),
           },
-          undefined,
           { signal, timeout: this.resilience.requestTimeoutMs },
         ),
       options,
@@ -459,7 +464,7 @@ export class McpSession {
         this.circuit.recordSuccess();
         return;
       } catch (err) {
-        if (err instanceof UnauthorizedError)
+        if (isAuthenticationRequired(err))
           throw new McpError(
             "mcp_auth_required",
             "MCP authentication is required.",
@@ -537,29 +542,29 @@ export class McpSession {
             "MCP connection was cancelled.",
           );
         }
-        const client = new Client(
-          CLIENT_INFO,
-          this.deps.elicitation
+        const client = new Client(CLIENT_INFO, {
+          versionNegotiation: { mode: "auto" },
+          ...(this.deps.elicitation
             ? { capabilities: { elicitation: { form: {}, url: {} } } }
-            : undefined,
-        );
+            : {}),
+        });
         if (this.deps.elicitation)
-          client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
+          client.setRequestHandler("elicitation/create", (request, extra) =>
             this.deps.elicitation!(request.params, {
               alias: this.alias,
-              signal: extra.signal,
+              signal: extra.mcpReq.signal,
             }),
           );
         client.setNotificationHandler(
-          ToolListChangedNotificationSchema,
+          "notifications/tools/list_changed",
           async () => this.deps.onCatalogChanged?.(this.alias, "tools"),
         );
         client.setNotificationHandler(
-          ResourceListChangedNotificationSchema,
+          "notifications/resources/list_changed",
           async () => this.deps.onCatalogChanged?.(this.alias, "resources"),
         );
         client.setNotificationHandler(
-          PromptListChangedNotificationSchema,
+          "notifications/prompts/list_changed",
           async () => this.deps.onCatalogChanged?.(this.alias, "prompts"),
         );
         // `Protocol.connect` overwrites `transport.onclose`, so the peer-closed
@@ -749,7 +754,7 @@ export class McpSession {
             "mcp_request_aborted",
           ].includes(failure.code) ||
             (failure.code === "mcp_remote_error" &&
-              !(err instanceof SdkMcpError)))
+              !(err instanceof ProtocolError)))
         ) {
           throw new McpError(
             "mcp_outcome_uncertain",
@@ -822,20 +827,20 @@ export class McpSession {
     redact: (text: string) => string,
   ): McpError {
     if (err instanceof McpError) return err;
-    if (err instanceof UnauthorizedError)
+    if (isAuthenticationRequired(err))
       return new McpError(
         "mcp_auth_required",
         "MCP authentication is required.",
       );
-    if (err instanceof SdkMcpError) {
-      if (err.code === ErrorCode.ConnectionClosed) {
+    if (err instanceof SdkMcpError || err instanceof ProtocolError) {
+      if (err.code === SdkErrorCode.ConnectionClosed) {
         return new McpError(
           "mcp_not_connected",
           `MCP server "${this.alias}" closed the connection during ${operation}.`,
           { retryable: true, cause: redactedCause(err, redact) },
         );
       }
-      if (err.code === ErrorCode.RequestTimeout) {
+      if (err.code === SdkErrorCode.RequestTimeout) {
         return new McpError(
           "mcp_request_timeout",
           `${operation} on MCP server "${this.alias}" timed out.`,
@@ -872,4 +877,12 @@ async function swallow(fn: () => Promise<void>): Promise<void> {
   } catch {
     // Intentionally ignored.
   }
+}
+
+function isAuthenticationRequired(error: unknown): boolean {
+  return (
+    error instanceof UnauthorizedError ||
+    (error instanceof SdkMcpError &&
+      error.code === SdkErrorCode.ClientHttpAuthentication)
+  );
 }

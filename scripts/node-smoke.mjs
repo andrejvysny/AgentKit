@@ -673,6 +673,117 @@ check(
 );
 await mcpServerHandler.dispose();
 
+// Exercise published MCP packages over a real Node HTTP server in both eras.
+const { createServer } = await import("node:http");
+const nodeMcp = mcpServer.createMcpServerHandler({
+  auth: { bearerToken: MCP_TOKEN },
+  tools: {
+    catalog: {
+      async listTools() {
+        return [
+          {
+            namespace: "node",
+            definition: {
+              name: "echo",
+              version: "1",
+              effect: "read",
+              capability: "echo",
+              description: "Echo",
+              inputSchema: { type: "object" },
+            },
+          },
+        ];
+      },
+    },
+    async execute(_name, args) {
+      return {
+        ok: true,
+        status: "ok",
+        data: args,
+        warnings: [],
+        truncated: false,
+      };
+    },
+  },
+});
+const nodeHttp = createServer(async (request, response) => {
+  const abort = new AbortController();
+  response.on("close", () => {
+    if (!response.writableEnded) abort.abort();
+  });
+  try {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = Buffer.concat(chunks);
+    const incoming = new Request(
+      `http://${request.headers.host}${request.url}`,
+      {
+        method: request.method,
+        headers: request.headers,
+        signal: abort.signal,
+        ...(body.length ? { body } : {}),
+      },
+    );
+    const result = await nodeMcp.fetch(incoming);
+    response.writeHead(result.status, Object.fromEntries(result.headers));
+    if (result.body)
+      for await (const chunk of result.body) response.write(chunk);
+    response.end();
+  } catch (error) {
+    response.destroy(error);
+  }
+});
+await new Promise((resolve) => nodeHttp.listen(0, "127.0.0.1", resolve));
+const nodeUrl = new URL(`http://127.0.0.1:${nodeHttp.address().port}/mcp`);
+const nodeManager = new mcp.McpClientManager({ secrets: nullSecrets }, [
+  {
+    alias: "node",
+    transport: {
+      kind: "http",
+      url: nodeUrl.href,
+      headers: { Authorization: `Bearer ${MCP_TOKEN}` },
+    },
+  },
+]);
+const { Client: LegacyMcpClient } = await import("mcp-sdk-v1/client/index.js");
+const { StreamableHTTPClientTransport: LegacyMcpTransport } = await import(
+  "mcp-sdk-v1/client/streamableHttp.js"
+);
+const oldMcp = new LegacyMcpClient({ name: "node-legacy", version: "1" });
+try {
+  check(
+    (await nodeManager.listTools("node")).length === 1,
+    "Node HTTP modern catalog round trip",
+  );
+  check(
+    (
+      await nodeManager.callTool("mcp.node.echo", { node: "modern" })
+    ).text.includes("modern"),
+    "Node HTTP modern call round trip",
+  );
+  await oldMcp.connect(
+    new LegacyMcpTransport(nodeUrl, {
+      requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}` } },
+    }),
+  );
+  check(
+    (await oldMcp.listTools()).tools.length === 1,
+    "Node HTTP SDK1 catalog round trip",
+  );
+  check(
+    (
+      await oldMcp.callTool({ name: "echo", arguments: { node: "legacy" } })
+    ).content[0].text.includes("legacy"),
+    "Node HTTP SDK1 call round trip",
+  );
+} finally {
+  await nodeManager.dispose();
+  await oldMcp.close();
+  await nodeMcp.dispose();
+  nodeHttp.closeAllConnections();
+  await new Promise((resolve) => nodeHttp.close(resolve));
+}
+
 // ---------------------------------------------------------------------------
 // 9. Testing dist: a golden trace loads and validates — this is the exact
 //    path that broke before `golden.ts`'s JSON imports carried

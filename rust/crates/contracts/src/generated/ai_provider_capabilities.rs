@@ -19,11 +19,7 @@ pub struct AiProviderCapabilities {
         skip_serializing_if = "Optional::is_absent"
     )]
     pub vision: Optional<bool>,
-    #[serde(
-        rename = "audio",
-        default,
-        skip_serializing_if = "Optional::is_absent"
-    )]
+    #[serde(rename = "audio", default, skip_serializing_if = "Optional::is_absent")]
     pub audio: Optional<bool>,
     #[serde(
         rename = "jsonMode",

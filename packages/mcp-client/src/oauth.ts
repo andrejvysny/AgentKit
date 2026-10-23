@@ -4,13 +4,14 @@ import {
   UnauthorizedError,
   type OAuthClientProvider,
   type OAuthDiscoveryState,
-} from "@modelcontextprotocol/sdk/client/auth.js";
+} from "@modelcontextprotocol/client";
 import type {
   OAuthClientMetadata,
-  OAuthClientInformationMixed,
+  StoredOAuthClientInformation,
+  StoredOAuthTokens,
   OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+} from "@modelcontextprotocol/client";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
   defaultMcpTransportFactory,
   type McpTransportFactory,
@@ -29,7 +30,7 @@ export interface ManagedOAuthOptions {
   redirectUrl: string;
   clientMetadata: OAuthClientMetadata;
   /** Pre-registered GitHub App/OAuth App information; stored only in SecretStore. */
-  clientInformation?: OAuthClientInformationMixed;
+  clientInformation?: StoredOAuthClientInformation;
   /** Application owns browser opening. */
   redirect(url: URL): Promise<void>;
   secrets: SecretStore;
@@ -40,25 +41,87 @@ export interface ManagedOAuthOptions {
   revoke?(tokens: OAuthTokens): Promise<void>;
 }
 
-/** Account-scoped PKCE, state, credentials and single-flight refresh using SDK discovery. */
+interface SavedTokens {
+  tokens: StoredOAuthTokens;
+  expiresAt: number;
+}
+
+function ordered(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(ordered);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, item]) => [key, ordered(item)]),
+    );
+  return value;
+}
+
+function frozen<T>(value: T): T {
+  if (value && typeof value === "object") {
+    Object.values(value).forEach(frozen);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function bindingRefusal(): never {
+  throw new McpError(
+    "mcp_auth_required",
+    "Stored OAuth credentials require explicit reauthorization.",
+  );
+}
+
+/** Account-scoped PKCE, state, credentials and single-flight refresh using SDK discovery.
+ * Stored material is bound to the canonical resource and configured OAuth identity.
+ * Legacy/unmatched entries require invalidateCredentials("all") and fresh authorization.
+ */
 export class ManagedOAuthProvider implements OAuthClientProvider {
   readonly redirectUrl: string;
   readonly clientMetadata: OAuthClientMetadata;
   private readonly prefix: string;
+  private readonly options: ManagedOAuthOptions;
+  private readonly binding: Promise<string>;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private revoked = false;
-  constructor(private readonly options: ManagedOAuthOptions) {
-    this.redirectUrl = options.redirectUrl;
-    this.clientMetadata = structuredClone(options.clientMetadata);
+  constructor(options: ManagedOAuthOptions) {
+    this.options = {
+      ...options,
+      serverUrl: new URL(options.serverUrl).href,
+      redirectUrl: options.redirectUrl,
+      clientMetadata: structuredClone(options.clientMetadata),
+      clientInformation: structuredClone(options.clientInformation),
+      allowedOrigins: [...options.allowedOrigins],
+    };
+    this.redirectUrl = this.options.redirectUrl;
+    this.clientMetadata = frozen(structuredClone(this.options.clientMetadata));
     this.prefix = `oauth/${encodeURIComponent(options.connectionId)}/${encodeURIComponent(options.accountId)}/`;
     this.now = options.now ?? Date.now;
-    this.checkUrl(options.serverUrl);
-    const redirect = new URL(options.redirectUrl);
+    if (this.checkUrl(this.options.serverUrl).hash)
+      throw new McpError(
+        "mcp_invalid_config",
+        "OAuth resource URI must not contain a fragment.",
+      );
+    const redirect = new URL(this.redirectUrl);
     if (redirect.hash || redirect.search)
       throw new McpError(
         "mcp_invalid_config",
         "OAuth redirect URI must not contain query or fragment.",
+      );
+    const identity = ordered({
+      resource: this.options.serverUrl,
+      redirect: this.redirectUrl,
+      clientMetadata: this.options.clientMetadata,
+      clientInformation: this.options.clientInformation,
+      allowedOrigins: [...this.options.allowedOrigins].sort(),
+    });
+    this.binding = crypto.subtle
+      .digest("SHA-256", new TextEncoder().encode(JSON.stringify(identity)))
+      .then((digest) =>
+        Array.from(new Uint8Array(digest), (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join(""),
       );
   }
   private exclusive<T>(fn: () => Promise<T>): Promise<T> {
@@ -82,10 +145,31 @@ export class ManagedOAuthProvider implements OAuthClientProvider {
   }
   private async read<T>(key: string): Promise<T | undefined> {
     const value = await this.options.secrets.get(this.prefix + key);
-    return value === null ? undefined : (JSON.parse(value) as T);
+    if (value === null) return undefined;
+    let saved: { version?: number; binding?: string; value?: T };
+    try {
+      saved = JSON.parse(value);
+    } catch {
+      bindingRefusal();
+    }
+    if (
+      !saved ||
+      saved.version !== 1 ||
+      saved.binding !== (await this.binding) ||
+      !Object.hasOwn(saved, "value")
+    )
+      bindingRefusal();
+    return saved.value;
   }
   private async write(key: string, value: unknown) {
-    await this.options.secrets.set(this.prefix + key, JSON.stringify(value));
+    await this.options.secrets.set(
+      this.prefix + key,
+      JSON.stringify({
+        version: 1,
+        binding: await this.binding,
+        value,
+      }),
+    );
   }
   async state() {
     const state = crypto.randomUUID() + crypto.randomUUID();
@@ -96,26 +180,42 @@ export class ManagedOAuthProvider implements OAuthClientProvider {
     return state;
   }
   async clientInformation() {
-    return (
-      (await this.read<OAuthClientInformationMixed>("client")) ??
-      this.options.clientInformation
+    return structuredClone(
+      (await this.read<StoredOAuthClientInformation>("client")) ??
+        this.options.clientInformation,
     );
   }
-  async saveClientInformation(value: OAuthClientInformationMixed) {
+  async saveClientInformation(value: StoredOAuthClientInformation) {
+    const expected = this.options.clientInformation;
+    if (
+      expected &&
+      (expected.client_id !== value.client_id ||
+        (expected.issuer && expected.issuer !== value.issuer))
+    )
+      bindingRefusal();
     await this.write("client", value);
   }
-  async tokens() {
-    return (await this.read<{ tokens: OAuthTokens }>("tokens"))?.tokens;
+  private async storedTokens() {
+    const saved = await this.read<SavedTokens>("tokens");
+    const client = await this.clientInformation();
+    if (saved && client?.issuer && saved.tokens.issuer !== client.issuer)
+      bindingRefusal();
+    return saved;
   }
-  async saveTokens(tokens: OAuthTokens) {
+  async tokens() {
+    return (await this.storedTokens())?.tokens;
+  }
+  async saveTokens(tokens: StoredOAuthTokens) {
     if (this.revoked)
       throw new McpError("mcp_auth_required", "OAuth connection is revoked.");
+    const client = await this.clientInformation();
+    if (client?.issuer && tokens.issuer !== client.issuer) bindingRefusal();
     const previous = await this.tokens();
     const next = {
       ...tokens,
       ...(tokens.refresh_token
         ? {}
-        : previous?.refresh_token
+        : previous?.issuer === tokens.issuer && previous?.refresh_token
           ? { refresh_token: previous.refresh_token }
           : {}),
     };
@@ -142,10 +242,7 @@ export class ManagedOAuthProvider implements OAuthClientProvider {
     if (new URL(serverUrl).href !== expected.href)
       throw new McpError("mcp_auth_required", "OAuth server identity changed.");
     const target = resource ? this.checkUrl(resource) : expected;
-    if (
-      target.origin !== expected.origin ||
-      target.pathname !== expected.pathname
-    )
+    if (target.href !== expected.href)
       throw new McpError(
         "mcp_auth_required",
         "OAuth resource identity mismatch.",
@@ -185,9 +282,7 @@ export class ManagedOAuthProvider implements OAuthClientProvider {
     return this.exclusive(async () => {
       if (this.revoked)
         throw new McpError("mcp_auth_required", "OAuth connection is revoked.");
-      const saved = await this.read<{ tokens: OAuthTokens; expiresAt: number }>(
-        "tokens",
-      );
+      const saved = await this.storedTokens();
       if (saved && saved.expiresAt > this.now() + 30_000) return;
       const result = await auth(this, {
         serverUrl: this.options.serverUrl,
@@ -221,12 +316,15 @@ export class ManagedOAuthProvider implements OAuthClientProvider {
           "mcp_auth_required",
           "Invalid or expired OAuth callback.",
         );
-      await this.options.secrets.delete(this.prefix + "state");
+      await this.options.secrets.delete(`${this.prefix}state`);
       try {
         if (
           (await auth(this, {
             serverUrl: this.options.serverUrl,
             authorizationCode: callback.searchParams.get("code")!,
+            ...(callback.searchParams.has("iss")
+              ? { iss: callback.searchParams.get("iss")! }
+              : {}),
             fetchFn: this.checkedFetch,
           })) !== "AUTHORIZED"
         )
@@ -235,15 +333,24 @@ export class ManagedOAuthProvider implements OAuthClientProvider {
             "OAuth authorization is incomplete.",
           );
       } finally {
-        await this.options.secrets.delete(this.prefix + "verifier");
+        await this.options.secrets.delete(`${this.prefix}verifier`);
       }
     });
   }
   async disconnect() {
     return this.exclusive(async () => {
       this.revoked = true;
-      const tokens = await this.tokens();
       try {
+        let tokens: StoredOAuthTokens | undefined;
+        try {
+          tokens = await this.tokens();
+        } catch (error) {
+          if (
+            !(error instanceof McpError) ||
+            error.code !== "mcp_auth_required"
+          )
+            throw error;
+        }
         if (tokens) await this.options.revoke?.(tokens);
       } finally {
         await this.invalidateCredentials("all");
@@ -256,10 +363,7 @@ export class ManagedOAuthProvider implements OAuthClientProvider {
       typeof input === "string" || input instanceof URL ? input : input.url,
     );
     const expected = new URL(this.options.serverUrl);
-    if (
-      target.origin !== expected.origin ||
-      target.pathname !== expected.pathname
-    )
+    if (target.href !== expected.href)
       throw new McpError(
         "mcp_auth_required",
         "OAuth transport resource changed.",
@@ -277,9 +381,7 @@ export class ManagedOAuthProvider implements OAuthClientProvider {
         "The remote account lacks permission for this operation.",
       );
     if (response.status === 401) {
-      const saved = await this.read<{ tokens: OAuthTokens; expiresAt: number }>(
-        "tokens",
-      );
+      const saved = await this.storedTokens();
       if (saved) await this.write("tokens", { ...saved, expiresAt: 0 });
       throw new UnauthorizedError("OAuth authorization required.");
     }

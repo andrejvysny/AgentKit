@@ -21,7 +21,6 @@ interface Vector {
   schemaJson?: string;
   knownDivergence?: string;
   expected: Outcome;
-  expectedTypeScript?: Outcome;
 }
 interface Corpus {
   version: number;
@@ -90,9 +89,7 @@ describe("shared Rust/TypeScript schema corpus", () => {
       corpus.vectors.length,
     );
     for (const vector of corpus.vectors)
-      expect(evaluate(corpus, vector), vector.id).toEqual(
-        vector.expectedTypeScript ?? vector.expected,
-      );
+      expect(evaluate(corpus, vector), vector.id).toEqual(vector.expected);
     const bundled = resolve(
       root,
       "rust/crates/contracts/tests/fixtures/schema-validation.json",
@@ -131,9 +128,7 @@ describe("shared Rust/TypeScript schema corpus", () => {
     );
     expect(vectors).toHaveLength(4);
     for (const vector of vectors) {
-      expect(evaluate(corpus, vector), vector.id).toEqual(
-        vector.expectedTypeScript ?? vector.expected,
-      );
+      expect(evaluate(corpus, vector), vector.id).toEqual(vector.expected);
       expect(JSON.stringify(JSON.parse(vector.inputJson!))).toBe(
         vector.profile === "tool"
           ? "null"

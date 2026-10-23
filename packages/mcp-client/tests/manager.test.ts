@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
+import type { Transport } from "@modelcontextprotocol/client";
 import {
   McpClientManager,
   type McpError,

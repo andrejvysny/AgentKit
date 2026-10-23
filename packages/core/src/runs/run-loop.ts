@@ -31,6 +31,7 @@ export interface RunChatInput
     | "continuationScope"
     | "continuationRequired"
     | "onContinuation"
+    | "runContent"
   > {
   budgets?: ExecutionBudgets;
   executionBudget?: ExecutionBudget;
@@ -205,6 +206,7 @@ async function* runChatUnchecked(
         continuationRequired:
           input.continuationRequired || continuation !== undefined,
         onContinuation,
+        runContent: input.runContent,
       })) {
         // Re-yield provider events with the canonical runId.
         const stamped = { ...event, runId } as AiRunEvent;

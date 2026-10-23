@@ -1,11 +1,13 @@
 diff --git a/packages/adapters-memory/src/index.ts b/packages/adapters-memory/src/index.ts
 --- a/packages/adapters-memory/src/index.ts
 +++ b/packages/adapters-memory/src/index.ts
-@@ -9,4 +9,3 @@
+@@ -9,6 +9,5 @@
  export * from "./memory-assistant-store.js";
  export * from "./memory-mcp-server-config-store.js";
  export * from "./memory-secret-store.js";
 -export * from "./memory-provider-continuation-store.js";
+ export * from "./memory-connection-store.js";
+ export * from "./memory-prompt-template-store.js";
 diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/adapters-memory/src/memory-assistant-store.ts
 --- a/packages/adapters-memory/src/memory-assistant-store.ts
 +++ b/packages/adapters-memory/src/memory-assistant-store.ts
@@ -17,26 +19,26 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
  import {
    ACTION_ID_RELEASING_STATUSES,
    AgentKitHostError,
-@@ -414,7 +413,6 @@
+@@ -415,7 +414,6 @@
      private readonly clock: Clock,
      private readonly ids: IdGenerator,
      private readonly checkFence?: (fence: RunWriteFence) => void,
 -    private readonly onDeleteChat?: (chatId: string) => void,
    ) {}
- 
+
    private requireFence(fence: RunWriteFence): void {
-@@ -501,7 +499,6 @@
+@@ -502,7 +500,6 @@
      this.messagesByChat.delete(chatId);
      this.orderKeys.delete(chatId);
      this.chats.delete(chatId);
 -    this.onDeleteChat?.(chatId);
    }
- 
+
    async appendMessage(
-@@ -651,15 +648,6 @@
+@@ -658,15 +655,6 @@
      return record ? copyMessage(record) : null;
    }
- 
+
 -  /** Synchronous lookup keeps continuation validation and mutation in one tick. */
 -  messageChatIdOf(messageId: string): string | null {
 -    return this.messagesById.get(messageId)?.chatId ?? null;
@@ -49,7 +51,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
    async lastMessageOfRun(
      chatId: string,
      runId: string,
-@@ -1039,7 +1027,6 @@
+@@ -1073,7 +1061,6 @@
      private readonly gate: MemoryTxGate = new MemoryTxGate(
        DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
      ),
@@ -57,23 +59,23 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
    ) {
      this.aging = resolveTaskAging(aging);
    }
-@@ -1171,7 +1158,6 @@
+@@ -1205,7 +1192,6 @@
        this.eventIds.delete(task.taskId);
        this.tasks.delete(task.taskId);
      }
 -    this.onDeleteTasks?.();
      return doomed.length;
    }
- 
-@@ -2128,7 +2114,6 @@
+
+@@ -2162,7 +2148,6 @@
    readonly providers = new MemoryProviderStore();
    readonly settings = new MemorySettingsStore();
    readonly outbox: MemoryOutboxStore;
 -  readonly continuations: MemoryProviderContinuationStore;
- 
+
    /** The FIFO {@link transaction} and `claimNext` queue on — one unit of work at a time. */
    private readonly gate: MemoryTxGate;
-@@ -2139,11 +2124,8 @@
+@@ -2173,11 +2158,8 @@
      this.gate = new MemoryTxGate(
        options.transactionGateTimeoutMs ?? DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
      );
@@ -87,7 +89,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      );
      this.rawTasks = new MemoryTaskStore(
        clock,
-@@ -2151,7 +2133,6 @@
+@@ -2185,7 +2167,6 @@
        options.leaseTtlMs,
        options,
        this.gate,
@@ -95,7 +97,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      );
      const fencedWrites = new Set([
        "createTask",
-@@ -2195,18 +2176,6 @@
+@@ -2229,18 +2210,6 @@
        },
      });
      this.proposals = new MemoryProposalStore(clock);
@@ -114,7 +116,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      this.outbox = new MemoryOutboxStore(
        clock,
        options.outboxClaimVisibilityMs,
-@@ -2252,9 +2221,6 @@
+@@ -2286,9 +2255,6 @@
        providers: this.providers,
        settings: this.settings,
        outbox: this.outbox,

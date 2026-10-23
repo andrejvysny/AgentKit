@@ -139,16 +139,24 @@ copies tracked and untracked nonignored regular files, detects source and Git
 changes during the copy, and records each original file hash. Foundation applies
 the reviewed inverse patches in `scripts/release/foundation/` from that captured
 copy and removes the explicitly listed Responses and private-continuation files.
-It retains current generic stream, storage, budget, fencing, and recovery fixes,
-uses schema 8, and has no production v8-to-v9 migration. Responses retains the
-integrated implementation and schema 9. No temporary prior snapshot is an input.
+It retains current generic stream, storage, archive, budget, fencing, recovery,
+managed connector, skill and template behavior. Both current-source candidates
+use schema 10 and the identical immutable v8-to-v9-to-v10 migration chain. The v9
+continuation table DDL remains reserved history in foundation; its provider and
+private-store APIs are absent. The earlier schema-8 foundation projection is
+superseded for these unpublished candidates. No temporary prior snapshot is an input.
 Patch drift fails closed: review and update the affected patch rather than restoring
 an old file or weakening the check.
 
 Each snapshot records its baseline commit, dirty diff hash, original file hashes,
 requested exclusions, present exclusions with hashes, patch hashes, and changed-file
 before/after hashes. Only the copy's umbrella, wire contract, workspace lock metadata,
-and golden trace versions change. The source manifest includes projection metadata
+and golden trace versions change. Candidate-only mirrored Rust fixtures and native
+contract-version constants follow the selected wire version; fixture hashes, schema
+counts and mirrored schema bundles are regenerated deterministically from captured
+JSON after validating the original manifests. Foundation removes only the excluded
+continuation schema. This is a TypeScript runtime feature projection; native optional
+managed services retain their documented 501 boundary. The source manifest includes projection metadata
 and patches; it excludes generated dist, dependencies, Git metadata, and build info.
 Its digest supplements, rather than replaces, the Git and transformation evidence.
 
@@ -165,7 +173,9 @@ CANDIDATE_TRACK=foundation ELECTRON_VERSION=41.6.1 \
 
 For Responses, select `CANDIDATE_TRACK=responses`. That track first qualifies a fresh
 foundation artifact, then independently builds and packs `0.7.0` and uses the exact
-foundation bytes for populated schema-8-to-9 migration qualification. Each source
+foundation bytes for populated schema-10 candidate continuity qualification. The
+independent Node and Bun SQLite gates still exercise real v8-to-v10 upgrades,
+rollback, refusal and reopen. Each source
 is frozen and archived before its build, checked again afterward, and packed once.
 The output retains source manifests, provenance, source archives, package tarballs,
 source gates, package qualification, runtime logs, consumer locks, and bundle metafiles.
@@ -204,7 +214,7 @@ OAuth provider, paid credential, or restricted DevKit is involved.
 
 `.github/workflows/release.yml` is a read-only manual qualification workflow.
 Its `track` input defaults to `foundation`; selecting `responses` adds Responses
-and exact foundation migration checks. Linux and macOS qualify with Node 22.23.2
+and exact foundation continuity checks. Linux and macOS qualify with Node 22.23.2
 and Bun 1.4.0; macOS additionally runs Electron 41.6.1. A separate required Bun
 1.3.14 source gate validates only the selected track. Platform jobs use
 `fail-fast: false`, and acceptance rejects failed, cancelled, or skipped jobs.
@@ -227,7 +237,7 @@ this repository's default branch and the corresponding selected-track artifact.
 It downloads that immutable artifact ID and checks source archives/manifests,
 projection provenance, clean Git evidence, exact package bytes/version, all source
 and package checks, actual Node/native and Electron runtime evidence, and the
-populated migration proof when publishing Responses. It requires the Bun minimum
+populated candidate continuity proof when publishing Responses. It requires the Bun minimum
 and both platform jobs to have passed. No checkout build or package repack occurs.
 
 Approval creates a new `vVERSION` tag pointing to the recorded source commit and
@@ -243,8 +253,9 @@ prepared workflow authorizes publication without the explicit approval above.
 For a Responses candidate, append `--responses true`. This adds clean-consumer
 mock Responses host runs, tool dispatch, proposal auto-apply and rejection,
 verification replay, and private continuation close/reopen checks. Append
-`--migration-from /absolute/path/agentkit-0.6.0.tgz` to seed a populated schema-8
-database using that exact foundation artifact, then migrate it with the candidate
-to schema 9. Migration requires `--responses true`; both artifact digests and
+`--migration-from /absolute/path/agentkit-0.6.0.tgz` to seed a populated schema-10
+database using that exact foundation artifact, then reopen it with the Responses
+candidate. This is candidate continuity, not a schema upgrade. The option requires
+`--responses true`; both artifact digests and
 fixture digests are recorded. The fake applier writes a fixture ledger only;
 these checks do not qualify a PCB application or paid provider credentials.

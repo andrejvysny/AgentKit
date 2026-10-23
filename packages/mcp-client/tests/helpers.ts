@@ -1,13 +1,9 @@
 import type { Clock, SecretStore } from "@agentkit/host";
 import { resolveToolLimits } from "@agentkit/core";
 import type { AiToolExecutionContext } from "@agentkit/core";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { Server } from "@modelcontextprotocol/server";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
+import type { Transport } from "@modelcontextprotocol/client";
 import type { McpTransportFactory, McpTransportRequest } from "../src/index.js";
 
 /** A clock that starts fixed and only moves when a test says so. */
@@ -80,7 +76,7 @@ export function buildFakeServer(
     { name, version: "1.0.0" },
     { capabilities: { tools: {} } },
   );
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server.setRequestHandler("tools/list", async () => ({
     tools: tools.map((tool) => ({
       name: tool.name,
       ...(tool.description === undefined
@@ -94,7 +90,7 @@ export function buildFakeServer(
         : { annotations: tool.annotations }),
     })),
   }));
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler("tools/call", async (request) => {
     const spec = tools.find((tool) => tool.name === request.params.name);
     if (!spec) {
       return {

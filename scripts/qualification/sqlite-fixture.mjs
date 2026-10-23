@@ -43,7 +43,7 @@ async function seed(path, legacy = false) {
     store = new SharedSqliteAssistantStore(db);
   } else store = new Store(path);
   try {
-    await seedConversation(store);
+    await seedConversation(store, legacy);
     await seedTask(store);
     await seedProposal(store);
     await store.outbox.enqueue({
@@ -56,8 +56,12 @@ async function seed(path, legacy = false) {
     store.close();
   }
 }
-async function seedConversation(store) {
+async function seedConversation(store, legacy) {
   await store.conversations.createChat({ id: "chat" });
+  if (legacy) {
+    seedLegacyMessages(store);
+    return;
+  }
   await store.conversations.appendMessage({
     id: "message",
     chatId: "chat",
@@ -73,6 +77,25 @@ async function seedConversation(store) {
       { type: "text", text: "searchable second fragment" },
     ],
   });
+}
+function seedLegacyMessages(store) {
+  // The current conversation adapter reads v10 archive columns; seed v8
+  // messages directly so the fixture exercises a real, unupgraded database.
+  const created = "2026-10-06T00:00:00.000Z";
+  store.database.run(
+    "INSERT INTO messages (id, chat_id, role, content, order_key, created_at) VALUES ('message', 'chat', 'user', 'persistent', 1, $created)",
+    { $created: created },
+  );
+  store.database.run(
+    "INSERT INTO messages (id, chat_id, role, content, content_format, order_key, parent_message_id, depth, created_at) VALUES ('parts', 'chat', 'assistant', $content, 'parts', 2, 'message', 1, $created)",
+    {
+      $content: JSON.stringify([
+        { type: "text", text: "first fragment" },
+        { type: "text", text: "searchable second fragment" },
+      ]),
+      $created: created,
+    },
+  );
 }
 async function seedTask(store) {
   await store.tasks.createTask({

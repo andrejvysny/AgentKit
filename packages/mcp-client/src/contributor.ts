@@ -294,7 +294,7 @@ function success(
     mapped.unsupported.length > 0
       ? [
           `MCP tool returned non-text content (${mapped.unsupported.join(", ")}); ` +
-            `only text parts were passed to the model.`,
+            `unsupported parts were not passed to the model.`,
         ]
       : [];
   const text = capped(ctx, mapped.text);

@@ -13,11 +13,7 @@ pub struct RegenerateMessageRequest {
         skip_serializing_if = "Optional::is_absent"
     )]
     pub content_selection: Optional<RunContentSelection>,
-    #[serde(
-        rename = "model",
-        default,
-        skip_serializing_if = "Optional::is_absent"
-    )]
+    #[serde(rename = "model", default, skip_serializing_if = "Optional::is_absent")]
     pub model: Optional<AiProviderKind>,
     #[serde(
         rename = "providerId",

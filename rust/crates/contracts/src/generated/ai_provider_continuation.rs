@@ -49,11 +49,35 @@ crate::impl_json_deserialize!(AiProviderContinuationScope, |value: Value| {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct AiProviderContinuationRunContent {
+    #[serde(rename = "runId")]
+    pub run_id: String,
+    #[serde(rename = "digest")]
+    pub digest: String,
+}
+crate::impl_json_deserialize!(AiProviderContinuationRunContent, |value: Value| {
+    let mut object = crate::json_object(value)?;
+    let output = Self {
+        run_id: crate::required_field(&mut object, "runId")?,
+        digest: crate::required_field(&mut object, "digest")?,
+    };
+    crate::reject_extra_fields(&object)?;
+    Ok(output)
+});
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AiProviderContinuation {
     #[serde(rename = "version")]
     pub version: AiProviderContinuationVersion,
     #[serde(rename = "scope")]
     pub scope: AiProviderContinuationScope,
+    #[serde(
+        rename = "runContent",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub run_content: Optional<AiProviderContinuationRunContent>,
     #[serde(rename = "messageCount", serialize_with = "crate::serialize_number")]
     pub message_count: f64,
     #[serde(rename = "messageDigest")]
@@ -66,6 +90,7 @@ crate::impl_json_deserialize!(AiProviderContinuation, |value: Value| {
     let output = Self {
         version: crate::required_field(&mut object, "version")?,
         scope: crate::required_field(&mut object, "scope")?,
+        run_content: crate::optional_field(&mut object, "runContent")?,
         message_count: crate::required_field(&mut object, "messageCount")?,
         message_digest: crate::required_field(&mut object, "messageDigest")?,
         input_items: crate::required_field(&mut object, "inputItems")?,

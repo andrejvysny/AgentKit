@@ -1154,11 +1154,6 @@
       "instance": "x",
       "expected": {
         "decoded": true,
-        "compiled": true,
-        "valid": true
-      },
-      "expectedTypeScript": {
-        "decoded": true,
         "compiled": false,
         "valid": false
       }
@@ -1874,11 +1869,6 @@
       "instance": "anything",
       "expected": {
         "decoded": true,
-        "compiled": true,
-        "valid": true
-      },
-      "expectedTypeScript": {
-        "decoded": true,
         "compiled": false,
         "valid": false
       }
@@ -1889,11 +1879,6 @@
       "schema": "format:unknown-host-format",
       "instance": "",
       "expected": {
-        "decoded": true,
-        "compiled": true,
-        "valid": true
-      },
-      "expectedTypeScript": {
         "decoded": true,
         "compiled": false,
         "valid": false
@@ -3008,11 +2993,6 @@
       },
       "expected": {
         "decoded": true,
-        "compiled": false,
-        "valid": false
-      },
-      "expectedTypeScript": {
-        "decoded": true,
         "compiled": true,
         "valid": true
       }
@@ -3027,11 +3007,6 @@
         }
       },
       "expected": {
-        "decoded": true,
-        "compiled": false,
-        "valid": false
-      },
-      "expectedTypeScript": {
         "decoded": true,
         "compiled": true,
         "valid": false
@@ -3049,6 +3024,6 @@
   ],
   "typescriptProfile": {
     "version": "schema-dialects-v1",
-    "description": "expectedTypeScript records stricter TypeScript compilation. expected retains the frozen Rust validator profile; native runtime parity for this new profile remains unqualified."
+    "description": "TypeScript and native tool validation share one expected outcome for the strict draft-07, 2019-09 and 2020-12 schema profile. The explicitly approved UTF-16 surrogate exception remains separately identified."
   }
 }

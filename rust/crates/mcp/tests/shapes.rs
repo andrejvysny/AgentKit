@@ -27,7 +27,7 @@ impl Backend for Host {
         let mut tool: model::Tool =
             serde_json::from_value(json!({"name":"echo", "inputSchema":{"type":"object"}}))
                 .unwrap();
-        Arc::make_mut(&mut tool.input_schema).insert("x-fixture".into(), payload());
+        Arc::make_mut(&mut tool.input_schema).insert("default".into(), payload());
         tool.meta = Some(metadata());
         let mut error = tool.clone();
         error.name = "error".into();
@@ -158,7 +158,7 @@ async fn native_http_callbacks_and_sdk_results_preserve_reserved_and_prefix_keys
         .await
         .unwrap();
     let listed = client.list_tools(CancellationToken::new()).await.unwrap();
-    assert_eq!(listed[0].input_schema["x-fixture"], payload());
+    assert_eq!(listed[0].input_schema["default"], payload());
     assert_eq!(listed[0].meta.as_ref().unwrap().0, metadata().0);
     let result = client
         .call_tool(
@@ -191,7 +191,7 @@ async fn sdk_stdio_results_preserve_reserved_and_prefix_keys() {
         .await
         .unwrap();
     let tools = client.list_tools(CancellationToken::new()).await.unwrap();
-    assert_eq!(tools[0].input_schema["x-fixture"], payload());
+    assert_eq!(tools[0].input_schema["default"], payload());
     let result = client
         .call_tool(
             "echo",
@@ -275,7 +275,7 @@ async fn json_peer(request: http::Request<axum::body::Body>) -> axum::response::
             json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"json-shape","version":"1"}})
         }
         "tools/list" => {
-            json!({"tools":[{"name":"echo","inputSchema":{"type":"object","x-fixture":payload()},"_meta":payload()}]})
+            json!({"tools":[{"name":"echo","inputSchema":{"type":"object","default":payload()},"_meta":payload()}]})
         }
         "tools/call" => {
             assert_eq!(value["params"]["arguments"], payload());
@@ -304,7 +304,7 @@ async fn json_http_response_parser_preserves_objects_before_sdk_deserialization(
         .await
         .unwrap();
     let tools = client.list_tools(CancellationToken::new()).await.unwrap();
-    assert_eq!(tools[0].input_schema["x-fixture"], payload());
+    assert_eq!(tools[0].input_schema["default"], payload());
     assert_eq!(tools[0].meta.as_ref().unwrap().0, metadata().0);
     let result = client
         .call_tool(

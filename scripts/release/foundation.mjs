@@ -19,14 +19,16 @@ export const foundationExclusions = [
   "packages/core/src/providers/responses-tools.ts",
   "packages/core/src/providers/responses-request.ts",
   "packages/core/src/providers/responses-stream.ts",
+  "packages/core/src/providers/responses-reasoning.ts",
   "packages/core/tests/responses.test.ts",
   "packages/core/tests/responses-request.test.ts",
+  "packages/core/tests/responses-reasoning.test.ts",
+  "packages/core/tests/responses-run-content.test.ts",
   "packages/core/tests/responses-continuation.test.ts",
   "packages/core/tests/responses-accounting.test.ts",
   "packages/core/tests/responses-helpers.ts",
   "packages/core/tests/run-loop-continuation.test.ts",
   "packages/adapters-memory/src/memory-provider-continuation-store.ts",
-  "packages/adapters-sqlite/src/provider-continuation-schema.ts",
   "packages/adapters-sqlite/src/sqlite/provider-continuation-store.ts",
   "packages/adapters-sqlite/tests/provider-continuation-durability.test.ts",
   "packages/adapters-sqlite/tests/provider-continuation.test.ts",
@@ -35,6 +37,8 @@ export const foundationExclusions = [
   "packages/host/src/turn/canonical-projection.ts",
   "packages/host/src/turn/provider-continuation.ts",
   "packages/host/tests/provider-continuation-cancellation.test.ts",
+  "packages/host/tests/provider-continuation-anchor.test.ts",
+  "packages/host/tests/content-durability.test.ts",
   "packages/host/tests/provider-continuation-durability.test.ts",
   "packages/host/tests/provider-continuation-helpers.ts",
   "packages/host/tests/provider-continuation-projection.test.ts",
@@ -85,6 +89,6 @@ export function assertFoundation(directory) {
     join(directory, "packages/adapters-sqlite/src/schema.ts"),
     "utf8",
   );
-  if (!schema.includes("export const SCHEMA_VERSION = 8;"))
-    throw new Error("Foundation must use SQLite schema 8");
+  if (!schema.includes("export const SCHEMA_VERSION = 10;"))
+    throw new Error("Foundation must retain SQLite schema 10");
 }

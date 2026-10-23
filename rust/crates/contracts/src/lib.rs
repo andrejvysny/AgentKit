@@ -13,6 +13,7 @@ mod properties_validation;
 mod regexp;
 mod routes;
 mod schema_mirror;
+mod tool_schema_profile;
 mod validation;
 
 pub use ajv::*;

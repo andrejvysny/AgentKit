@@ -66,6 +66,7 @@ const planeResources = new Set([
   "module",
   "workspace",
   "user",
+  "member",
   "label",
   "state",
   "comment",
@@ -82,22 +83,36 @@ export const planeConnector: ConnectorDefinition = {
   classify(name, args) {
     return planeResources.has(name) &&
       typeof args.action === "string" &&
-      planeReads.has(args.action)
+      (planeReads.has(args.action) ||
+        (name === "member" && args.action === "me"))
       ? "read"
       : "write";
   },
   validate(record) {
     if (!record.workspaceId)
       invalid("Plane connections require an explicit workspace.");
-    if (record.config.transport.kind === "stdio") return;
+    if (record.config.transport.kind === "stdio") {
+      if (
+        record.config.transport.env?.PLANE_WORKSPACE_SLUG !== record.workspaceId
+      )
+        invalid(
+          "Plane stdio connections require PLANE_WORKSPACE_SLUG matching the selected workspace.",
+        );
+      return;
+    }
     requireHttp(record, [
       "https://mcp.plane.so/http/mcp",
       "https://mcp.plane.so/http/api-key/mcp",
     ]);
+    const workspaceHeaders = Object.entries(
+      record.config.transport.headers ?? {},
+    ).filter(([name]) => name.toLowerCase() === "x-workspace-slug");
     if (
-      record.config.transport.url.endsWith("/api-key/mcp") &&
-      record.config.transport.headers?.["x-workspace-slug"] !==
-        record.workspaceId
+      workspaceHeaders.length > 1 ||
+      (workspaceHeaders.length === 1 &&
+        workspaceHeaders[0]![1] !== record.workspaceId) ||
+      (record.config.transport.url.endsWith("/api-key/mcp") &&
+        workspaceHeaders.length !== 1)
     )
       invalid(
         "Plane PAT connections require x-workspace-slug matching the selected workspace.",

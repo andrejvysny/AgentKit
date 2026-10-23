@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   verifyCandidate,
+  verifyMigration,
   verifyJobs,
   verifyRun,
 } from "../release/publication.mjs";
@@ -152,6 +159,56 @@ describe("trusted run guards", () => {
     ).toThrow("bun-minimum did not succeed");
     expect(() => verifyJobs(jobs.slice(0, 3))).toThrow(
       "platform qualification is missing",
+    );
+  });
+});
+
+describe("exact foundation continuity evidence", () => {
+  it("requires populated schema-10 continuity and refuses obsolete schema-upgrade claims", () => {
+    const { directory } = fixture();
+    const responses = join(directory, "../responses");
+    mkdirSync(responses);
+    const foundation = JSON.parse(
+      readFileSync(join(directory, "candidate.json"), "utf8"),
+    );
+    const proof = {
+      checks: [
+        "npm-responses-reopen",
+        "npm-responses-openpcb-reopen",
+        "bun-responses-reopen",
+        "bun-responses-openpcb-reopen",
+        "migration-a-install",
+        "migration-a-seed",
+        "migration-b-responses-reopen",
+      ].map((name) => ({ name, status: 0, passed: true })),
+      migration: {
+        kind: "candidate-continuity",
+        from: 10,
+        to: 10,
+        populated: true,
+        reopened: true,
+        sha256: foundation.tarballSha256,
+      },
+    };
+    expect(() => verifyMigration(responses, proof)).not.toThrow();
+    for (const change of [
+      { kind: "schema-upgrade" },
+      { from: 8 },
+      { to: 9 },
+      { populated: false },
+      { reopened: false },
+      { sha256: "0".repeat(64) },
+    ]) {
+      expect(() =>
+        verifyMigration(responses, {
+          ...proof,
+          migration: { ...proof.migration, ...change },
+        }),
+      ).toThrow("exact populated foundation continuity proof is missing");
+    }
+    const incomplete = { ...proof, checks: proof.checks.slice(1) };
+    expect(() => verifyMigration(responses, incomplete)).toThrow(
+      "npm-responses-reopen",
     );
   });
 });

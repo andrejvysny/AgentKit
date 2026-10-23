@@ -71,6 +71,10 @@
     "./adapters-sqlite-node": {
       "types": "./dist/adapters-sqlite/node.d.ts",
       "import": "./dist/adapters-sqlite/node.js"
+    },
+    "./runner-local/filesystem": {
+      "types": "./dist/runner-local/file-skill-source.d.ts",
+      "import": "./dist/runner-local/file-skill-source.js"
     }
   },
   "repository": {
@@ -79,10 +83,12 @@
     "directory": "packages/agentkit"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
     "@sinclair/typebox": "^0.34.0",
     "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1"
+    "ajv-formats": "^3.0.1",
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/server": "2.4.0",
+    "@modelcontextprotocol/core": "2.4.0"
   },
   "peerDependencies": {
     "react": ">=18",

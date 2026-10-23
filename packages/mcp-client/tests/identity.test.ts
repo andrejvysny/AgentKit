@@ -152,7 +152,7 @@ describe("canonical tool identity", () => {
   });
 });
 it("maps long protocol names to bounded provider names without changing remote identity", () => {
-  const name = "DATA_EXPORT_" + "x".repeat(110);
+  const name = `DATA_EXPORT_${"x".repeat(110)}`;
   const identity = buildMcpToolIdentity({
     serverAlias: "test",
     toolName: name,

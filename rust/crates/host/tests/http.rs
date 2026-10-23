@@ -370,3 +370,67 @@ async fn replay_normalizes_json_numbers_and_rejects_delimiter_collision_across_c
     );
     server.abort();
 }
+
+#[tokio::test]
+async fn unsupported_selected_content_never_creates_turns_or_calls_providers() {
+    let (host, prompts) = host();
+    let (base, server) = serve(host.clone()).await;
+    let client = reqwest::Client::new();
+    let chat = json(
+        client
+            .post(format!("{base}/v1/chats"))
+            .bearer_auth(TOKEN)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap(),
+        "ChatDtoSchema",
+    )
+    .await;
+    let chat_id = chat["id"].as_str().unwrap();
+    for path in [
+        format!("chats/{chat_id}/messages"),
+        format!("chats/{chat_id}/messages/unused/regenerate"),
+    ] {
+        for selection in [
+            json!({}),
+            json!({"skills":[{"id":"skill","revision":"1"}]}),
+            json!({"template":{"id":"template","revision":"1","arguments":{}}}),
+        ] {
+            assert_content_unsupported(&client, &format!("{base}/v1/{path}"), selection).await;
+        }
+    }
+    assert!(
+        host.store()
+            .list_tasks(Some(chat_id.into()))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        host.store()
+            .messages(chat_id, true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!host.run_once().await.unwrap());
+    assert!(prompts.lock().unwrap().is_empty());
+    server.abort();
+}
+
+async fn assert_content_unsupported(client: &reqwest::Client, url: &str, selection: Value) {
+    let response = client
+        .post(url)
+        .bearer_auth(TOKEN)
+        .header("idempotency-key", "unsupported")
+        .json(&json!({"content":"hello","contentSelection":selection}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 501);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["code"],
+        "not_implemented"
+    );
+}

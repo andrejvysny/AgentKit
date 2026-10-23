@@ -9,7 +9,16 @@ import type {
   AiToolDefinition,
 } from "@agentkit/contracts";
 
+export interface AiRunContent {
+  /** Trusted, resolved selection for this run; separate from canonical history. */
+  messages: readonly {
+    role: "system" | "user" | "assistant";
+    content: string;
+  }[];
+}
+
 export interface AiChatRequest {
+  runContent?: AiRunContent;
   /** Reserve a durable request budget immediately before each transport dispatch. */
   beforeRequest?: () => Promise<void>;
   /** Trusted host continuation; never populated from a public request body. */

@@ -25,11 +25,20 @@ cursors, preserves case-sensitive remote names, and bounds provider names to
 64 characters. Core validation preserves `$schema` and `$id`, supports draft-07,
 2019-09 and 2020-12, and rejects unknown dialects, validation keywords and formats.
 
-The installed SDK is still 1.30. `MCP_COMPATIBILITY` reports its supported
-revisions, ending at **2025-11-25**. **2026-07-28 / SDK v2 is not implemented.**
-That migration requires an available dependency source and qualification of the
-new transport. It must preserve application-generated actors and the same
-permission boundary. Do not advertise the newer revision based on this change.
+The adapters use the official `@modelcontextprotocol/client`, `server`, and
+`core` packages at **2.4.0**, verified against the npm registry. SDK automatic
+negotiation supports **2026-07-28** and the older initialize handshake. The
+inbound HTTP tests exercise every revision in `MCP_COMPATIBILITY.verified`;
+outbound HTTP and stdio tests exercise 2026-07-28 and 2025-11-25 peers over real
+loopback sockets and child processes. Node 22 and Bun 1.4 are locally qualified;
+other runtime versions remain CI gates. Supported protocol constants alone are
+not evidence that every transport/revision pair has been exercised.
+
+Both inbound paths use application-generated actors independent of transport
+session identifiers and apply the same permission checks. Modern input-required
+interactions use the host elicitation callback; capability advertisement and
+cancellation are tested. The compatibility declaration separates supported
+revisions from the transport matrix actually exercised.
 
 Inbound cancellation now combines request and actor lifetimes. Cancelled queued
 calls do not execute. Resource and prompt callbacks receive request cancellation.
@@ -52,7 +61,10 @@ A run's selection callback returns explicit `ConnectionGrant` records. Selection
 precedes bounded parallel discovery. Each grant pins connection ID, account,
 workspace and revision, names allowed tools/effects, and can constrain exact
 argument values such as GitHub owner/repository or Plane project. An existing
-run refuses changed, disabled, disconnected or removed connections.
+run refuses changed, disabled, disconnected or removed connections. A staged
+run also pins the live connection instance, so disconnect/reconnect cannot restore
+an old grant even when its durable configuration revision is unchanged. Account
+aliases must be unique across persisted connections.
 
 Every write requires `authorize(invocation)`. The host renders and approves that
 exact immutable invocation. The operation ledger receives a pending receipt
@@ -76,8 +88,14 @@ discovery and tokens are account-scoped in `SecretStore`. Refresh is coordinated
 within each provider instance; applications must share one provider per account.
 A distributed host must provide cross-process credential coordination. Browser
 opening, registered client information, callback routing, identity verification
-and remote revocation are application callbacks. HTTP authorization failures are
-not replayed as tool operations.
+and remote revocation are application callbacks. Stored OAuth entries use a
+versioned binding to the canonical resource, configured client/issuer, exact
+callback, client metadata, and trusted origins. A resource or identity edit cannot
+reuse an unexpired token. Legacy unbound or mismatched material requires explicit
+`invalidateCredentials("all")` and fresh authorization; reconnect alone does not
+migrate it. Disconnect removes mismatched local material without sending it to a
+new revocation target. Current-binding revocation failures remain visible after
+local cleanup. HTTP authorization failures are not replayed as tool operations.
 
 The supplied reference definitions are:
 
@@ -85,7 +103,8 @@ The supplied reference definitions are:
   client. No assumption of dynamic client registration.
 - Plane: `https://mcp.plane.so/http/mcp` for OAuth,
   `https://mcp.plane.so/http/api-key/mcp` for PAT, or explicit stdio configuration.
-  PAT workspace headers must match the connection workspace. Resource tools are
+  PAT workspace headers and stdio workspace variables must match the connection
+  workspace. Duplicate case-insensitive headers are refused. Resource tools are
   classified using their action arguments. Unknown actions require approval.
 - Custom MCP: HTTP/stdio, with conservative classification by default.
 
@@ -100,7 +119,8 @@ Optional elicitation callbacks are advertised only when supplied by the host.
 
 Tool results attribute resource links and embedded resources as sources.
 `modelContentCapabilities` explicitly enables image or audio delivery for the
-selected model. Attachments stay in the persisted tool envelope and are delivered
+selected model. Managed hosts forward these capabilities per run through the
+connection service; omitted capabilities remain disabled. Attachments stay in the persisted tool envelope and are delivered
 as attributed user content after balanced tool results, including on replay.
 They share the serialized result byte budget. OpenAI-compatible chat adapters
 map images and WAV/MP3 input audio; the Responses adapter continues to reject
@@ -114,13 +134,22 @@ arguments and renders `{{variable}}` placeholders without evaluation. Messages
 retain their system/user/assistant roles. Missing and unknown arguments fail
 before execution. Memory and shared SQLite stores, render/preview APIs, and the
 inbound `templatePromptSource` adapter are supplied. The inbound adapter exposes
-only selected versions with user/assistant roles.
+only selected versions with user/assistant roles. Deleted versions retain a
+tombstone: the same `(id, revision)` cannot be republished with different content.
+Optional managed-content tables are validated when reopening the shared SQLite
+database; malformed or unknown tables still fail closed.
 
 `SkillService` catalogs explicitly configured application bundles or directory
 sources, parses safe scalar/block `SKILL.md` frontmatter, activates explicitly
 selected instruction hashes, and progressively reads bounded references. Complex
 YAML tags, anchors and collections are refused. `fileSkillSource` from `@agentkit/runner-local/filesystem`
 checks real paths, symlink containment, file type, byte limits and cancellation.
+It opens without following a final symlink, verifies file identity before and
+after bounded reads, and detects parent substitution before reading. Portable
+Node filesystem APIs do not provide atomic ancestor resolution against a hostile
+process continuously renaming directories; such deployments need an OS sandbox.
+Default package imports do not load filesystem services; the umbrella package
+exposes them through `agentkit/runner-local/filesystem`.
 Supporting-resource reads include a content hash and an optional audit callback.
 `metadata.requires-connectors` can declare comma-separated dependencies on
 already selected authorized connectors. A declaration never creates a grant.
@@ -128,7 +157,12 @@ There is no automatic installer or script executor.
 
 `SubmitMessageInput.contentSelection` (also exposed in REST submit/regenerate)
 pins template revisions and skill hashes in the durable task. `runContent`
-resolves those selections before provider execution. A changed skill hash fails
+resolves those selections before provider creation or connector discovery.
+Responses continuation stores pin the selected-content digest for the current
+run without adding transient instructions to canonical conversation history.
+Selected content is delivered once across tool passes and durable replay; a later
+turn can choose different content or none without losing the prior Responses
+reasoning chain. A changed skill hash fails
 rather than silently replacing instructions. `ContextProvider.promptBlocks` is
 used when there is no custom `systemPrompt`; hosts with a custom composer keep
 legacy behavior unless they select `promptBlockMode: "append"`.
@@ -151,18 +185,32 @@ catalogs use `skill`.
 | Skill metadata | `GET /v1/skills` |
 
 The typed client follows the shared route table. Applications still own account
-selection, settings and approval presentation. Live GitHub/Plane OAuth, account
-identity and approved-write acceptance require application credentials and remain
-unqualified in this environment.
+selection, settings and approval presentation. The reusable
+[acceptance harness](../examples/desktop-host/src/managed-connector-acceptance.ts)
+uses the same production connection service. Follow the
+[live acceptance instructions](managed-connector-acceptance.md) for trusted
+identity probes, disposable targets, exact-action approval, and evidence capture.
+Deterministic tests do not qualify live GitHub/Plane OAuth, account identity,
+revocation, or external writes. Those checks still require application credentials,
+registered OAuth callbacks, and explicitly designated disposable resources.
 
 ## Rust boundary
 
-The upstream checkout now includes a separate native Rust runtime. This change
-implements the assessed phases in TypeScript and refreshes the shared Rust wire
-schemas and routes. The native runtime does not implement these optional managed
-content services. The shared corpus retains the native validator's frozen
-`expected` outcomes and separately records `expectedTypeScript` where the new
-strict schema profile differs (unknown keywords/formats and nested resource IDs).
-This is an explicit parity gap, not a successful native qualification. Rust's
-compiler and formatter are unavailable in the execution environment; generated
-native changes require that toolchain check before merge.
+The separate native runtime keeps its own SQLite database identity; it must not
+open the TypeScript database. Shared schemas, routes, and conformance fixtures
+are regenerated from their authoritative sources. Strict unknown-keyword and
+format checks and nested resource IDs now use the same expected outcomes in the
+shared corpus; there is no `expectedTypeScript` override for these cases.
+
+Native optional connection, OAuth, template, and skill services remain
+unimplemented. Their routes return authenticated `501` responses. Selected
+content on submit/regenerate is rejected before creating tasks, messages, or
+provider work, rather than silently ignored. Shared rich-result DTOs do not
+qualify the native rich-content delivery pipeline.
+
+The pinned native JSON Schema evaluator has an evaluated-property limitation:
+modern schemas combining `unevaluatedProperties` and complex `patternProperties`
+are refused. Supported literal patterns and the exact restriction are documented
+in [native parity](rust/parity.md). This is an explicit bounded limitation, not
+full modern schema parity. See [Rust validation](../rust/README.md) for the pinned
+toolchain, native tests, wasm target, and TypeScript-to-native conformance gates.

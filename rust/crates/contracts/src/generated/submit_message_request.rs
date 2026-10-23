@@ -15,11 +15,7 @@ pub struct SubmitMessageRequest {
     pub content_selection: Optional<RunContentSelection>,
     #[serde(rename = "content")]
     pub content: AiMessageContent,
-    #[serde(
-        rename = "model",
-        default,
-        skip_serializing_if = "Optional::is_absent"
-    )]
+    #[serde(rename = "model", default, skip_serializing_if = "Optional::is_absent")]
     pub model: Optional<AiProviderKind>,
     #[serde(
         rename = "providerId",

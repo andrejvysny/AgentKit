@@ -19,6 +19,7 @@ import {
   type ConnectorInvocation,
   type OperationReceipt,
   type ManagedOAuthProvider,
+  type McpModelContentCapabilities,
 } from "@agentkit/mcp-client";
 
 /** Optional recipe for applications with their own settings and approval UI. */
@@ -33,6 +34,9 @@ export function createManagedIntegrations(options: {
   authorizedConnectors(ctx: RunContentContext): Promise<readonly string[]>;
   approveExactAction(invocation: ConnectorInvocation): Promise<boolean>;
   recordOperation(receipt: OperationReceipt): Promise<void>;
+  modelContentCapabilities?(
+    ctx: ToolContributionContext,
+  ): McpModelContentCapabilities | Promise<McpModelContentCapabilities>;
   oauthProviderForAlias?(alias: string): ManagedOAuthProvider | undefined;
 }) {
   const connections = new ConnectionService({
@@ -41,6 +45,7 @@ export function createManagedIntegrations(options: {
     connectors: referenceConnectors,
     authorize: options.approveExactAction,
     recordOperation: options.recordOperation,
+    modelContentCapabilities: options.modelContentCapabilities,
     ...(options.oauthProviderForAlias
       ? {
           transportFactory: oauthTransportFactory(
@@ -70,3 +75,5 @@ export function createManagedIntegrations(options: {
     dispose: () => connections.dispose(),
   };
 }
+
+export { createManagedConnectorAcceptance } from "./managed-connector-acceptance.js";

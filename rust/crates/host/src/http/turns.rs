@@ -51,6 +51,11 @@ impl DesktopBackend {
     }
 
     async fn submit_turn(&self, input: &OperationRequest) -> Result<OperationResponse, Problem> {
+        if input.body.get("contentSelection").is_some() {
+            return Err(optional(
+                "Native prompt templates and skills are not configured.",
+            ));
+        }
         if !self.host.supports("chat.turn") {
             return Err(Problem::host("executor_not_found", "chat.turn"));
         }

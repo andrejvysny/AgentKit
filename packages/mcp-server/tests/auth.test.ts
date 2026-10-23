@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { timingSafeEqualString, verifyBearer } from "../src/auth.js";
+import {
+  authFingerprint,
+  authSchedulingFingerprint,
+  timingSafeEqualString,
+  verifyBearer,
+} from "../src/auth.js";
 import { createMcpServerHandler } from "../src/index.js";
 import type { McpToolSource } from "../src/index.js";
 
@@ -107,4 +112,21 @@ describe("createMcpServerHandler auth wiring", () => {
     expect(response.status).toBe(401);
     await handler.dispose();
   });
+});
+
+it("canonicalizes bearer scheduling without changing raw session binding or token identity", async () => {
+  const expected = await authSchedulingFingerprint("Bearer token-A");
+  for (const header of [
+    "bearer token-A",
+    "BEARER  token-A",
+    "  Bearer\t token-A  ",
+  ])
+    expect(await authSchedulingFingerprint(header)).toBe(expected);
+  expect(await authSchedulingFingerprint("Bearer token-B")).not.toBe(expected);
+  expect(await authFingerprint("Bearer token-A")).not.toBe(
+    await authFingerprint("bearer token-A"),
+  );
+  expect(await authSchedulingFingerprint("Custom A")).not.toBe(
+    await authSchedulingFingerprint("Custom B"),
+  );
 });

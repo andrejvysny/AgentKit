@@ -5,12 +5,14 @@ import { AiToolRegistry } from "@agentkit/core";
 import type { SecretStore, ToolContributionContext } from "@agentkit/host";
 import type { McpServerConfig } from "./config.js";
 import { McpError } from "./errors.js";
+import { normalizeServerAlias } from "./identity.js";
 import { McpClientManager, type McpClientManagerDeps } from "./manager.js";
 import {
   createMcpToolSetContributor,
   type McpToolSource,
 } from "./contributor.js";
 import type { McpToolCallOutcome } from "./projection.js";
+import type { McpModelContentCapabilities } from "./model-content.js";
 
 export interface ConnectorDefinition {
   id: string;
@@ -76,6 +78,10 @@ export interface ConnectionServiceDeps extends McpClientManagerDeps {
   /** Audit persistence is awaited before reporting a result. */
   recordOperation(receipt: OperationReceipt): Promise<void>;
   revoke?(connection: ConnectionRecord): Promise<void>;
+  /** Explicit capabilities of this run's selected model; defaults to no media. */
+  modelContentCapabilities?(
+    ctx: ToolContributionContext,
+  ): McpModelContentCapabilities | Promise<McpModelContentCapabilities>;
 }
 function fail(
   code:
@@ -170,20 +176,34 @@ export class ConnectionService {
           "mcp_invalid_config",
           "Account and workspace identity are immutable; create a separate connection.",
         );
+      const alias = normalizeServerAlias(input.config.alias);
+      if (
+        (await this.deps.store.list()).some(
+          (record) =>
+            record.id !== input.id &&
+            normalizeServerAlias(record.config.alias) === alias,
+        )
+      )
+        fail(
+          "mcp_invalid_config",
+          "Connection aliases must be unique across accounts.",
+        );
       const definition = this.definition(input.connectorId);
       if (!definition.transports.includes(input.config.transport.kind))
         fail("mcp_invalid_config", "Unsupported connector transport.");
       const draft = {
         ...structuredClone(input),
+        config: { ...structuredClone(input.config), alias },
         status: "disconnected" as const,
       };
       definition.validate?.(draft);
-      // All headers/env values are conservatively secretized, including custom names.
+      // Secretize credential values; preserve only explicit public workspace bindings.
       draft.config = await normalizeConnectionSecrets(
         draft.id,
         draft.config,
         this.deps.secrets,
         old?.config,
+        draft.workspaceId,
       );
       await this.drop(input.id);
       await this.deps.store.put(draft, expectedRevision);
@@ -264,6 +284,7 @@ export class ConnectionService {
   /** Remote context is selected and authorized with the same account pin as tools. */
   context(grantInput: ConnectionGrant) {
     const grant = immutable(grantInput);
+    const selectedManager = this.managers.get(grant.connectionId)?.manager;
     const selected = async () => {
       this.assertActive();
       if (!grant.effects.includes("read"))
@@ -272,7 +293,13 @@ export class ConnectionService {
           "Reading remote context is outside the connection grant.",
         );
       const record = await this.selected(grant);
-      return { record, manager: this.manager(record) };
+      const manager = this.manager(record);
+      if (manager !== selectedManager)
+        fail(
+          "mcp_stale_connection",
+          "The selected connection session changed.",
+        );
+      return { record, manager };
     };
     return {
       listResources: async (options?: { signal?: AbortSignal }) => {
@@ -325,6 +352,9 @@ export class ConnectionService {
       async contribute(ctx: ToolContributionContext) {
         ctx.signal?.throwIfAborted();
         const grants = immutable(await selection(ctx));
+        const modelContentCapabilities = immutable(
+          (await service.deps.modelContentCapabilities?.(ctx)) ?? {},
+        );
         if (new Set(grants.map((g) => g.connectionId)).size !== grants.length)
           fail("mcp_invalid_config", "Duplicate selected connection.");
         const tools: Awaited<
@@ -359,11 +389,19 @@ export class ConnectionService {
                       .filter((tool) => grant.tools.includes(tool.toolName))
                       .map((tool) => ({ ...tool, effect: "write" })),
                   callTool: async (id, args, options) =>
-                    service.invoke(grant, id, args ?? {}, ctx, options?.signal),
+                    service.invoke(
+                      grant,
+                      manager,
+                      id,
+                      args ?? {},
+                      ctx,
+                      options?.signal,
+                    ),
                 };
                 tools.push(
                   ...(await createMcpToolSetContributor(source, {
                     connectOnContribute: false,
+                    modelContentCapabilities,
                     authorize: async () => true,
                   }).contribute(ctx)),
                 );
@@ -384,6 +422,7 @@ export class ConnectionService {
   }
   private async invoke(
     grant: ConnectionGrant,
+    selectedManager: McpClientManager,
     id: string,
     args: Record<string, unknown>,
     ctx: ToolContributionContext,
@@ -393,6 +432,8 @@ export class ConnectionService {
     signal?.throwIfAborted();
     const record = await this.selected(grant);
     const manager = this.manager(record);
+    if (manager !== selectedManager)
+      fail("mcp_stale_connection", "The selected connection session changed.");
     const descriptor = (
       await manager.listTools(record.config.alias, { signal })
     ).find((tool) => tool.canonicalId === id);
@@ -440,7 +481,9 @@ export class ConnectionService {
       let approved = false;
       try {
         approved =
-          (await this.deps.authorize?.({ ...invocation, signal })) ?? false;
+          (await this.deps.authorize?.(
+            Object.freeze({ ...invocation, signal }),
+          )) ?? false;
       } catch {
         /* Policy faults refuse without publishing private diagnostics. */
       }
@@ -449,7 +492,8 @@ export class ConnectionService {
     }
     // Approval may await UI. Re-check identity/lifecycle after it returns.
     signal?.throwIfAborted();
-    await this.selected(grant);
+    if (this.manager(await this.selected(grant)) !== manager)
+      fail("mcp_stale_connection", "The selected connection session changed.");
     const base = {
       operationId: invocation.operationId,
       connectionId: record.id,
@@ -468,14 +512,23 @@ export class ConnectionService {
         "Operation receipt storage is unavailable; no request was dispatched.",
       );
     }
-    // Audit persistence was asynchronous: lifecycle and cancellation may have changed.
-    signal?.throwIfAborted();
-    await this.selected(grant);
     let result: McpToolCallOutcome;
     try {
+      // Audit persistence was asynchronous: lifecycle and cancellation may have changed.
+      signal?.throwIfAborted();
+      if (this.manager(await this.selected(grant)) !== manager)
+        fail(
+          "mcp_stale_connection",
+          "The selected connection session changed.",
+        );
       result = await manager.callTool(id, snapshot, { signal });
     } catch (error) {
-      const code = error instanceof McpError ? error.code : "mcp_remote_error";
+      const code =
+        error instanceof McpError
+          ? error.code
+          : signal?.aborted
+            ? "mcp_request_aborted"
+            : "mcp_remote_error";
       try {
         await this.deps.recordOperation({
           ...base,
@@ -569,6 +622,19 @@ export class ConnectionService {
     await live?.manager.dispose();
   }
   private async connectRecord(record: ConnectionRecord) {
+    this.definition(record.connectorId).validate?.(record);
+    const alias = normalizeServerAlias(record.config.alias);
+    if (
+      (await this.deps.store.list()).some(
+        (other) =>
+          other.id !== record.id &&
+          normalizeServerAlias(other.config.alias) === alias,
+      )
+    )
+      fail(
+        "mcp_invalid_config",
+        "Connection aliases must be unique across accounts.",
+      );
     if (record.config.enabled === false)
       fail("mcp_stale_connection", "Connection is disabled.");
     const fingerprint = this.fingerprint(record);
@@ -615,6 +681,7 @@ export async function normalizeConnectionSecrets(
   input: McpServerConfig,
   secrets: SecretStore,
   previous?: McpServerConfig,
+  publicWorkspaceId?: string,
 ): Promise<McpServerConfig> {
   const config = structuredClone(input);
   if (config.transport.kind === "http") {
@@ -650,8 +717,11 @@ export async function normalizeConnectionSecrets(
       );
     values![key] = value;
     if (
-      config.transport.kind === "http" &&
-      key.toLowerCase() === "x-workspace-slug"
+      (config.transport.kind === "http" &&
+        key.toLowerCase() === "x-workspace-slug") ||
+      (config.transport.kind === "stdio" &&
+        key === "PLANE_WORKSPACE_SLUG" &&
+        value === publicWorkspaceId)
     )
       continue;
     if (/\$\{[^}]+\}/.test(value)) continue;

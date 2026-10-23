@@ -24,11 +24,7 @@ pub struct AiToolResult {
     pub model_content: Optional<Vec<AiContentPart>>,
     #[serde(rename = "ok")]
     pub ok: bool,
-    #[serde(
-        rename = "data",
-        default,
-        skip_serializing_if = "Optional::is_absent"
-    )]
+    #[serde(rename = "data", default, skip_serializing_if = "Optional::is_absent")]
     pub data: Optional<Value>,
     #[serde(rename = "sources")]
     pub sources: Vec<AiSourceRef>,

@@ -9,6 +9,7 @@ export interface PromptTemplateStore {
   put(template: PromptTemplate): Promise<void>;
   get(id: string, revision: string): Promise<PromptTemplate | null>;
   list(): Promise<PromptTemplate[]>;
+  /** Erases the body while permanently reserving the immutable revision. */
   delete(id: string, revision: string): Promise<void>;
 }
 export class PromptTemplateService {

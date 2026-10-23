@@ -1,12 +1,8 @@
-import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { Server } from "@modelcontextprotocol/server";
 import {
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
-  ListPromptsRequestSchema,
-  GetPromptRequestSchema,
-  McpError,
-  ErrorCode,
-} from "@modelcontextprotocol/sdk/types.js";
+  ProtocolError as McpError,
+  ProtocolErrorCode,
+} from "@modelcontextprotocol/server";
 import type { McpServerHandlerOptions, McpSessionScope } from "./types.js";
 
 /** Every extension uses the same actor scope and request cancellation boundary. */
@@ -18,36 +14,39 @@ export function installHostExtensions(
 ): void {
   const resources = options.resources;
   if (resources) {
-    server.setRequestHandler(ListResourcesRequestSchema, (_request, extra) =>
-      invoke("resources/list", extra.signal, async (scope) => ({
+    server.setRequestHandler("resources/list", (_request, extra) =>
+      invoke("resources/list", extra.mcpReq.signal, async (scope) => ({
         resources: await resources.list(scope),
       })),
     );
-    server.setRequestHandler(ReadResourceRequestSchema, (request, extra) =>
-      invoke("resources/read", extra.signal, async (scope) => {
+    server.setRequestHandler("resources/read", (request, extra) =>
+      invoke("resources/read", extra.mcpReq.signal, async (scope) => {
         const listed = await resources.list(scope);
         scope.signal?.throwIfAborted();
         if (!listed.some((item) => item.uri === request.params.uri))
-          throw new McpError(ErrorCode.InvalidParams, "Unknown resource");
+          throw new McpError(
+            ProtocolErrorCode.InvalidParams,
+            "Unknown resource",
+          );
         return resources.read(request.params.uri, scope);
       }),
     );
   }
   const prompts = options.prompts;
   if (prompts) {
-    server.setRequestHandler(ListPromptsRequestSchema, (_request, extra) =>
-      invoke("prompts/list", extra.signal, async (scope) => ({
+    server.setRequestHandler("prompts/list", (_request, extra) =>
+      invoke("prompts/list", extra.mcpReq.signal, async (scope) => ({
         prompts: await prompts.list(scope),
       })),
     );
-    server.setRequestHandler(GetPromptRequestSchema, (request, extra) =>
-      invoke("prompts/get", extra.signal, async (scope) => {
+    server.setRequestHandler("prompts/get", (request, extra) =>
+      invoke("prompts/get", extra.mcpReq.signal, async (scope) => {
         const prompt = (await prompts.list(scope)).find(
           (item) => item.name === request.params.name,
         );
         scope.signal?.throwIfAborted();
         if (!prompt)
-          throw new McpError(ErrorCode.InvalidParams, "Unknown prompt");
+          throw new McpError(ProtocolErrorCode.InvalidParams, "Unknown prompt");
         const args = request.params.arguments ?? {};
         const allowed = new Set(
           prompt.arguments?.map((argument) => argument.name),
@@ -60,7 +59,7 @@ export function installHostExtensions(
           )
         )
           throw new McpError(
-            ErrorCode.InvalidParams,
+            ProtocolErrorCode.InvalidParams,
             "Invalid prompt arguments",
           );
         return prompts.get(request.params.name, args, scope);
@@ -88,7 +87,10 @@ export function installHostExtensions(
         method,
         actorId: session.actorId,
       });
-      throw new McpError(ErrorCode.InternalError, "Host MCP extension failed");
+      throw new McpError(
+        ProtocolErrorCode.InternalError,
+        "Host MCP extension failed",
+      );
     } finally {
       lifecycle.finish();
     }

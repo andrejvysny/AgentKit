@@ -25,7 +25,7 @@ afterEach(async () => {
   await server?.stop();
 });
 
-test("all 39 REST operations exercise real native host, SQLite, configured domain ports", async () => {
+test("all 48 REST operations exercise native host and explicit optional-service boundaries", async () => {
   const client = server.client;
   const covered = new Set<RestOperation>();
   const call = async <T>(
@@ -301,7 +301,46 @@ test("all 39 REST operations exercise real native host, SQLite, configured domai
   ).toBe(false);
   await call("deleteMcpServer", client.deleteMcpServer({ serverId: mcp.id }));
   expect(await call("listTools", client.listTools())).toEqual([]);
+  for (const operation of [
+    "listConnections",
+    "saveConnection",
+    "deleteConnection",
+    "connectionAction",
+    "listPromptTemplates",
+    "publishPromptTemplate",
+    "deletePromptTemplate",
+    "renderPromptTemplate",
+    "listSkills",
+  ] as const) {
+    await assertManagedServiceUnavailable(operation);
+    covered.add(operation);
+  }
   expect([...covered].sort()).toEqual(
     (Object.keys(REST_ROUTES) as RestOperation[]).sort(),
   );
 }, 60_000);
+
+async function assertManagedServiceUnavailable(
+  operation: RestOperation,
+): Promise<void> {
+  const route = REST_ROUTES[operation];
+  const path = route.path.replace(/:[A-Za-z]+/g, "unconfigured");
+  const input: RequestInit = {
+    method: route.method,
+    ...(route.method === "GET" || route.method === "DELETE"
+      ? {}
+      : { body: "{}" }),
+  };
+  const unauthorized = await fetch(`${server.baseUrl}${path}`, input);
+  expect(unauthorized.status, `${operation} requires authentication`).toBe(401);
+  const response = await fetch(`${server.baseUrl}${path}`, {
+    ...input,
+    headers: {
+      authorization: `Bearer ${server.token}`,
+      "content-type": "application/json",
+    },
+  });
+  expect(response.status, operation).toBe(501);
+  const problem: unknown = await response.json();
+  expect(problem).toMatchObject({ status: 501, code: "not_implemented" });
+}

@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { projectCandidateFixtures } from "./release/fixture-projection.mjs";
 import {
   foundationExclusions,
   projectFoundation,
@@ -101,6 +102,12 @@ function replaceExactly(text, pattern, replacement, label) {
 }
 
 const patches = release === "foundation" ? projectFoundation(output) : [];
+const contractVersion = readFileSync(
+  join(output, "packages/contracts/src/version.ts"),
+  "utf8",
+).match(/export const CONTRACT_VERSION = "([^"]+)";/)?.[1];
+if (!contractVersion)
+  throw new Error("Candidate contract-version declaration drift");
 rewrite("packages/contracts/src/version.ts", (text) =>
   replaceExactly(
     text,
@@ -121,6 +128,9 @@ for (const path of versionedFixtures)
     for (const event of events) event.contractVersion = version;
     return `${JSON.stringify(events, null, 2)}\n`;
   });
+versionedFixtures.push(
+  ...projectCandidateFixtures(output, contractVersion, version, release),
+);
 rewrite("packages/agentkit/package.json", (text) => {
   const manifest = JSON.parse(text);
   manifest.version = version;

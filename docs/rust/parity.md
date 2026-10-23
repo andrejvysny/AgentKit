@@ -71,6 +71,45 @@ must replace these statuses with exact test results and remaining limitations.
 | TypeScript client and React | `client`, `react`: typed REST methods, SSE parsing/resume, derived run phases, headless hooks, optimistic chat, branch/proposal/provider helpers. | Not a native Rust API target in phase 1. Wire compatibility remains required; no claim of a Rust replacement for browser React hooks. |
 | Distribution and embedding | Package exports/builds, `examples/desktop-host`, qualification and publication scripts. | Unimplemented. Cargo docs/tests/build and supported embedding examples must be independently validated; no npm compatibility or publication claimed. |
 
+## Managed-content follow-up qualification
+
+The historical freeze above remains unchanged. The managed-content contract
+refresh at `3c7ea5f` contains 97 schemas and 48 routes. Native qualification
+repairs preserve the separate SQLite database identity and do not add optional
+native managed-connector, OAuth, prompt-template, or skill services. The native
+desktop backend returns `501 not_implemented` for these absent services and for
+submit/regenerate requests containing `contentSelection`, before turn effects.
+Rich MCP tool-content delivery remains a separate native integration gap; wire
+DTO coverage alone does not qualify that execution pipeline.
+
+Five schema vectors had separate `expectedTypeScript` outcomes: unknown tool
+keywords, two unknown-format inputs, and valid/invalid nested resource references.
+These were required native compiler gaps, not approved compatibility exceptions.
+The native compiler now rejects unknown tool keywords/formats and preserves
+schema resource IDs; the corpus again uses one `expected` outcome per vector.
+The approved unpaired-surrogate exception remains unchanged.
+
+Native tool schemas select the declared Draft-07, 2019-09, or 2020-12 dialect;
+regressions cover `prefixItems`, `unevaluatedProperties`, nested resource IDs,
+ambiguous IDs, and literal `$id`/`$schema` keys inside instance data. Resource
+identity is isolated per compiler and retained through tool registration.
+
+One explicit native limitation remains: jsonschema 0.33.0 internally tracks
+`unevaluatedProperties` with its own regex engine, bypassing the custom
+ECMAScript matcher used for `patternProperties`. Reproduction: a modern schema
+with `patternProperties: {"^.$": {"type": "integer"}}` and
+`unevaluatedProperties: false` incorrectly accepts a carriage-return property.
+Native compilation now refuses modern schema documents combining these keywords
+unless all patterns are ASCII literals with optional leading `^`/trailing `$`;
+literal bodies allow letters, digits, `_`, `:`, `/`, and `-`. This document-wide
+check includes nested/reference branches. Tests prove refusal and supported
+literal behavior. This is a bounded fail-closed limitation, not full newer-dialect
+parity or a new shared-corpus exception. Draft-07 matching is unchanged.
+
+Qualification commands and platform/integration evidence boundaries remain in
+[`rust/README.md`](../../rust/README.md). Local tests do not establish live OAuth,
+provider, keychain, or remote CI qualification.
+
 ## Defaults and limits to preserve or deliberately change
 
 These are runtime defaults, not constraints implied by the TypeBox schema. For

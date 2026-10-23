@@ -106,6 +106,17 @@ impl DesktopBackend {
                     .ok_or_else(|| optional("This deployment has no tool catalog wired."))?;
                 Ok(output(200, encoded(port.list(&input.actor).await?)?))
             }
+            "listConnections"
+            | "saveConnection"
+            | "deleteConnection"
+            | "connectionAction"
+            | "listPromptTemplates"
+            | "publishPromptTemplate"
+            | "deletePromptTemplate"
+            | "renderPromptTemplate"
+            | "listSkills" => Err(optional(
+                "Native managed content services are not configured.",
+            )),
             _ => Err(Problem::host(
                 "internal_error",
                 "Unknown operation dispatch",

@@ -5,10 +5,29 @@ AgentKit runs: an `McpClientManager` owns the connections, and a
 `ToolSetContributor` built from it turns every connected server's tools into
 `AiTool`s that a `TurnRunner` stages like any other tool source.
 
-Built on the official `@modelcontextprotocol/sdk` (`Client`,
+Built on the official `@modelcontextprotocol/client@2.4.0` (`Client`,
 `StdioClientTransport`, `StreamableHTTPClientTransport`). This package adds only
 what an agent host needs on top of it: stable tool identity, per-server failure
 isolation, and secrets that never reach a log line.
+
+## Protocol compatibility
+
+Connections use the official SDK's `versionNegotiation: { mode: "auto" }`.
+The SDK negotiates 2026-07-28 envelopes or falls back to legacy `initialize`
+before tool dispatch. AgentKit adds no protocol loop or post-dispatch fallback.
+OAuth storage preserves SDK issuer stamps, validates callback `iss`, and never
+carries a refresh token into credentials for another issuer. Pre-registered
+`clientInformation` should include its known authorization-server `issuer`.
+Modern `input_required` rounds use the SDK driver and the host's `elicitation`
+callback; elicitation capability is advertised only when that callback exists.
+Input cancellation follows the originating call's signal. A lost mutation
+acknowledgement returns nonretryable `mcp_outcome_uncertain`; compatibility
+negotiation never replays it.
+
+`MCP_COMPATIBILITY.verified` records exercised behavior: real Node/Bun HTTP and
+spawned stdio against SDK 2.4.0 modern peers and SDK 1.30.0 legacy peers.
+Older legacy revisions are verified on the inbound HTTP adapter; they are not
+claimed as outbound transport qualification.
 
 ## Wiring
 
@@ -133,7 +152,7 @@ All overridable per server via `resilience`.
 | Option | Default | What it governs |
 | --- | --- | --- |
 | `requestTimeoutMs` | `5000` | Deadline for one `tools/list` / `tools/call`. |
-| `connectTimeoutMs` | `5000` | Deadline for one connect attempt (transport + `initialize`). |
+| `connectTimeoutMs` | `5000` | Deadline for transport, discovery and initialization. |
 | `maxConnectAttempts` | `3` | Attempts in one connect cycle before the circuit opens. |
 | `connectBackoffBaseMs` | `250` | First backoff step; doubles per attempt. |
 | `connectBackoffMaxMs` | `2000` | Backoff ceiling. No jitter. |
@@ -142,13 +161,14 @@ All overridable per server via `resilience`.
 | `reconnectBackoffFactor` | `2` | Growth factor for the reconnect backoff. |
 | `retryTimeouts` | `false` | Whether a request timeout may be replayed. See below. |
 
-**Only a request that never reached the server is auto-retried.** The reconnect
-loop fires on `mcp_not_connected` — the session was already dead — and on
-nothing else. A request **timeout is not** retried: our deadline firing says
-nothing about whether the server ran the tool, so replaying one would execute a
-slow-but-successful write two or three times while the model is told the call
-failed. Set `retryTimeouts: true` per server to opt back in, for a server whose
-tools are all idempotent.
+**Dispatched tool calls require explicit replay safety.** A transport loss,
+timeout or cancellation after dispatch returns nonretryable
+`mcp_outcome_uncertain`: the caller must reconcile the remote outcome. Remote
+annotations never authorize replay. Only a trusted host may pass
+`replaySafe: true`; timeout replay additionally requires `retryTimeouts: true`.
+Catalog requests and explicitly replay-safe calls can share a reconnect when
+the SDK reports a dead connection. Negotiation completes before tool dispatch
+and never provides a second replay path.
 
 The circuit is a **hard timed lockout**, not a half-open probe: once a cycle
 fails, `connect()` rejects immediately with `mcp_circuit_open` until the window
@@ -156,8 +176,8 @@ elapses, and the first call afterwards runs a fresh full cycle. A failure
 retrying cannot fix (a missing secret, an unparseable URL) does *not* arm the
 lockout — the precise error stays visible.
 
-Concurrent request failures share **one** reconnect: two calls that die on the
-same dropped session produce one reconnect and both retry after it.
+Concurrent replay-safe failures share **one** reconnect. Calls whose outcome is
+uncertain remain terminal.
 
 **Both deadlines are races, not awaits.** Aborting a signal is a request, and a
 transport that ignores it (a spawn that never execs, an SDK path that only looks
@@ -184,12 +204,13 @@ the request path (and the reconnect it drives) refuses a disposed session with
 
 Every failure is an `McpError` with a stable `code` and a `retryable` verdict,
 classified where the cause is known (our own timer, the transport's `onclose`,
-the SDK's JSON-RPC error code) — never by matching message text. `retryable` is
+the SDK's typed local or JSON-RPC error code) — never by matching message text. `retryable` is
 **advisory**: it says a retry could succeed, not that one is safe. The host and
 the model decide, because they know what the tool does; the client's own
 auto-retry gate is the narrower set above.
 
-`mcp_circuit_open`, `mcp_connect_failed`, `mcp_request_timeout`,
+`mcp_outcome_uncertain`, `mcp_auth_required`, `mcp_circuit_open`,
+`mcp_connect_failed`, `mcp_request_timeout`,
 `mcp_request_aborted`, `mcp_reconnect_exhausted`, `mcp_not_connected`,
 `mcp_remote_error`, `mcp_secret_missing`, `mcp_canonical_id_collision`,
 `mcp_invalid_alias`, `mcp_invalid_tool_name`, `mcp_invalid_config`,
@@ -214,8 +235,9 @@ everything the server sent, for a UI to render.
 ## Testing
 
 `McpClientManagerDeps.transportFactory` is injectable, so tests drive real MCP
-servers over the SDK's `InMemoryTransport` instead of spawning processes or
-opening sockets. See `tests/helpers.ts`.
+servers over the SDK's `InMemoryTransport`. Separate interop tests use real HTTP
+sockets and spawned Node/Bun stdio peers. See `tests/helpers.ts` and
+`tests/transport-interop.test.ts`.
 
 ## Managed integrations and invocation policy
 

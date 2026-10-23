@@ -33,12 +33,15 @@ export class SharedSqlitePromptTemplateStore implements PromptTemplateStore {
       this.db
         .query("SELECT template FROM prompt_templates ORDER BY id, revision")
         .all() as { template: string }[]
-    ).map((row) => JSON.parse(row.template));
+    )
+      .map((row) => JSON.parse(row.template) as PromptTemplate | null)
+      .filter((template): template is PromptTemplate => template !== null);
   }
   async delete(id: string, revision: string) {
     await writeGateFor(this.db).whenFree(() => {
       this.db.run(
-        "DELETE FROM prompt_templates WHERE id = $id AND revision = $revision",
+        // Keep the primary key reserved while erasing the deleted body.
+        "UPDATE prompt_templates SET template = 'null' WHERE id = $id AND revision = $revision",
         { $id: id, $revision: revision },
       );
     });
