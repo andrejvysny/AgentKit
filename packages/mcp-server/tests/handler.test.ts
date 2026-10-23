@@ -525,10 +525,13 @@ it("releases each actor exactly once on eviction and awaited shutdown", async ()
   });
   const first = await initSession(handler);
   const second = await initSession(handler);
-  expect(closed).toEqual([first]);
+  expect(closed).toHaveLength(1);
+  expect(closed[0]).not.toBe(first);
   await handler.dispose();
   await handler.dispose();
-  expect(closed).toEqual([first, second]);
+  expect(closed).toHaveLength(2);
+  expect(new Set(closed).size).toBe(2);
+  expect(closed).not.toContain(second);
 });
 
 /** Open a session over raw fetch and return the id the server minted. */

@@ -33,20 +33,29 @@ export async function buildResponsesRequest(
   ) {
     responsesError("unsupported_parameter");
   }
+  const selected = runContentMessages(input);
+  const selectedDigest = input.runContent
+    ? await contentDigest(selected)
+    : undefined;
+  const sameRun = input.continuation?.runContent?.runId === input.runId;
+  if (sameRun && input.continuation?.runContent?.digest !== selectedDigest)
+    responsesError("continuation_history_mismatch");
+  const additions = sameRun ? [] : mapMessages(selected);
   let items: Record<string, unknown>[];
   if (input.continuation) {
     await checkContinuation(input, identity);
     items = [
       ...structuredClone(input.continuation.inputItems),
+      ...additions,
       ...mapMessages(input.messages.slice(input.continuation.messageCount)),
     ];
   } else {
     if (input.continuationRequired) responsesError("continuation_required");
-    items = mapMessages(input.messages);
+    items = [...additions, ...mapMessages(input.messages)];
   }
   if (items.length > MAX_RESPONSES_ITEMS)
     responsesError("state_limit_exceeded");
-  const instructions = input.messages
+  const instructions = [...input.messages, ...selected]
     .filter((message) => message.role === "system")
     .map(textContent)
     .join("\n\n");
@@ -116,6 +125,14 @@ export async function makeResponsesContinuation(
   const state: AiProviderContinuation = {
     version: 1,
     scope: { ...identity, ...input.continuationScope, model: input.model },
+    ...(input.runContent
+      ? {
+          runContent: {
+            runId: input.runId,
+            digest: await contentDigest(runContentMessages(input)),
+          },
+        }
+      : {}),
     messageCount: input.messages.length + 1,
     messageDigest: await messageDigest([...input.messages, assistant]),
     inputItems: [
@@ -126,6 +143,36 @@ export async function makeResponsesContinuation(
   boundedJson(state);
   if (!validateContinuation(state)) responsesError("state_limit_exceeded");
   return state;
+}
+
+function runContentMessages(input: AiChatRequest): AiChatMessage[] {
+  if (input.runContent === undefined) return [];
+  boundedJson(input.runContent);
+  if (
+    !input.runContent ||
+    !Array.isArray(input.runContent.messages) ||
+    input.runContent.messages.length > MAX_RESPONSES_ITEMS
+  )
+    return responsesError("invalid_request");
+  return input.runContent.messages.map((message) => {
+    if (
+      !message ||
+      !["system", "user", "assistant"].includes(message.role) ||
+      typeof message.content !== "string"
+    )
+      return responsesError("invalid_request");
+    return { role: message.role, content: message.content };
+  });
+}
+
+async function contentDigest(value: unknown): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(boundedJson(value)),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 async function messageDigest(messages: AiChatMessage[]): Promise<string> {
@@ -143,13 +190,7 @@ async function messageDigest(messages: AiChatMessage[]): Promise<string> {
         }
       : {}),
   }));
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(boundedJson(stable)),
-  );
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  return contentDigest(stable);
 }
 
 function mapMessages(messages: AiChatMessage[]): Record<string, unknown>[] {

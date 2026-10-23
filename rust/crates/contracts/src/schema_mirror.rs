@@ -79,6 +79,10 @@ fn prepare_child(name: &str, value: &mut Value, marker: &str, path: &str) {
             }
         }
         "additionalProperties"
+        | "unevaluatedProperties"
+        | "unevaluatedItems"
+        | "contentSchema"
+        | "prefixItems"
         | "additionalItems"
         | "items"
         | "contains"

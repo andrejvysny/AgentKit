@@ -68,6 +68,20 @@ describe.skipIf(!integrated)("current-source foundation projection", () => {
       "packages/client/src/stream.ts",
       "packages/transport-http/src/sse.ts",
       "packages/adapters-sqlite/src/sqlite/open.ts",
+      "packages/adapters-sqlite/src/schema.ts",
+      "packages/adapters-sqlite/src/sqlite/migrations.ts",
+      "packages/adapters-sqlite/src/provider-continuation-schema.ts",
+      "packages/adapters-sqlite/src/message-archive-schema.ts",
+      "packages/adapters-sqlite/tests/archive-durability.test.ts",
+      "scripts/sqlite-durability.mjs",
+      "scripts/qualification/sqlite-fixture.mjs",
+      "packages/host/src/prompts/run-content.ts",
+      "packages/host/src/prompts/template-service.ts",
+      "packages/host/src/skills/skill-service.ts",
+      "packages/host/tests/skills-templates.test.ts",
+      "packages/mcp-client/src/connections.ts",
+      "packages/adapters-sqlite/src/shared-prompt-template-store.ts",
+      "packages/runner-local/src/file-skill-source.ts",
       "examples/desktop-host/node-host.mjs",
     ])
       expect(read(first, path)).toBe(read(fixtureRoot, path));
@@ -78,13 +92,37 @@ describe.skipIf(!integrated)("current-source foundation projection", () => {
       read(first, "packages/adapters-sqlite/src/sqlite/migrations.ts"),
     ).toContain("unsupportedVersion(version, target)");
     expect(read(first, "packages/adapters-sqlite/src/schema.ts")).toContain(
-      "SCHEMA_VERSION = 8",
+      "SCHEMA_VERSION = 10",
     );
     expect(read(first, "packages/agentkit/package.json")).toContain(
       '"version": "0.6.0"',
     );
     const provenance = JSON.parse(read(first, "snapshot-provenance.json"));
     expect(provenance.patches).toHaveLength(6);
+    const nativeFixtures = JSON.parse(
+      read(first, "rust/fixtures/manifest.json"),
+    );
+    expect(nativeFixtures.contractVersion).toBe("0.6.0");
+    const foundationSchemas = JSON.parse(
+      read(first, "rust/fixtures/schemas.json"),
+    );
+    expect(nativeFixtures.schemaCount).toBe(
+      Object.keys(foundationSchemas).length,
+    );
+    expect(foundationSchemas.AiProviderContinuationSchema).toBeUndefined();
+    expect(read(first, "rust/crates/contracts/src/routes.rs")).toContain(
+      'CONTRACT_VERSION: &str = "0.6.0"',
+    );
+    for (const path of [
+      "rust/fixtures/schemas.json",
+      "rust/crates/contracts/src/schema_bundle.json",
+      "rust/crates/host/src/lib.rs",
+    ])
+      expect(
+        provenance.changedFiles.some(
+          (file: { path: string }) => file.path === path,
+        ),
+      ).toBe(true);
     for (const patch of provenance.patches)
       expect(patch.sha256).toBe(sha256(read(first, patch.path)));
     expect(
@@ -117,7 +155,7 @@ describe.skipIf(!integrated)("current-source foundation projection", () => {
       existsSync(join(directory, "packages/core/src/providers/responses.ts")),
     ).toBe(true);
     expect(read(directory, "packages/adapters-sqlite/src/schema.ts")).toContain(
-      "SCHEMA_VERSION = 9",
+      "SCHEMA_VERSION = 10",
     );
   });
 
@@ -127,8 +165,8 @@ describe.skipIf(!integrated)("current-source foundation projection", () => {
     writeFileSync(
       join(directory, path),
       read(directory, path).replace(
-        "SCHEMA_VERSION = 9",
-        "SCHEMA_VERSION = 999",
+        "type ProviderContinuationStore,",
+        "type MissingContinuationStore,",
       ),
     );
     expect(() => projectFoundation(directory)).toThrow(
@@ -136,13 +174,13 @@ describe.skipIf(!integrated)("current-source foundation projection", () => {
     );
   });
 
-  it("retains Responses source and schema 9 in separate candidate", () => {
+  it("retains Responses source and schema 10 in separate candidate", () => {
     const directory = snapshot("responses", "responses");
     expect(read(directory, "packages/core/src/providers/responses.ts")).toBe(
       read(fixtureRoot, "packages/core/src/providers/responses.ts"),
     );
     expect(read(directory, "packages/adapters-sqlite/src/schema.ts")).toContain(
-      "SCHEMA_VERSION = 9",
+      "SCHEMA_VERSION = 10",
     );
     const provenance = JSON.parse(read(directory, "snapshot-provenance.json"));
     expect(provenance.patches).toEqual([]);

@@ -1,3 +1,4 @@
+import { CONTRACT_VERSION } from "@agentkit/contracts";
 import { MemoryAssistantStore } from "@agentkit/adapters-memory";
 import { SqliteAssistantStore } from "@agentkit/adapters-sqlite";
 import {
@@ -133,7 +134,7 @@ export async function snapshot(
   const events = await env.store.tasks.listEvents("run");
   for (const event of events) {
     if (
-      event.contractVersion !== "0.7.0" ||
+      event.contractVersion !== CONTRACT_VERSION ||
       typeof event.eventId !== "string" ||
       typeof event.attemptId !== "string" ||
       Number.isNaN(Date.parse(event.timestamp))

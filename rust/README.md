@@ -85,6 +85,33 @@ offline demonstration is labeled explicitly; it is not evidence of live provider
 or platform keychain qualification. Consult the example's documentation for its
 database path, consent controls and supported provider configuration.
 
+## Managed content and schema qualification
+
+The current shared contracts contain 97 schemas and 48 REST operations. The
+native desktop backend does not implement optional managed connectors, OAuth,
+prompt-template management, or skill services. Those service routes return
+`501 not_implemented`. Submit and regenerate requests containing
+`contentSelection` also return `501` before creating a turn; native execution
+must not silently omit selected instructions.
+
+Tool schemas retain resource `$id` and declared dialects, while ordinary JSON
+payloads in `const`, `enum`, defaults, and examples retain their literal keys.
+Unknown validation keywords, unknown formats, unsupported dialects, and ambiguous
+resource identities fail compilation. Supported dialect selection is Draft-07,
+2019-09, and 2020-12; this is not a claim of arbitrary dialect parity.
+
+The pinned validator's evaluated-property tracking bypasses the custom
+ECMAScript matcher. Native compilation therefore rejects 2019-09/2020-12
+schema documents combining `unevaluatedProperties` with `patternProperties`
+unless every pattern is an ASCII literal, optionally beginning with `^` and/or
+ending with `$`. Literal bodies allow letters, digits, `_`, `:`, `/`, and `-`.
+This conservative document-wide check also covers nested and referenced schema
+branches. Draft-07 ECMAScript property matching, modern literal patterns, and
+modern schemas without that combination retain their normal validation paths.
+A refused schema reports
+`Native unevaluatedProperties requires literal patternProperties patterns`;
+it is not silently downgraded or accepted as parity.
+
 ## Verification
 
 For untrusted JSON, use `agentkit_contracts::parse_javascript_json` and the

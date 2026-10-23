@@ -158,3 +158,24 @@ test("run content keeps template roles and loads each selected skill once", asyn
   expect(resolved.messages[0]?.role).toBe("user");
   expect(resolved.blocks).toHaveLength(1);
 });
+
+test("removed template revisions remain reserved and cannot replace a durable selection", async () => {
+  const service = new PromptTemplateService(new MemoryPromptTemplateStore());
+  await service.publish(template);
+  await service.remove(template.id, template.revision);
+  expect(await service.get(template.id, template.revision)).toBeNull();
+  expect(await service.list()).toEqual([]);
+  await expect(
+    service.publish({
+      ...template,
+      messages: [{ role: "user", content: "replacement" }],
+    }),
+  ).rejects.toThrow("already exists");
+  await expect(
+    service.render({
+      id: template.id,
+      revision: template.revision,
+      arguments: { project: "AgentKit" },
+    }),
+  ).rejects.toThrow("revision not found");
+});

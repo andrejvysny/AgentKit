@@ -19,10 +19,7 @@ pub struct ConnectionRecord {
         skip_serializing_if = "Optional::is_absent"
     )]
     pub workspace_id: Optional<AiProviderKind>,
-    #[serde(
-        rename = "revision",
-        serialize_with = "crate::serialize_number"
-    )]
+    #[serde(rename = "revision", serialize_with = "crate::serialize_number")]
     pub revision: f64,
     #[serde(rename = "config")]
     pub config: ManagedConnectionConfig,

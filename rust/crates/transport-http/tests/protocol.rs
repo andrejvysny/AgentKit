@@ -64,10 +64,18 @@ impl Backend for Fake {
             return Ok(OperationResponse::json(201, body));
         }
         let status = match input.operation.as_str() {
-            "createChat" | "createProvider" | "createMcpServer" | "grantAllowance" | "forkChat" => {
-                201
-            }
-            "deleteChat" | "deleteProvider" | "deleteMcpServer" | "revokeAllowance" => 204,
+            "createChat"
+            | "createProvider"
+            | "createMcpServer"
+            | "grantAllowance"
+            | "forkChat"
+            | "publishPromptTemplate" => 201,
+            "deleteChat"
+            | "deleteProvider"
+            | "deleteMcpServer"
+            | "revokeAllowance"
+            | "deleteConnection"
+            | "deletePromptTemplate" => 204,
             "cancelRun" | "resumeRun" => 202,
             _ => 200,
         };
@@ -177,7 +185,7 @@ async fn all_48_routes_reach_backend_and_preserve_status() {
             assert_eq!(status, 202);
         }
     }
-    assert_eq!(fake.calls.lock().unwrap().len(), 38);
+    assert_eq!(fake.calls.lock().unwrap().len(), routes().len() - 1);
     task.abort();
 }
 

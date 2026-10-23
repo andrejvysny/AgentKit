@@ -7,12 +7,30 @@ one fetch-standard handler. The mirror image of
 tools into your runs, this one lets Claude Desktop, an IDE, or another agent
 call yours.
 
-Built on the official `@modelcontextprotocol/sdk` — the low-level `Server` plus
-its `WebStandardStreamableHTTPServerTransport`, so no Node `IncomingMessage`
-bridge and no framework: the handler takes a `Request` and returns a `Response`.
+Built on the official `@modelcontextprotocol/server@2.4.0`. Modern requests use
+`createMcpHandler`; the official `isLegacyRequest` classifier routes older peers
+to `WebStandardStreamableHTTPServerTransport`. Both paths use the same tool,
+authorization, resource and prompt handlers. The fetch handler takes a `Request`
+and returns a `Response`.
 What this package adds on top is the part a host would otherwise have to get
 right itself: constant-time bearer auth, a DNS-rebinding guard, a session's
 scope pinned at initialize, verbatim tool projection, and write-tool filtering.
+
+## Protocol compatibility
+
+The modern path serves protocol 2026-07-28 through a fresh server and application
+actor for each authenticated HTTP request. The host's `sessionScope` callback
+resolves trusted principal/chat context again for every request. Actor grants
+are revoked when that exchange closes; persistent approvals belong to host
+proposal state rather than a transport session. Request actor IDs and legacy
+transport session IDs are independently generated, never caller-selected.
+
+The legacy adapter retains session-pinned context and bearer binding. Real HTTP
+qualification covers 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05 and 2024-10-07,
+including an official SDK 1.30.0 client. Modern Node and Bun HTTP round trips are
+also exercised. Modern exchanges count against the same per-principal/global
+capacity budget as legacy sessions, and concurrent modern calls share the
+principal's bounded queue. Catalog staging remains local to each request actor.
 
 ## Wiring
 
@@ -108,7 +126,7 @@ is a native process that sends no `Origin`, so requiring one would refuse every
 real client to defend against a browser that is not there. Refusals are a `403`
 with no body; the reason goes to the `logger`.
 
-**A session's scope is resolved once, at `initialize`, from that request's
+**A legacy session's scope is resolved once, at `initialize`, from that request's
 headers.** `sessionScope(headers)` runs before the session exists, and the
 answer is closed over for the session's whole life. Two things are deliberately
 *not* inputs: anything in a message body, and the client's announced
@@ -258,8 +276,8 @@ a proposal, and applies it if the `WritePolicy` allows — but no chat UI is
 watching and nothing prompts a human. Turning writes on is a decision per
 server, and it belongs in the host's wiring where someone can see it.
 
-Each initialized session receives a fresh server-generated `actorId`, also used
-as its protocol session ID. Client names and supplied actor fields never choose
+Each legacy session and modern request receives a fresh server-generated
+`actorId`, independent of every transport session ID. Client names and supplied actor fields never choose
 this identity. The actor reaches contributor and guard contexts, execution
 metadata, proposal audit envelopes (`__agentkitInvocation`), and policy approval
 reasons. Two clients with the same name, credential, principal, and chat still
@@ -293,7 +311,7 @@ audit, deduplication, and implement `closeSession(scope)` for actor cleanup.
 Optional `resources: { list(scope), read(uri, scope) }` and
 `prompts: { list(scope), get(name, arguments, scope) }` expose host-owned,
 read-only extension sources. Capabilities are advertised only when supplied.
-All calls require the authenticated session, receive its pinned actor scope,
+All calls require authentication, receive their application actor scope,
 and check visibility against the host's current catalogue before resolving a
 resource or prompt. Required and unknown prompt arguments are checked. Host
 faults are logged locally and returned with fixed error text.

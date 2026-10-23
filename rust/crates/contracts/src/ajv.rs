@@ -11,21 +11,8 @@ use std::{collections::BTreeMap, sync::OnceLock};
 // jsonschema fixes keyword callbacks to its large borrowed ValidationError type.
 #[allow(clippy::result_large_err)]
 pub fn compile_tool_schema(schema: &Value) -> Result<crate::SchemaValidator, ValidationError> {
-    crate::properties_validation::compile(&tool_schema_document(schema), true)
-}
-
-fn tool_schema_document(value: &Value) -> Value {
-    match value {
-        Value::Object(object) => Value::Object(
-            object
-                .iter()
-                .filter(|(key, _)| key.as_str() != "$id" && key.as_str() != "$schema")
-                .map(|(key, value)| (key.clone(), tool_schema_document(value)))
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(items.iter().map(tool_schema_document).collect()),
-        _ => value.clone(),
-    }
+    crate::tool_schema_profile::check(schema)?;
+    crate::properties_validation::compile(schema, true)
 }
 
 // jsonschema fixes keyword callbacks to its large borrowed ValidationError type.
@@ -205,6 +192,24 @@ fn format_validator(name: &str) -> Result<FormatValidator, String> {
             regex,
             unicode: flags.contains('u'),
         });
+    }
+    if !matches!(
+        name,
+        "date"
+            | "date-time"
+            | "time"
+            | "iso-time"
+            | "iso-date-time"
+            | "uri"
+            | "regex"
+            | "int32"
+            | "int64"
+            | "float"
+            | "double"
+            | "password"
+            | "binary"
+    ) {
+        return Err(format!("Unknown tool schema format: {name}"));
     }
     let schema = json!({"format": if name == "iso-time" { "time" } else if name == "iso-date-time" { "date-time" } else {name}});
     schema_options()

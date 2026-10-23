@@ -111,3 +111,35 @@ fn assert_serialized_output(events: &[agentkit_contracts::AiRunEvent]) {
     let model: Value = serde_json::from_str(data["modelResultJson"].as_str().unwrap()).unwrap();
     assert_eq!(model["data"], result);
 }
+
+#[test]
+fn registry_preserves_schema_identity_and_instance_literals() {
+    let mut registry = ToolRegistry::new();
+    let schema = json!({
+        "$schema":"https://json-schema.org/draft/2020-12/schema",
+        "$id":"https://schemas.example.test/root.json",
+        "$defs":{"value":{"$id":"literal.json","const":{"$id":"user","$schema":"data"}}},
+        "type":"object", "properties":{"payload":{"$ref":"literal.json"}},
+        "required":["payload"], "unevaluatedProperties":false
+    });
+    registry
+        .register(Arc::new(Echo {
+            definition: serde_json::from_value(json!({"name":"echo","version":"1",
+            "effect":"read","capability":"test","description":"Echo","inputSchema":schema}))
+            .unwrap(),
+            inputs: Arc::new(Mutex::new(vec![])),
+        }))
+        .unwrap();
+    assert!(registry
+        .validate_input("echo", &json!({"payload":{"$id":"user","$schema":"data"}}))
+        .is_empty());
+    assert!(!registry
+        .validate_input("echo", &json!({"payload":{}}))
+        .is_empty());
+    assert!(!registry
+        .validate_input(
+            "echo",
+            &json!({"payload":{"$id":"user","$schema":"data"},"other":1})
+        )
+        .is_empty());
+}

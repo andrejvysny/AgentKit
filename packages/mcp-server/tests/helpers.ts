@@ -1,7 +1,7 @@
 import type { AiTool } from "@agentkit/core";
 import type { Clock, ToolSetContributor } from "@agentkit/host";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import type { McpServerHandler } from "../src/index.js";
 
 export const TEST_TOKEN = "test-token-0123456789";
@@ -150,22 +150,7 @@ export interface ServedHandler {
  * inside the handler's DEFAULT `allowedHosts`, which is the point: the happy
  * path here is the shipped default configuration, not a relaxed one.
  */
-const inProcessHandlers = new Map<string, McpServerHandler>();
-let inProcessPort = 20_000;
-
 export function serveHandler(handler: McpServerHandler): ServedHandler {
-  if (process.env.AGENTKIT_MCP_TEST_IN_PROCESS === "1") {
-    const port = inProcessPort++;
-    const url = new URL(`http://127.0.0.1:${port}/mcp`);
-    inProcessHandlers.set(url.origin, handler);
-    return {
-      url,
-      port,
-      async stop() {
-        inProcessHandlers.delete(url.origin);
-      },
-    };
-  }
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -185,28 +170,18 @@ export function serveHandler(handler: McpServerHandler): ServedHandler {
 export async function connectClient(
   url: URL,
   headers: Record<string, string>,
+  mode: "legacy" | "auto" = "legacy",
 ): Promise<{
   client: Client;
   transport: StreamableHTTPClientTransport;
 }> {
   const transport = new StreamableHTTPClientTransport(url, {
     requestInit: { headers },
-    ...(inProcessHandlers.has(url.origin)
-      ? {
-          fetch: async (input: string | URL, init?: RequestInit) => {
-            const requestHeaders = new Headers(init?.headers);
-            requestHeaders.set("host", new URL(input).host);
-            return inProcessHandlers.get(url.origin)!.fetch(
-              new Request(input.toString(), {
-                ...init,
-                headers: requestHeaders,
-              }),
-            );
-          },
-        }
-      : {}),
   });
-  const client = new Client({ name: "test-client", version: "1.0.0" });
+  const client = new Client(
+    { name: "test-client", version: "1.0.0" },
+    { versionNegotiation: { mode } },
+  );
   await client.connect(transport);
   return { client, transport };
 }

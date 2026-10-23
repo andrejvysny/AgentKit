@@ -1,16 +1,18 @@
 diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
 --- a/packages/core/src/index.ts
 +++ b/packages/core/src/index.ts
-@@ -33,5 +33,3 @@
+@@ -33,7 +33,5 @@
  export * from "./providers/openai-compatible.js";
- 
+
  export * from "./runs/execution-budget.js";
 -export * from "./providers/responses-types.js";
 -export * from "./providers/responses.js";
+ export * from "./prompts/templates.js";
+ export * from "./messages/tool-content.js";
 diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers/client.ts
 --- a/packages/core/src/providers/client.ts
 +++ b/packages/core/src/providers/client.ts
-@@ -1,8 +1,6 @@
+@@ -1,31 +1,15 @@
 -import type { AiProviderConnectionIdentity } from "./responses-types.js";
  import type { AiRunEvent } from "@agentkit/contracts";
  import type {
@@ -19,8 +21,19 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
    AiProviderCapabilities,
    AiProviderKind,
    AiProviderModel,
-@@ -12,11 +10,6 @@
+   AiToolDefinition,
+ } from "@agentkit/contracts";
+
+-export interface AiRunContent {
+-  /** Trusted, resolved selection for this run; separate from canonical history. */
+-  messages: readonly {
+-    role: "system" | "user" | "assistant";
+-    content: string;
+-  }[];
+-}
+-
  export interface AiChatRequest {
+-  runContent?: AiRunContent;
    /** Reserve a durable request budget immediately before each transport dispatch. */
    beforeRequest?: () => Promise<void>;
 -  /** Trusted host continuation; never populated from a public request body. */
@@ -31,7 +44,7 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
    /** Valid provider stream activity, including non-visible reasoning/tool fragments. */
    onActivity?: () => void;
    runId: string;
-@@ -31,9 +24,6 @@
+@@ -40,9 +24,6 @@
  export interface AiProviderClient {
    /** Calls beforeRequest for each network attempt, including internal retries. */
    readonly tracksTransportRequests?: boolean;
@@ -44,7 +57,7 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
 diff --git a/packages/core/src/runs/run-loop.ts b/packages/core/src/runs/run-loop.ts
 --- a/packages/core/src/runs/run-loop.ts
 +++ b/packages/core/src/runs/run-loop.ts
-@@ -2,7 +2,7 @@
+@@ -3,7 +3,7 @@
  import type { ExecutionBudget, ExecutionBudgets } from "./execution-budget.js";
  import { newRunId, newToolEventId, nowIso } from "../ids.js";
  import { createEventStamper, type EventStamper } from "../events.js";
@@ -53,10 +66,10 @@ diff --git a/packages/core/src/runs/run-loop.ts b/packages/core/src/runs/run-loo
  import type { AiToolRegistry } from "../tools/registry.js";
  import type { AiTool } from "../tools/tool.js";
  import type {
-@@ -23,14 +23,7 @@
+@@ -24,15 +24,7 @@
  import { truncateString } from "../tools/limits.js";
  import { dedupeToolCallIds } from "../tools/tool-calls.js";
- 
+
 -export interface RunChatInput
 -  extends Pick<
 -    AiChatRequest,
@@ -64,12 +77,13 @@ diff --git a/packages/core/src/runs/run-loop.ts b/packages/core/src/runs/run-loo
 -    | "continuationScope"
 -    | "continuationRequired"
 -    | "onContinuation"
+-    | "runContent"
 -  > {
 +export interface RunChatInput {
    budgets?: ExecutionBudgets;
    executionBudget?: ExecutionBudget;
    client: AiProviderClient;
-@@ -138,13 +131,6 @@
+@@ -140,13 +132,6 @@
      firstSeq: input.firstSeq,
      attemptId: input.attemptId,
    });
@@ -82,8 +96,8 @@ diff --git a/packages/core/src/runs/run-loop.ts b/packages/core/src/runs/run-loo
 -    : undefined;
    let iteration = 0;
    let finishReason: string | undefined;
- 
-@@ -199,11 +185,6 @@
+
+@@ -201,12 +186,6 @@
          temperature: input.temperature,
          maxOutputTokens: input.maxOutputTokens,
          signal: input.signal,
@@ -92,6 +106,7 @@ diff --git a/packages/core/src/runs/run-loop.ts b/packages/core/src/runs/run-loo
 -        continuationRequired:
 -          input.continuationRequired || continuation !== undefined,
 -        onContinuation,
+-        runContent: input.runContent,
        })) {
          // Re-yield provider events with the canonical runId.
          const stamped = { ...event, runId } as AiRunEvent;

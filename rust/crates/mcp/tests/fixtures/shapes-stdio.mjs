@@ -24,7 +24,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "echo",
-      inputSchema: { type: "object", "x-fixture": payload },
+      inputSchema: { type: "object", default: payload },
       _meta: payload,
     },
   ],

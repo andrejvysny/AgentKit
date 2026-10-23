@@ -1,9 +1,9 @@
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { Transport } from "@modelcontextprotocol/client";
 import {
   StdioClientTransport,
   getDefaultEnvironment,
-} from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+} from "@modelcontextprotocol/client/stdio";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import type { McpTransportConfig } from "./config.js";
 import { McpError } from "./errors.js";
 
@@ -36,7 +36,7 @@ export type McpTransportFactory = (
  * MCP server launched with an empty environment cannot find its own interpreter,
  * and the SDK's default set is the curated, PATH-carrying minimum.
  *
- * Closing a `StdioClientTransport` (SDK 1.30) ends stdin, then escalates to
+ * Closing a `StdioClientTransport` (SDK 2.4) ends stdin, then escalates to
  * SIGTERM and SIGKILL — so `dispose()` genuinely reaps the child and no extra
  * kill is needed here.
  */

@@ -116,9 +116,7 @@ fn prepare_schema(
     }
     let mut output = Map::new();
     for (key, child) in value.as_object().expect("object checked") {
-        if key != "$id" && key != "$schema" {
-            output.insert(key.clone(), prepare_schema(child, name, depth + 1, nodes)?);
-        }
+        output.insert(key.clone(), prepare_schema(child, name, depth + 1, nodes)?);
     }
     Ok(Value::Object(output))
 }

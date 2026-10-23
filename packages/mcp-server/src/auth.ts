@@ -55,10 +55,8 @@ export async function verifyBearer(
   authorizationHeader: string | null,
   expected: string,
 ): Promise<boolean> {
-  if (authorizationHeader === null) return false;
-  const match = BEARER.exec(authorizationHeader.trim());
-  if (!match?.[1]) return false;
-  return timingSafeEqualString(match[1], expected);
+  const token = bearerToken(authorizationHeader);
+  return token === undefined ? false : timingSafeEqualString(token, expected);
 }
 
 /**
@@ -110,5 +108,21 @@ export async function authFingerprint(
   const digest = await sha256(authorizationHeader ?? "");
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join(
     "",
+  );
+}
+
+function bearerToken(authorizationHeader: string | null): string | undefined {
+  return authorizationHeader === null
+    ? undefined
+    : BEARER.exec(authorizationHeader.trim())?.[1];
+}
+
+/** Bound resource budgets to accepted bearer credentials, not header spelling. */
+export function authSchedulingFingerprint(
+  authorizationHeader: string | null,
+): Promise<string> {
+  const token = bearerToken(authorizationHeader);
+  return authFingerprint(
+    token === undefined ? authorizationHeader : `Bearer ${token}`,
   );
 }

@@ -1003,6 +1003,24 @@
         "pattern": "^[a-f0-9]{64}$",
         "type": "string"
       },
+      "runContent": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "digest"
+        ],
+        "type": "object"
+      },
       "scope": {
         "additionalProperties": false,
         "properties": {

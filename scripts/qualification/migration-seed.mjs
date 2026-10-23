@@ -7,7 +7,7 @@ const outcome = await exerciseNodeHost(path);
 const store = new NodeSqliteAssistantStore(path);
 try {
   const schema = store.database.query("PRAGMA user_version").get().user_version;
-  assert.equal(schema, 8);
+  assert.equal(schema, 10);
   const messages = await store.conversations.listMessages(outcome.chatId);
   assert.ok(messages.length >= 2);
   const seed = {

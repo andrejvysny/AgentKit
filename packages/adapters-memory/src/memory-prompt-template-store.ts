@@ -1,7 +1,7 @@
 import type { PromptTemplate } from "@agentkit/contracts";
 import type { PromptTemplateStore } from "@agentkit/host";
 export class MemoryPromptTemplateStore implements PromptTemplateStore {
-  private readonly templates = new Map<string, PromptTemplate>();
+  private readonly templates = new Map<string, PromptTemplate | null>();
   private key(id: string, revision: string) {
     return JSON.stringify([id, revision]);
   }
@@ -15,9 +15,15 @@ export class MemoryPromptTemplateStore implements PromptTemplateStore {
     return structuredClone(this.templates.get(this.key(id, revision)) ?? null);
   }
   async list() {
-    return structuredClone([...this.templates.values()]);
+    return structuredClone(
+      [...this.templates.values()].filter(
+        (template): template is PromptTemplate => template !== null,
+      ),
+    );
   }
   async delete(id: string, revision: string) {
-    this.templates.delete(this.key(id, revision));
+    const key = this.key(id, revision);
+    // A deleted revision remains reserved so a durable selection cannot drift.
+    if (this.templates.has(key)) this.templates.set(key, null);
   }
 }

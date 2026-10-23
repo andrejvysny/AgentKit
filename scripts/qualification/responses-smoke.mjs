@@ -230,7 +230,7 @@ assert.equal(
 );
 if (process.argv[3]) {
   const seed = JSON.parse(readFileSync(process.argv[3], "utf8"));
-  assert.equal(seed.schema, 8);
+  assert.equal(seed.schema, 10);
   assert.equal(
     (await app.store.conversations.getChat(seed.chatId)).id,
     seed.chatId,

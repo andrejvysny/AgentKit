@@ -1,9 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import {
-  ErrorCode,
-  McpError as SdkMcpError,
-} from "@modelcontextprotocol/sdk/types.js";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
 import {
   McpClientManager,
   type McpServerConfig,
@@ -86,7 +82,8 @@ describe("MCP cancellation around connection waits", () => {
             name: "echo",
             handler: () => {
               called.resolve();
-              throw new SdkMcpError(ErrorCode.ConnectionClosed, "closed");
+              void harness.dropCurrent("notes");
+              return new Promise(() => {});
             },
           },
         ]),

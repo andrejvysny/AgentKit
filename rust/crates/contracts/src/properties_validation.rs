@@ -34,11 +34,17 @@ struct Context {
     entry_uri: String,
     marker: String,
     tools: bool,
+    draft: Draft,
     children: RwLock<BTreeMap<String, Arc<Validator>>>,
     compilations: AtomicUsize,
 }
 
 pub(crate) fn compile(schema: &Value, tools: bool) -> Result<SchemaValidator, ValidationError> {
+    let draft = if tools {
+        crate::tool_schema_profile::draft(schema)?
+    } else {
+        Draft::Draft7
+    };
     let (mut root, marker) = tool_schema_mirror(schema);
     let namespace = private_namespace(schema);
     let root_uri = resolve_root_id(&mut root, &namespace)?;
@@ -48,6 +54,7 @@ pub(crate) fn compile(schema: &Value, tools: bool) -> Result<SchemaValidator, Va
         entry_uri: format!("{namespace}entry"),
         marker,
         tools,
+        draft,
         children: RwLock::new(BTreeMap::new()),
         compilations: AtomicUsize::new(0),
     });
@@ -71,10 +78,11 @@ impl Context {
     #[allow(clippy::result_large_err)]
     fn compile_at(self: &Arc<Self>, pointer: &str) -> Result<Validator, ValidationError> {
         self.compilations.fetch_add(1, Ordering::Relaxed);
-        let resource = Draft::Draft7.create_resource(self.root.clone());
+        let resource = self.draft.create_resource(self.root.clone());
         let weak = Arc::downgrade(self);
         let additional_weak = weak.clone();
         let options = crate::ajv::profile_options(self.marker.clone(), self.tools)
+            .with_draft(self.draft)
             .with_resource(&self.root_uri, resource)
             .with_base_uri(&self.entry_uri)
             .with_keyword("patternProperties", move |parent, value, path| {

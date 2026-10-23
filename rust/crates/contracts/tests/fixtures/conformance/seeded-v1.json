@@ -135,8 +135,8 @@
             "slot": "root",
             "events": [
               {
-                "seq": 0,
-                "id": "a-0"
+                "seq": 2,
+                "id": "a-2"
               }
             ]
           },
@@ -151,11 +151,31 @@
             "slot": "root",
             "events": [
               {
-                "seq": 1,
+                "seq": 5,
+                "id": "a-5"
+              },
+              {
+                "seq": 9,
+                "id": "a-9"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 12,
                 "id": "partial"
               },
               {
-                "seq": 1,
+                "seq": 12,
                 "id": "bad-seq"
               }
             ]
@@ -171,8 +191,28 @@
             "slot": "root",
             "events": [
               {
-                "seq": 1,
-                "id": "a-0"
+                "seq": 12,
+                "id": "a-2"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 12,
+                "id": "partial"
+              },
+              {
+                "seq": 8,
+                "id": "regression"
               }
             ]
           },
@@ -204,11 +244,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -457,11 +505,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -658,11 +714,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -892,11 +956,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -1014,6 +1086,332 @@
               "nextSeq": 0
             }
           ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "submit",
+            "id": "numeric",
+            "scope": "numeric",
+            "priority": 0
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "numeric-owner"
+          },
+          "expected": "numeric"
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": -1,
+                "id": "invalid-first"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": -0.5,
+                "id": "",
+                "type": "",
+                "timestamp": "",
+                "contractVersion": ""
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.5,
+                "id": "half",
+                "type": "generic.fraction",
+                "timestamp": "arbitrary timestamp",
+                "contractVersion": "future"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.75,
+                "id": "partial"
+              },
+              {
+                "seq": 0.25,
+                "id": "bad"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.75,
+                "id": "partial"
+              },
+              {
+                "seq": 0.75,
+                "id": "bad"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 1e+100,
+                "id": "wide"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child",
+              "numeric"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
+                }
+              ],
+              "nextSeq": 10
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 11,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "completed",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 2,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                },
+                {
+                  "seq": 2,
+                  "id": "crash-2"
+                }
+              ],
+              "nextSeq": 3
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 11,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "numeric",
+              "scopeId": "numeric",
+              "status": "running",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": -0.5,
+                  "id": ""
+                },
+                {
+                  "seq": 0.5,
+                  "id": "half"
+                },
+                {
+                  "seq": 1e+100,
+                  "id": "wide"
+                }
+              ],
+              "nextSeq": 1e+100
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "numeric-owner",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
         },
         {
           "at": 1200,
@@ -1311,8 +1709,8 @@
             "slot": "root",
             "events": [
               {
-                "seq": 0,
-                "id": "a-0"
+                "seq": 2,
+                "id": "a-2"
               }
             ]
           },
@@ -1327,11 +1725,31 @@
             "slot": "root",
             "events": [
               {
-                "seq": 1,
+                "seq": 5,
+                "id": "a-5"
+              },
+              {
+                "seq": 9,
+                "id": "a-9"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 12,
                 "id": "partial"
               },
               {
-                "seq": 1,
+                "seq": 12,
                 "id": "bad-seq"
               }
             ]
@@ -1347,8 +1765,28 @@
             "slot": "root",
             "events": [
               {
-                "seq": 1,
-                "id": "a-0"
+                "seq": 12,
+                "id": "a-2"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 12,
+                "id": "partial"
+              },
+              {
+                "seq": 8,
+                "id": "regression"
               }
             ]
           },
@@ -1380,11 +1818,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -1633,11 +2079,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -1834,11 +2288,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -2068,11 +2530,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -2190,6 +2660,332 @@
               "nextSeq": 0
             }
           ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "submit",
+            "id": "numeric",
+            "scope": "numeric",
+            "priority": 0
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "numeric-owner"
+          },
+          "expected": "numeric"
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": -1,
+                "id": "invalid-first"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": -0.5,
+                "id": "",
+                "type": "",
+                "timestamp": "",
+                "contractVersion": ""
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.5,
+                "id": "half",
+                "type": "generic.fraction",
+                "timestamp": "arbitrary timestamp",
+                "contractVersion": "future"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.75,
+                "id": "partial"
+              },
+              {
+                "seq": 0.25,
+                "id": "bad"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.75,
+                "id": "partial"
+              },
+              {
+                "seq": 0.75,
+                "id": "bad"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 1e+100,
+                "id": "wide"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child",
+              "numeric"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
+                }
+              ],
+              "nextSeq": 10
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 5,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "completed",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 2,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                },
+                {
+                  "seq": 2,
+                  "id": "crash-2"
+                }
+              ],
+              "nextSeq": 3
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 5,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "numeric",
+              "scopeId": "numeric",
+              "status": "running",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": -0.5,
+                  "id": ""
+                },
+                {
+                  "seq": 0.5,
+                  "id": "half"
+                },
+                {
+                  "seq": 1e+100,
+                  "id": "wide"
+                }
+              ],
+              "nextSeq": 1e+100
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "numeric-owner",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
         },
         {
           "at": 1200,
@@ -2487,8 +3283,8 @@
             "slot": "root",
             "events": [
               {
-                "seq": 0,
-                "id": "a-0"
+                "seq": 2,
+                "id": "a-2"
               }
             ]
           },
@@ -2503,11 +3299,31 @@
             "slot": "root",
             "events": [
               {
-                "seq": 1,
+                "seq": 5,
+                "id": "a-5"
+              },
+              {
+                "seq": 9,
+                "id": "a-9"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 12,
                 "id": "partial"
               },
               {
-                "seq": 1,
+                "seq": 12,
                 "id": "bad-seq"
               }
             ]
@@ -2523,8 +3339,28 @@
             "slot": "root",
             "events": [
               {
-                "seq": 1,
-                "id": "a-0"
+                "seq": 12,
+                "id": "a-2"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 12,
+                "id": "partial"
+              },
+              {
+                "seq": 8,
+                "id": "regression"
               }
             ]
           },
@@ -2556,11 +3392,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -2809,11 +3653,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -3010,11 +3862,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -3244,11 +4104,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -3366,6 +4234,332 @@
               "nextSeq": 0
             }
           ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "submit",
+            "id": "numeric",
+            "scope": "numeric",
+            "priority": 0
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "numeric-owner"
+          },
+          "expected": "numeric"
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": -1,
+                "id": "invalid-first"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": -0.5,
+                "id": "",
+                "type": "",
+                "timestamp": "",
+                "contractVersion": ""
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.5,
+                "id": "half",
+                "type": "generic.fraction",
+                "timestamp": "arbitrary timestamp",
+                "contractVersion": "future"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.75,
+                "id": "partial"
+              },
+              {
+                "seq": 0.25,
+                "id": "bad"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.75,
+                "id": "partial"
+              },
+              {
+                "seq": 0.75,
+                "id": "bad"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 1e+100,
+                "id": "wide"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child",
+              "numeric"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
+                }
+              ],
+              "nextSeq": 10
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 14,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "completed",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 2,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                },
+                {
+                  "seq": 2,
+                  "id": "crash-2"
+                }
+              ],
+              "nextSeq": 3
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 14,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "numeric",
+              "scopeId": "numeric",
+              "status": "running",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": -0.5,
+                  "id": ""
+                },
+                {
+                  "seq": 0.5,
+                  "id": "half"
+                },
+                {
+                  "seq": 1e+100,
+                  "id": "wide"
+                }
+              ],
+              "nextSeq": 1e+100
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "numeric-owner",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
         },
         {
           "at": 1200,
@@ -3663,8 +4857,8 @@
             "slot": "root",
             "events": [
               {
-                "seq": 0,
-                "id": "a-0"
+                "seq": 2,
+                "id": "a-2"
               }
             ]
           },
@@ -3679,11 +4873,31 @@
             "slot": "root",
             "events": [
               {
-                "seq": 1,
+                "seq": 5,
+                "id": "a-5"
+              },
+              {
+                "seq": 9,
+                "id": "a-9"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 12,
                 "id": "partial"
               },
               {
-                "seq": 1,
+                "seq": 12,
                 "id": "bad-seq"
               }
             ]
@@ -3699,8 +4913,28 @@
             "slot": "root",
             "events": [
               {
-                "seq": 1,
-                "id": "a-0"
+                "seq": 12,
+                "id": "a-2"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1000,
+          "action": {
+            "op": "append",
+            "slot": "root",
+            "events": [
+              {
+                "seq": 12,
+                "id": "partial"
+              },
+              {
+                "seq": 8,
+                "id": "regression"
               }
             ]
           },
@@ -3732,11 +4966,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -3985,11 +5227,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -4186,11 +5436,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -4420,11 +5678,19 @@
               "poisonCount": 0,
               "events": [
                 {
-                  "seq": 0,
-                  "id": "a-0"
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
                 }
               ],
-              "nextSeq": 1
+              "nextSeq": 10
             },
             {
               "taskId": "b",
@@ -4542,6 +5808,332 @@
               "nextSeq": 0
             }
           ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "submit",
+            "id": "numeric",
+            "scope": "numeric",
+            "priority": 0
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "claim",
+            "slot": "numeric-owner"
+          },
+          "expected": "numeric"
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": -1,
+                "id": "invalid-first"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": -0.5,
+                "id": "",
+                "type": "",
+                "timestamp": "",
+                "contractVersion": ""
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.5,
+                "id": "half",
+                "type": "generic.fraction",
+                "timestamp": "arbitrary timestamp",
+                "contractVersion": "future"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.75,
+                "id": "partial"
+              },
+              {
+                "seq": 0.25,
+                "id": "bad"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 0.75,
+                "id": "partial"
+              },
+              {
+                "seq": 0.75,
+                "id": "bad"
+              }
+            ]
+          },
+          "expected": {
+            "error": "seq_conflict"
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "append",
+            "slot": "numeric-owner",
+            "events": [
+              {
+                "seq": 1e+100,
+                "id": "wide"
+              }
+            ]
+          },
+          "expected": {
+            "ok": true
+          }
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "checkpoint",
+            "ids": [
+              "a",
+              "b",
+              "c",
+              "cancel-child",
+              "cancel-root",
+              "crash",
+              "d",
+              "delayed",
+              "failed-child",
+              "numeric"
+            ]
+          },
+          "expected": [
+            {
+              "taskId": "a",
+              "scopeId": "a",
+              "status": "completed",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": 2,
+                  "id": "a-2"
+                },
+                {
+                  "seq": 5,
+                  "id": "a-5"
+                },
+                {
+                  "seq": 9,
+                  "id": "a-9"
+                }
+              ],
+              "nextSeq": 10
+            },
+            {
+              "taskId": "b",
+              "scopeId": "b",
+              "status": "failed",
+              "priority": 100,
+              "dependsOn": [
+                "a"
+              ],
+              "parentTaskId": "a",
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "c",
+              "scopeId": "c",
+              "status": "completed",
+              "priority": 13,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-child",
+              "scopeId": "cancel-child",
+              "status": "cancelled",
+              "priority": 10,
+              "dependsOn": [
+                "cancel-root"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "cancel-root",
+              "scopeId": "cancel-root",
+              "status": "cancelled",
+              "priority": 1,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "crash",
+              "scopeId": "crash",
+              "status": "completed",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 2,
+              "poisonCount": 1,
+              "events": [
+                {
+                  "seq": 0,
+                  "id": "crash-0"
+                },
+                {
+                  "seq": 1,
+                  "id": "crash-1"
+                },
+                {
+                  "seq": 2,
+                  "id": "crash-2"
+                }
+              ],
+              "nextSeq": 3
+            },
+            {
+              "taskId": "d",
+              "scopeId": "d",
+              "status": "completed",
+              "priority": 13,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "delayed",
+              "scopeId": "delayed",
+              "status": "cancelled",
+              "priority": 300,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "failed-child",
+              "scopeId": "failed-child",
+              "status": "failed",
+              "priority": 200,
+              "dependsOn": [
+                "b"
+              ],
+              "parentTaskId": null,
+              "attemptCount": 0,
+              "poisonCount": 0,
+              "events": [],
+              "nextSeq": 0
+            },
+            {
+              "taskId": "numeric",
+              "scopeId": "numeric",
+              "status": "running",
+              "priority": 0,
+              "dependsOn": [],
+              "parentTaskId": null,
+              "attemptCount": 1,
+              "poisonCount": 0,
+              "events": [
+                {
+                  "seq": -0.5,
+                  "id": ""
+                },
+                {
+                  "seq": 0.5,
+                  "id": "half"
+                },
+                {
+                  "seq": 1e+100,
+                  "id": "wide"
+                }
+              ],
+              "nextSeq": 1e+100
+            }
+          ]
+        },
+        {
+          "at": 1200,
+          "action": {
+            "op": "settle",
+            "slot": "numeric-owner",
+            "status": "completed"
+          },
+          "expected": {
+            "ok": true
+          }
         },
         {
           "at": 1200,

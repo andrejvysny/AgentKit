@@ -516,6 +516,23 @@ export class TurnRunner implements TaskWorker {
     const { task } = ctx;
     const conversations = fencedConversations(store, ctx);
     ctx.signal.throwIfAborted();
+    const selectedContent = request.contentSelection
+      ? await withHookDeadline({
+          hook: "runContent.resolve",
+          timeoutMs: this.hookTimeouts.context,
+          run: async () => {
+            if (!this.deps.runContent)
+              throw new Error(
+                "Run content selection requires a configured provider.",
+              );
+            return this.deps.runContent.resolve(request.contentSelection!, {
+              runId: task.taskId,
+              chatId,
+              signal: ctx.signal,
+            });
+          },
+        })
+      : { blocks: [], messages: [] };
     const settings = await store.settings.getSettings();
     const provider = await this.resolveProvider(request, settings);
     const model =
@@ -613,30 +630,15 @@ export class TurnRunner implements TaskWorker {
     // example for something that is not a tool here is not reported as one.
     const stagedToolNames = new Set(staged.namespaces.keys());
 
-    const selectedContent = request.contentSelection
-      ? await withHookDeadline({
-          hook: "runContent.resolve",
-          timeoutMs: this.hookTimeouts.context,
-          run: async () => {
-            if (!this.deps.runContent)
-              throw new Error(
-                "Run content selection requires a configured provider.",
-              );
-            return this.deps.runContent.resolve(request.contentSelection!, {
-              runId: task.taskId,
-              chatId,
-              signal: ctx.signal,
-            });
-          },
-        })
-      : { blocks: [], messages: [] };
     const baseSystemPrompt = await this.resolveSystemPrompt(ctx, chatId);
     const systemPrompt =
       [
         baseSystemPrompt ?? "",
-        ...selectedContent.blocks.map(
-          (block) => `\n## ${block.title}\n${block.content}`,
-        ),
+        ...(client.protocol === "responses"
+          ? []
+          : selectedContent.blocks.map(
+              (block) => `\n## ${block.title}\n${block.content}`,
+            )),
       ]
         .join("\n")
         .trim() || null;
@@ -670,7 +672,7 @@ export class TurnRunner implements TaskWorker {
       assistantMessageId,
       systemPrompt,
     );
-    if (selectedContent.messages.length) {
+    if (client.protocol !== "responses" && selectedContent.messages.length) {
       const systemIndex = assembled[0]?.role === "system" ? 1 : 0;
       assembled.splice(systemIndex, 0, ...selectedContent.messages);
     }
@@ -681,6 +683,19 @@ export class TurnRunner implements TaskWorker {
     const initialMessages = assembled.slice();
 
     const basePass = {
+      ...(client.protocol === "responses" && request.contentSelection
+        ? {
+            runContent: {
+              messages: [
+                ...selectedContent.messages,
+                ...selectedContent.blocks.map((block) => ({
+                  role: "system" as const,
+                  content: `## ${block.title}\n${block.content}`,
+                })),
+              ],
+            },
+          }
+        : {}),
       providerContinuation,
       task,
       chatId,
@@ -968,6 +983,7 @@ export class TurnRunner implements TaskWorker {
     const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
     const generator = runChat({
       ...continuationRequest(input.providerContinuation),
+      runContent: input.runContent,
       client: input.client,
       registry: input.registry,
       model: input.model,
@@ -1037,7 +1053,10 @@ export class TurnRunner implements TaskWorker {
       chatId: input.chatId,
       providerId: input.providerId,
       model: input.model,
-      estimatedPromptTokens: estimatePromptTokens(input.messages),
+      estimatedPromptTokens: estimatePromptTokens([
+        ...input.messages,
+        ...(input.runContent?.messages ?? []),
+      ]),
     });
     if (decision.allowed) return;
 

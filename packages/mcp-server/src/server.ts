@@ -1,17 +1,25 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
-  CallToolRequestSchema,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
+  createMcpHandler,
+  isLegacyRequest,
+  isJsonContentType,
+  Server,
+} from "@modelcontextprotocol/server";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
+import {
+  ProtocolErrorCode,
+  ProtocolError as McpError,
   isInitializeRequest,
   SUPPORTED_PROTOCOL_VERSIONS,
   type CallToolResult,
   type ListToolsResult,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/server";
 import { defaultClock, type ToolCatalogEntry } from "@agentkit/host";
-import { authFingerprint, resolveAuth, timingSafeEqualString } from "./auth.js";
+import {
+  authFingerprint,
+  authSchedulingFingerprint,
+  resolveAuth,
+  timingSafeEqualString,
+} from "./auth.js";
 import { checkRebindingGuard } from "./guard.js";
 import { installHostExtensions } from "./extensions.js";
 import {
@@ -86,6 +94,8 @@ interface SessionEntry {
    * at initialize; every later request must present the same one.
    */
   fingerprint: string;
+  /** Canonical verified credential identity for capacity and scheduling only. */
+  schedulingIdentity: string;
   runtime: SessionRuntime;
   /**
    * Set when the session could not be registered because the cap was reached
@@ -101,7 +111,7 @@ interface SessionEntry {
  *
  * Mount `handler.fetch` at a path (`/mcp` by convention) on whatever server the
  * host already runs — `Bun.serve`, `Deno.serve`, a Node adapter, a Worker. The
- * package brings the protocol (the official `@modelcontextprotocol/sdk`'s
+ * package brings the protocol (the official `@modelcontextprotocol/server`'s
  * web-standard streamable-HTTP transport) and the policy; it never opens a
  * socket, because a transport that started owning ports and TLS would stop
  * being optional.
@@ -161,6 +171,51 @@ export function createMcpServerHandler(
   const sessions = new Map<string, SessionEntry>();
   let disposed = false;
 
+  const modernCleanups = new Set<Promise<void>>();
+  const modernAdmissions = new Map<string, number>();
+  let modernReserved = 0;
+  const modernActors = new Set<SessionEntry>();
+  const modernSchedulers = new Map<
+    string,
+    { runtime: SessionRuntime; actors: number }
+  >();
+  const modernRequests = new WeakMap<Request, SessionEntry>();
+  const modern = createMcpHandler(
+    (context) => {
+      const entry =
+        context.requestInfo && modernRequests.get(context.requestInfo);
+      if (!entry) throw new Error("Missing authenticated MCP request scope");
+      entry.server.onclose = () => releaseModern(entry);
+      return entry.server;
+    },
+    { legacy: "reject", maxRequestBodySize: maxRequestBytes },
+  );
+
+  function releaseModern(entry: SessionEntry): void {
+    if (!modernActors.delete(entry)) return;
+    const cleanup = releaseSession(entry);
+    modernCleanups.add(cleanup);
+    void cleanup.finally(() => modernCleanups.delete(cleanup));
+    const scheduler = modernSchedulers.get(entry.schedulingIdentity);
+    if (scheduler) {
+      scheduler.actors -= 1;
+      pruneModernScheduler(scheduler.runtime);
+    }
+    releaseModernAdmission(entry.schedulingIdentity);
+  }
+  function pruneModernScheduler(runtime: SessionRuntime): void {
+    if (runtime.running > 0 || runtime.waiters.length > 0) return;
+    for (const [fingerprint, scheduler] of modernSchedulers)
+      if (scheduler.runtime === runtime && scheduler.actors === 0)
+        modernSchedulers.delete(fingerprint);
+  }
+  function releaseModernAdmission(fingerprint: string): void {
+    modernReserved -= 1;
+    const count = (modernAdmissions.get(fingerprint) ?? 1) - 1;
+    if (count === 0) modernAdmissions.delete(fingerprint);
+    else modernAdmissions.set(fingerprint, count);
+  }
+
   /**
    * Build one session's `Server`, with both tool handlers closed over the scope
    * resolved for it. A fresh `Server` per session (rather than one shared across
@@ -170,6 +225,7 @@ export function createMcpServerHandler(
   function buildServer(
     scope: McpSessionScope,
     runtime: SessionRuntime,
+    scheduler: SessionRuntime = runtime,
   ): Server {
     const server = new Server(serverInfo, {
       capabilities: {
@@ -180,13 +236,13 @@ export function createMcpServerHandler(
     });
 
     server.setRequestHandler(
-      ListToolsRequestSchema,
+      "tools/list",
       async (_request, extra): Promise<ListToolsResult> => {
         beginRequest(runtime);
         try {
           const signal = scope.signal
-            ? AbortSignal.any([scope.signal, extra.signal])
-            : extra.signal;
+            ? AbortSignal.any([scope.signal, extra.mcpReq.signal])
+            : extra.mcpReq.signal;
           signal.throwIfAborted();
           const entries = await listCatalog(runtime, { ...scope, signal });
           return {
@@ -206,18 +262,23 @@ export function createMcpServerHandler(
     });
 
     server.setRequestHandler(
-      CallToolRequestSchema,
+      "tools/call",
       async (request, extra): Promise<CallToolResult> => {
         // Counted BEFORE the queue wait, not after it: a session whose calls are
         // all still waiting for a permit is as busy as one executing them, and
         // reaping it would drop answers nobody has produced yet.
         beginRequest(runtime);
         try {
-          await acquireCallSlot(runtime, extra.signal);
+          await acquireCallSlot(
+            scheduler,
+            scope.signal
+              ? AbortSignal.any([scope.signal, extra.mcpReq.signal])
+              : extra.mcpReq.signal,
+          );
           try {
             const signal = scope.signal
-              ? AbortSignal.any([scope.signal, extra.signal])
-              : extra.signal;
+              ? AbortSignal.any([scope.signal, extra.mcpReq.signal])
+              : extra.mcpReq.signal;
             signal.throwIfAborted();
             return await callTool(
               request.params,
@@ -225,7 +286,7 @@ export function createMcpServerHandler(
               runtime,
             );
           } finally {
-            releaseCallSlot(runtime);
+            releaseCallSlot(scheduler);
           }
         } finally {
           finishRequest(runtime);
@@ -243,7 +304,10 @@ export function createMcpServerHandler(
     runtime: SessionRuntime,
   ): Promise<CallToolResult> {
     if (runtime.closed)
-      throw new McpError(ErrorCode.InvalidRequest, "MCP session is closed");
+      throw new McpError(
+        ProtocolErrorCode.InvalidRequest,
+        "MCP session is closed",
+      );
     const name = params.name;
     const entries = visibleEntries(
       await listCatalog(runtime, scope),
@@ -259,9 +323,18 @@ export function createMcpServerHandler(
       // error (a JSON-RPC error response the SDK builds from this), not a
       // tool that ran and failed. Reporting it as `isError` content would
       // tell the model its call was dispatched.
-      throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);
+      throw new McpError(
+        ProtocolErrorCode.InvalidParams,
+        `Unknown tool: ${name}`,
+      );
     }
 
+    scope?.signal?.throwIfAborted();
+    if (runtime.closed)
+      throw new McpError(
+        ProtocolErrorCode.InvalidRequest,
+        "MCP session is closed",
+      );
     try {
       const envelope = await tools.execute(name, params.arguments ?? {}, scope);
       return projectEnvelope(envelope);
@@ -325,7 +398,7 @@ export function createMcpServerHandler(
           error: String(err),
         });
         throw new McpError(
-          ErrorCode.InternalError,
+          ProtocolErrorCode.InternalError,
           "Host tool catalogue failed",
         );
       });
@@ -366,6 +439,7 @@ export function createMcpServerHandler(
     const next = runtime.waiters.shift();
     if (next === undefined) {
       runtime.running -= 1;
+      pruneModernScheduler(runtime);
       return;
     }
     next();
@@ -518,10 +592,10 @@ export function createMcpServerHandler(
    */
   function evictForCapacity(fingerprint: string): boolean {
     const perPrincipal = evictOldest(
-      maxSessions,
-      (entry) => entry.fingerprint === fingerprint,
+      maxSessions - (modernAdmissions.get(fingerprint) ?? 0),
+      (entry) => entry.schedulingIdentity === fingerprint,
     );
-    const global = evictOldest(globalMaxSessions, () => true);
+    const global = evictOldest(globalMaxSessions - modernReserved, () => true);
     return perPrincipal && global;
   }
 
@@ -573,11 +647,17 @@ export function createMcpServerHandler(
     }
   }
 
-  async function openSession(headers: Headers): Promise<SessionEntry> {
+  async function openSession(
+    headers: Headers,
+    request?: Request,
+  ): Promise<SessionEntry> {
     // Taken from the request that INITIALIZES the session, before the session
     // exists, for the same reason the scope is: it is what the caller proved
     // with, not something a later message can restate.
     const fingerprint = await authFingerprint(headers.get("authorization"));
+    const schedulingIdentity = await authSchedulingFingerprint(
+      headers.get("authorization"),
+    );
     const resolved = await options.sessionScope?.(headers);
     const actorId = crypto.randomUUID();
     const controller = new AbortController();
@@ -599,9 +679,17 @@ export function createMcpServerHandler(
       controller,
       closed: false,
     };
-    const server = buildServer(scope, runtime);
+    let scheduler = runtime;
+    if (request) {
+      const shared = modernSchedulers.get(schedulingIdentity);
+      if (shared) {
+        shared.actors += 1;
+        scheduler = shared.runtime;
+      } else modernSchedulers.set(schedulingIdentity, { runtime, actors: 1 });
+    }
+    const server = buildServer(scope, runtime, scheduler);
     const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => actorId,
+      sessionIdGenerator: () => crypto.randomUUID(),
       onsessioninitialized: (sessionId) => {
         // `dispose()` can land while this initialize was in flight (resolving
         // the scope, connecting). Registering now would leak a live session
@@ -614,7 +702,7 @@ export function createMcpServerHandler(
         // At the moment of insertion, not before it: two initializes racing
         // each other would both pass a check made earlier and leave the map one
         // over the cap.
-        if (!evictForCapacity(fingerprint)) {
+        if (!evictForCapacity(schedulingIdentity)) {
           logger?.warn("mcp session refused: capacity full", { sessionId });
           entry.capacityRefused = true;
           releaseSession(entry);
@@ -635,6 +723,7 @@ export function createMcpServerHandler(
       transport,
       scope,
       fingerprint,
+      schedulingIdentity,
       runtime,
       capacityRefused: false,
     };
@@ -645,7 +734,10 @@ export function createMcpServerHandler(
       if (sessionId !== undefined) sessions.delete(sessionId);
       releaseSession(entry);
     };
-    await server.connect(transport);
+    if (request) {
+      modernRequests.set(request, entry);
+      modernActors.add(entry);
+    } else await server.connect(transport);
     return entry;
   }
 
@@ -676,7 +768,11 @@ export function createMcpServerHandler(
         });
       }
       const version = request.headers.get("mcp-protocol-version");
-      if (version !== null && !SUPPORTED_PROTOCOL_VERSIONS.includes(version)) {
+      if (
+        version !== null &&
+        version !== "2026-07-28" &&
+        !SUPPORTED_PROTOCOL_VERSIONS.includes(version)
+      ) {
         return jsonRpcError(400, -32600, "Unsupported MCP protocol version");
       }
 
@@ -706,6 +802,53 @@ export function createMcpServerHandler(
             `Invalid Request: batch of ${body.length} messages exceeds the ` +
               `limit of ${maxBatchSize}`,
           );
+        }
+      }
+
+      if (
+        request.method === "POST" &&
+        !isJsonContentType(request.headers.get("content-type"))
+      )
+        return jsonRpcError(
+          415,
+          -32600,
+          "Content-Type must be application/json",
+        );
+      if (
+        !(await isLegacyRequest(request, body, {
+          maxRequestBodySize: maxRequestBytes,
+        }))
+      ) {
+        const fingerprint = await authSchedulingFingerprint(
+          request.headers.get("authorization"),
+        );
+        const active = modernAdmissions.get(fingerprint) ?? 0;
+        const legacyCount = [...sessions.values()].filter(
+          (entry) => entry.schedulingIdentity === fingerprint,
+        ).length;
+        if (
+          active + legacyCount >= maxSessions ||
+          modernReserved + sessions.size >= globalMaxSessions
+        )
+          return capacityRefusal();
+        modernAdmissions.set(fingerprint, active + 1);
+        modernReserved += 1;
+        let entry: SessionEntry;
+        try {
+          entry = await openSession(request.headers, request);
+        } catch (error) {
+          releaseModernAdmission(fingerprint);
+          throw error;
+        }
+        try {
+          return await modern.fetch(request, { parsedBody: body });
+        } catch (error) {
+          await entry.server.close();
+          throw error;
+        } finally {
+          modernRequests.delete(request);
+          // Rejected envelopes may never reach the server factory.
+          if (!entry.server.transport) releaseModern(entry);
         }
       }
 
@@ -774,7 +917,11 @@ export function createMcpServerHandler(
 
     async dispose(): Promise<void> {
       disposed = true;
-      const open = [...sessions.values()];
+      await modern.close();
+      await Promise.all([...modernCleanups]);
+      const open = [...sessions.values(), ...modernActors];
+      modernActors.clear();
+      modernSchedulers.clear();
       sessions.clear();
       for (const entry of open) {
         await releaseSession(entry);

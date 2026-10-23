@@ -99,6 +99,13 @@ describe(`SQLite durability: ${bun ? "Bun" : "Node"}`, () => {
     scratch(async (path) => {
       await seed(path, true);
       const db = raw(path);
+      assert.equal(scalar(db, "PRAGMA user_version", "user_version"), 8);
+      assert.equal(
+        rows(db, "PRAGMA table_info(messages)").some(
+          (column) => column.name === "archived",
+        ),
+        false,
+      );
       db.exec(
         "INSERT INTO message_search(message_search) VALUES ('delete-all')",
       );
@@ -106,6 +113,17 @@ describe(`SQLite durability: ${bun ? "Bun" : "Node"}`, () => {
       const store = new Store(path);
       try {
         await verifyPopulated(store);
+        assert.equal(
+          scalar(store.database, "PRAGMA user_version", "user_version"),
+          SCHEMA_VERSION,
+        );
+        assert.deepEqual(
+          rows(
+            store.database,
+            "SELECT archived FROM messages ORDER BY order_key",
+          ).map((message) => Number(message.archived)),
+          [0, 0],
+        );
       } finally {
         store.close();
       }

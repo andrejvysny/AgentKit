@@ -5,20 +5,20 @@ import type {
   ReadResourceResult,
   Prompt,
   GetPromptResult,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/server";
 
 /**
  * The scope one MCP session works in.
  *
- * Resolved ONCE, from the transport headers of the request that initialized the
- * session (see {@link McpServerHandlerOptions.sessionScope}), and never from
+ * Resolved per authenticated modern request, or once at legacy initialization
+ * (see {@link McpServerHandlerOptions.sessionScope}), and never from
  * anything the client puts in a message body: a `chatId` a client can name per
  * call is a `chatId` a client can name someone else's.
  */
 export interface McpSessionScope {
   /** Minted by the server, never taken from a client name or request body. */
   actorId?: string;
-  /** Server session lifetime; aborted before ephemeral grants are revoked. */
+  /** Actor lifetime; aborted before ephemeral grants are revoked. */
   signal?: AbortSignal;
   chatId?: string;
   /**

@@ -255,7 +255,7 @@ function qualifyMigration() {
     directory,
     "migration-a-install",
   );
-  const database = join(output, "migration-8-to-9.sqlite");
+  const database = join(output, "foundation-to-responses.sqlite");
   run("node", ["migration-seed.mjs", database], directory, "migration-a-seed");
   run(
     "node",
@@ -271,8 +271,9 @@ function qualifyMigration() {
   evidence.migration = {
     artifact: previous,
     sha256: previousDigest,
-    from: 8,
-    to: 9,
+    kind: "candidate-continuity",
+    from: 10,
+    to: 10,
     populated: true,
     reopened: true,
   };

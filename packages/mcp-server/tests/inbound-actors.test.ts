@@ -88,8 +88,17 @@ function fixture(outcome?: {
     clock: harness.clock,
     ids: harness.ids,
   });
+  const actors: McpSessionScope[] = [];
   const handler = createMcpServerHandler({
-    tools,
+    tools: {
+      ...tools,
+      catalog: {
+        async listTools(scope) {
+          actors.push(scope!);
+          return tools.catalog.listTools(scope);
+        },
+      },
+    },
     auth: { bearerToken: TEST_TOKEN },
     writesEnabled: true,
     sessionScope: () => ({
@@ -107,6 +116,10 @@ function fixture(outcome?: {
     handler,
     served,
     seen,
+    async actorOf(client: { listTools(): Promise<unknown> }) {
+      await client.listTools();
+      return actors.at(-1)!.actorId!;
+    },
     setRevision: (value: string) => {
       revision = value;
     },
@@ -117,6 +130,10 @@ it("same-name clients have distinct actors, grants and action keys; disconnect r
   const f = fixture();
   const a = await connectClient(f.served.url, authHeaders());
   const b = await connectClient(f.served.url, authHeaders());
+  const aActor = await f.actorOf(a.client);
+  const bActor = await f.actorOf(b.client);
+  expect(aActor).not.toBe(a.transport.sessionId);
+  expect(bActor).not.toBe(b.transport.sessionId);
   const input = { action_id: "remove_item_design-1", item: "item-1" };
   const grant = {
     chatId: "chat-1",
@@ -127,7 +144,7 @@ it("same-name clients have distinct actors, grants and action keys; disconnect r
     revision: "rev-1",
     maxRisk: "destructive",
   } as const;
-  f.policy.allow({ ...grant, actorId: a.transport.sessionId! });
+  f.policy.allow({ ...grant, actorId: aActor });
   const authorized = await a.client.callTool({
     name: "demo_remove",
     arguments: input,
@@ -145,9 +162,9 @@ it("same-name clients have distinct actors, grants and action keys; disconnect r
   expect(records[1]!.status).toBe("pending");
   expect(f.applier.calls).toHaveLength(1);
   expect(f.seen.map((scope) => scope.actorId)).toEqual([
-    a.transport.sessionId,
-    a.transport.sessionId,
-    b.transport.sessionId,
+    aActor,
+    aActor,
+    bActor,
   ]);
   expect(
     f.seen.every(
@@ -155,10 +172,10 @@ it("same-name clients have distinct actors, grants and action keys; disconnect r
         scope.actorId !== "client-forged" && scope.principal === "same-user",
     ),
   ).toBe(true);
-  f.policy.allow({ ...grant, actorId: b.transport.sessionId! });
+  f.policy.allow({ ...grant, actorId: bActor });
   await a.transport.terminateSession();
   expect(f.policy.list("chat-1").map((allowance) => allowance.actorId)).toEqual(
-    [b.transport.sessionId],
+    [bActor],
   );
   await a.client.close();
   await b.client.close();
@@ -166,17 +183,14 @@ it("same-name clients have distinct actors, grants and action keys; disconnect r
 
 it("changed arguments or revision cannot reuse an actor approval", async () => {
   const f = fixture();
-  const { client, transport } = await connectClient(
-    f.served.url,
-    authHeaders(),
-  );
+  const { client } = await connectClient(f.served.url, authHeaders());
   const input = { action_id: "remove_item_design-1", item: "item-1" };
   f.policy.allow({
     chatId: "chat-1",
     toolName: "demo_remove",
     proposalKind: "items.remove",
     scopeKey: "design-1",
-    actorId: transport.sessionId!,
+    actorId: await f.actorOf(client),
     payloadFingerprint: await writePayloadFingerprint(input),
     revision: "rev-1",
     maxRisk: "destructive",
@@ -199,17 +213,14 @@ it("changed arguments or revision cannot reuse an actor approval", async () => {
 
 it("concurrent repeated writes apply and record once", async () => {
   const f = fixture();
-  const { client, transport } = await connectClient(
-    f.served.url,
-    authHeaders(),
-  );
+  const { client } = await connectClient(f.served.url, authHeaders());
   const input = { action_id: "remove_item_design-1", item: "item-1" };
   f.policy.allow({
     chatId: "chat-1",
     toolName: "demo_remove",
     proposalKind: "items.remove",
     scopeKey: "design-1",
-    actorId: transport.sessionId!,
+    actorId: await f.actorOf(client),
     payloadFingerprint: await writePayloadFingerprint(input),
     revision: "rev-1",
     maxRisk: "destructive",
@@ -266,17 +277,14 @@ it("projects partial auto-apply as isError with exact skipped operations", async
     appliedOps: 1,
     failedOps: [{ opIndex: 1, error: "missing target" }],
   });
-  const { client, transport } = await connectClient(
-    f.served.url,
-    authHeaders(),
-  );
+  const { client } = await connectClient(f.served.url, authHeaders());
   const input = { action_id: "remove_item_design-1", item: "item-1" };
   f.policy.allow({
     chatId: "chat-1",
     toolName: "demo_remove",
     proposalKind: "items.remove",
     scopeKey: "design-1",
-    actorId: transport.sessionId!,
+    actorId: await f.actorOf(client),
     payloadFingerprint: await writePayloadFingerprint(input),
     revision: "rev-1",
     maxRisk: "destructive",

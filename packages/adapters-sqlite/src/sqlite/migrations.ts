@@ -17,6 +17,30 @@ export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = Object.freeze([
 ]);
 export const MIN_SUPPORTED_SCHEMA_VERSION = 8;
 
+// Optional stores share the owned database without changing its core version.
+const OPTIONAL_TABLES = {
+  connector_connections:
+    "CREATE TABLE connector_connections (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, record TEXT NOT NULL)",
+  prompt_templates:
+    "CREATE TABLE prompt_templates (id TEXT NOT NULL, revision TEXT NOT NULL, template TEXT NOT NULL, PRIMARY KEY(id, revision))",
+};
+
+function assertOptionalTables(db: SqliteDatabase): void {
+  for (const [name, sql] of Object.entries(OPTIONAL_TABLES)) {
+    const row = db
+      .query(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = $name",
+      )
+      .get({ $name: name }) as { sql: string } | null;
+    if (row && canonical(row.sql) !== canonical(sql)) {
+      throw new AgentKitHostError(
+        "sqlite_schema_integrity",
+        `Unrecognized optional AgentKit table ${name}; refusing to change this database.`,
+      );
+    }
+  }
+}
+
 function versionOf(db: SqliteDatabase): number {
   const row = normalizeRow(db.query("PRAGMA user_version").get()) as {
     user_version?: number;
@@ -60,7 +84,10 @@ function assertOwnership(
       "Foreign SQLite application_id; refusing to change this database.",
     );
   }
-  const allowed = new Set(declaredTables(SCHEMA_V8));
+  const allowed = new Set([
+    ...declaredTables(SCHEMA_V8),
+    ...Object.keys(OPTIONAL_TABLES),
+  ]);
   const migrated = new Set<string>();
   for (const step of migrations.filter(
     (migration) => migration.to <= version,
@@ -187,6 +214,7 @@ export function inspectSchema(
   if (version < MIN_SUPPORTED_SCHEMA_VERSION || version > target) {
     unsupportedVersion(version, target);
   }
+  assertOptionalTables(db);
   assertBaseline(db, version);
   assertMigratedTables(db, version, migrations);
   assertIntegrity(db);

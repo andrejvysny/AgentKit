@@ -111,7 +111,8 @@ it("advertises and serves only host-supplied resources and prompts, without a pr
   expect(
     seen.every(
       (scope) =>
-        scope.actorId === transport.sessionId &&
+        typeof scope.actorId === "string" &&
+        scope.actorId !== transport.sessionId &&
         scope.chatId === "chat-1" &&
         scope.principal === "user-1",
     ),
@@ -139,7 +140,7 @@ it("keeps extension faults private and does not advertise absent extension seams
   opened.push({ handler, served });
   const { client } = await connectClient(served.url, authHeaders());
   expect(client.getServerCapabilities()?.prompts).toBeUndefined();
-  await expect(client.listPrompts()).rejects.toThrow();
+  expect((await client.listPrompts()).prompts).toEqual([]);
   await expect(client.listResources()).rejects.toThrow(
     "Host MCP extension failed",
   );

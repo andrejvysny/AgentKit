@@ -199,22 +199,36 @@ async fn rust_client_exercises_all_48_operations_against_the_actual_typescript_h
     fixture
         .call(Op::DeleteChat, request(&[("chatId", &chat)], None), "", 204)
         .await;
-    for op in [Op::ListConnections, Op::SaveConnection, Op::DeleteConnection,
-        Op::ConnectionAction, Op::ListPromptTemplates, Op::PublishPromptTemplate,
-        Op::DeletePromptTemplate, Op::RenderPromptTemplate, Op::ListSkills] {
+    for op in [
+        Op::ListConnections,
+        Op::SaveConnection,
+        Op::DeleteConnection,
+        Op::ConnectionAction,
+        Op::ListPromptTemplates,
+        Op::PublishPromptTemplate,
+        Op::DeletePromptTemplate,
+        Op::RenderPromptTemplate,
+        Op::ListSkills,
+    ] {
         fixture.covered.insert(op.as_str().into(), 501);
         let case = fixture.expected_requests.len().to_string();
-        fixture.expected_requests.insert(case.clone(), (op.as_str().into(), 501));
+        fixture
+            .expected_requests
+            .insert(case.clone(), (op.as_str().into(), 501));
         let mut call = Call::default();
         for segment in op.route().path.split('/') {
             if let Some(name) = segment.strip_prefix(':') {
                 call.path.insert(name.into(), "optional-service".into());
             }
         }
-        call.headers.insert("x-agentkit-case", case.parse().unwrap());
-        call.headers.insert("x-agentkit-operation", op.as_str().parse().unwrap());
-        assert!(matches!(fixture.client.call(op, call).await,
-            Err(agentkit_client::ClientError::Http { status: 501, .. })));
+        call.headers
+            .insert("x-agentkit-case", case.parse().unwrap());
+        call.headers
+            .insert("x-agentkit-operation", op.as_str().parse().unwrap());
+        assert!(matches!(
+            fixture.client.call(op, call).await,
+            Err(agentkit_client::ClientError::Http { status: 501, .. })
+        ));
     }
     fixture.verify().await;
 }

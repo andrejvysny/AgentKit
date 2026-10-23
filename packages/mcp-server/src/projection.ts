@@ -1,6 +1,6 @@
 import type { AiToolEnvelope } from "@agentkit/contracts";
 import type { ToolCatalogEntry } from "@agentkit/host";
-import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, Tool } from "@modelcontextprotocol/server";
 
 /**
  * Is this tool a write?

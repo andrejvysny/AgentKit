@@ -17,6 +17,16 @@ export const AiProviderContinuationSchema = Type.Object(
       },
       { additionalProperties: false },
     ),
+    /** Pins transient content for one run without changing canonical history. */
+    runContent: Type.Optional(
+      Type.Object(
+        {
+          runId: Type.String({ minLength: 1 }),
+          digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     messageCount: Type.Integer({ minimum: 0 }),
     messageDigest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
     /** Contains opaque encrypted provider state. Trusted storage only, never a public DTO. */
