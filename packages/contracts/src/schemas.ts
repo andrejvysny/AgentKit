@@ -24,6 +24,7 @@ export {
   AiTextPartSchema,
   AiImageSourceSchema,
   AiImagePartSchema,
+  AiAudioPartSchema,
   AiContentPartSchema,
   AiMessageContentSchema,
 } from "./content.js";
@@ -50,7 +51,11 @@ export {
   AiChatMessageSchema,
 } from "./provider.js";
 
-export { AiPromptPresetSchema, AiPromptContextBlockSchema } from "./prompt.js";
+export {
+  AiPromptPresetSchema,
+  AiPromptContextBlockSchema,
+  RunContentSelectionSchema,
+} from "./prompt.js";
 
 export {
   AiRunEventTypeSchema,
@@ -123,3 +128,10 @@ export {
 } from "./rest.js";
 
 export { AiProviderContinuationSchema } from "./provider-continuation.js";
+
+export {
+  ManagedConnectionConfigSchema,
+  ConnectionStatusSchema,
+  ConnectionRecordSchema,
+  PromptTemplateSchema,
+} from "./managed-content.js";

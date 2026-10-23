@@ -111,13 +111,16 @@ describe("createMcpToolSetContributor", () => {
       ],
       { idx: searchServer },
     );
-    const tools = await createMcpToolSetContributor(manager).contribute(CTX);
+    const tools = await createMcpToolSetContributor(manager, {
+      classify: (descriptor) => descriptor.effect,
+      authorize: async () => true,
+    }).contribute(CTX);
     const search = tools[0]?.definition;
     expect(search?.name).toBe("mcp__idx__search");
     // The canonical id survives on `capability` — it is the routing key.
     expect(search?.capability).toBe("mcp.idx.search");
     expect(search?.description).toBe("Search the index");
-    expect(search?.effect).toBe("read");
+    expect(search?.effect).toBe("write");
     expect(search?.inputSchema).toEqual(RICH_SCHEMA as unknown as object);
     expect(Object.keys(search?.inputSchema ?? {})).not.toContain(
       "additionalProperties",
@@ -136,7 +139,10 @@ describe("createMcpToolSetContributor", () => {
       ],
       { idx: searchServer },
     );
-    const tools = await createMcpToolSetContributor(manager).contribute(CTX);
+    const tools = await createMcpToolSetContributor(manager, {
+      classify: (descriptor) => descriptor.effect,
+      authorize: async () => true,
+    }).contribute(CTX);
     const registry = new AiToolRegistry();
     // Registering is the real assertion: a dotted canonical id would be refused
     // here and the tool silently dropped during registry staging.
@@ -162,7 +168,10 @@ describe("createMcpToolSetContributor", () => {
       ],
       { idx: searchServer },
     );
-    const [search] = await createMcpToolSetContributor(manager).contribute(CTX);
+    const [search] = await createMcpToolSetContributor(manager, {
+      classify: (descriptor) => descriptor.effect,
+      authorize: async () => true,
+    }).contribute(CTX);
     const result = await search!.execute(toolContext(), { query: "abc" });
     expect(result.ok).toBe(true);
     expect(result.modelData).toEqual({
@@ -198,7 +207,10 @@ describe("createMcpToolSetContributor", () => {
           ]),
       },
     );
-    const [dump] = await createMcpToolSetContributor(manager).contribute(CTX);
+    const [dump] = await createMcpToolSetContributor(manager, {
+      classify: (descriptor) => descriptor.effect,
+      authorize: async () => true,
+    }).contribute(CTX);
     const ctx = toolContext();
     const result = await dump!.execute(ctx, {});
 
@@ -223,7 +235,10 @@ describe("createMcpToolSetContributor", () => {
       ],
       { idx: searchServer },
     );
-    const tools = await createMcpToolSetContributor(manager).contribute(CTX);
+    const tools = await createMcpToolSetContributor(manager, {
+      classify: (descriptor) => descriptor.effect,
+      authorize: async () => true,
+    }).contribute(CTX);
     const purge = tools.find((t) => t.definition.name === "mcp__idx__purge");
     const result = await purge!.execute(toolContext(), {});
     expect(result.ok).toBe(false);
@@ -255,12 +270,15 @@ describe("createMcpToolSetContributor", () => {
           ]),
       },
     );
-    const [wait] = await createMcpToolSetContributor(manager).contribute(CTX);
+    const [wait] = await createMcpToolSetContributor(manager, {
+      classify: (descriptor) => descriptor.effect,
+      authorize: async () => true,
+    }).contribute(CTX);
     const result = await wait!.execute(toolContext(), {});
     expect(result.ok).toBe(false);
     const data = result.modelData as { errorCode: string; retryable: boolean };
-    expect(data.errorCode).toBe("mcp_request_timeout");
-    expect(data.retryable).toBe(true);
+    expect(data.errorCode).toBe("mcp_outcome_uncertain");
+    expect(data.retryable).toBe(false);
     pending.resolve({ content: [{ type: "text", text: "late" }] });
   });
 
@@ -286,7 +304,10 @@ describe("createMcpToolSetContributor", () => {
       },
     );
     const warned: string[] = [];
-    const tools = await createMcpToolSetContributor(manager).contribute({
+    const tools = await createMcpToolSetContributor(manager, {
+      classify: (descriptor) => descriptor.effect,
+      authorize: async () => true,
+    }).contribute({
       ...CTX,
       logger: {
         debug: () => {},
@@ -390,7 +411,10 @@ describe("createMcpToolSetContributor", () => {
       { idx: searchServer },
     );
     expect(
-      createMcpToolSetContributor(manager).unboundToolNames,
+      createMcpToolSetContributor(manager, {
+        classify: (descriptor) => descriptor.effect,
+        authorize: async () => true,
+      }).unboundToolNames,
     ).toBeUndefined();
   });
 
@@ -405,7 +429,10 @@ describe("createMcpToolSetContributor", () => {
       ],
       { idx: searchServer },
     );
-    const contributor = createMcpToolSetContributor(manager);
+    const contributor = createMcpToolSetContributor(manager, {
+      classify: (descriptor) => descriptor.effect,
+      authorize: async () => true,
+    });
     expect(contributor.namespace).toBe("mcp");
     expect(contributor.privileged).toBe(true);
 

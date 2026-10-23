@@ -1,3 +1,5 @@
+import type { ConnectionRecord } from "@agentkit/contracts";
+import type { PromptTemplateService, SkillService } from "@agentkit/host";
 /**
  * What the adapter needs from a host, and nothing more.
  *
@@ -235,6 +237,20 @@ export interface RestHandlerDeps {
    * declares its MCP servers in a config file has nothing for them to write to.
    */
   mcpConfigs?: McpServerConfigOperations;
+  connections?: {
+    list(): Promise<ConnectionRecord[]>;
+    save(
+      input: Omit<ConnectionRecord, "status" | "errorCode">,
+      expectedRevision: number | null,
+    ): Promise<ConnectionRecord>;
+    connect(id: string): Promise<ConnectionRecord>;
+    reconnect(id: string): Promise<ConnectionRecord>;
+    disconnect(id: string): Promise<void>;
+    remove(id: string): Promise<void>;
+    test(id: string): Promise<unknown>;
+  };
+  promptTemplates?: PromptTemplateService;
+  skills?: SkillService;
   /**
    * What `listTools` advertises — the host's {@link ToolCatalog} port.
    *

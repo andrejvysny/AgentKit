@@ -8,8 +8,8 @@
     "conformance/",
     "schema-validation.json"
   ],
-  "routeCount": 39,
-  "schemaCount": 91,
+  "routeCount": 48,
+  "schemaCount": 97,
   "sha256": {
     "golden-traces/cancelled-run.json": "eb4ef4c0ef63b82fa03bd5b88f808588f8c4c18e5c7e8af7b823249b0dcc7ce0",
     "golden-traces/chat-only.json": "a54fc9b3d37d6efe20fc22539e92349edaee0f80c8206dbc2b4c70f5841accc0",
@@ -21,8 +21,8 @@
     "golden-traces/unserializable-run.json": "01ea941d8e83553ae067e9b6ee58f45389c9e76d9230ec8fa30a2bd2b2eae636",
     "golden-traces/usage-run.json": "2553a34bed205b18b89ebb4e4c2556beb88aaa3ee85f6a52eac5ec7826c795a7",
     "idempotency.json": "15c9f548e68b9a3b06ec004acf7de616200ab0f5f9d7a7bb231bac2f005bcc89",
-    "routes.json": "bffbb4dd07676fdb368856e5f734a2d1b2c2854180e63c76dd0a8fcc489a8bad",
+    "routes.json": "5cff81e54e3bb0dafb4a9a812659244aea8792996f84cd5a3183a5d42a1b3149",
     "run-events.json": "360ad2f768319eecf51ee670bb2956293cc2ec18f59c92631ef214fbcfe3e660",
-    "schemas.json": "46a40843878749aeaad96a9adee52d3c24b619c15b2c52c96cf0bf975f3fe7bb"
+    "schemas.json": "384cbbf82243a66513773f86c910e7f3e0589951ffb2b2f6dfeeb38f930a2830"
   }
 }

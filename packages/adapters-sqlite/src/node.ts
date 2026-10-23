@@ -60,3 +60,5 @@ export class NodeSqliteMcpServerConfigStore extends SharedSqliteMcpServerConfigS
     );
   }
 }
+export * from "./shared-connection-store.js";
+export * from "./shared-prompt-template-store.js";

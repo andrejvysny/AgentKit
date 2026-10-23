@@ -1,3 +1,14 @@
+import {
+  listConnections,
+  saveConnection,
+  deleteConnection,
+  connectionAction,
+  listPromptTemplates,
+  publishPromptTemplate,
+  deletePromptTemplate,
+  renderPromptTemplate,
+  listSkills,
+} from "./routes/managed-content.js";
 /**
  * The handler: one `(Request) => Promise<Response>`, no framework anywhere.
  *
@@ -109,6 +120,15 @@ const HANDLERS: Readonly<Record<RestOperation, RouteHandler>> = Object.freeze({
   listAllowances,
   grantAllowance,
   revokeAllowance,
+  listConnections,
+  saveConnection,
+  deleteConnection,
+  connectionAction,
+  listPromptTemplates,
+  publishPromptTemplate,
+  deletePromptTemplate,
+  renderPromptTemplate,
+  listSkills,
   listMcpServers,
   createMcpServer,
   updateMcpServer,

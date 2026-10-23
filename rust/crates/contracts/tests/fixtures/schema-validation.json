@@ -1156,6 +1156,11 @@
         "decoded": true,
         "compiled": true,
         "valid": true
+      },
+      "expectedTypeScript": {
+        "decoded": true,
+        "compiled": false,
+        "valid": false
       }
     },
     {
@@ -1871,6 +1876,11 @@
         "decoded": true,
         "compiled": true,
         "valid": true
+      },
+      "expectedTypeScript": {
+        "decoded": true,
+        "compiled": false,
+        "valid": false
       }
     },
     {
@@ -1882,6 +1892,11 @@
         "decoded": true,
         "compiled": true,
         "valid": true
+      },
+      "expectedTypeScript": {
+        "decoded": true,
+        "compiled": false,
+        "valid": false
       }
     },
     {
@@ -2995,6 +3010,11 @@
         "decoded": true,
         "compiled": false,
         "valid": false
+      },
+      "expectedTypeScript": {
+        "decoded": true,
+        "compiled": true,
+        "valid": true
       }
     },
     {
@@ -3010,6 +3030,11 @@
         "decoded": true,
         "compiled": false,
         "valid": false
+      },
+      "expectedTypeScript": {
+        "decoded": true,
+        "compiled": true,
+        "valid": false
       }
     }
   ],
@@ -3021,5 +3046,9 @@
       "scope": "Native JSON input rejects unpaired UTF-16 surrogates. Valid surrogate pairs remain accepted.",
       "evidence": "User explicitly approved this documented native UTF-8 compatibility exception."
     }
-  ]
+  ],
+  "typescriptProfile": {
+    "version": "schema-dialects-v1",
+    "description": "expectedTypeScript records stricter TypeScript compilation. expected retains the frozen Rust validator profile; native runtime parity for this new profile remains unqualified."
+  }
 }

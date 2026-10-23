@@ -20,3 +20,4 @@ export {
   type RebindingGuardOptions,
 } from "./guard.js";
 export { timingSafeEqualString, verifyBearer } from "./auth.js";
+export * from "./prompt-templates.js";

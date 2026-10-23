@@ -35,6 +35,9 @@ export function toolEnvelopeFromResult(
     warnings: result.warnings,
     truncated: result.truncated,
     data: result.modelData ?? result.data,
+    ...(result.modelContent?.length
+      ? { modelContent: result.modelContent }
+      : {}),
   };
 }
 

@@ -1,4 +1,33 @@
 {
+  "AiAudioPartSchema": {
+    "properties": {
+      "data": {
+        "type": "string"
+      },
+      "format": {
+        "anyOf": [
+          {
+            "const": "wav",
+            "type": "string"
+          },
+          {
+            "const": "mp3",
+            "type": "string"
+          }
+        ]
+      },
+      "type": {
+        "const": "audio",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "data",
+      "format"
+    ],
+    "type": "object"
+  },
   "AiChatMessageSchema": {
     "properties": {
       "content": {
@@ -112,6 +141,35 @@
                   "required": [
                     "type",
                     "source"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "data": {
+                      "type": "string"
+                    },
+                    "format": {
+                      "anyOf": [
+                        {
+                          "const": "wav",
+                          "type": "string"
+                        },
+                        {
+                          "const": "mp3",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "type": {
+                      "const": "audio",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data",
+                    "format"
                   ],
                   "type": "object"
                 }
@@ -308,6 +366,35 @@
         "required": [
           "type",
           "source"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "const": "wav",
+                "type": "string"
+              },
+              {
+                "const": "mp3",
+                "type": "string"
+              }
+            ]
+          },
+          "type": {
+            "const": "audio",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "data",
+          "format"
         ],
         "type": "object"
       }
@@ -726,6 +813,35 @@
                 "source"
               ],
               "type": "object"
+            },
+            {
+              "properties": {
+                "data": {
+                  "type": "string"
+                },
+                "format": {
+                  "anyOf": [
+                    {
+                      "const": "wav",
+                      "type": "string"
+                    },
+                    {
+                      "const": "mp3",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "audio",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "data",
+                "format"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -782,6 +898,9 @@
   },
   "AiProviderCapabilitiesSchema": {
     "properties": {
+      "audio": {
+        "type": "boolean"
+      },
       "checkedAt": {
         "type": "string"
       },
@@ -3199,6 +3318,148 @@
   "AiToolEnvelopeSchema": {
     "properties": {
       "data": {},
+      "modelContent": {
+        "items": {
+          "anyOf": [
+            {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "const": "auto",
+                      "type": "string"
+                    },
+                    {
+                      "const": "low",
+                      "type": "string"
+                    },
+                    {
+                      "const": "high",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "source": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "kind": {
+                          "const": "url",
+                          "type": "string"
+                        },
+                        "url": {
+                          "pattern": "^https?://",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "url"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "base64": {
+                          "description": "Raw base64 payload — no `data:` prefix, no media type.",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "data",
+                          "type": "string"
+                        },
+                        "mediaType": {
+                          "description": "IANA media type of the payload, e.g. \"image/png\".",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "base64",
+                        "mediaType"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "kind": {
+                          "const": "ref",
+                          "type": "string"
+                        },
+                        "ref": {
+                          "description": "Host-resolved attachment handle. Never sent to a provider as-is.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "ref"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "image",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "source"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "data": {
+                  "type": "string"
+                },
+                "format": {
+                  "anyOf": [
+                    {
+                      "const": "wav",
+                      "type": "string"
+                    },
+                    {
+                      "const": "mp3",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "audio",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "data",
+                "format"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "type": "array"
+      },
       "ok": {
         "type": "boolean"
       },
@@ -3354,6 +3615,148 @@
           "maxBytes"
         ],
         "type": "object"
+      },
+      "modelContent": {
+        "items": {
+          "anyOf": [
+            {
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "detail": {
+                  "anyOf": [
+                    {
+                      "const": "auto",
+                      "type": "string"
+                    },
+                    {
+                      "const": "low",
+                      "type": "string"
+                    },
+                    {
+                      "const": "high",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "source": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "kind": {
+                          "const": "url",
+                          "type": "string"
+                        },
+                        "url": {
+                          "pattern": "^https?://",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "url"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "base64": {
+                          "description": "Raw base64 payload — no `data:` prefix, no media type.",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "data",
+                          "type": "string"
+                        },
+                        "mediaType": {
+                          "description": "IANA media type of the payload, e.g. \"image/png\".",
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "base64",
+                        "mediaType"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "kind": {
+                          "const": "ref",
+                          "type": "string"
+                        },
+                        "ref": {
+                          "description": "Host-resolved attachment handle. Never sent to a provider as-is.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "ref"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "image",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "source"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "data": {
+                  "type": "string"
+                },
+                "format": {
+                  "anyOf": [
+                    {
+                      "const": "wav",
+                      "type": "string"
+                    },
+                    {
+                      "const": "mp3",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "type": {
+                  "const": "audio",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "data",
+                "format"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "type": "array"
       },
       "modelData": {},
       "ok": {
@@ -3558,6 +3961,224 @@
     ],
     "type": "object"
   },
+  "ConnectionRecordSchema": {
+    "properties": {
+      "accountId": {
+        "type": "string"
+      },
+      "config": {
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "discovery": {
+            "properties": {
+              "maxBytes": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "maxItems": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "maxPages": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "resilience": {
+            "properties": {
+              "circuitOpenMs": {
+                "type": "number"
+              },
+              "connectBackoffBaseMs": {
+                "type": "number"
+              },
+              "connectBackoffMaxMs": {
+                "type": "number"
+              },
+              "connectTimeoutMs": {
+                "type": "number"
+              },
+              "maxConnectAttempts": {
+                "type": "number"
+              },
+              "reconnectBackoffFactor": {
+                "type": "number"
+              },
+              "reconnectMaxAttempts": {
+                "type": "number"
+              },
+              "requestTimeoutMs": {
+                "type": "number"
+              },
+              "retryTimeouts": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "secretRefs": {
+            "patternProperties": {
+              "^(.*)$": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "toolAliases": {
+            "patternProperties": {
+              "^(.*)$": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "transport": {
+            "anyOf": [
+              {
+                "properties": {
+                  "args": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "env": {
+                    "patternProperties": {
+                      "^(.*)$": {
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "stdio",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "command"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "headers": {
+                    "patternProperties": {
+                      "^(.*)$": {
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "http",
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "url"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "alias",
+          "transport"
+        ],
+        "type": "object"
+      },
+      "connectorId": {
+        "type": "string"
+      },
+      "errorCode": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "const": "disconnected",
+            "type": "string"
+          },
+          {
+            "const": "connecting",
+            "type": "string"
+          },
+          {
+            "const": "connected",
+            "type": "string"
+          },
+          {
+            "const": "needs_authentication",
+            "type": "string"
+          },
+          {
+            "const": "failed",
+            "type": "string"
+          }
+        ]
+      },
+      "workspaceId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "connectorId",
+      "accountId",
+      "revision",
+      "config",
+      "status"
+    ],
+    "type": "object"
+  },
+  "ConnectionStatusSchema": {
+    "anyOf": [
+      {
+        "const": "disconnected",
+        "type": "string"
+      },
+      {
+        "const": "connecting",
+        "type": "string"
+      },
+      {
+        "const": "connected",
+        "type": "string"
+      },
+      {
+        "const": "needs_authentication",
+        "type": "string"
+      },
+      {
+        "const": "failed",
+        "type": "string"
+      }
+    ]
+  },
   "CreateChatRequestSchema": {
     "properties": {
       "metadata": {
@@ -3758,6 +4379,144 @@
       "toolName",
       "proposalKind",
       "maxRisk"
+    ],
+    "type": "object"
+  },
+  "ManagedConnectionConfigSchema": {
+    "properties": {
+      "alias": {
+        "type": "string"
+      },
+      "discovery": {
+        "properties": {
+          "maxBytes": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxItems": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxPages": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "resilience": {
+        "properties": {
+          "circuitOpenMs": {
+            "type": "number"
+          },
+          "connectBackoffBaseMs": {
+            "type": "number"
+          },
+          "connectBackoffMaxMs": {
+            "type": "number"
+          },
+          "connectTimeoutMs": {
+            "type": "number"
+          },
+          "maxConnectAttempts": {
+            "type": "number"
+          },
+          "reconnectBackoffFactor": {
+            "type": "number"
+          },
+          "reconnectMaxAttempts": {
+            "type": "number"
+          },
+          "requestTimeoutMs": {
+            "type": "number"
+          },
+          "retryTimeouts": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "secretRefs": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "toolAliases": {
+        "patternProperties": {
+          "^(.*)$": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "transport": {
+        "anyOf": [
+          {
+            "properties": {
+              "args": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "command": {
+                "type": "string"
+              },
+              "env": {
+                "patternProperties": {
+                  "^(.*)$": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "kind": {
+                "const": "stdio",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "command"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "headers": {
+                "patternProperties": {
+                  "^(.*)$": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "kind": {
+                "const": "http",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "required": [
+      "alias",
+      "transport"
     ],
     "type": "object"
   },
@@ -4107,6 +4866,35 @@
                     "source"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "data": {
+                      "type": "string"
+                    },
+                    "format": {
+                      "anyOf": [
+                        {
+                          "const": "wav",
+                          "type": "string"
+                        },
+                        {
+                          "const": "mp3",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "type": {
+                      "const": "audio",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data",
+                    "format"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -4317,6 +5105,35 @@
                           "source"
                         ],
                         "type": "object"
+                      },
+                      {
+                        "properties": {
+                          "data": {
+                            "type": "string"
+                          },
+                          "format": {
+                            "anyOf": [
+                              {
+                                "const": "wav",
+                                "type": "string"
+                              },
+                              {
+                                "const": "mp3",
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          "type": {
+                            "const": "audio",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "data",
+                          "format"
+                        ],
+                        "type": "object"
                       }
                     ]
                   },
@@ -4524,6 +5341,93 @@
       "type",
       "title",
       "status"
+    ],
+    "type": "object"
+  },
+  "PromptTemplateSchema": {
+    "properties": {
+      "argumentsSchema": {
+        "additionalProperties": true,
+        "description": "A JSON Schema document (see AiJsonSchemaObject).",
+        "type": "object"
+      },
+      "description": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "messages": {
+        "items": {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "role": {
+              "anyOf": [
+                {
+                  "const": "system",
+                  "type": "string"
+                },
+                {
+                  "const": "user",
+                  "type": "string"
+                },
+                {
+                  "const": "assistant",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "required": [
+            "role",
+            "content"
+          ],
+          "type": "object"
+        },
+        "maxItems": 100,
+        "minItems": 1,
+        "type": "array"
+      },
+      "origin": {
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "const": "application",
+                "type": "string"
+              },
+              {
+                "const": "mcp",
+                "type": "string"
+              }
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "trusted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "source",
+          "trusted"
+        ],
+        "type": "object"
+      },
+      "revision": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "revision",
+      "description",
+      "argumentsSchema",
+      "messages"
     ],
     "type": "object"
   },
@@ -4834,6 +5738,52 @@
   },
   "RegenerateMessageRequestSchema": {
     "properties": {
+      "contentSelection": {
+        "properties": {
+          "skills": {
+            "items": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "type": "array"
+          },
+          "template": {
+            "properties": {
+              "arguments": {
+                "patternProperties": {
+                  "^(.*)$": {}
+                },
+                "type": "object"
+              },
+              "id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "revision",
+              "arguments"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
       "metadata": {
         "patternProperties": {
           "^(.*)$": {}
@@ -4868,6 +5818,52 @@
         "type": "string"
       }
     ]
+  },
+  "RunContentSelectionSchema": {
+    "properties": {
+      "skills": {
+        "items": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "maxItems": 20,
+        "type": "array"
+      },
+      "template": {
+        "properties": {
+          "arguments": {
+            "patternProperties": {
+              "^(.*)$": {}
+            },
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "revision",
+          "arguments"
+        ],
+        "type": "object"
+      }
+    },
+    "type": "object"
   },
   "RunDtoSchema": {
     "properties": {
@@ -6124,6 +7120,35 @@
                     "source"
                   ],
                   "type": "object"
+                },
+                {
+                  "properties": {
+                    "data": {
+                      "type": "string"
+                    },
+                    "format": {
+                      "anyOf": [
+                        {
+                          "const": "wav",
+                          "type": "string"
+                        },
+                        {
+                          "const": "mp3",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "type": {
+                      "const": "audio",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "data",
+                    "format"
+                  ],
+                  "type": "object"
                 }
               ]
             },
@@ -6131,6 +7156,52 @@
             "type": "array"
           }
         ]
+      },
+      "contentSelection": {
+        "properties": {
+          "skills": {
+            "items": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "revision"
+              ],
+              "type": "object"
+            },
+            "maxItems": 20,
+            "type": "array"
+          },
+          "template": {
+            "properties": {
+              "arguments": {
+                "patternProperties": {
+                  "^(.*)$": {}
+                },
+                "type": "object"
+              },
+              "id": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "revision",
+              "arguments"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
       },
       "metadata": {
         "patternProperties": {

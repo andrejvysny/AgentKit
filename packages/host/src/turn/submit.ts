@@ -5,7 +5,10 @@
  * `turn-runner.ts` because none of it runs a provider pass — it only writes
  * the task and the messages a pass will later read.
  */
-import type { AiMessageContent } from "@agentkit/contracts";
+import type {
+  AiMessageContent,
+  RunContentSelection,
+} from "@agentkit/contracts";
 import {
   DuplicateTaskError,
   InvalidRegenerateError,
@@ -15,6 +18,8 @@ import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import type { TurnRunnerDeps } from "./turn-runner.js";
 
 export interface SubmitMessageInput {
+  /** Immutable template revisions and skill content hashes persisted in the task. */
+  contentSelection?: RunContentSelection;
   chatId: string;
   /**
    * The turn's body — a string, or content parts for a multimodal turn. Written
@@ -101,6 +106,8 @@ export interface SubmitMessageResult {
  * path, exactly where {@link ConversationStore.listSiblings} will report it.
  */
 export interface RegenerateMessageInput {
+  /** Immutable template revisions and skill content hashes persisted in the task. */
+  contentSelection?: RunContentSelection;
   chatId: string;
   /**
    * The assistant message to re-answer. Must be IN this chat, `role:
@@ -144,6 +151,8 @@ export interface RegenerateMessageInput {
  * a shared document instead still needs the chat spelled out here.
  */
 export interface TurnRequest {
+  /** Immutable template revisions and skill content hashes persisted in the task. */
+  contentSelection?: RunContentSelection;
   chatId: string;
   model?: string;
   providerId?: string;
@@ -175,6 +184,9 @@ export async function submitMessage(
     ...(input.parentMessageId === undefined
       ? {}
       : { parentMessageId: input.parentMessageId }),
+    ...(input.contentSelection
+      ? { contentSelection: structuredClone(input.contentSelection) }
+      : {}),
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.providerId === undefined ? {} : { providerId: input.providerId }),
     assistantMessageId,
@@ -359,6 +371,9 @@ export async function regenerate(
   const assistantMessageId = deps.ids.messageId();
   const payload: TurnRequest = {
     chatId: input.chatId,
+    ...(input.contentSelection
+      ? { contentSelection: structuredClone(input.contentSelection) }
+      : {}),
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.providerId === undefined ? {} : { providerId: input.providerId }),
     assistantMessageId,

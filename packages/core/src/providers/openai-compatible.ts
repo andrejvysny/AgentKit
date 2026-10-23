@@ -692,7 +692,7 @@ function mapMessageContent(
   if (role === "system" || role === "tool") {
     return {
       content: messageContentToText(content),
-      droppedImages: content.some((part) => part.type === "image"),
+      droppedImages: content.some((part) => part.type !== "text"),
     };
   }
   return {
@@ -721,6 +721,11 @@ function toOpenAiContentPart(
   part: AiContentPart,
 ): Record<string, unknown> | null {
   if (part.type === "text") return { type: "text", text: part.text };
+  if (part.type === "audio")
+    return {
+      type: "input_audio",
+      input_audio: { data: part.data, format: part.format },
+    };
   const source = part.source;
   if (source.kind === "ref") return null;
   const url =

@@ -20,7 +20,7 @@ describe("Rust parity fixture exporter", () => {
     expect([...(await buildFixtures())]).toEqual([...first]);
     expect(await exportFixtures(FIXTURE_DIR, true)).toEqual([]);
     const routes = JSON.parse(first.get("routes.json")!);
-    expect(routes.routes).toHaveLength(39);
+    expect(routes.routes).toHaveLength(48);
     expect(
       routes.routes.map((route: { operation: string }) => route.operation),
     ).toEqual(Object.keys(REST_ROUTES));

@@ -93,6 +93,10 @@ const STATUS_BY_HOST_CODE = {
 const STATUS_BY_CODE: Readonly<Record<string, number>> = Object.freeze({
   ...STATUS_BY_HOST_CODE,
   invalid_decision: 400,
+  mcp_stale_connection: 409,
+  mcp_invalid_config: 400,
+  mcp_auth_required: 401,
+  mcp_invocation_refused: 403,
   resume_unsupported: 501,
 });
 

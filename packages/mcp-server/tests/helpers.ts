@@ -150,7 +150,22 @@ export interface ServedHandler {
  * inside the handler's DEFAULT `allowedHosts`, which is the point: the happy
  * path here is the shipped default configuration, not a relaxed one.
  */
+const inProcessHandlers = new Map<string, McpServerHandler>();
+let inProcessPort = 20_000;
+
 export function serveHandler(handler: McpServerHandler): ServedHandler {
+  if (process.env.AGENTKIT_MCP_TEST_IN_PROCESS === "1") {
+    const port = inProcessPort++;
+    const url = new URL(`http://127.0.0.1:${port}/mcp`);
+    inProcessHandlers.set(url.origin, handler);
+    return {
+      url,
+      port,
+      async stop() {
+        inProcessHandlers.delete(url.origin);
+      },
+    };
+  }
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -176,6 +191,20 @@ export async function connectClient(
 }> {
   const transport = new StreamableHTTPClientTransport(url, {
     requestInit: { headers },
+    ...(inProcessHandlers.has(url.origin)
+      ? {
+          fetch: async (input: string | URL, init?: RequestInit) => {
+            const requestHeaders = new Headers(init?.headers);
+            requestHeaders.set("host", new URL(input).host);
+            return inProcessHandlers.get(url.origin)!.fetch(
+              new Request(input.toString(), {
+                ...init,
+                headers: requestHeaders,
+              }),
+            );
+          },
+        }
+      : {}),
   });
   const client = new Client({ name: "test-client", version: "1.0.0" });
   await client.connect(transport);

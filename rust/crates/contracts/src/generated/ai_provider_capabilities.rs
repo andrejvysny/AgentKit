@@ -20,6 +20,12 @@ pub struct AiProviderCapabilities {
     )]
     pub vision: Optional<bool>,
     #[serde(
+        rename = "audio",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub audio: Optional<bool>,
+    #[serde(
         rename = "jsonMode",
         default,
         skip_serializing_if = "Optional::is_absent"
@@ -54,6 +60,7 @@ crate::impl_json_deserialize!(AiProviderCapabilities, |value: Value| {
         tool_calling: crate::required_field(&mut object, "toolCalling")?,
         model_list: crate::required_field(&mut object, "modelList")?,
         vision: crate::optional_field(&mut object, "vision")?,
+        audio: crate::optional_field(&mut object, "audio")?,
         json_mode: crate::optional_field(&mut object, "jsonMode")?,
         max_context_tokens: crate::optional_field(&mut object, "maxContextTokens")?,
         checked_at: crate::optional_field(&mut object, "checkedAt")?,

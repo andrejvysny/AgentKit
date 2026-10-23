@@ -181,10 +181,14 @@ export function createMcpServerHandler(
 
     server.setRequestHandler(
       ListToolsRequestSchema,
-      async (): Promise<ListToolsResult> => {
+      async (_request, extra): Promise<ListToolsResult> => {
         beginRequest(runtime);
         try {
-          const entries = await listCatalog(runtime, scope);
+          const signal = scope.signal
+            ? AbortSignal.any([scope.signal, extra.signal])
+            : extra.signal;
+          signal.throwIfAborted();
+          const entries = await listCatalog(runtime, { ...scope, signal });
           return {
             tools: visibleEntries(entries, writesEnabled).map(
               projectToolDefinition,
@@ -203,15 +207,23 @@ export function createMcpServerHandler(
 
     server.setRequestHandler(
       CallToolRequestSchema,
-      async (request): Promise<CallToolResult> => {
+      async (request, extra): Promise<CallToolResult> => {
         // Counted BEFORE the queue wait, not after it: a session whose calls are
         // all still waiting for a permit is as busy as one executing them, and
         // reaping it would drop answers nobody has produced yet.
         beginRequest(runtime);
         try {
-          await acquireCallSlot(runtime);
+          await acquireCallSlot(runtime, extra.signal);
           try {
-            return await callTool(request.params, scope, runtime);
+            const signal = scope.signal
+              ? AbortSignal.any([scope.signal, extra.signal])
+              : extra.signal;
+            signal.throwIfAborted();
+            return await callTool(
+              request.params,
+              { ...scope, signal },
+              runtime,
+            );
           } finally {
             releaseCallSlot(runtime);
           }
@@ -325,13 +337,27 @@ export function createMcpServerHandler(
   }
 
   /** One permit, or a place in the queue for the next one released. */
-  function acquireCallSlot(runtime: SessionRuntime): Promise<void> {
+  function acquireCallSlot(
+    runtime: SessionRuntime,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted();
     if (runtime.running < maxConcurrentCalls) {
       runtime.running += 1;
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => {
-      runtime.waiters.push(resolve);
+    return new Promise<void>((resolve, reject) => {
+      const granted = () => {
+        signal?.removeEventListener("abort", aborted);
+        resolve();
+      };
+      const aborted = () => {
+        const index = runtime.waiters.indexOf(granted);
+        if (index >= 0) runtime.waiters.splice(index, 1);
+        reject(signal?.reason);
+      };
+      runtime.waiters.push(granted);
+      signal?.addEventListener("abort", aborted, { once: true });
     });
   }
 

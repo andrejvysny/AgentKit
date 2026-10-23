@@ -140,12 +140,12 @@ fn body(operation: &str) -> Value {
 }
 
 #[tokio::test]
-async fn all_39_routes_reach_backend_and_preserve_status() {
+async fn all_48_routes_reach_backend_and_preserve_status() {
     let fake = Arc::new(Fake::default());
     fake.settled.store(true, Ordering::SeqCst);
     let (base, task) = serve(fake.clone(), Config::default()).await;
     let client = reqwest::Client::new();
-    assert_eq!(routes().len(), 39);
+    assert_eq!(routes().len(), 48);
     for route in routes() {
         let path = route
             .path

@@ -138,6 +138,7 @@ describe("projectEnvelope", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic["self"] = cyclic;
     const result = projectEnvelope({ ...ok, data: cyclic });
+    expect(result.isError).toBe(true);
     expect(JSON.parse(textBlock(result.content, 1))).toMatchObject({
       errorCode: "tool_result_unserializable",
     });

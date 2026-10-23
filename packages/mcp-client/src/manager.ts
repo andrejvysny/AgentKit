@@ -8,7 +8,7 @@ import { isServerEnabled, type McpServerConfig } from "./config.js";
 import { describeCause, McpError } from "./errors.js";
 import { normalizeServerAlias, parseMcpCanonicalToolId } from "./identity.js";
 import type { McpToolCallOutcome, McpToolDescriptor } from "./projection.js";
-import { McpSession } from "./session.js";
+import { McpSession, type McpSessionDeps } from "./session.js";
 import {
   defaultMcpTransportFactory,
   type McpTransportFactory,
@@ -17,6 +17,8 @@ import {
 export interface McpClientManagerDeps {
   secrets: SecretStore;
   logger?: Logger;
+  elicitation?: McpSessionDeps["elicitation"];
+  onCatalogChanged?: McpSessionDeps["onCatalogChanged"];
   clock?: Clock;
   /** Defaults to {@link defaultMcpTransportFactory}; tests inject in-memory pairs. */
   transportFactory?: McpTransportFactory;
@@ -49,7 +51,10 @@ export class McpClientManager {
   private readonly sessions = new Map<string, McpSession>();
   private readonly logger: Logger | undefined;
 
-  constructor(deps: McpClientManagerDeps, configs: readonly McpServerConfig[]) {
+  constructor(
+    private readonly deps: McpClientManagerDeps,
+    configs: readonly McpServerConfig[],
+  ) {
     this.logger = deps.logger;
     const clock = deps.clock ?? defaultClock;
     const transportFactory =
@@ -68,9 +73,11 @@ export class McpClientManager {
       this.sessions.set(
         alias,
         new McpSession(
-          { ...config, alias },
+          { ...structuredClone(config), alias },
           {
             secrets: deps.secrets,
+            elicitation: deps.elicitation,
+            onCatalogChanged: deps.onCatalogChanged,
             transportFactory,
             clock,
             ...(deps.logger === undefined ? {} : { logger: deps.logger }),
@@ -96,8 +103,11 @@ export class McpClientManager {
     return this.session(alias).isConnected;
   }
 
-  async connect(alias: string): Promise<void> {
-    await this.session(alias).connect();
+  async connect(
+    alias: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    await this.session(alias).connect(options);
   }
 
   /**
@@ -107,19 +117,25 @@ export class McpClientManager {
    * a host with a dozen stdio servers should not fork a dozen children at once
    * on the first turn of a chat.
    */
-  async connectAll(): Promise<McpConnectAllResult> {
+  async connectAll(options?: {
+    signal?: AbortSignal;
+    aliases?: readonly string[];
+  }): Promise<McpConnectAllResult> {
     const result: McpConnectAllResult = {
       connected: [],
       failed: [],
       skipped: [],
     };
     for (const session of this.sessions.values()) {
+      options?.signal?.throwIfAborted();
+      if (options?.aliases && !options.aliases.includes(session.alias))
+        continue;
       if (!isServerEnabled(session.config)) {
         result.skipped.push(session.alias);
         continue;
       }
       try {
-        await session.connect();
+        await session.connect(options);
         result.connected.push(session.alias);
       } catch (err) {
         const failure = this.asMcpError(session.alias, err);
@@ -134,8 +150,11 @@ export class McpClientManager {
     return result;
   }
 
-  async listTools(alias: string): Promise<McpToolDescriptor[]> {
-    return this.session(alias).listTools();
+  async listTools(
+    alias: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<McpToolDescriptor[]> {
+    return this.session(alias).listTools(options);
   }
 
   /**
@@ -147,11 +166,54 @@ export class McpClientManager {
   async callTool(
     canonicalId: string,
     args: Record<string, unknown> | undefined,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; replaySafe?: boolean },
   ): Promise<McpToolCallOutcome> {
     const { serverAlias, effectiveToolName } =
       parseMcpCanonicalToolId(canonicalId);
     return this.session(serverAlias).callTool(effectiveToolName, args, options);
+  }
+
+  /** Replace invalidates the old session before exposing new configuration. */
+  async replace(config: McpServerConfig): Promise<void> {
+    const alias = normalizeServerAlias(config.alias);
+    const next = new McpSession(structuredClone(config), {
+      elicitation: this.deps.elicitation,
+      onCatalogChanged: this.deps.onCatalogChanged,
+      secrets: this.deps.secrets,
+      clock: this.deps.clock ?? defaultClock,
+      transportFactory:
+        this.deps.transportFactory ?? defaultMcpTransportFactory,
+      logger: this.deps.logger,
+    });
+    const old = this.sessions.get(alias);
+    this.sessions.delete(alias);
+    if (old) await old.close();
+    this.sessions.set(alias, next);
+  }
+  async remove(alias: string): Promise<void> {
+    const session = this.sessions.get(alias);
+    this.sessions.delete(alias);
+    if (session) await session.close();
+  }
+  listResources(alias: string, options?: { signal?: AbortSignal }) {
+    return this.session(alias).listResources(options);
+  }
+  listResourceTemplates(alias: string, options?: { signal?: AbortSignal }) {
+    return this.session(alias).listResourceTemplates(options);
+  }
+  readResource(alias: string, uri: string, options?: { signal?: AbortSignal }) {
+    return this.session(alias).readResource(uri, options);
+  }
+  listPrompts(alias: string, options?: { signal?: AbortSignal }) {
+    return this.session(alias).listPrompts(options);
+  }
+  getPrompt(
+    alias: string,
+    name: string,
+    args?: Record<string, string>,
+    options?: { signal?: AbortSignal },
+  ) {
+    return this.session(alias).getPrompt(name, args, options);
   }
 
   async close(alias: string): Promise<void> {

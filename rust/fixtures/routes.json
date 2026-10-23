@@ -207,6 +207,60 @@
     },
     {
       "method": "GET",
+      "operation": "listConnections",
+      "path": "/v1/connections",
+      "requiredHeaders": []
+    },
+    {
+      "method": "PATCH",
+      "operation": "saveConnection",
+      "path": "/v1/connections/:connectionId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "DELETE",
+      "operation": "deleteConnection",
+      "path": "/v1/connections/:connectionId",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "connectionAction",
+      "path": "/v1/connections/:connectionId/actions",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listPromptTemplates",
+      "path": "/v1/prompt-templates",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "publishPromptTemplate",
+      "path": "/v1/prompt-templates",
+      "requiredHeaders": []
+    },
+    {
+      "method": "DELETE",
+      "operation": "deletePromptTemplate",
+      "path": "/v1/prompt-templates/:templateId/:revision",
+      "requiredHeaders": []
+    },
+    {
+      "method": "POST",
+      "operation": "renderPromptTemplate",
+      "path": "/v1/prompt-templates/:templateId/:revision/render",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
+      "operation": "listSkills",
+      "path": "/v1/skills",
+      "requiredHeaders": []
+    },
+    {
+      "method": "GET",
       "operation": "listMcpServers",
       "path": "/v1/mcp/servers",
       "requiredHeaders": []

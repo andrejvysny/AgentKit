@@ -11,6 +11,12 @@
  */
 
 export type McpErrorCode =
+  | "mcp_outcome_uncertain"
+  | "mcp_catalog_limit"
+  | "mcp_auth_required"
+  | "mcp_invocation_refused"
+  | "mcp_stale_connection"
+  | "mcp_unsupported_protocol"
   /** Connect is under a timed lockout after a full attempt cycle failed. */
   | "mcp_circuit_open"
   /** Every connect attempt in the cycle failed. */
@@ -55,6 +61,12 @@ export type McpErrorCode =
  * session's own auto-retry gate is narrower — see `McpSession.isAutoRetryable`.
  */
 const RETRYABLE_BY_CODE: Record<McpErrorCode, boolean> = {
+  mcp_outcome_uncertain: false,
+  mcp_catalog_limit: false,
+  mcp_auth_required: false,
+  mcp_invocation_refused: false,
+  mcp_stale_connection: false,
+  mcp_unsupported_protocol: false,
   mcp_circuit_open: false,
   mcp_connect_failed: true,
   mcp_request_timeout: true,

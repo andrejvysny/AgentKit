@@ -18,7 +18,10 @@ export interface ContextProvider {
   ): Promise<AiContextBinding[]>;
   /** Fully composed system prompt for this chat, when the host builds its own. */
   systemPrompt?(chatId: string, signal?: AbortSignal): Promise<string | null>;
-  /** Blocks for a host composing through core's `composeSystemPrompt`. */
+  /** If append, TurnRunner adds promptBlocks even when systemPrompt exists.
+   * Default fallback: blocks are composed only without a systemPrompt hook. */
+  promptBlockMode?: "fallback" | "append";
+  /** Blocks composed by TurnRunner according to promptBlockMode. */
   promptBlocks?(
     chatId: string,
     signal?: AbortSignal,

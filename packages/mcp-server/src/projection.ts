@@ -82,24 +82,17 @@ export function projectEnvelope(envelope: AiToolEnvelope): CallToolResult {
     content.push({ type: "text", text: envelope.summary });
   }
   const payload = envelope.data === undefined ? envelope : envelope.data;
-  content.push({ type: "text", text: safeStringify(payload) });
-  return envelope.ok ? { content } : { content, isError: true };
-}
-
-/**
- * `JSON.stringify` that cannot throw the session down.
- *
- * A tool is host code returning host data; a cycle or a BigInt in it is a bug in
- * that tool, and the right report is a failed call carrying the reason, not an
- * exception escaping the request handler.
- */
-function safeStringify(value: unknown): string {
   try {
-    return JSON.stringify(value) ?? "null";
-  } catch (err) {
-    return JSON.stringify({
-      errorCode: "tool_result_unserializable",
-      errorMessage: err instanceof Error ? err.message : String(err),
+    content.push({ type: "text", text: JSON.stringify(payload) ?? "null" });
+    return envelope.ok ? { content } : { content, isError: true };
+  } catch {
+    content.push({
+      type: "text",
+      text: JSON.stringify({
+        errorCode: "tool_result_unserializable",
+        errorMessage: "Tool result cannot be serialized.",
+      }),
     });
+    return { content, isError: true };
   }
 }

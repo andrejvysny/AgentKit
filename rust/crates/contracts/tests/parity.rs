@@ -9,7 +9,7 @@ fn schemas_match_frozen_typescript_exports_and_compile() {
         serde_json::to_value(schemas()).unwrap(),
         fixture("schemas.json")
     );
-    assert_eq!(schemas().len(), 91);
+    assert_eq!(schemas().len(), 97);
     for (name, schema) in schemas() {
         compile_schema(schema).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
@@ -19,7 +19,7 @@ fn schemas_match_frozen_typescript_exports_and_compile() {
 fn all_routes_match_typescript() {
     let frozen = fixture("routes.json");
     let rows = frozen["routes"].as_array().unwrap();
-    assert_eq!(REST_ROUTES.len(), 39);
+    assert_eq!(REST_ROUTES.len(), 48);
     assert_eq!(rows.len(), REST_ROUTES.len());
     for route in REST_ROUTES {
         let row = rows

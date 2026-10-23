@@ -1,5 +1,7 @@
 import Ajv, { type ValidateFunction } from "ajv";
 import addFormats from "ajv-formats";
+import Ajv2019 from "ajv/dist/2019.js";
+import Ajv2020 from "ajv/dist/2020.js";
 import { TOOL_NAME_PATTERN } from "@agentkit/contracts";
 import type { AiTool } from "./tool.js";
 import { mapValidatorErrors, type ValidationError } from "./validation.js";
@@ -152,8 +154,8 @@ const validatorCache = new Map<string, ValidateFunction>();
  * tool-set build down with it. Isolation costs one instance per tool and
  * removes a cross-tool failure mode entirely.
  *
- * `strict: false` because tool inputSchemas are authored loosely (unknown
- * keywords tolerated); `allErrors: true` mirrors validation.ts so callers see
+ * Structural strictness is relaxed; unknown validation keywords are rejected.
+ * `allErrors: true` mirrors validation.ts so callers see
  * every problem; `ajv-formats` so `format: "email"`/`"uri"`/... actually
  * validate instead of being ignored with a console warning.
  *
@@ -178,7 +180,31 @@ function compileInputSchema(
     validatorCache.set(key, cached);
     return cached;
   }
-  const ajv = new Ajv({ allErrors: true, strict: false, logger: false });
+  const dialect = prepared["$schema"];
+  const Validator =
+    dialect === undefined ||
+    dialect === "http://json-schema.org/draft-07/schema#" ||
+    dialect === "https://json-schema.org/draft-07/schema"
+      ? Ajv
+      : dialect === "https://json-schema.org/draft/2019-09/schema"
+        ? Ajv2019
+        : dialect === "https://json-schema.org/draft/2020-12/schema"
+          ? Ajv2020
+          : undefined;
+  if (!Validator)
+    throw new ToolSchemaError(
+      "schema_invalid",
+      toolName,
+      `Unsupported JSON Schema dialect: ${String(dialect)}`,
+    );
+  const ajv = new Validator({
+    allErrors: true,
+    strict: false,
+    strictSchema: true,
+    strictRequired: false,
+    allowMatchingProperties: true,
+    logger: false,
+  });
   addFormats(ajv);
   let validate: ValidateFunction;
   try {
@@ -202,17 +228,7 @@ function compileInputSchema(
   return validate;
 }
 
-/**
- * One walk that both bounds the schema and copies it without `$id`/`$schema`.
- *
- * `$id` only names the schema in a registry this tool doesn't share any more,
- * and `$schema` names a DIALECT: an MCP server correctly advertising `2020-12`
- * (its own spec's dialect) made this draft-07 Ajv throw at compile time, and
- * the tool was silently dropped. Neither keyword changes how an instance
- * validates here — and both are stripped at EVERY level, because a NESTED `$id`
- * duplicated inside one document fails the compile with "resolves to more than
- * one schema" exactly like a top-level one used to.
- */
+/** Bound and clone the complete document, preserving dialect and reference identities. */
 function prepareSchema(
   toolName: string,
   schema: object,
@@ -240,8 +256,12 @@ function prepareSchema(
     for (const [key, value] of Object.entries(
       node as Record<string, unknown>,
     )) {
-      if (key === "$id" || key === "$schema") continue;
-      copy[key] = walk(value, depth + 1);
+      Object.defineProperty(copy, key, {
+        value: walk(value, depth + 1),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     }
     return copy;
   };

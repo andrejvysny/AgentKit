@@ -55,7 +55,37 @@ export const DEFAULT_MCP_RESILIENCE: McpResilienceOptions = {
 export function resolveMcpResilience(
   overrides?: Partial<McpResilienceOptions>,
 ): McpResilienceOptions {
-  return { ...DEFAULT_MCP_RESILIENCE, ...(overrides ?? {}) };
+  const options = { ...DEFAULT_MCP_RESILIENCE, ...(overrides ?? {}) };
+  for (const [key, value] of Object.entries(options)) {
+    if (key === "retryTimeouts") {
+      if (typeof value !== "boolean")
+        throw new McpError(
+          "mcp_invalid_config",
+          "retryTimeouts must be boolean.",
+        );
+      continue;
+    }
+    const minimum = [
+      "requestTimeoutMs",
+      "connectTimeoutMs",
+      "maxConnectAttempts",
+      "reconnectBackoffFactor",
+    ].includes(key)
+      ? 1
+      : 0;
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      value < minimum ||
+      value > 2_147_483_647 ||
+      (key.endsWith("Attempts") && !Number.isSafeInteger(value))
+    )
+      throw new McpError(
+        "mcp_invalid_config",
+        `Invalid MCP resilience setting: ${key}.`,
+      );
+  }
+  return options;
 }
 
 /** `min(max, base * factor^(attempt-1))`. Deliberately jitter-free: one client, one server. */

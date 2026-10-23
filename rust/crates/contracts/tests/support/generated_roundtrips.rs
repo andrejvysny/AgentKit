@@ -1,6 +1,7 @@
 // Generated coverage for every exported TypeBox schema.
 #[test]
 fn all_generated_dtos_roundtrip() {
+    support::roundtrip::<AiAudioPart>("AiAudioPartSchema");
     support::roundtrip::<AiChatMessage>("AiChatMessageSchema");
     support::roundtrip::<AiChatRole>("AiChatRoleSchema");
     support::roundtrip::<AiContentPart>("AiContentPartSchema");
@@ -51,11 +52,14 @@ fn all_generated_dtos_roundtrip() {
     support::roundtrip::<ApplyOutcomeDto>("ApplyOutcomeDtoSchema");
     support::roundtrip::<ApplyProposalRequest>("ApplyProposalRequestSchema");
     support::roundtrip::<ChatDto>("ChatDtoSchema");
+    support::roundtrip::<ConnectionRecord>("ConnectionRecordSchema");
+    support::roundtrip::<ConnectionStatus>("ConnectionStatusSchema");
     support::roundtrip::<CreateChatRequest>("CreateChatRequestSchema");
     support::roundtrip::<CreateMcpServerRequest>("CreateMcpServerRequestSchema");
     support::roundtrip::<CreateProviderRequest>("CreateProviderRequestSchema");
     support::roundtrip::<ForkChatRequest>("ForkChatRequestSchema");
     support::roundtrip::<GrantAllowanceRequest>("GrantAllowanceRequestSchema");
+    support::roundtrip::<ManagedConnectionConfig>("ManagedConnectionConfigSchema");
     support::roundtrip::<McpHttpTransportDto>("McpHttpTransportDtoSchema");
     support::roundtrip::<McpServerDto>("McpServerDtoSchema");
     support::roundtrip::<McpStdioTransportDto>("McpStdioTransportDtoSchema");
@@ -66,6 +70,7 @@ fn all_generated_dtos_roundtrip() {
     support::roundtrip::<MessageSearchResponse>("MessageSearchResponseSchema");
     support::roundtrip::<ModelDto>("ModelDtoSchema");
     support::roundtrip::<ProblemDetailsDto>("ProblemDetailsDtoSchema");
+    support::roundtrip::<PromptTemplate>("PromptTemplateSchema");
     support::roundtrip::<ProposalDecisionDto>("ProposalDecisionDtoSchema");
     support::roundtrip::<ProposalDecisionRequest>("ProposalDecisionRequestSchema");
     support::roundtrip::<ProposalDto>("ProposalDtoSchema");
@@ -73,6 +78,7 @@ fn all_generated_dtos_roundtrip() {
     support::roundtrip::<ProviderDto>("ProviderDtoSchema");
     support::roundtrip::<RegenerateMessageRequest>("RegenerateMessageRequestSchema");
     support::roundtrip::<RiskLevelDto>("RiskLevelDtoSchema");
+    support::roundtrip::<RunContentSelection>("RunContentSelectionSchema");
     support::roundtrip::<RunDto>("RunDtoSchema");
     support::roundtrip::<RunEventFrameDto>("RunEventFrameDtoSchema");
     support::roundtrip::<RunStatusDto>("RunStatusDtoSchema");

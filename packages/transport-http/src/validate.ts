@@ -122,8 +122,13 @@ function checkContentPart(part: unknown, index: number): string | null {
       ? null
       : `${at}.text must be a string.`;
   }
+  if (type === "audio")
+    return typeof part["data"] === "string" &&
+      (part["format"] === "wav" || part["format"] === "mp3")
+      ? null
+      : `${at} requires audio data and wav/mp3 format.`;
   if (type !== "image") {
-    return `${at}.type must be "text" or "image".`;
+    return `${at}.type must be "text", "image" or "audio".`;
   }
   const source = part["source"];
   if (!isRecord(source)) return `${at}.source must be an object.`;
@@ -200,6 +205,7 @@ export function validateSubmitMessageRequest(
 ): ValidationResult<SubmitMessageRequest> {
   const issue = first(
     checkMessageContent(body),
+    checkContentSelection(body["contentSelection"]),
     checkOptionalString(body, "model"),
     checkOptionalString(body, "providerId"),
     body["parentMessageId"] === null
@@ -392,6 +398,7 @@ export function validateRegenerateMessageRequest(
   body: Record<string, unknown>,
 ): ValidationResult<RegenerateMessageRequest> {
   const issue = first(
+    checkContentSelection(body["contentSelection"]),
     checkOptionalString(body, "model"),
     checkOptionalString(body, "providerId"),
     checkOptionalMetadata(body, "metadata"),
@@ -690,4 +697,32 @@ export function validateUpdateMcpServerRequest(
   );
   if (issue !== null) return { ok: false, detail: issue };
   return { ok: true, value: body as UpdateMcpServerRequest };
+}
+
+function checkContentSelection(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (!isRecord(value)) return "contentSelection must be an object.";
+  const template = value["template"];
+  if (
+    template !== undefined &&
+    (!isRecord(template) ||
+      typeof template["id"] !== "string" ||
+      typeof template["revision"] !== "string" ||
+      !isRecord(template["arguments"]))
+  )
+    return "Invalid template selection.";
+  const skills = value["skills"];
+  if (
+    skills !== undefined &&
+    (!Array.isArray(skills) ||
+      skills.length > 20 ||
+      skills.some(
+        (item) =>
+          !isRecord(item) ||
+          typeof item["id"] !== "string" ||
+          typeof item["revision"] !== "string",
+      ))
+  )
+    return "Invalid skill selection.";
+  return null;
 }

@@ -25,6 +25,9 @@ const PATH_VALUES: Readonly<Record<string, string>> = {
   providerId: "pv-1",
   allowanceId: "al-1",
   serverId: "sv-1",
+  connectionId: "cn-1",
+  templateId: "tpl-1",
+  revision: "1",
 };
 
 interface Recorded {
@@ -122,6 +125,39 @@ const DRIVERS = {
     ),
   revokeAllowance: (c) =>
     c.revokeAllowance({ chatId: "c-1", allowanceId: "al-1" }),
+  listConnections: (c) => c.listConnections(),
+  saveConnection: (c) =>
+    c.saveConnection(
+      { connectionId: "cn-1" },
+      {
+        id: "cn-1",
+        connectorId: "custom-mcp",
+        accountId: "a",
+        revision: 1,
+        expectedRevision: null,
+        config: {
+          alias: "test",
+          transport: { kind: "stdio", command: "test" },
+        },
+      },
+    ),
+  deleteConnection: (c) => c.deleteConnection({ connectionId: "cn-1" }),
+  connectionAction: (c) =>
+    c.connectionAction({ connectionId: "cn-1" }, "connect"),
+  listPromptTemplates: (c) => c.listPromptTemplates(),
+  publishPromptTemplate: (c) =>
+    c.publishPromptTemplate({
+      id: "tpl-1",
+      revision: "1",
+      description: "test",
+      argumentsSchema: { type: "object" },
+      messages: [{ role: "user", content: "test" }],
+    }),
+  deletePromptTemplate: (c) =>
+    c.deletePromptTemplate({ templateId: "tpl-1", revision: "1" }),
+  renderPromptTemplate: (c) =>
+    c.renderPromptTemplate({ templateId: "tpl-1", revision: "1" }, {}),
+  listSkills: (c) => c.listSkills(),
   listMcpServers: (c) => c.listMcpServers(),
   createMcpServer: (c) =>
     c.createMcpServer({
@@ -159,7 +195,7 @@ describe("every route in the contract has a client method", () => {
     expect(clientOps).toEqual(contractOps);
     // 39 operations, and the number is asserted so a route quietly disappearing
     // from the contract does not quietly shrink this test with it.
-    expect(contractOps).toHaveLength(39);
+    expect(contractOps).toHaveLength(48);
   });
 
   for (const operation of Object.keys(REST_ROUTES) as RestOperation[]) {

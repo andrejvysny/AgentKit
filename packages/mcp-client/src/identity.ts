@@ -38,7 +38,7 @@ export interface McpToolIdentityInput {
 }
 
 const SERVER_ALIAS_PATTERN = /^[a-z][a-z0-9-]*$/;
-const MCP_TOOL_NAME_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*$/;
+const MCP_TOOL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
 /** Every canonical id is `mcp.` + an alias + `.` + a non-empty remainder. */
 const CANONICAL_ID_PATTERN = /^mcp\.[a-z][a-z0-9-]*\..+$/;
 
@@ -60,7 +60,7 @@ export function normalizeMcpToolName(
   value: string,
   field: "toolName" | "toolAlias",
 ): string {
-  const trimmed = value.trim();
+  const trimmed = value;
   if (!MCP_TOOL_NAME_PATTERN.test(trimmed)) {
     throw new McpError(
       "mcp_invalid_tool_name",
@@ -80,7 +80,11 @@ export function normalizeMcpToolName(
  * of producing a name that registry staging quietly discards.
  */
 export function toRegistryToolName(canonicalId: string): string {
-  const projected = canonicalId.split(".").join("__");
+  const raw = canonicalId.split(".").join("__");
+  const projected =
+    raw.length <= 64
+      ? raw
+      : `${raw.slice(0, 47)}_${routingSuffix(canonicalId)}`;
   if (!TOOL_NAME_PATTERN.test(projected)) {
     throw new McpError(
       "mcp_invalid_tool_name",
@@ -205,4 +209,13 @@ export function canonicalCollision(
       incoming: incomingRef,
     },
   });
+}
+
+/** A portable identity fingerprint, not an authorization primitive. Both identity
+ * namespaces are collision-checked before any descriptor is contributed. */
+function routingSuffix(value: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(value))
+    hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n);
+  return hash.toString(16).padStart(16, "0");
 }

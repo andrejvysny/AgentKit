@@ -61,7 +61,7 @@ describe("canonical tool identity", () => {
     ).toBe("mcp_invalid_alias");
     expect(
       codeOf(() =>
-        buildMcpToolIdentity({ serverAlias: "gh", toolName: "List" }),
+        buildMcpToolIdentity({ serverAlias: "gh", toolName: "List tool" }),
       ),
     ).toBe("mcp_invalid_tool_name");
     expect(
@@ -150,4 +150,16 @@ describe("canonical tool identity", () => {
       "mcp.gh.search_issues",
     ]);
   });
+});
+it("maps long protocol names to bounded provider names without changing remote identity", () => {
+  const name = "DATA_EXPORT_" + "x".repeat(110);
+  const identity = buildMcpToolIdentity({
+    serverAlias: "test",
+    toolName: name,
+  });
+  expect(identity.registryName.length).toBeLessThanOrEqual(64);
+  expect(identity.toolName).toBe(name);
+  expect(parseMcpCanonicalToolId(identity.canonicalId).effectiveToolName).toBe(
+    name,
+  );
 });

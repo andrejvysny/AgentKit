@@ -222,6 +222,9 @@ export async function submitMessage(ctx: RouteContext): Promise<Response> {
   const result = await ctx.deps.turns.submitMessage({
     chatId,
     content: validated.value.content,
+    ...(validated.value.contentSelection === undefined
+      ? {}
+      : { contentSelection: validated.value.contentSelection }),
     ...(validated.value.model === undefined
       ? {}
       : { model: validated.value.model }),
@@ -271,6 +274,7 @@ async function submitReplayMismatch(
     metadata: request.metadata ?? {},
     model: request.model ?? null,
     providerId: request.providerId ?? null,
+    contentSelection: request.contentSelection ?? null,
     parentMessageId:
       parentMessageId === undefined
         ? { append: true }
@@ -281,6 +285,7 @@ async function submitReplayMismatch(
     metadata: stored.metadata ?? {},
     model: payload["model"] ?? null,
     providerId: payload["providerId"] ?? null,
+    contentSelection: payload["contentSelection"] ?? null,
     parentMessageId:
       "parentMessageId" in payload
         ? { parent: payload["parentMessageId"] }
@@ -312,10 +317,12 @@ async function regenerateReplayMismatch(
   const asked = await turnFingerprint({
     model: request.model ?? null,
     providerId: request.providerId ?? null,
+    contentSelection: request.contentSelection ?? null,
   });
   const recorded = await turnFingerprint({
     model: payload["model"] ?? null,
     providerId: payload["providerId"] ?? null,
+    contentSelection: payload["contentSelection"] ?? null,
   });
   return asked === recorded ? null : keyMismatch(ctx);
 }
@@ -452,6 +459,9 @@ export async function regenerateMessage(ctx: RouteContext): Promise<Response> {
   const result = await ctx.deps.turns.regenerate({
     chatId,
     messageId,
+    ...(validated.value.contentSelection === undefined
+      ? {}
+      : { contentSelection: validated.value.contentSelection }),
     ...(validated.value.model === undefined
       ? {}
       : { model: validated.value.model }),

@@ -104,7 +104,7 @@ describe("AiToolRegistry schema hygiene", () => {
     expect(() => r.register(makeTool("normal", deepSchema(10)))).not.toThrow();
   });
 
-  it("registers two tools whose NESTED subschemas share an $id", () => {
+  it("refuses ambiguous nested schema identifiers", () => {
     // The strip used to be top-level only, so a document repeating one `$id`
     // inside itself failed the compile ("resolves to more than one schema") and
     // staging dropped the tool without a word.
@@ -117,9 +117,9 @@ describe("AiToolRegistry schema hygiene", () => {
       required: ["from"],
     } as unknown as AiJsonSchemaObject;
     const r = new AiToolRegistry();
-    expect(() => r.register(makeTool("nested_ids", schema))).not.toThrow();
-    expect(r.validateInput("nested_ids", { from: "a" })).toEqual([]);
-    expect(r.validateInput("nested_ids", { from: 1 })).not.toEqual([]);
+    expect(() => r.register(makeTool("nested_ids", schema))).toThrow(
+      ToolSchemaError,
+    );
   });
 
   it("refuses an over-large schema with a typed ToolSchemaError", () => {
@@ -175,7 +175,7 @@ describe("AiToolRegistry schema hygiene", () => {
     expect(second.validateInput("mailer_two", { to: "nope" })).not.toEqual([]);
   });
 
-  it("compiles an unknown format without printing anything", () => {
+  it("rejects an unknown format without printing anything", () => {
     // `ajv-formats` warns once per property per compile for a format it does
     // not know — which, on a per-turn (or per-call) staging, is a console flood
     // rather than a diagnostic.
@@ -189,20 +189,21 @@ describe("AiToolRegistry schema hygiene", () => {
     }
     const r = new AiToolRegistry();
     try {
-      r.register(
-        makeTool("odd_format", {
-          type: "object",
-          properties: {
-            v: { type: "string", format: "agentkit-not-a-real-format" },
-          },
-        } as unknown as AiJsonSchemaObject),
-      );
+      expect(() =>
+        r.register(
+          makeTool("odd_format", {
+            type: "object",
+            properties: {
+              v: { type: "string", format: "agentkit-not-a-real-format" },
+            },
+          } as unknown as AiJsonSchemaObject),
+        ),
+      ).toThrow(ToolSchemaError);
     } finally {
       for (const [key, fn] of original) console[key] = fn;
     }
 
     expect(printed).toEqual([]);
-    // Unknown formats stay permissive — only the noise went away.
-    expect(r.validateInput("odd_format", { v: "anything" })).toEqual([]);
+    expect(r.has("odd_format")).toBe(false);
   });
 });

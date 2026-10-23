@@ -141,9 +141,18 @@ export type AiImagePart = Static<typeof AiImagePartSchema>;
  * it cannot render. New part kinds (audio, file, …) are additive changes to this
  * union, not an escape hatch left open in advance.
  */
+/** Input audio is supported by chat-completions adapters for audio-capable models. */
+export const AiAudioPartSchema = Type.Object({
+  type: Type.Literal("audio"),
+  data: Type.String(),
+  format: Type.Union([Type.Literal("wav"), Type.Literal("mp3")]),
+});
+export type AiAudioPart = Static<typeof AiAudioPartSchema>;
+
 export const AiContentPartSchema = Type.Union([
   AiTextPartSchema,
   AiImagePartSchema,
+  AiAudioPartSchema,
 ]);
 export type AiContentPart = Static<typeof AiContentPartSchema>;
 

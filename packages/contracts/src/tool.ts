@@ -1,3 +1,4 @@
+import { AiContentPartSchema } from "./content.js";
 import { Type, type Static } from "@sinclair/typebox";
 import { AiJsonSchemaObjectSchema } from "./json-schema.js";
 import { AiSourceRefSchema } from "./source-ref.js";
@@ -68,6 +69,8 @@ export const AiToolLimitsSchema = Type.Object({
 export type AiToolLimits = Static<typeof AiToolLimitsSchema>;
 
 export const AiToolResultSchema = Type.Object({
+  /** Optional model-visible attachments, under the same serialized byte budget. */
+  modelContent: Type.Optional(Type.Array(AiContentPartSchema)),
   ok: Type.Boolean(),
   data: Type.Optional(Type.Unknown()),
   sources: Type.Array(AiSourceRefSchema),
@@ -101,6 +104,7 @@ export type AiToolResult<T = unknown> = Omit<
  * else the trimmed `data`.
  */
 export const AiToolEnvelopeSchema = Type.Object({
+  modelContent: Type.Optional(Type.Array(AiContentPartSchema)),
   ok: Type.Boolean(),
   status: Type.Union([
     Type.Literal("ok"),
