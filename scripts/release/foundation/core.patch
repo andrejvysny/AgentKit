@@ -12,7 +12,7 @@ diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
 diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers/client.ts
 --- a/packages/core/src/providers/client.ts
 +++ b/packages/core/src/providers/client.ts
-@@ -1,31 +1,15 @@
+@@ -1,34 +1,18 @@
 -import type { AiProviderConnectionIdentity } from "./responses-types.js";
  import type { AiRunEvent } from "@agentkit/contracts";
  import type {
@@ -32,6 +32,9 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
 -  }[];
 -}
 -
+ /** Provider-side thinking budget; a request hint, degraded with a warning where unsupported. */
+ export type AiReasoningEffort = "minimal" | "low" | "medium" | "high";
+ 
  export interface AiChatRequest {
 -  runContent?: AiRunContent;
    /** Reserve a durable request budget immediately before each transport dispatch. */
@@ -44,7 +47,7 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
    /** Valid provider stream activity, including non-visible reasoning/tool fragments. */
    onActivity?: () => void;
    runId: string;
-@@ -40,9 +24,6 @@ export interface AiChatRequest {
+@@ -44,9 +28,6 @@ export interface AiChatRequest {
  export interface AiProviderClient {
    /** Calls beforeRequest for each network attempt, including internal retries. */
    readonly tracksTransportRequests?: boolean;
@@ -130,9 +133,9 @@ diff --git a/packages/core/src/runs/model-step.ts b/packages/core/src/runs/model
      for await (const event of input.client.streamChat({
        runId,
        model: input.model,
-@@ -92,12 +81,6 @@ export async function* streamModelStep(
-       temperature: input.temperature,
+@@ -93,12 +82,6 @@ export async function* streamModelStep(
        maxOutputTokens: input.maxOutputTokens,
+       reasoningEffort: input.reasoningEffort,
        signal: input.signal,
 -      continuation,
 -      continuationScope: input.continuationScope,
@@ -146,12 +149,16 @@ diff --git a/packages/core/src/runs/model-step.ts b/packages/core/src/runs/model
 diff --git a/packages/core/src/runs/run-types.ts b/packages/core/src/runs/run-types.ts
 --- a/packages/core/src/runs/run-types.ts
 +++ b/packages/core/src/runs/run-types.ts
-@@ -3,19 +3,11 @@ import type {
+@@ -3,23 +3,11 @@ import type {
    AiContextBinding,
    AiToolLimits,
  } from "@agentkit/contracts";
--import type { AiChatRequest, AiProviderClient } from "../providers/client.js";
-+import type { AiProviderClient } from "../providers/client.js";
+-import type {
+-  AiChatRequest,
+-  AiProviderClient,
+-  AiReasoningEffort,
+-} from "../providers/client.js";
++import type { AiProviderClient, AiReasoningEffort } from "../providers/client.js";
  import type { AiToolRegistry } from "../tools/registry.js";
  import type { ExecutionBudget, ExecutionBudgets } from "./execution-budget.js";
  
