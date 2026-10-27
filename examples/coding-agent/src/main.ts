@@ -13,17 +13,36 @@
  *   --session <id>       stable id; reusing it continues the same session
  *   --db <path>          default ./.agentkit/coding-agent.db
  *   --yes                approve every request (still inside the role ceiling)
- *   --resume             adopt a turn a previous process left unfinished
+ *   --resume             continue a turn a previous process left interrupted
+ *   --effort <level>     reasoning effort: minimal | low | medium | high
  *   --transcript         print the session transcript and exit
+ *   --list-sessions      list the database's sessions and exit
+ *   --usage              print the session's token usage and exit
+ *   --export <file>      write the session as JSON and exit
  *   --list-profiles
+ *
+ * Quitting (/quit, Ctrl-C, SIGTERM) parks a running turn `interrupted`;
+ * nothing restarts it until --resume or /resume.
  */
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import type { AiRunEvent } from "@agentkit/contracts";
 import type { CodingMode } from "@agentkit/toolpacks-coding";
-import { defaultProfileRegistry } from "@agentkit/host";
+import {
+  REASONING_EFFORTS,
+  defaultProfileRegistry,
+  type SessionReasoningEffort,
+} from "@agentkit/host";
 import { CodingAgentApp, type PendingApproval } from "./app.js";
+import {
+  MODES,
+  exportTo,
+  handleCommand,
+  isEffort,
+  printSessions,
+  printUsage,
+} from "./commands.js";
 
 interface Cli {
   repo: string;
@@ -36,18 +55,14 @@ interface Cli {
   apiKeyEnv?: string;
   task?: string;
   yes: boolean;
+  effort?: SessionReasoningEffort;
   resume: boolean;
   transcript: boolean;
   listProfiles: boolean;
+  listSessions: boolean;
+  usage: boolean;
+  exportFile?: string;
 }
-
-const MODES: readonly string[] = [
-  "ask",
-  "auto_edit",
-  "full_auto",
-  "plan",
-  "read_only",
-];
 
 function usage(message?: string): never {
   if (message) console.error(`error: ${message}`);
@@ -65,8 +80,12 @@ function usage(message?: string): never {
       "  --session <id>       session id to continue (default: coding-agent)",
       "  --db <path>          state file (default: ./.agentkit/coding-agent.db)",
       "  --yes                approve every tool request",
-      "  --resume             adopt work a previous process left unfinished",
+      "  --resume             continue a turn a previous process left interrupted",
+      `  --effort <level>     ${REASONING_EFFORTS.join(" | ")}`,
       "  --transcript         print the transcript and exit",
+      "  --list-sessions      list sessions in the database and exit",
+      "  --usage              print token usage and exit",
+      "  --export <file>      write the session as JSON and exit",
       "  --list-profiles",
     ].join("\n"),
   );
@@ -85,6 +104,8 @@ function parse(argv: string[]): Cli {
     resume: false,
     transcript: false,
     listProfiles: false,
+    listSessions: false,
+    usage: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] as string;
@@ -137,6 +158,22 @@ function parse(argv: string[]): Cli {
       case "--list-profiles":
         cli.listProfiles = true;
         break;
+      case "--list-sessions":
+        cli.listSessions = true;
+        break;
+      case "--usage":
+        cli.usage = true;
+        break;
+      case "--export":
+        cli.exportFile = next();
+        break;
+      case "--effort": {
+        const effort = next();
+        if (!isEffort(effort))
+          usage(`--effort must be one of ${REASONING_EFFORTS.join(", ")}`);
+        cli.effort = effort;
+        break;
+      }
       case "--help":
       case "-h":
         usage();
@@ -145,8 +182,7 @@ function parse(argv: string[]): Cli {
         usage(`unknown argument ${arg}`);
     }
   }
-  if (!cli.listProfiles && !cli.transcript && cli.repo === "")
-    usage("--repo is required");
+  if (!cli.listProfiles && cli.repo === "") usage("--repo is required");
   if (cli.repo !== "") cli.repo = resolve(cli.repo);
   cli.db = resolve(cli.db);
   return cli;
@@ -183,7 +219,13 @@ async function decide(
 ): Promise<"approve" | "deny"> {
   if (cli.yes) return "approve";
   console.log("\n--- approval requested -------------------------------");
-  console.log(`tool:  ${approval.toolName}`);
+  console.log(
+    `tool:  ${approval.toolName}${
+      approval.argsSha256 === undefined
+        ? ""
+        : `  (args sha256 ${approval.argsSha256.slice(0, 12)})`
+    }`,
+  );
   if (approval.plan !== undefined) {
     console.log("PLAN APPROVAL — approving grants the host's execution mode:");
     console.log(approval.plan.plan ?? "(no plan text)");
@@ -208,6 +250,27 @@ async function decide(
   }
 }
 
+/**
+ * Ctrl-C and SIGTERM close the app, which parks a running turn `interrupted`
+ * instead of losing it. A second signal means "now": exit without waiting.
+ */
+function installSignalHandlers(app: CodingAgentApp): void {
+  let closing = false;
+  const onSignal = (signal: NodeJS.Signals): void => {
+    if (closing) process.exit(130);
+    closing = true;
+    console.error(
+      `\n${signal}: interrupting the running turn (signal again to force exit)`,
+    );
+    app
+      .close()
+      .catch((error) => console.error(error))
+      .finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+}
+
 async function main(): Promise<void> {
   const cli = parse(process.argv.slice(2));
   if (cli.listProfiles) {
@@ -229,39 +292,33 @@ async function main(): Promise<void> {
     baseUrl: cli.baseUrl,
     ...(cli.apiKeyEnv === undefined ? {} : { apiKeyEnv: cli.apiKeyEnv }),
     ...(cli.mode === undefined ? {} : { mode: cli.mode }),
+    ...(cli.effort === undefined ? {} : { reasoningEffort: cli.effort }),
   });
+  installSignalHandlers(app);
 
+  if (cli.listSessions) {
+    await printSessions(app);
+    await app.close();
+    return;
+  }
   await app.ensureSession();
-  if (cli.transcript) {
-    for (const message of await app.transcript())
-      console.log(
-        `[${message.role}${message.toolName ? `:${message.toolName}` : ""}] ${message.content}`,
-      );
+  if (cli.transcript || cli.usage || cli.exportFile !== undefined) {
+    if (cli.transcript)
+      for (const message of await app.transcript())
+        console.log(
+          `[${message.role}${message.toolName ? `:${message.toolName}` : ""}] ${message.content}`,
+        );
+    if (cli.usage) await printUsage(app);
+    if (cli.exportFile !== undefined)
+      console.log(`exported to ${await exportTo(app, cli.exportFile)}`);
     await app.close();
     return;
   }
 
   await app.startWorker();
-  if (cli.resume) {
-    const active = (await app.state()).activeTurn;
-    if (active !== undefined) {
-      console.log(
-        `adopting unfinished turn ${active.turnId} (${active.status})`,
-      );
-      await app.recover();
-    }
-  }
-
   const rl = createInterface({ input, output });
-  const runOnce = async (text: string): Promise<void> => {
-    const started = await app.send(text);
-    if (started.kind !== "turn") {
-      console.log(
-        "(queued as a follow-up; it runs when the current turn ends)",
-      );
-      return;
-    }
-    const status = await app.waitForTurn(started.turnId, {
+  const follow = async (turnId: string): Promise<void> => {
+    const status = await app.waitForTurn(turnId, {
       decide: (approval) => decide(cli, rl, approval),
       onEvent: (event) => {
         const line = describeEvent(event);
@@ -274,8 +331,34 @@ async function main(): Promise<void> {
     const last = answers[answers.length - 1];
     console.log(`\n${last?.content ?? "(no answer)"}\n[turn ${status}]`);
   };
+  const runOnce = async (text: string): Promise<void> => {
+    const started = await app.send(text);
+    if (started.kind !== "turn") {
+      console.log(
+        "(queued as a follow-up; it runs when the current turn ends)",
+      );
+      return;
+    }
+    await follow(started.turnId);
+  };
+  const resumeInterrupted = async (): Promise<void> => {
+    // Crashed leases become `interrupted` first; a clean quit already left it so.
+    await app.recover();
+    const active = (await app.state()).activeTurn;
+    if (active === undefined) return;
+    if (active.status === "running") {
+      console.log(
+        `turn ${active.turnId} still holds a live lease (another process, or one that has not expired yet); retry shortly`,
+      );
+      return;
+    }
+    console.log(`resuming turn ${active.turnId} (${active.status})`);
+    if (active.status === "interrupted") await app.resumeTurn(active.turnId);
+    await follow(active.turnId);
+  };
 
   try {
+    if (cli.resume) await resumeInterrupted();
     if (cli.task !== undefined) {
       await runOnce(cli.task);
       return;
@@ -286,54 +369,13 @@ async function main(): Promise<void> {
       }`,
     );
     console.log(
-      "commands: /mode <m> /status /transcript /cancel /quit, or type an instruction",
+      "commands: /mode <m> /status /transcript /cancel /interrupt /resume /turns /usage /export <file> /model <id> [effort] /effort <level|off> /quit, or type an instruction",
     );
     for (;;) {
       const line = (await rl.question("> ")).trim();
       if (line === "") continue;
-      if (line === "/quit" || line === "/exit") return;
-      if (line === "/status") {
-        const state = await app.state();
-        console.log(
-          JSON.stringify(
-            {
-              mode: await app.executionMode(),
-              activeTurn: state.activeTurn ?? null,
-              pending: state.pending.length,
-              waiting: state.waiting?.inputId ?? null,
-            },
-            null,
-            2,
-          ),
-        );
-        continue;
-      }
-      if (line === "/transcript") {
-        for (const m of await app.transcript())
-          console.log(`[${m.role}] ${m.content}`);
-        continue;
-      }
-      if (line.startsWith("/mode ")) {
-        const mode = line.slice(6).trim();
-        if (!MODES.includes(mode)) {
-          console.log(`unknown mode; choose one of ${MODES.join(", ")}`);
-          continue;
-        }
-        await app.setExecutionMode(mode);
-        console.log(`mode is now ${mode}`);
-        continue;
-      }
-      if (line === "/cancel") {
-        const active = (await app.state()).activeTurn;
-        if (active === undefined) console.log("nothing to cancel");
-        else {
-          await app.cancel(active.turnId);
-          console.log(`cancelled ${active.turnId}`);
-        }
-        continue;
-      }
       if (line.startsWith("/")) {
-        console.log("unknown command");
+        if (!(await handleCommand(app, line, { follow }))) return;
         continue;
       }
       await runOnce(line);

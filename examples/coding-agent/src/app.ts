@@ -30,9 +30,14 @@ import {
   defaultClock,
   defaultIds,
   defaultProfileRegistry,
+  readSessionDescriptor,
   type AgentInputRecord,
+  type AgentSessionExport,
   type AgentSessionState,
+  type AgentSessionUsage,
+  type AgentTurnSummary,
   type ProfileRegistry,
+  type SessionReasoningEffort,
   type SecretStore,
   type TaskStatus,
   type ToolSetContributor,
@@ -85,6 +90,8 @@ export interface CodingAgentOptions {
   /** A profile id; see `defaultProfileRegistry()`. */
   profileId: string;
   model: string;
+  /** Applied with `setModel` on a new session, or when it differs on an existing one. */
+  reasoningEffort?: SessionReasoningEffort;
   baseUrl: string;
   /** Name of the environment variable holding the API key. */
   apiKeyEnv?: string;
@@ -111,9 +118,21 @@ export interface PendingApproval {
   requestId: string;
   answerId: string;
   toolName: string;
+  /** SHA-256 of the exact arguments the approval is bound to. */
+  argsSha256?: string;
   prompt: string;
   /** Set when the request is a plan the user is asked to approve as a whole. */
   plan?: { planDigest: string; plan?: string; requestedMode?: string };
+}
+
+/** One row of `--list-sessions`. */
+export interface SessionListing {
+  sessionId: string;
+  profileId: string;
+  model?: string;
+  reasoningEffort?: SessionReasoningEffort;
+  turns: number;
+  lastTurnStatus?: TaskStatus;
 }
 
 export class CodingAgentApp {
@@ -175,6 +194,10 @@ export class CodingAgentApp {
       leaseTtlMs,
       heartbeatMs: Math.max(250, Math.floor(leaseTtlMs / 3)),
       pollMs: 50,
+      // Manual + interrupt: opening never restarts work, and closing parks a
+      // running turn `interrupted` so only an explicit resume continues it.
+      recoveryMode: "manual",
+      shutdownMode: "interrupt",
     });
     // The profile and the session's durable execution state decide permission;
     // `options.mode` is the floor for a session that has said nothing yet.
@@ -261,8 +284,19 @@ export class CodingAgentApp {
     const existing = await this.store.conversations.getChat(
       this.options.sessionId,
     );
-    if (existing !== null) return this.service.getState(this.options.sessionId);
-    return this.service.createSession({
+    if (existing !== null) {
+      const { descriptor } = await this.service.getState(
+        this.options.sessionId,
+      );
+      const effort = this.options.reasoningEffort;
+      if (effort === undefined || descriptor.reasoningEffort === effort)
+        return this.service.getState(this.options.sessionId);
+      return this.service.setModel(this.options.sessionId, {
+        model: descriptor.model ?? this.options.model,
+        reasoningEffort: effort,
+      });
+    }
+    const created = await this.service.createSession({
       sessionId: this.options.sessionId,
       profile: { id: this.options.profileId },
       providerId: this.options.providerId ?? "local",
@@ -273,10 +307,22 @@ export class CodingAgentApp {
         ? {}
         : { executionMode: this.options.mode }),
     });
+    const effort = this.options.reasoningEffort;
+    // createSession has no effort field; setModel is the one place it is set.
+    return effort === undefined
+      ? created
+      : this.service.setModel(this.options.sessionId, {
+          model: this.options.model,
+          reasoningEffort: effort,
+        });
   }
 
   async startWorker(): Promise<void> {
     if (this.worker) return;
+    // A manual-recovery runner refuses to claim until it has reconciled boot:
+    // anything left queued by a previous process is parked `interrupted`
+    // rather than silently restarted.
+    await this.recover();
     this.worker = await this.taskRunner.startWorker(
       createDispatchingWorker(this.registry, {
         store: this.store,
@@ -292,9 +338,10 @@ export class CodingAgentApp {
   }
 
   /**
-   * Adopt work a previous process left behind. Recovery is explicit — a restart
-   * of the app must not by itself resume an unfinished turn — and it never
-   * re-runs a tool whose outcome the log cannot decide (see side-effects).
+   * Park work a previous process left behind as `interrupted`. This never
+   * restarts it — `resumeTurn` does, on explicit intent — and a resumed turn
+   * never re-runs a tool whose outcome the log cannot decide (see side-effects).
+   * A killed process's lease must expire first, so repeat until it is parked.
    */
   async recover(): Promise<void> {
     await this.taskRunner.recover();
@@ -347,6 +394,9 @@ export class CodingAgentApp {
       // DIFFERENT decision is refused rather than silently overriding a human.
       answerId: `ans:${request.inputId}`,
       toolName: state.waitingApproval?.toolName ?? "tool",
+      ...(state.waitingApproval === undefined
+        ? {}
+        : { argsSha256: state.waitingApproval.argsSha256 }),
       prompt:
         typeof content?.prompt === "string"
           ? content.prompt
@@ -384,6 +434,79 @@ export class CodingAgentApp {
 
   async setExecutionMode(mode: string): Promise<void> {
     await this.service.setExecutionMode(this.options.sessionId, mode);
+  }
+
+  /** Park a running turn `interrupted`; `resumeTurn` continues it. */
+  async interrupt(turnId: string): Promise<void> {
+    await this.service.interrupt(this.options.sessionId, turnId);
+  }
+
+  /** The session's interrupted turn, if it has one. */
+  async interruptedTurn(): Promise<string | undefined> {
+    const active = (await this.state()).activeTurn;
+    return active?.status === "interrupted" ? active.turnId : undefined;
+  }
+
+  async resumeTurn(turnId: string): Promise<void> {
+    await this.service.resume(this.options.sessionId, turnId);
+  }
+
+  async turns(): Promise<AgentTurnSummary[]> {
+    return this.service.listTurns(this.options.sessionId);
+  }
+
+  async usage(): Promise<AgentSessionUsage> {
+    return this.service.getUsage(this.options.sessionId);
+  }
+
+  async exportSession(): Promise<AgentSessionExport> {
+    return this.service.exportSession(this.options.sessionId);
+  }
+
+  /** Takes effect on the NEXT turn; a turn already running keeps its request. */
+  async setModel(
+    model: string,
+    reasoningEffort?: SessionReasoningEffort | null,
+  ): Promise<AgentSessionState> {
+    return this.service.setModel(this.options.sessionId, {
+      model,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    });
+  }
+
+  /** Every agent session in the database, newest first. */
+  async listSessions(): Promise<SessionListing[]> {
+    const listings: SessionListing[] = [];
+    let before: string | undefined;
+    for (;;) {
+      const page = await this.store.conversations.listChats({
+        limit: 100,
+        includeArchived: true,
+        ...(before === undefined ? {} : { before }),
+      });
+      if (page.length === 0) break;
+      for (const chat of page) {
+        const descriptor = readSessionDescriptor(chat.metadata);
+        if (descriptor === undefined) continue;
+        const turns = await this.service.listTurns(chat.id);
+        const last = turns[turns.length - 1];
+        listings.push({
+          sessionId: chat.id,
+          profileId: descriptor.profile.id,
+          ...(descriptor.model === undefined
+            ? {}
+            : { model: descriptor.model }),
+          ...(descriptor.reasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: descriptor.reasoningEffort }),
+          turns: turns.length,
+          ...(last === undefined ? {} : { lastTurnStatus: last.status }),
+        });
+      }
+      if (page.length < 100) break;
+      before = page[page.length - 1]!.updatedAt;
+    }
+    return listings;
   }
 
   async cancel(turnId: string): Promise<void> {
