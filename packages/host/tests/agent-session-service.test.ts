@@ -525,6 +525,46 @@ describe("human input", () => {
   });
 });
 
+describe("setModel reasoning effort", () => {
+  it("pins effort into later turns and null clears it", async () => {
+    const f = await setup();
+    await newSession(f);
+    f.mock.setScript([{ steps: [{ kind: "text", content: "a" }] }]);
+    const state = await f.service.setModel("s1", {
+      model: "m-y",
+      reasoningEffort: "high",
+    });
+    expect(state.descriptor.reasoningEffort).toBe("high");
+    const first = await turnOf(f, "s1", "q1");
+    expect(
+      (await f.store.tasks.getTask(first.turnId))?.payload["reasoningEffort"],
+    ).toBe("high");
+    await drive(f, first.turnId);
+
+    // Omitted keeps it; null clears it.
+    const kept = await f.service.setModel("s1", { model: "m-y" });
+    expect(kept.descriptor.reasoningEffort).toBe("high");
+    const cleared = await f.service.setModel("s1", {
+      model: "m-y",
+      reasoningEffort: null,
+    });
+    expect(cleared.descriptor.reasoningEffort).toBeUndefined();
+    f.mock.setScript([{ steps: [{ kind: "text", content: "b" }] }]);
+    const second = await turnOf(f, "s1", "q2");
+    expect(
+      (await f.store.tasks.getTask(second.turnId))?.payload,
+    ).not.toHaveProperty("reasoningEffort");
+    expect(
+      await codeOf(
+        f.service.setModel("s1", {
+          model: "m-y",
+          reasoningEffort: "extreme" as never,
+        }),
+      ),
+    ).toBe("invalid_input");
+  });
+});
+
 describe("fork and setModel", () => {
   it("forks history without pending inputs", async () => {
     const f = await setup();

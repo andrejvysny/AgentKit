@@ -7,12 +7,17 @@ export const SESSION_METADATA_KEY = "agentkit.session";
 export const COMPACT_REQUESTED_METADATA_KEY =
   "agentkit.session.compactRequestedAt";
 
+export const REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
+export type SessionReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
 /** What a chat records once it is an agent session. */
 export interface AgentSessionDescriptor {
   version: 1;
   profile: { id: string; digest?: string };
   providerId?: string;
   model?: string;
+  /** Overrides the profile's reasoning effort for future turns. */
+  reasoningEffort?: SessionReasoningEffort;
   createdAt: string;
   /** Project instructions source; absent means none are injected (ADR 0017). */
   workspace?: { root: string; trusted: boolean };
@@ -54,12 +59,18 @@ export function readSessionDescriptor(
   const digest = profile["digest"];
   const providerId = raw["providerId"];
   const model = raw["model"];
+  const reasoningEffort = raw["reasoningEffort"];
   const createdAt = raw["createdAt"];
   if (typeof id !== "string" || id === "") return undefined;
   if (digest !== undefined && typeof digest !== "string") return undefined;
   if (providerId !== undefined && typeof providerId !== "string")
     return undefined;
   if (model !== undefined && typeof model !== "string") return undefined;
+  if (
+    reasoningEffort !== undefined &&
+    !REASONING_EFFORTS.includes(reasoningEffort as SessionReasoningEffort)
+  )
+    return undefined;
   if (typeof createdAt !== "string") return undefined;
   const workspace = readWorkspace(raw["workspace"]);
   const context = readContext(raw["context"]);
@@ -71,6 +82,9 @@ export function readSessionDescriptor(
     profile: { id, ...(digest === undefined ? {} : { digest }) },
     ...(providerId === undefined ? {} : { providerId }),
     ...(model === undefined ? {} : { model }),
+    ...(reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: reasoningEffort as SessionReasoningEffort }),
     createdAt,
     ...(workspace === undefined ? {} : { workspace }),
     ...(context === undefined ? {} : { context }),

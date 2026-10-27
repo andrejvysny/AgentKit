@@ -386,6 +386,10 @@ export const AiRunUsageEventSchema = Type.Object({
     promptTokens: Type.Optional(Type.Number()),
     completionTokens: Type.Optional(Type.Number()),
     totalTokens: Type.Optional(Type.Number()),
+    /** Prompt tokens served from the provider's cache; set only when reported. */
+    cachedPromptTokens: Type.Optional(Type.Number()),
+    /** Completion tokens spent on hidden reasoning; set only when reported. */
+    reasoningTokens: Type.Optional(Type.Number()),
     source: Type.Union([Type.Literal("stream"), Type.Literal("response")]),
     finalForCall: Type.Boolean(),
   }),

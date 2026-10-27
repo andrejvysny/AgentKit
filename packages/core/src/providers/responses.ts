@@ -334,12 +334,32 @@ function abortError(): Error {
 
 type EventBase = { runId: string; timestamp: string };
 
+function detailCount<K extends string>(
+  key: K,
+  details: unknown,
+  field: string,
+): { [P in K]?: number } {
+  if (!details || typeof details !== "object") return {};
+  const n = tokenCount((details as Record<string, unknown>)[field]);
+  return n === undefined ? {} : ({ [key]: n } as { [P in K]?: number });
+}
+
 function usageCounts(usage: Record<string, unknown> | undefined) {
   return usage
     ? {
         promptTokens: tokenCount(usage.input_tokens),
         completionTokens: tokenCount(usage.output_tokens),
         totalTokens: tokenCount(usage.total_tokens),
+        ...detailCount(
+          "cachedPromptTokens",
+          usage.input_tokens_details,
+          "cached_tokens",
+        ),
+        ...detailCount(
+          "reasoningTokens",
+          usage.output_tokens_details,
+          "reasoning_tokens",
+        ),
       }
     : undefined;
 }

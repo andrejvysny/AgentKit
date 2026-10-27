@@ -11,6 +11,7 @@
  * the model cannot talk its way out of, because the model never sees the tool
  * set the profile removed and cannot answer a guard.
  */
+import type { AiReasoningEffort, RunContentSelection } from "@agentkit/core";
 import {
   readSessionDescriptor,
   type AgentSessionDescriptor,
@@ -60,7 +61,7 @@ export interface AgentProfile {
   instructions: string;
   model?: string;
   /** Provider-side thinking budget, where the model supports one. */
-  reasoningEffort?: "minimal" | "low" | "medium" | "high";
+  reasoningEffort?: AiReasoningEffort;
   /**
    * The complete allowlist of tool names this profile may stage. Empty means
    * "no tools at all", not "no opinion" — a chat agent that silently kept the
@@ -76,6 +77,27 @@ export interface AgentProfile {
   role?: AgentRole;
   limits: AgentLimits;
   resources: AgentResources;
+}
+
+/**
+ * The skills a turn carries: the session's own first, then the profile's.
+ * An id already selected keeps its pinned revision, so a profile can add a
+ * skill but never silently move one the session pinned.
+ */
+export function mergeProfileSkills(
+  selection: RunContentSelection | undefined,
+  profile: AgentProfile | undefined,
+): RunContentSelection | undefined {
+  const extra = profile?.resources.skills ?? [];
+  if (extra.length === 0) return selection;
+  const skills = [...(selection?.skills ?? [])];
+  const seen = new Set(skills.map((skill) => skill.id));
+  for (const skill of extra) {
+    if (seen.has(skill.id)) continue;
+    seen.add(skill.id);
+    skills.push({ ...skill });
+  }
+  return { ...selection, skills };
 }
 
 /** The tool names `@agentkit/toolpacks-coding` contributes. */

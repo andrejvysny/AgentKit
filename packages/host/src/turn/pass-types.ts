@@ -16,6 +16,7 @@ import type {
 import type {
   AiChatRequest,
   AiProviderClient,
+  AiReasoningEffort,
   AiToolRegistry,
 } from "@agentkit/core";
 import type { TaskRecord } from "../ports/task-store.js";
@@ -53,6 +54,9 @@ export interface PassInput {
   assistantMessageId: string;
   state: PassState;
   maxToolIterations?: number;
+  maxToolCallsPerIteration?: number;
+  maxOutputTokens?: number;
+  reasoningEffort?: AiReasoningEffort;
   /** Session main pass only: where durable steers come from. */
   steering?: AgentSteeringSource;
   /** Session main pass only: lets a tool park the run for human input. */

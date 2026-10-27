@@ -25,10 +25,12 @@ import { stageNextQueuedTurn } from "../turn/session-turn.js";
 import type { TurnRunner } from "../turn/turn-runner.js";
 import {
   COMPACT_REQUESTED_METADATA_KEY,
+  REASONING_EFFORTS,
   SESSION_METADATA_KEY,
   readSessionDescriptor,
   sessionContentSelection,
   type AgentSessionDescriptor,
+  type SessionReasoningEffort,
 } from "./descriptor.js";
 import { sha256Hex } from "./hash.js";
 import {
@@ -462,20 +464,39 @@ export class AgentSessionService {
   /** Future turns only; an active task keeps the model it was submitted with. */
   async setModel(
     sessionId: string,
-    input: { providerId?: string; model: string },
+    input: {
+      providerId?: string;
+      model: string;
+      /** Omit to keep the current effort; `null` falls back to the profile's. */
+      reasoningEffort?: SessionReasoningEffort | null;
+    },
   ): Promise<AgentSessionState> {
     if (typeof input.model !== "string" || input.model === "")
       invalid("model must be a non-empty string.");
+    if (
+      input.reasoningEffort !== undefined &&
+      input.reasoningEffort !== null &&
+      !REASONING_EFFORTS.includes(input.reasoningEffort)
+    )
+      invalid(
+        `reasoningEffort must be one of ${REASONING_EFFORTS.join(", ")}.`,
+      );
     await this.deps.store.transaction(async (tx) => {
       const chat = await tx.conversations.getChat(sessionId);
       const descriptor = readSessionDescriptor(chat?.metadata);
       if (!chat || !descriptor) throw this.notASession(sessionId);
+      const { reasoningEffort: current, ...rest } = descriptor;
+      const reasoningEffort =
+        input.reasoningEffort === undefined ? current : input.reasoningEffort;
       await tx.conversations.updateChat(sessionId, {
         metadata: {
           ...chat.metadata,
           [SESSION_METADATA_KEY]: {
-            ...descriptor,
+            ...rest,
             model: input.model,
+            ...(reasoningEffort === null || reasoningEffort === undefined
+              ? {}
+              : { reasoningEffort }),
             ...(input.providerId === undefined
               ? {}
               : { providerId: input.providerId }),
@@ -569,6 +590,9 @@ export class AgentSessionService {
       content,
       ...(inputId === undefined ? {} : { taskId: turnIdFor(inputId) }),
       ...(descriptor.model === undefined ? {} : { model: descriptor.model }),
+      ...(descriptor.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: descriptor.reasoningEffort }),
       ...(descriptor.providerId === undefined
         ? {}
         : { providerId: descriptor.providerId }),

@@ -52,6 +52,20 @@ pub struct AiRunUsageEventData {
         serialize_with = "crate::serialize_optional_number"
     )]
     pub total_tokens: Optional<f64>,
+    #[serde(
+        rename = "cachedPromptTokens",
+        default,
+        skip_serializing_if = "Optional::is_absent",
+        serialize_with = "crate::serialize_optional_number"
+    )]
+    pub cached_prompt_tokens: Optional<f64>,
+    #[serde(
+        rename = "reasoningTokens",
+        default,
+        skip_serializing_if = "Optional::is_absent",
+        serialize_with = "crate::serialize_optional_number"
+    )]
+    pub reasoning_tokens: Optional<f64>,
     #[serde(rename = "source")]
     pub source: AiRunUsageEventDataSource,
     #[serde(rename = "finalForCall")]
@@ -69,6 +83,8 @@ crate::impl_json_deserialize!(AiRunUsageEventData, |value: Value| {
         prompt_tokens: crate::optional_field(&mut object, "promptTokens")?,
         completion_tokens: crate::optional_field(&mut object, "completionTokens")?,
         total_tokens: crate::optional_field(&mut object, "totalTokens")?,
+        cached_prompt_tokens: crate::optional_field(&mut object, "cachedPromptTokens")?,
+        reasoning_tokens: crate::optional_field(&mut object, "reasoningTokens")?,
         source: crate::required_field(&mut object, "source")?,
         final_for_call: crate::required_field(&mut object, "finalForCall")?,
         extra: object.into_iter().collect(),

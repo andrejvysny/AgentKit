@@ -73,6 +73,13 @@ export async function buildResponsesRequest(
     if (input.maxOutputTokens !== undefined)
       body.max_output_tokens = input.maxOutputTokens;
   }
+  if (input.reasoningEffort !== undefined) {
+    const existing = body.reasoning;
+    body.reasoning = {
+      ...(existing && typeof existing === "object" ? existing : {}),
+      effort: input.reasoningEffort,
+    };
+  }
   boundedJson(body);
   return body;
 }
