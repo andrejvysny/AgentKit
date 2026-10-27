@@ -7,6 +7,7 @@ import {
   RecordNotFoundError,
   SessionsUnavailableError,
 } from "../errors.js";
+import type { AgentInputRecord } from "../ports/agent-input-store.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { Clock, IdGenerator } from "../ports/system.js";
 import { sha256Hex } from "./hash.js";
@@ -84,6 +85,47 @@ export async function answerHumanRequest(
       const recorded = request.appliedMessageId
         ? await tx.conversations.getMessage(request.appliedMessageId)
         : null;
+      // REPAIR, not conflict: the receipt names a tool record that is not
+      // there. Only a store without rollback (the memory adapter) can leave
+      // that state, by failing between the CAS and the append. The same
+      // answerId is the caller retrying that very answer, so write the record
+      // it was owed under the id the receipt already promised; refusing would
+      // let the resumed turn run on a synthetic "missing result" instead.
+      if (
+        recorded === null &&
+        request.appliedMessageId !== undefined &&
+        request.answerId === answerId
+      ) {
+        const last = await tx.conversations.lastMessageOfRun(
+          request.sessionId,
+          taskId,
+        );
+        if (!last)
+          throw new RecordNotFoundError(`Turn ${taskId} has no run records.`, {
+            taskId,
+          });
+        await appendAnswer(tx, {
+          id: request.appliedMessageId,
+          request,
+          taskId,
+          parentMessageId: last.id,
+          envelopeJson,
+          answerId,
+          responseHash,
+        });
+        return {
+          receipt: {
+            requestId,
+            answerId,
+            turnId: taskId,
+            messageId: request.appliedMessageId,
+            duplicate: false,
+          },
+          ...(task?.status === "queued"
+            ? { enqueue: { taskId, scopeId: request.sessionId } }
+            : {}),
+        };
+      }
       if (
         request.answerId !== answerId ||
         recorded?.metadata["responseHash"] !== responseHash
@@ -141,26 +183,14 @@ export async function answerHumanRequest(
         throw stale("a concurrent answer or cancel won");
       throw error;
     }
-    await tx.conversations.appendMessage({
+    await appendAnswer(tx, {
       id: messageId,
-      chatId: request.sessionId,
-      runId: taskId,
-      role: "tool",
-      content: envelopeJson,
-      modelResultJson: envelopeJson,
-      ...(request.toolCallId === undefined
-        ? {}
-        : { toolCallId: request.toolCallId }),
+      request,
+      taskId,
       parentMessageId: last.id,
-      activate: false,
-      metadata: {
-        internal: true,
-        toolName: toolName(request.content),
-        humanAnswer: true,
-        answerId,
-        requestId,
-        responseHash,
-      },
+      envelopeJson,
+      answerId,
+      responseHash,
     });
     return {
       receipt: {
@@ -172,5 +202,42 @@ export async function answerHumanRequest(
       },
       enqueue: { taskId, scopeId: request.sessionId },
     };
+  });
+}
+
+/** The human's answer, as the parked call's tool result in the run chain. */
+async function appendAnswer(
+  tx: AssistantStore,
+  input: {
+    id: string;
+    request: AgentInputRecord;
+    taskId: string;
+    parentMessageId: string;
+    envelopeJson: string;
+    answerId: string;
+    responseHash: string;
+  },
+): Promise<void> {
+  const { request } = input;
+  await tx.conversations.appendMessage({
+    id: input.id,
+    chatId: request.sessionId,
+    runId: input.taskId,
+    role: "tool",
+    content: input.envelopeJson,
+    modelResultJson: input.envelopeJson,
+    ...(request.toolCallId === undefined
+      ? {}
+      : { toolCallId: request.toolCallId }),
+    parentMessageId: input.parentMessageId,
+    activate: false,
+    metadata: {
+      internal: true,
+      toolName: toolName(request.content),
+      humanAnswer: true,
+      answerId: input.answerId,
+      requestId: request.inputId,
+      responseHash: input.responseHash,
+    },
   });
 }
