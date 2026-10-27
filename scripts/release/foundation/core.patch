@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
 --- a/packages/core/src/index.ts
 +++ b/packages/core/src/index.ts
-@@ -33,7 +33,5 @@
+@@ -37,7 +37,5 @@ export * from "./providers/sse.js";
  export * from "./providers/openai-compatible.js";
-
+ 
  export * from "./runs/execution-budget.js";
 -export * from "./providers/responses-types.js";
 -export * from "./providers/responses.js";
@@ -23,7 +23,7 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
    AiProviderModel,
    AiToolDefinition,
  } from "@agentkit/contracts";
-
+ 
 -export interface AiRunContent {
 -  /** Trusted, resolved selection for this run; separate from canonical history. */
 -  messages: readonly {
@@ -44,7 +44,7 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
    /** Valid provider stream activity, including non-visible reasoning/tool fragments. */
    onActivity?: () => void;
    runId: string;
-@@ -40,9 +24,6 @@
+@@ -40,9 +24,6 @@ export interface AiChatRequest {
  export interface AiProviderClient {
    /** Calls beforeRequest for each network attempt, including internal retries. */
    readonly tracksTransportRequests?: boolean;
@@ -57,15 +57,15 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
 diff --git a/packages/core/src/runs/agent-loop.ts b/packages/core/src/runs/agent-loop.ts
 --- a/packages/core/src/runs/agent-loop.ts
 +++ b/packages/core/src/runs/agent-loop.ts
-@@ -1,7 +1,6 @@
- import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
+@@ -5,7 +5,6 @@ import type {
+ } from "@agentkit/contracts";
  import { createEventStamper } from "../events.js";
  import { newRunId, nowIso } from "../ids.js";
 -import type { AiChatRequest } from "../providers/client.js";
  import { boundedRun } from "./bounded-run.js";
  import {
    type AgentLoopHooks,
-@@ -83,13 +82,6 @@ async function* runAgentLoopUnchecked(
+@@ -125,13 +124,6 @@ async function* runAgentLoopUnchecked(
      firstSeq: input.firstSeq,
      attemptId: input.attemptId,
    });
@@ -79,7 +79,7 @@ diff --git a/packages/core/src/runs/agent-loop.ts b/packages/core/src/runs/agent
    let iteration = 0;
    let finishReason: string | undefined;
  
-@@ -149,8 +141,6 @@ async function* runAgentLoopUnchecked(
+@@ -213,8 +205,6 @@ async function* runAgentLoopUnchecked(
        messages,
        toolDefinitions,
        stamp,
