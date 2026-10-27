@@ -75,6 +75,10 @@
     "./runner-local/filesystem": {
       "types": "./dist/runner-local/file-skill-source.d.ts",
       "import": "./dist/runner-local/file-skill-source.js"
+    },
+    "./toolpacks-coding": {
+      "types": "./dist/toolpacks-coding/index.d.ts",
+      "import": "./dist/toolpacks-coding/index.js"
     }
   },
   "repository": {
