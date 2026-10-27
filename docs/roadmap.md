@@ -298,11 +298,11 @@ itself) creates real pressure for them.
   ([`docs/ports.md`](ports.md) records this as an adapter-MAY — memory has no
   rollback, so the hazard the queueing prevents does not exist). Full parity
   needs sub-store state injection.
-- **`TurnRunner`'s terminal `updateMessage` is unfenced.** The block is fenced
-  `transitionTask` → fenced `endAttempt` → **unfenced** `updateMessage`, so a
-  lease that moves between the first two awaits leaves the task terminal with
-  the placeholder still `placeholder: true`. Unreachable in a single process;
-  closing it properly means a lease-aware `ConversationStore` write.
+- ~~**`TurnRunner`'s terminal `updateMessage` is unfenced.**~~ Resolved in
+  source (verified in the [M0 baseline](baseline/m0-2026-10-27.md)): the
+  terminal transaction now writes the placeholder through
+  `fencedConversations(tx, ctx).updateMessage`, then fenced `endAttempt` and
+  fenced `transitionTask` (`packages/host/src/turn/turn-runner.ts`).
 - **`SingleProcessTaskRunner.stillHoldsLease` probes by renewing**, so asking
   whether the runner still holds the lease extends it as a side effect on the
   settle path. Harmless where it is used today, but a read that writes.
