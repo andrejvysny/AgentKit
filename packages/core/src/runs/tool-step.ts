@@ -48,6 +48,11 @@ export interface ToolBatchContext {
   duplicateIds: string[];
   /** Mutated: synthesized announcements are added so none repeats. */
   announcedToolCallIds: Set<string>;
+  /**
+   * The calls' assistant message is already in `messages` (an approved call
+   * resumed after a park): push no assistant message and announce nothing.
+   */
+  assistantInHistory?: boolean;
 }
 
 /**
@@ -88,7 +93,7 @@ export async function* executeToolBatch(
   // never appearing at all). Synthesize the missing announcements — deduped
   // by id, so a provider that emits BOTH still produces exactly one per call —
   // before any of them executes.
-  for (const tc of toolCalls) {
+  for (const tc of ctx.assistantInHistory ? [] : toolCalls) {
     if (announcedToolCallIds.has(tc.id)) continue;
     announcedToolCallIds.add(tc.id);
     yield stamp({
@@ -137,11 +142,12 @@ export async function* executeToolBatch(
   // execute only the capped subset and emit a terminal tool message for each
   // skipped call below, so every tool_call_id has both an assistant entry and
   // a tool response.
-  messages.push({
-    role: "assistant",
-    content: assistantContent,
-    toolCalls: toolCalls,
-  });
+  if (!ctx.assistantInHistory)
+    messages.push({
+      role: "assistant",
+      content: assistantContent,
+      toolCalls: toolCalls,
+    });
 
   // On cancellation mid-loop, every tool call already listed in the
   // assistant message (limited + skipped) must still receive a tool
@@ -167,7 +173,13 @@ export async function* executeToolBatch(
   // The one call (first wins) that is waiting for a human. It gets no tool
   // message now: its result is the human's later answer.
   let suspension:
-    | { tc: AiToolCall; prompt: string; expiresAt?: string }
+    | {
+        tc: AiToolCall;
+        prompt: string;
+        expiresAt?: string;
+        kind?: "input" | "approval";
+        argsSha256?: string;
+      }
     | undefined;
   // Cancellation must still answer the suspended call, or its tool_call_id
   // stays orphaned in the replayed history.
@@ -313,6 +325,8 @@ export async function* executeToolBatch(
           suspendRequest = {
             prompt: request?.prompt,
             ...(request?.expiresAt ? { expiresAt: request.expiresAt } : {}),
+            ...(request?.kind ? { kind: request.kind } : {}),
+            ...(request?.argsSha256 ? { argsSha256: request.argsSha256 } : {}),
           };
         }
       : undefined;
@@ -326,7 +340,8 @@ export async function* executeToolBatch(
         bindings: input.bindings ?? [],
         limits: input.limits,
         signal: input.signal,
-        metadata: { toolEventId: newToolEventId() },
+        toolCallId: tc.id,
+        metadata: { ...input.toolMetadata, toolEventId: newToolEventId() },
         // Key absent (not undefined) when not suspendable.
         ...(suspend ? { suspend } : {}),
       },
@@ -336,7 +351,8 @@ export async function* executeToolBatch(
     sealed = true;
 
     if (suspendRequest) {
-      const { prompt, expiresAt } = suspendRequest as AgentSuspendRequest;
+      const { prompt, expiresAt, kind, argsSha256 } =
+        suspendRequest as AgentSuspendRequest;
       const fail = (message: string, code: string) =>
         failTool(
           stamp,
@@ -364,7 +380,13 @@ export async function* executeToolBatch(
         );
         if (hooked) yield* toolResult(tc, "failed", SUSPEND_CONFLICT_CODE);
       } else {
-        suspension = { tc, prompt, ...(expiresAt ? { expiresAt } : {}) };
+        suspension = {
+          tc,
+          prompt,
+          ...(expiresAt ? { expiresAt } : {}),
+          ...(kind ? { kind } : {}),
+          ...(argsSha256 ? { argsSha256 } : {}),
+        };
       }
       continue;
     }
@@ -539,6 +561,8 @@ export async function* executeToolBatch(
         step,
         prompt: suspension.prompt,
         ...(suspension.expiresAt ? { expiresAt: suspension.expiresAt } : {}),
+        ...(suspension.kind ? { kind: suspension.kind } : {}),
+        ...(suspension.argsSha256 ? { argsSha256: suspension.argsSha256 } : {}),
       },
     });
     return "suspended";

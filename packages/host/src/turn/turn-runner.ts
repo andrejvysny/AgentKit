@@ -113,6 +113,7 @@ import {
   sessionSteering,
   settleSessionInputs,
 } from "./session-turn.js";
+import { resolveApprovedCalls } from "./approval-resume.js";
 import {
   RETRY_MAX_TOOL_ITERATIONS,
   filterToolTurns,
@@ -752,6 +753,23 @@ export class TurnRunner implements TaskWorker {
       await parkTurn(store, ctx, assistantMessageId, state.content);
       return;
     }
+    // Approved calls that never ran execute first, ahead of any model request
+    // (ADR 0019); their ids stay out of orphan reconciliation.
+    const approvals =
+      session === undefined
+        ? undefined
+        : await resolveApprovedCalls(store, ctx, {
+            chatId,
+            assistantMessageId,
+            ...(state.lastMessageId === undefined
+              ? {}
+              : { lastMessageId: state.lastMessageId }),
+          });
+    if (approvals?.lastMessageId !== undefined)
+      state.lastMessageId = approvals.lastMessageId;
+    const exceptToolCallIds = new Set(
+      approvals?.resumeCalls.map((call) => call.id),
+    );
     // Agent sessions replay full transcripts under a token budget and carry
     // project instructions; every other chat assembles exactly as before.
     const assembleHistory = async (
@@ -775,6 +793,7 @@ export class TurnRunner implements TaskWorker {
             runContentMessages: selectedContent.messages,
             client,
             limits,
+            exceptToolCallIds,
           });
     const assembled = await assembleHistory(
       this.deps,
@@ -833,6 +852,12 @@ export class TurnRunner implements TaskWorker {
         : {
             steering: sessionSteering(inputs, this.deps, chatId, task.taskId),
             suspendable: true,
+            ...(approvals && approvals.resumeCalls.length > 0
+              ? {
+                  resumeCalls: approvals.resumeCalls,
+                  toolMetadata: { approvedCalls: approvals.approvedCalls },
+                }
+              : {}),
           }),
     });
     if (first.terminal === "suspended") {
@@ -1161,6 +1186,12 @@ export class TurnRunner implements TaskWorker {
       ...(input.suspendable === undefined
         ? {}
         : { suspendable: input.suspendable }),
+      ...(input.resumeCalls === undefined
+        ? {}
+        : { resumeCalls: input.resumeCalls }),
+      ...(input.toolMetadata === undefined
+        ? {}
+        : { toolMetadata: input.toolMetadata }),
     });
 
     let failureCode: string | undefined;
@@ -1383,6 +1414,8 @@ export class TurnRunner implements TaskWorker {
     runContentMessages: readonly AiChatMessage[];
     client: AiProviderClient;
     limits: AiToolLimits;
+    /** Approved calls awaiting execution: not orphans, so no synthetic result. */
+    exceptToolCallIds: ReadonlySet<string>;
   }): Promise<AiChatMessage[]> {
     const { ctx, session } = input;
     let systemPrompt = input.systemPrompt;
@@ -1405,7 +1438,10 @@ export class TurnRunner implements TaskWorker {
       input.chatId,
       input.assistantMessageId,
       systemPrompt,
-      { policy: session.context?.policy ?? "transcript" },
+      {
+        policy: session.context?.policy ?? "transcript",
+        exceptToolCallIds: input.exceptToolCallIds,
+      },
     );
 
     const models = await this.deps.store.providers.listModels(input.providerId);

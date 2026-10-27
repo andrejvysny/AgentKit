@@ -126,6 +126,9 @@ export class AgentSessionService {
         : {}),
       pending: records.filter((record) => record.kind !== "human_request"),
       ...(waiting ? { waiting } : {}),
+      ...(waiting && approvalOf(waiting)
+        ? { waitingApproval: approvalOf(waiting) }
+        : {}),
     };
   }
 
@@ -235,6 +238,32 @@ export class AgentSessionService {
     const outcome = await answerHumanRequest(this.deps, input);
     if (outcome.enqueue) await this.deps.taskRunner.enqueue(outcome.enqueue);
     return outcome.receipt;
+  }
+
+  /** Approve exactly the call the request names (ADR 0019). */
+  approve(
+    requestId: string,
+    answerId: string,
+    note?: string,
+  ): Promise<AgentAnswerReceipt> {
+    return this.answer({
+      requestId,
+      answerId,
+      response: { decision: "approve", ...(note === undefined ? {} : { note }) },
+    });
+  }
+
+  /** Answer the call with a denial result; it never runs. */
+  deny(
+    requestId: string,
+    answerId: string,
+    note?: string,
+  ): Promise<AgentAnswerReceipt> {
+    return this.answer({
+      requestId,
+      answerId,
+      response: { decision: "deny", ...(note === undefined ? {} : { note }) },
+    });
   }
 
   /**
@@ -525,6 +554,30 @@ export class AgentSessionService {
   private hashOf(kind: QueueKind, content: SessionContent): Promise<string> {
     return sha256Hex(JSON.stringify({ kind, content }));
   }
+}
+
+function approvalOf(
+  record: AgentInputRecord,
+): AgentSessionState["waitingApproval"] {
+  const content = record.content as {
+    kind?: unknown;
+    prompt?: unknown;
+    toolName?: unknown;
+    argsSha256?: unknown;
+  } | null;
+  if (
+    content?.kind !== "approval" ||
+    record.toolCallId === undefined ||
+    typeof content.argsSha256 !== "string"
+  )
+    return undefined;
+  return {
+    requestId: record.inputId,
+    toolCallId: record.toolCallId,
+    toolName: typeof content.toolName === "string" ? content.toolName : "",
+    argsSha256: content.argsSha256,
+    prompt: typeof content.prompt === "string" ? content.prompt : "",
+  };
 }
 
 function isLiveTurn(task: TaskRecord): boolean {

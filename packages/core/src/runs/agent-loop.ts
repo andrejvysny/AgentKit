@@ -1,4 +1,8 @@
-import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
+import type {
+  AiChatMessage,
+  AiRunEvent,
+  AiToolCall,
+} from "@agentkit/contracts";
 import { createEventStamper } from "../events.js";
 import { newRunId, nowIso } from "../ids.js";
 import type { AiChatRequest } from "../providers/client.js";
@@ -30,6 +34,15 @@ export interface AgentLoopInput extends RunChatInput {
    * section 5). Off: tools get no `suspend` and "suspended" is unreachable.
    */
   suspendable?: boolean;
+  /**
+   * Calls to execute FIRST, before the first model request (ADR 0019): their
+   * assistant message is already in `messages`, so the batch pushes none and
+   * announces nothing. It counts as step 1 without using an iteration; the
+   * first model step is then step 1 too, so `run.usage.step` is unchanged.
+   */
+  resumeCalls?: readonly AiToolCall[];
+  /** Merged into every tool context's `metadata` (host-owned, e.g. approvals). */
+  toolMetadata?: Readonly<Record<string, unknown>>;
 }
 export type AgentLoopResult = Omit<RunChatResult, "terminal"> & {
   terminal: RunChatResult["terminal"] | "suspended";
@@ -142,6 +155,25 @@ async function* runAgentLoopUnchecked(
       messageCount: messages.length,
       signal: input.signal,
     });
+  }
+
+  if (input.resumeCalls && input.resumeCalls.length > 0) {
+    iteration = 1;
+    const outcome = yield* executeToolBatch({
+      input,
+      runId,
+      step: 1,
+      stamp,
+      messages,
+      maxCallsPerIter: input.resumeCalls.length,
+      assistantContent: "",
+      toolCalls: input.resumeCalls.slice(),
+      duplicateIds: [],
+      announcedToolCallIds: new Set(),
+      assistantInHistory: true,
+    });
+    if (outcome === "cancelled") return finish("cancelled");
+    if (outcome === "suspended") return finish("suspended");
   }
 
   for (let i = 0; i < maxIterations; i++) {

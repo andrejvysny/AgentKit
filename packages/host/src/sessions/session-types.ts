@@ -15,6 +15,14 @@ export interface AgentSessionState {
   pending: AgentInputRecord[];
   /** The oldest unanswered human request. */
   waiting?: AgentInputRecord;
+  /** Set when `waiting` asks to approve one exact tool call (ADR 0019). */
+  waitingApproval?: {
+    requestId: string;
+    toolCallId: string;
+    toolName: string;
+    argsSha256: string;
+    prompt: string;
+  };
 }
 
 export type AgentSendResult =

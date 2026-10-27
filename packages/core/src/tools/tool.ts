@@ -26,6 +26,8 @@ export interface AiToolExecutionContext {
   limits: AiToolLimits;
   signal?: AbortSignal;
   metadata?: Record<string, unknown>;
+  /** The model's id for this call; lets a wrapper bind an approval to it. */
+  toolCallId?: string;
   /**
    * Present only when the loop is suspendable. Calling it (before `execute`
    * settles) pauses the run for human input: this call's result is then the

@@ -10,6 +10,7 @@ import type { AgentSteeringSource } from "@agentkit/core";
 import type {
   AiChatMessage,
   AiContextBinding,
+  AiToolCall,
   AiToolLimits,
 } from "@agentkit/contracts";
 import type {
@@ -56,6 +57,10 @@ export interface PassInput {
   steering?: AgentSteeringSource;
   /** Session main pass only: lets a tool park the run for human input. */
   suspendable?: boolean;
+  /** Session main pass only: approved calls to run before the first model request. */
+  resumeCalls?: readonly AiToolCall[];
+  /** Session main pass only: host-owned tool context (`approvedCalls`). */
+  toolMetadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface PassResult {

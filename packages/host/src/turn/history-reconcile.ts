@@ -60,8 +60,10 @@ function missingToolResultEnvelope(): string {
  */
 export function reconcileOrphanToolCalls(
   messages: readonly AiChatMessage[],
+  exceptToolCallIds?: ReadonlySet<string>,
 ): AiChatMessage[] {
-  const answered = new Set<string>();
+  // An approved call about to execute is neither answered nor lost.
+  const answered = new Set<string>(exceptToolCallIds);
   for (const message of messages) {
     if (message.role === "tool" && message.toolCallId !== undefined) {
       answered.add(message.toolCallId);

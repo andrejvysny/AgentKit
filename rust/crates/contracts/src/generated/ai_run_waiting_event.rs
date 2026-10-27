@@ -12,6 +12,15 @@ pub enum AiRunWaitingEventType {
 }
 crate::impl_json_via_serde!(AiRunWaitingEventType);
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum AiRunWaitingEventDataKind {
+    #[serde(rename = "input")]
+    Input,
+    #[serde(rename = "approval")]
+    Approval,
+}
+crate::impl_json_via_serde!(AiRunWaitingEventDataKind);
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AiRunWaitingEventData {
     #[serde(rename = "requestId")]
@@ -30,6 +39,14 @@ pub struct AiRunWaitingEventData {
         skip_serializing_if = "Optional::is_absent"
     )]
     pub expires_at: Optional<AiProviderKind>,
+    #[serde(rename = "kind", default, skip_serializing_if = "Optional::is_absent")]
+    pub kind: Optional<AiRunWaitingEventDataKind>,
+    #[serde(
+        rename = "argsSha256",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub args_sha256: Optional<AiProviderKind>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -42,6 +59,8 @@ crate::impl_json_deserialize!(AiRunWaitingEventData, |value: Value| {
         step: crate::required_field(&mut object, "step")?,
         prompt: crate::required_field(&mut object, "prompt")?,
         expires_at: crate::optional_field(&mut object, "expiresAt")?,
+        kind: crate::optional_field(&mut object, "kind")?,
+        args_sha256: crate::optional_field(&mut object, "argsSha256")?,
         extra: object.into_iter().collect(),
     };
     Ok(output)

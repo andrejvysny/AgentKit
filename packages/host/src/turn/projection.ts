@@ -455,14 +455,28 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
     event: Extract<AiRunEvent, { type: "run.waiting" }>,
   ): Promise<void> {
     if (!store.inputs) return;
-    const { requestId, toolCallId, toolName, prompt, expiresAt } = event.data;
+    const { requestId, toolCallId, toolName, prompt, expiresAt, kind } =
+      event.data;
+    const argsSha256 = event.data.argsSha256;
     await store.inputs.createInput({
       inputId: requestId,
       sessionId: state.chatId,
       kind: "human_request",
-      content: { prompt, toolName },
+      content: {
+        prompt,
+        toolName,
+        ...(kind === undefined ? {} : { kind }),
+        ...(argsSha256 === undefined ? {} : { argsSha256 }),
+      },
       contentHash: await sha256Hex(
-        JSON.stringify({ requestId, toolCallId, prompt, expiresAt }),
+        JSON.stringify({
+          requestId,
+          toolCallId,
+          prompt,
+          expiresAt,
+          ...(kind === undefined ? {} : { kind }),
+          ...(argsSha256 === undefined ? {} : { argsSha256 }),
+        }),
       ),
       targetTaskId: ctx.task.taskId,
       attemptId: event.attemptId ?? ctx.attemptId,

@@ -2363,9 +2363,26 @@
           },
           "data": {
             "properties": {
+              "argsSha256": {
+                "description": "Approval only: sha-256 hex of the call's canonical JSON arguments.",
+                "type": "string"
+              },
               "expiresAt": {
                 "description": "ISO-8601 expiry of the request.",
                 "type": "string"
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "const": "input",
+                    "type": "string"
+                  },
+                  {
+                    "const": "approval",
+                    "type": "string"
+                  }
+                ],
+                "description": "`approval`: a human must approve this exact call (ADR 0019). Absent means `input`."
               },
               "prompt": {
                 "description": "What the human is asked.",
@@ -3528,9 +3545,26 @@
       },
       "data": {
         "properties": {
+          "argsSha256": {
+            "description": "Approval only: sha-256 hex of the call's canonical JSON arguments.",
+            "type": "string"
+          },
           "expiresAt": {
             "description": "ISO-8601 expiry of the request.",
             "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "const": "input",
+                "type": "string"
+              },
+              {
+                "const": "approval",
+                "type": "string"
+              }
+            ],
+            "description": "`approval`: a human must approve this exact call (ADR 0019). Absent means `input`."
           },
           "prompt": {
             "description": "What the human is asked.",
@@ -7363,9 +7397,26 @@
           },
           "data": {
             "properties": {
+              "argsSha256": {
+                "description": "Approval only: sha-256 hex of the call's canonical JSON arguments.",
+                "type": "string"
+              },
               "expiresAt": {
                 "description": "ISO-8601 expiry of the request.",
                 "type": "string"
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "const": "input",
+                    "type": "string"
+                  },
+                  {
+                    "const": "approval",
+                    "type": "string"
+                  }
+                ],
+                "description": "`approval`: a human must approve this exact call (ADR 0019). Absent means `input`."
               },
               "prompt": {
                 "description": "What the human is asked.",
