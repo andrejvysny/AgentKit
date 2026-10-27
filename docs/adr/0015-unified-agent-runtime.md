@@ -1,6 +1,6 @@
 # ADR 0015 — Unified agent runtime: one loop, one durable host, profiles not engines
 
-**Status:** accepted (2026-10-27). M0 recorded; M1 in progress (Plane AGENTKIT-30..33).
+**Status:** accepted (2026-10-27). M0, M1 and M2 implemented (Plane AGENTKIT-30..33).
 **Contract impact:** none for M0. M1 is additive: one new `run.warning` code (`hook_failed`), new in-process types
 (`runAgentLoop`, `AgentLoopHooks`), and no DTO changes. `CONTRACT_VERSION` stays `0.7.0`, per
 [contracts.md](../contracts.md#contract_version-policy).

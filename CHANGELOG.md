@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased — Unified agent runtime M0–M1
+## Unreleased — Unified agent runtime M0–M2
+
+**M2 — durable agent sessions** ([ADR 0016](docs/adr/0016-durable-agent-sessions.md)).
+
+- `AgentSessionService` (create, getState, send, followUp, steer, flushQueue, cancel, answer, fork, setModel) runs
+  over the existing chat tree and `chat.turn` tasks. A session is a chat with an `agentkit.session` descriptor.
+- New optional `AssistantStore.inputs` (`AgentInputStore`; memory and sqlite adapters; the sqlite optional table
+  `agent_inputs`, schema stays v10) holds steer, follow-up and human-request inputs with idempotent create and CAS
+  receipts.
+- `runAgentLoop` gains `steering` and `suspendable` seams. New additive events are `run.input.applied` and the
+  non-terminal `run.waiting`, and `waiting_approval` now has its first producer.
+- The task transition `waiting_approval → queued` is new.
+- The opt-in `request_user_input` tool lets a run wait for a human answer.
+- `deleteChat` now purges a session's inputs.
+- `CONTRACT_VERSION` stays 0.7.0. The golden traces are byte-identical.
+
+**M0–M1:**
+
 
 Records the M0 baseline (`docs/baseline/`) and the unified-runtime decision
 ([ADR 0015](docs/adr/0015-unified-agent-runtime.md)): one model/tool loop,
