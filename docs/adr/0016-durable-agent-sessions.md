@@ -1,6 +1,6 @@
 # ADR 0016 — Durable agent sessions: session = chat, durable inputs, steer, follow-up, human-input wait
 
-**Status:** accepted (2026-10-27), implementation in progress (Plane AGENTKIT-33, milestone M2 of
+**Status:** accepted, implemented (2026-10-27; Plane AGENTKIT-33, milestone M2 of
 [ADR 0015](0015-unified-agent-runtime.md)).
 **Contract impact:** additive only. Two new run event types (`run.input.applied`, `run.waiting`), new DTOs for
 sessions and inputs, and one new task transition edge (`waiting_approval → queued`). `CONTRACT_VERSION` stays `0.7.0`
@@ -73,7 +73,7 @@ There is one new port and one new table, `agent_inputs`. It holds every input th
 | `status` | `pending` → `applied` (steer placed) \| `converted` (became a turn) \| `answered` (human request) \| `cancelled` |
 | `appliedTaskId?`, `appliedMessageId?` | The receipt: where the input landed. |
 | `onSettled?` | For steer: `follow_up` (default) or `cancel`. What happens if the target turn ends before the steer is placed. |
-| `attemptId?`, `toolCallId?`, `argsHash?`, `expiresAt?` | For human requests: the generation, call identity and expiry that an answer must match. |
+| `attemptId?`, `toolCallId?`, `expiresAt?` | For human requests: the attempt that parked (audit), the call identity, and the expiry an answer must beat. |
 | `createdAt`, `updatedAt` | |
 
 Every status change is a compare-and-set from an expected status, so a lost acknowledgement can never place an input
@@ -149,7 +149,11 @@ A database opened by an older AgentKit simply ignores the table.
   - No lease is held while waiting.
 - **Answer.** `answer({ requestId, answerId, response })` runs in one transaction. It checks:
   - the task is `waiting_approval`;
-  - the request is `pending`, for this task, at the recorded attempt generation, and not expired.
+  - the request is `pending`, names this task, and has not expired.
+
+  The attempt id is recorded for audit only. A request is keyed on its task and tool call
+  (`hreq:<taskId>:<toolCallId>`), and a crash between `run.waiting` and the park re-parks the same request on a later
+  attempt, so an attempt-generation check would make that request permanently stale.
 
   It then:
   - CAS-marks the request `answered`, receipting `answerId`;
@@ -162,7 +166,7 @@ A database opened by an older AgentKit simply ignores the table.
 - **Deny rules.**
   - Repeating the same `answerId` with the same response returns the original receipt.
   - A different response for an answered request is `answer_conflict`.
-  - An expired, cancelled or wrong-generation request, or a task no longer `waiting_approval`, is `answer_stale`.
+  - An expired or cancelled request, or a task no longer `waiting_approval`, is `answer_stale`.
 - **Resume guard.** An attempt that starts while its task has a `pending` `human_request` with no answer, for example
   after a crash between projecting `run.waiting` and the transition, goes straight back to `waiting_approval` without
   calling the model.

@@ -545,6 +545,29 @@ one handle cannot event-loop-wait for another handle's in-flight
 *asynchronous* claim in the same process (see ADR 0006's Consequences and
 `docs/roadmap.md`'s Later list).
 
+### `AgentInputStore` (optional, `AssistantStore.inputs`)
+
+Durable inputs for agent sessions ([ADR 0016](adr/0016-durable-agent-sessions.md)) that do not become a turn
+immediately. There are three kinds:
+
+- `steer`: a mid-run user message placed at a step boundary.
+- `follow_up`: queued for the next turn.
+- `human_request`: a parked tool call waiting for a human answer.
+
+Storage and idempotency:
+
+- `inputId` is the caller's idempotency key. Re-creating the same input returns the existing record
+  (`created: false`). A differing duplicate is `input_conflict`.
+- `transitionInput` is a compare-and-set from an expected status, along per-kind edges (`AGENT_INPUT_TRANSITIONS`).
+  Every non-`pending` status is terminal, so a lost acknowledgement cannot place an input twice.
+- `listInputs` is FIFO by store-assigned `order`.
+- `deleteSessionInputs` is called by `ConversationService.deleteChat` inside its transaction.
+
+Like `continuations`, the member is optional. A store that omits it simply has no sessions; `AgentSessionService`
+refuses with `sessions_unavailable`. The memory and sqlite adapters implement it. In sqlite it is the optional
+`agent_inputs` table, and `SCHEMA_VERSION` stays 10. Conformance: `describeAgentInputStoreConformance`
+(`@agentkit/testing`).
+
 ### `ProposalStore`
 
 [`ports/proposal-store.ts`](../packages/host/src/ports/proposal-store.ts)

@@ -481,6 +481,29 @@ class CloudChatExecutor implements TaskExecutor {
 }
 ```
 
+## Agent sessions
+
+A session is a chat that carries an `agentkit.session` descriptor (profile id and digest, plus the pinned
+provider and model). `AgentSessionService` drives it ([ADR 0016](adr/0016-durable-agent-sessions.md)).
+
+There is no second history store and no second scheduler. Each turn is still one `chat.turn` task. In session mode,
+`TurnRunner` gives the turn's main pass two seams from `runAgentLoop`:
+
+- **Steering.** Durable `steer` inputs are polled after each tool batch while another step remains. Each one is
+  placed exactly once: `run.input.applied`, then an internal user run record, then the input is receipted `applied`.
+- **Suspension.** A tool such as `request_user_input` may call `ctx.suspend(...)`. The run then ends with the
+  non-terminal `run.waiting`, and the task parks in `waiting_approval`, holding no lease. `answer` appends the
+  human's reply as that call's tool result and re-queues the task (`waiting_approval → queued`).
+  - A resumed attempt with an unanswered request parks again without calling the provider.
+  - An answer to a cancelled, expired or no-longer-waiting request is `answer_stale`.
+
+Follow-ups queued while a turn runs are converted into the next turn inside the finished turn's settlement
+transaction, one at a time, and only after a `completed` turn. After a failed or cancelled turn, `flushQueue` releases
+them.
+
+Later turns still see earlier turns' final answers only. Run records live off the active path, and full-transcript
+context is M3's context assembler.
+
 ## Task dependencies and subagents
 
 `TaskRecord` carries two edges beyond `kind`/`payload`
