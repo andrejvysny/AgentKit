@@ -171,6 +171,16 @@ describe("run_command (sandbox off, portable)", () => {
     expect(env["TMPDIR"]).toBe("/scratch");
   });
 
+  test("sanitizedEnv keeps git commit identity", () => {
+    const env = sanitizedEnv(
+      { GIT_AUTHOR_NAME: "a", GIT_AUTHOR_EMAIL: "a@x", OAUTH_CLIENT: "s" },
+      "/scratch",
+    );
+    expect(env["GIT_AUTHOR_NAME"]).toBe("a");
+    expect(env["GIT_AUTHOR_EMAIL"]).toBe("a@x");
+    expect(env["OAUTH_CLIENT"]).toBeUndefined();
+  });
+
   test("sanitizedEnv drops agent sockets, auth-ish names and credential URLs", () => {
     const env = sanitizedEnv(
       {

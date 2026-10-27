@@ -8,8 +8,9 @@ import { confine } from "./paths.js";
 import { runBounded } from "./process.js";
 import { sandboxAvailable, sandboxProfile, toolchainPaths } from "./sandbox.js";
 
+// `AUTH(?!OR)`: GIT_AUTHOR_NAME/EMAIL are commit identity, not credentials.
 const SECRET_NAME =
-  /(TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL|AUTH|COOKIE|SESSION|PRIVATE)/i;
+  /(TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL|AUTH(?!OR)|COOKIE|SESSION|PRIVATE)/i;
 const AGENT_VARS = new Set(["SSH_AUTH_SOCK", "GPG_AGENT_INFO"]);
 /** A URL with userinfo (`scheme://user:pass@host`) carries a credential. */
 const CREDENTIAL_URL = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
