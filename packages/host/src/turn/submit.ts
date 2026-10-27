@@ -14,6 +14,7 @@ import {
   InvalidRegenerateError,
   RecordNotFoundError,
 } from "../errors.js";
+import type { AssistantStore } from "../ports/assistant-store.js";
 import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import type { TurnRunnerDeps } from "./turn-runner.js";
 
@@ -194,58 +195,22 @@ export async function submitMessage(
   };
 
   try {
-    await deps.store.transaction(async (tx) => {
-      // The task goes in FIRST, ahead of both messages. It is the only write
-      // in this transaction that can reject, and on a resubmitted
-      // `input.taskId` it must reject before anything else lands: a store
-      // whose `transaction` is a real BEGIN/ROLLBACK would undo the messages
-      // anyway, but one where it is only a logical grouping (the reference
-      // `MemoryAssistantStore`, the host's own test fakes) would leave two
-      // orphan messages in the chat for every retried request.
-      await tx.tasks.createTask({
+    await deps.store.transaction((tx) =>
+      stageTurnInTransaction(tx, deps, {
         taskId,
         kind,
-        // Scope on the chat: two turns in one conversation must not run at
-        // once, or they would interleave into the same message history.
-        scopeId: input.chatId,
-        payload: payload as unknown as Record<string, unknown>,
-        // And, by default, must not be ACCEPTED at once either — the refusal
-        // is the store's, inside this transaction, so two racing submits
-        // cannot both get past it. See `allowConcurrentSubmit`.
-        exclusiveScope: deps.allowConcurrentSubmit !== true,
-        ...(input.priority === undefined ? {} : { priority: input.priority }),
-      });
-      await tx.conversations.appendMessage({
-        id: userMessageId,
         chatId: input.chatId,
-        role: "user",
         content: input.content,
-        // Absent on the ordinary submit, which appends to the active leaf
-        // exactly as it always did; present, it makes this turn a branch.
+        userMessageId,
+        assistantMessageId,
+        payload,
         ...(input.parentMessageId === undefined
           ? {}
           : { parentMessageId: input.parentMessageId }),
-        metadata: input.metadata ?? {},
-      });
-      // The placeholder exists so the UI has a message to stream into, and so
-      // the task has one durable target to write the answer to no matter how
-      // many provider passes it takes.
-      await tx.conversations.appendMessage({
-        id: assistantMessageId,
-        chatId: input.chatId,
-        runId: taskId,
-        role: "assistant",
-        content: "",
-        // Named EXPLICITLY rather than left to the store's
-        // append-to-the-active-leaf default, even though the user message just
-        // written IS that leaf. Saying so costs nothing and makes the pairing
-        // structural: the answer is a child of the question it answers, and a
-        // branch submit cannot end up with its placeholder hanging off the
-        // branch it replaced.
-        parentMessageId: userMessageId,
-        metadata: { placeholder: true },
-      });
-    });
+        ...(input.priority === undefined ? {} : { priority: input.priority }),
+        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+      }),
+    );
   } catch (err) {
     const existing = await resubmitted(deps, err, { ...input, kind }, taskId);
     if (existing === null) throw err;
@@ -264,6 +229,88 @@ export async function submitMessage(
     userMessageId,
     assistantMessageId,
   };
+}
+
+/** What {@link stageTurnInTransaction} writes: ids are minted by the caller. */
+export interface StageTurnInput {
+  taskId: string;
+  kind: string;
+  chatId: string;
+  content: AiMessageContent;
+  userMessageId: string;
+  assistantMessageId: string;
+  payload: TurnRequest;
+  parentMessageId?: string | null;
+  priority?: number;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * The writes that make a turn durable: its task, the user message and the
+ * placeholder. Runs inside the caller's transaction and never enqueues, so the
+ * settlement path can stage the next turn atomically with the one it follows.
+ */
+export async function stageTurnInTransaction(
+  tx: AssistantStore,
+  deps: Pick<TurnRunnerDeps, "allowConcurrentSubmit">,
+  input: StageTurnInput,
+): Promise<{
+  taskId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}> {
+  const { taskId, kind, userMessageId, assistantMessageId, payload } = input;
+  // The task goes in FIRST, ahead of both messages. It is the only write
+  // in this transaction that can reject, and on a resubmitted
+  // `input.taskId` it must reject before anything else lands: a store
+  // whose `transaction` is a real BEGIN/ROLLBACK would undo the messages
+  // anyway, but one where it is only a logical grouping (the reference
+  // `MemoryAssistantStore`, the host's own test fakes) would leave two
+  // orphan messages in the chat for every retried request.
+  await tx.tasks.createTask({
+    taskId,
+    kind,
+    // Scope on the chat: two turns in one conversation must not run at
+    // once, or they would interleave into the same message history.
+    scopeId: input.chatId,
+    payload: payload as unknown as Record<string, unknown>,
+    // And, by default, must not be ACCEPTED at once either — the refusal
+    // is the store's, inside this transaction, so two racing submits
+    // cannot both get past it. See `allowConcurrentSubmit`.
+    exclusiveScope: deps.allowConcurrentSubmit !== true,
+    ...(input.priority === undefined ? {} : { priority: input.priority }),
+  });
+  await tx.conversations.appendMessage({
+    id: userMessageId,
+    chatId: input.chatId,
+    role: "user",
+    content: input.content,
+    // Absent on the ordinary submit, which appends to the active leaf
+    // exactly as it always did; present, it makes this turn a branch.
+    ...(input.parentMessageId === undefined
+      ? {}
+      : { parentMessageId: input.parentMessageId }),
+    metadata: input.metadata ?? {},
+  });
+  // The placeholder exists so the UI has a message to stream into, and so
+  // the task has one durable target to write the answer to no matter how
+  // many provider passes it takes.
+  await tx.conversations.appendMessage({
+    id: assistantMessageId,
+    chatId: input.chatId,
+    runId: taskId,
+    role: "assistant",
+    content: "",
+    // Named EXPLICITLY rather than left to the store's
+    // append-to-the-active-leaf default, even though the user message just
+    // written IS that leaf. Saying so costs nothing and makes the pairing
+    // structural: the answer is a child of the question it answers, and a
+    // branch submit cannot end up with its placeholder hanging off the
+    // branch it replaced.
+    parentMessageId: userMessageId,
+    metadata: { placeholder: true },
+  });
+  return { taskId, userMessageId, assistantMessageId };
 }
 
 /**

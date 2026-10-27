@@ -6,6 +6,7 @@
  * and these are internal to the turn pipeline, not part of the package's
  * public surface. This file is deliberately NOT listed in `index.ts`.
  */
+import type { AgentSteeringSource } from "@agentkit/core";
 import type {
   AiChatMessage,
   AiContextBinding,
@@ -51,6 +52,10 @@ export interface PassInput {
   assistantMessageId: string;
   state: PassState;
   maxToolIterations?: number;
+  /** Session main pass only: where durable steers come from. */
+  steering?: AgentSteeringSource;
+  /** Session main pass only: lets a tool park the run for human input. */
+  suspendable?: boolean;
 }
 
 export interface PassResult {

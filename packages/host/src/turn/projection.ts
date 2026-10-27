@@ -6,7 +6,10 @@ import {
 } from "./reasoning-projection.js";
 import { recordRunUsage } from "./record-run-usage.js";
 import type { AiRunEvent, AiToolCall } from "@agentkit/contracts";
-import { AgentKitHostError } from "../errors.js";
+import { AgentInputTransitionError, AgentKitHostError } from "../errors.js";
+import type { MessageRecord } from "../ports/conversation-store.js";
+import { sha256Hex } from "../sessions/hash.js";
+import { readInputContent } from "../sessions/input-content.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { Clock, Logger } from "../ports/system.js";
 import type { TaskRecord } from "../ports/task-store.js";
@@ -348,6 +351,14 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
         ).id;
         break;
       }
+      case "run.input.applied": {
+        await reflectInputApplied(store, ctx, state, event, append);
+        break;
+      }
+      case "run.waiting": {
+        await reflectWaiting(store, ctx, state, event);
+        break;
+      }
       case "run.tool.failed": {
         const slim =
           event.data.modelResultJson ??
@@ -380,6 +391,84 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
       default:
         break;
     }
+  }
+
+  async function reflectInputApplied(
+    store: AssistantStore,
+    ctx: RunProjectionContext,
+    state: RunProjectionState,
+    event: Extract<AiRunEvent, { type: "run.input.applied" }>,
+    append: (
+      input: Parameters<typeof store.conversations.appendMessage>[0],
+    ) => Promise<MessageRecord>,
+  ): Promise<void> {
+    if (!store.inputs) return;
+    const taskId = ctx.task.taskId;
+    const { inputId } = event.data;
+    const input = await store.inputs.getInput(inputId);
+    const content = input ? readInputContent(input.content) : undefined;
+    if (!input || content === undefined) {
+      deps.logger?.warn("applied steer has no usable durable input", {
+        taskId,
+        inputId,
+      });
+      return;
+    }
+    const record = await append({
+      chatId: state.chatId,
+      runId: taskId,
+      role: "user",
+      content,
+      parentMessageId: state.lastMessageId,
+      activate: false,
+      metadata: { internal: true, steering: true, inputId },
+    });
+    state.lastMessageId = record.id;
+    if (input.status === "pending") {
+      try {
+        await store.inputs.transitionInput(inputId, ["pending"], "applied", {
+          appliedTaskId: taskId,
+          appliedMessageId: record.id,
+        });
+      } catch (error) {
+        if (!(error instanceof AgentInputTransitionError)) throw error;
+        deps.logger?.warn("steer changed before it could be receipted", {
+          taskId,
+          inputId,
+        });
+      }
+    } else if (
+      !(input.status === "applied" && input.appliedTaskId === taskId)
+    ) {
+      deps.logger?.warn("steer was placed but is no longer pending", {
+        taskId,
+        inputId,
+        status: input.status,
+      });
+    }
+  }
+
+  async function reflectWaiting(
+    store: AssistantStore,
+    ctx: RunProjectionContext,
+    state: RunProjectionState,
+    event: Extract<AiRunEvent, { type: "run.waiting" }>,
+  ): Promise<void> {
+    if (!store.inputs) return;
+    const { requestId, toolCallId, toolName, prompt, expiresAt } = event.data;
+    await store.inputs.createInput({
+      inputId: requestId,
+      sessionId: state.chatId,
+      kind: "human_request",
+      content: { prompt, toolName },
+      contentHash: await sha256Hex(
+        JSON.stringify({ requestId, toolCallId, prompt, expiresAt }),
+      ),
+      targetTaskId: ctx.task.taskId,
+      attemptId: event.attemptId ?? ctx.attemptId,
+      toolCallId,
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+    });
   }
 
   async function reflect(

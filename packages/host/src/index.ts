@@ -51,3 +51,6 @@ export * from "./turn/turn-runner.js";
 export * from "./prompts/template-service.js";
 export * from "./skills/skill-service.js";
 export * from "./prompts/run-content.js";
+
+// Agent sessions: the chat-metadata descriptor that opts a chat into session mode.
+export * from "./sessions/descriptor.js";

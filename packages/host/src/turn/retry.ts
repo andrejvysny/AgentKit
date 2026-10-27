@@ -1,7 +1,7 @@
 import type { AiChatMessage } from "@agentkit/contracts";
 
 /** Which terminal a `runChat` pass reached. */
-export type PassTerminal = "completed" | "failed" | "cancelled";
+export type PassTerminal = "completed" | "failed" | "cancelled" | "suspended";
 
 export interface RetryDecisionInput {
   terminal: PassTerminal;

@@ -14,6 +14,9 @@
 import type { AiToolCall, TaskEventEnvelope } from "@agentkit/contracts";
 import {
   ACTION_ID_RELEASING_STATUSES,
+  AgentInputConflictError,
+  assertAgentInputTransition,
+  validateCreateAgentInput,
   DuplicateActionIdError,
   DuplicateTaskError,
   InvalidProposalTransitionError,
@@ -42,7 +45,13 @@ import {
   evaluateTaskDependencies,
   type ApplyOutcome,
   type ApplyProposalInput,
+  type AgentInputPatch,
+  type AgentInputQuery,
+  type AgentInputRecord,
+  type AgentInputStatus,
+  type AgentInputStore,
   type AppendEventsOptions,
+  type CreateAgentInput,
   type AppendMessageInput,
   type AssistantSettings,
   type AssistantStore,
@@ -1094,6 +1103,101 @@ export class FakeOutboxStore implements OutboxStore {
   }
 }
 
+/**
+ * Durable inputs for session tests. Opt-in (`store.inputs = new
+ * FakeAgentInputStore(clock)`), because a store without the port is the
+ * non-session baseline every other test runs against.
+ */
+export class FakeAgentInputStore implements AgentInputStore {
+  readonly records = new Map<string, AgentInputRecord>();
+  /** How many `listInputs` calls were made — the "no polling" assertion. */
+  listCalls = 0;
+  private lastOrder = 0;
+
+  constructor(private readonly clock: Clock) {}
+
+  async createInput(
+    input: CreateAgentInput,
+  ): Promise<{ record: AgentInputRecord; created: boolean }> {
+    validateCreateAgentInput(input);
+    const existing = this.records.get(input.inputId);
+    if (existing) {
+      if (
+        existing.kind !== input.kind ||
+        existing.sessionId !== input.sessionId ||
+        existing.contentHash !== input.contentHash
+      ) {
+        throw new AgentInputConflictError(
+          `Input ${input.inputId} already exists with a different kind, session or content.`,
+          { inputId: input.inputId },
+        );
+      }
+      return { record: structuredClone(existing), created: false };
+    }
+    const now = this.clock.nowIso();
+    this.lastOrder += 1;
+    const record: AgentInputRecord = {
+      inputId: input.inputId,
+      sessionId: input.sessionId,
+      kind: input.kind,
+      status: "pending",
+      content: structuredClone(input.content),
+      contentHash: input.contentHash,
+      order: this.lastOrder,
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (input.targetTaskId !== undefined)
+      record.targetTaskId = input.targetTaskId;
+    if (input.onSettled !== undefined) record.onSettled = input.onSettled;
+    if (input.attemptId !== undefined) record.attemptId = input.attemptId;
+    if (input.toolCallId !== undefined) record.toolCallId = input.toolCallId;
+    if (input.expiresAt !== undefined) record.expiresAt = input.expiresAt;
+    this.records.set(record.inputId, record);
+    return { record: structuredClone(record), created: true };
+  }
+
+  async getInput(inputId: string): Promise<AgentInputRecord | undefined> {
+    const record = this.records.get(inputId);
+    return record ? structuredClone(record) : undefined;
+  }
+
+  async listInputs(query: AgentInputQuery): Promise<AgentInputRecord[]> {
+    this.listCalls += 1;
+    return [...this.records.values()]
+      .filter(
+        (record) =>
+          record.sessionId === query.sessionId &&
+          (query.kinds === undefined || query.kinds.includes(record.kind)) &&
+          (query.statuses === undefined ||
+            query.statuses.includes(record.status)) &&
+          (query.targetTaskId === undefined ||
+            record.targetTaskId === query.targetTaskId),
+      )
+      .sort((a, b) => a.order - b.order)
+      .map((record) => structuredClone(record));
+  }
+
+  async transitionInput(
+    inputId: string,
+    from: readonly AgentInputStatus[],
+    to: AgentInputStatus,
+    patch?: AgentInputPatch,
+  ): Promise<AgentInputRecord> {
+    const record = this.records.get(inputId);
+    if (!record) throw new RecordNotFoundError(`Input not found: ${inputId}`);
+    assertAgentInputTransition(record, from, to);
+    record.status = to;
+    if (patch?.appliedTaskId !== undefined)
+      record.appliedTaskId = patch.appliedTaskId;
+    if (patch?.appliedMessageId !== undefined)
+      record.appliedMessageId = patch.appliedMessageId;
+    if (patch?.answerId !== undefined) record.answerId = patch.answerId;
+    record.updatedAt = this.clock.nowIso();
+    return structuredClone(record);
+  }
+}
+
 export class FakeAssistantStore implements AssistantStore {
   readonly conversations: FakeConversationStore;
   readonly tasks: FakeTaskStore;
@@ -1101,6 +1205,8 @@ export class FakeAssistantStore implements AssistantStore {
   readonly providers = new FakeProviderStore();
   readonly settings = new FakeSettingsStore();
   readonly outbox: FakeOutboxStore;
+  /** Absent unless a test opts in — see {@link FakeAgentInputStore}. */
+  inputs?: AgentInputStore;
   /** How many times `transaction` was entered — atomicity assertions read it. */
   transactions = 0;
 
