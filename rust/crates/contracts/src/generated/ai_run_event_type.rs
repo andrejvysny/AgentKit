@@ -27,6 +27,8 @@ pub enum AiRunEventType {
     RunWarning,
     #[serde(rename = "run.usage")]
     RunUsage,
+    #[serde(rename = "run.context.compacted")]
+    RunContextCompacted,
     #[serde(rename = "run.verification")]
     RunVerification,
     #[serde(rename = "run.input.applied")]

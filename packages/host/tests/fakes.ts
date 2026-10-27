@@ -50,6 +50,7 @@ import {
   type AgentInputRecord,
   type AgentInputStatus,
   type AgentInputStore,
+  type ContextSummaryStore,
   type AppendEventsOptions,
   type CreateAgentInput,
   type AppendMessageInput,
@@ -1217,6 +1218,8 @@ export class FakeAssistantStore implements AssistantStore {
   readonly outbox: FakeOutboxStore;
   /** Absent unless a test opts in — see {@link FakeAgentInputStore}. */
   inputs?: AgentInputStore;
+  /** Absent unless a test opts in (ADR 0017 part 2). */
+  summaries?: ContextSummaryStore;
   /** How many times `transaction` was entered — atomicity assertions read it. */
   transactions = 0;
 

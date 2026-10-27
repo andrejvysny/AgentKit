@@ -187,3 +187,34 @@ none
 ## Reproduction
 
 Re-run independently on the same machine against the same model: `bun scripts/live/coding-session.ts`, which exited 0 with **ALL PASS: 17/17**. Re-running the script regenerates this file and drops the hand-written Observations section, so keep a copy before you re-run it.
+
+## Compaction smoke
+
+Evidence label: **live-provider (local vLLM Qwen3.8-Flash-Next)**, `scripts/live/compaction-session.ts`, 2026-10-27T14:59:00.484Z.
+Session context forced to `{"windowTokens":24000,"reserveTokens":4000,"keepRecentTokens":6000}`; guard `full_auto`, sandbox required.
+
+| turn | status | latency | prompt tokens (sum) | max prompt tokens (one call) | compaction | warnings | bun test after |
+|---|---|---|---|---|---|---|---|
+| turn1 | completed | 14.4s | 116423 | 21502 | - | {} | false |
+| turn2 | completed | 26.4s | 74659 | 9071 | threshold: 20507->828 tok, 18 msgs | {} | true |
+| turn3 | completed | 20.4s | 53389 | 15131 | - | {} | true |
+| turn4 | completed | 30s | 89107 | 19968 | - | {} | true |
+
+- PASS fixture: bun test fails before the agent starts
+- PASS turn1: turn completed (completed)
+- PASS turn1: event seq contiguous
+- PASS turn2: turn completed (completed)
+- PASS turn2: event seq contiguous
+- PASS turn3: turn completed (completed)
+- PASS turn3: event seq contiguous
+- PASS turn4: turn completed (completed)
+- PASS turn4: event seq contiguous
+- PASS at least one run.context.compacted (1 event(s))
+- PASS compaction saved a summary record (1 record(s))
+- PASS bun test passes at the end
+- PASS no context_overflow
+- PASS no turn failed
+
+Re-run: `bun scripts/live/compaction-session.ts`. First attempt with smaller fixture files (28 doc lines per module) did NOT cross the budget (max single-call prompt 16153 tokens, 0 compactions, 2 FAIL); the fixture was enlarged to 90 doc lines per module, which is what the table shows. This section is written by hand: `coding-session.ts` regenerates the rest of this file.
+
+Result: ALL PASS (14/14).

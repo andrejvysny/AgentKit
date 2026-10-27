@@ -24,6 +24,10 @@ export * from "./store-conformance.js";
 // (ADR 0016 §2), the optional `AssistantStore.inputs` member.
 export * from "./agent-input-conformance.js";
 
+// ContextSummaryStore conformance: derived compaction summaries (ADR 0017 part 2),
+// the optional `AssistantStore.summaries` member.
+export * from "./context-summary-conformance.js";
+
 // MCP server-config conformance: the same idea for the standalone
 // McpServerConfigStore port (@agentkit/mcp-client), which is NOT part of the
 // AssistantStore aggregate and so cannot be graded through its harness.

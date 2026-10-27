@@ -24,6 +24,7 @@ import type { TaskService } from "../tasks/task-service.js";
 import { stageNextQueuedTurn } from "../turn/session-turn.js";
 import type { TurnRunner } from "../turn/turn-runner.js";
 import {
+  COMPACT_REQUESTED_METADATA_KEY,
   SESSION_METADATA_KEY,
   readSessionDescriptor,
   sessionContentSelection,
@@ -234,6 +235,40 @@ export class AgentSessionService {
     const outcome = await answerHumanRequest(this.deps, input);
     if (outcome.enqueue) await this.deps.taskRunner.enqueue(outcome.enqueue);
     return outcome.receipt;
+  }
+
+  /**
+   * Ask for the session's context to be compacted (ADR 0017 part 2).
+   *
+   * DEFERRED, not immediate: this service holds no provider client, so it only
+   * records `compactRequestedAt` on the chat. The session's NEXT turn, which
+   * has the pinned client, compacts even below the threshold when anything is
+   * older than the kept tail, then clears the flag in the same transaction that
+   * saves the summary. Refused with `chat_busy` while a turn is live, because
+   * that turn is already assembling its history.
+   */
+  async compact(sessionId: string): Promise<void> {
+    await this.requireSession(sessionId);
+    if (await this.activeTurn(sessionId))
+      throw new ChatBusyError(`Chat ${sessionId} is busy.`, {
+        chatId: sessionId,
+      });
+    await this.deps.store.transaction(async (tx) => {
+      const chat = await tx.conversations.getChat(sessionId);
+      if (!chat || !readSessionDescriptor(chat.metadata))
+        throw this.notASession(sessionId);
+      const tasks = await tx.tasks.listByScope(sessionId);
+      if (tasks.some(isLiveTurn))
+        throw new ChatBusyError(`Chat ${sessionId} is busy.`, {
+          chatId: sessionId,
+        });
+      await tx.conversations.updateChat(sessionId, {
+        metadata: {
+          ...chat.metadata,
+          [COMPACT_REQUESTED_METADATA_KEY]: this.deps.clock.nowIso(),
+        },
+      });
+    });
   }
 
   /** Pending inputs and the provider continuation are NOT copied. */

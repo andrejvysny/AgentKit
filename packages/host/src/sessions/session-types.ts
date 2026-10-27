@@ -49,6 +49,7 @@ export interface CreateSessionInput {
     policy?: "final_answers" | "transcript";
     windowTokens?: number;
     reserveTokens?: number;
+    keepRecentTokens?: number;
   };
   /** Skills re-selected on every turn. */
   skills?: { id: string; revision: string }[];

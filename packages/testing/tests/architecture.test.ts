@@ -49,6 +49,8 @@ const EXECUTE_SITES: Record<string, string> = {
 const LOOP_DRIVER_SITES: Record<string, string> = {
   "core/src/runs/run-loop.ts": "runChat facade over runAgentLoop",
   "host/src/turn/turn-runner.ts": "TurnRunner.runPass, the one host driver",
+  "host/src/context/compactor.ts":
+    "session context compaction: one tool-less summarization request",
 };
 
 const FORBIDDEN_DEPENDENCY = /^@(earendil-works|mariozechner)\//;

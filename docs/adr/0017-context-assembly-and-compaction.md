@@ -1,8 +1,8 @@
 # ADR 0017 — Context assembly and compaction: transcript replay, token budget, project instructions
 
 **Status:** part 1 accepted, implemented (2026-10-27; milestone M3a of [ADR 0015](0015-unified-agent-runtime.md)).
-Part 2 (compaction) is a placeholder until M3b.
-**Contract impact:** additive only. Four new `run.warning` codes (`context_budget_fallback`, `context_trimmed`,
+Part 2 accepted, implemented (milestone M3b): derived, versioned summaries; see the end of this document.
+**Contract impact:** additive only. Part 2 adds the `run.context.compacted` event and the `compaction_failed` warning code. Four new `run.warning` codes (`context_budget_fallback`, `context_trimmed`,
 `skill_unavailable`, `project_instructions_unavailable`), a new host `errorCode` (`context_overflow`), optional
 session-descriptor fields (still `version: 1`), and `AiProviderModel.contextWindowTokens` now populated by
 `OpenAiCompatibleClient.listModels`. `CONTRACT_VERSION` and sqlite `SCHEMA_VERSION` do not change.
@@ -125,10 +125,81 @@ traces are byte-identical. The descriptor validator now rejects a present-but-ma
 - Instruction files are repository text. They are labelled with their hash and trust, but a trusted workspace is the
   caller's assertion, not something this layer verifies.
 
-## Part 2: compaction (M3b) — placeholder
+## Part 2: compaction (M3b)
 
-To be written with M3b: summary records, the cut point, branch and fork invalidation, and the `run.context.compacted`
-event. Until then, trimming above is the only reduction and drops information.
+### Decision
+
+When a session turn's history is over budget, the host replaces the oldest whole turns with ONE model-written summary
+instead of dropping them. The summary is a derived record in an optional store. Canonical history is never edited.
+
+### Summary records
+
+`ContextSummaryStore` (`AssistantStore.summaries`, optional) keeps `ContextSummaryRecord`s: `coversThroughMessageId`
+(last covered record, inclusive), `firstKeptMessageId` (start of the kept tail), the `summary` text, a `sourceHash`
+(sha256 over the covered records' `(id, role, content, toolCallId)` in order), token estimates before and after, the
+summarizing `model` and `providerId`, a `summarizerRevision` (`agentkit-compaction-v1`), `details`
+(`readFiles`, `modifiedFiles`) and `createdAt`. Saves are idempotent on `summaryId`, which is
+`<taskId>:compaction:<n>`, so a retried attempt cannot save twice. Sqlite uses the optional `context_summaries` table
+(index on `(session_id, created_at)`); `SCHEMA_VERSION` stays 10.
+
+### Validity
+
+Each turn lists the session's summaries newest first and uses the first VALID one. A summary is valid when both ids
+appear, adjacent and in order, among the current assembled record ids, its `summarizerRevision` is this build's, and the
+hash recomputed over the covered range equals `sourceHash`. A branch switch (the ids are off the path), a fork (a
+different session id, and new message ids), an edit (the hash changes) or a changed prompt revision all make it stale.
+A stale summary is ignored, not deleted. Assembly returns record ids next to the messages
+(`assembleMessagesWithIds`; the public `assembleMessages` is unchanged), and a synthetic result for a lost tool call
+carries `<call record id>#missing:<toolCallId>`.
+
+### Cut point
+
+Same turn-start rule as M3a trimming: a turn starts at a user message that does not follow a tool result. Walking back
+from the current turn, whole turns are kept while their estimate stays within `keepRecentTokens` (descriptor
+`context.keepRecentTokens`, default 20000). The current turn is always kept and a tool call is never split from its
+results. With a previous valid summary only the turns after it are summarized, with Pi's update prompt and the old text
+in `<previous-summary>` tags, so work accumulates instead of restarting.
+
+### Trigger and flow
+
+In `assembleSessionHistory`, when `store.summaries` exists: substitute the newest valid summary for its covered prefix
+(one user message: "The conversation history before this point was compacted into the following summary: ..."). If the
+result is still over `window - reserve - tools`, or a manual request is pending, run the compactor, save the record,
+append `run.context.compacted` (`reason: "threshold" | "manual"`), then the summarizer's `run.usage` events (re-stamped
+by the host event path, `step: 0`), and re-assemble. If it is still over budget, or compaction failed, M3a trimming
+applies unchanged. A failure also emits `run.warning` `compaction_failed`; the message names the reason class and never
+carries model or provider text. Overflow handling is unchanged.
+
+The compactor makes one tool-less `runAgentLoop` request (`maxToolIterations: 1`, empty registry, the turn's pinned
+client and model, `maxOutputTokens` 0.8 of the reserve). Empty text, a non-completed terminal, a `length` stop or an
+exception is a failure. A covered range too large for the window keeps its newest part. Tool results are cut to 2000
+characters in the request. The summary gets Pi-style `<read-files>` and `<modified-files>` blocks from the covered
+tool calls (`read_file`/`code_search` and `edit_file`/`write_file`, from `argumentsJson.path`).
+
+### Manual compaction
+
+`AgentSessionService.compact(sessionId)` is DEFERRED. The service has no provider client, so it only sets chat metadata
+`agentkit.session.compactRequestedAt`. It refuses with `chat_busy` while a turn is live. The next session turn compacts
+even below the threshold when something is older than the kept tail, and clears the flag in the same transaction that
+saves the summary. If there is nothing to cover the flag is cleared and no summary is made. If the summarizer fails the
+flag stays, so the next turn tries again.
+
+### Alternatives considered
+
+- **Summarize in the service, on request.** Rejected: no provider client, and a summary made while no turn runs cannot
+  be tied to the path the next turn will take.
+- **Rewrite or delete the covered records.** Rejected: canonical history is the audit trail; a summary is a cache that
+  can be wrong or stale.
+- **Always compact at a fixed ratio.** Rejected: an extra model call on every turn of a roomy window. The threshold
+  reuses the M3a budget.
+
+### Consequences
+
+- A compaction costs one extra model request on the turn that crosses the threshold, billed as that task's usage.
+- A summary is only as good as the summarizer; the kept tail and the current turn stay verbatim. A bad summary is fixed
+  by editing or branching, which makes it stale.
+- A third-party store without `summaries` keeps M3a behaviour exactly.
+- Rust consumers see one more `AiRunEvent` variant; the generated types and fixtures are regenerated.
 
 ## Verification
 
@@ -139,3 +210,8 @@ event. Until then, trimming above is the only reduction and drops information.
 - `packages/core/tests` (`listModels` parsing, estimator) and `packages/runner-local/tests/project-instructions.test.ts`
   (read, fallback, truncation, symlink and escape refusals, symlinked root, missing file).
 - The gate, byte-identical golden traces, `scripts/tests/snapshot-release.test.ts`, the architecture test.
+- `packages/host/tests/compactor.test.ts` and `context-compaction.test.ts`: cut never splits a pair and keeps the
+  current turn, 2000-character truncation, file details, update-prompt path, threshold compaction (request shape, saved
+  record, contiguous event seq), reuse without a second compaction, invalidation by branch switch, fork and edit,
+  summarizer failure falling back to trimming, manual compaction and its flag, non-session chats unaffected.
+- `describeContextSummaryStoreConformance` on both adapters; `scripts/live/compaction-session.ts` (manual, real model).

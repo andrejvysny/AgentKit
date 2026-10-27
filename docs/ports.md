@@ -568,6 +568,21 @@ refuses with `sessions_unavailable`. The memory and sqlite adapters implement it
 `agent_inputs` table, and `SCHEMA_VERSION` stays 10. Conformance: `describeAgentInputStoreConformance`
 (`@agentkit/testing`).
 
+### `ContextSummaryStore` (optional, `AssistantStore.summaries`)
+
+Derived, versioned summaries of a session's older history ([ADR 0017](adr/0017-context-assembly-and-compaction.md)
+part 2). A `ContextSummaryRecord` names the last covered and first kept canonical message ids, a `sourceHash` over the
+covered records, the summarizer `model` and `summarizerRevision`, and the files read or modified.
+
+- `saveSummary` is idempotent on `summaryId`; `listSummaries` is newest first; `deleteSessionSummaries` is called by
+  `ConversationService.deleteChat` inside its transaction.
+- A summary never replaces canonical records. The host uses one only while its ids and hash still match the current
+  path, and ignores it otherwise.
+
+Optional like `inputs`: a store without it keeps M3a trimming. The memory and sqlite adapters implement it; in sqlite it
+is the optional `context_summaries` table (`SCHEMA_VERSION` stays 10). Conformance:
+`describeContextSummaryStoreConformance` (`@agentkit/testing`).
+
 ### `ProposalStore`
 
 [`ports/proposal-store.ts`](../packages/host/src/ports/proposal-store.ts)

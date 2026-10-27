@@ -323,6 +323,31 @@ export async function assembleMessages(
   systemPrompt: string | null,
   options?: { policy?: HistoryPolicy },
 ): Promise<AiChatMessage[]> {
+  return (
+    await assembleMessagesWithIds(
+      deps,
+      chatId,
+      assistantMessageId,
+      systemPrompt,
+      options,
+    )
+  ).messages;
+}
+
+/**
+ * {@link assembleMessages} plus the canonical record id behind each NON-system
+ * message (`recordIds[i]` belongs to the i-th message after the optional system
+ * prompt). A synthetic tool result for a lost one takes `<call record
+ * id>#missing:<toolCallId>`. Context summaries (ADR 0017 part 2) are keyed on
+ * these ids.
+ */
+export async function assembleMessagesWithIds(
+  deps: TurnRunnerDeps,
+  chatId: string,
+  assistantMessageId: string,
+  systemPrompt: string | null,
+  options?: { policy?: HistoryPolicy },
+): Promise<{ messages: AiChatMessage[]; recordIds: string[] }> {
   const records = await anchoredHistory(
     deps.store.conversations,
     chatId,
@@ -330,8 +355,22 @@ export async function assembleMessages(
     deps.historyLimit ?? DEFAULT_HISTORY_LIMIT,
     options?.policy ?? "final_answers",
   );
-  const ordered = orderMessagesForProvider(records);
+  // Each pushed message is attributed to the record being visited, so the loop
+  // below needs no bookkeeping of its own.
+  let visiting = "";
+  const idOf = new Map<AiChatMessage, string>();
+  const ordered = (function* () {
+    for (const record of orderMessagesForProvider(records)) {
+      visiting = record.id;
+      yield record;
+    }
+  })();
   const messages: AiChatMessage[] = [];
+  const pushMessage = messages.push.bind(messages);
+  messages.push = (...items) => {
+    for (const item of items) idOf.set(item, visiting);
+    return pushMessage(...items);
+  };
   if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
   /**
    * Tool call ids an assistant turn in THIS window actually declared. A tool
@@ -386,7 +425,17 @@ export async function assembleMessages(
       });
     }
   }
-  return reconcileOrphanToolCalls(messages);
+  const reconciled = reconcileOrphanToolCalls(messages);
+  const recordIds: string[] = [];
+  let lastId = "";
+  for (const message of reconciled) {
+    if (message.role === "system") continue;
+    const id =
+      idOf.get(message) ?? `${lastId}#missing:${message.toolCallId ?? ""}`;
+    recordIds.push(id);
+    lastId = id.split("#missing:")[0] as string;
+  }
+  return { messages: reconciled, recordIds };
 }
 
 /**

@@ -21,6 +21,7 @@
  * `expiresAt` on the same stored object) touches the same record.
  */
 import { MemoryAgentInputStore } from "./memory-agent-input-store.js";
+import { MemoryContextSummaryStore } from "./memory-context-summary-store.js";
 import type {
   AiContentPart,
   AiMessageContent,
@@ -2161,6 +2162,7 @@ export class MemoryAssistantStore implements AssistantStore {
   private readonly rawTasks: MemoryTaskStore;
   readonly proposals: MemoryProposalStore;
   readonly inputs: MemoryAgentInputStore;
+  readonly summaries: MemoryContextSummaryStore;
   readonly providers = new MemoryProviderStore();
   readonly settings = new MemorySettingsStore();
   readonly outbox: MemoryOutboxStore;
@@ -2252,6 +2254,9 @@ export class MemoryAssistantStore implements AssistantStore {
       clock,
       withGate: (operation) => this.gate.runExclusive(async () => operation()),
     });
+    this.summaries = new MemoryContextSummaryStore({
+      withGate: (operation) => this.gate.runExclusive(async () => operation()),
+    });
   }
 
   /**
@@ -2290,6 +2295,9 @@ export class MemoryAssistantStore implements AssistantStore {
       tasks: taskStoreInTransaction(this.rawTasks, owner),
       proposals: this.proposals,
       inputs: this.inputs.withGate((operation) =>
+        this.gate.runExclusive(async () => operation(), owner),
+      ),
+      summaries: this.summaries.withGate((operation) =>
         this.gate.runExclusive(async () => operation(), owner),
       ),
       providers: this.providers,

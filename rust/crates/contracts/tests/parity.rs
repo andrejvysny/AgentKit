@@ -9,7 +9,7 @@ fn schemas_match_frozen_typescript_exports_and_compile() {
         serde_json::to_value(schemas()).unwrap(),
         fixture("schemas.json")
     );
-    assert_eq!(schemas().len(), 99);
+    assert_eq!(schemas().len(), 100);
     for (name, schema) in schemas() {
         compile_schema(schema).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
@@ -39,7 +39,7 @@ fn all_routes_match_typescript() {
 fn all_event_variants_and_golden_traces_roundtrip() {
     let frozen = fixture("run-events.json");
     let variants = frozen["variants"].as_array().unwrap();
-    assert_eq!(variants.len(), 16);
+    assert_eq!(variants.len(), 17);
     for variant in variants {
         let value = example(&variant["schema"]);
         let event: AiRunEvent = deserialize_validated("AiRunEventSchema", value.clone()).unwrap();

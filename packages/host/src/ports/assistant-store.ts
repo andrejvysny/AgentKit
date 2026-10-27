@@ -1,4 +1,5 @@
 import type { AgentInputStore } from "./agent-input-store.js";
+import type { ContextSummaryStore } from "./context-summary-store.js";
 import type { ConversationStore } from "./conversation-store.js";
 import type { OutboxStore } from "./outbox-store.js";
 import type { ProposalStore } from "./proposal-store.js";
@@ -23,6 +24,8 @@ export interface AssistantStore {
   proposals: ProposalStore;
   /** Durable steer, follow-up and human-input records; optional so existing host stores remain compatible. */
   inputs?: AgentInputStore;
+  /** Derived context summaries (ADR 0017 part 2); optional so existing host stores remain compatible. */
+  summaries?: ContextSummaryStore;
   providers: ProviderStore;
   settings: SettingsStore;
   outbox: OutboxStore;

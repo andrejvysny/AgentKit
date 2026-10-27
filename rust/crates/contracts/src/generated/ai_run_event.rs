@@ -18,6 +18,7 @@ pub enum AiRunEvent {
     ToolFailed(AiRunToolFailedEvent),
     Warning(AiRunWarningEvent),
     Usage(AiRunUsageEvent),
+    ContextCompacted(AiRunContextCompactedEvent),
     Verification(AiRunVerificationEvent),
     InputApplied(AiRunInputAppliedEvent),
     Waiting(AiRunWaitingEvent),
@@ -65,6 +66,11 @@ crate::impl_json_deserialize!(AiRunEvent, |value: Value| {
     }
     if let Ok(member) = <AiRunUsageEvent as crate::JsonDeserialize>::from_json(value.clone()) {
         return Ok(Self::Usage(member));
+    }
+    if let Ok(member) =
+        <AiRunContextCompactedEvent as crate::JsonDeserialize>::from_json(value.clone())
+    {
+        return Ok(Self::ContextCompacted(member));
     }
     if let Ok(member) = <AiRunVerificationEvent as crate::JsonDeserialize>::from_json(value.clone())
     {

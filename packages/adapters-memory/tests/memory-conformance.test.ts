@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   describeAgentInputStoreConformance,
+  describeContextSummaryStoreConformance,
   describeAssistantStoreConformance,
 } from "@agentkit/testing";
 import { MemoryAssistantStore } from "../src/index.js";
@@ -37,6 +38,15 @@ describeAssistantStoreConformance({
 });
 
 describeAgentInputStoreConformance({
+  name: "MemoryAssistantStore",
+  create: async () => ({
+    store: new MemoryAssistantStore(),
+    capabilities: { atomicTransactions: false },
+  }),
+  test: { describe, it, expect },
+});
+
+describeContextSummaryStoreConformance({
   name: "MemoryAssistantStore",
   create: async () => ({
     store: new MemoryAssistantStore(),

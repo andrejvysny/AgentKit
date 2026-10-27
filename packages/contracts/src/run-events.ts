@@ -13,6 +13,7 @@ export const AiRunEventTypeSchema = Type.Union([
   Type.Literal("run.tool.failed"),
   Type.Literal("run.warning"),
   Type.Literal("run.usage"),
+  Type.Literal("run.context.compacted"),
   Type.Literal("run.verification"),
   Type.Literal("run.input.applied"),
   Type.Literal("run.waiting"),
@@ -268,6 +269,9 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  * - `context_trimmed` — host-emitted on an agent-session turn: the transcript
  *   was over the window budget and the oldest whole turns were left out of this
  *   pass. The message carries the turn count and the estimated tokens.
+ * - `compaction_failed` — host-emitted on an agent-session turn: the context
+ *   summarizer failed (provider error, empty summary), so this pass used the
+ *   plain `context_trimmed` fallback instead. The message carries no model text.
  * - `skill_unavailable` — host-emitted on an agent-session turn: a Skill the
  *   session carries over could not be activated (missing, or its revision or
  *   hash changed). The turn went on without it; the message names the skill id.
@@ -302,6 +306,7 @@ export type AiRunWarningCode =
   | "emulated_tool_call"
   | "context_budget_fallback"
   | "context_trimmed"
+  | "compaction_failed"
   | "skill_unavailable"
   | "project_instructions_unavailable";
 
@@ -386,6 +391,33 @@ export const AiRunUsageEventSchema = Type.Object({
   }),
 });
 export type AiRunUsageEvent = Static<typeof AiRunUsageEventSchema>;
+
+/**
+ * An agent-session turn compacted its older history into a derived summary
+ * (ADR 0017 part 2) before the pass ran. Host-emitted; additive.
+ *
+ * - `summaryId` — the saved `ContextSummaryRecord`. Canonical history is
+ *   untouched; the summary only stands in for the covered prefix.
+ * - `tokensBefore` / `tokensAfter` — estimated size of the covered messages and
+ *   of the summary message that replaced them.
+ * - `coveredMessages` — how many canonical messages the summary covers.
+ * - `reason` — `"threshold"` when the history went over budget, `"manual"` when
+ *   `AgentSessionService.compact` asked for it.
+ */
+export const AiRunContextCompactedEventSchema = Type.Object({
+  type: Type.Literal("run.context.compacted"),
+  ...runEventBaseFields,
+  data: Type.Object({
+    summaryId: Type.String(),
+    tokensBefore: Type.Number(),
+    tokensAfter: Type.Number(),
+    coveredMessages: Type.Number(),
+    reason: Type.Union([Type.Literal("threshold"), Type.Literal("manual")]),
+  }),
+});
+export type AiRunContextCompactedEvent = Static<
+  typeof AiRunContextCompactedEventSchema
+>;
 
 /**
  * The outcome of ONE verification of this run — "did the work actually land?"
@@ -519,6 +551,7 @@ export const AiRunEventSchema = Type.Union([
   AiRunToolFailedEventSchema,
   AiRunWarningEventSchema,
   AiRunUsageEventSchema,
+  AiRunContextCompactedEventSchema,
   AiRunVerificationEventSchema,
   AiRunInputAppliedEventSchema,
   AiRunWaitingEventSchema,
@@ -544,6 +577,7 @@ export type AiRunEvent =
   | AiRunToolFailedEvent
   | AiRunWarningEvent
   | AiRunUsageEvent
+  | AiRunContextCompactedEvent
   | AiRunVerificationEvent
   | AiRunInputAppliedEvent
   | AiRunWaitingEvent
