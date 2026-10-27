@@ -86,6 +86,7 @@ const SUBPATHS = [
   "adapters-memory",
   "adapters-sqlite",
   "runner-local",
+  "toolpacks-coding",
 ];
 
 function fail(message) {

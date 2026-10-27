@@ -78,6 +78,7 @@ const PACKAGES = [
   "react",
   "core",
   "host",
+  "toolpacks-coding",
   // Ahead of the adapters: both `adapters-memory` and `adapters-sqlite` depend
   // on it, and `withRewrittenDeps` can only point a `workspace:*` at a tarball
   // an EARLIER entry already packed.
@@ -396,6 +397,40 @@ for (const deadline = Date.now() + 5000; Date.now() < deadline; ) {
 }
 await handle.stop();
 check(ran?.status === "completed", \`the runner drove a queued task to "\${ran?.status}"\`);
+
+const toolpacks = await import("@agentkit/toolpacks-coding");
+console.log("@agentkit/toolpacks-coding");
+const codingDir = (await import("node:fs")).mkdtempSync(
+  (await import("node:path")).join((await import("node:os")).tmpdir(), "coding-smoke-"),
+);
+(await import("node:fs")).writeFileSync(
+  (await import("node:path")).join(codingDir, "hello.txt"),
+  "alpha\\nbeta\\n",
+);
+const codingPack = toolpacks.createCodingToolPack({
+  workspace: { root: codingDir },
+  sandbox: "off",
+});
+const codingTools = await codingPack.contribute({
+  bindings: [],
+  limits: { profile: "small", maxBytes: 16384 },
+});
+check(
+  codingPack.namespace === "coding" && codingTools.length === toolpacks.CODING_TOOL_NAMES.length,
+  "the coding pack contributes every tool under namespace coding",
+);
+const codingRead = await codingTools
+  .find((t) => t.definition.name === "read_file")
+  .execute({ runId: "smoke", bindings: [], limits: { profile: "small", maxBytes: 16384 } }, { path: "hello.txt" });
+check(codingRead.ok && String(codingRead.modelData).includes("2\\tbeta"), "read_file returns numbered lines");
+const codingGuard = toolpacks.createCodingPermissionGuard({ mode: "read_only" });
+const codingVerdict = codingGuard.canExecute({
+  namespace: "coding",
+  bindings: [],
+  tool: codingTools.find((t) => t.definition.name === "edit_file").definition,
+});
+check(codingVerdict.allowed === false, "the read_only guard refuses edit_file");
+await codingPack.dispose();
 
 const testing = await import("@agentkit/testing");
 console.log("@agentkit/testing");

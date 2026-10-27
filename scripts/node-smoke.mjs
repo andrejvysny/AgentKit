@@ -104,6 +104,7 @@ const CORE_ENTRY = publishedEntry("core");
 const HOST_ENTRY = publishedEntry("host");
 const ADAPTERS_MEMORY_ENTRY = publishedEntry("adapters-memory");
 const RUNNER_LOCAL_ENTRY = publishedEntry("runner-local");
+const TOOLPACKS_CODING_ENTRY = publishedEntry("toolpacks-coding");
 const MCP_CLIENT_ENTRY = publishedEntry("mcp-client");
 const TRANSPORT_HTTP_ENTRY = publishedEntry("transport-http");
 const MCP_SERVER_ENTRY = publishedEntry("mcp-server");
@@ -119,6 +120,7 @@ const WORKSPACE_ENTRIES = {
   "@agentkit/host": HOST_ENTRY,
   "@agentkit/adapters-memory": ADAPTERS_MEMORY_ENTRY,
   "@agentkit/runner-local": RUNNER_LOCAL_ENTRY,
+  "@agentkit/toolpacks-coding": TOOLPACKS_CODING_ENTRY,
   "@agentkit/mcp-client": MCP_CLIENT_ENTRY,
   "@agentkit/transport-http": TRANSPORT_HTTP_ENTRY,
   "@agentkit/mcp-server": MCP_SERVER_ENTRY,
@@ -532,6 +534,60 @@ check(
   ranTask?.status === "completed",
   `the runner drove a queued task to "${ranTask?.status}" under Node`,
 );
+
+// ---------------------------------------------------------------------------
+// 5b. toolpacks-coding dist: the pack builds and one tool runs under Node
+// ---------------------------------------------------------------------------
+
+const toolpacks = await import(TOOLPACKS_CODING_ENTRY);
+console.log("toolpacks-coding dist");
+const codingDir = (await import("node:fs")).mkdtempSync(
+  (await import("node:path")).join(
+    (await import("node:os")).tmpdir(),
+    "coding-smoke-",
+  ),
+);
+(await import("node:fs")).writeFileSync(
+  (await import("node:path")).join(codingDir, "hello.txt"),
+  "alpha\nbeta\n",
+);
+const codingPack = toolpacks.createCodingToolPack({
+  workspace: { root: codingDir },
+  sandbox: "off",
+});
+const codingTools = await codingPack.contribute({
+  bindings: [],
+  limits: { profile: "small", maxBytes: 16384 },
+});
+check(
+  codingPack.namespace === "coding" &&
+    codingTools.length === toolpacks.CODING_TOOL_NAMES.length,
+  "the coding pack contributes every tool under namespace coding",
+);
+const codingRead = await codingTools
+  .find((t) => t.definition.name === "read_file")
+  .execute(
+    {
+      runId: "smoke",
+      bindings: [],
+      limits: { profile: "small", maxBytes: 16384 },
+    },
+    { path: "hello.txt" },
+  );
+check(
+  codingRead.ok && String(codingRead.modelData).includes("2\tbeta"),
+  "read_file returns numbered lines",
+);
+const codingGuard = toolpacks.createCodingPermissionGuard({
+  mode: "read_only",
+});
+const codingVerdict = codingGuard.canExecute({
+  namespace: "coding",
+  bindings: [],
+  tool: codingTools.find((t) => t.definition.name === "edit_file").definition,
+});
+check(codingVerdict.allowed === false, "the read_only guard refuses edit_file");
+await codingPack.dispose();
 
 // ---------------------------------------------------------------------------
 // 6. MCP client dist: the module graph resolves under Node, a manager builds
