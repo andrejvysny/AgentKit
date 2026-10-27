@@ -37,6 +37,15 @@ export interface StageRegistryInput {
    * call is awaited unbounded — what it was before this existed.
    */
   contributeTimeoutMs?: number;
+  /**
+   * The complete set of tool names this run may have, when the caller has a
+   * profile to enforce. Absent means no opinion; an EMPTY set means no tools.
+   *
+   * This is a host ceiling, not a hint: a tool the profile did not list is not
+   * staged, so the provider is never shown it and the model cannot ask for it.
+   * A profile enforced only by prompt text is a profile that says nothing.
+   */
+  allowedToolNames?: ReadonlySet<string>;
 }
 
 /** The staged tool set: the registry the run loop uses, plus who owns what. */
@@ -50,6 +59,12 @@ export interface StagedToolSet {
    * tools.
    */
   failed: readonly FailedContributor[];
+  /**
+   * Tools the profile's allowlist removed. Reported so a host can tell "the
+   * profile does not have that tool" apart from "the contributor failed": one
+   * is a decision, the other is a fault, and they read the same in a transcript.
+   */
+  pruned: readonly string[];
   /**
    * Tool name → the namespace of the contributor that offered it.
    *
@@ -125,6 +140,7 @@ export async function stageRegistry(
 
   const collected: { namespace: string; tool: AiTool }[] = [];
   const failed: FailedContributor[] = [];
+  const pruned: string[] = [];
   const owners = new Map<
     string,
     { namespace: string; contributorIndex: number }
@@ -179,6 +195,13 @@ export async function stageRegistry(
   const namespaces = new Map<string, string>();
   for (const { namespace, tool } of collected) {
     if (allowed && !allowed.has(tool.definition.name)) continue;
+    if (
+      input.allowedToolNames !== undefined &&
+      !input.allowedToolNames.has(tool.definition.name)
+    ) {
+      pruned.push(tool.definition.name);
+      continue;
+    }
     const guardCtx: ToolGuardContext = {
       ...(input.ctx.chatId === undefined ? {} : { chatId: input.ctx.chatId }),
       bindings: input.ctx.bindings,
@@ -199,7 +222,7 @@ export async function stageRegistry(
       });
     }
   }
-  return { registry, namespaces, failed };
+  return { registry, namespaces, failed, pruned };
 }
 
 /**

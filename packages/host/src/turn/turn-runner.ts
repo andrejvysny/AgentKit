@@ -115,6 +115,10 @@ import {
 } from "./session-turn.js";
 import { resolveApprovedCalls } from "./approval-resume.js";
 import {
+  effectiveLimits,
+  type ProfileRegistry,
+} from "../profiles/agent-profile.js";
+import {
   createMutatingToolClassifier,
   createUncertainSideEffectGuard,
   findUncertainCalls,
@@ -193,6 +197,16 @@ export interface TurnRunnerDeps {
    * previous behaviour of calling every such gap a clean failure.
    */
   uncertainSideEffects?: boolean;
+  /**
+   * Agent profiles to run under. Absent, no profile is consulted and every
+   * contributed tool is staged, exactly as before profiles existed.
+   *
+   * When present, a session whose descriptor names a profile gets that
+   * profile's tool allowlist enforced HERE, at staging: the provider is never
+   * shown a tool the profile does not list, and its limits cap (never raise)
+   * this host's.
+   */
+  profiles?: ProfileRegistry;
   context?: ContextProvider;
   runContent?: RunContentProvider;
   verification?: VerificationHook;
@@ -683,6 +697,19 @@ export class TurnRunner implements TaskWorker {
       toolCalling === "off"
         ? false
         : toolCalling === "on" || capabilities?.toolCalling !== false;
+    // The agent profile, resolved by the HOST from the session's descriptor.
+    // Its tool allowlist is enforced at staging and its limits cap — never
+    // raise — this host's; its `instructions` are the only part the model is
+    // trusted with.
+    const profile = this.deps.profiles?.forSession(session);
+    const profileLimits = effectiveLimits(profile, {
+      ...(this.deps.maxToolIterations === undefined
+        ? {}
+        : { maxToolIterations: this.deps.maxToolIterations }),
+      ...(this.deps.historyLimit === undefined
+        ? {}
+        : { historyLimit: this.deps.historyLimit }),
+    });
     // Side-effect receipts (ADR 0019 part 3). The guard is staged BEFORE the
     // durable log has been read, so it reads through holders this turn fills in
     // below; a guard that froze an empty map here would freeze the feature off.
@@ -710,12 +737,16 @@ export class TurnRunner implements TaskWorker {
           },
           hasPrimaryBinding,
           contributeTimeoutMs: this.hookTimeouts.contribute,
+          ...(profile === undefined
+            ? {}
+            : { allowedToolNames: new Set(profile.tools) }),
           guards: [...(this.deps.toolGuards ?? []), uncertainSideEffectGuard],
         })
       : {
           registry: new AiToolRegistry(),
           namespaces: new Map<string, string>(),
           failed: [],
+          pruned: [],
         };
     ctx.signal.throwIfAborted();
     const registry = staged.registry;
@@ -735,6 +766,14 @@ export class TurnRunner implements TaskWorker {
         `Tools from "${contributor.namespace}" are not available for this turn: it did not finish contributing in time.`,
       );
     }
+    // A profile that removed tools is a decision, not a fault, and a log reader
+    // cannot tell the two apart without this.
+    if (staged.pruned.length > 0)
+      await this.emitWarning(
+        ctx,
+        "profile_tools_pruned",
+        `This agent's profile does not include: ${staged.pruned.join(", ")}.`,
+      );
     const registryHadTools = registry.size() > 0;
     // The names actually staged — what the emulated-call detector checks a
     // printed call against, so a model quoting a `{"name", "parameters"}`
@@ -742,9 +781,17 @@ export class TurnRunner implements TaskWorker {
     const stagedToolNames = new Set(staged.namespaces.keys());
 
     const baseSystemPrompt = await this.resolveSystemPrompt(ctx, chatId);
+    // The profile's instructions join the system prompt; everything else the
+    // profile says was already enforced by the host, so a model that ignores
+    // this text still cannot reach a tool the profile removed.
     const systemPrompt =
       [
         baseSystemPrompt ?? "",
+        ...(profile === undefined || profile.instructions === ""
+          ? []
+          : [
+              `## Agent profile: ${profile.label ?? profile.id}\n${profile.instructions}`,
+            ]),
         ...(client.protocol === "responses"
           ? []
           : selectedContent.blocks.map(
@@ -845,6 +892,9 @@ export class TurnRunner implements TaskWorker {
             limits,
             exceptToolCallIds,
             uncertain: uncertainHold.current,
+            ...(profileLimits.historyLimit === undefined
+              ? {}
+              : { historyLimit: profileLimits.historyLimit }),
           });
     const assembled = await assembleHistory(
       this.deps,
@@ -893,9 +943,9 @@ export class TurnRunner implements TaskWorker {
       ...basePass,
       messages: assembled,
       registry,
-      ...(this.deps.maxToolIterations === undefined
+      ...(profileLimits.maxToolIterations === undefined
         ? {}
-        : { maxToolIterations: this.deps.maxToolIterations }),
+        : { maxToolIterations: profileLimits.maxToolIterations }),
       // The main pass only: recovery and correction passes must not steer or
       // park, they re-ask a question the main pass already shaped.
       ...(inputs === undefined || session === undefined
@@ -1508,6 +1558,8 @@ export class TurnRunner implements TaskWorker {
     exceptToolCallIds: ReadonlySet<string>;
     /** Calls that started and never reported: reconciled as uncertain. */
     uncertain: ReadonlyMap<string, UncertainCall>;
+    /** The profile-capped history window, when a profile set one. */
+    historyLimit?: number;
   }): Promise<AiChatMessage[]> {
     const { ctx, session } = input;
     let systemPrompt = input.systemPrompt;
@@ -1526,7 +1578,9 @@ export class TurnRunner implements TaskWorker {
         systemPrompt = appendToSystemPrompt(systemPrompt, instructions.text);
     }
     const assembled = await assembleMessagesWithIds(
-      this.deps,
+      input.historyLimit === undefined
+        ? this.deps
+        : { ...this.deps, historyLimit: input.historyLimit },
       input.chatId,
       input.assistantMessageId,
       systemPrompt,
