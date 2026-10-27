@@ -26,6 +26,12 @@ const guard = createCodingPermissionGuard({ mode: "auto_edit" });
 | `edit_file`, `write_file` | write / `fs.write` |
 | `run_command`, `run_tests` | write / `process.exec` |
 
+`read_file` takes `path` or `paths` (up to 8) and returns each file's `sha256`
+and `totalLines` in its result data; pass the hash as `edit_file`'s
+`expectedSha256`. `edit_file` keeps each line's original terminator (CRLF, LF,
+CR) and refuses non-UTF-8 files (`encoding_unsupported`). `list_dir` hides
+gitignored entries unless `includeIgnored`. `code_search` pages with `offset`.
+
 Every path is confined to the workspace root (symlink-aware); credential-like
 paths are refused unless `allowSensitive` is set; the file tools never write
 `.git`, and the shell sandbox denies writes under `<root>/.git` unless

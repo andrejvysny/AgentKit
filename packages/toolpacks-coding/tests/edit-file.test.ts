@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { cleanup, harness, put, tempDir } from "./support.js";
 
@@ -305,5 +311,98 @@ describe("write_file", () => {
     put(h.root, "d/x.txt", "x");
     const r = await h.run("write_file", { path: "d", content: "x" });
     expect(r.ok).toBe(false);
+  });
+});
+
+describe("edit_file byte fidelity", () => {
+  const readBytes = (root: string, rel: string) =>
+    readFileSync(join(root, rel)).toString("latin1");
+
+  test("a mixed CRLF/LF file keeps every untouched line ending", async () => {
+    const h = await harness();
+    put(h.root, "m.txt", "a\r\nb\nc\r\nd\ne\r\n");
+    const r = await h.run("edit_file", {
+      path: "m.txt",
+      edits: [{ oldText: "c", newText: "C" }],
+    });
+    expect(r.ok).toBe(true);
+    expect(readBytes(h.root, "m.txt")).toBe("a\r\nb\nC\r\nd\ne\r\n");
+  });
+
+  test("a lone-CR file stays lone-CR", async () => {
+    const h = await harness();
+    put(h.root, "cr.txt", "one\rtwo\rthree\r");
+    const r = await h.run("edit_file", {
+      path: "cr.txt",
+      edits: [{ oldText: "two", newText: "2\nextra" }],
+    });
+    expect(r.ok).toBe(true);
+    expect(readBytes(h.root, "cr.txt")).toBe("one\r2\rextra\rthree\r");
+  });
+
+  test("inserted lines use the dominant ending (CRLF)", async () => {
+    const h = await harness();
+    put(h.root, "d.txt", "a\r\nb\r\nc\n");
+    const r = await h.run("edit_file", {
+      path: "d.txt",
+      edits: [{ oldText: "b", newText: "b\nb2\nb3" }],
+    });
+    expect(r.ok).toBe(true);
+    expect(readBytes(h.root, "d.txt")).toBe("a\r\nb\r\nb2\r\nb3\r\nc\n");
+  });
+
+  test("invalid UTF-8 is refused and the file is untouched", async () => {
+    const h = await harness();
+    const bytes = Buffer.from([0x61, 0x0a, 0xff, 0xfe, 0x0a, 0x62, 0x0a]);
+    writeFileSync(join(h.root, "bad.txt"), bytes);
+    const r = await h.run("edit_file", {
+      path: "bad.txt",
+      edits: [{ oldText: "a", newText: "z" }],
+    });
+    expect(r.ok).toBe(false);
+    expect(h.text(r)).toContain("encoding_unsupported");
+    expect(readFileSync(join(h.root, "bad.txt")).equals(bytes)).toBe(true);
+  });
+
+  test("a read_file sha256 is the file hash and works as expectedSha256", async () => {
+    const h = await harness();
+    put(h.root, "s.txt", "x\ny\n");
+    const read1 = await h.run("read_file", { path: "s.txt" });
+    const data = read1.data as { sha256: string; totalLines: number };
+    expect(data.sha256).toBe(sha("x\ny\n"));
+    expect(data.totalLines).toBe(2);
+    const ok = await h.run("edit_file", {
+      path: "s.txt",
+      edits: [{ oldText: "x", newText: "X" }],
+      expectedSha256: data.sha256,
+    });
+    expect(ok.ok).toBe(true);
+    const stale = await h.run("edit_file", {
+      path: "s.txt",
+      edits: [{ oldText: "y", newText: "Y" }],
+      expectedSha256: data.sha256,
+    });
+    expect(h.text(stale)).toContain("sha256_mismatch");
+  });
+
+  test("an aborted signal before the write leaves the file untouched", async () => {
+    const h = await harness();
+    put(h.root, "ab.txt", "keep\n");
+    const ac = new AbortController();
+    ac.abort();
+    const edit = await h.run(
+      "edit_file",
+      { path: "ab.txt", edits: [{ oldText: "keep", newText: "lost" }] },
+      ac.signal,
+    );
+    expect(edit.ok).toBe(false);
+    expect(h.text(edit)).toContain("aborted");
+    const write = await h.run(
+      "write_file",
+      { path: "ab.txt", content: "lost" },
+      ac.signal,
+    );
+    expect(write.ok).toBe(false);
+    expect(read(h.root, "ab.txt")).toBe("keep\n");
   });
 });

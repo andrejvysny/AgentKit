@@ -127,7 +127,7 @@ export async function* walkTree(
 
 async function inheritedRules(
   root: string,
-  options: WalkOptions,
+  options: Pick<WalkOptions, "limits" | "inheritedFrom">,
   cache: Map<string, IgnoreRule[]>,
 ): Promise<IgnoreRule[]> {
   const from = options.inheritedFrom;
@@ -148,7 +148,7 @@ async function inheritedRules(
 
 async function ignoreRules(
   directory: string,
-  options: WalkOptions,
+  options: Pick<WalkOptions, "limits">,
   cache: Map<string, IgnoreRule[]>,
 ): Promise<IgnoreRule[]> {
   const cached = cache.get(directory);
@@ -169,6 +169,25 @@ async function ignoreRules(
   }
   cache.set(directory, rules);
   return rules;
+}
+
+/**
+ * The ignore decision walkTree makes, for one directory's direct children:
+ * rules from the workspace root down to `directory` itself.
+ */
+export async function loadIgnoreMatcher(
+  directory: string,
+  workspaceRoot: string,
+  limits: CodingLimits,
+): Promise<(name: string, isDirectory: boolean) => boolean> {
+  const cache = new Map<string, IgnoreRule[]>();
+  const options = { limits, inheritedFrom: workspaceRoot };
+  const rules = [
+    ...(await inheritedRules(directory, options, cache)),
+    ...(await ignoreRules(directory, options, cache)),
+  ];
+  return (name, isDirectory) =>
+    excluded(rules, join(directory, name), isDirectory);
 }
 
 function parseIgnoreRule(line: string): Omit<IgnoreRule, "base"> | undefined {
@@ -274,6 +293,8 @@ export interface SearchInput {
   ignoreCase: boolean;
   context: number;
   limit: number;
+  /** Matches to skip, for paging. */
+  offset?: number;
 }
 
 export interface SearchOutcome {
@@ -328,10 +349,12 @@ export async function searchText(
   let bytes = 0;
   let outputBytes = 0;
   let matches = 0;
+  let skipped = 0;
+  const offset = input.offset ?? 0;
+  let outputFull = false;
   let inputExhausted = false;
   const deadline = options.clock() + limits.searchTimeBudgetMs;
-  const done = () =>
-    matches >= input.limit || outputBytes >= limits.searchMaxOutputBytes;
+  const done = () => matches >= input.limit || outputFull;
   for await (const file of files) {
     if (options.signal?.aborted) aborted();
     if (options.clock() > deadline) {
@@ -351,18 +374,40 @@ export async function searchText(
     if (text === undefined || text.includes("\0")) continue;
     const lines = text.split("\n");
     for (let index = 0; index < lines.length; index++) {
+      // A huge file must not outlive a cancel or the time budget.
+      if (index % 256 === 255) {
+        if (options.signal?.aborted) aborted();
+        if (options.clock() > deadline) {
+          budget.timedOut = true;
+          break;
+        }
+      }
       if (!regex.test((lines[index] as string).slice(0, 8192))) continue;
+      if (skipped < offset) {
+        skipped++;
+        continue;
+      }
       const from = Math.max(0, index - input.context);
       const to = Math.min(lines.length - 1, index + input.context);
+      const entries: string[] = [];
+      let size = 0;
       for (let line = from; line <= to; line++) {
         const entry = `${file.rel}:${line + 1}:${(lines[line] as string).slice(0, limits.searchMaxLineChars)}`;
-        output.push(entry);
-        outputBytes += Buffer.byteLength(entry) + 1;
+        entries.push(entry);
+        size += Buffer.byteLength(entry) + 1;
       }
+      // A match is shown whole or left for the next page, never cut.
+      if (matches > 0 && outputBytes + size > limits.searchMaxOutputBytes) {
+        outputFull = true;
+        break;
+      }
+      output.push(...entries);
+      outputBytes += size;
       matches++;
+      if (outputBytes >= limits.searchMaxOutputBytes) outputFull = true;
       if (done()) break;
     }
-    if (done()) break;
+    if (done() || budget.timedOut) break;
   }
   const reason = inputExhausted
     ? `${Math.round(bytes / 1024 / 1024)} MiB of input scanned`
@@ -372,15 +417,19 @@ export async function searchText(
         ? `${limits.searchTimeBudgetMs / 1000}s of scanning elapsed`
         : matches >= input.limit
           ? `match limit ${input.limit} reached`
-          : outputBytes >= limits.searchMaxOutputBytes
+          : outputFull
             ? "output limit reached"
             : "";
   const stopped = reason
     ? `${reason}; ${matches} match${matches === 1 ? "" : "es"} so far, narrow the path, glob or pattern`
     : "";
   const body = output.join("\n").slice(0, limits.searchMaxOutputBytes);
+  const more =
+    (matches >= input.limit || outputFull) && !inputExhausted
+      ? `\n[more matches: call again with offset=${offset + matches}]`
+      : "";
   const text = output.length
-    ? `${body}${stopped ? `\n[stopped: ${stopped}]` : ""}`
+    ? `${body}${stopped ? `\n[stopped: ${stopped}]` : ""}${more}`
     : `No matches found${stopped ? ` (${stopped})` : ""}`;
   return { text, truncated: stopped !== "", matches };
 }

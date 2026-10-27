@@ -71,6 +71,17 @@ export async function readRegularFile(
   }
 }
 
+/** Strict UTF-8 decode that keeps a BOM; `undefined` when the bytes are not UTF-8. */
+export function decodeUtf8(buffer: Buffer): string | undefined {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      buffer,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 export function looksBinary(buffer: Buffer): boolean {
   return buffer.subarray(0, 8192).includes(0);
 }

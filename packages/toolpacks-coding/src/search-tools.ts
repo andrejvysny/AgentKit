@@ -137,6 +137,12 @@ export function codeSearchTool(env: PackEnv): AiTool {
             maximum: l.searchMaxMatches,
             description: `Maximum matches (default ${l.searchDefaultMatches}).`,
           },
+          offset: {
+            type: "integer",
+            minimum: 0,
+            description:
+              "Matches to skip, to page through a truncated result (use the offset the notice gives).",
+          },
         },
         required: ["pattern"],
         additionalProperties: false,
@@ -164,6 +170,7 @@ export function codeSearchTool(env: PackEnv): AiTool {
           limit:
             optInt(input, "limit", 1, l.searchMaxMatches) ??
             l.searchDefaultMatches,
+          offset: optInt(input, "offset", 0, 1_000_000_000) ?? 0,
         },
         walkBase(env, ctx.signal),
       );
