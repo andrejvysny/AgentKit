@@ -41,6 +41,7 @@ export * from "./conversation/conversation-service.js";
 // Turn execution: the durable worker over core's run loop.
 export * from "./turn/message-order.js";
 export * from "./turn/history-reconcile.js";
+export * from "./turn/side-effects.js";
 export * from "./turn/emulated-tool-call.js";
 export * from "./turn/hook-deadline.js";
 export * from "./turn/registry-staging.js";

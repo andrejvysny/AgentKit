@@ -283,24 +283,32 @@ function toolContributor(world: World): ToolSetContributor {
   const tool = (
     name: string,
     execute: (ctx: { limits: never }) => Promise<ReturnType<typeof result>>,
+    effect: "read" | "write" = "read",
   ): AiTool =>
     ({
       definition: {
         name,
         version: "1.0.0",
-        effect: "read",
+        effect,
         capability: name,
         description: name,
         inputSchema: { type: "object", properties: {} },
       },
       execute: (ctx: { limits: never }) => execute(ctx),
     }) as unknown as AiTool;
-  const bump = tool("bump", async (ctx) => {
-    world.bumps += 1;
-    // The "process dies" half: the side effect happened, nothing was logged.
-    if (world.blockFirstBump && world.bumps === 1) await world.toolGate.park();
-    return result(ctx.limits, "bumped");
-  });
+  // `bump` declares itself a write: it mutates something outside the runtime,
+  // which is exactly what side-effect reconciliation is for.
+  const bump = tool(
+    "bump",
+    async (ctx) => {
+      world.bumps += 1;
+      // The "process dies" half: the side effect happened, nothing was logged.
+      if (world.blockFirstBump && world.bumps === 1)
+        await world.toolGate.park();
+      return result(ctx.limits, "bumped");
+    },
+    "write",
+  );
   const echo = tool("echo_steer", async (ctx) => {
     await world.onEcho?.();
     return result(ctx.limits, "echoed");
@@ -759,7 +767,7 @@ for (const adapter of ADAPTERS) {
       });
     });
 
-    it("C5: tool side effect before its event — AT-LEAST-ONCE, host does not re-run the tool", async () => {
+    it("C5: tool side effect before its event — reported UNCERTAIN, never re-run", async () => {
       const world = await createWorld(adapter, [
         { turn: toolCall("call-b1", "bump") },
         { turn: text(ANSWER_2) },
@@ -777,15 +785,17 @@ for (const adapter of ADAPTERS) {
       await crashAndRecover(world, "owner-B");
       await waitTask(world, turn.turnId, "completed", 2);
 
-      // CURRENT BEHAVIOUR (at-least-once; receipts arrive in M5): the host does
-      // not re-run the dangling call on recovery. The counter stays at 1.
+      // The host does not re-run the dangling call on recovery, and it does not
+      // claim the call failed either: the log shows it STARTED, so the replayed
+      // result says the outcome is unknown (side-effect receipts, C5).
       expect(world.bumps).toBe(1);
-      // The dangling call is answered with the synthetic result on replay...
       const replay = world.provider.calls[1]!;
       expect(replay.map((m) => m.role)).toEqual(["user", "assistant", "tool"]);
       expect(replay[1]?.toolCalls?.[0]?.id).toBe("call-b1");
       expect(replay[2]?.toolCallId).toBe("call-b1");
-      expect(replay[2]?.content).toContain("tool_result_missing");
+      expect(replay[2]?.content).toContain("tool_result_uncertain");
+      expect(replay[2]?.content).toContain("Do NOT retry");
+      expect(replay[2]?.content).not.toContain("tool_result_missing");
       // ...in memory only: no tool record was ever persisted for it.
       const messages = await messagesOf(world);
       expect(messages.filter((m) => m.role === "tool")).toHaveLength(0);
@@ -808,7 +818,7 @@ for (const adapter of ADAPTERS) {
       });
     });
 
-    it("C5b: when the model chooses to call the tool again the side effect runs twice (script decides)", async () => {
+    it("C5b: an identical re-issue of the uncertain call needs a human, and runs once", async () => {
       const world = await createWorld(adapter, [
         { turn: toolCall("call-b1", "bump") },
         { turn: toolCall("call-b2", "bump") },
@@ -820,28 +830,42 @@ for (const adapter of ADAPTERS) {
       const turn = await sendTurn(a, "bump it");
       await world.toolGate.whenParked();
 
-      await crashAndRecover(world, "owner-B");
-      await waitTask(world, turn.turnId, "completed", 2);
+      const b = await crashAndRecover(world, "owner-B");
+      // The model repeats the exact call. The runtime cannot prove the first one
+      // never completed, so it does not run it a second time on the model's
+      // word: the turn parks for a human instead.
+      await waitTask(world, turn.turnId, "waiting_approval", 2);
+      expect(world.bumps).toBe(1);
+      const waiting = (await b.service.getState(SESSION)).waiting;
+      expect(waiting?.content).toMatchObject({ toolName: "bump" });
 
-      // AT-LEAST-ONCE made visible: first bump (lost) + the model's re-ask.
+      // Step 2's request carried the uncertain result, not a clean failure.
+      const second = world.provider.calls[1]!;
+      const b1 = second.find(
+        (m) => m.role === "tool" && m.toolCallId === "call-b1",
+      );
+      expect(b1?.content).toContain("tool_result_uncertain");
+
+      await b.service.approve(waiting!.inputId, "ans-1");
+      // Attempt 3: the approved call executes ahead of the model, and the turn
+      // finishes on the answer the script had queued.
+      await waitTask(world, turn.turnId, "completed", 3);
+      expect(world.provider.calls).toHaveLength(3);
+
+      // Exactly once beyond the crash: the interrupted bump, plus the approved
+      // re-issue. Nothing ran twice behind anyone's back.
       expect(world.bumps).toBe(2);
       const messages = await messagesOf(world);
       expect(
         messages.filter((m) => m.role === "tool").map((m) => m.toolCallId),
       ).toEqual(["call-b2"]);
-      // Step 2's request still carries the synthetic answer for call-b1.
-      const third = world.provider.calls[2]!;
-      const b1 = third.find(
-        (m) => m.role === "tool" && m.toolCallId === "call-b1",
-      );
-      expect(b1?.content).toContain("tool_result_missing");
 
       const eventsBefore = (await eventsOf(world, turn.turnId)).length;
       const messagesBefore = messages.length;
       await wakeZombie(world, a);
       expect(world.bumps).toBe(2);
       await assertEndState(world, {
-        runs: { [turn.turnId]: { status: "completed", attempts: 2 } },
+        runs: { [turn.turnId]: { status: "completed", attempts: 3 } },
         zombie: {
           runId: turn.turnId,
           executions: a.executions,
