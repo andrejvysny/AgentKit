@@ -252,7 +252,12 @@ interface Slice {
   builds(): number;
 }
 
-function embedSlice(options: { provider?: AiProviderClient } = {}): Slice {
+function embedSlice(
+  options: {
+    provider?: AiProviderClient;
+    interruptionMode?: "immediate" | "after_execution";
+  } = {},
+): Slice {
   // 1. Ambient ports. Injected, not imported, so every assertion below is about
   //    the fake clock rather than about how fast this machine is.
   const clock = createTestClock();
@@ -269,6 +274,7 @@ function embedSlice(options: { provider?: AiProviderClient } = {}): Slice {
     // Far past any test's real lifetime: renewal must not rescue or expire a
     // lease behind a test's back.
     heartbeatMs: 60_000,
+    interruptionMode: options.interruptionMode,
   });
 
   // 4. The write pipeline. The policy decides whether a staged write applies
@@ -1329,6 +1335,70 @@ describe("e2e vertical slice (D) — a crashed attempt is continued, and its zom
       recoveredGate.release();
       await workerA?.stop();
       await workerB?.stop();
+      slice.store.close();
+    }
+  });
+});
+
+describe("targeted interruption across the chat stack", () => {
+  it("preserves partial events and pins, then regenerates the same run on explicit resume", async () => {
+    const hanging = new HangingProviderClient();
+    const complete = new MockProviderClient();
+    complete.setScript([
+      { steps: [{ kind: "text", content: "Fresh answer" }] },
+    ]);
+    let calls = 0;
+    const provider: AiProviderClient = {
+      id: hanging.id,
+      kind: hanging.kind,
+      capabilities: () => hanging.capabilities(),
+      listModels: () => hanging.listModels(),
+      streamChat: (input) =>
+        ++calls === 1 ? hanging.streamChat(input) : complete.streamChat(input),
+    };
+    const slice = embedSlice({ provider, interruptionMode: "immediate" });
+    await seedHostState(slice);
+    const handle = await startTurnWorker(slice, slice, "interrupt-owner");
+    try {
+      const submitted = await slice.turnRunner.submitMessage({
+        chatId: CHAT_ID,
+        content: "Original question π",
+      });
+      await waitFor(() => hanging.blocking, "durable partial output");
+      const original = await slice.store.tasks.getTask(submitted.runId);
+      await slice.taskRunner.requestInterrupt(submitted.runId, {
+        code: "LOCAL_RUNTIME_SYSTEM_SLEEP",
+        message: "System sleep",
+      });
+      expect(await runStatus(slice, submitted.runId)).toBe("interrupted");
+      const partial = await eventsOf(slice, submitted.runId);
+      expect(partial.map((event) => event.type)).toEqual([
+        "run.started",
+        "run.message.delta",
+      ]);
+      expect(JSON.stringify(partial)).toContain("Thinking");
+      await slice.taskRunner.resume(submitted.runId);
+      await waitFor(
+        async () => (await runStatus(slice, submitted.runId)) === "completed",
+        "resumed generation",
+      );
+      expect(calls).toBe(2);
+      expect(
+        (await slice.store.tasks.getTask(submitted.runId))?.payload,
+      ).toEqual(original?.payload);
+      expect(slice.provider.calls[1]).toEqual(slice.provider.calls[0]);
+      const message = await slice.store.conversations.getMessage(
+        submitted.assistantMessageId,
+      );
+      expect(message?.content).toBe("Fresh answer");
+      const events = await eventsOf(slice, submitted.runId);
+      expect(events.slice(0, partial.length)).toEqual(partial);
+      expect(
+        events.filter((event) => event.type === "run.cancelled"),
+      ).toHaveLength(0);
+      expect(new Set(events.map((event) => event.attemptId)).size).toBe(2);
+    } finally {
+      await handle.stop();
       slice.store.close();
     }
   });

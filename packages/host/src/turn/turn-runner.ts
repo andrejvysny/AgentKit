@@ -51,6 +51,7 @@ import type {
   TaskRunner,
   TaskWorker,
 } from "../ports/task-runner.js";
+import { TaskInterruptedError } from "../ports/task-runner.js";
 import type { ToolSetContributor } from "../ports/tool-contributor.js";
 import type { ToolGuard } from "../ports/tool-guard.js";
 import type { UsageAuthorizer } from "../ports/usage-authorizer.js";
@@ -522,7 +523,7 @@ export class TurnRunner implements TaskWorker {
         );
     } catch (err) {
       if (ctx.signal.reason instanceof ExecutionInterruptedError) {
-        await this.interruptQuietly(ctx);
+        await this.interruptQuietly(ctx, ctx.signal.reason);
         return;
       }
       const message = publicErrorMessage(err);
@@ -550,6 +551,7 @@ export class TurnRunner implements TaskWorker {
     message: string,
     assistantMessageId?: string,
   ): Promise<void> {
+    if (err instanceof ExecutionInterruptedError) return;
     const cancelled =
       ctx.signal.aborted &&
       !(ctx.signal.reason instanceof ExecutionBudgetError);
@@ -1913,26 +1915,36 @@ export class TurnRunner implements TaskWorker {
    * next attempt follows the existing recovery path. The attempt ends
    * `cancelled`, never `abandoned` (which counts toward poisonCount).
    */
-  private async interruptQuietly(ctx: TaskExecutionContext): Promise<void> {
+  private async interruptQuietly(
+    ctx: TaskExecutionContext,
+    reason: ExecutionInterruptedError,
+  ): Promise<void> {
     const { store, logger } = this.deps;
+    // A reasoned interrupt keeps its reason as the task error, the same string
+    // the runner and the store's atomic `interruptTask` record.
+    const error =
+      reason instanceof TaskInterruptedError
+        ? JSON.stringify(reason.reason)
+        : "interrupted";
     try {
       await store.transaction(async (tx) => {
         const task = await tx.tasks.getTask(ctx.task.taskId);
+        // An immediate interrupt already parked the task, closed this attempt
+        // and revoked the lease atomically; there is nothing left to write.
+        if (task?.status !== "running") return;
         await tx.tasks.endAttempt({
           attemptId: ctx.attemptId,
           status: "cancelled",
-          error: "interrupted",
+          error,
           leaseToken: ctx.leaseToken,
         });
-        if (task?.status === "running") {
-          await tx.tasks.transitionTask(
-            ctx.task.taskId,
-            ["running"],
-            "interrupted",
-            { error: "interrupted" },
-            { leaseToken: ctx.leaseToken },
-          );
-        }
+        await tx.tasks.transitionTask(
+          ctx.task.taskId,
+          ["running"],
+          "interrupted",
+          { error },
+          { leaseToken: ctx.leaseToken },
+        );
       });
     } catch (error) {
       logger?.warn("could not park interrupted turn", {

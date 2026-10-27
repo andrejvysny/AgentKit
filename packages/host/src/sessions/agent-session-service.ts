@@ -18,7 +18,10 @@ import type { ChatRecord } from "../ports/conversation-store.js";
 import type { Clock, IdGenerator, Logger } from "../ports/system.js";
 import { assertScopeIdle, isTerminalTaskStatus } from "../ports/task-store.js";
 import type { TaskRecord } from "../ports/task-store.js";
-import type { TaskRunner } from "../ports/task-runner.js";
+import type {
+  TaskInterruptionReason,
+  TaskRunner,
+} from "../ports/task-runner.js";
 import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import type { TaskService } from "../tasks/task-service.js";
 import { stageNextQueuedTurn } from "../turn/session-turn.js";
@@ -326,9 +329,13 @@ export class AgentSessionService {
    * `interrupted` with its id, events and records intact, and
    * {@link resume} continues it with a new attempt.
    */
-  async interrupt(sessionId: string, turnId: string): Promise<void> {
+  async interrupt(
+    sessionId: string,
+    turnId: string,
+    reason?: TaskInterruptionReason,
+  ): Promise<void> {
     await this.requireTurn(sessionId, turnId);
-    await this.deps.tasks.interruptTask(turnId);
+    await this.deps.tasks.interruptTask(turnId, reason);
   }
 
   /** Continue an interrupted turn; any other status is `invalid_state`. */

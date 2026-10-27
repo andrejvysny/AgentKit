@@ -12,7 +12,9 @@ import { MemoryAssistantStore } from "@agentkit/adapters-memory";
 import {
   AgentSessionService,
   ChatTurnExecutor,
+  ExecutionInterruptedError,
   ExecutorRegistry,
+  TaskInterruptedError,
   TaskService,
   TurnRunner,
   createDispatchingWorker,
@@ -185,6 +187,7 @@ function node(
   opts: {
     shutdownMode?: "drain" | "cancel" | "interrupt";
     recoveryMode?: "automatic" | "manual";
+    interruptionMode?: "immediate" | "after_execution";
     store?: AssistantStore;
   } = {},
 ): Node {
@@ -194,6 +197,9 @@ function node(
     pollMs: 5,
     ...(opts.shutdownMode ? { shutdownMode: opts.shutdownMode } : {}),
     ...(opts.recoveryMode ? { recoveryMode: opts.recoveryMode } : {}),
+    ...(opts.interruptionMode
+      ? { interruptionMode: opts.interruptionMode }
+      : {}),
   });
   world.runners.push(runner);
   const turns = new TurnRunner({
@@ -428,6 +434,61 @@ describe("interrupt a running turn", () => {
     const resumedPass = world.provider.calls[1] ?? [];
     const result = resumedPass.find((m) => m.role === "tool");
     expect(String(result?.content)).toContain("tool_result_uncertain");
+  });
+});
+
+describe("one interrupt API: reason and mode", () => {
+  it("a reasoned interrupt is still an ExecutionInterruptedError", () => {
+    const error = new TaskInterruptedError({ code: "SLEEP", message: "Sleep" });
+    expect(error).toBeInstanceOf(ExecutionInterruptedError);
+    expect(error.name).toBe("TaskInterruptedError");
+    expect(error.reason).toEqual({ code: "SLEEP", message: "Sleep" });
+  });
+
+  for (const interruptionMode of ["after_execution", "immediate"] as const) {
+    it(`${interruptionMode}: a session interrupt records its reason and resumes`, async () => {
+      const world = await createWorld([
+        { turn: text("never"), park: true },
+        { turn: text("DONE") },
+      ]);
+      const n = node(world, { interruptionMode });
+      await seed(n);
+      await n.start();
+      const turnId = await send(n, "hello");
+      await world.provider.gate(1).whenParked();
+
+      const reason = { code: "APP_QUIT", message: "OneMind closed" };
+      await n.service.interrupt(SESSION, turnId, reason);
+      await waitStatus(world, turnId, "interrupted");
+      const task = await world.store.tasks.getTask(turnId);
+      expect(task?.error).toBe(JSON.stringify(reason));
+      expect(task?.poisonCount).toBe(0);
+      const types = (await eventsOf(world, turnId)).map((e) => e.type);
+      expect(types).not.toContain("run.cancelled");
+      expect(types).not.toContain("run.failed");
+
+      world.provider.gate(1).release();
+      await n.service.resume(SESSION, turnId);
+      await waitStatus(world, turnId, "completed");
+      expect((await world.store.tasks.getTask(turnId))?.attemptCount).toBe(2);
+    });
+  }
+
+  it("an unreasoned interrupt records the default reason", async () => {
+    const world = await createWorld([
+      { turn: text("never"), park: true },
+      { turn: text("DONE") },
+    ]);
+    const n = node(world);
+    await seed(n);
+    await n.start();
+    const turnId = await send(n, "hello");
+    await world.provider.gate(1).whenParked();
+    await n.service.interrupt(SESSION, turnId);
+    await waitStatus(world, turnId, "interrupted");
+    expect((await world.store.tasks.getTask(turnId))?.error).toBe(
+      JSON.stringify({ code: "INTERRUPTED", message: "execution interrupted" }),
+    );
   });
 });
 

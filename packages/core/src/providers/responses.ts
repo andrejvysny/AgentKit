@@ -16,6 +16,10 @@ import {
   ResponsesStreamState,
   type ResponsesResult,
 } from "./responses-stream.js";
+import {
+  responseErrorDiagnostic,
+  responseMetadata,
+} from "./responses-errors.js";
 import { parseSseStream } from "./sse.js";
 import {
   boundedJson,
@@ -37,6 +41,7 @@ export class ResponsesClient implements AiProviderClient {
   readonly protocol = "responses";
   readonly tracksTransportRequests = true;
   readonly authKind: TrustedResponsesTransport["authKind"];
+  private readonly onError: ResponsesClientOptions["onError"];
   private readonly currentIdentity: () => AiProviderConnectionIdentity;
   private readonly requestTransport: TrustedResponsesTransport["request"];
   private readonly modelCapabilities: ResponsesClientOptions["capabilities"];
@@ -51,6 +56,7 @@ export class ResponsesClient implements AiProviderClient {
       identity.generation < 0
     )
       responsesError("invalid_connection");
+    this.onError = options.onError;
     this.id = options.id;
     this.kind = options.kind ?? "responses";
     this.connectionIdentity = Object.freeze({
@@ -113,7 +119,7 @@ export class ResponsesClient implements AiProviderClient {
     const stamp = createEventStamper();
     const base = { runId: input.runId, timestamp: nowIso() };
     const callId = newCallId();
-    const state = new ResponsesStreamState();
+    const state = new ResponsesStreamState(this.authKind === "chatgpt-account");
     yield stamp({
       ...base,
       type: "run.started",
@@ -122,6 +128,13 @@ export class ResponsesClient implements AiProviderClient {
     try {
       yield* this.requestChat(input, stamp, base, callId, state);
     } catch (error) {
+      if (error instanceof ResponsesProviderError && error.diagnostic) {
+        try {
+          this.onError?.(error.diagnostic);
+        } catch {
+          /* Diagnostics cannot change run outcomes. */
+        }
+      }
       yield* failedUsage(input, state.usage(), stamp, base, callId);
       if (
         input.signal?.aborted ||
@@ -169,6 +182,7 @@ export class ResponsesClient implements AiProviderClient {
     });
     if (!response.ok) await rejectHttp(response, input.signal);
     if (!response.body) responsesError("empty_body");
+    state.setResponseMetadata(responseMetadata(response));
     let text = "";
     for await (const frame of parseSseStream(response.body, input.signal)) {
       if (frame.done) continue;
@@ -264,20 +278,35 @@ async function rejectHttp(
   response: Response,
   signal?: AbortSignal,
 ): Promise<never> {
-  let code: unknown;
+  let errorBody: Record<string, unknown> = {};
+  let shape: "error" | "detail" | "other" | "unreadable" = "unreadable";
   try {
-    code = object(
-      object(await readBoundedJson(response, signal)).error ?? {},
-    ).code;
+    const body = object(await readBoundedJson(response, signal));
+    shape =
+      body.error && typeof body.error === "object" && !Array.isArray(body.error)
+        ? "error"
+        : typeof body.detail === "string"
+          ? "detail"
+          : "other";
+    if (shape === "error") errorBody = object(body.error);
   } catch (error) {
     if (signal?.aborted) throw error;
   }
-  const known = classifyResponseError(code);
-  if (known !== "provider_error") return responsesError(known);
-  if (response.status === 401) return responsesError("authentication_required");
-  if (response.status === 403) return responsesError("consent_required");
-  if (response.status === 429) return responsesError("usage_limit");
-  return responsesError("provider_error");
+  const known = classifyResponseError(errorBody.code);
+  const fallback: Record<number, string> = {
+    401: "authentication_required",
+    403: "consent_required",
+    429: "usage_limit",
+    503: "service_unavailable",
+  };
+  const code =
+    known !== "provider_error"
+      ? known
+      : (fallback[response.status] ?? "provider_error");
+  return responsesError(
+    code,
+    responseErrorDiagnostic(errorBody, shape, code, responseMetadata(response)),
+  );
 }
 
 async function readBoundedJson(

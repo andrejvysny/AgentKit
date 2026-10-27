@@ -38,6 +38,8 @@ export interface ResponsesClientOptions {
   kind?: string;
   transport: TrustedResponsesTransport;
   capabilities?: Pick<AiProviderCapabilities, "vision" | "maxContextTokens">;
+  /** Safe metadata only; callback failures cannot change request outcomes. */
+  onError?: (diagnostic: ResponsesErrorDiagnostic) => void;
 }
 
 export const MAX_RESPONSES_STATE_BYTES = 1024 * 1024;
@@ -71,6 +73,7 @@ const SAFE_ERROR_CODES = new Set([
   "provider_error",
   "response_incomplete",
   "response_limit_exceeded",
+  "service_unavailable",
   "state_limit_exceeded",
   "stream_incomplete",
   "stream_limit_exceeded",
@@ -88,20 +91,37 @@ const SAFE_ERROR_CODES = new Set([
   "usage_limit",
 ]);
 
+/** Bounded metadata only; provider messages and body text are deliberately omitted. */
+export interface ResponsesErrorDiagnostic {
+  readonly httpStatus?: number;
+  readonly providerCode?: string;
+  readonly param?: string;
+  readonly requestId?: string;
+  readonly responseShape: "error" | "detail" | "other" | "unreadable" | "sse";
+  /** Retry later only; never automatically replay a partially consumed stream. */
+  readonly retryable: boolean;
+}
+
 /** Safe category only: raw provider messages may contain credentials or state. */
 export class ResponsesProviderError extends Error {
   readonly code: string;
 
-  constructor(code: string) {
+  readonly diagnostic?: ResponsesErrorDiagnostic;
+
+  constructor(code: string, diagnostic?: ResponsesErrorDiagnostic) {
     const safeCode = SAFE_ERROR_CODES.has(code) ? code : "provider_error";
     super(`Responses provider failed: ${safeCode}`);
     this.name = "ResponsesProviderError";
     this.code = safeCode;
+    this.diagnostic = diagnostic ? Object.freeze({ ...diagnostic }) : undefined;
   }
 }
 
-export function responsesError(code: string): never {
-  throw new ResponsesProviderError(code);
+export function responsesError(
+  code: string,
+  diagnostic?: ResponsesErrorDiagnostic,
+): never {
+  throw new ResponsesProviderError(code, diagnostic);
 }
 
 export function object(value: unknown): Record<string, unknown> {

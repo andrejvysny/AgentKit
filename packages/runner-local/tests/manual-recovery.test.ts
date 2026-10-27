@@ -124,3 +124,52 @@ it("shutdown cancellation aborts active work before claiming another task", asyn
   expect((await store.tasks.getTask("active"))?.status).toBe("cancelled");
   expect((await store.tasks.getTask("next"))?.status).toBe("queued");
 });
+
+it("a typed worker interruption parks without retry or user cancellation", async () => {
+  const { TaskInterruptedError } = await import("@agentkit/host");
+  const store = new MemoryAssistantStore();
+  const runner = new SingleProcessTaskRunner({ store, pollMs: 1 });
+  await store.tasks.createTask({
+    taskId: "sleep",
+    scopeId: "scope",
+    kind: "work",
+    payload: {},
+  });
+  let calls = 0;
+  const handle = await runner.startWorker({
+    execute: async () => {
+      calls++;
+      throw new TaskInterruptedError({
+        code: "LOCAL_RUNTIME_SYSTEM_SLEEP",
+        message: "System sleep",
+      });
+    },
+  });
+  try {
+    await waitFor(
+      async () =>
+        (await store.tasks.getTask("sleep"))?.status === "interrupted",
+      "worker interruption",
+    );
+    expect(calls).toBe(1);
+    expect([...store.tasks.attempts.values()][0]?.status).toBe("cancelled");
+    expect(await store.tasks.listEvents("sleep")).toEqual([]);
+  } finally {
+    await handle.stop();
+  }
+});
+
+it("committed user cancellation remains authoritative after interruption", async () => {
+  const store = new MemoryAssistantStore();
+  const runner = new SingleProcessTaskRunner({ store });
+  await store.tasks.createTask({
+    taskId: "cancel",
+    scopeId: "scope",
+    kind: "work",
+    payload: {},
+  });
+  await runner.requestCancel("cancel");
+  await runner.requestInterrupt("cancel", { code: "SLEEP", message: "Sleep" });
+  expect((await store.tasks.getTask("cancel"))?.status).toBe("cancelled");
+  expect([...store.tasks.attempts.values()]).toHaveLength(0);
+});

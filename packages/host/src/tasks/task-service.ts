@@ -5,7 +5,10 @@ import {
 } from "../errors.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { Clock, IdGenerator } from "../ports/system.js";
-import type { TaskRunner } from "../ports/task-runner.js";
+import type {
+  TaskInterruptionReason,
+  TaskRunner,
+} from "../ports/task-runner.js";
 import type { TaskRecord } from "../ports/task-store.js";
 
 export interface TaskServiceDeps {
@@ -124,14 +127,17 @@ export class TaskService {
   }
 
   /** Resumable stop of a task: it parks `interrupted` and `resumeTask` continues it. */
-  async interruptTask(taskId: string): Promise<void> {
+  async interruptTask(
+    taskId: string,
+    reason?: TaskInterruptionReason,
+  ): Promise<void> {
     if (!this.deps.taskRunner.requestInterrupt) {
       throw new AgentKitHostError(
         "interrupt_unsupported",
         "This task runner does not support interrupt.",
       );
     }
-    await this.deps.taskRunner.requestInterrupt(taskId);
+    await this.deps.taskRunner.requestInterrupt(taskId, reason);
   }
 
   /**

@@ -6,7 +6,14 @@ import {
   MAX_RESPONSES_ITEMS,
   object,
   responsesError,
+  type ResponsesErrorDiagnostic,
 } from "./responses-types.js";
+
+import {
+  classifyResponseError,
+  responseErrorDiagnostic,
+} from "./responses-errors.js";
+export { classifyResponseError } from "./responses-errors.js";
 
 interface ItemState {
   id: string;
@@ -27,6 +34,17 @@ export interface ResponsesResult {
 
 /** Assemblers are keyed by both index and item id; neither may be rebound. */
 export class ResponsesStreamState {
+  constructor(private readonly allowEmptyTerminalOutput = false) {}
+
+  private metadata: Pick<ResponsesErrorDiagnostic, "httpStatus" | "requestId"> =
+    {};
+
+  setResponseMetadata(
+    metadata: Pick<ResponsesErrorDiagnostic, "httpStatus" | "requestId">,
+  ): void {
+    this.metadata = metadata;
+  }
+
   private readonly byIndex = new Map<number, ItemState>();
   private readonly byId = new Map<string, ItemState>();
   private terminal?: Record<string, unknown>;
@@ -54,11 +72,17 @@ export class ResponsesStreamState {
         event.type === "error"
           ? event
           : object(object(event.response).error ?? {});
-      responsesError(classifyResponseError(error.code));
+      const code = classifyResponseError(error.code);
+      responsesError(
+        code,
+        responseErrorDiagnostic(error, "sse", code, this.metadata),
+      );
     }
     if (event.type === "response.incomplete")
       responsesError("response_incomplete");
     if (this.terminal) responsesError("event_after_terminal");
+    // Live SIWC metadata is advisory and must never change output or terminal state.
+    if (event.type === "response.metadata") return undefined;
     if (event.type === "response.completed") {
       this.terminal = object(event.response);
       if (
@@ -110,7 +134,7 @@ export class ResponsesStreamState {
     ) {
       responsesError("malformed_response");
     }
-    const output = this.terminal.output.map(object);
+    const output = this.completedOutput(this.terminal.output.map(object));
     this.reconcile(output);
     const calls: AiToolCall[] = [];
     const ids = new Set<string>();
@@ -134,6 +158,26 @@ export class ResponsesStreamState {
       tools: calls,
       ...(this.terminal.usage ? { usage: object(this.terminal.usage) } : {}),
     };
+  }
+
+  private completedOutput(
+    output: Record<string, unknown>[],
+  ): Record<string, unknown>[] {
+    if (output.length || !this.allowEmptyTerminalOutput || !this.byIndex.size)
+      return output;
+    // SIWC can omit terminal output; only authoritative, contiguous done items replace it.
+    return [...this.byIndex.values()]
+      .sort((left, right) => left.index - right.index)
+      .map((state, index) => {
+        if (state.index !== index || !state.done)
+          responsesError("missing_output_item");
+        if (
+          state.item.type !== "reasoning" &&
+          state.item.status !== "completed"
+        )
+          responsesError("response_incomplete");
+        return state.item;
+      });
   }
 
   private auxiliary(event: Record<string, unknown>): void {
@@ -380,36 +424,4 @@ function validateOutput(item: Record<string, unknown>): void {
   ) {
     responsesError("continuation_required");
   }
-}
-
-export function classifyResponseError(value: unknown): string {
-  if (
-    value === "subscription_sharing_usage_limit_exceeded" ||
-    value === "subscription_sharing_usage_unavailable"
-  ) {
-    return "usage_limit";
-  }
-  if (
-    value === "subscription_sharing_invalid_user" ||
-    value === "invalid_api_key" ||
-    value === "token_expired" ||
-    value === "authentication_error"
-  )
-    return "authentication_required";
-  if (
-    value === "chatpass_v2_scope_not_authorized" ||
-    value === "chatpass_v2_invalid_authorization_context" ||
-    value === "subscription_sharing_consent_required" ||
-    value === "consent_required" ||
-    value === "insufficient_scope"
-  ) {
-    return "consent_required";
-  }
-  if (value === "subscription_sharing_user_not_eligible")
-    return "permission_denied";
-  if (value === "subscription_sharing_unsupported_capability")
-    return "unsupported_parameter";
-  if (value === "subscription_sharing_route_not_supported")
-    return "unsupported_route";
-  return "provider_error";
 }

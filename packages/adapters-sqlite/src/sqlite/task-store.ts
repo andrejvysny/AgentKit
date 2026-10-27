@@ -325,6 +325,29 @@ export class SqliteTaskStore implements TaskStore {
     }, this.txOwner);
   }
 
+  async interruptTask(
+    taskId: string,
+    reason: string,
+    opts?: FencedWriteOptions,
+  ): Promise<boolean> {
+    return this.conn.whenFree(() => {
+      if (opts?.leaseToken !== undefined)
+        this.assertLeaseCurrent(taskId, opts.leaseToken);
+      const params = { $id: taskId, $reason: reason };
+      const changed = this.conn.run(
+        "UPDATE tasks SET status = 'interrupted', error = $reason WHERE task_id = $id AND status IN ('queued', 'running')",
+        params,
+      ).changes;
+      if (!changed) return false;
+      this.conn.run(
+        "UPDATE task_attempts SET status = 'cancelled', error = $reason, ended_at = $now WHERE task_id = $id AND status = 'running'",
+        { ...params, $now: this.clock.nowIso() },
+      );
+      this.conn.run("DELETE FROM leases WHERE task_id = $id", { $id: taskId });
+      return true;
+    }, this.txOwner);
+  }
+
   async interruptQueued(before: string): Promise<number> {
     const instant = normalizeInstant(before, "before");
     return this.conn.whenFree(

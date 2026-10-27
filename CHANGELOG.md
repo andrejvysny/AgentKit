@@ -2,6 +2,20 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**One interrupt API, OneMind runtime fixes upstreamed.** The OneMind candidate patches `onemind.4`–`onemind.10` are
+now in source, merged with the M7 resumable interrupt.
+
+- `TaskRunner.requestInterrupt(taskId, reason?)`, `TaskService.interruptTask(taskId, reason?)` and
+  `AgentSessionService.interrupt(sessionId, turnId, reason?)`. `TaskInterruptedError` (carries the reason) extends
+  `ExecutionInterruptedError`. The parked task's `error` is the JSON reason.
+- `SingleProcessTaskRunner` `interruptionMode`: `after_execution` (default, cooperative: lease and slot are held until
+  the executor settles) or `immediate` (atomic store-first park through the new optional `TaskStore.interruptTask`,
+  implemented by the memory and SQLite adapters). Stores without `interruptTask` park through fenced transitions.
+- Runner shutdown awaits the pending claim pass; a claim returned after stop is fenced-settled without dispatch.
+  Queued interruption is a queued-only compare-and-set that cannot revoke a racing claim's lease.
+- Responses: SIWC error recovery classification, inert `response.metadata` events, and account-profile empty terminal
+  output recovered from completed output items.
+
 **Coding tool pack hardening** ([ADR 0018](docs/adr/0018-coding-tool-pack.md)).
 
 - `git_inspect` neutralizes repository-defined filter, textconv and external-diff drivers, pagers and ssh/askpass
