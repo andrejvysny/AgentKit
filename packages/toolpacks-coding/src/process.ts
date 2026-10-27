@@ -9,12 +9,21 @@
  * Copyright (c) 2025 Mario Zechner. MIT License.
  * Changes: SIGSTOP the group before SIGKILL so it cannot fork during the
  * kill; no Windows branch (macOS-first); streaming accumulator rewritten.
+ * `terminate` is new: marker-based descendant discovery, TERM then KILL,
+ * survivor report.
  */
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { type WriteStream, createWriteStream } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CodingLimits } from "./limits.js";
+import {
+  EXEC_ID_ENV,
+  findMarkedProcesses,
+  scanMarked,
+  TreeTracker,
+} from "./process-tree.js";
 import { formatSize, truncateTail } from "./truncate.js";
 
 /** Kill `pid` and every process in its group. */
@@ -59,6 +68,128 @@ export interface RunResult {
   timedOut: boolean;
   aborted: boolean;
   spawnError?: string | undefined;
+  teardown: Teardown;
+}
+
+/** What the teardown of one command found and had to do. */
+export interface Teardown {
+  /** True when SIGTERM was not enough and SIGKILL was sent. */
+  escalated: boolean;
+  /** Marked pids still alive after SIGKILL. */
+  survivors: number[];
+  /** "unsupported": descendants outside the group could not be looked for. */
+  scan: "ok" | "unsupported";
+}
+
+const KILL_GRACE_CAP_MS = 10_000;
+const SURVIVOR_WAIT_MS = 500;
+const POLL_MS = 25;
+
+function signalPid(pid: number, sig: NodeJS.Signals): void {
+  try {
+    process.kill(pid, sig);
+  } catch {
+    // already gone
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+
+interface TerminateSpec {
+  /** Process group to signal; undefined when only marked pids are known. */
+  pgid?: number | undefined;
+  find: () => Promise<number[] | null>;
+  graceMs: number;
+}
+
+/**
+ * SIGTERM the group and every marked pid, wait `graceMs`, SIGKILL what is
+ * left, then report what still lives. `seen` counts distinct marked pids.
+ */
+async function terminate(
+  spec: TerminateSpec,
+): Promise<Teardown & { seen: number }> {
+  const known = new Set<number>();
+  let scan: Teardown["scan"] = "ok";
+  const refresh = async () => {
+    const pids = await spec.find();
+    if (pids === null) scan = "unsupported";
+    else for (const pid of pids) known.add(pid);
+  };
+  const signalAll = (sig: NodeJS.Signals) => {
+    if (spec.pgid !== undefined) signalPid(-spec.pgid, sig);
+    for (const pid of known) signalPid(pid, sig);
+  };
+  const remaining = () =>
+    (spec.pgid !== undefined && pidAlive(-spec.pgid)) ||
+    [...known].some(pidAlive);
+
+  await refresh();
+  if (known.size === 0 && !remaining())
+    return { escalated: false, survivors: [], scan, seen: 0 };
+  // Freeze first so nothing can fork between discovery and the signal; rescan
+  // until the set stops growing. A stopped process only sees SIGTERM once
+  // continued, hence the SIGCONT.
+  for (let i = 0; i < 3; i++) {
+    signalAll("SIGSTOP");
+    const before = known.size;
+    await refresh();
+    if (known.size === before) break;
+  }
+  signalAll("SIGTERM");
+  signalAll("SIGCONT");
+  const deadline = Date.now() + spec.graceMs;
+  while (remaining() && Date.now() < deadline) await sleep(POLL_MS);
+  const escalated = remaining();
+  if (escalated) {
+    await refresh();
+    signalAll("SIGKILL");
+    const end = Date.now() + SURVIVOR_WAIT_MS;
+    while (remaining() && Date.now() < end) await sleep(POLL_MS);
+  }
+  let survivors = [...known].filter(pidAlive);
+  if (survivors.length > 0 && scan === "ok") {
+    // A zombie nobody reaped still answers kill(pid, 0) but has no
+    // environment to find; only a process the scan still sees is a survivor.
+    const live = await spec.find();
+    if (live) survivors = survivors.filter((pid) => live.includes(pid));
+  }
+  return { escalated, survivors, scan, seen: known.size };
+}
+
+/**
+ * Kill commands left behind by agent processes that no longer exist (a crash
+ * skips every teardown). Best effort, never throws; returns how many marked
+ * processes it found. Call once at boot. A recycled owner pid hides its
+ * orphans until that pid is free again.
+ */
+export async function sweepOrphans(
+  options: { graceMs?: number } = {},
+): Promise<number> {
+  try {
+    const find = async () => {
+      const all = await scanMarked();
+      return all
+        ? all.filter((m) => !pidAlive(m.ownerPid)).map((m) => m.pid)
+        : null;
+    };
+    const { seen } = await terminate({
+      find,
+      graceMs: Math.min(options.graceMs ?? 2000, KILL_GRACE_CAP_MS),
+    });
+    return seen;
+  } catch {
+    return 0;
+  }
 }
 
 /** Keeps a bounded tail in memory; spills the full stream to a scratch file. */
@@ -138,10 +269,13 @@ function describeTruncation(
 export async function runBounded(spec: RunSpec): Promise<RunResult> {
   const tail = new Tail(spec.limits, spec.scratch, spec.logName);
   let child: ChildProcess;
+  // Inherited by every descendant, which is how teardown and the crash sweep
+  // find the ones that left the process group.
+  const execId = `${process.pid}:${randomUUID()}`;
   try {
     child = spawn(spec.file, spec.args, {
       cwd: spec.cwd,
-      env: spec.env,
+      env: { ...spec.env, [EXEC_ID_ENV]: execId },
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -153,16 +287,42 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
   let exitCode: number | null = null;
   let exitSignal: NodeJS.Signals | null = null;
   let spawnError: string | undefined;
-  const kill = () => {
-    if (child.pid !== undefined) killProcessTree(child.pid);
+  // The marker misses Apple-signed binaries on macOS, so sample the tree too.
+  const tracker =
+    process.platform === "darwin" && child.pid !== undefined
+      ? new TreeTracker(child.pid)
+      : undefined;
+  tracker?.start();
+  const find = async (): Promise<number[] | null> => {
+    const [marked, tracked] = await Promise.all([
+      findMarkedProcesses(execId),
+      tracker ? tracker.sample() : Promise.resolve([]),
+    ]);
+    if (marked === null && tracked === null) return null;
+    return [...new Set([...(marked ?? []), ...(tracked ?? [])])];
+  };
+  let teardownRun: Promise<Teardown> | undefined;
+  const tearDown = (): Promise<Teardown> => {
+    teardownRun ??= terminate({
+      pgid: child.pid,
+      find,
+      graceMs: Math.min(spec.limits.commandKillGraceMs, KILL_GRACE_CAP_MS),
+    })
+      .then(({ escalated, survivors, scan }) => ({
+        escalated,
+        survivors,
+        scan,
+      }))
+      .finally(() => tracker?.stop());
+    return teardownRun;
   };
   const timer = setTimeout(() => {
     timedOut = true;
-    kill();
+    void tearDown();
   }, spec.timeoutMs);
   const onAbort = () => {
     aborted = true;
-    kill();
+    void tearDown();
   };
   if (spec.signal?.aborted) onAbort();
   else spec.signal?.addEventListener("abort", onAbort, { once: true });
@@ -188,7 +348,7 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
       if (grace) clearTimeout(grace);
       grace = setTimeout(
         () => {
-          kill();
+          void tearDown();
           child.stdout?.destroy();
           child.stderr?.destroy();
           finish();
@@ -213,7 +373,7 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
   clearTimeout(timer);
   spec.signal?.removeEventListener("abort", onAbort);
   // Sweep stragglers left by a command that exited with children alive.
-  kill();
+  const teardown = await tearDown();
 
   const collected = await tail.finish();
   const cut = truncateTail(collected.text, {
@@ -243,6 +403,7 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
     timedOut,
     aborted,
     spawnError,
+    teardown,
   };
   return result;
 
@@ -256,6 +417,7 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
       timedOut: false,
       aborted: false,
       spawnError: error instanceof Error ? error.message : String(error),
+      teardown: { escalated: false, survivors: [], scan: "ok" },
     };
   }
 }

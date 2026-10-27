@@ -64,7 +64,10 @@ export interface CodingLimits {
   commandTailMaxBytes: number;
   /** run_command / run_tests: bytes of the full log kept in scratch. */
   commandMaxLogBytes: number;
-  /** run_command / run_tests: wait after a kill before giving up on pipes. */
+  /**
+   * run_command / run_tests: wait after SIGTERM before SIGKILL, and after a
+   * kill before giving up on pipes. Capped at 10000.
+   */
   commandKillGraceMs: number;
   /** Per-tool `timeoutMs` advertised to the run loop for cheap tools. */
   toolTimeoutMs: number;
