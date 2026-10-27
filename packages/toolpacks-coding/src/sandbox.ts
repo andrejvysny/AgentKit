@@ -6,8 +6,9 @@
  * `SAFE_PATH`, denied read roots, credential patterns, toolchain dirs).
  * Copyright (c) 2026 OneMind contributors. MIT License.
  * Changes: the workspace root is writable (OneMind's shell is read-only),
- * network is opt-in, `.git/hooks` and `.git/config` stay read-only so a
- * command cannot plant a hook that later runs unsandboxed.
+ * network is opt-in, `.git` is read-only (hooks and config only, with
+ * allowGitWrites) so a command cannot plant a hook or driver that later runs
+ * unsandboxed.
  */
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -28,7 +29,11 @@ const DENIED_READ_ROOTS = [
 const CREDENTIAL_PATTERNS = [
   "/\\.(netrc|npmrc|pypirc|git-credentials)$",
   "/\\.cargo/credentials(\\.toml)?$",
-  "/\\.(ssh|aws|gnupg|kube|docker)(/|$)",
+  "/\\.(ssh|aws|gnupg|kube|docker|azure|terraform\\.d|password-store)(/|$)",
+  "/\\.pgpass$",
+  "/\\.config/(gh|gcloud|hub)(/|$)",
+  "/\\.local/share/keyrings(/|$)",
+  "/Library/(Keychains|Cookies)(/|$)",
 ];
 const TOOLCHAIN_DIRS = [
   ".rustup",
@@ -48,6 +53,8 @@ export interface SandboxPolicy {
   root: string;
   scratch: string;
   network: boolean;
+  /** False: the whole `.git` subtree is read-only; true: only hooks and config are. */
+  allowGitWrites: boolean;
   /** Extra absolute canonical directories the command may read. */
   readable: readonly string[];
 }
@@ -71,10 +78,11 @@ export function sandboxProfile(policy: SandboxPolicy): string {
       "a path needed by the sandbox profile contains characters outside [A-Za-z0-9._/-]; refusing to build the profile",
     );
   const subpath = (path: string) => `(subpath "${path}")`;
-  const gitGuards = [
-    join(policy.root, ".git", "hooks"),
-    join(policy.root, ".git", "config"),
-  ];
+  // Config, hooks, attributes, refs and objects all steer later unsandboxed
+  // git runs, so the default is to fence the whole subtree.
+  const gitGuards = policy.allowGitWrites
+    ? [join(policy.root, ".git", "hooks"), join(policy.root, ".git", "config")]
+    : [join(policy.root, ".git")];
   return (
     "(version 1)(allow default)" +
     (policy.network ? "" : "(deny network*)") +

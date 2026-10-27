@@ -11,14 +11,72 @@ type GitCommand = (typeof COMMANDS)[number];
 
 const REV_PATTERN = /^[A-Za-z0-9_./~^-]{1,100}$/;
 
-/** Config that keeps git from running anything the repository supplies. */
+/**
+ * Config that keeps git from running anything the repository supplies. Filter
+ * and textconv drivers are named by the repository, so they are neutralized
+ * per driver in `driverOverrides`; these are the ones with a fixed name.
+ * `diff.external=` is inert only together with `--no-ext-diff`, which every
+ * diff-capable command below passes.
+ */
 export const GIT_SAFETY_ARGS: readonly string[] = [
   "--no-pager",
   "-c",
   "core.hooksPath=/dev/null",
   "-c",
   "core.fsmonitor=false",
+  "-c",
+  "core.sshCommand=false",
+  "-c",
+  "core.pager=cat",
+  "-c",
+  "diff.external=",
+  "-c",
+  "log.showSignature=false",
 ];
+
+const DRIVER_KEY =
+  /^(filter|diff)\.(.+)\.(clean|smudge|process|textconv|command)$/;
+const DRIVER_KEY_REGEXP =
+  "^(filter|diff)\\..*\\.(clean|smudge|process|textconv|command)$";
+
+/**
+ * Per-driver overrides for every filter/diff driver the repository config
+ * defines. An empty `process` disables the long-running filter (git skips it
+ * and falls back to clean/smudge, which are `cat`); an empty `textconv` or
+ * `command` is likewise inert once --no-textconv/--no-ext-diff are passed.
+ */
+export function driverOverrides(keys: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const key of keys) {
+    const m = DRIVER_KEY.exec(key);
+    if (!m) continue;
+    const [, section, name] = m;
+    // -c splits on the first "=", so such a name cannot be overridden safely.
+    if (!name || name.includes("=") || [...name].some((c) => c < " "))
+      throw new CodingError(
+        "git_config_unreadable",
+        "a git driver name in the repository config cannot be neutralized",
+      );
+    const id = `${section}.${name}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (section === "filter")
+      out.push(
+        "-c",
+        `filter.${name}.clean=cat`,
+        "-c",
+        `filter.${name}.smudge=cat`,
+        "-c",
+        `filter.${name}.process=`,
+        "-c",
+        `filter.${name}.required=false`,
+      );
+    else
+      out.push("-c", `diff.${name}.textconv=`, "-c", `diff.${name}.command=`);
+  }
+  return out;
+}
 
 export interface GitInvocation {
   command: GitCommand;
@@ -33,8 +91,9 @@ export function buildGitArgs(
   root: string,
   call: GitInvocation,
   excludeSensitive: boolean,
+  overrides: readonly string[] = [],
 ): string[] {
-  const args = ["-C", root, ...GIT_SAFETY_ARGS];
+  const args = ["-C", root, ...GIT_SAFETY_ARGS, ...overrides];
   const pathspec = (): string[] => {
     const tail =
       call.path !== undefined || excludeSensitive
@@ -59,6 +118,8 @@ export function buildGitArgs(
         "log",
         "--no-color",
         "--date=short",
+        "--no-ext-diff",
+        "--no-textconv",
         "--format=%h %ad %an %s",
         `--max-count=${call.maxCount ?? 20}`,
       );
@@ -87,6 +148,23 @@ interface GitRun {
   timedOut: boolean;
 }
 
+/** Fixed env: no user config, no prompts, no pager, no external helpers. */
+function gitEnv(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env["PATH"] ?? "",
+    HOME: process.env["HOME"] ?? "",
+    LANG: process.env["LANG"] ?? "C",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_PAGER: "cat",
+    GIT_EXTERNAL_DIFF: "",
+    GIT_ASKPASS: "false",
+    SSH_ASKPASS: "false",
+  };
+}
+
 function runGit(
   args: string[],
   cap: number,
@@ -102,15 +180,7 @@ function runGit(
         maxBuffer: cap * 4,
         timeout: timeoutMs,
         ...(signal ? { signal } : {}),
-        env: {
-          PATH: process.env["PATH"] ?? "",
-          HOME: process.env["HOME"] ?? "",
-          LANG: process.env["LANG"] ?? "C",
-          GIT_TERMINAL_PROMPT: "0",
-          GIT_OPTIONAL_LOCKS: "0",
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_CONFIG_GLOBAL: "/dev/null",
-        },
+        env: gitEnv(),
       },
       (error, stdout, stderr) => {
         const e = error as
@@ -128,6 +198,39 @@ function runGit(
   });
 }
 
+/**
+ * Names of every filter/diff driver the repository config (includes
+ * honored) defines. Fails closed: if git cannot list them, nothing runs.
+ */
+async function configuredDrivers(
+  root: string,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<string[]> {
+  const run = await runGit(
+    [
+      "-C",
+      root,
+      ...GIT_SAFETY_ARGS,
+      "config",
+      "-z",
+      "--name-only",
+      "--get-regexp",
+      DRIVER_KEY_REGEXP,
+    ],
+    1 << 20,
+    timeoutMs,
+    signal,
+  );
+  // Exit 1 means "no matching key"; anything else is an unreadable config.
+  if (run.timedOut || run.capped || (run.code !== 0 && run.code !== 1))
+    throw new CodingError(
+      "git_config_unreadable",
+      `could not enumerate git drivers: ${run.stderr.trim().slice(0, 300) || `exit ${run.code}`}`,
+    );
+  return run.stdout.split("\0").filter((key) => key.length > 0);
+}
+
 export function gitInspectTool(env: PackEnv): AiTool {
   const l = env.limits;
   return defineTool(
@@ -135,7 +238,7 @@ export function gitInspectTool(env: PackEnv): AiTool {
       name: "git_inspect",
       effect: "read",
       capability: "git.read",
-      description: `Read-only git inspection: status, diff (staged or not), log, show. Fixed commands only; no hooks run. Output is capped at ${formatSize(l.gitMaxOutputBytes)}. Prefer this over running git through a shell.`,
+      description: `Read-only git inspection: status, diff (staged or not), log, show. Fixed commands only. Hooks, fsmonitor, filter/textconv/external-diff drivers, pager and ssh/askpass helpers configured by the repository are neutralized and never run; if the repository config cannot be read the call is refused. Output is capped at ${formatSize(l.gitMaxOutputBytes)}. Prefer this over running git through a shell.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -204,8 +307,11 @@ export function gitInspectTool(env: PackEnv): AiTool {
         maxCount: optInt(args, "maxCount", 1, l.gitMaxCount),
         rev,
       };
+      const drivers = await configuredDrivers(root, l.gitTimeoutMs, ctx.signal);
+      if (ctx.signal?.aborted)
+        throw new CodingError("aborted", "the call was aborted");
       const run = await runGit(
-        buildGitArgs(root, call, !env.allowSensitive),
+        buildGitArgs(root, call, !env.allowSensitive, driverOverrides(drivers)),
         l.gitMaxOutputBytes,
         l.gitTimeoutMs,
         ctx.signal,

@@ -52,6 +52,12 @@ export interface CodingToolPackOptions {
   network?: boolean;
   /** Exact command strings `run_tests` may run, e.g. ["bun test"]. */
   testCommands?: readonly string[];
+  /**
+   * Default false: the sandbox denies every write under `<root>/.git`, so a
+   * command cannot plant config, hooks or refs that later run unsandboxed.
+   * When true, git state is writable but `.git/hooks` and `.git/config` stay denied.
+   */
+  allowGitWrites?: boolean;
   /** Default false: credential-like paths are refused for read and write. */
   allowSensitive?: boolean;
   limits?: Partial<CodingLimits>;
