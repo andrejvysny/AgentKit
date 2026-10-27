@@ -25,6 +25,35 @@ export interface AnswerOutcome {
   enqueue?: { taskId: string; scopeId: string };
 }
 
+/** Marks an approve answer in `appliedMessageId`: no tool record backs it. */
+const APPROVE_MARKER = "approval:";
+
+type ApprovalDecision = "approve" | "deny";
+
+function isApprovalRequest(content: unknown): boolean {
+  return (content as { kind?: unknown } | null)?.kind === "approval";
+}
+
+/** `{ decision, note? }` only; anything else is `invalid_input`. */
+function readDecision(
+  response: unknown,
+  requestId: string,
+): { decision: ApprovalDecision; note?: string } {
+  const bad = (): never => {
+    throw new AgentKitHostError(
+      "invalid_input",
+      'An approval answer must be { decision: "approve" | "deny", note?: string }.',
+      { requestId },
+    );
+  };
+  if (typeof response !== "object" || response === null) return bad();
+  const { decision, note, ...rest } = response as Record<string, unknown>;
+  if (decision !== "approve" && decision !== "deny") return bad();
+  if (Object.keys(rest).length > 0) return bad();
+  if (note !== undefined && typeof note !== "string") return bad();
+  return { decision, ...(note === undefined ? {} : { note }) };
+}
+
 function toolName(content: unknown): string {
   const name = (content as { toolName?: unknown } | null)?.toolName;
   return typeof name === "string" ? name : "request_user_input";
@@ -51,14 +80,29 @@ export async function answerHumanRequest(
   const responseHash = await sha256Hex(serialized);
   const now = deps.clock.nowIso();
   const messageId = deps.ids.messageId();
-  const envelopeJson = JSON.stringify({
-    ok: true,
-    status: "ok",
-    summary: "The user answered.",
-    warnings: [],
-    truncated: false,
-    data: { answer: input.response },
-  });
+  const answerEnvelope = (response: unknown): string =>
+    JSON.stringify({
+      ok: true,
+      status: "ok",
+      summary: "The user answered.",
+      warnings: [],
+      truncated: false,
+      data: { answer: response },
+    });
+  const denyEnvelope = (note: string | undefined): string =>
+    JSON.stringify({
+      ok: false,
+      status: "error",
+      summary: "The user denied this tool call.",
+      warnings: [],
+      truncated: false,
+      data: {
+        errorCode: "approval_denied",
+        errorMessage: note ?? "The user denied this tool call.",
+        phase: "guard",
+        retryable: false,
+      },
+    });
 
   return deps.store.transaction(async (tx) => {
     const inputs = tx.inputs;
@@ -69,6 +113,13 @@ export async function answerHumanRequest(
       throw new RecordNotFoundError(`Human request not found: ${requestId}`, {
         requestId,
       });
+    const approval = isApprovalRequest(request.content)
+      ? readDecision(input.response, requestId)
+      : undefined;
+    const envelopeJson =
+      approval === undefined
+        ? answerEnvelope(input.response)
+        : denyEnvelope(approval.note);
     const taskId = request.targetTaskId;
     const stale = (reason: string): AnswerStaleError =>
       new AnswerStaleError(
@@ -81,6 +132,32 @@ export async function answerHumanRequest(
     if (taskId === undefined) throw stale("it names no turn");
     const task = await tx.tasks.getTask(taskId);
 
+    if (
+      request.status === "answered" &&
+      request.appliedMessageId?.startsWith(APPROVE_MARKER)
+    ) {
+      // An approve has no tool record: the marker carries the response hash.
+      if (
+        request.answerId !== answerId ||
+        request.appliedMessageId !== `${APPROVE_MARKER}${responseHash}`
+      )
+        throw new AnswerConflictError(
+          `Request ${requestId} was already answered differently.`,
+          { requestId },
+        );
+      return {
+        receipt: {
+          requestId,
+          answerId,
+          turnId: taskId,
+          messageId: "",
+          duplicate: true,
+        },
+        ...(task?.status === "queued"
+          ? { enqueue: { taskId, scopeId: request.sessionId } }
+          : {}),
+      };
+    }
     if (request.status === "answered") {
       const recorded = request.appliedMessageId
         ? await tx.conversations.getMessage(request.appliedMessageId)
@@ -157,6 +234,35 @@ export async function answerHumanRequest(
       Date.parse(request.expiresAt) <= Date.parse(now)
     )
       throw stale("it expired");
+
+    if (approval?.decision === "approve") {
+      try {
+        await tx.tasks.transitionTask(taskId, ["waiting_approval"], "queued", {
+          availableAt: now,
+        });
+        await inputs.transitionInput(requestId, ["pending"], "answered", {
+          answerId,
+          appliedMessageId: `${APPROVE_MARKER}${responseHash}`,
+        });
+      } catch (error) {
+        if (
+          error instanceof InvalidTaskTransitionError ||
+          error instanceof AgentInputTransitionError
+        )
+          throw stale("a concurrent answer or cancel won");
+        throw error;
+      }
+      return {
+        receipt: {
+          requestId,
+          answerId,
+          turnId: taskId,
+          messageId: "",
+          duplicate: false,
+        },
+        enqueue: { taskId, scopeId: request.sessionId },
+      };
+    }
 
     const last = await tx.conversations.lastMessageOfRun(
       request.sessionId,

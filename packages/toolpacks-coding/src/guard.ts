@@ -67,7 +67,11 @@ export function createCodingPermissionGuard(options: {
       if (MODE_ALLOWS[mode].includes(toolClass)) return { allowed: true };
       if (mode === "read_only")
         return { allowed: false, reason: `read_only: ${name} is not allowed` };
-      return { allowed: false, reason: `approval_required: ${name}` };
+      return {
+        allowed: false,
+        reason: `approval_required: ${name}`,
+        approval: {},
+      };
     },
   };
 }

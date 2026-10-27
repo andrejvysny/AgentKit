@@ -503,6 +503,18 @@ export const AiRunWaitingEventSchema = Type.Object({
     expiresAt: Type.Optional(
       Type.String({ description: "ISO-8601 expiry of the request." }),
     ),
+    kind: Type.Optional(
+      Type.Union([Type.Literal("input"), Type.Literal("approval")], {
+        description:
+          "`approval`: a human must approve this exact call (ADR 0019). Absent means `input`.",
+      }),
+    ),
+    argsSha256: Type.Optional(
+      Type.String({
+        description:
+          "Approval only: sha-256 hex of the call's canonical JSON arguments.",
+      }),
+    ),
   }),
 });
 export type AiRunWaitingEvent = Static<typeof AiRunWaitingEventSchema>;

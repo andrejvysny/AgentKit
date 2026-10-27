@@ -346,7 +346,11 @@ export async function assembleMessagesWithIds(
   chatId: string,
   assistantMessageId: string,
   systemPrompt: string | null,
-  options?: { policy?: HistoryPolicy },
+  options?: {
+    policy?: HistoryPolicy;
+    /** Calls awaiting an approved execution: left dangling, not reconciled. */
+    exceptToolCallIds?: ReadonlySet<string>;
+  },
 ): Promise<{ messages: AiChatMessage[]; recordIds: string[] }> {
   const records = await anchoredHistory(
     deps.store.conversations,
@@ -425,7 +429,10 @@ export async function assembleMessagesWithIds(
       });
     }
   }
-  const reconciled = reconcileOrphanToolCalls(messages);
+  const reconciled = reconcileOrphanToolCalls(
+    messages,
+    options?.exceptToolCallIds,
+  );
   const recordIds: string[] = [];
   let lastId = "";
   for (const message of reconciled) {

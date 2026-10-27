@@ -83,6 +83,7 @@ describe("CodingPermissionGuard", () => {
             expect(verdict).toEqual({
               allowed: false,
               reason: `approval_required: ${name}`,
+              approval: {},
             });
           else
             expect(verdict).toEqual({

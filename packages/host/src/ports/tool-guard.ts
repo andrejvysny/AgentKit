@@ -41,7 +41,16 @@ export interface ToolGuardContext {
 /** A refusal must say why: the reason is fed back to the model verbatim. */
 export type ToolGuardVerdict =
   | { allowed: true }
-  | { allowed: false; reason: string };
+  | {
+      allowed: false;
+      reason: string;
+      /**
+       * Set: a human may approve THIS exact call (ADR 0019). Absent: the
+       * refusal is final. Denial wins: one final refusal among several makes
+       * the call final, whatever the others say.
+       */
+      approval?: { preview?: string };
+    };
 
 /**
  * A policy that can hide a tool from the model, or refuse a call to it.

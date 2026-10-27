@@ -1,4 +1,8 @@
-import type { AiToolErrorData, AiToolResult } from "@agentkit/contracts";
+import type {
+  AiToolErrorData,
+  AiToolLimits,
+  AiToolResult,
+} from "@agentkit/contracts";
 import { AiToolRegistry, type AiTool } from "@agentkit/core";
 import { AgentKitHostError } from "../errors.js";
 import {
@@ -12,6 +16,7 @@ import type {
   ToolGuardContext,
   ToolGuardVerdict,
 } from "../ports/tool-guard.js";
+import { argsSha256Of } from "../sessions/hash.js";
 import { isHookTimeout, withHookDeadline } from "./hook-deadline.js";
 
 export interface StageRegistryInput {
@@ -292,6 +297,38 @@ async function isVisible(
   return true;
 }
 
+interface ApprovableRefusal {
+  reason: string;
+  preview?: string;
+}
+
+function refusal(
+  ctx: { limits: AiToolLimits },
+  reason: string,
+): AiToolResult<unknown> {
+  const data: AiToolErrorData = {
+    errorCode: TOOL_GUARD_REFUSED_CODE,
+    errorMessage: reason,
+    phase: "guard",
+    // A guard's answer is a decision, not a fault: repeating the same
+    // call gets the same "no". Whatever would change the verdict is not
+    // another attempt.
+    retryable: false,
+  };
+  return {
+    ok: false,
+    summary: reason,
+    data,
+    // The code IS the payload here — same object in both slots so it
+    // survives into the envelope the model reads.
+    modelData: data,
+    sources: [],
+    warnings: [],
+    truncated: false,
+    limits: ctx.limits,
+  };
+}
+
 /**
  * Wrap a tool so every call passes the guard chain first.
  *
@@ -315,6 +352,9 @@ function guarded(
 ): AiTool {
   const gates = guards.filter((guard) => guard.canExecute !== undefined);
   if (gates.length === 0) return tool;
+  // Call ids whose approval this wrapper (one per staged registry, so one per
+  // attempt) already spent.
+  const consumed = new Set<string>();
   return {
     definition: tool.definition,
     async execute(ctx, args): Promise<AiToolResult<unknown>> {
@@ -328,6 +368,7 @@ function guarded(
         return value;
       };
       freeze(snapshot);
+      const approvable: ApprovableRefusal[] = [];
       for (const guard of gates) {
         // A guard that throws REFUSES. Same reading as `isVisible`: a policy
         // hook that could not answer has not allowed anything. The reason is a
@@ -345,28 +386,39 @@ function guarded(
         } catch {
           verdict = { allowed: false, reason: TOOL_GUARD_ERROR_MESSAGE };
         }
-        if (!verdict.allowed) {
-          const data: AiToolErrorData = {
-            errorCode: TOOL_GUARD_REFUSED_CODE,
-            errorMessage: verdict.reason,
-            phase: "guard",
-            // A guard's answer is a decision, not a fault: repeating the same
-            // call gets the same "no". Whatever would change the verdict is not
-            // another attempt.
-            retryable: false,
-          };
-          return {
-            ok: false,
-            summary: verdict.reason,
-            data,
-            // The code IS the payload here — same object in both slots so it
-            // survives into the envelope the model reads.
-            modelData: data,
-            sources: [],
-            warnings: [],
-            truncated: false,
-            limits: ctx.limits,
-          };
+        if (verdict.allowed) continue;
+        // Denial wins: a refusal no human may overrule ends the call here,
+        // however many other guards would have accepted an approval.
+        if (verdict.approval === undefined) return refusal(ctx, verdict.reason);
+        approvable.push({ reason: verdict.reason, ...verdict.approval });
+      }
+      if (approvable.length > 0) {
+        const first = approvable[0] as ApprovableRefusal;
+        const toolCallId = ctx.toolCallId;
+        const argsSha256 = await argsSha256Of(snapshot);
+        const granted = ctx.metadata?.["approvedCalls"] as
+          | ReadonlyMap<string, string>
+          | undefined;
+        if (
+          toolCallId !== undefined &&
+          granted?.get(toolCallId) === argsSha256 &&
+          !consumed.has(toolCallId)
+        ) {
+          // One use: a second execute of the same call id in this attempt
+          // goes back to asking.
+          consumed.add(toolCallId);
+        } else if (ctx.suspend) {
+          ctx.suspend({
+            prompt:
+              approvable.find((r) => r.preview !== undefined)?.preview ??
+              `Approve ${guardCtx.tool.name}?`,
+            kind: "approval",
+            argsSha256,
+          });
+          // The core discards a suspended call's result.
+          return refusal(ctx, first.reason);
+        } else {
+          return refusal(ctx, first.reason);
         }
       }
       ctx.signal?.throwIfAborted();

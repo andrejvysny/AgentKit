@@ -32,6 +32,10 @@ export interface AgentSuspendRequest {
   prompt: string;
   /** ISO-8601 expiry of the request. */
   expiresAt?: string;
+  /** `approval` asks a human to approve this exact call (ADR 0019). Default `input`. */
+  kind?: "input" | "approval";
+  /** Approval only: sha-256 hex of the call's canonical JSON arguments. */
+  argsSha256?: string;
 }
 
 /** Deterministic, so a restarted attempt derives the same id for the same call. */
