@@ -72,7 +72,13 @@ export type AttemptBehavior =
    * `settleResolved`'s defensive branch exists for, which the runner then has
    * to finalize itself.
    */
-  | { kind: "quiet" };
+  | { kind: "quiet" }
+  /**
+   * Park the task on a human request the way a session turn does: transition
+   * `running → waiting_approval` and end the attempt `completed`, no terminal
+   * event, and return.
+   */
+  | { kind: "park" };
 
 export interface WorkerCall {
   taskId: string;
@@ -161,6 +167,20 @@ export class FakeWorker implements TaskWorker {
           return;
         case "quiet":
           await this.appendCompleted(taskId, attemptId, leaseToken);
+          return;
+        case "park":
+          await this.store.tasks.transitionTask(
+            taskId,
+            ["running"],
+            "waiting_approval",
+            {},
+            { leaseToken },
+          );
+          await this.store.tasks.endAttempt({
+            attemptId,
+            status: "completed",
+            leaseToken,
+          });
           return;
       }
     } finally {

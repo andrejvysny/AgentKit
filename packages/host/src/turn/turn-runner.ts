@@ -51,6 +51,7 @@ import type { UsageAuthorizer } from "../ports/usage-authorizer.js";
 import type { AssistantSettings } from "../ports/settings-store.js";
 import type { TaskStatus } from "../ports/task-store.js";
 import type { VerificationHook } from "../ports/verification.js";
+import { readSessionDescriptor } from "../sessions/descriptor.js";
 import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import { loadExecutableTask } from "../tasks/load-executable-task.js";
 import type {
@@ -86,6 +87,12 @@ import {
 import { createRunProjector, type RunProjector } from "./projection.js";
 import type { PassInput, PassResult, PassState } from "./pass-types.js";
 import { stageRegistry } from "./registry-staging.js";
+import {
+  hasUnansweredRequest,
+  parkTurn,
+  sessionSteering,
+  settleSessionInputs,
+} from "./session-turn.js";
 import {
   RETRY_MAX_TOOL_ITERATIONS,
   filterToolTurns,
@@ -677,6 +684,25 @@ export class TurnRunner implements TaskWorker {
       task.taskId,
     );
     if (resumed !== null) state.lastMessageId = resumed.id;
+    // Session mode: a chat opts in through its metadata, and only a store that
+    // keeps durable inputs can honour it. Anything else runs exactly as before.
+    const inputs = store.inputs;
+    const session =
+      inputs === undefined
+        ? undefined
+        : readSessionDescriptor(
+            (await store.conversations.getChat(chatId))?.metadata,
+          );
+    // Resume guard: a request nobody has answered means this attempt has
+    // nothing to continue with, so go back to waiting without a provider call.
+    if (
+      inputs !== undefined &&
+      session !== undefined &&
+      (await hasUnansweredRequest(inputs, chatId, task.taskId))
+    ) {
+      await parkTurn(store, ctx, assistantMessageId, state.content);
+      return;
+    }
     const assembled = await assembleMessages(
       this.deps,
       chatId,
@@ -727,7 +753,19 @@ export class TurnRunner implements TaskWorker {
       ...(this.deps.maxToolIterations === undefined
         ? {}
         : { maxToolIterations: this.deps.maxToolIterations }),
+      // The main pass only: recovery and correction passes must not steer or
+      // park, they re-ask a question the main pass already shaped.
+      ...(inputs === undefined || session === undefined
+        ? {}
+        : {
+            steering: sessionSteering(inputs, this.deps, chatId, task.taskId),
+            suspendable: true,
+          }),
     });
+    if (first.terminal === "suspended") {
+      await parkTurn(store, ctx, assistantMessageId, state.content);
+      return;
+    }
     let terminal: PassTerminal = first.terminal;
     // How many provider passes this run has made. The pass just run is 1; every
     // recovery and correction pass announces itself as the next number, so a
@@ -934,6 +972,7 @@ export class TurnRunner implements TaskWorker {
         : terminal === "cancelled"
           ? "cancelled"
           : "failed";
+    let nextTaskId: string | undefined;
     await store.transaction(async (tx) => {
       await fencedConversations(tx, ctx).updateMessage(assistantMessageId, {
         content: state.content,
@@ -955,7 +994,31 @@ export class TurnRunner implements TaskWorker {
         { finishedAt: clock.nowIso() },
         { leaseToken: ctx.leaseToken },
       );
+      // After the fenced task write, so a lost lease aborts before anything is
+      // converted (ADR 0016 §4).
+      if (session !== undefined)
+        nextTaskId = await settleSessionInputs(tx, this.deps, {
+          ctx,
+          chatId,
+          session,
+          status: finalStatus,
+          assistantMessageId,
+        });
     });
+    if (nextTaskId !== undefined) {
+      try {
+        await this.deps.taskRunner.enqueue({
+          taskId: nextTaskId,
+          scopeId: chatId,
+        });
+      } catch (error) {
+        // The task is durable and queued; the runner's own poll finds it.
+        this.deps.logger?.warn("could not enqueue the converted follow-up", {
+          taskId: nextTaskId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /**
@@ -1021,6 +1084,10 @@ export class TurnRunner implements TaskWorker {
       ...(this.deps.loopHookTimeoutMs === undefined
         ? {}
         : { hookTimeoutMs: this.deps.loopHookTimeoutMs }),
+      ...(input.steering === undefined ? {} : { steering: input.steering }),
+      ...(input.suspendable === undefined
+        ? {}
+        : { suspendable: input.suspendable }),
     });
 
     let failureCode: string | undefined;

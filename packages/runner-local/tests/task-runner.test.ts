@@ -657,3 +657,50 @@ describe("SingleProcessTaskRunner — the runner's own terminal block", () => {
     ]);
   });
 });
+
+describe("SingleProcessTaskRunner — parked tasks", () => {
+  it("leaves a waiting_approval task parked, then re-admits it with attempt 2", async () => {
+    const harness = createHarness();
+    await harness.seedTask("run-1");
+    harness.worker.script("run-1", [{ kind: "park" }, { kind: "complete" }]);
+    await start(harness, 1);
+
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
+    await waitFor(
+      async () => (await taskStatus(harness, "run-1")) === "waiting_approval",
+      "run-1 to park",
+    );
+    await settle();
+
+    // No redispatch, no failure, no poison: the park is a clean finish.
+    expect(harness.worker.callsFor("run-1").length).toBe(1);
+    expect(await taskStatus(harness, "run-1")).toBe("waiting_approval");
+    expect(harness.attemptsFor("run-1")).toEqual([
+      { status: "completed", attemptNumber: 1 },
+    ]);
+    expect((await harness.store.tasks.getTask("run-1"))?.poisonCount).toBe(0);
+
+    // A parked task holds no lease, so recovery has nothing to reconcile.
+    harness.clock.advance(10 * 60_000);
+    expect((await harness.runner.recoverWithReport()).expired).toBe(0);
+    expect(await taskStatus(harness, "run-1")).toBe("waiting_approval");
+    expect(harness.worker.callsFor("run-1").length).toBe(1);
+
+    // The answer path: requeue, poke, and the normal claim path runs attempt 2.
+    await harness.store.tasks.transitionTask(
+      "run-1",
+      ["waiting_approval"],
+      "queued",
+    );
+    await harness.runner.enqueue({ taskId: "run-1", scopeId: "chat-1" });
+    await waitFor(
+      async () => (await taskStatus(harness, "run-1")) === "completed",
+      "run-1 to complete on attempt 2",
+    );
+    expect(harness.worker.callsFor("run-1").length).toBe(2);
+    expect(harness.attemptsFor("run-1")).toEqual([
+      { status: "completed", attemptNumber: 1 },
+      { status: "completed", attemptNumber: 2 },
+    ]);
+  });
+});

@@ -6,6 +6,19 @@ function isInternalAssistant(record: MessageRecord): boolean {
 }
 
 /**
+ * A steer the loop placed between two model steps (ADR 0016 §3). It sits in
+ * the prefix so it keeps chat order relative to the tool results it followed,
+ * instead of being hoisted into the tail behind later tool-call groups.
+ */
+function isSteer(record: MessageRecord): boolean {
+  return (
+    record.role === "user" &&
+    record.metadata["internal"] === true &&
+    record.metadata["steering"] === true
+  );
+}
+
+/**
  * Records that must replay BEFORE the run's visible answer: the internal
  * assistant turns that requested tools, and the tool results answering them.
  *
@@ -15,7 +28,9 @@ function isInternalAssistant(record: MessageRecord): boolean {
  * this module exists to prevent.
  */
 function isReplayPrefix(record: MessageRecord): boolean {
-  return isInternalAssistant(record) || record.role === "tool";
+  return (
+    isInternalAssistant(record) || record.role === "tool" || isSteer(record)
+  );
 }
 
 /**
