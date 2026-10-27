@@ -31,6 +31,11 @@ export interface SessionContextOptions {
   reserveTokens?: number;
   /** Newest tokens left uncompacted when summarizing. Default 20000. */
   keepRecentTokens?: number;
+  /**
+   * Elision of old large tool results in the provider view (ADR 0017). Absent
+   * uses the defaults; `false` sends every result whole.
+   */
+  toolResultElision?: { keepRecentTurns?: number; maxChars?: number } | false;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -108,10 +113,12 @@ function readContext(raw: unknown): SessionContextOptions | null | undefined {
   const windowTokens = readPositiveInt(raw["windowTokens"]);
   const reserveTokens = readPositiveInt(raw["reserveTokens"]);
   const keepRecentTokens = readPositiveInt(raw["keepRecentTokens"]);
+  const toolResultElision = readElision(raw["toolResultElision"]);
   if (
     windowTokens === null ||
     reserveTokens === null ||
-    keepRecentTokens === null
+    keepRecentTokens === null ||
+    toolResultElision === null
   )
     return null;
   return {
@@ -119,6 +126,21 @@ function readContext(raw: unknown): SessionContextOptions | null | undefined {
     ...(windowTokens === undefined ? {} : { windowTokens }),
     ...(reserveTokens === undefined ? {} : { reserveTokens }),
     ...(keepRecentTokens === undefined ? {} : { keepRecentTokens }),
+    ...(toolResultElision === undefined ? {} : { toolResultElision }),
+  };
+}
+
+function readElision(
+  raw: unknown,
+): SessionContextOptions["toolResultElision"] | null | undefined {
+  if (raw === undefined || raw === false) return raw;
+  if (!isRecord(raw)) return null;
+  const keepRecentTurns = readPositiveInt(raw["keepRecentTurns"]);
+  const maxChars = readPositiveInt(raw["maxChars"]);
+  if (keepRecentTurns === null || maxChars === null) return null;
+  return {
+    ...(keepRecentTurns === undefined ? {} : { keepRecentTurns }),
+    ...(maxChars === undefined ? {} : { maxChars }),
   };
 }
 

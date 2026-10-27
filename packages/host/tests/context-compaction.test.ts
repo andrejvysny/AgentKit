@@ -14,6 +14,7 @@ import {
   SUMMARIZATION_SYSTEM_PROMPT,
   TaskService,
   TurnRunner,
+  createUserInputContributor,
   type ToolSetContributor,
 } from "../src/index.js";
 import { MemoryContextSummaryStore } from "../../adapters-memory/src/memory-context-summary-store.js";
@@ -47,12 +48,18 @@ interface Fixture extends TestHarness {
   chatId: string;
 }
 
+const BIG_FILE = `FILE-HEAD ${"y".repeat(50_000)} FILE-TAIL`;
+
 const SMALL_WINDOW = {
   context: { windowTokens: 4000, reserveTokens: 1000, keepRecentTokens: 1000 },
 };
 
 async function setup(
-  options: { session?: Record<string, unknown> | false } = {},
+  options: {
+    session?: Record<string, unknown> | false;
+    /** Adds a 50 KB `read_file` and the human-input tool. */
+    extras?: boolean;
+  } = {},
 ): Promise<Fixture> {
   const session = options.session ?? SMALL_WINDOW;
   const harness = createHarness();
@@ -83,9 +90,32 @@ async function setup(
       };
     },
   };
+  const readFile: AiTool<{ path?: string }, { text: string }> = {
+    definition: {
+      name: "read_file",
+      version: "1.0.0",
+      effect: "read",
+      capability: "read_file",
+      description: "Read a file.",
+      inputSchema: { type: "object", properties: { path: { type: "string" } } },
+    },
+    async execute(ctx) {
+      return {
+        ok: true as const,
+        data: { text: BIG_FILE },
+        sources: [],
+        warnings: [],
+        truncated: false,
+        limits: (ctx as unknown as { limits: never }).limits,
+      };
+    },
+  };
   const contributor: ToolSetContributor = {
     namespace: "test",
-    contribute: async () => [echo as AiTool],
+    contribute: async () =>
+      options.extras === true
+        ? [echo as AiTool, readFile as AiTool]
+        : [echo as AiTool],
   };
   await harness.store.providers.upsertProvider({
     id: "p1",
@@ -122,7 +152,10 @@ async function setup(
     store: harness.store,
     taskRunner: harness.taskRunner,
     providerFactory: () => mock,
-    contributors: [contributor],
+    contributors:
+      options.extras === true
+        ? [contributor, createUserInputContributor({ clock: harness.clock })]
+        : [contributor],
     clock: harness.clock,
     ids: harness.ids,
   });
@@ -477,5 +510,143 @@ describe("non-session chats", () => {
     expect(labels(f.mock.requests.at(-2) ?? [])).toContain(
       `user:${big("q1").slice(0, 18)}`,
     );
+  });
+});
+
+/** Claim a re-queued turn the way the task runner does, then run it. */
+async function resume(f: Fixture, taskId: string): Promise<void> {
+  await f.store.tasks.transitionTask(taskId, ["queued"], "running");
+  await drive(f, taskId);
+}
+
+const ROOMY = {
+  context: { windowTokens: 100_000, reserveTokens: 1000, keepRecentTokens: 5 },
+};
+
+describe("tool-result elision", () => {
+  const readThenAnswer = [
+    {
+      steps: [
+        {
+          kind: "tool_call" as const,
+          toolCallId: "read-1",
+          name: "read_file",
+          argumentsJson: '{"path":"a.ts"}',
+        },
+      ],
+    },
+    { steps: [{ kind: "text" as const, content: "answer 1" }] },
+  ];
+
+  async function toolRecords(f: Fixture) {
+    // Content only: the store flips `active` as the branch advances.
+    return f.store.conversations.messages
+      .filter((m) => m.role === "tool")
+      .map((m) => ({ id: m.id, content: m.content }));
+  }
+
+  it("sends an older turn's big result elided and leaves the stored record untouched", async () => {
+    const f = await setup({ session: ROOMY, extras: true });
+    f.mock.setScript([
+      ...readThenAnswer,
+      { steps: [{ kind: "text", content: "answer 2" }] },
+      { steps: [{ kind: "text", content: "answer 3" }] },
+    ]);
+    const first = await turn(f, "q1");
+    const stored = await toolRecords(f);
+    expect(stored).toHaveLength(1);
+    const before = JSON.stringify(stored);
+    expect(String(stored[0]?.content).length).toBeGreaterThan(6_000);
+
+    const second = await turn(f, "q2", { parent: first });
+    expect(JSON.stringify(f.mock.requests.at(-1)).length).toBeGreaterThan(
+      6_000,
+    );
+    await turn(f, "q3", { parent: second });
+
+    const request = f.mock.requests.at(-1) ?? [];
+    const sent = request.find((m) => m.role === "tool");
+    expect(String(sent?.content)).toContain(
+      "characters of an earlier tool result elided",
+    );
+    expect(String(sent?.content).length).toBeLessThan(4000);
+    expect(sent?.toolCallId).toBe("read-1");
+    expect(JSON.stringify(await toolRecords(f))).toBe(before);
+  });
+
+  it("sends results whole when the session disables elision", async () => {
+    const f = await setup({
+      session: { context: { ...ROOMY.context, toolResultElision: false } },
+      extras: true,
+    });
+    f.mock.setScript([
+      ...readThenAnswer,
+      { steps: [{ kind: "text", content: "answer 2" }] },
+      { steps: [{ kind: "text", content: "answer 3" }] },
+    ]);
+    let prev: Turn | undefined;
+    for (const q of ["q1", "q2", "q3"])
+      prev = await turn(f, q, prev ? { parent: prev } : {});
+    const sent = (f.mock.requests.at(-1) ?? []).find((m) => m.role === "tool");
+    expect(String(sent?.content).length).toBeGreaterThan(6_000);
+    expect(String(sent?.content)).not.toContain("elided");
+  });
+});
+
+describe("compaction and parked turns", () => {
+  const askThenDone = [
+    {
+      steps: [
+        {
+          kind: "tool_call" as const,
+          toolCallId: "ask-1",
+          name: "request_user_input",
+          argumentsJson: '{"prompt":"Pick one"}',
+        },
+      ],
+    },
+    { steps: [{ kind: "text" as const, content: "resumed answer" }] },
+  ];
+
+  it("keeps a pending question and the current turn across compaction", async () => {
+    const f = await setup({ session: ROOMY, extras: true });
+    f.mock.setScript([...scripts(2), ...askThenDone]);
+    let prev: Turn | undefined;
+    for (const n of [1, 2])
+      prev = await turn(f, `q${n}`, prev ? { parent: prev } : {});
+    await f.service.compact(f.chatId);
+
+    const parked = await turn(f, "need a decision", { parent: prev as Turn });
+    expect(f.mock.summaryRequests).toHaveLength(1);
+    expect(await f.summaries.listSummaries(f.chatId)).toHaveLength(1);
+
+    const state = await f.service.getState(f.chatId);
+    expect(state.activeTurn?.status).toBe("waiting_approval");
+    expect(state.waiting?.kind).toBe("human_request");
+    // A live turn refuses a second compaction request instead of dropping it.
+    await expect(f.service.compact(f.chatId)).rejects.toMatchObject({
+      code: "chat_busy",
+    });
+    expect((await f.service.getState(f.chatId)).waiting?.inputId).toBe(
+      state.waiting?.inputId,
+    );
+
+    await f.service.answer({
+      requestId: state.waiting?.inputId ?? "",
+      answerId: "a1",
+      response: { choice: "b" },
+    });
+    await resume(f, parked.runId);
+    expect((await f.store.tasks.getTask(parked.runId))?.status).toBe(
+      "completed",
+    );
+    const resumed = f.mock.requests.at(-1) ?? [];
+    expect(String(resumed[0]?.content)).toContain("SUMMARY-ONE");
+    expect(labels(resumed).slice(-3)).toEqual([
+      "user:need a decision",
+      "assistant:calls",
+      "tool:ask-1",
+    ]);
+    expect(String(resumed.at(-1)?.content)).toContain('"choice":"b"');
   });
 });
