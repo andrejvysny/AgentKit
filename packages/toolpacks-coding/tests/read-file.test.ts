@@ -156,3 +156,46 @@ describe("list_dir", () => {
     expect(h.text(sub)).toBe("x.txt");
   });
 });
+
+describe("read_file paths and encoding", () => {
+  test("paths[] reads several files and reports a missing one inline", async () => {
+    const h = await harness();
+    put(h.root, "a.txt", "alpha\n");
+    put(h.root, "b.txt", "beta\n");
+    const r = await h.run("read_file", {
+      paths: ["a.txt", "nope.txt", "b.txt"],
+    });
+    expect(r.ok).toBe(true);
+    const text = h.text(r);
+    expect(text).toContain("==> a.txt <==\n1\talpha");
+    expect(text).toContain("==> nope.txt <==\nnot_found");
+    expect(text).toContain("==> b.txt <==\n1\tbeta");
+    const all = await h.run("read_file", { paths: ["x.txt", "y.txt"] });
+    expect(all.ok).toBe(false);
+  });
+
+  test("path and paths together, or neither, are refused", async () => {
+    const h = await harness();
+    put(h.root, "a.txt", "a\n");
+    const both = await h.run("read_file", { path: "a.txt", paths: ["a.txt"] });
+    expect(both.ok).toBe(false);
+    const none = await h.run("read_file", {});
+    expect(none.ok).toBe(false);
+    const dup = await h.run("read_file", { paths: ["a.txt", "a.txt"] });
+    expect(dup.ok).toBe(false);
+  });
+
+  test("invalid UTF-8 is shown with a warning and an encoding marker", async () => {
+    const h = await harness();
+    writeFileSync(
+      join(h.root, "bad.txt"),
+      Buffer.from([0x68, 0x69, 0xff, 0x0a]),
+    );
+    const r = await h.run("read_file", { path: "bad.txt" });
+    expect(r.ok).toBe(true);
+    expect(r.warnings).toContain(
+      "not valid UTF-8; shown with replacement characters",
+    );
+    expect((r.data as { encoding: string }).encoding).toBe("invalid-utf8");
+  });
+});

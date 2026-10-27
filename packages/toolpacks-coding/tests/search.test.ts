@@ -205,3 +205,54 @@ describe("repo_map", () => {
     expect(h.text(r)).toContain("4 entries shown");
   });
 });
+
+describe("list_dir ignore rules and code_search paging", () => {
+  test("list_dir hides gitignored entries unless includeIgnored", async () => {
+    const h = await harness();
+    put(h.root, ".gitignore", "secret.log\nbuild/\n");
+    put(h.root, "keep.txt", "k");
+    put(h.root, "secret.log", "s");
+    put(h.root, "build/out.js", "o");
+    const r = await h.run("list_dir", {});
+    const text = h.text(r);
+    expect(text).toContain("keep.txt");
+    expect(text).not.toContain("secret.log");
+    expect(text).not.toContain("build/");
+    expect(text).toContain("[2 ignored entries hidden]");
+    const all = await h.run("list_dir", { includeIgnored: true });
+    expect(h.text(all)).toContain("secret.log");
+    expect(h.text(all)).toContain("build/");
+    expect(h.text(all)).not.toContain("ignored entries hidden");
+  });
+
+  test("offset pages are disjoint and complete", async () => {
+    const h = await harness();
+    for (const f of ["a.txt", "b.txt", "c.txt"])
+      put(h.root, f, "hit 1\nmiss\nhit 2\n");
+    const everything = await h.run("code_search", {
+      pattern: "hit",
+      limit: 100,
+    });
+    const want = h.text(everything).split("\n");
+    expect(want.length).toBe(6);
+    const got: string[] = [];
+    let offset = 0;
+    for (let page = 0; page < 10; page++) {
+      const r = await h.run("code_search", {
+        pattern: "hit",
+        limit: 2,
+        offset,
+      });
+      const lines = h
+        .text(r)
+        .split("\n")
+        .filter((l) => /^[a-c]\.txt:/.test(l));
+      got.push(...lines);
+      const next = /offset=(\d+)/.exec(h.text(r));
+      if (!next) break;
+      expect(lines.length).toBe(2);
+      offset = Number(next[1]);
+    }
+    expect(got).toEqual(want);
+  });
+});

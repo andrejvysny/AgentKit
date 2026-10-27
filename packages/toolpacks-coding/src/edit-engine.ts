@@ -15,22 +15,61 @@ export interface Edit {
   newText: string;
 }
 
-export function detectLineEnding(content: string): "\r\n" | "\n" {
-  const crlf = content.indexOf("\r\n");
-  const lf = content.indexOf("\n");
-  if (lf === -1 || crlf === -1) return "\n";
-  return crlf < lf ? "\r\n" : "\n";
+export type Eol = "\r\n" | "\n" | "\r";
+
+/** Most frequent terminator; a tie prefers LF, then CRLF. */
+export function dominantEol(content: string): Eol {
+  let crlf = 0;
+  let lf = 0;
+  let cr = 0;
+  for (let i = 0; i < content.length; i++) {
+    const c = content.charCodeAt(i);
+    if (c === 13) {
+      if (content.charCodeAt(i + 1) === 10) {
+        crlf++;
+        i++;
+      } else cr++;
+    } else if (c === 10) lf++;
+  }
+  const top = Math.max(crlf, lf, cr);
+  if (lf === top) return "\n";
+  return crlf === top ? "\r\n" : "\r";
 }
 
 export function normalizeToLF(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-export function restoreLineEndings(
-  text: string,
-  ending: "\r\n" | "\n",
-): string {
-  return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
+/**
+ * LF view of `text` plus, per view character, its offset in `text` (and one
+ * extra entry for the end), so matches can be spliced back into the original.
+ */
+function lfView(text: string): { view: string; starts: number[] } {
+  const starts: number[] = [];
+  const parts: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    starts.push(i);
+    if (c === 13) {
+      parts.push("\n");
+      if (text.charCodeAt(i + 1) === 10) i++;
+    } else parts.push(text[i] as string);
+  }
+  starts.push(text.length);
+  return { view: parts.join(""), starts };
+}
+
+const EOL_AT_END = /(?:\r\n|\r|\n)$/;
+
+/**
+ * Inserted text takes the file's dominant terminator; a final newline that
+ * replaces a terminator keeps that terminator, so unchanged lines stay exact.
+ */
+function withEol(replacement: string, replaced: string, eol: Eol): string {
+  const out = replacement.replace(/\n/g, eol);
+  const tail = EOL_AT_END.exec(replaced)?.[0];
+  if (tail === undefined || !replacement.endsWith("\n")) return out;
+  return out.slice(0, out.length - eol.length) + tail;
 }
 
 export function splitBom(content: string): { bom: string; text: string } {
@@ -57,6 +96,10 @@ export function normalizeForFuzzyMatch(text: string): string {
 
 function splitLinesWithEndings(content: string): string[] {
   return content.match(/[^\n]*\n|[^\n]+/g) ?? [];
+}
+
+function splitOriginalLines(content: string): string[] {
+  return content.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+/g) ?? [];
 }
 
 interface LineSpan {
@@ -134,8 +177,9 @@ function applyPreservingUnchangedLines(
   original: string,
   base: string,
   replacements: Replacement[],
+  eol: Eol,
 ): string {
-  const originalLines = splitLinesWithEndings(original);
+  const originalLines = splitOriginalLines(original);
   const baseLines = lineSpans(base);
   if (originalLines.length !== baseLines.length)
     throw new CodingError(
@@ -164,10 +208,14 @@ function applyPreservingUnchangedLines(
     result += originalLines.slice(cursor, group.startLine).join("");
     const startOffset = (baseLines[group.startLine] as LineSpan).start;
     const endOffset = (baseLines[group.endLine - 1] as LineSpan).end;
-    result += applyReplacements(
-      base.slice(startOffset, endOffset),
-      group.replacements,
-      startOffset,
+    result += withEol(
+      applyReplacements(
+        base.slice(startOffset, endOffset),
+        group.replacements,
+        startOffset,
+      ),
+      originalLines.slice(group.startLine, group.endLine).join(""),
+      eol,
     );
     cursor = group.endLine;
   }
@@ -209,21 +257,47 @@ function countOccurrences(content: string, oldText: string): number {
   );
 }
 
+function spliceOriginal(
+  original: string,
+  starts: number[],
+  matched: Replacement[],
+  eol: Eol,
+): string {
+  let result = "";
+  let cursor = 0;
+  for (const r of matched) {
+    const from = starts[r.matchIndex] as number;
+    const to = starts[r.matchIndex + r.matchLength] as number;
+    result +=
+      original.slice(cursor, from) +
+      withEol(r.newText, original.slice(from, to), eol);
+    cursor = to;
+  }
+  return result + original.slice(cursor);
+}
+
 export interface AppliedEdits {
+  /** The original, LF-normalised (for diffs). */
   baseContent: string;
+  /** The edited text in LF form (for diffs). */
   newContent: string;
+  /** The edited text with every untouched line terminator byte-identical. */
+  output: string;
 }
 
 /**
  * Apply every edit against the same ORIGINAL content: each `oldText` must
  * match exactly once (exact first, normalized fallback) and edits must not
- * overlap. Input and output are LF-normalised.
+ * overlap. Matching runs on an LF view; replacements are spliced into the
+ * original so its line terminators survive.
  */
-export function applyEditsToNormalizedContent(
-  normalizedContent: string,
+export function applyEdits(
+  original: string,
   edits: Edit[],
   path: string,
 ): AppliedEdits {
+  const { view: normalizedContent, starts } = lfView(original);
+  const eol = dominantEol(original);
   const total = edits.length;
   const label = (i: number) => (total === 1 ? "the text" : `edits[${i}]`);
   const normalized = edits.map((edit) => ({
@@ -274,13 +348,17 @@ export function applyEditsToNormalizedContent(
         `edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${path}. Merge them or target disjoint regions.`,
       );
   }
-  const newContent = usedFuzzy
-    ? applyPreservingUnchangedLines(normalizedContent, base, matched)
-    : applyReplacements(base, matched);
-  if (newContent === normalizedContent)
+  const output = usedFuzzy
+    ? applyPreservingUnchangedLines(original, base, matched, eol)
+    : spliceOriginal(original, starts, matched, eol);
+  if (output === original)
     throw new CodingError(
       "edit_no_change",
       `No changes made to ${path}: the replacement produced identical content.`,
     );
-  return { baseContent: normalizedContent, newContent };
+  return {
+    baseContent: normalizedContent,
+    newContent: normalizeToLF(output),
+    output,
+  };
 }
