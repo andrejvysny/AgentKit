@@ -2,8 +2,8 @@
 
 Evidence label: **live-provider (local vLLM Qwen3.8-Flash-Next)**
 
-- Date: 2026-10-27T14:34:35.218Z
-- AgentKit HEAD: a70c563518edfa75e2add2ec1aabca4dc04f8cc8
+- Date: 2026-10-27T17:12:37.724Z
+- AgentKit HEAD: 043cf2a94700df8c28d69d6613e604b8c962c315
 - Model: Qwen3.8-Flash-Next @ http://127.0.0.1:8000/v1
 - Guard mode: `full_auto` (the M5 approval flow is not built, so `ask`/`auto_edit` are not exercised). Sandbox: required (`sandbox-exec`), network off.
 - Re-run: `bun scripts/live/coding-session.ts`
@@ -14,16 +14,16 @@ Tokens are summed over `run.usage` events with `finalForCall`. Provider requests
 
 | turn | status | attempts | provider requests | tool calls | shell reads | prompt / completion tokens | latency | context_trimmed | bun test after |
 |---|---|---|---|---|---|---|---|---|---|
-| turn1 | completed | 1 | 5 | repo_map:1, read_file:2, edit_file:1, run_tests:1 | 0 | 14588 / 578 | 3.8s | 0 | true |
-| turn2 | completed | 1 | 3 | edit_file:2, run_tests:1 | 0 | 12425 / 833 | 4.5s | 0 | true |
-| turn3 | completed | 2 | 4 | edit_file:2, run_tests:1 | 0 | 23347 / 1753 | 15.5s | 0 | true |
+| turn1 | completed | 1 | 6 | repo_map:1, read_file:2, run_tests:2, edit_file:1 | 0 | 21796 / 644 | 6.0s | 0 | true |
+| turn2 | completed | 1 | 4 | read_file:2, edit_file:2, run_tests:1 | 0 | 21976 / 1739 | 12.0s | 0 | true |
+| turn3 | completed | 2 | 4 | read_file:2, edit_file:2, run_tests:1 | 0 | 31866 / 2181 | 21.4s | 0 | true |
 
 ## Assertions
 
 - PASS fixture: bun test fails before the agent starts
 - PASS turn1: turn completed (completed)
 - PASS turn1: bun test passes afterwards
-- PASS turn1: read_file/code_search used before edit_file/write_file (order: repo_map,read_file,read_file,edit_file,run_tests)
+- PASS turn1: read_file/code_search used before edit_file/write_file (order: repo_map,read_file,read_file,run_tests,edit_file,run_tests)
 - PASS turn2: turn completed (completed)
 - PASS turn2: bun test passes afterwards
 - PASS turn3: child SIGKILLed mid-turn after a run.tool.succeeded (exit=null signal=SIGKILL)
@@ -31,16 +31,16 @@ Tokens are summed over `run.usage` events with `finalForCall`. Provider requests
 - PASS turn3: bun test passes afterwards
 - PASS turn3: >= 2 attempts (attempts=2)
 - PASS turn3: log has events from both attempts (attemptIds=2)
-- PASS turn1: event seq contiguous (176 events)
-- PASS turn1: tool-call ids unique among tool records (5 tool records)
-- PASS turn2: event seq contiguous (196 events)
-- PASS turn2: tool-call ids unique among tool records (3 tool records)
-- PASS turn3: event seq contiguous (328 events)
-- PASS turn3: tool-call ids unique among tool records (3 tool records)
+- PASS turn1: event seq contiguous (187 events)
+- PASS turn1: tool-call ids unique among tool records (6 tool records)
+- PASS turn2: event seq contiguous (477 events)
+- PASS turn2: tool-call ids unique among tool records (5 tool records)
+- PASS turn3: event seq contiguous (526 events)
+- PASS turn3: tool-call ids unique among tool records (5 tool records)
 
 ## Tool failures (verbatim codes)
 
-none
+- turn1: `run_tests` `tool_failed`: exit code 1
 
 ## Shell reads via run_command
 
@@ -52,9 +52,9 @@ none
 
 ## Final answers (truncated)
 
-- turn1:  The bug is on line 4 of `src/math.ts`: when the value exceeds `max`, it returns `min` instead of `max`. Fixed. The bug was in `src/math.ts:4` — the upper-bound branch returned `min` instead of `max`, so `clamp(15, 0, 10)` returned `0` instead of `10`. ```ts if (value < min) return min; if (value > max) return max; // was: return min return value; ``` All 3 tests now pass (`bun test`: 3 pass, 0 fa
-- turn2:  Done. Since `clamp` previously had no validation, throwing required both the test and the guard. **`src/math.ts`** — added a precondition before the clamping branches: ```ts export function clamp(value: number, min: number, max: number): number { if (min > max) throw new RangeError("min must be less than or equal to max"); if (value < min) return min; if (value > max) return max; return value; } 
-- turn3:  Added `lerp` alongside `clamp`. **`src/math.ts`**: ```ts /** Linearly interpolate between `a` and `b`; `t` = 0 yields `a`, `t` = 1 yields `b`. */ export function lerp(a: number, b: number, t: number): number { return a + (b - a) * t; } ``` I used `a + (b - a) * t` rather than `a * (1 - t) + b * t` — it is exact at `t = 0`/`t = 1` (returns `a`/`b` bit-for-bit, no `NaN` propagation from the other e
+- turn1:  I'll start by orienting myself in the repository. The bug is on line 4 of `src/math.ts`: when the value exceeds `max`, it returns `min` instead of `max`. Let me confirm the failure first. Failure confirmed, matching the read of the code. Fixing the copy-paste error: Fixed. All 3 tests pass. **Bug:** `src/math.ts` line 4 — the upper-bound branch returned `min` instead of `max`: ```ts if (value > m
+- turn2:  I'll add the validation to `clamp` and a test for it. Let me check the current state of both files. The test asks for behavior that doesn't exist yet — `clamp` currently returns `min` when `min > max` (e.g. `clamp(5, 10, 0)` → `10`) rather than throwing. So I need the validation plus the test. Done — 5 tests pass, 0 fail. **What changed** `src/math.ts` — the requested behavior didn't exist yet, s
+- turn3:  Now I'll add `lerp` and its tests. Added `lerp` with tests — 12 pass, 0 fail (up from 5). **`src/math.ts`** — new export, appended after `clamp`: ```ts export function lerp(a: number, b: number, t: number): number { return a + (b - a) * t; } ``` I used the `a + (b - a) * t` form rather than `(1 - t) * a + t * b` because it's exact at the endpoints: `t = 1` gives precisely `b`, whereas the weighte
 
 ## Raw summary
 
@@ -65,34 +65,41 @@ none
       "turn": "turn1",
       "status": "completed",
       "attempts": 1,
-      "providerRequests": 5,
+      "providerRequests": 6,
       "runStarted": 1,
       "iterations": [
-        5
+        6
       ],
       "toolCalls": {
         "repo_map": 1,
         "read_file": 2,
-        "edit_file": 1,
-        "run_tests": 1
+        "run_tests": 2,
+        "edit_file": 1
       },
-      "toolFailures": [],
+      "toolFailures": [
+        {
+          "tool": "run_tests",
+          "code": "tool_failed",
+          "message": "exit code 1"
+        }
+      ],
       "shellReads": [],
-      "promptTokens": 14588,
-      "completionTokens": 578,
-      "latencyMs": 3783,
+      "promptTokens": 21796,
+      "completionTokens": 644,
+      "latencyMs": 6024,
       "contextTrimmed": 0,
       "warnings": {},
       "finishReasons": [
         "stop"
       ],
       "attemptIds": [
-        "att_e85bc703-9e3b-49e6-92cb-78a6bb993958"
+        "att_f0de2b2a-a4d6-4e75-9cd5-ad2d2e93e5a7"
       ],
       "toolOrder": [
         "repo_map",
         "read_file",
         "read_file",
+        "run_tests",
         "edit_file",
         "run_tests"
       ],
@@ -102,29 +109,32 @@ none
       "turn": "turn2",
       "status": "completed",
       "attempts": 1,
-      "providerRequests": 3,
+      "providerRequests": 4,
       "runStarted": 1,
       "iterations": [
-        3
+        4
       ],
       "toolCalls": {
+        "read_file": 2,
         "edit_file": 2,
         "run_tests": 1
       },
       "toolFailures": [],
       "shellReads": [],
-      "promptTokens": 12425,
-      "completionTokens": 833,
-      "latencyMs": 4531,
+      "promptTokens": 21976,
+      "completionTokens": 1739,
+      "latencyMs": 12049,
       "contextTrimmed": 0,
       "warnings": {},
       "finishReasons": [
         "stop"
       ],
       "attemptIds": [
-        "att_a946d255-27a3-491b-95e4-abefef666ff8"
+        "att_a27683da-d3d6-4356-a39d-3d2273ae7fd1"
       ],
       "toolOrder": [
+        "read_file",
+        "read_file",
         "edit_file",
         "edit_file",
         "run_tests"
@@ -141,24 +151,27 @@ none
         3
       ],
       "toolCalls": {
+        "read_file": 2,
         "edit_file": 2,
         "run_tests": 1
       },
       "toolFailures": [],
       "shellReads": [],
-      "promptTokens": 23347,
-      "completionTokens": 1753,
-      "latencyMs": 15476,
+      "promptTokens": 31866,
+      "completionTokens": 2181,
+      "latencyMs": 21379,
       "contextTrimmed": 0,
       "warnings": {},
       "finishReasons": [
         "stop"
       ],
       "attemptIds": [
-        "att_250b8234-761e-4c43-a7b9-8070786e5c68",
-        "att_0eac3adb-405b-4dae-b181-a23bdb14f242"
+        "att_c341fa2d-74f0-435b-b5da-f21bb9fb92ea",
+        "att_1bc59d6c-2e35-420e-9657-74c82e181f1a"
       ],
       "toolOrder": [
+        "read_file",
+        "read_file",
         "edit_file",
         "edit_file",
         "run_tests"
@@ -174,7 +187,11 @@ none
 }
 ```
 
-## Observations (hand-written; a re-run of the script overwrites this file)
+## Re-run after the M5–M7 hardening
+
+Re-run on the current tree after the tool-pack hardening (git driver neutralization, `.git` write fence, process-tree teardown, byte-faithful edits), interrupt/resume, context elision and profile wiring: **ALL PASS: 17/17**. The model used `read_file`/`edit_file`/`run_tests` only; no shell reads. The table above is this run.
+
+## Observations from the first runs (at `a70c563`, hand-written, kept on re-run)
 
 - Run history: 2 full runs, both 17/17 PASS (first run: read_file x2 before edit, turn 3 latency 17.5s). No AGENTS.md or prompt iterations were needed: 0 of the 3 allowed.
 - No tool failures, no `run.warning` of any kind, no `context_trimmed`, no shell reads through `run_command`. The model used `repo_map`, `read_file`, `edit_file`, `run_tests` only; it ran tests with `run_tests`, as AGENTS.md says.

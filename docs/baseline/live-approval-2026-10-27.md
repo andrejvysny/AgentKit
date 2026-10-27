@@ -2,11 +2,11 @@
 
 Evidence label: **live-provider (local vLLM Qwen3.8-Flash-Next)**
 
-- Date: 2026-10-27T17:05:51.457Z
-- AgentKit HEAD: 5e157d782cad27370f8c5e1300160cd4d767078c
+- Date: 2026-10-27T17:11:57.990Z
+- AgentKit HEAD: 043cf2a94700df8c28d69d6613e604b8c962c315
 - Model: Qwen3.8-Flash-Next @ http://127.0.0.1:8000/v1
 - Sandbox: required (`sandbox-exec`), network off. Plan approval policy grants `auto_edit`.
-- Total runtime: 67s. Retries: a failing scenario is re-run (fresh session and repo) up to 2 times; the last attempt's assertions are shown.
+- Total runtime: 61s. Retries: a failing scenario is re-run (fresh session and repo) up to 2 times; the last attempt's assertions are shown.
 - Re-run: `bun scripts/live/approval-session.ts`
 
 ## Per-scenario results
@@ -15,14 +15,14 @@ Approvals = asked / approved / denied. Tokens = prompt / completion over `run.us
 
 | scenario | status | retries | approvals | tool calls | provider requests | tokens | latency |
 |---|---|---|---|---|---|---|---|
-| S1 ask: approve edit and tests | PASS | 0 | 3 / 3 / 0 | repo_map:1, read_file:3, edit_file:2, run_tests:1 | 7 | 26689 / 836 | 5.7s |
-| S2 ask: deny a destructive command | PASS | 0 | 1 / 0 / 1 | list_dir:3, git_inspect:2, read_file:2, run_command:1 | 6 | 21644 / 2169 | 12.7s |
-| S3 plan: refuse until the plan is approved | PASS | 0 | 2 / 2 / 0 | read_file:2, edit_file:2, find_files:1, code_search:1, submit_plan:1, run_tests:1 | 8 | 31357 / 1186 | 7.9s |
-| S4 stale and duplicate approvals rejected | PASS | 0 | 2 / 2 / 0 | repo_map:1, read_file:3, edit_file:2 | 5 | 17814 / 574 | 3.5s |
-| S5 role ceilings under full_auto | PASS | 0 | 0 / 0 / 0 | find_files:2, repo_map:2, read_file:3, git_inspect:1, run_tests:1 | 8 | 19491 / 1985 | 12.7s |
-| S6 network denied in the sandbox | PASS | 0 | 0 / 0 / 0 | run_command:1 | 2 | 6099 / 331 | 2.1s |
-| S7 interrupt during generation, resume | PASS | 0 | 0 / 0 / 0 | read_file:4, edit_file:3, run_tests:1 | 6 | 25355 / 1325 | 8.5s |
-| S8 interrupt during a tool, resume | PASS | 0 | 0 / 0 / 0 | repo_map:1, read_file:3, run_tests:1, find_files:2, git_inspect:1 | 6 | 21904 / 2550 | 13.9s |
+| S1 ask: approve edit and tests | PASS | 0 | 3 / 3 / 0 | repo_map:1, read_file:3, edit_file:2, run_tests:1 | 7 | 27308 / 846 | 6.6s |
+| S2 ask: deny a destructive command | PASS | 0 | 1 / 0 / 1 | run_command:1, list_dir:1 | 3 | 9467 / 1375 | 8.8s |
+| S3 plan: refuse until the plan is approved | PASS | 0 | 2 / 2 / 0 | read_file:3, edit_file:2, find_files:1, repo_map:1, submit_plan:1, run_tests:1, git_inspect:1 | 9 | 36854 / 1691 | 10.9s |
+| S4 stale and duplicate approvals rejected | PASS | 0 | 2 / 2 / 0 | list_dir:2, read_file:3, edit_file:1, run_tests:1 | 5 | 17362 / 366 | 2.9s |
+| S5 role ceilings under full_auto | PASS | 0 | 0 / 0 / 0 | find_files:2, repo_map:2, read_file:4, run_tests:1, git_inspect:1 | 7 | 17049 / 2024 | 12.1s |
+| S6 network denied in the sandbox | PASS | 0 | 0 / 0 / 0 | run_command:1 | 2 | 6099 / 330 | 2.4s |
+| S7 interrupt during generation, resume | PASS | 0 | 0 / 0 / 0 | read_file:2, edit_file:2, run_tests:1 | 5 | 19221 / 914 | 6.6s |
+| S8 interrupt during a tool, resume | PASS | 0 | 0 / 0 / 0 | run_tests:1, repo_map:1, find_files:1, read_file:1, git_inspect:1 | 4 | 13535 / 1368 | 10.5s |
 
 ## Assertions
 
@@ -92,8 +92,8 @@ Approvals = asked / approved / denied. Tokens = prompt / completion over `run.us
 - PASS S7 no run.cancelled / run.failed after interrupt
 - PASS S7 turn completed after resume (completed)
 - PASS S7 attemptCount is 2 (2)
-- PASS S7 event seq contiguous (295 events)
-- PASS S7 tool-call ids unique among tool records (8 records)
+- PASS S7 event seq contiguous (191 events)
+- PASS S7 tool-call ids unique among tool records (5 records)
 - PASS S7 bun test passes afterwards
 
 ### S8 interrupt during a tool, resume
@@ -104,7 +104,7 @@ Approvals = asked / approved / denied. Tokens = prompt / completion over `run.us
 - PASS S8 turn completed after resume (completed)
 - PASS S8 interrupted call itself began running exactly once (x1)
 - PASS S8 any re-requested run_tests (new id) was approval-gated before it finished (0 re-requests, 0 ungated)
-- PASS S8 event seq contiguous (897 events)
+- PASS S8 event seq contiguous (472 events)
 
 ## Failure codes seen (verbatim)
 
@@ -114,7 +114,6 @@ Approvals = asked / approved / denied. Tokens = prompt / completion over `run.us
 - S3: `edit_file: tool_failed`
 - S4: `duplicate approve: AnswerConflictError/answer_conflict`
 - S4: `approve after cancel: AnswerStaleError/answer_stale`
-- S4: `edit_file: tool_failed`
 - S5: `S5a reviewer run_tests: tool_failed: exit code 1`
 - S5: `run_tests: tool_failed`
 - S6: `run_command: tool_failed: exit code 6`
@@ -123,15 +122,15 @@ Approvals = asked / approved / denied. Tokens = prompt / completion over `run.us
 ## Run notes
 
 - S1 3 of 3 approved calls emitted run.tool.running BEFORE run.waiting (guard runs after the running event)
-- S2 timeline: 0:started 265:tool.requested[list_dir#db71] 266:tool.requested[git_inspect#7047] 267:tool.running[list_dir#db71] 268:tool.succeeded[list_dir#db71] 269:tool.running[git_inspect#7047] 270:tool.succeeded[git_inspect#7047] 279:tool.requested[list_dir#7239] 280:tool.requested[list_dir#8c15] 281:tool.running[list_dir#7239] 282:tool.succeeded[list_dir#7239] 283:tool.running[list_dir#8c15] 284:tool.succeeded[list_dir#8c15] 327:tool.requested[read_file#8bbb] 328:tool.requested[read_file#4fda] 329:tool.running[read_file#8bbb] 330:tool.succeeded[read_file#8bbb] 331:tool.running[read_file#4fda] 332:tool.succeeded[read_file#4fda] 532:tool.requested[git_inspect#26f1] 533:tool.running[git_inspect#26f1] 534:tool.succeeded[git_inspect#26f1] 602:tool.requested[run_command#31fb] 603:tool.running[run_command#31fb] 604:waiting[run_command#31fb] 605:started 801:completed
-- S3 pre-plan timeline: 0:started 27:tool.requested[read_file#d0b9] 28:tool.running[read_file#d0b9] 29:tool.succeeded[read_file#d0b9] 38:tool.requested[edit_file#9f39] 39:tool.running[edit_file#9f39] 40:tool.failed[edit_file#9f39] 67:tool.requested[find_files#c2bf] 68:tool.requested[code_search#8dcf] 69:tool.running[find_files#c2bf] 70:tool.succeeded[find_files#c2bf] 71:tool.running[code_search#8dcf] 72:tool.succeeded[code_search#8dcf] 84:tool.requested[submit_plan#4ec2] 85:tool.running[submit_plan#4ec2]
+- S2 timeline: 0:started 233:tool.requested[run_command#d62d] 234:tool.running[run_command#d62d] 235:waiting[run_command#d62d] 236:started 321:tool.requested[list_dir#1b4d] 322:tool.running[list_dir#1b4d] 323:tool.succeeded[list_dir#1b4d] 578:completed
+- S3 pre-plan timeline: 0:started 43:tool.requested[read_file#2698] 44:tool.running[read_file#2698] 45:tool.succeeded[read_file#2698] 80:tool.requested[edit_file#46d8] 81:tool.running[edit_file#46d8] 82:tool.failed[edit_file#46d8] 114:tool.requested[find_files#ac0c] 115:tool.requested[repo_map#fcd1] 116:tool.running[find_files#ac0c] 117:tool.succeeded[find_files#ac0c] 118:tool.running[repo_map#fcd1] 119:tool.succeeded[repo_map#fcd1] 134:tool.requested[read_file#2897] 135:tool.running[read_file#2897] 136:tool.succeeded[read_file#2897] 151:tool.requested[submit_plan#0b11] 152:tool.running[submit_plan#0b11]
 - S3 pre-plan failure edit_file: tool_failed: plan mode: propose the change with submit_plan and wait for the user to approve it. (edit_file is a write tool)
 - S3 requested=full_auto granted=auto_edit policy=auto_edit
-- S5a reviewer: requested tools [find_files,repo_map,read_file,read_file,git_inspect,run_tests]
-- S5b supervisor: requested tools [repo_map,find_files,read_file]
-- S8 timeline: 0:started 36:tool.requested[repo_map#306e] 37:tool.running[repo_map#306e] 38:tool.succeeded[repo_map#306e] 72:tool.requested[read_file#49d1] 73:tool.requested[read_file#a6d5] 74:tool.requested[read_file#2916] 75:tool.running[read_file#49d1] 76:tool.succeeded[read_file#49d1] 77:tool.running[read_file#a6d5] 78:tool.succeeded[read_file#a6d5] 79:tool.running[read_file#2916] 80:tool.succeeded[read_file#2916] 100:tool.requested[run_tests#dd52] 101:tool.running[run_tests#dd52] 102:started 234:tool.requested[find_files#9083] 235:tool.requested[find_files#bca1] 236:tool.running[find_files#9083] 237:tool.succeeded[find_files#9083] 238:tool.running[find_files#bca1] 239:tool.succeeded[find_files#bca1] 459:tool.requested[git_inspect#35e9] 460:tool.running[git_inspect#35e9] 461:tool.succeeded[git_inspect#35e9] 896:completed
+- S5a reviewer: requested tools [find_files,repo_map,read_file,read_file,run_tests,git_inspect]
+- S5b supervisor: requested tools [repo_map,find_files,read_file,read_file]
+- S8 timeline: 0:started 26:tool.requested[run_tests#4962] 27:tool.running[run_tests#4962] 28:started 65:tool.requested[repo_map#a013] 66:tool.requested[find_files#4523] 67:tool.running[repo_map#a013] 68:tool.succeeded[repo_map#a013] 69:tool.running[find_files#4523] 70:tool.succeeded[find_files#4523] 86:tool.requested[read_file#2e5b] 87:tool.requested[git_inspect#f4e6] 88:tool.running[read_file#2e5b] 89:tool.succeeded[read_file#2e5b] 90:tool.running[git_inspect#f4e6] 91:tool.succeeded[git_inspect#f4e6] 471:completed
 - S8 tool record for the interrupted call: (none: missing)
-- S8 interrupted call chatcmpl-tool-83a07aa1f944dd52; run_tests began 1x in total; failures after resume: none; warnings: none
+- S8 interrupted call chatcmpl-tool-84bb943797074962; run_tests began 1x in total; failures after resume: none; warnings: none
 
 ## Observations
 
@@ -144,3 +143,4 @@ Approvals = asked / approved / denied. Tokens = prompt / completion over `run.us
 - Network (S6): curl exits 6 (could not resolve host) inside the sandbox; no page content returned.
 - Interrupt (S7/S8): interrupted turns park `interrupted` with no `run.cancelled`/`run.failed`; resume gives attemptCount 2 with contiguous seq. In S8 the interrupted `run_tests` call ends with NO tool record and no terminal event (`(none: missing)`), and was never re-executed under its id. When a model re-requests `run_tests` under a new id, the uncertain-side-effect guard parks it for approval even in `full_auto` (seen in earlier S8 runs); a different tool (e.g. `run_command`) was not gated. Whether the model is told the first result is uncertain was not verified here (provider requests were not captured).
 - Model: steady with explicit tool instructions; reasoning-heavy turns (hundreds of delta events) are common, latency per scenario 2-14s.
+- Follow-up fixed in `5327763`: because a parked call logs `run.tool.running` before the guard, the side-effect receipt scan read a parked or denied call as "may have run". The scan now follows log order and treats `run.waiting` as the settle of a parked call (ADR 0019 part 3). The final run above was re-run after that fix: 56/56.

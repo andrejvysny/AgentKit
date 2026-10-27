@@ -1,6 +1,32 @@
 # Changelog
 
-## Unreleased — Unified agent runtime M0–M2
+## Unreleased — Unified agent runtime M0–M7
+
+**Coding tool pack hardening** ([ADR 0018](docs/adr/0018-coding-tool-pack.md)).
+
+- `git_inspect` neutralizes repository-defined filter, textconv and external-diff drivers, pagers and ssh/askpass
+  helpers, and refuses the call (`git_config_unreadable`) when it cannot enumerate them.
+- The macOS sandbox makes the whole `.git` subtree read-only (opt out with `allowGitWrites`), denies more
+  credential stores, and the command environment drops agent sockets, auth/session/cookie names and URLs with
+  embedded credentials.
+- Command teardown escalates SIGTERM → SIGKILL, kills descendants that left the process group, reports survivors,
+  and sweeps orphans of a crashed agent at pack start (`sweepOrphans`).
+- Edits keep each line's original terminator and refuse invalid UTF-8 (`encoding_unsupported`). `read_file` returns
+  `sha256`/`totalLines` and reads up to 8 `paths`. `list_dir` honours ignore files, and `code_search` pages with
+  `offset`.
+
+**Sessions, context, profiles** ([ADR 0016](docs/adr/0016-durable-agent-sessions.md) §6a–6b,
+[0017](docs/adr/0017-context-assembly-and-compaction.md), [0015](docs/adr/0015-unified-agent-runtime.md) §3).
+
+- Resumable interrupt: `AgentSessionService.interrupt`/`resume`, `TaskRunner.requestInterrupt`, and
+  `shutdownMode: "interrupt"`. Also `listTurns`, `getUsage` and `exportSession`.
+- Old large tool results are elided from the provider view; canonical history is unchanged.
+- Profiles now apply `model`, `reasoningEffort`, `maxToolCallsPerIteration`, `maxOutputTokens`, `attemptBudgetMs`,
+  `resources.projectInstructions` and `resources.skills`. Reasoning effort reaches chat completions and Responses;
+  a chat 400 naming it retries once without it and warns `reasoning_effort_unsupported`.
+- `run.usage` gains optional `cachedPromptTokens`/`reasoningTokens`. `CONTRACT_VERSION` stays 0.7.0.
+- Side-effect receipts read the log in order and do not report a call parked for approval as uncertain.
+
 
 **M2 — durable agent sessions** ([ADR 0016](docs/adr/0016-durable-agent-sessions.md)).
 
