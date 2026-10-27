@@ -6,8 +6,12 @@
  */
 import type { AgentSteeringSource } from "@agentkit/core";
 import { ChatBusyError } from "../errors.js";
-import type { AgentInputStore } from "../ports/agent-input-store.js";
+import type {
+  AgentInputRecord,
+  AgentInputStore,
+} from "../ports/agent-input-store.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
+import type { IdGenerator, Logger } from "../ports/system.js";
 import type { TaskStatus } from "../ports/task-store.js";
 import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import type { TaskExecutionContext } from "../tasks/task-executor.js";
@@ -146,22 +150,80 @@ export async function settleSessionInputs(
     ...followUps,
     ...leftovers.filter((record) => record.onSettled !== "cancel"),
   ].sort((a, b) => a.order - b.order);
-  for (const next of queue) {
+  try {
+    const staged = await stageNextQueuedTurn(tx, deps, {
+      chatId,
+      session: input.session,
+      parentMessageId: input.assistantMessageId,
+      queue,
+    });
+    return staged?.taskId;
+  } catch (error) {
+    // The scope already holds unfinished work; the input stays queued and the
+    // session's own flush releases it later. Nothing was written (the task
+    // row is the first write), so the settlement is not poisoned.
+    if (!(error instanceof ChatBusyError)) throw error;
+    deps.logger?.warn("could not stage the next turn; chat is busy", {
+      taskId,
+    });
+    return undefined;
+  }
+}
+
+export interface StageQueuedTurnDeps {
+  ids: IdGenerator;
+  logger?: Logger | undefined;
+  allowConcurrentSubmit?: boolean | undefined;
+}
+
+export interface StageQueuedTurnInput {
+  chatId: string;
+  session: AgentSessionDescriptor;
+  /** The new user message's parent; absent appends to the chat's active leaf. */
+  parentMessageId?: string;
+  /** Candidates in FIFO order; the first with readable content is converted. */
+  queue: readonly AgentInputRecord[];
+}
+
+export interface StagedQueuedTurn {
+  taskId: string;
+  inputId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+}
+
+/**
+ * The conversion core shared by settlement and `AgentSessionService.flushQueue`:
+ * inside the caller's transaction, stage the oldest convertible queued input as
+ * a `chat.turn` task and CAS it `converted`. The caller enqueues the returned
+ * task after commit. Throws {@link ChatBusyError} when the scope still holds
+ * unfinished work (nothing is written then); returns undefined when no
+ * candidate has readable content.
+ */
+export async function stageNextQueuedTurn(
+  tx: AssistantStore,
+  deps: StageQueuedTurnDeps,
+  input: StageQueuedTurnInput,
+): Promise<StagedQueuedTurn | undefined> {
+  const inputs = tx.inputs;
+  if (!inputs) return undefined;
+  const { chatId, session } = input;
+  for (const next of input.queue) {
     const content = readInputContent(next.content);
     if (content === undefined) {
       deps.logger?.warn("skipping a queued input with malformed content", {
         inputId: next.inputId,
-        taskId,
       });
       continue;
     }
-    const newTaskId = deps.ids.taskId();
+    const taskId = deps.ids.taskId();
     const userMessageId = deps.ids.messageId();
     const assistantMessageId = deps.ids.messageId();
-    const { session } = input;
     const payload: TurnRequest = {
       chatId,
-      parentMessageId: input.assistantMessageId,
+      ...(input.parentMessageId === undefined
+        ? {}
+        : { parentMessageId: input.parentMessageId }),
       ...(session.model === undefined ? {} : { model: session.model }),
       ...(session.providerId === undefined
         ? {}
@@ -169,32 +231,22 @@ export async function settleSessionInputs(
       assistantMessageId,
       userMessageId,
     };
-    try {
-      await stageTurnInTransaction(tx, deps, {
-        taskId: newTaskId,
-        kind: CHAT_TURN_TASK_KIND,
-        chatId,
-        content,
-        userMessageId,
-        assistantMessageId,
-        payload,
-        parentMessageId: input.assistantMessageId,
-      });
-    } catch (error) {
-      // The scope already holds unfinished work; the input stays queued and the
-      // session's own flush releases it later. Nothing was written (the task
-      // row is the first write), so the settlement is not poisoned.
-      if (!(error instanceof ChatBusyError)) throw error;
-      deps.logger?.warn("could not stage the next turn; chat is busy", {
-        inputId: next.inputId,
-        taskId,
-      });
-      return undefined;
-    }
-    await inputs.transitionInput(next.inputId, ["pending"], "converted", {
-      appliedTaskId: newTaskId,
+    await stageTurnInTransaction(tx, deps, {
+      taskId,
+      kind: CHAT_TURN_TASK_KIND,
+      chatId,
+      content,
+      userMessageId,
+      assistantMessageId,
+      payload,
+      ...(input.parentMessageId === undefined
+        ? {}
+        : { parentMessageId: input.parentMessageId }),
     });
-    return newTaskId;
+    await inputs.transitionInput(next.inputId, ["pending"], "converted", {
+      appliedTaskId: taskId,
+    });
+    return { taskId, inputId: next.inputId, userMessageId, assistantMessageId };
   }
   return undefined;
 }

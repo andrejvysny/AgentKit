@@ -281,6 +281,21 @@ export function describeAgentInputStoreConformance(
       });
     });
 
+    it("deleteSessionInputs removes only that session's inputs and counts them", async () => {
+      await withStore(async (inputs) => {
+        const a = steer({ sessionId: "chat-del" });
+        const b = humanRequest({ sessionId: "chat-del" });
+        const other = steer({ sessionId: "chat-keep" });
+        for (const input of [a, b, other]) await inputs.createInput(input);
+        await inputs.transitionInput(a.inputId, ["pending"], "cancelled");
+        expect(await inputs.deleteSessionInputs("chat-del")).toBe(2);
+        expect(await inputs.getInput(a.inputId)).toBeUndefined();
+        expect(await inputs.getInput(b.inputId)).toBeUndefined();
+        expect((await inputs.getInput(other.inputId))?.status).toBe("pending");
+        expect(await inputs.deleteSessionInputs("chat-del")).toBe(0);
+      });
+    });
+
     it("transaction writes are visible to tx.inputs, then to store.inputs after commit", async () => {
       await withStore(async (inputs, { store }) => {
         const input = steer();

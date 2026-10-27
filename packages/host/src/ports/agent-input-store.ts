@@ -95,6 +95,12 @@ export interface AgentInputStore {
     to: AgentInputStatus,
     patch?: AgentInputPatch,
   ): Promise<AgentInputRecord>;
+  /**
+   * Remove every input of a session, whatever its status, and return how many
+   * rows went. Called inside `ConversationService.deleteChat`'s transaction so
+   * a deleted chat leaves no orphaned inputs behind.
+   */
+  deleteSessionInputs(sessionId: string): Promise<number>;
 }
 
 /**

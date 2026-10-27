@@ -1,6 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { ConversationService } from "../src/index.js";
-import { FakeAssistantStore, createTestClock, createTestIds } from "./fakes.js";
+import {
+  FakeAgentInputStore,
+  FakeAssistantStore,
+  createTestClock,
+  createTestIds,
+} from "./fakes.js";
 
 /**
  * `ConversationService.deleteChat` is the one operation in this package that
@@ -52,6 +57,28 @@ async function seedChat(store: FakeAssistantStore, chatId: string) {
 }
 
 describe("ConversationService.deleteChat", () => {
+  it("purges the session's durable inputs, and only that session's", async () => {
+    const { store, service } = await setup();
+    store.inputs = new FakeAgentInputStore(createTestClock());
+    const { chat } = await seedChat(store, "chat-inputs");
+    await seedChat(store, "chat-other");
+    for (const sessionId of [chat.id, "chat-other"]) {
+      await store.inputs.createInput({
+        inputId: `in-${sessionId}`,
+        sessionId,
+        kind: "follow_up",
+        content: { content: "later" },
+        contentHash: "h",
+      });
+    }
+    await store.tasks.deleteByScope(chat.id);
+
+    await service.deleteChat(chat.id);
+
+    expect(await store.inputs.getInput(`in-${chat.id}`)).toBeUndefined();
+    expect(await store.inputs.getInput("in-chat-other")).toBeDefined();
+  });
+
   it("refuses with chat_busy while a task in the chat's scope is running, and deletes nothing", async () => {
     const { store, service } = await setup();
     const { chat, task } = await seedChat(store, "chat-busy");

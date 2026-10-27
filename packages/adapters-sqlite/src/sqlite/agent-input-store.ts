@@ -233,6 +233,16 @@ export class SqliteAgentInputStore implements AgentInputStore {
     }, this.owner);
   }
 
+  async deleteSessionInputs(sessionId: string): Promise<number> {
+    return this.conn.whenFree(() => {
+      const result = this.conn.run(
+        "DELETE FROM agent_inputs WHERE session_id = $sessionId",
+        { $sessionId: sessionId },
+      );
+      return Number(result.changes);
+    }, this.owner);
+  }
+
   private select(inputId: string): AgentInputRecord | undefined {
     const row = this.conn.get(
       "SELECT * FROM agent_inputs WHERE input_id = $inputId",

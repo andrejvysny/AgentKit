@@ -326,15 +326,15 @@ export const HOST_ERROR_CODES = [
   "unknown_dependency",
   "usage_denied",
   "transaction_gate_timeout",
+  "input_conflict",
+  "input_transition_invalid",
+  "answer_conflict",
+  "answer_stale",
+  "session_not_found",
+  "sessions_unavailable",
 ] as const;
 
 export type HostErrorCode = (typeof HOST_ERROR_CODES)[number];
-
-// Plain constants (not `super("…")` literals): `tests/errors.test.ts` requires
-// every literal passed to `super` here to be in HOST_ERROR_CODES, and these two
-// codes are intentionally outside that closed union — see AgentInputConflictError.
-const INPUT_CONFLICT_CODE = "input_conflict";
-const INPUT_TRANSITION_INVALID_CODE = "input_transition_invalid";
 
 /**
  * An {@link AgentInputStore.createInput} whose `inputId` already exists with a
@@ -343,13 +343,11 @@ const INPUT_TRANSITION_INVALID_CODE = "input_transition_invalid";
  * The id is the caller's idempotency key, so "same id, same input" is a replay
  * and returns the stored record; "same id, different input" means two callers
  * disagree about what the id names, and picking either would drop the other's
- * input silently. Deliberately NOT in {@link HOST_ERROR_CODES}: that union is
- * the closed set `@agentkit/transport-http` maps to statuses, and input routes
- * are not part of it yet.
+ * input silently.
  */
-export class AgentInputConflictError extends AgentKitHostError {
+export class AgentInputConflictError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
-    super(INPUT_CONFLICT_CODE, message, details);
+    super("input_conflict", message, details);
   }
 }
 
@@ -358,8 +356,39 @@ export class AgentInputConflictError extends AgentKitHostError {
  * include the input's current status (a lost race or a replayed
  * acknowledgement), or whose edge the input's kind forbids.
  */
-export class AgentInputTransitionError extends AgentKitHostError {
+export class AgentInputTransitionError extends NamedHostError {
   constructor(message: string, details?: Record<string, unknown>) {
-    super(INPUT_TRANSITION_INVALID_CODE, message, details);
+    super("input_transition_invalid", message, details);
+  }
+}
+
+/** An answer to a human-input request that was already answered differently. */
+export class AnswerConflictError extends NamedHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("answer_conflict", message, details);
+  }
+}
+
+/**
+ * An answer to a human-input request that can no longer be taken: it expired,
+ * was cancelled, or its task is no longer parked on it.
+ */
+export class AnswerStaleError extends NamedHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("answer_stale", message, details);
+  }
+}
+
+/** The chat does not exist or is not an agent session (no valid descriptor). */
+export class SessionNotFoundError extends NamedHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("session_not_found", message, details);
+  }
+}
+
+/** `AgentSessionService` was built over a store without `inputs`. */
+export class SessionsUnavailableError extends NamedHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super("sessions_unavailable", message, details);
   }
 }

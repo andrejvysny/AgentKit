@@ -11,11 +11,11 @@ import { ChatBusyError, InvalidTaskTransitionError } from "../errors.js";
  * finished, and calling it either would make the queue's recovery pass do the
  * wrong thing.
  *
- * Nothing in this repository currently produces `waiting_approval`: a staged
- * write returns `pending` to the model and the chat-turn executor completes the
- * task. It is reserved for a host that parks a task on the decision and resumes
- * it after — the state and its transitions exist so that host does not fork this
- * table.
+ * `waiting_approval` is a PARK (ADR 0016 §5): the chat-turn executor produces it
+ * when a session turn suspends for human input. A parked task holds no lease and
+ * all its attempts are settled (the last one `completed`); answering the request
+ * re-admits it through `waiting_approval → queued`. A staged write, by contrast,
+ * still returns `pending` to the model and the turn completes.
  */
 export type TaskStatus =
   | "queued"
