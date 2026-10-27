@@ -54,22 +54,107 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
    id: string;
    kind: AiProviderKind;
    capabilities(
-diff --git a/packages/core/src/runs/run-loop.ts b/packages/core/src/runs/run-loop.ts
---- a/packages/core/src/runs/run-loop.ts
-+++ b/packages/core/src/runs/run-loop.ts
-@@ -3,7 +3,7 @@
- import type { ExecutionBudget, ExecutionBudgets } from "./execution-budget.js";
- import { newRunId, newToolEventId, nowIso } from "../ids.js";
- import { createEventStamper, type EventStamper } from "../events.js";
--import type { AiProviderClient, AiChatRequest } from "../providers/client.js";
+diff --git a/packages/core/src/runs/agent-loop.ts b/packages/core/src/runs/agent-loop.ts
+--- a/packages/core/src/runs/agent-loop.ts
++++ b/packages/core/src/runs/agent-loop.ts
+@@ -1,7 +1,6 @@
+ import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
+ import { createEventStamper } from "../events.js";
+ import { newRunId, nowIso } from "../ids.js";
+-import type { AiChatRequest } from "../providers/client.js";
+ import { boundedRun } from "./bounded-run.js";
+ import { streamModelStep } from "./model-step.js";
+ import type { RunChatInput, RunChatResult } from "./run-types.js";
+@@ -54,13 +53,6 @@ async function* runAgentLoopUnchecked(
+     firstSeq: input.firstSeq,
+     attemptId: input.attemptId,
+   });
+-  let continuation = input.continuation;
+-  const onContinuation: AiChatRequest["onContinuation"] = input.onContinuation
+-    ? async (state) => {
+-        await input.onContinuation?.(state);
+-        continuation = state;
+-      }
+-    : undefined;
+   let iteration = 0;
+   let finishReason: string | undefined;
+ 
+@@ -91,8 +83,6 @@ async function* runAgentLoopUnchecked(
+       messages,
+       toolDefinitions,
+       stamp,
+-      getContinuation: () => continuation,
+-      onContinuation,
+     });
+     if (step.kind !== "response") return finish(step.kind);
+     const assistantContent = step.content;
+diff --git a/packages/core/src/runs/model-step.ts b/packages/core/src/runs/model-step.ts
+--- a/packages/core/src/runs/model-step.ts
++++ b/packages/core/src/runs/model-step.ts
+@@ -7,7 +7,6 @@ import type {
+ import type { EventStamper } from "../events.js";
+ import { nowIso } from "../ids.js";
+ import { expandToolResultContent } from "../messages/tool-content.js";
+-import type { AiChatRequest } from "../providers/client.js";
+ import { dedupeToolCallIds } from "../tools/tool-calls.js";
+ import { errorMessageOf, isAbortError } from "./errors.js";
+ import type { RunChatInput } from "./run-types.js";
+@@ -20,12 +19,6 @@ export interface ModelStepContext {
+   messages: readonly AiChatMessage[];
+   toolDefinitions: AiToolDefinition[];
+   stamp: EventStamper;
+-  /**
+-   * The loop owns `continuation` (onContinuation mutates it across
+-   * iterations), so it is read at request time through this getter.
+-   */
+-  getContinuation: () => AiChatRequest["continuation"];
+-  onContinuation: AiChatRequest["onContinuation"];
+ }
+ 
+ export type ModelStepOutcome =
+@@ -56,8 +49,6 @@ export async function* streamModelStep(
+     messages,
+     toolDefinitions,
+     stamp,
+-    getContinuation,
+-    onContinuation,
+   } = ctx;
+   // Deltas are display-only; the turn's authoritative content + tool calls come
+   // from run.message.completed (so non-streaming providers that emit a single
+@@ -82,8 +73,6 @@ export async function* streamModelStep(
+   // as a raw rejection, leaving the run with no terminal event at all. Catch it
+   // here and turn it into the one terminal event the contract promises.
+   try {
+-    // Read at request time: onContinuation moves it between iterations.
+-    const continuation = getContinuation();
+     for await (const event of input.client.streamChat({
+       runId,
+       model: input.model,
+@@ -92,12 +81,6 @@ export async function* streamModelStep(
+       temperature: input.temperature,
+       maxOutputTokens: input.maxOutputTokens,
+       signal: input.signal,
+-      continuation,
+-      continuationScope: input.continuationScope,
+-      continuationRequired:
+-        input.continuationRequired || continuation !== undefined,
+-      onContinuation,
+-      runContent: input.runContent,
+     })) {
+       // Re-yield provider events with the canonical runId.
+       const stamped = { ...event, runId } as AiRunEvent;
+diff --git a/packages/core/src/runs/run-types.ts b/packages/core/src/runs/run-types.ts
+--- a/packages/core/src/runs/run-types.ts
++++ b/packages/core/src/runs/run-types.ts
+@@ -3,19 +3,11 @@ import type {
+   AiContextBinding,
+   AiToolLimits,
+ } from "@agentkit/contracts";
+-import type { AiChatRequest, AiProviderClient } from "../providers/client.js";
 +import type { AiProviderClient } from "../providers/client.js";
  import type { AiToolRegistry } from "../tools/registry.js";
- import type { AiTool } from "../tools/tool.js";
- import type {
-@@ -24,15 +24,7 @@
- import { truncateString } from "../tools/limits.js";
- import { dedupeToolCallIds } from "../tools/tool-calls.js";
-
+ import type { ExecutionBudget, ExecutionBudgets } from "./execution-budget.js";
+ 
 -export interface RunChatInput
 -  extends Pick<
 -    AiChatRequest,
@@ -83,30 +168,3 @@ diff --git a/packages/core/src/runs/run-loop.ts b/packages/core/src/runs/run-loo
    budgets?: ExecutionBudgets;
    executionBudget?: ExecutionBudget;
    client: AiProviderClient;
-@@ -140,13 +132,6 @@
-     firstSeq: input.firstSeq,
-     attemptId: input.attemptId,
-   });
--  let continuation = input.continuation;
--  const onContinuation: AiChatRequest["onContinuation"] = input.onContinuation
--    ? async (state) => {
--        await input.onContinuation?.(state);
--        continuation = state;
--      }
--    : undefined;
-   let iteration = 0;
-   let finishReason: string | undefined;
-
-@@ -201,12 +186,6 @@
-         temperature: input.temperature,
-         maxOutputTokens: input.maxOutputTokens,
-         signal: input.signal,
--        continuation,
--        continuationScope: input.continuationScope,
--        continuationRequired:
--          input.continuationRequired || continuation !== undefined,
--        onContinuation,
--        runContent: input.runContent,
-       })) {
-         // Re-yield provider events with the canonical runId.
-         const stamped = { ...event, runId } as AiRunEvent;

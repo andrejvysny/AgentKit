@@ -3,7 +3,7 @@ import { AiToolRegistry } from "../tools/registry.js";
 import { createEventStamper } from "../events.js";
 import { newRunId, nowIso } from "../ids.js";
 import { ExecutionBudget, ExecutionBudgetError } from "./execution-budget.js";
-import type { RunChatInput, RunChatResult } from "./run-loop.js";
+import type { RunChatInput, RunChatResult } from "./run-types.js";
 import { boundedClient } from "./bounded-provider.js";
 
 function boundedRegistry(
