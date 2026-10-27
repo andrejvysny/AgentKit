@@ -382,6 +382,88 @@ describe("flushQueue", () => {
   });
 });
 
+describe("clearQueue", () => {
+  it("cancels queued follow-ups and steers so none converts later", async () => {
+    const f = await setup();
+    await newSession(f);
+    const first = await turnOf(f, "s1", "q1");
+    await f.service.followUp("s1", { inputId: "fu-1", content: "q2" });
+    await f.service.send("s1", {
+      content: "steer",
+      inputId: "st-1",
+      whenBusy: "steer",
+    });
+    expect(await f.service.clearQueue("s1")).toBe(2);
+    expect((await f.inputs.getInput("fu-1"))?.status).toBe("cancelled");
+    expect((await f.inputs.getInput("st-1"))?.status).toBe("cancelled");
+    expect(await f.service.clearQueue("s1")).toBe(0);
+
+    await claimAndDrive(f, first.turnId);
+    expect(await f.service.flushQueue("s1")).toBeUndefined();
+    expect((await f.service.getState("s1")).pending).toEqual([]);
+  });
+
+  it("leaves a pending human request alone and rejects unknown sessions", async () => {
+    const f = await setup();
+    await newSession(f);
+    askScript(f);
+    const turn = await turnOf(f, "s1", "ask me");
+    await drive(f, turn.turnId);
+    const requestId = humanRequestId(turn.turnId, "call-1");
+    await f.service.followUp("s1", { inputId: "fu-1", content: "later" });
+    expect(await f.service.clearQueue("s1")).toBe(1);
+    expect((await f.inputs.getInput(requestId))?.status).toBe("pending");
+    expect(await codeOf(f.service.clearQueue("nope"))).toBe(
+      "session_not_found",
+    );
+  });
+});
+
+describe("configure", () => {
+  it("updates skills and context for future turns only", async () => {
+    const f = await setup();
+    await newSession(f);
+    const state = await f.service.configure("s1", {
+      skills: [{ id: "sk", revision: "r1" }],
+      context: { policy: "final_answers", windowTokens: 5000 },
+    });
+    expect(state.descriptor.skills).toEqual([{ id: "sk", revision: "r1" }]);
+    expect(state.descriptor.context).toEqual({
+      policy: "final_answers",
+      windowTokens: 5000,
+    });
+    expect(state.descriptor.model).toBe("m-x");
+    const turn = await turnOf(f, "s1", "hi");
+    const task = await f.store.tasks.getTask(turn.turnId);
+    expect(task?.payload).toMatchObject({
+      contentSelection: { skills: [{ id: "sk", revision: "r1" }] },
+    });
+    // A patch with only one field keeps the other.
+    const kept = await f.service.configure("s1", { skills: [] });
+    expect(kept.descriptor.skills).toEqual([]);
+    expect(kept.descriptor.context?.windowTokens).toBe(5000);
+  });
+
+  it("rejects invalid input and unknown sessions", async () => {
+    const f = await setup();
+    await newSession(f);
+    expect(
+      await codeOf(
+        f.service.configure("s1", { skills: [{ id: "x" } as never] }),
+      ),
+    ).toBe("invalid_input");
+    expect(
+      await codeOf(
+        f.service.configure("s1", { context: { windowTokens: -1 } }),
+      ),
+    ).toBe("invalid_input");
+    expect(await codeOf(f.service.configure("nope", {}))).toBe(
+      "session_not_found",
+    );
+    expect((await f.service.getState("s1")).descriptor.skills).toBeUndefined();
+  });
+});
+
 describe("human input", () => {
   async function parked(f: Fixture, args?: string) {
     await newSession(f);

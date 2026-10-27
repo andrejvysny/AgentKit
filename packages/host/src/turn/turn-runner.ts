@@ -268,6 +268,12 @@ export interface TurnRunnerDeps {
    * `workspace`. Absent, no project instructions are injected (ADR 0017).
    */
   projectInstructions?: ProjectInstructionsSource;
+  /**
+   * What to do with project instructions of a session whose workspace is
+   * untrusted: `label` (default) injects them behind an untrusted notice,
+   * `skip` loads none.
+   */
+  untrustedProjectInstructions?: "label" | "skip";
   /** Token estimate for session context budgeting. Default chars/4. */
   tokenEstimator?: TokenEstimator;
   /**
@@ -1634,7 +1640,8 @@ export class TurnRunner implements TaskWorker {
     if (
       input.projectInstructions !== false &&
       session.workspace !== undefined &&
-      this.deps.projectInstructions
+      this.deps.projectInstructions &&
+      !this.skipsUntrustedInstructions(session.workspace)
     ) {
       const instructions = await loadProjectInstructions(
         this.deps.projectInstructions,
@@ -1756,6 +1763,18 @@ export class TurnRunner implements TaskWorker {
    * `createTaskEventWriter`, because these warnings are emitted BETWEEN passes
    * and must speak the same `AiRunEvent` vocabulary the passes around them do.
    */
+  private skipsUntrustedInstructions(workspace: {
+    root: string;
+    trusted: boolean;
+  }): boolean {
+    if (workspace.trusted || this.deps.untrustedProjectInstructions !== "skip")
+      return false;
+    this.deps.logger?.debug("skipped untrusted project instructions", {
+      root: workspace.root,
+    });
+    return true;
+  }
+
   private async emitWarning(
     ctx: TaskExecutionContext,
     code: string,

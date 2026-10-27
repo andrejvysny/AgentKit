@@ -6,6 +6,7 @@
  * `AgentInputStore` record.
  */
 import {
+  AgentInputTransitionError,
   AgentKitHostError,
   ChatBusyError,
   RecordNotFoundError,
@@ -34,6 +35,7 @@ import {
   sessionContentSelection,
   sessionTurnKind,
   type AgentSessionDescriptor,
+  type SessionContextOptions,
   type SessionReasoningEffort,
 } from "./descriptor.js";
 import { sha256Hex } from "./hash.js";
@@ -528,6 +530,67 @@ export class AgentSessionService {
           },
         },
       });
+    });
+    return this.getState(sessionId);
+  }
+
+  /**
+   * Cancel every pending queued follow-up and steer of the session. Human
+   * requests are untouched. Returns how many inputs were cancelled.
+   */
+  async clearQueue(sessionId: string): Promise<number> {
+    await this.requireSession(sessionId);
+    return this.deps.store.transaction(async (tx) => {
+      const inputs = tx.inputs;
+      if (!inputs) return 0;
+      const pending = await inputs.listInputs({
+        sessionId,
+        kinds: ["follow_up", "steer"],
+        statuses: ["pending"],
+      });
+      let cleared = 0;
+      for (const record of pending) {
+        try {
+          await inputs.transitionInput(
+            record.inputId,
+            ["pending"],
+            "cancelled",
+          );
+          cleared += 1;
+        } catch (error) {
+          // A concurrent flush or cancel won this input; it is no longer queued.
+          if (!(error instanceof AgentInputTransitionError)) throw error;
+        }
+      }
+      return cleared;
+    });
+  }
+
+  /**
+   * Replace the session's Skills and/or context options. Future turns only; an
+   * active task keeps what it was submitted with.
+   */
+  async configure(
+    sessionId: string,
+    patch: {
+      skills?: { id: string; revision: string }[];
+      context?: SessionContextOptions;
+    },
+  ): Promise<AgentSessionState> {
+    await this.deps.store.transaction(async (tx) => {
+      const chat = await tx.conversations.getChat(sessionId);
+      const descriptor = readSessionDescriptor(chat?.metadata);
+      if (!chat || !descriptor) throw this.notASession(sessionId);
+      const next = {
+        ...descriptor,
+        ...(patch.skills === undefined ? {} : { skills: patch.skills }),
+        ...(patch.context === undefined ? {} : { context: patch.context }),
+      };
+      const metadata = { ...chat.metadata, [SESSION_METADATA_KEY]: next };
+      const checked = readSessionDescriptor(metadata);
+      if (checked === undefined)
+        invalid("skills must be {id, revision} strings and context valid.");
+      await tx.conversations.updateChat(sessionId, { metadata });
     });
     return this.getState(sessionId);
   }

@@ -16,6 +16,17 @@ now in source, merged with the M7 resumable interrupt.
 - Responses: SIWC error recovery classification, inert `response.metadata` events, and account-profile empty terminal
   output recovered from completed output items.
 
+**Host APIs for product coding agents.**
+
+- `PlanApprovalPolicy.grantedMode` may be a function `({ sessionId }) => string | Promise<string>`, resolved before the
+  answer transaction; a resolved `plan` or empty mode denies with `plan_not_authorized: invalid granted mode`.
+- `AgentSessionService.clearQueue(sessionId)` cancels every pending queued follow-up and steer and returns the count;
+  human requests are untouched.
+- `AgentSessionService.configure(sessionId, { skills?, context? })` replaces the session's Skills and context options
+  for future turns, validated like `createSession`.
+- `TurnRunnerDeps.untrustedProjectInstructions: "label" | "skip"` (default `label`): `skip` loads no project
+  instructions for a session whose workspace is untrusted.
+
 **Coding tool pack hardening** ([ADR 0018](docs/adr/0018-coding-tool-pack.md)).
 
 - `git_inspect` neutralizes repository-defined filter, textconv and external-diff drivers, pagers and ssh/askpass

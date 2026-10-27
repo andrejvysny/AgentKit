@@ -299,6 +299,46 @@ describe("plan approval", () => {
     expect(message?.content).toContain("plan_not_authorized");
   });
 
+  it("resolves a function grantedMode per session", async () => {
+    const f = fixture({
+      toolNames: ["submit_plan"],
+      grantedMode: ({ sessionId }) =>
+        sessionId === "s1" ? "auto_edit" : "full_auto",
+    });
+    const a = await createSession(f, "s1", "plan");
+    const b = await createSession(f, "s2", "plan");
+    const ra = await parkPlanRequest(f, a);
+    const rb = await parkPlanRequest(f, b);
+    await f.service.approve(ra.requestId, "ans-1");
+    await f.service.approve(rb.requestId, "ans-2");
+    expect((await f.service.getExecution(a))?.mode).toBe("auto_edit");
+    expect((await f.service.getExecution(b))?.mode).toBe("full_auto");
+    expect((await f.service.getExecution(b))?.grantedPlan?.mode).toBe(
+      "full_auto",
+    );
+  });
+
+  it("denies when the resolved grantedMode is plan or empty", async () => {
+    for (const mode of ["plan", ""]) {
+      const f = fixture({
+        toolNames: ["submit_plan"],
+        grantedMode: async () => mode,
+      });
+      const s = await createSession(f, "s1", "plan");
+      const { requestId } = await parkPlanRequest(f, s);
+      await f.service.approve(requestId, "ans-1");
+      expect((await f.service.getExecution(s))?.mode).toBe("plan");
+      expect((await f.service.getExecution(s))?.grantedPlan).toBeUndefined();
+      const record = await f.inputs.getInput(requestId);
+      const message = await f.harness.store.conversations.getMessage(
+        record?.appliedMessageId ?? "",
+      );
+      expect(message?.content).toContain(
+        "plan_not_authorized: invalid granted mode",
+      );
+    }
+  });
+
   it("repairs a grant lost between the marker and the metadata", async () => {
     const f = fixture();
     const s = await createSession(f, "s1", "plan");
