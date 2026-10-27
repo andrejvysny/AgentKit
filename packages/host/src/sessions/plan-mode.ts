@@ -157,6 +157,12 @@ export function executionStateForGrant(
       "a plan approval may not grant plan mode: it is the escalation out of it, not a destination.",
       { grantedMode: grant.mode },
     );
+  if (grant.mode === "")
+    throw new AgentKitHostError(
+      "invalid_input",
+      "a plan approval must grant a non-empty mode.",
+      { grantedMode: grant.mode },
+    );
   return {
     version: 1,
     mode: grant.mode,
@@ -185,9 +191,14 @@ export interface PlanApprovalPolicy {
   toolNames: readonly string[];
   /**
    * The mode the session moves to when the user approves. The host decides:
-   * the model's request is recorded, never obeyed.
+   * the model's request is recorded, never obeyed. A function resolves it per
+   * session (before the answer transaction); resolving to "plan" or "" denies.
+   * A repair of a half-written answer may call it inside the store transaction,
+   * so it must be fast and must not write to the AgentKit store.
    */
-  grantedMode: string;
+  grantedMode:
+    | string
+    | ((ctx: { sessionId: string }) => string | Promise<string>);
   /** Extra veto (role ceiling, untrusted workspace). A denial keeps plan mode. */
   authorize?(ctx: {
     sessionId: string;
@@ -200,6 +211,16 @@ export interface PlanApprovalPolicy {
     | boolean
     | { allowed: boolean; reason?: string }
     | Promise<boolean | { allowed: boolean; reason?: string }>;
+}
+
+/** Resolve the policy's granted mode for a session; a function runs the host's code. */
+export async function resolveGrantedMode(
+  policy: PlanApprovalPolicy,
+  sessionId: string,
+): Promise<string> {
+  return typeof policy.grantedMode === "function"
+    ? policy.grantedMode({ sessionId })
+    : policy.grantedMode;
 }
 
 /** The plan a pending request asks to approve, or undefined when it is not one. */
@@ -249,6 +270,8 @@ export async function applyPlanGrant(
     turnId: string;
     plan: PlanRequest;
     policy: PlanApprovalPolicy;
+    /** The mode already resolved from `policy.grantedMode`. */
+    grantedMode: string;
     nowIso: string;
     note?: string;
   },
@@ -263,7 +286,7 @@ export async function applyPlanGrant(
   const prior = readSessionExecution(chat.metadata);
   const state = executionStateForGrant(
     {
-      mode: input.policy.grantedMode,
+      mode: input.grantedMode,
       planDigest: input.plan.planDigest,
       requestId: input.requestId,
       turnId: input.turnId,

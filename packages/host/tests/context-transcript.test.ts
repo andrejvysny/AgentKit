@@ -487,6 +487,45 @@ describe("project instructions", () => {
     expect(text).toContain("rules");
   });
 
+  it("skips untrusted instructions when configured, labels them otherwise", async () => {
+    const skip = await setup({
+      session: { workspace: { root: "/repo", trusted: false } },
+      overrides: {
+        projectInstructions: source({ "AGENTS.md": "rules" }),
+        untrustedProjectInstructions: "skip",
+      },
+    });
+    skip.mock.setScript([{ steps: [{ kind: "text", content: "ok" }] }]);
+    await turn(skip, "hi");
+    const skipped = String(skip.mock.requests[0]?.[0]?.content ?? "");
+    expect(skipped).not.toContain("rules");
+    expect(skipped).not.toContain("untrusted");
+
+    const trusted = await setup({
+      session: { workspace: { root: "/repo", trusted: true } },
+      overrides: {
+        projectInstructions: source({ "AGENTS.md": "rules" }),
+        untrustedProjectInstructions: "skip",
+      },
+    });
+    trusted.mock.setScript([{ steps: [{ kind: "text", content: "ok" }] }]);
+    await turn(trusted, "hi");
+    expect(String(trusted.mock.requests[0]?.[0]?.content)).toContain("rules");
+
+    const label = await setup({
+      session: { workspace: { root: "/repo", trusted: false } },
+      overrides: {
+        projectInstructions: source({ "AGENTS.md": "rules" }),
+        untrustedProjectInstructions: "label",
+      },
+    });
+    label.mock.setScript([{ steps: [{ kind: "text", content: "ok" }] }]);
+    await turn(label, "hi");
+    const labelled = String(label.mock.requests[0]?.[0]?.content);
+    expect(labelled).toContain("untrusted");
+    expect(labelled).toContain("rules");
+  });
+
   it("warns when a file was truncated", async () => {
     const f = await setup({
       session: { workspace: { root: "/repo", trusted: true } },

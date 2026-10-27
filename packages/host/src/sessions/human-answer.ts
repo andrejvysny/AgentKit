@@ -13,6 +13,7 @@ import type { Clock, IdGenerator } from "../ports/system.js";
 import { sha256Hex } from "./hash.js";
 import {
   applyPlanGrant,
+  resolveGrantedMode,
   planRequestOf,
   readSessionExecution,
   type PlanApprovalPolicy,
@@ -121,6 +122,7 @@ export async function answerHumanRequest(
   // write lock. The authoritative grant write still happens inside the
   // transaction, against the record re-read there.
   let policyDenial: string | undefined;
+  let grantedMode: string | undefined;
   {
     const pre = await deps.store.inputs?.getInput(requestId);
     if (
@@ -152,6 +154,10 @@ export async function answerHumanRequest(
             : { requestedMode: plan.requestedMode }),
           ...(typeof note === "string" ? { note } : {}),
         });
+        grantedMode = await resolveGrantedMode(
+          deps.planApproval,
+          pre.sessionId,
+        );
         const allowed =
           verdict === undefined ||
           verdict === true ||
@@ -161,6 +167,8 @@ export async function answerHumanRequest(
             typeof verdict === "object" && verdict.reason !== undefined
               ? verdict.reason
               : "the host does not allow approving a plan here";
+        else if (grantedMode === "" || grantedMode === "plan")
+          policyDenial = "invalid granted mode";
       }
     }
   }
@@ -234,6 +242,10 @@ export async function answerHumanRequest(
               turnId: taskId,
               plan: replay,
               policy: deps.planApproval,
+              grantedMode: await resolveGrantedMode(
+                deps.planApproval,
+                request.sessionId,
+              ),
               nowIso: now,
             });
         }
@@ -344,6 +356,9 @@ export async function answerHumanRequest(
             turnId: taskId,
             plan,
             policy: deps.planApproval,
+            grantedMode:
+              grantedMode ??
+              (await resolveGrantedMode(deps.planApproval, request.sessionId)),
             nowIso: now,
             ...(approval.note === undefined ? {} : { note: approval.note }),
           });
