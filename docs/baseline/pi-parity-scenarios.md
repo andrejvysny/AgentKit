@@ -26,9 +26,9 @@ Status values:
 | # | Scenario | Pi / OneMind source | AgentKit owner | Status |
 |---|---|---|---|---|
 | S1 | Single prompt, model answers with no tools | `packages/agent/test/agent-loop.test.ts`; OneMind `pi-worker/worker.test.ts` | exists (`golden: chat-only`) | AgentKit (done) |
-| S2 | Read/search exploration with native tools, no shell | `packages/coding-agent/test/tools.test.ts`, `read-line-range-display.test.ts`, `tool-search.test.ts`; OneMind `pi-worker/search.test.ts` | M4 coding tool pack | pinned (source) |
-| S3 | Edit file with conflict detection | `packages/coding-agent/test/edit-tool-legacy-input.test.ts`, `file-mutation-queue.test.ts` | M4 | pinned (source) |
-| S4 | Run tests / bounded shell with timeout and teardown | `packages/coding-agent/test/exec.test.ts`, `bash-close-hang-windows.test.ts`; OneMind `pi-worker/shell-isolation.test.ts`, `bash-exploration.test.ts` | M4/M5 | pinned (source) |
+| S2 | Read/search exploration with native tools, no shell | `packages/coding-agent/test/tools.test.ts`, `read-line-range-display.test.ts`, `tool-search.test.ts`; OneMind `pi-worker/search.test.ts` | `packages/toolpacks-coding` (`read_file` ranges/batches/sha256, `code_search` paging, gitignore-aware `find_files`/`list_dir`); `tests/read-file.test.ts`, `tests/search.test.ts` | AgentKit (done) |
+| S3 | Edit file with conflict detection | `packages/coding-agent/test/edit-tool-legacy-input.test.ts`, `file-mutation-queue.test.ts` | `edit-engine.ts` (expected sha256, overlap/ambiguity refusal, per-line EOL kept, invalid UTF-8 refused); `tests/edit-file.test.ts` | AgentKit (done) |
+| S4 | Run tests / bounded shell with timeout and teardown | `packages/coding-agent/test/exec.test.ts`, `bash-close-hang-windows.test.ts`; OneMind `pi-worker/shell-isolation.test.ts`, `bash-exploration.test.ts` | `exec-tools.ts`, `process.ts`, `process-tree.ts` (TERM→KILL, escaped-descendant tracking, orphan sweep); `tests/exec.test.ts`, `tests/teardown.test.ts` | AgentKit (done, macOS + Linux) |
 | S5 | Multi-tool turn, tool results balanced, parallel vs sequential | `packages/agent/test/agent-loop.test.ts` (`executeToolCalls*`), `packages/coding-agent/test/nested-tool-calls.test.ts` | M1 (loop), exists (`golden: tool-run`, `tool-cap-run`) | AgentKit (M1) |
 | S6 | Tool gated by host approval; denial fed back to model | OneMind `pi-worker/gate.test.ts` | `packages/host/src/sessions/human-answer.ts`, `packages/host/src/turn/approval-resume.ts`; `packages/host/tests/approval-resume.test.ts`, `examples/coding-agent/tests/acceptance.test.ts` | AgentKit (done) |
 | S7 | Follow-up turn after settlement | `packages/agent/test/agent.test.ts` (`followUp`) | M2 | AgentKit (M2); not a OneMind blocker |
@@ -36,7 +36,7 @@ Status values:
 | S9 | Abort mid-stream / mid-tool; no post-cancel dispatch | `packages/agent/test/agent.test.ts`, `agent-loop.test.ts`; OneMind `pi-worker/worker.test.ts` | exists (`golden: cancelled-run`, `run-loop-cancellation*.test.ts`) | AgentKit (done) |
 | S10 | Resume exact session after quit/restart | `packages/coding-agent/test/sdk-session-manager.test.ts`, `session-file-invalid.test.ts`; OneMind `pi-worker/session.test.ts` | M2 | AgentKit (M2) |
 | S11 | Fork / branch session from a checkpoint | `packages/coding-agent/test/agent-session-branching.test.ts`, `agent-session-tree-navigation.test.ts` | exists (chat fork, ADR 0007) + M2 session fork | AgentKit (M2) |
-| S12 | Auto compaction at threshold; overflow recovery | `packages/coding-agent/test/agent-session-compaction.test.ts`, `agent-session-auto-compaction-queue.test.ts`, `compaction*.test.ts`; OneMind `pi-worker/worker.test.ts` (`worker compaction`) | M3 | pinned (source) |
+| S12 | Auto compaction at threshold; overflow recovery | `packages/coding-agent/test/agent-session-compaction.test.ts`, `agent-session-auto-compaction-queue.test.ts`, `compaction*.test.ts`; OneMind `pi-worker/worker.test.ts` (`worker compaction`) | `packages/host/src/context/` (compaction, stale tool-result elision); `packages/host/tests/context-compaction.test.ts`; live: `scripts/live/compaction-session.ts` | AgentKit (done) |
 | S13 | Model change mid-session with continuation safety | `packages/coding-agent/test/agent-session-dynamic-provider.test.ts` | M2 (`setModel`) + existing continuation validation | AgentKit (M2) |
 | S14 | Retry on transient provider failure | `packages/coding-agent/test/agent-session-retry.test.ts` | exists (host retry / pass boundary) | AgentKit (done) |
 | S15 | Event stream fidelity for a UI (start / deltas / tool start-end / settled) | OneMind `pi-worker/events.test.ts`, `pi/parser.test.ts` | M1 event mapping (ADR 0015 §event mapping) | AgentKit (M1) |
@@ -57,17 +57,17 @@ Every case requires explicit durable state, no lost authoritative event, and no 
 | C5 | After tool side effect, before receipt | `packages/host/src/turn/side-effects.ts`, `packages/host/src/turn/history-reconcile.ts`; `packages/host/tests/side-effects.test.ts`, `packages/runner-local/tests/e2e-sessions-crash.test.ts` (C5/C5b), `examples/coding-agent/tests/acceptance.test.ts` (SIGKILL of a real child process) | AgentKit (done) |
 | C6 | While waiting for human input | M2 | AgentKit (M2) |
 | C7 | After compaction, before checkpoint | M3 | pinned (source) |
-| C8 | Application quit and OS kill | M2 (restart), M8 (packaged app) | AgentKit (M2/M8) |
+| C8 | Application quit and OS kill | `shutdownMode: "interrupt"` + `recoveryMode: "manual"`; `packages/runner-local/tests/interrupt.test.ts`, `examples/coding-agent/tests/acceptance.test.ts` (quit, SIGKILL); packaged app is M8 | AgentKit (done); M8 open |
 
 ## Security matrix (canonical page §12)
 
 | # | Case | AgentKit owner | Status |
 |---|---|---|---|
-| X1 | Parent-relative and absolute path escapes | M4 | pinned (OneMind `pi-worker/tools.ts` `confinePath`) |
+| X1 | Parent-relative and absolute path escapes | `packages/toolpacks-coding/src/paths.ts`; `tests/paths.test.ts` | AgentKit (done) |
 | X2 | Symlinks and races (TOCTOU) | M4/M5 | pinned (source) |
-| X3 | Credential and hidden files excluded from reads | M4 | pinned (source) |
-| X4 | Git hooks and untrusted repository instructions | M3/M5 | open |
-| X5 | Shell injection, network and exfiltration | M5 (OS sandbox) | pinned (OneMind `pi-worker/shell-isolation.test.ts`) |
+| X3 | Credential and hidden files excluded from reads | `paths.ts` sensitive-name list, sandbox credential read-deny; `tests/paths.test.ts`, `tests/read-file.test.ts`, `tests/exec.test.ts` | AgentKit (done) |
+| X4 | Git hooks and untrusted repository instructions | `git-tool.ts` neutralizes hooks, fsmonitor and repo-defined filter/textconv/ext-diff drivers; sandbox makes `.git` read-only; project instructions are labelled untrusted (`context/instructions.ts`); `tests/git-inspect.test.ts` | AgentKit (done) |
+| X5 | Shell injection, network and exfiltration | `sandbox.ts` (network off, writes confined), env scrub in `exec-tools.ts`; `tests/exec.test.ts` (macOS only; other OSes refuse unless `sandbox: "off"`) | AgentKit (done, macOS) |
 | X6 | MCP tools misclassified as reads | M5 (reuse Code Mode A10) | open |
 | X7 | Tool cancellation and stale callbacks | M1 (no post-cancel dispatch) | AgentKit (M1) |
 | X8 | Permission mode / role inversion | `packages/toolpacks-coding/src/guard.ts` (the ceiling is checked before the mode and its refusal carries no approval), `packages/host/src/profiles/agent-profile.ts`; `packages/toolpacks-coding/tests/guard.test.ts`, `packages/host/tests/profiles.test.ts` | AgentKit (done) |

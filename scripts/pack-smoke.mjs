@@ -424,7 +424,7 @@ const codingRead = await codingTools
   .execute({ runId: "smoke", bindings: [], limits: { profile: "small", maxBytes: 16384 } }, { path: "hello.txt" });
 check(codingRead.ok && String(codingRead.modelData).includes("2\\tbeta"), "read_file returns numbered lines");
 const codingGuard = toolpacks.createCodingPermissionGuard({ mode: "read_only" });
-const codingVerdict = codingGuard.canExecute({
+const codingVerdict = await codingGuard.canExecute({
   namespace: "coding",
   bindings: [],
   tool: codingTools.find((t) => t.definition.name === "edit_file").definition,
