@@ -107,6 +107,12 @@ bounded number of the same scope's unfinished tasks:
 interface UncertainCall { toolCallId: string; toolName: string; argsSha256?: string }
 ```
 
+The scan follows log order and the last state of a call id wins: `run.tool.running` opens it, and
+`run.tool.succeeded`, `run.tool.failed` or `run.waiting` close it. `run.waiting` counts because `run.tool.running` is
+emitted before the guard chain runs, so a call the guard parked for approval logs "running" without having executed
+(found by the live approval smoke, 2026-10-27). An approved call that then starts on the resumed attempt and dies is
+open again, and is uncertain.
+
 Only tools the staged registry declares `effect: "write"` (plus any the host names explicitly) are candidates; a read
 that lost its result is a plain gap, not a hazard. Two consequences follow:
 
