@@ -31,6 +31,9 @@ export * from "./policy/session-write-policy.js";
 // Tools: the chat-independent catalogue over the same contributors a turn uses.
 export * from "./tools/contributor-tool-catalog.js";
 
+// Agent profiles: one runtime, many jobs — data the host enforces, not prompts.
+export * from "./profiles/agent-profile.js";
+
 // Conversation shape: the message-tree arithmetic every ConversationStore
 // adapter shares (active path, branch switching, fork flattening, import
 // validation), plus the chat lifecycle that spans three stores.
