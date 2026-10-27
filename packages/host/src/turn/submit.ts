@@ -9,6 +9,7 @@ import type {
   AiMessageContent,
   RunContentSelection,
 } from "@agentkit/contracts";
+import type { AiReasoningEffort } from "@agentkit/core";
 import {
   DuplicateTaskError,
   InvalidRegenerateError,
@@ -30,6 +31,7 @@ export interface SubmitMessageInput {
    */
   content: AiMessageContent;
   model?: string;
+  reasoningEffort?: AiReasoningEffort;
   providerId?: string;
   metadata?: Record<string, unknown>;
   priority?: number;
@@ -122,6 +124,7 @@ export interface RegenerateMessageInput {
    */
   messageId: string;
   model?: string;
+  reasoningEffort?: AiReasoningEffort;
   providerId?: string;
   /** Metadata for the new placeholder, merged over `{ placeholder: true }`. */
   metadata?: Record<string, unknown>;
@@ -156,6 +159,8 @@ export interface TurnRequest {
   contentSelection?: RunContentSelection;
   chatId: string;
   model?: string;
+  /** Pinned at submit, like `model`; the profile's effort applies when absent. */
+  reasoningEffort?: AiReasoningEffort;
   providerId?: string;
   assistantMessageId: string;
   userMessageId?: string;
@@ -189,6 +194,9 @@ export async function submitMessage(
       ? { contentSelection: structuredClone(input.contentSelection) }
       : {}),
     ...(input.model === undefined ? {} : { model: input.model }),
+    ...(input.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: input.reasoningEffort }),
     ...(input.providerId === undefined ? {} : { providerId: input.providerId }),
     assistantMessageId,
     userMessageId,
@@ -422,6 +430,9 @@ export async function regenerate(
       ? { contentSelection: structuredClone(input.contentSelection) }
       : {}),
     ...(input.model === undefined ? {} : { model: input.model }),
+    ...(input.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: input.reasoningEffort }),
     ...(input.providerId === undefined ? {} : { providerId: input.providerId }),
     assistantMessageId,
     // The question this run answers. It is not a message this call created —

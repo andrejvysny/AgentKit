@@ -10,8 +10,8 @@ import { publicErrorMessage } from "./error-message.js";
 import { fencedConversations } from "./fenced-conversations.js";
 import { createTurnBudget } from "./execution-budget.js";
 import {
+  ExecutionBudget,
   ExecutionBudgetError,
-  type ExecutionBudget,
   type ExecutionBudgets,
 } from "@agentkit/core";
 import type {
@@ -121,6 +121,7 @@ import {
 import { resolveApprovedCalls } from "./approval-resume.js";
 import {
   effectiveLimits,
+  mergeProfileSkills,
   type ProfileRegistry,
 } from "../profiles/agent-profile.js";
 import {
@@ -600,6 +601,34 @@ export class TurnRunner implements TaskWorker {
     }
   }
 
+  /**
+   * A profile's `attemptBudgetMs` bounds this attempt's wall clock. It rides
+   * the execution budget so an overrun lands `failed` (`execution_timeout`),
+   * never `cancelled`; a host that configured no budgets gets a local one,
+   * because the core loop only converts a budget abort into a failure.
+   * `AbortSignal.timeout` timers are unref'd, so a turn that finishes early
+   * leaves nothing to clean up.
+   */
+  private armAttemptBudget(
+    ctx: TaskExecutionContext,
+    attemptBudgetMs: number | undefined,
+  ): TaskExecutionContext {
+    if (attemptBudgetMs === undefined) return ctx;
+    let budget = this.executionBudgets.get(ctx);
+    if (!budget) {
+      budget = new ExecutionBudget({}, { signal: ctx.signal });
+      ctx = { ...ctx, signal: budget.signal };
+      this.executionBudgets.set(ctx, budget);
+    }
+    const armed = budget;
+    AbortSignal.timeout(attemptBudgetMs).addEventListener(
+      "abort",
+      () => armed.timeout("attempt"),
+      { once: true },
+    );
+    return ctx;
+  }
+
   private async runTurn(
     ctx: TaskExecutionContext,
     chatId: string,
@@ -619,10 +648,25 @@ export class TurnRunner implements TaskWorker {
         : readSessionDescriptor(
             (await store.conversations.getChat(chatId))?.metadata,
           );
+    // The agent profile, resolved by the HOST from the session's descriptor.
+    // Its tool allowlist is enforced at staging and its limits cap — never
+    // raise — this host's; its `instructions` are the only part the model is
+    // trusted with. Resolved first: its model, skills and attempt budget all
+    // feed decisions made before the tools are staged.
+    const profile = this.deps.profiles?.forSession(session);
+    const profileLimits = effectiveLimits(profile, {
+      ...(this.deps.maxToolIterations === undefined
+        ? {}
+        : { maxToolIterations: this.deps.maxToolIterations }),
+      ...(this.deps.historyLimit === undefined
+        ? {}
+        : { historyLimit: this.deps.historyLimit }),
+    });
+    ctx = this.armAttemptBudget(ctx, profileLimits.attemptBudgetMs);
     // Session Skills come from the descriptor, so one that has since vanished
     // or changed is a warning, not a failed turn.
     const unavailableSkills: string[] = [];
-    const selection = request.contentSelection;
+    const selection = mergeProfileSkills(request.contentSelection, profile);
     const selectedContent = selection
       ? await withHookDeadline({
           hook: "runContent.resolve",
@@ -661,7 +705,11 @@ export class TurnRunner implements TaskWorker {
     const settings = await store.settings.getSettings();
     const provider = await this.resolveProvider(request, settings);
     const model =
-      request.model ?? provider.defaultModel ?? settings.defaultModel;
+      request.model ??
+      profile?.model ??
+      provider.defaultModel ??
+      settings.defaultModel;
+    const reasoningEffort = request.reasoningEffort ?? profile?.reasoningEffort;
     if (!model) {
       throw new AgentKitHostError(
         "no_model",
@@ -706,19 +754,6 @@ export class TurnRunner implements TaskWorker {
       toolCalling === "off"
         ? false
         : toolCalling === "on" || capabilities?.toolCalling !== false;
-    // The agent profile, resolved by the HOST from the session's descriptor.
-    // Its tool allowlist is enforced at staging and its limits cap — never
-    // raise — this host's; its `instructions` are the only part the model is
-    // trusted with.
-    const profile = this.deps.profiles?.forSession(session);
-    const profileLimits = effectiveLimits(profile, {
-      ...(this.deps.maxToolIterations === undefined
-        ? {}
-        : { maxToolIterations: this.deps.maxToolIterations }),
-      ...(this.deps.historyLimit === undefined
-        ? {}
-        : { historyLimit: this.deps.historyLimit }),
-    });
     // Side-effect receipts (ADR 0019 part 3). The guard is staged BEFORE the
     // durable log has been read, so it reads through holders this turn fills in
     // below; a guard that froze an empty map here would freeze the feature off.
@@ -901,6 +936,9 @@ export class TurnRunner implements TaskWorker {
             limits,
             exceptToolCallIds,
             uncertain: uncertainHold.current,
+            ...(profile?.resources.projectInstructions === false
+              ? { projectInstructions: false }
+              : {}),
             ...(profileLimits.historyLimit === undefined
               ? {}
               : { historyLimit: profileLimits.historyLimit }),
@@ -922,7 +960,7 @@ export class TurnRunner implements TaskWorker {
     const initialMessages = assembled.slice();
 
     const basePass = {
-      ...(client.protocol === "responses" && request.contentSelection
+      ...(client.protocol === "responses" && selection
         ? {
             runContent: {
               messages: [
@@ -946,6 +984,13 @@ export class TurnRunner implements TaskWorker {
       limits,
       assistantMessageId,
       state,
+      ...(profileLimits.maxToolCallsPerIteration === undefined
+        ? {}
+        : { maxToolCallsPerIteration: profileLimits.maxToolCallsPerIteration }),
+      ...(profileLimits.maxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: profileLimits.maxOutputTokens }),
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     };
 
     const first = await this.runPass({
@@ -1286,6 +1331,15 @@ export class TurnRunner implements TaskWorker {
       ...(input.maxToolIterations === undefined
         ? {}
         : { maxToolIterations: input.maxToolIterations }),
+      ...(input.maxToolCallsPerIteration === undefined
+        ? {}
+        : { maxToolCallsPerIteration: input.maxToolCallsPerIteration }),
+      ...(input.maxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: input.maxOutputTokens }),
+      ...(input.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: input.reasoningEffort }),
       ...(this.deps.loopHooks === undefined
         ? {}
         : { hooks: this.deps.loopHooks }),
@@ -1569,10 +1623,16 @@ export class TurnRunner implements TaskWorker {
     uncertain: ReadonlyMap<string, UncertainCall>;
     /** The profile-capped history window, when a profile set one. */
     historyLimit?: number;
+    /** False when the profile opts out of AGENTS.md / CLAUDE.md loading. */
+    projectInstructions?: boolean;
   }): Promise<AiChatMessage[]> {
     const { ctx, session } = input;
     let systemPrompt = input.systemPrompt;
-    if (session.workspace !== undefined && this.deps.projectInstructions) {
+    if (
+      input.projectInstructions !== false &&
+      session.workspace !== undefined &&
+      this.deps.projectInstructions
+    ) {
       const instructions = await loadProjectInstructions(
         this.deps.projectInstructions,
         session.workspace,

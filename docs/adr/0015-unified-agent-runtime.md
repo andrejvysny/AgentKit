@@ -71,6 +71,14 @@ Chat, Coding, Research, Automation, Supervisor, Implementer and Reviewer are con
 profile is tools, prompts, selected context, model, budgets and permission ceilings (M7). A profile is resolved and
 pinned at admission. It never changes an in-flight attempt.
 
+Wiring, as enforced by the host: `model` sits between the session pin and the provider default; `reasoningEffort`
+(session pin, else profile) reaches the provider as `reasoning_effort` / `reasoning.effort` and, when a
+chat-completions server rejects it, is dropped once with a `reasoning_effort_unsupported` warning;
+`maxToolCallsPerIteration` and `maxOutputTokens` flow into the loop and provider request; `attemptBudgetMs` arms the
+execution budget so an overrun lands `failed` (`execution_timeout`); `resources.projectInstructions: false` skips
+workspace instruction loading; `resources.skills` are appended to the session's skills (the session's revision wins).
+`run.usage` also carries `cachedPromptTokens` and `reasoningTokens` when the provider reports them.
+
 ### 4. Identity model
 
 | Id | Meaning | Owner |

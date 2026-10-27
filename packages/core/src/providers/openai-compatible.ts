@@ -195,12 +195,13 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     }
 
     let response: Response;
+    let droppedEffort: string | undefined;
     try {
-      response = await this.postChatCompletions(
+      ({ response, droppedEffort } = await this.postChatCompletions(
         body,
         input.signal,
         input.beforeRequest,
-      );
+      ));
     } catch (err) {
       if (input.signal?.aborted) {
         yield stamp({
@@ -224,6 +225,20 @@ export class OpenAiCompatibleClient implements AiProviderClient {
         },
       });
       return;
+    }
+
+    // Degraded, not broken: the server refused the thinking budget, the request
+    // went out without it.
+    if (droppedEffort !== undefined) {
+      yield stamp({
+        type: "run.warning",
+        runId,
+        timestamp: nowIso(),
+        data: {
+          code: "reasoning_effort_unsupported",
+          message: `Provider rejected reasoning_effort=${droppedEffort}; continuing without it.`,
+        },
+      });
     }
 
     if (!response.ok) {
@@ -280,6 +295,17 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           promptTokens: counts.prompt_tokens,
           completionTokens: counts.completion_tokens,
           totalTokens: counts.total_tokens,
+          ...(counts.prompt_tokens_details?.cached_tokens === undefined
+            ? {}
+            : {
+                cachedPromptTokens: counts.prompt_tokens_details.cached_tokens,
+              }),
+          ...(counts.completion_tokens_details?.reasoning_tokens === undefined
+            ? {}
+            : {
+                reasoningTokens:
+                  counts.completion_tokens_details.reasoning_tokens,
+              }),
           source: "stream" as const,
           finalForCall,
         },
@@ -469,15 +495,17 @@ export class OpenAiCompatibleClient implements AiProviderClient {
   }
 
   /**
-   * POST /chat/completions with a `max_completion_tokens` fallback. Newer servers
-   * (and some proxies) reject the legacy `max_tokens` field with a 400; when the body
-   * mentions it, retry once translating `max_tokens` → `max_completion_tokens`.
+   * POST /chat/completions with two one-shot fallbacks on a 400. Newer servers
+   * reject the legacy `max_tokens` field: retry translating it to
+   * `max_completion_tokens`. Servers without reasoning support reject
+   * `reasoning_effort`: retry without it and report what was dropped, so the
+   * caller can say so instead of degrading silently.
    */
   private async postChatCompletions(
     body: Record<string, unknown>,
     signal?: AbortSignal,
     beforeRequest?: AiChatRequest["beforeRequest"],
-  ): Promise<Response> {
+  ): Promise<{ response: Response; droppedEffort?: string }> {
     const send = async (b: Record<string, unknown>): Promise<Response> => {
       await beforeRequest?.();
       signal?.throwIfAborted();
@@ -489,26 +517,53 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       });
     };
 
-    const response = await send(body);
+    let current = body;
+    let droppedEffort: string | undefined;
+    let response = await send(current);
+    for (let fallback = 0; fallback < 2; fallback++) {
+      if (response.ok || response.status !== 400) break;
+      const detail = await safeBody(response);
+      const next = this.rewriteRejectedField(current, detail);
+      if (!next) {
+        // Unrelated 400; rebuild a response so the caller can still read the body.
+        response = new Response(detail, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+        break;
+      }
+      if ("reasoning_effort" in current && !("reasoning_effort" in next))
+        droppedEffort = String(current.reasoning_effort);
+      current = next;
+      response = await send(current);
+    }
+    return droppedEffort === undefined
+      ? { response }
+      : { response, droppedEffort };
+  }
+
+  /** The body minus whichever field the 400 named, or undefined if none. */
+  private rewriteRejectedField(
+    body: Record<string, unknown>,
+    detail: string,
+  ): Record<string, unknown> | undefined {
     if (
-      response.ok ||
-      response.status !== 400 ||
-      !("max_tokens" in body) ||
-      "max_completion_tokens" in body
+      "reasoning_effort" in body &&
+      /reasoning_effort|reasoning/i.test(detail)
     ) {
-      return response;
+      const { reasoning_effort: _dropped, ...rest } = body;
+      return rest;
     }
-    const detail = await safeBody(response);
-    if (!/max_tokens|max_completion_tokens/i.test(detail)) {
-      // Unrelated 400; rebuild a response so the caller can still read the body.
-      return new Response(detail, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
+    if (
+      "max_tokens" in body &&
+      !("max_completion_tokens" in body) &&
+      /max_tokens|max_completion_tokens/i.test(detail)
+    ) {
+      const { max_tokens, ...rest } = body;
+      return { ...rest, max_completion_tokens: max_tokens };
     }
-    const { max_tokens, ...rest } = body;
-    return send({ ...rest, max_completion_tokens: max_tokens });
+    return undefined;
   }
 
   /**
@@ -644,6 +699,8 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     if (input.temperature !== undefined) body.temperature = input.temperature;
     if (input.maxOutputTokens !== undefined)
       body.max_tokens = input.maxOutputTokens;
+    if (input.reasoningEffort !== undefined)
+      body.reasoning_effort = input.reasoningEffort;
     if (input.tools && input.tools.length > 0) {
       body.tools = input.tools.map((t) => ({
         type: "function",
@@ -861,6 +918,8 @@ interface OpenAiUsage {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number } | null;
+  completion_tokens_details?: { reasoning_tokens?: number } | null;
 }
 
 interface OpenAiStreamChunk {

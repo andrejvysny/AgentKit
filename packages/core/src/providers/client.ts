@@ -17,6 +17,9 @@ export interface AiRunContent {
   }[];
 }
 
+/** Provider-side thinking budget; a request hint, degraded with a warning where unsupported. */
+export type AiReasoningEffort = "minimal" | "low" | "medium" | "high";
+
 export interface AiChatRequest {
   runContent?: AiRunContent;
   /** Reserve a durable request budget immediately before each transport dispatch. */
@@ -34,6 +37,7 @@ export interface AiChatRequest {
   tools?: AiToolDefinition[];
   temperature?: number;
   maxOutputTokens?: number;
+  reasoningEffort?: AiReasoningEffort;
   signal?: AbortSignal;
 }
 

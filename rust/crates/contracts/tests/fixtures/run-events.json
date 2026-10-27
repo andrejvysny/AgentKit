@@ -679,6 +679,9 @@
               "attempt": {
                 "type": "number"
               },
+              "cachedPromptTokens": {
+                "type": "number"
+              },
               "callId": {
                 "type": "string"
               },
@@ -692,6 +695,9 @@
                 "type": "string"
               },
               "promptTokens": {
+                "type": "number"
+              },
+              "reasoningTokens": {
                 "type": "number"
               },
               "source": {

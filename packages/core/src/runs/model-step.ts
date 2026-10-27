@@ -91,6 +91,7 @@ export async function* streamModelStep(
       tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
       temperature: input.temperature,
       maxOutputTokens: input.maxOutputTokens,
+      reasoningEffort: input.reasoningEffort,
       signal: input.signal,
       continuation,
       continuationScope: input.continuationScope,

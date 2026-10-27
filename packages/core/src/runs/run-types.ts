@@ -3,7 +3,11 @@ import type {
   AiContextBinding,
   AiToolLimits,
 } from "@agentkit/contracts";
-import type { AiChatRequest, AiProviderClient } from "../providers/client.js";
+import type {
+  AiChatRequest,
+  AiProviderClient,
+  AiReasoningEffort,
+} from "../providers/client.js";
 import type { AiToolRegistry } from "../tools/registry.js";
 import type { ExecutionBudget, ExecutionBudgets } from "./execution-budget.js";
 
@@ -36,6 +40,7 @@ export interface RunChatInput
   userId?: string;
   temperature?: number;
   maxOutputTokens?: number;
+  reasoningEffort?: AiReasoningEffort;
   maxToolIterations?: number;
   maxToolCallsPerIteration?: number;
   /**
