@@ -41,9 +41,13 @@
  */
 import {
   AgentKitHostError,
+  DEFAULT_INTERRUPTION_REASON,
   ExecutionInterruptedError,
+  InvalidTaskTransitionError,
   LeaseLostError,
   RecordNotFoundError,
+  TaskInterruptedError,
+  type TaskInterruptionReason,
   defaultClock,
   type AssistantStore,
   type AttemptRecord,
@@ -71,6 +75,10 @@ const DEFAULT_RETRY_JITTER_RATIO = 0.2;
 
 /** Dead-letter reason for a task whose attempts died without ever landing. */
 const POISON_REASON = "poison: attempts exhausted without a terminal outcome";
+const SHUTDOWN_REASON: TaskInterruptionReason = {
+  code: "HOST_SHUTDOWN",
+  message: "Host runtime stopped",
+};
 
 /**
  * How long a transient failure waits before its next attempt.
@@ -108,6 +116,14 @@ export interface SingleProcessTaskRunnerDeps {
    * parked `interrupted` and only an explicit resume() continues it.
    */
   shutdownMode?: "drain" | "cancel" | "interrupt";
+  /**
+   * When an interrupt of running work becomes durable. `after_execution`
+   * (default) aborts cooperatively and keeps the lease, heartbeat and local
+   * slot until the executor has released its resources, then parks the task
+   * fenced. `immediate` parks the task and revokes its lease atomically first
+   * (requires the store's `interruptTask`), then aborts the executor.
+   */
+  interruptionMode?: "immediate" | "after_execution";
   store: AssistantStore;
   /** Defaults to {@link defaultClock}. Injectable so lease expiry is testable. */
   clock?: Clock;
@@ -142,8 +158,8 @@ interface ActiveExecution {
   controller: AbortController;
   /** A cancel arrived; do not retry, and land the task `cancelled`. */
   cancelRequested: boolean;
-  /** A resumable interrupt arrived; land the task `interrupted`. Cancel wins if both. */
-  interruptRequested: boolean;
+  hasExecuted: boolean;
+  interruptionReason?: TaskInterruptionReason;
 }
 
 /**
@@ -221,6 +237,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
   private readonly pendingRedispatch = new Set<string>();
 
   private readonly shutdownMode: "drain" | "cancel" | "interrupt";
+  private readonly interruptionMode: "immediate" | "after_execution";
   private readonly recoveryMode: "automatic" | "manual";
   private manualBootReconciled = false;
   private worker: TaskWorker | null = null;
@@ -232,11 +249,13 @@ export class SingleProcessTaskRunner implements TaskRunner {
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** True while a claim pass is running — there is exactly one loop. */
   private ticking = false;
+  private claimPass: Promise<void> | null = null;
   /** A wake-up arrived mid-pass; claim again immediately instead of sleeping. */
   private wakeRequested = false;
 
   constructor(deps: SingleProcessTaskRunnerDeps) {
     this.shutdownMode = deps.shutdownMode ?? "drain";
+    this.interruptionMode = deps.interruptionMode ?? "after_execution";
     this.recoveryMode = deps.recoveryMode ?? "automatic";
     this.store = deps.store;
     this.clock = deps.clock ?? defaultClock;
@@ -315,6 +334,72 @@ export class SingleProcessTaskRunner implements TaskRunner {
    * the class doc on the single-process limit. `recover()` reconciles it once
    * that owner's lease expires.
    */
+  async requestInterrupt(
+    taskId: string,
+    reason: TaskInterruptionReason = DEFAULT_INTERRUPTION_REASON,
+  ): Promise<void> {
+    if (this.interruptionMode === "after_execution") {
+      await this.requestDeferredInterrupt(taskId, reason);
+      return;
+    }
+    if (!this.store.tasks.interruptTask)
+      throw new AgentKitHostError(
+        "interruption_unsupported",
+        "Immediate interruption requires the store's interruptTask.",
+      );
+    const changed = await this.store.tasks.interruptTask(
+      taskId,
+      JSON.stringify(reason),
+    );
+    if (!changed) return;
+    this.pendingRedispatch.delete(taskId);
+    const entry = this.active.get(taskId);
+    if (entry) entry.controller.abort(new TaskInterruptedError(reason));
+    const task = await this.store.tasks.getTask(taskId);
+    if (task && !entry) this.scopeLock.remove(task.scopeId, taskId);
+  }
+
+  private async requestDeferredInterrupt(
+    taskId: string,
+    reason: TaskInterruptionReason,
+  ): Promise<void> {
+    if (this.interruptLocal(taskId, reason)) return;
+    try {
+      // A queued-only CAS cannot revoke a lease minted by a concurrent claim.
+      const task = await this.store.tasks.transitionTask(
+        taskId,
+        ["queued"],
+        "interrupted",
+        { error: JSON.stringify(reason) },
+      );
+      this.pendingRedispatch.delete(taskId);
+      this.scopeLock.remove(task.scopeId, taskId);
+      return;
+    } catch (failure) {
+      if (failure instanceof RecordNotFoundError) return;
+      if (!(failure instanceof InvalidTaskTransitionError)) throw failure;
+    }
+    if (this.interruptLocal(taskId, reason)) return;
+    // A claim can own the task before dispatch registers its local executor.
+    // Await that exact pass rather than inferring process death from the gap.
+    await this.claimPass;
+    if (!this.interruptLocal(taskId, reason))
+      this.logger?.info(
+        "interruption has no local execution; preserving its lease",
+        { taskId },
+      );
+  }
+
+  private interruptLocal(
+    taskId: string,
+    reason: TaskInterruptionReason,
+  ): boolean {
+    const entry = this.active.get(taskId);
+    if (!entry) return false;
+    if (!entry.cancelRequested) this.interruptActive(entry, reason);
+    return true;
+  }
+
   async requestCancel(taskId: string): Promise<void> {
     const task = await this.store.tasks.getTask(taskId);
     if (!task) return;
@@ -364,46 +449,6 @@ export class SingleProcessTaskRunner implements TaskRunner {
     // scope when it was cancelled still holds its place in line, and nothing
     // else will ever take it out.
     this.scopeLock.remove(task.scopeId, taskId);
-  }
-
-  /**
-   * Resumable stop. Queued: parked `interrupted` before any worker sees it.
-   * Running with a local execution: its signal is aborted with
-   * `ExecutionInterruptedError` and the worker parks the task. Anything else
-   * (waiting_approval, terminal, already interrupted) is a no-op — the task is
-   * not executing, so there is nothing to interrupt.
-   */
-  async requestInterrupt(taskId: string): Promise<void> {
-    const task = await this.store.tasks.getTask(taskId);
-    if (!task) return;
-
-    if (task.status === "queued") {
-      try {
-        await this.store.tasks.transitionTask(
-          taskId,
-          ["queued"],
-          "interrupted",
-          { error: "interrupted" },
-        );
-        this.scopeLock.remove(task.scopeId, taskId);
-      } catch (err) {
-        // A claim beat us to it: the task is running now, so interrupt the
-        // execution instead of reporting an interrupt that did not happen.
-        this.logger?.debug("interrupt raced a claim; aborting instead", {
-          taskId,
-          error: errorMessage(err),
-        });
-        this.interruptActive(taskId);
-      }
-      return;
-    }
-
-    if (task.status === "running" && !this.interruptActive(taskId)) {
-      this.logger?.info(
-        "interrupt for a running task with no local execution; recover() will reconcile",
-        { taskId },
-      );
-    }
   }
 
   /**
@@ -587,7 +632,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
         "recovery_required",
         "Call recoverOnBoot before starting a manual-recovery worker.",
       );
-    if (this.worker) {
+    if (this.worker || this.claimPass || this.inFlight.size > 0) {
       throw new AgentKitHostError(
         "worker_already_started",
         "This runner already has a worker; stop it before starting another.",
@@ -627,15 +672,18 @@ export class SingleProcessTaskRunner implements TaskRunner {
   private async stop(): Promise<void> {
     this.stopped = true;
     this.worker = null;
-    if (this.shutdownMode === "cancel") {
-      for (const taskId of this.active.keys()) this.abortActive(taskId);
-    } else if (this.shutdownMode === "interrupt") {
-      for (const taskId of this.active.keys()) this.interruptActive(taskId);
+    for (const entry of this.active.values()) {
+      if (this.shutdownMode === "cancel") this.abortActive(entry.taskId);
+      if (this.shutdownMode === "interrupt" && !entry.cancelRequested)
+        this.interruptActive(entry, SHUTDOWN_REASON);
     }
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    // A pending store claim owns work even before it enters inFlight. Quiesce
+    // it before the host can close the store; late results are never dispatched.
+    await this.claimPass;
     // Loop rather than a single `allSettled`: an execution can spawn a retry
     // (a new promise) while we are waiting on it.
     while (this.inFlight.size > 0) {
@@ -662,7 +710,9 @@ export class SingleProcessTaskRunner implements TaskRunner {
     if (this.timer) return;
     const timer = setTimeout(() => {
       this.timer = null;
-      void this.tick();
+      void this.tick().catch((err: unknown) => {
+        this.logger?.error("claim pass failed", { error: errorMessage(err) });
+      });
     }, delayMs);
     // Never hold the process open for a poll that has nothing to poll for.
     (timer as unknown as { unref?: () => void }).unref?.();
@@ -677,37 +727,82 @@ export class SingleProcessTaskRunner implements TaskRunner {
    * the class doc. Awaiting even one of them would serialize the queue behind
    * the slowest task, which is precisely the task-system bug this replaces.
    */
-  private async tick(): Promise<void> {
+  private tick(): Promise<void> {
     const worker = this.worker;
-    if (this.stopped || !worker) return;
+    if (this.stopped || !worker) return Promise.resolve();
     if (this.ticking) {
       this.wakeRequested = true;
-      return;
+      return this.claimPass ?? Promise.resolve();
     }
     this.ticking = true;
-    try {
-      while (!this.stopped && this.active.size < this.concurrency) {
-        let claimed: ClaimedTask | null;
-        try {
-          claimed = await this.store.tasks.claimNext({
-            ownerId: this.ownerId,
-            now: this.clock.now(),
-            scopesBusy: this.scopeLock.busyScopes(),
-            ...(this.kinds === undefined ? {} : { kinds: this.kinds }),
-          });
-        } catch (err) {
-          this.logger?.error("claimNext failed", { error: errorMessage(err) });
-          break;
-        }
-        if (!claimed) break;
-        this.dispatch(claimed, worker);
-      }
-    } finally {
+    const pass = this.claimTasks(worker).finally(() => {
       this.ticking = false;
+      this.claimPass = null;
+      const immediate = this.wakeRequested;
+      this.wakeRequested = false;
+      this.schedule(immediate ? 0 : this.pollMs);
+    });
+    this.claimPass = pass;
+    return pass;
+  }
+
+  private async claimTasks(worker: TaskWorker): Promise<void> {
+    while (!this.stopped && this.active.size < this.concurrency) {
+      let claimed: ClaimedTask | null;
+      try {
+        claimed = await this.store.tasks.claimNext({
+          ownerId: this.ownerId,
+          now: this.clock.now(),
+          scopesBusy: this.scopeLock.busyScopes(),
+          ...(this.kinds === undefined ? {} : { kinds: this.kinds }),
+        });
+      } catch (err) {
+        this.logger?.error("claimNext failed", { error: errorMessage(err) });
+        break;
+      }
+      if (!claimed) break;
+      if (this.stopped) {
+        await this.settleUndispatched(claimed);
+        break;
+      }
+      this.dispatch(claimed, worker);
     }
-    const immediate = this.wakeRequested;
-    this.wakeRequested = false;
-    this.schedule(immediate ? 0 : this.pollMs);
+  }
+
+  private async settleUndispatched(claimed: ClaimedTask): Promise<void> {
+    const entry: ActiveExecution = {
+      taskId: claimed.task.taskId,
+      scopeId: claimed.task.scopeId,
+      controller: new AbortController(),
+      cancelRequested: this.shutdownMode === "cancel",
+      hasExecuted: false,
+    };
+    // Reuse fenced settlement without registering or invoking an executor.
+    try {
+      if (entry.cancelRequested)
+        await this.settleResolved(
+          entry.taskId,
+          claimed.attempt.attemptId,
+          claimed.lease,
+          entry,
+        );
+      else
+        await this.settleThrown(
+          entry.taskId,
+          claimed.attempt.attemptId,
+          claimed.lease,
+          entry,
+          new TaskInterruptedError(SHUTDOWN_REASON),
+        );
+    } catch (err) {
+      if (!(err instanceof LeaseLostError)) throw err;
+    }
+    try {
+      await this.store.tasks.releaseLease(claimed.lease.leaseToken);
+    } catch (err) {
+      if (!(err instanceof LeaseLostError)) throw err;
+    }
+    this.scopeLock.remove(entry.scopeId, entry.taskId);
   }
 
   /**
@@ -754,7 +849,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
       scopeId: task.scopeId,
       controller: new AbortController(),
       cancelRequested: false,
-      interruptRequested: false,
+      hasExecuted: false,
     };
     this.active.set(task.taskId, entry);
 
@@ -874,10 +969,38 @@ export class SingleProcessTaskRunner implements TaskRunner {
     entry: ActiveExecution,
     worker: TaskWorker,
   ): Promise<AttemptOutcome> {
+    if (!(await this.stillHoldsLease(lease.leaseToken)))
+      return { kind: "done", landed: true };
+    if (entry.interruptionReason && !entry.cancelRequested)
+      return this.settleThrown(
+        taskId,
+        attemptId,
+        lease,
+        entry,
+        new TaskInterruptedError(entry.interruptionReason),
+      );
+    if (
+      !entry.cancelRequested &&
+      entry.controller.signal.reason instanceof TaskInterruptedError
+    )
+      return { kind: "done", landed: true };
+    if (entry.cancelRequested && !entry.hasExecuted)
+      return this.settleResolved(taskId, attemptId, lease, entry);
+    if (this.stopped) {
+      if (this.shutdownMode === "cancel") entry.cancelRequested = true;
+      else entry.interruptionReason = SHUTDOWN_REASON;
+      return entry.cancelRequested
+        ? this.settleResolved(taskId, attemptId, lease, entry)
+        : this.settleThrown(
+            taskId,
+            attemptId,
+            lease,
+            entry,
+            new TaskInterruptedError(SHUTDOWN_REASON),
+          );
+    }
     entry.controller = new AbortController();
     if (entry.cancelRequested) entry.controller.abort();
-    else if (entry.interruptRequested)
-      entry.controller.abort(new ExecutionInterruptedError());
 
     const heartbeat = setInterval(() => {
       void this.renewLease(taskId, lease.leaseToken, entry);
@@ -887,6 +1010,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
     let thrown: unknown;
     let threw = false;
     try {
+      entry.hasExecuted = true;
       await worker.execute({
         taskId,
         attemptId,
@@ -911,6 +1035,14 @@ export class SingleProcessTaskRunner implements TaskRunner {
       return { kind: "done", landed: true };
     }
 
+    if (entry.interruptionReason && !entry.cancelRequested)
+      return this.settleThrown(
+        taskId,
+        attemptId,
+        lease,
+        entry,
+        new TaskInterruptedError(entry.interruptionReason),
+      );
     return threw
       ? await this.settleThrown(taskId, attemptId, lease, entry, thrown)
       : await this.settleResolved(taskId, attemptId, lease, entry);
@@ -936,9 +1068,6 @@ export class SingleProcessTaskRunner implements TaskRunner {
     const task = await this.store.tasks.getTask(taskId);
     if (!task || task.status !== "running")
       return { kind: "done", landed: true };
-    if (entry.interruptRequested && !entry.cancelRequested) {
-      return await this.settleInterrupted(taskId, attemptId, lease);
-    }
     // A cancel that the worker swallowed still means cancelled, not completed.
     const status = entry.cancelRequested ? "cancelled" : "completed";
     // FENCED, AND THE TASK TRANSITION GOES FIRST — the order `TurnRunner` uses
@@ -979,31 +1108,31 @@ export class SingleProcessTaskRunner implements TaskRunner {
   }
 
   /**
-   * Park an interrupted attempt: task `running` → `interrupted`, attempt
-   * `cancelled`. Never `abandoned` (that increments the store's poisonCount —
-   * an interrupt is not a crash), never retried or dead-lettered. A worker that
-   * already parked the task itself (TurnRunner does) leaves nothing to write.
+   * Park an interrupted attempt on a store without the atomic `interruptTask`:
+   * task `running` → `interrupted`, then attempt `cancelled`. Never `abandoned`
+   * (that counts toward poisonCount — an interrupt is not a crash), never
+   * retried or dead-lettered.
    */
   private async settleInterrupted(
     taskId: string,
     attemptId: string,
     lease: Lease,
+    reason: string,
   ): Promise<AttemptOutcome> {
     const task = await this.store.tasks.getTask(taskId);
-    if (task?.status === "running") {
-      await this.store.tasks.transitionTask(
-        taskId,
-        ["running"],
-        "interrupted",
-        { error: "interrupted" },
-        { leaseToken: lease.leaseToken },
-      );
-    }
+    if (task?.status !== "running") return { kind: "done", landed: true };
+    await this.store.tasks.transitionTask(
+      taskId,
+      ["running"],
+      "interrupted",
+      { error: reason },
+      { leaseToken: lease.leaseToken },
+    );
     try {
       await this.store.tasks.endAttempt({
         attemptId,
         status: "cancelled",
-        error: "interrupted",
+        error: reason,
         leaseToken: lease.leaseToken,
       });
     } catch (err) {
@@ -1024,8 +1153,22 @@ export class SingleProcessTaskRunner implements TaskRunner {
     entry: ActiveExecution,
     err: unknown,
   ): Promise<AttemptOutcome> {
-    if (entry.interruptRequested && !entry.cancelRequested) {
-      return await this.settleInterrupted(taskId, attemptId, lease);
+    if (err instanceof ExecutionInterruptedError && !entry.cancelRequested) {
+      const reason = JSON.stringify(
+        err instanceof TaskInterruptedError
+          ? err.reason
+          : DEFAULT_INTERRUPTION_REASON,
+      );
+      if (!this.store.tasks.interruptTask)
+        return await this.settleInterrupted(taskId, attemptId, lease, reason);
+      try {
+        await this.store.tasks.interruptTask(taskId, reason, {
+          leaseToken: lease.leaseToken,
+        });
+      } catch (failure) {
+        if (!(failure instanceof LeaseLostError)) throw failure;
+      }
+      return { kind: "done", landed: true };
     }
     const classified = classifyExecutionError(err);
     const kind = entry.cancelRequested ? "cancelled" : classified.kind;
@@ -1124,6 +1267,14 @@ export class SingleProcessTaskRunner implements TaskRunner {
       delayMs,
     });
     await this.waitForRetry(taskId, delayMs, lease, entry);
+    if (entry.interruptionReason && !entry.cancelRequested)
+      return this.settleThrown(
+        taskId,
+        attemptId,
+        lease,
+        entry,
+        new TaskInterruptedError(entry.interruptionReason),
+      );
     // The wait is the one place a retry can be overtaken, and it can be
     // overtaken TWO ways. Both have to be re-asked before an attempt is minted.
     //
@@ -1217,7 +1368,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
       while (
         !this.stopped &&
         !entry.cancelRequested &&
-        !entry.interruptRequested
+        !entry.controller.signal.aborted
       ) {
         // THE DEADLINE IS ON THE INJECTED CLOCK; the sleep is on the real one,
         // and the two are never mixed. `Clock` has no timer facility — it
@@ -1373,13 +1524,12 @@ export class SingleProcessTaskRunner implements TaskRunner {
     }
   }
 
-  /** Abort the local execution of `taskId` resumably. False when there is none. */
-  private interruptActive(taskId: string): boolean {
-    const entry = this.active.get(taskId);
-    if (!entry) return false;
-    entry.interruptRequested = true;
-    entry.controller.abort(new ExecutionInterruptedError());
-    return true;
+  private interruptActive(
+    entry: ActiveExecution,
+    reason: TaskInterruptionReason,
+  ): void {
+    entry.interruptionReason ??= { ...reason };
+    entry.controller.abort(new TaskInterruptedError(entry.interruptionReason));
   }
 
   /** Abort the local execution of `taskId`. False when there is none. */
@@ -1387,6 +1537,7 @@ export class SingleProcessTaskRunner implements TaskRunner {
     const entry = this.active.get(taskId);
     if (!entry) return false;
     entry.cancelRequested = true;
+    entry.interruptionReason = undefined;
     entry.controller.abort();
     return true;
   }

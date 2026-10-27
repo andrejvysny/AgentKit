@@ -52,6 +52,51 @@ Any store that passes `@agentkit/testing`'s
   dispatch optimization only: correctness rests on the store's `claimNext` +
   leases, never on this lock.
 
+## Shutdown and interruption
+
+`handle.stop()` first prevents new claims and waits for any pending claim pass,
+then waits for registered executions. A claim returned after shutdown never
+reaches the worker: `shutdownMode: "cancel"` cancels it, while `"drain"` and
+`"interrupt"` park it as interrupted. All settlement writes use its lease fence.
+The store must remain open until `stop()` resolves.
+
+Defaults are `shutdownMode: "drain"` and `interruptionMode: "after_execution"`.
+`requestInterrupt(taskId, reason?)` is the one interrupt entry point; the
+running executor's signal is aborted with a `TaskInterruptedError` carrying the
+reason (a subclass of `ExecutionInterruptedError`), and the reason, JSON-encoded,
+becomes the parked task's `error`. Without a reason it records
+`{ code: "INTERRUPTED", message: "execution interrupted" }`.
+
+`interruptionMode: "immediate"` parks the task, closes its attempt and revokes
+its lease atomically through the store's `interruptTask` before aborting the
+executor. Use it only for executors that hold no resources needing cleanup:
+
+```ts
+const runner = new SingleProcessTaskRunner({
+  store,
+  interruptionMode: "immediate",
+  shutdownMode: "cancel",
+});
+```
+
+With `after_execution`, interrupting an active task records the first reason and
+aborts its signal. `requestInterrupt()` returns after requesting the abort; the
+task stays running, heartbeated, leased, and in its scope/concurrency slot until
+`worker.execute()` settles. Only then does the runner write the fenced durable
+interruption, even if the worker swallowed the abort. An explicit user cancel
+takes precedence. Queued interruption uses a queued-only compare-and-set; if a
+claim wins, the runner waits for its pending claim pass and interrupts the local
+executor after registration. Running work with no local executor keeps its
+lease: absence from the local map does not prove that its process has stopped.
+Workers must await all resource cleanup before settling and
+must not finalize a task as completed after its signal is aborted.
+
+`shutdownMode: "interrupt"` applies the same deferred flow to active work with
+`{ code: "HOST_SHUTDOWN", message: "Host runtime stopped" }`, regardless of
+`interruptionMode`. `"cancel"` aborts and lands active work as cancelled;
+`"drain"` waits for active work normally. None can forcibly finish an executor
+that ignores its signal or never settles.
+
 ## Retry backoff
 
 A transient failure waits before its next attempt:

@@ -52,6 +52,10 @@ function runnerFor(
     // The backoff is measured against the same frozen clock the suite steps by
     // hand; the contract below is about WHETHER a retry happens, not when.
     retryBackoff: { baseMs: 0, jitterRatio: 0 },
+    // The conformance suite's targeted-interruption case pins the atomic
+    // store-first park. The cooperative default is covered by interrupt.test.ts
+    // and deferred-interruption-race.test.ts.
+    interruptionMode: "immediate",
   });
 }
 

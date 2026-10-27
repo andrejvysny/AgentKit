@@ -8,6 +8,35 @@
  * lossy.
  */
 
+import { ExecutionInterruptedError } from "../errors.js";
+
+/** A host interruption parks work until explicit resume; it is not user cancellation. */
+export interface TaskInterruptionReason {
+  code: string;
+  message: string;
+}
+
+/** The reason {@link TaskRunner.requestInterrupt} records when its caller names none. */
+export const DEFAULT_INTERRUPTION_REASON: TaskInterruptionReason =
+  Object.freeze({
+    code: "INTERRUPTED",
+    message: "execution interrupted",
+  });
+
+/**
+ * A resumable interrupt that carries its reason. It IS an
+ * {@link ExecutionInterruptedError}, so a worker that parks on the base class
+ * also parks on this one; hosts that need the reason test for the subclass.
+ */
+export class TaskInterruptedError extends ExecutionInterruptedError {
+  readonly code: string;
+  constructor(readonly reason: TaskInterruptionReason) {
+    super(reason.message);
+    this.name = "TaskInterruptedError";
+    this.code = reason.code;
+  }
+}
+
 /** What a worker is handed for one attempt at one task. */
 export interface TaskExecution {
   taskId: string;
@@ -69,11 +98,15 @@ export interface TaskRunner {
 
   /**
    * Ask the task to stop RESUMABLY: queued → `interrupted` outright; a running
-   * one has its signal aborted with `ExecutionInterruptedError` and the worker
-   * parks it `interrupted` (not terminal, no terminal event). `resume` continues
-   * the same task with a new attempt.
+   * one has its signal aborted with {@link TaskInterruptedError} and is parked
+   * `interrupted` (not terminal, no terminal event, attempt `cancelled`).
+   * `resume` continues the same task with a new attempt. `reason` defaults to
+   * {@link DEFAULT_INTERRUPTION_REASON} and is stored as the task's `error`.
    */
-  requestInterrupt?(taskId: string): Promise<void>;
+  requestInterrupt?(
+    taskId: string,
+    reason?: TaskInterruptionReason,
+  ): Promise<void>;
 
   /**
    * Startup pass: expire dead leases, end their attempts as `abandoned`,

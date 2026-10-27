@@ -190,7 +190,7 @@ describe("Responses stream conformance", () => {
       },
     ]);
     const events = await collect(client);
-    expect(failure(events)).toBe("usage_limit");
+    expect(failure(events)).toBe("service_unavailable");
     expect(events.some((event) => event.type === "run.tool.requested")).toBe(
       false,
     );

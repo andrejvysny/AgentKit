@@ -125,3 +125,49 @@ through SQLite, the local worker, REST, and the client, then closes and reopens
 the database. Generic qualification separately covers proposals and migration.
 These checks do not execute OpenPCB or qualify PCB mutation, receipts, undo, or
 the consumer application integration.
+
+## Recovery diagnostics
+
+Quota exhaustion (`subscription_sharing_usage_limit_exceeded`) yields
+`usage_limit`. Temporary usage checks (`subscription_sharing_usage_unavailable`),
+user/workspace availability (`subscription_sharing_user_unavailable`), and HTTP
+503 admission failures yield `service_unavailable`. Neither category triggers an
+automatic retry or billing fallback. Preserve credentials for temporary failures;
+the host may offer a later bounded retry. A partially consumed stream must never
+be replayed automatically.
+
+An optional `ResponsesClientOptions.onError` observer receives bounded structured
+metadata for HTTP and Responses-layer failures during `streamChat`: actual HTTP
+status, provider code, parameter, request ID, response shape and retryability.
+Model catalog failures throw `ResponsesProviderError` with the same optional
+`diagnostic` property. Generic error messages and run events retain only safe
+normalized categories. Observer exceptions cannot replace the original outcome.
+Provider message/detail text is omitted entirely; identifiers exceeding 256
+characters or containing non-identifier characters are omitted. Bodies using
+`detail` are classified independently from standard `error` objects and unreadable
+bodies. Diagnostics do not include raw provider bodies, credentials or opaque
+continuation state. Retryability describes a later request, not permission to
+replay the current stream.
+
+Recovery mapping checked 2026-10-24 against official
+[errors and recovery](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery).
+
+The SIWC route was observed emitting `response.metadata` between text deltas and
+completion on 2026-10-24. This is a live-observed extension, absent from the
+current public streaming-event reference. Its bounded payload is treated as
+advisory and discarded: it cannot change text, tools, usage, private continuation
+or response status. It still counts toward frame and cumulative stream limits.
+A valid completed response and EOF remain required; metadata after a terminal
+event and all other unknown event names still fail closed.
+
+The SIWC route was also observed ending a completed response with `output: []`
+after delivering a fully completed message in `response.output_item.done` on
+2026-10-24. For the `chatgpt-account` profile only, an empty terminal output
+array is reconstructed from all previously validated done items in contiguous
+output-index order. Message and function items must have completed status;
+reasoning must retain its required encrypted continuation. Partial items, index
+gaps, malformed tool arguments, nonempty conflicting/incomplete terminal output,
+missing completion, late failures and events after terminal remain errors.
+The API-key profile retains strict terminal-output reconciliation. This is a
+live-observed SIWC compatibility behavior, not a claim that the public contract
+generally permits terminal output omissions.

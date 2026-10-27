@@ -1211,6 +1211,30 @@ export class MemoryTaskStore implements TaskStore {
     return doomed.length;
   }
 
+  async interruptTask(
+    taskId: string,
+    reason: string,
+    opts?: FencedWriteOptions,
+  ): Promise<boolean> {
+    if (opts?.leaseToken !== undefined)
+      this.assertLeaseCurrent(taskId, opts.leaseToken);
+    const task = this.tasks.get(taskId);
+    if (!task || (task.status !== "queued" && task.status !== "running"))
+      return false;
+    task.status = "interrupted";
+    task.error = reason;
+    for (const attempt of this.attempts.values()) {
+      if (attempt.taskId !== taskId || attempt.status !== "running") continue;
+      attempt.status = "cancelled";
+      attempt.error = reason;
+      attempt.endedAt = this.clock.nowIso();
+    }
+    const lease = this.leases.get(taskId);
+    if (lease) this.leasesByToken.delete(lease.leaseToken);
+    this.leases.delete(taskId);
+    return true;
+  }
+
   async interruptQueued(before: string): Promise<number> {
     const instant = normalizeInstant(before, "before");
     let count = 0;
@@ -2098,6 +2122,8 @@ function taskStoreInTransaction(
   return {
     createTask: (input) => tasks.createTask(input),
     getTask: (taskId) => tasks.getTask(taskId),
+    interruptTask: (taskId, reason, opts) =>
+      tasks.interruptTask(taskId, reason, opts),
     interruptQueued: (before) => tasks.interruptQueued(before),
     listChildren: (taskId) => tasks.listChildren(taskId),
     listByScope: (scopeId) => tasks.listByScope(scopeId),
@@ -2194,6 +2220,7 @@ export class MemoryAssistantStore implements AssistantStore {
     const fencedWrites = new Set([
       "createTask",
       "interruptQueued",
+      "interruptTask",
       "deleteByScope",
       "transitionTask",
       "createAttempt",

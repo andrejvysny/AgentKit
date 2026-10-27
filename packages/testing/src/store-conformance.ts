@@ -98,6 +98,49 @@ export function describeAssistantStoreConformance(
   });
 
   describe(`AssistantStore conformance — ${name}`, () => {
+    it("targeted interruption atomically fences attempts and preserves payload", async () => {
+      const harness = await create();
+      try {
+        const { store } = harness;
+        if (!store.tasks.interruptTask) return;
+        const input = makeTaskInput();
+        await store.tasks.createTask(input);
+        const claimed = await store.tasks.claimNext({
+          ownerId: "worker",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(claimed).not.toBeNull();
+        expect(await store.tasks.interruptTask(input.taskId, "sleep")).toBe(
+          true,
+        );
+        expect(await store.tasks.interruptTask(input.taskId, "again")).toBe(
+          false,
+        );
+        const task = await store.tasks.getTask(input.taskId);
+        expect(task?.status).toBe("interrupted");
+        expect(task?.error).toBe("sleep");
+        expect(task?.payload).toEqual(input.payload);
+        await expectRejectsWithCode(
+          store.tasks.updateProgress(
+            input.taskId,
+            {},
+            { leaseToken: claimed!.lease.leaseToken },
+          ),
+          "lease_lost",
+          expect,
+        );
+        expect(
+          await store.tasks.claimNext({
+            ownerId: "other",
+            now: new Date(),
+            scopesBusy: [],
+          }),
+        ).toBeNull();
+      } finally {
+        harness.close?.();
+      }
+    });
     // The tree half of the conversation contract — branching, path switching,
     // forking — lives in its own module; an adapter still opts in exactly once,
     // through this call.

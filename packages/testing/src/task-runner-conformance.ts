@@ -438,6 +438,85 @@ export function describeTaskRunnerConformance(
       }
     });
 
+    it("targeted interruption parks queued work without an attempt", async () => {
+      const harness = await create();
+      try {
+        if (!harness.runner.requestInterrupt) return;
+        await harness.seedTask({ taskId: "t1", scopeId: "s1" });
+        const reason = { code: "SYSTEM_SLEEP", message: "System sleep" };
+        await harness.runner.requestInterrupt("t1", reason);
+        await harness.runner.requestInterrupt("t1", reason);
+        expect(await statusOf(harness, "t1")).toBe("interrupted");
+        expect(await attemptsFor(harness, "t1")).toEqual([]);
+        expect((await harness.store.tasks.getTask("t1"))?.error).toBe(
+          JSON.stringify(reason),
+        );
+      } finally {
+        harness.close?.();
+      }
+    });
+
+    it("targeted interruption fences running work and explicit resume keeps identity", async () => {
+      const harness = await create();
+      let calls = 0;
+      let first: import("@agentkit/host").TaskExecution | undefined;
+      const handle = await harness.runner.startWorker({
+        execute: async (execution) => {
+          calls++;
+          if (calls > 1) return;
+          first = execution;
+          await new Promise<void>((resolve) =>
+            execution.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            }),
+          );
+        },
+      });
+      try {
+        if (!harness.runner.requestInterrupt || !harness.runner.resume) return;
+        await harness.seedTask({ taskId: "t1", scopeId: "s1" });
+        await harness.runner.enqueue({ taskId: "t1", scopeId: "s1" });
+        await waitFor(() => first !== undefined, "first attempt");
+        const reason = { code: "SYSTEM_SLEEP", message: "System sleep" };
+        await harness.runner.requestInterrupt("t1", reason);
+        expect(first?.signal.reason.name).toBe("TaskInterruptedError");
+        expect(first?.signal.reason.reason).toEqual(reason);
+        expect(await statusOf(harness, "t1")).toBe("interrupted");
+        expect(await attemptsFor(harness, "t1")).toEqual([
+          { status: "cancelled", attemptNumber: 1 },
+        ]);
+        let fenced = false;
+        try {
+          await harness.store.tasks.updateProgress(
+            "t1",
+            { stale: true },
+            { leaseToken: first!.leaseToken },
+          );
+        } catch (error) {
+          fenced = (error as { code?: string }).code === "lease_lost";
+        }
+        expect(fenced).toBe(true);
+        await harness.runner.requestInterrupt("t1", reason);
+        await settle();
+        expect(calls).toBe(1);
+        await harness.runner.resume("t1");
+        await waitFor(
+          async () => (await statusOf(harness, "t1")) === "completed",
+          "explicit resume completion",
+        );
+        expect(calls).toBe(2);
+        await harness.runner.requestInterrupt("t1", reason);
+        expect(await statusOf(harness, "t1")).toBe("completed");
+        expect(await attemptsFor(harness, "t1")).toEqual([
+          { status: "cancelled", attemptNumber: 1 },
+          { status: "completed", attemptNumber: 2 },
+        ]);
+      } finally {
+        await handle.stop();
+        harness.close?.();
+      }
+    });
+
     it("requestCancel aborts the running worker's signal and lands the task cancelled", async () => {
       const harness = await create();
       const worker = createWorker(

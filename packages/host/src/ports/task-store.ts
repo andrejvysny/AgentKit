@@ -552,6 +552,14 @@ export interface TaskStore {
   /** Park pre-boot queued work for explicit user resume. Optional for custom adapters. */
   interruptQueued?(before: string): Promise<number>;
 
+  /** Atomically park queued/running work, close running attempts as cancelled, and revoke its lease.
+   * Terminal outcomes and prior interruptions are unchanged. Events and payload remain intact. */
+  interruptTask?(
+    taskId: string,
+    reason: string,
+    opts?: FencedWriteOptions,
+  ): Promise<boolean>;
+
   /**
    * Tasks whose `parentTaskId` is `taskId` — one level, not the whole subtree.
    *
