@@ -5,8 +5,7 @@
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { TaskRecord } from "../ports/task-store.js";
 import { resolveContextWindow } from "../context/budget.js";
-import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
-import type { AgentSessionDescriptor } from "./descriptor.js";
+import { type AgentSessionDescriptor, sessionTurnKind } from "./descriptor.js";
 import { readSessionExecution } from "./plan-mode.js";
 import type {
   AgentExportMessage,
@@ -37,10 +36,11 @@ function str(value: unknown): string | undefined {
 export async function listTurnTasks(
   store: AssistantStore,
   sessionId: string,
+  kind: string,
 ): Promise<TaskRecord[]> {
   const tasks = await store.tasks.listByScope(sessionId);
   return tasks
-    .filter((task) => task.kind === CHAT_TURN_TASK_KIND)
+    .filter((task) => task.kind === kind)
     .sort(
       (a, b) =>
         a.enqueuedAt.localeCompare(b.enqueuedAt) ||
@@ -100,7 +100,11 @@ export async function sessionUsage(
   sessionId: string,
   descriptor: AgentSessionDescriptor,
 ): Promise<AgentSessionUsage> {
-  const tasks = await listTurnTasks(store, sessionId);
+  const tasks = await listTurnTasks(
+    store,
+    sessionId,
+    sessionTurnKind(descriptor),
+  );
   const turns: AgentTurnUsage[] = [];
   for (const task of tasks) turns.push(await turnUsage(store, task));
   const totals = {
@@ -197,7 +201,9 @@ export async function exportSession(
     descriptor: input.descriptor,
     ...(execution === undefined ? {} : { execution }),
     messages,
-    turns: (await listTurnTasks(store, sessionId)).map(summarizeTurn),
+    turns: (
+      await listTurnTasks(store, sessionId, sessionTurnKind(input.descriptor))
+    ).map(summarizeTurn),
     inputs: store.inputs ? await store.inputs.listInputs({ sessionId }) : [],
     ...(summaries === undefined ? {} : { summaries }),
   };

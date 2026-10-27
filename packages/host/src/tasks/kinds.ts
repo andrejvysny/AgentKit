@@ -16,3 +16,17 @@
 
 /** The kind the chat-turn executor handles — one turn of one conversation. */
 export const CHAT_TURN_TASK_KIND = "chat.turn";
+
+const HOST_TASK_KIND = /^[a-z][a-z0-9_-]*(\.[a-z0-9_-]+)*$/;
+
+/**
+ * Whether `kind` may name a session's turn tasks: the default, or a host kind
+ * in dotted lowercase form outside the reserved `chat.*` / `agentkit.*` prefixes.
+ */
+export function isValidSessionTurnKind(kind: unknown): kind is string {
+  if (typeof kind !== "string") return false;
+  if (kind === CHAT_TURN_TASK_KIND) return true;
+  if (!HOST_TASK_KIND.test(kind)) return false;
+  const root = kind.split(".")[0];
+  return root !== "chat" && root !== "agentkit";
+}
