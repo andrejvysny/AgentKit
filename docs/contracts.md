@@ -26,9 +26,15 @@ Thirteen event types, all discriminated on `type`
 | `run.warning` | `{ code, message, pass?, reason? }` — a non-fatal condition; see the warning-code table below. `pass`/`reason` carry pass context (set by `retry_pass`). |
 | `run.usage` | `{ callId, attempt, step, model, promptTokens?, completionTokens?, totalTokens?, source, finalForCall }` — token accounting for one provider call. See "usage" below. |
 | `run.verification` | `{ pass, status, deficiencies }` — the outcome of one post-run verification. `pass` is 0 for the run's own answer, then 1, 2, … per correction pass; `status` is `pass`/`partial` from the host's `DeficiencyReport`, or `unavailable` when the hook threw or answered `null`. **Emitted only under the correction harness** — a single-shot verification writes nothing, so absence is not evidence a run went unverified. See [`docs/ports.md`](ports.md#verification). |
+| `run.input.applied` | `{ inputId, kind, step }` — a durable input was placed before provider step `step` (1-based). `inputId` is the input's idempotency key; `kind` is an open vocabulary, today only `"steer"`. |
+| `run.waiting` | `{ requestId, toolCallId, toolName, step, prompt, expiresAt? }` — the run paused for human input; the task parks in `waiting_approval` and continues on a later attempt. **Not a terminal event.** |
 | `run.completed` | `{ iterations, finishReason? }` — the run ended with an answer. Carries the same possibly-synthetic `"incomplete"` as `run.message.completed`. |
 | `run.failed` | `{ errorMessage, errorCode? }` — the run ended in a provider or transport error. |
 | `run.cancelled` | `{ reason? }` — the run was aborted. |
+
+### Session events (ADR 0016)
+
+`run.input.applied` and `run.waiting` are emitted only when a host uses agent sessions, so plain `runChat`/`TurnRunner` consumers never see them. Both are additive; `CONTRACT_VERSION` is unchanged.
 
 ## The v2 base fields
 

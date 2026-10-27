@@ -29,6 +29,10 @@ pub enum AiRunEventType {
     RunUsage,
     #[serde(rename = "run.verification")]
     RunVerification,
+    #[serde(rename = "run.input.applied")]
+    RunInputApplied,
+    #[serde(rename = "run.waiting")]
+    RunWaiting,
     #[serde(rename = "run.completed")]
     RunCompleted,
     #[serde(rename = "run.failed")]

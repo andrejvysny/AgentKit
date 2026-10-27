@@ -849,6 +849,152 @@
           },
           "data": {
             "properties": {
+              "inputId": {
+                "description": "The durable input's idempotency key (`AgentInputStore`).",
+                "type": "string"
+              },
+              "kind": {
+                "description": "Open vocabulary; today only \"steer\".",
+                "type": "string"
+              },
+              "step": {
+                "description": "The 1-based provider step the input was placed before.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "inputId",
+              "kind",
+              "step"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.input.applied",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      "type": "run.input.applied"
+    },
+    {
+      "schema": {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "expiresAt": {
+                "description": "ISO-8601 expiry of the request.",
+                "type": "string"
+              },
+              "prompt": {
+                "description": "What the human is asked.",
+                "type": "string"
+              },
+              "requestId": {
+                "description": "Deterministic human-request id, `hreq:<taskId>:<toolCallId>`.",
+                "type": "string"
+              },
+              "step": {
+                "description": "The 1-based provider step.",
+                "type": "number"
+              },
+              "toolCallId": {
+                "description": "The tool call that asked for input.",
+                "type": "string"
+              },
+              "toolName": {
+                "description": "The tool that asked for input.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "requestId",
+              "toolCallId",
+              "toolName",
+              "step",
+              "prompt"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.waiting",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      "type": "run.waiting"
+    },
+    {
+      "schema": {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
               "finishReason": {
                 "type": "string"
               },

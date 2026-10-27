@@ -71,6 +71,8 @@ export {
   AiRunWarningEventSchema,
   AiRunUsageEventSchema,
   AiRunVerificationEventSchema,
+  AiRunInputAppliedEventSchema,
+  AiRunWaitingEventSchema,
   AiRunCompletedEventSchema,
   AiRunFailedEventSchema,
   AiRunCancelledEventSchema,

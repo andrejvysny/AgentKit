@@ -56,6 +56,8 @@ impl AiRunEvent {
             Self::Warning(_) => "run.warning",
             Self::Usage(_) => "run.usage",
             Self::Verification(_) => "run.verification",
+            Self::InputApplied(_) => "run.input.applied",
+            Self::Waiting(_) => "run.waiting",
             Self::Completed(_) => "run.completed",
             Self::Failed(_) => "run.failed",
             Self::Cancelled(_) => "run.cancelled",

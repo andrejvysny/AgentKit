@@ -14,6 +14,8 @@ export const AiRunEventTypeSchema = Type.Union([
   Type.Literal("run.warning"),
   Type.Literal("run.usage"),
   Type.Literal("run.verification"),
+  Type.Literal("run.input.applied"),
+  Type.Literal("run.waiting"),
   Type.Literal("run.completed"),
   Type.Literal("run.failed"),
   Type.Literal("run.cancelled"),
@@ -408,6 +410,55 @@ export type AiRunVerificationEvent = Static<
   typeof AiRunVerificationEventSchema
 >;
 
+/**
+ * A durable input (a steer) was placed into the run before a provider step
+ * (ADR 0016 §3). Emitted only by a host that uses agent sessions.
+ */
+export const AiRunInputAppliedEventSchema = Type.Object({
+  type: Type.Literal("run.input.applied"),
+  ...runEventBaseFields,
+  data: Type.Object({
+    inputId: Type.String({
+      description: "The durable input's idempotency key (`AgentInputStore`).",
+    }),
+    kind: Type.String({
+      description: 'Open vocabulary; today only "steer".',
+    }),
+    step: Type.Number({
+      description: "The 1-based provider step the input was placed before.",
+    }),
+  }),
+});
+export type AiRunInputAppliedEvent = Static<
+  typeof AiRunInputAppliedEventSchema
+>;
+
+/**
+ * The run paused for human input; the task parks in `waiting_approval` and
+ * continues on a later attempt. NOT a terminal event (ADR 0016 §5). Emitted
+ * only by a host that uses agent sessions.
+ */
+export const AiRunWaitingEventSchema = Type.Object({
+  type: Type.Literal("run.waiting"),
+  ...runEventBaseFields,
+  data: Type.Object({
+    requestId: Type.String({
+      description:
+        "Deterministic human-request id, `hreq:<taskId>:<toolCallId>`.",
+    }),
+    toolCallId: Type.String({
+      description: "The tool call that asked for input.",
+    }),
+    toolName: Type.String({ description: "The tool that asked for input." }),
+    step: Type.Number({ description: "The 1-based provider step." }),
+    prompt: Type.String({ description: "What the human is asked." }),
+    expiresAt: Type.Optional(
+      Type.String({ description: "ISO-8601 expiry of the request." }),
+    ),
+  }),
+});
+export type AiRunWaitingEvent = Static<typeof AiRunWaitingEventSchema>;
+
 export const AiRunCompletedEventSchema = Type.Object({
   type: Type.Literal("run.completed"),
   ...runEventBaseFields,
@@ -453,6 +504,8 @@ export const AiRunEventSchema = Type.Union([
   AiRunWarningEventSchema,
   AiRunUsageEventSchema,
   AiRunVerificationEventSchema,
+  AiRunInputAppliedEventSchema,
+  AiRunWaitingEventSchema,
   AiRunCompletedEventSchema,
   AiRunFailedEventSchema,
   AiRunCancelledEventSchema,
@@ -476,6 +529,8 @@ export type AiRunEvent =
   | AiRunWarningEvent
   | AiRunUsageEvent
   | AiRunVerificationEvent
+  | AiRunInputAppliedEvent
+  | AiRunWaitingEvent
   | AiRunCompletedEvent
   | AiRunFailedEvent
   | AiRunCancelledEvent;
