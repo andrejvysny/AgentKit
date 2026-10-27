@@ -230,6 +230,28 @@ cancelled, expired or already-resumed request is `answer_stale`. `fork` copies
 history and the descriptor but not pending inputs; `setModel` affects future
 turns only.
 
+### Context for session turns (ADR 0017)
+
+A session turn replays the full transcript of earlier turns (tool calls,
+results and steering, not only final answers), fits it to the model's context
+window, and can carry project instructions and Skills. Chats without a session
+descriptor are untouched. Optional descriptor fields (still `version: 1`):
+
+| Field | Meaning |
+|---|---|
+| `workspace: { root, trusted }` | Read `AGENTS.md` then `CLAUDE.md` (64 KiB each) from `root` into the system prompt as `Project instructions (<file>, sha256:<12 hex>)`. Needs `TurnRunnerDeps.projectInstructions` (`fileProjectInstructions()` from `@agentkit/runner-local/filesystem`). `trusted: false` prefixes the block as untrusted repository text, never a permission grant. |
+| `context.policy` | `"transcript"` (default) or `"final_answers"` (earlier turns' answers only). |
+| `context.windowTokens` | Overrides the window: otherwise the stored model's `contextWindowTokens`, then the provider's `maxContextTokens`, then 32768 with a `context_budget_fallback` warning. |
+| `context.reserveTokens` | Tokens kept free for the reply. Default 16384, at most half the window. |
+| `skills: { id, revision }[]` | Re-selected on every turn. One that went missing or changed is skipped with a `skill_unavailable` warning. |
+
+Over budget (window - reserve - tool definitions), the oldest whole turns are
+dropped with a `context_trimmed` warning; if the system prompt and current turn
+alone do not fit, the turn fails with `context_overflow` and the provider is
+never called. `refreshProviderModels(deps, providerId)` probes the provider's
+model list and stores it, which is how `max_model_len`-style context windows
+reach the budget; call it from your `ProviderOperations.refreshModels`.
+
 ## Port implementation checklist
 
 Implementing `AssistantStore` for your own backend (Postgres, Redis, a

@@ -15,7 +15,9 @@ import {
   type ExecutionBudgets,
 } from "@agentkit/core";
 import type {
+  AiChatMessage,
   AiContextBinding,
+  AiProviderCapabilities,
   AiProviderConfig,
   AiRunEvent,
   AiToolLimits,
@@ -23,6 +25,9 @@ import type {
 import {
   AiToolRegistry,
   createEventStamper,
+  defaultTokenEstimator,
+  estimateTools,
+  type TokenEstimator,
   resolveToolLimits,
   runAgentLoop,
   type AgentLoopHooks,
@@ -51,7 +56,20 @@ import type { UsageAuthorizer } from "../ports/usage-authorizer.js";
 import type { AssistantSettings } from "../ports/settings-store.js";
 import type { TaskStatus } from "../ports/task-store.js";
 import type { VerificationHook } from "../ports/verification.js";
-import { readSessionDescriptor } from "../sessions/descriptor.js";
+import {
+  appendToSystemPrompt,
+  loadProjectInstructions,
+  type ProjectInstructionsSource,
+} from "../context/instructions.js";
+import {
+  fitToBudget,
+  resolveContextWindow,
+  resolveReserveTokens,
+} from "../context/budget.js";
+import {
+  readSessionDescriptor,
+  type AgentSessionDescriptor,
+} from "../sessions/descriptor.js";
 import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import { loadExecutableTask } from "../tasks/load-executable-task.js";
 import type {
@@ -196,6 +214,13 @@ export interface TurnRunnerDeps {
   attachmentBudgets?: AttachmentBudgets;
   /** Overrides the limits derived from settings + provider capabilities. */
   limits?: AiToolLimits;
+  /**
+   * Reads `AGENTS.md` / `CLAUDE.md` for agent sessions whose descriptor names a
+   * `workspace`. Absent, no project instructions are injected (ADR 0017).
+   */
+  projectInstructions?: ProjectInstructionsSource;
+  /** Token estimate for session context budgeting. Default chars/4. */
+  tokenEstimator?: TokenEstimator;
   /**
    * Deadlines for the host's own hooks. Absent, the defaults in
    * {@link DEFAULT_HOOK_TIMEOUTS_MS} apply; a non-positive value on any field
@@ -534,23 +559,54 @@ export class TurnRunner implements TaskWorker {
     const { task } = ctx;
     const conversations = fencedConversations(store, ctx);
     ctx.signal.throwIfAborted();
-    const selectedContent = request.contentSelection
+    // Session mode: a chat opts in through its metadata, and only a store that
+    // keeps durable inputs can honour it. Anything else runs exactly as before.
+    const inputs = store.inputs;
+    const session =
+      inputs === undefined
+        ? undefined
+        : readSessionDescriptor(
+            (await store.conversations.getChat(chatId))?.metadata,
+          );
+    // Session Skills come from the descriptor, so one that has since vanished
+    // or changed is a warning, not a failed turn.
+    const unavailableSkills: string[] = [];
+    const selection = request.contentSelection;
+    const selectedContent = selection
       ? await withHookDeadline({
           hook: "runContent.resolve",
           timeoutMs: this.hookTimeouts.context,
           run: async () => {
-            if (!this.deps.runContent)
-              throw new Error(
-                "Run content selection requires a configured provider.",
-              );
-            return this.deps.runContent.resolve(request.contentSelection!, {
+            if (!this.deps.runContent) {
+              if (session === undefined || selection.template)
+                throw new Error(
+                  "Run content selection requires a configured provider.",
+                );
+              for (const skill of selection.skills ?? [])
+                unavailableSkills.push(
+                  `Skill "${skill.id}" is unavailable and was skipped: no run content provider is configured.`,
+                );
+              return { blocks: [], messages: [] };
+            }
+            return this.deps.runContent.resolve(selection, {
               runId: task.taskId,
               chatId,
               signal: ctx.signal,
+              ...(session === undefined
+                ? {}
+                : {
+                    onSkillUnavailable: (skillId: string, reason: unknown) => {
+                      unavailableSkills.push(
+                        `Skill "${skillId}" is unavailable and was skipped: ${publicErrorMessage(reason)}`,
+                      );
+                    },
+                  }),
             });
           },
         })
       : { blocks: [], messages: [] };
+    for (const message of unavailableSkills)
+      await this.emitWarning(ctx, "skill_unavailable", message);
     const settings = await store.settings.getSettings();
     const provider = await this.resolveProvider(request, settings);
     const model =
@@ -684,15 +740,6 @@ export class TurnRunner implements TaskWorker {
       task.taskId,
     );
     if (resumed !== null) state.lastMessageId = resumed.id;
-    // Session mode: a chat opts in through its metadata, and only a store that
-    // keeps durable inputs can honour it. Anything else runs exactly as before.
-    const inputs = store.inputs;
-    const session =
-      inputs === undefined
-        ? undefined
-        : readSessionDescriptor(
-            (await store.conversations.getChat(chatId))?.metadata,
-          );
     // Resume guard: a request nobody has answered means this attempt has
     // nothing to continue with, so go back to waiting without a provider call.
     if (
@@ -703,7 +750,29 @@ export class TurnRunner implements TaskWorker {
       await parkTurn(store, ctx, assistantMessageId, state.content);
       return;
     }
-    const assembled = await assembleMessages(
+    // Agent sessions replay full transcripts under a token budget and carry
+    // project instructions; every other chat assembles exactly as before.
+    const assembleHistory = async (
+      deps: TurnRunnerDeps,
+      historyChatId: string,
+      anchorId: string,
+      prompt: string | null,
+    ): Promise<AiChatMessage[]> =>
+      session === undefined
+        ? assembleMessages(deps, historyChatId, anchorId, prompt)
+        : this.assembleSessionHistory({
+            ctx,
+            session,
+            chatId: historyChatId,
+            assistantMessageId: anchorId,
+            systemPrompt: prompt,
+            providerId: provider.id,
+            model,
+            capabilities,
+            registry,
+            runContentMessages: selectedContent.messages,
+          });
+    const assembled = await assembleHistory(
       this.deps,
       chatId,
       assistantMessageId,
@@ -1286,6 +1355,100 @@ export class TurnRunner implements TaskWorker {
       );
       return null;
     }
+  }
+
+  /**
+   * The history of one agent-session pass (ADR 0017): transcript replay,
+   * project instructions in the system prompt, and the token budget.
+   *
+   * A trim is a warning and an over-limit request is a refusal BEFORE any
+   * provider call: the alternative is the provider's own rejection, which names
+   * neither the cause nor the way out. The refusal throws a coded host error, so
+   * it lands like `no_model` -- a failed task with `errorCode: "context_overflow"`.
+   */
+  private async assembleSessionHistory(input: {
+    ctx: TaskExecutionContext;
+    session: AgentSessionDescriptor;
+    chatId: string;
+    assistantMessageId: string;
+    systemPrompt: string | null;
+    providerId: string;
+    model: string;
+    capabilities: AiProviderCapabilities | null;
+    registry: AiToolRegistry;
+    runContentMessages: readonly AiChatMessage[];
+  }): Promise<AiChatMessage[]> {
+    const { ctx, session } = input;
+    let systemPrompt = input.systemPrompt;
+    if (session.workspace !== undefined && this.deps.projectInstructions) {
+      const instructions = await loadProjectInstructions(
+        this.deps.projectInstructions,
+        session.workspace,
+      );
+      for (const warning of instructions?.warnings ?? [])
+        await this.emitWarning(
+          ctx,
+          "project_instructions_unavailable",
+          warning,
+        );
+      if (instructions)
+        systemPrompt = appendToSystemPrompt(systemPrompt, instructions.text);
+    }
+    const messages = await assembleMessages(
+      this.deps,
+      input.chatId,
+      input.assistantMessageId,
+      systemPrompt,
+      { policy: session.context?.policy ?? "transcript" },
+    );
+
+    const models = await this.deps.store.providers.listModels(input.providerId);
+    const window = resolveContextWindow({
+      descriptor: session,
+      model: models.find((candidate) => candidate.modelId === input.model),
+      capabilities: input.capabilities,
+    });
+    if (window.source === "fallback") {
+      await this.emitWarning(
+        ctx,
+        "context_budget_fallback",
+        `No context window is known for model "${input.model}"; assuming ${window.windowTokens} tokens. Refresh the provider's models or set context.windowTokens on the session.`,
+      );
+    }
+    const estimator = this.deps.tokenEstimator ?? defaultTokenEstimator;
+    const fit = fitToBudget(messages, {
+      windowTokens: window.windowTokens,
+      reserveTokens: resolveReserveTokens(
+        window.windowTokens,
+        session.context?.reserveTokens,
+      ),
+      toolTokens: estimateTools(input.registry.listDefinitions()),
+      extraTokens: input.runContentMessages.reduce(
+        (sum, message) => sum + estimator.estimateMessage(message),
+        0,
+      ),
+      estimator,
+    });
+    if (fit.overflow) {
+      throw new AgentKitHostError(
+        "context_overflow",
+        `The system prompt and the current turn need about ${fit.estimatedTokens} tokens but only ${fit.budgetTokens} fit in the ${window.windowTokens}-token context window after the reply reserve and tool definitions. Shorten the request, raise context.windowTokens, or use a larger model.`,
+        {
+          chatId: input.chatId,
+          estimatedTokens: fit.estimatedTokens,
+          budgetTokens: fit.budgetTokens,
+          windowTokens: window.windowTokens,
+        },
+      );
+    }
+    if (fit.droppedTurns > 0) {
+      await this.emitWarning(
+        ctx,
+        "context_trimmed",
+        `Dropped the ${fit.droppedTurns} oldest turn(s) to fit the context window; about ${fit.estimatedTokens} of ${fit.budgetTokens} budgeted tokens remain in use.`,
+      );
+    }
+    return fit.messages;
   }
 
   /**

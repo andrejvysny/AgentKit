@@ -501,8 +501,14 @@ Follow-ups queued while a turn runs are converted into the next turn inside the 
 transaction, one at a time, and only after a `completed` turn. After a failed or cancelled turn, `flushQueue` releases
 them.
 
-Later turns still see earlier turns' final answers only. Run records live off the active path, and full-transcript
-context is M3's context assembler.
+Later turns replay the full transcript ([ADR 0017](adr/0017-context-assembly-and-compaction.md)). Under the default
+`transcript` policy each earlier turn's run records (tool calls, results and steering) are replayed before its final
+answer, whether or not they sit on the active path; `context.policy: "final_answers"` opts back into answers only.
+The assembled history is fitted to the model's context window (descriptor override, stored model record, provider
+capability, then a 32768-token fallback with a warning): the oldest whole turns are dropped with a `context_trimmed`
+warning, and a request that cannot fit fails with `context_overflow` before any provider call. A descriptor `workspace`
+adds `AGENTS.md` / `CLAUDE.md` to the system prompt, and descriptor `skills` are re-selected every turn. Chats without a
+session descriptor assemble exactly as before.
 
 ## Task dependencies and subagents
 

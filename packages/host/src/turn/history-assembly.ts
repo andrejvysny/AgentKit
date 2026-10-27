@@ -22,7 +22,7 @@ import { isHookTimeout, withHookDeadline } from "./hook-deadline.js";
 import { reconcileOrphanToolCalls } from "./history-reconcile.js";
 import { orderMessagesForProvider } from "./message-order.js";
 import type { TurnRunnerDeps } from "./turn-runner.js";
-import { anchoredHistory } from "./anchored-history.js";
+import { anchoredHistory, type HistoryPolicy } from "./anchored-history.js";
 
 /** Default number of messages replayed to the provider. */
 const DEFAULT_HISTORY_LIMIT = 200;
@@ -311,18 +311,24 @@ export async function resolveAttachments(
  * failure (see {@link reconcileOrphanToolCalls}). Either imbalance is rejected
  * outright by every provider, and both are reachable — the first from the
  * history limit, the second from a turn that died between two writes.
+ *
+ * `options.policy` defaults to `final_answers`, the behaviour every chat has
+ * always had. `transcript` (agent sessions, ADR 0017) additionally replays each
+ * prior turn's tool calls, results and steering, ahead of its final answer.
  */
 export async function assembleMessages(
   deps: TurnRunnerDeps,
   chatId: string,
   assistantMessageId: string,
   systemPrompt: string | null,
+  options?: { policy?: HistoryPolicy },
 ): Promise<AiChatMessage[]> {
   const records = await anchoredHistory(
     deps.store.conversations,
     chatId,
     assistantMessageId,
     deps.historyLimit ?? DEFAULT_HISTORY_LIMIT,
+    options?.policy ?? "final_answers",
   );
   const ordered = orderMessagesForProvider(records);
   const messages: AiChatMessage[] = [];

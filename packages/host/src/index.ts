@@ -57,3 +57,8 @@ export * from "./sessions/descriptor.js";
 export * from "./sessions/session-types.js";
 export * from "./sessions/agent-session-service.js";
 export * from "./sessions/user-input-tool.js";
+
+// Context assembly for agent sessions (ADR 0017).
+export * from "./context/budget.js";
+export * from "./context/instructions.js";
+export * from "./context/refresh-models.js";

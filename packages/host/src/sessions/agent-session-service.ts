@@ -26,6 +26,7 @@ import type { TurnRunner } from "../turn/turn-runner.js";
 import {
   SESSION_METADATA_KEY,
   readSessionDescriptor,
+  sessionContentSelection,
   type AgentSessionDescriptor,
 } from "./descriptor.js";
 import { sha256Hex } from "./hash.js";
@@ -93,6 +94,9 @@ export class AgentSessionService {
         : { providerId: input.providerId }),
       ...(input.model === undefined ? {} : { model: input.model }),
       createdAt: this.deps.clock.nowIso(),
+      ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
+      ...(input.context === undefined ? {} : { context: input.context }),
+      ...(input.skills === undefined ? {} : { skills: input.skills }),
     };
     const metadata = { ...input.metadata, [SESSION_METADATA_KEY]: raw };
     if (readSessionDescriptor(metadata) === undefined)
@@ -348,6 +352,7 @@ export class AgentSessionService {
     inputId: string | undefined,
   ): Promise<AgentSendResult> {
     const { descriptor } = session;
+    const contentSelection = sessionContentSelection(descriptor);
     const result = await this.deps.turns.submitMessage({
       chatId: session.sessionId,
       content,
@@ -356,6 +361,7 @@ export class AgentSessionService {
       ...(descriptor.providerId === undefined
         ? {}
         : { providerId: descriptor.providerId }),
+      ...(contentSelection === undefined ? {} : { contentSelection }),
     });
     return {
       kind: "turn",
