@@ -34,6 +34,9 @@ now in source, merged with the M7 resumable interrupt.
 
 - Resumable interrupt: `AgentSessionService.interrupt`/`resume`, `TaskRunner.requestInterrupt`, and
   `shutdownMode: "interrupt"`. Also `listTurns`, `getUsage` and `exportSession`.
+- `CreateSessionInput.turnKind` / `AgentSessionDescriptor.turnKind` (persisted, forks inherit) run a session's turns under a
+  host task kind (not `chat.*`/`agentkit.*`) so a host can route them to its own runner pool; `sessionTurnKind(descriptor)`
+  resolves it (default `chat.turn`), `ChatTurnExecutor` takes an optional kind, and `listTurnTasks` takes a `kind`.
 - Old large tool results are elided from the provider view; canonical history is unchanged.
 - Profiles now apply `model`, `reasoningEffort`, `maxToolCallsPerIteration`, `maxOutputTokens`, `attemptBudgetMs`,
   `resources.projectInstructions` and `resources.skills`. Reasoning effort reaches chat completions and Responses;

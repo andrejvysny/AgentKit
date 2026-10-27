@@ -22,7 +22,7 @@ import type {
   TaskInterruptionReason,
   TaskRunner,
 } from "../ports/task-runner.js";
-import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
+import { isValidSessionTurnKind } from "../tasks/kinds.js";
 import type { TaskService } from "../tasks/task-service.js";
 import { stageNextQueuedTurn } from "../turn/session-turn.js";
 import type { TurnRunner } from "../turn/turn-runner.js";
@@ -32,6 +32,7 @@ import {
   SESSION_METADATA_KEY,
   readSessionDescriptor,
   sessionContentSelection,
+  sessionTurnKind,
   type AgentSessionDescriptor,
   type SessionReasoningEffort,
 } from "./descriptor.js";
@@ -116,6 +117,10 @@ export class AgentSessionService {
   async createSession(input: CreateSessionInput): Promise<AgentSessionState> {
     if (input.metadata && SESSION_METADATA_KEY in input.metadata)
       invalid(`metadata must not contain ${SESSION_METADATA_KEY}.`);
+    if (input.turnKind !== undefined && !isValidSessionTurnKind(input.turnKind))
+      invalid(
+        "turnKind must be a dotted lowercase task kind outside the reserved chat.* / agentkit.* prefixes.",
+      );
     const raw = {
       version: 1,
       profile: input.profile,
@@ -127,6 +132,7 @@ export class AgentSessionService {
       ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
       ...(input.context === undefined ? {} : { context: input.context }),
       ...(input.skills === undefined ? {} : { skills: input.skills }),
+      ...(input.turnKind === undefined ? {} : { turnKind: input.turnKind }),
     };
     const metadata = { ...input.metadata, [SESSION_METADATA_KEY]: raw };
     if (readSessionDescriptor(metadata) === undefined)
@@ -195,7 +201,10 @@ export class AgentSessionService {
 
   async getState(sessionId: string): Promise<AgentSessionState> {
     const { descriptor, chat } = await this.requireSession(sessionId);
-    const active = await this.activeTurn(sessionId);
+    const active = await this.activeTurn(
+      sessionId,
+      sessionTurnKind(descriptor),
+    );
     const records = await this.inputs().listInputs({
       sessionId,
       statuses: ["pending"],
@@ -280,7 +289,9 @@ export class AgentSessionService {
       // the exclusive-scope create below stays the authoritative guard.
       assertScopeIdle(
         sessionId,
-        (await tx.tasks.listByScope(sessionId)).filter(isLiveTurn),
+        (await tx.tasks.listByScope(sessionId)).filter(
+          isLiveTurn(sessionTurnKind(descriptor)),
+        ),
       );
       const queue: AgentInputRecord[] = [];
       for (const record of pending) {
@@ -352,8 +363,14 @@ export class AgentSessionService {
 
   /** The session's turns, oldest first. */
   async listTurns(sessionId: string): Promise<AgentTurnSummary[]> {
-    await this.requireSession(sessionId);
-    return (await listTurnTasks(this.deps.store, sessionId)).map(summarizeTurn);
+    const { descriptor } = await this.requireSession(sessionId);
+    return (
+      await listTurnTasks(
+        this.deps.store,
+        sessionId,
+        sessionTurnKind(descriptor),
+      )
+    ).map(summarizeTurn);
   }
 
   /** Provider-reported token usage per turn, plus the context window it fills. */
@@ -419,8 +436,9 @@ export class AgentSessionService {
    * that turn is already assembling its history.
    */
   async compact(sessionId: string): Promise<void> {
-    await this.requireSession(sessionId);
-    if (await this.activeTurn(sessionId))
+    const { descriptor } = await this.requireSession(sessionId);
+    const turnKind = sessionTurnKind(descriptor);
+    if (await this.activeTurn(sessionId, turnKind))
       throw new ChatBusyError(`Chat ${sessionId} is busy.`, {
         chatId: sessionId,
       });
@@ -429,7 +447,7 @@ export class AgentSessionService {
       if (!chat || !readSessionDescriptor(chat.metadata))
         throw this.notASession(sessionId);
       const tasks = await tx.tasks.listByScope(sessionId);
-      if (tasks.some(isLiveTurn))
+      if (tasks.some(isLiveTurn(turnKind)))
         throw new ChatBusyError(`Chat ${sessionId} is busy.`, {
           chatId: sessionId,
         });
@@ -559,9 +577,12 @@ export class AgentSessionService {
     return task;
   }
 
-  private async activeTurn(sessionId: string): Promise<TaskRecord | undefined> {
+  private async activeTurn(
+    sessionId: string,
+    turnKind: string,
+  ): Promise<TaskRecord | undefined> {
     const tasks = await this.deps.store.tasks.listByScope(sessionId);
-    return tasks.find(isLiveTurn);
+    return tasks.find(isLiveTurn(turnKind));
   }
 
   private async cancelRequests(
@@ -595,6 +616,7 @@ export class AgentSessionService {
     const result = await this.deps.turns.submitMessage({
       chatId: session.sessionId,
       content,
+      kind: sessionTurnKind(descriptor),
       ...(inputId === undefined ? {} : { taskId: turnIdFor(inputId) }),
       ...(descriptor.model === undefined ? {} : { model: descriptor.model }),
       ...(descriptor.reasoningEffort === undefined
@@ -636,7 +658,10 @@ export class AgentSessionService {
         if (!(error instanceof ChatBusyError)) throw error;
         busy = error;
       }
-      const active = await this.activeTurn(sessionId);
+      const active = await this.activeTurn(
+        sessionId,
+        sessionTurnKind(session.descriptor),
+      );
       // The turn settled between the refusal and now: start over as idle.
       if (active === undefined) continue;
       return this.queueInput(sessionId, kind, request, active);
@@ -758,8 +783,6 @@ function approvalOf(
   };
 }
 
-function isLiveTurn(task: TaskRecord): boolean {
-  return (
-    task.kind === CHAT_TURN_TASK_KIND && !isTerminalTaskStatus(task.status)
-  );
+function isLiveTurn(turnKind: string): (task: TaskRecord) => boolean {
+  return (task) => task.kind === turnKind && !isTerminalTaskStatus(task.status);
 }

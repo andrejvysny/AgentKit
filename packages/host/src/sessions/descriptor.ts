@@ -1,3 +1,4 @@
+import { CHAT_TURN_TASK_KIND, isValidSessionTurnKind } from "../tasks/kinds.js";
 /** Chat metadata key holding the {@link AgentSessionDescriptor} (ADR 0016 §1). */
 export const SESSION_METADATA_KEY = "agentkit.session";
 /**
@@ -25,6 +26,16 @@ export interface AgentSessionDescriptor {
   context?: SessionContextOptions;
   /** Skills re-selected on every turn of this session. */
   skills?: { id: string; revision: string }[];
+  /**
+   * Task kind this session's turns run under, so a host can route them to a
+   * dedicated runner pool. Absent means {@link CHAT_TURN_TASK_KIND}.
+   */
+  turnKind?: string;
+}
+
+/** The task kind the session's turns are enqueued and matched under. */
+export function sessionTurnKind(descriptor: AgentSessionDescriptor): string {
+  return descriptor.turnKind ?? CHAT_TURN_TASK_KIND;
 }
 
 export interface SessionContextOptions {
@@ -75,6 +86,9 @@ export function readSessionDescriptor(
   const workspace = readWorkspace(raw["workspace"]);
   const context = readContext(raw["context"]);
   const skills = readSkills(raw["skills"]);
+  const turnKind = raw["turnKind"];
+  if (turnKind !== undefined && !isValidSessionTurnKind(turnKind))
+    return undefined;
   if (workspace === null || context === null || skills === null)
     return undefined;
   return {
@@ -89,6 +103,7 @@ export function readSessionDescriptor(
     ...(workspace === undefined ? {} : { workspace }),
     ...(context === undefined ? {} : { context }),
     ...(skills === undefined ? {} : { skills }),
+    ...(turnKind === undefined ? {} : { turnKind }),
   };
 }
 

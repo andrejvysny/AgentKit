@@ -76,6 +76,12 @@ export interface CreateSessionInput {
   /** Skills re-selected on every turn. */
   skills?: { id: string; revision: string }[];
   /**
+   * Task kind for this session's turns (persisted), so a host can route them to
+   * its own runner pool. Must not use the reserved `chat.*` / `agentkit.*`
+   * prefixes. Absent means `"chat.turn"`.
+   */
+  turnKind?: string;
+  /**
    * Initial permission mode (e.g. `"plan"` to start read-only, or `"read_only"`
    * for a constrained role). Absent means the host's configured default.
    */

@@ -480,7 +480,7 @@ export class TurnRunner implements TaskWorker {
       ].filter((field): field is string => field !== null);
       const error = new AgentKitHostError(
         "invalid_task_payload",
-        `Task ${task.taskId} of kind ${CHAT_TURN_TASK_KIND} has no ${missing.join(
+        `Task ${task.taskId} of kind ${task.kind} has no ${missing.join(
           " and no ",
         )} in its payload; only TurnRunner.submitMessage may create tasks of this kind.`,
         { taskId: task.taskId, kind: task.kind, missing },
@@ -2020,16 +2020,22 @@ export class TurnRunner implements TaskWorker {
 }
 
 /**
- * The `chat.turn` entry in an {@link ExecutorRegistry}.
+ * The chat-turn entry (`chat.turn` unless a session `turnKind` is given) in an {@link ExecutorRegistry}.
  *
  * Deliberately thin: everything about executing a turn lives on
  * {@link TurnRunner}, and this class exists only so the dispatcher has one
  * uniform shape to call — the same shape a host's own executors implement.
  */
 export class ChatTurnExecutor implements TaskExecutor {
-  readonly kind = CHAT_TURN_TASK_KIND;
+  readonly kind: string;
 
-  constructor(private readonly runner: TurnRunner) {}
+  /** `kind` defaults to `chat.turn`; pass a session's `turnKind` to serve it. */
+  constructor(
+    private readonly runner: TurnRunner,
+    kind: string = CHAT_TURN_TASK_KIND,
+  ) {
+    this.kind = kind;
+  }
 
   async execute(ctx: TaskExecutionContext): Promise<void> {
     await this.runner.executeTask(ctx);

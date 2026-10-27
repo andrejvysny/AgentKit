@@ -13,10 +13,10 @@ import type {
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { IdGenerator, Logger } from "../ports/system.js";
 import type { TaskStatus } from "../ports/task-store.js";
-import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import type { TaskExecutionContext } from "../tasks/task-executor.js";
 import {
   sessionContentSelection,
+  sessionTurnKind,
   type AgentSessionDescriptor,
 } from "../sessions/descriptor.js";
 import { readInputContent } from "../sessions/input-content.js";
@@ -238,7 +238,7 @@ export async function stageNextQueuedTurn(
     };
     await stageTurnInTransaction(tx, deps, {
       taskId,
-      kind: CHAT_TURN_TASK_KIND,
+      kind: sessionTurnKind(input.session),
       chatId,
       content,
       userMessageId,
