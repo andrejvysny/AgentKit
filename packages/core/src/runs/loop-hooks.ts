@@ -83,7 +83,7 @@ export interface AgentToolResultContext {
 
 export interface AgentSettledContext {
   readonly runId: string;
-  readonly terminal: "completed" | "failed" | "cancelled";
+  readonly terminal: "completed" | "failed" | "cancelled" | "suspended";
   readonly iterations: number;
 }
 

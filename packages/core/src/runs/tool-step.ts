@@ -21,6 +21,12 @@ import { executeToolSafely } from "./tool-exec.js";
 import type { AgentLoopInput } from "./agent-loop.js";
 import { describeValidationErrors, failTool } from "./tool-failure.js";
 import {
+  humanRequestId,
+  SUSPEND_CONFLICT_CODE,
+  SUSPEND_INVALID_CODE,
+  type AgentSuspendRequest,
+} from "./session-seams.js";
+import {
   frozenClone,
   hasHooks,
   runObservers,
@@ -46,12 +52,13 @@ export interface ToolBatchContext {
 
 /**
  * Run one iteration's tool calls. Returns "cancelled" when the run was aborted
- * (its terminal event already yielded), else "continue" so the loop asks the
- * model again.
+ * (its terminal event already yielded), "suspended" when a tool asked for human
+ * input (`run.waiting` yielded, deliberately no terminal event), else
+ * "continue" so the loop asks the model again.
  */
 export async function* executeToolBatch(
   ctx: ToolBatchContext,
-): AsyncGenerator<AiRunEvent, "continue" | "cancelled", unknown> {
+): AsyncGenerator<AiRunEvent, "continue" | "cancelled" | "suspended", unknown> {
   const {
     input,
     runId,
@@ -157,9 +164,32 @@ export async function* executeToolBatch(
       );
   };
 
+  // The one call (first wins) that is waiting for a human. It gets no tool
+  // message now: its result is the human's later answer.
+  let suspension:
+    | { tc: AiToolCall; prompt: string; expiresAt?: string }
+    | undefined;
+  // Cancellation must still answer the suspended call, or its tool_call_id
+  // stays orphaned in the replayed history.
+  const answerSuspended = function* (): Generator<AiRunEvent, void, unknown> {
+    if (!suspension) return;
+    const { tc } = suspension;
+    suspension = undefined;
+    yield* failTool(
+      stamp,
+      runId,
+      messages,
+      input.limits.maxBytes,
+      tc,
+      "Run cancelled before this tool produced a result.",
+      "cancelled",
+    );
+  };
+
   for (const tc of limitedToolCalls) {
     // Abort race: stop before starting a tool if cancellation arrived.
     if (input.signal?.aborted) {
+      yield* answerSuspended();
       yield* balanceCancelled(tc);
       yield stamp({
         type: "run.cancelled",
@@ -261,6 +291,7 @@ export async function* executeToolBatch(
       }
       // Same rule as the loop-top check: nothing dispatches after cancel.
       if (input.signal?.aborted) {
+        yield* answerSuspended();
         yield* balanceCancelled(tc);
         yield stamp({
           type: "run.cancelled",
@@ -272,6 +303,19 @@ export async function* executeToolBatch(
       }
     }
 
+    // Per-call holder: the closure is sealed once execute settles, so a tool
+    // that fires `suspend` late (after a timeout) cannot park a finished call.
+    let suspendRequest: AgentSuspendRequest | undefined;
+    let sealed = false;
+    const suspend = input.suspendable
+      ? (request: AgentSuspendRequest): void => {
+          if (sealed || suspendRequest) return;
+          suspendRequest = {
+            prompt: request?.prompt,
+            ...(request?.expiresAt ? { expiresAt: request.expiresAt } : {}),
+          };
+        }
+      : undefined;
     const result = await executeToolSafely(
       tool,
       {
@@ -283,10 +327,47 @@ export async function* executeToolBatch(
         limits: input.limits,
         signal: input.signal,
         metadata: { toolEventId: newToolEventId() },
+        // Key absent (not undefined) when not suspendable.
+        ...(suspend ? { suspend } : {}),
       },
       args,
       input.defaultToolTimeoutMs,
     );
+    sealed = true;
+
+    if (suspendRequest) {
+      const { prompt, expiresAt } = suspendRequest as AgentSuspendRequest;
+      const fail = (message: string, code: string) =>
+        failTool(
+          stamp,
+          runId,
+          messages,
+          input.limits.maxBytes,
+          tc,
+          message,
+          code,
+          {
+            phase: "execution",
+            retryable: false,
+          },
+        );
+      if (typeof prompt !== "string" || prompt.trim() === "") {
+        yield* fail(
+          "suspend() needs a non-empty prompt for the human.",
+          SUSPEND_INVALID_CODE,
+        );
+        if (hooked) yield* toolResult(tc, "failed", SUSPEND_INVALID_CODE);
+      } else if (suspension) {
+        yield* fail(
+          "Another tool call in this step is already waiting for human input.",
+          SUSPEND_CONFLICT_CODE,
+        );
+        if (hooked) yield* toolResult(tc, "failed", SUSPEND_CONFLICT_CODE);
+      } else {
+        suspension = { tc, prompt, ...(expiresAt ? { expiresAt } : {}) };
+      }
+      continue;
+    }
 
     // NOTE: do NOT abort here. This tool has already executed — its side
     // effects (e.g. an applied write) are real, so its result MUST be
@@ -433,6 +514,34 @@ export async function* executeToolBatch(
       name: tc.name,
     });
     if (hooked) yield* toolResult(tc, "failed", "tool_call_cap");
+  }
+  if (suspension) {
+    // Cancellation wins: the abort is caught here rather than at the next
+    // loop-top, because "suspended" would otherwise park an aborted run.
+    if (input.signal?.aborted) {
+      yield* answerSuspended();
+      yield stamp({
+        type: "run.cancelled",
+        runId,
+        timestamp: nowIso(),
+        data: { reason: "aborted" },
+      });
+      return "cancelled";
+    }
+    yield stamp({
+      type: "run.waiting",
+      runId,
+      timestamp: nowIso(),
+      data: {
+        requestId: humanRequestId(runId, suspension.tc.id),
+        toolCallId: suspension.tc.id,
+        toolName: suspension.tc.name,
+        step,
+        prompt: suspension.prompt,
+        ...(suspension.expiresAt ? { expiresAt: suspension.expiresAt } : {}),
+      },
+    });
+    return "suspended";
   }
   // Loop again so the model can react to tool results.
   return "continue";

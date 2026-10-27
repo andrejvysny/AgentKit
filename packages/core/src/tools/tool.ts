@@ -4,6 +4,7 @@ import type {
   AiToolLimits,
   AiToolResult,
 } from "@agentkit/contracts";
+import type { AgentSuspendRequest } from "../runs/session-seams.js";
 
 export interface AiToolExecutionContext {
   runId: string;
@@ -25,6 +26,13 @@ export interface AiToolExecutionContext {
   limits: AiToolLimits;
   signal?: AbortSignal;
   metadata?: Record<string, unknown>;
+  /**
+   * Present only when the loop is suspendable. Calling it (before `execute`
+   * settles) pauses the run for human input: this call's result is then the
+   * human's later answer, and whatever `execute` returns is discarded. Only
+   * the first call per step is honoured.
+   */
+  suspend?(request: AgentSuspendRequest): void;
 }
 
 export interface AiTool<TInput = unknown, TOutput = unknown> {
