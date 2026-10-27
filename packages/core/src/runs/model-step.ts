@@ -10,6 +10,12 @@ import { expandToolResultContent } from "../messages/tool-content.js";
 import type { AiChatRequest } from "../providers/client.js";
 import { dedupeToolCallIds } from "../tools/tool-calls.js";
 import { errorMessageOf, isAbortError } from "./errors.js";
+import {
+  defaultRetrySleep,
+  effectiveMaxAttempts,
+  isRetryableProviderCode,
+  retryDelayMs,
+} from "./provider-retry.js";
 import type { RunChatInput } from "./run-types.js";
 
 export interface ModelStepContext {
@@ -41,14 +47,61 @@ export type ModelStepOutcome =
       sawNoToolCallWarning: boolean;
     };
 
+type AttemptOutcome = ModelStepOutcome | { kind: "retry"; code: string };
+
 /**
  * Stream one provider round-trip, re-yielding its events stamped. Returns the
  * assembled turn, or "cancelled"/"failed" once the matching terminal event has
- * been yielded.
+ * been yielded. With `input.providerRetry`, a transient failure before any
+ * visible output is retried (bounded, backed off) instead of failing the run.
  */
 export async function* streamModelStep(
   ctx: ModelStepContext,
 ): AsyncGenerator<AiRunEvent, ModelStepOutcome, unknown> {
+  const policy = ctx.input.providerRetry;
+  const maxAttempts = effectiveMaxAttempts(policy);
+  for (let attempt = 1; ; attempt++) {
+    const canRetry = policy !== undefined && attempt < maxAttempts;
+    const outcome = yield* streamModelAttempt(ctx, canRetry, attempt > 1);
+    if (outcome.kind !== "retry" || policy === undefined) {
+      return outcome as ModelStepOutcome;
+    }
+    const delayMs = retryDelayMs(policy, attempt);
+    yield ctx.stamp({
+      type: "run.warning",
+      runId: ctx.runId,
+      timestamp: nowIso(),
+      data: {
+        code: "provider_retry",
+        message: `Provider request failed (${outcome.code}); retrying in ${
+          Math.round(delayMs / 100) / 10
+        }s (attempt ${attempt + 1} of ${maxAttempts}).`,
+      },
+    });
+    try {
+      await (policy.sleep ?? defaultRetrySleep)(delayMs, ctx.input.signal);
+    } catch (err) {
+      // A sleep seam that rejects is only meaningful as an abort; otherwise
+      // the backoff is skipped and the retry proceeds.
+      if (!ctx.input.signal?.aborted && !isAbortError(err)) continue;
+    }
+    if (ctx.input.signal?.aborted) {
+      yield ctx.stamp({
+        type: "run.cancelled",
+        runId: ctx.runId,
+        timestamp: nowIso(),
+        data: { reason: "aborted" },
+      });
+      return { kind: "cancelled" };
+    }
+  }
+}
+
+async function* streamModelAttempt(
+  ctx: ModelStepContext,
+  canRetry: boolean,
+  isRetryAttempt: boolean,
+): AsyncGenerator<AiRunEvent, AttemptOutcome, unknown> {
   const {
     input,
     runId,
@@ -75,6 +128,15 @@ export async function* streamModelStep(
   // warning during streaming; track it so the final-block fallback doesn't
   // re-emit a duplicate (while still covering providers/mocks that don't).
   let sawNoToolCallWarning = false;
+  // Output a consumer may already have shown or acted on; once set, a failure
+  // is never retried.
+  let visibleOutput = false;
+  let retryCode: string | undefined;
+  const mayRetry = (code: string | undefined): code is string =>
+    canRetry &&
+    !visibleOutput &&
+    !input.signal?.aborted &&
+    isRetryableProviderCode(code);
 
   // A provider client is expected to normalize its own transport failures into
   // run.failed, but a THROW still escapes — a bad JSON body, a socket reset, a
@@ -102,15 +164,28 @@ export async function* streamModelStep(
     })) {
       // Re-yield provider events with the canonical runId.
       const stamped = { ...event, runId } as AiRunEvent;
+      if (retryCode !== undefined) {
+        // Failed attempt being discarded: keep only its token accounting.
+        if (stamped.type === "run.usage") {
+          yield stamp({
+            ...stamped,
+            data: { ...stamped.data, step: iteration },
+          });
+        }
+        continue;
+      }
       switch (stamped.type) {
         case "run.message.reasoning-delta":
+          visibleOutput = true;
           yield stamp(stamped);
           break;
         case "run.message.delta":
+          visibleOutput = true;
           deltaContent += stamped.data.delta;
           yield stamp(stamped);
           break;
         case "run.message.completed":
+          visibleOutput = true;
           completedContent = stamped.data.content;
           if (stamped.data.toolCalls && stamped.data.toolCalls.length > 0) {
             completedToolCalls = stamped.data.toolCalls;
@@ -119,6 +194,7 @@ export async function* streamModelStep(
           yield stamp(stamped);
           break;
         case "run.tool.requested":
+          visibleOutput = true;
           requestedToolCalls.push({
             id: stamped.data.toolCallId,
             name: stamped.data.toolName,
@@ -128,6 +204,10 @@ export async function* streamModelStep(
           yield stamp(stamped);
           break;
         case "run.failed":
+          if (mayRetry(stamped.data.errorCode)) {
+            retryCode = stamped.data.errorCode;
+            break;
+          }
           // The provider already emitted run.failed; record it and don't re-emit.
           turnFailed = true;
           yield stamp(stamped);
@@ -136,7 +216,7 @@ export async function* streamModelStep(
           yield stamp(stamped);
           return { kind: "cancelled" };
         case "run.started":
-          if (iteration === 1) yield stamp(stamped);
+          if (iteration === 1 && !isRetryAttempt) yield stamp(stamped);
           break;
         case "run.warning":
           if (stamped.data.code === "tool_call_unparseable")
@@ -147,7 +227,10 @@ export async function* streamModelStep(
           // run is the signal a consumer acts on; N copies of it are noise
           // that consumer then has to dedupe. Suppressed the same way
           // `run.started` is, and for the same reason.
-          if (stamped.data.code === "multimodal_flattened" && iteration > 1)
+          if (
+            stamped.data.code === "multimodal_flattened" &&
+            (iteration > 1 || isRetryAttempt)
+          )
             break;
           yield stamp(stamped);
           break;
@@ -177,6 +260,9 @@ export async function* streamModelStep(
       });
       return { kind: "cancelled" };
     }
+    if (mayRetry("provider_error")) {
+      return { kind: "retry", code: "provider_error" };
+    }
     yield stamp({
       type: "run.failed",
       runId,
@@ -188,6 +274,8 @@ export async function* streamModelStep(
     });
     return { kind: "failed" };
   }
+
+  if (retryCode !== undefined) return { kind: "retry", code: retryCode };
 
   if (turnFailed) {
     // Provider already yielded run.failed during the stream — don't double-emit.

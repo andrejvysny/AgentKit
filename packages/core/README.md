@@ -25,6 +25,10 @@ persisted event log, proposal review) is `@agentkit/host`'s job; see
   Ajv schema compiled once per tool at registration), `tools/limits.ts`
   (`resolveToolLimits`, UTF-8-safe `truncateString`/`truncateArray`),
   `tools/validation.ts` (`parseToolArguments`, Ajv error mapping).
+- `runs/provider-retry.ts` — opt-in `RunChatInput.providerRetry`
+  (`ProviderRetryPolicy`): bounded exponential-backoff retry of a model
+  request after a transient provider failure, only while nothing from that
+  request was shown or acted on; emits `run.warning` `provider_retry`.
 - `runs/` — `runChat()`, the frozen chat facade (`RunChatInput` /
   `RunChatResult`), over `runAgentLoop()` — the single model/tool loop
   (`agent-loop.ts` → `model-step.ts` + `tool-step.ts`), which additionally

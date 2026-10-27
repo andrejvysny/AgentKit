@@ -219,7 +219,9 @@ export async function stageNextQueuedTurn(
       });
       continue;
     }
-    const taskId = deps.ids.taskId();
+    // Derived from the input like a directly sent turn (`turn:<inputId>`), so a
+    // host can bind per-turn state to the input before it is converted.
+    const taskId = `turn:${next.inputId}`;
     const userMessageId = deps.ids.messageId();
     const assistantMessageId = deps.ids.messageId();
     const contentSelection = sessionContentSelection(session);

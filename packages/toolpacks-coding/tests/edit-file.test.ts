@@ -136,7 +136,7 @@ describe("edit_file", () => {
       edits: [{ oldText: "v1", newText: "v2" }],
     });
     expect(bad.ok).toBe(false);
-    expect(h.text(bad)).toContain("sha256_mismatch");
+    expect(h.text(bad)).toContain("file_changed");
     expect(read(h.root, "f.txt")).toBe("v1\n");
     const good = await h.run("edit_file", {
       path: "f.txt",
@@ -258,6 +258,7 @@ describe("write_file", () => {
     const again = await h.run("write_file", {
       path: "a/b/c.txt",
       content: "yo\n",
+      expectedSha256: sha("hi\n"),
     });
     expect(h.text(again)).toContain("Overwrote");
     expect(read(h.root, "a/b/c.txt")).toBe("yo\n");
@@ -382,7 +383,7 @@ describe("edit_file byte fidelity", () => {
       edits: [{ oldText: "y", newText: "Y" }],
       expectedSha256: data.sha256,
     });
-    expect(h.text(stale)).toContain("sha256_mismatch");
+    expect(h.text(stale)).toContain("file_changed");
   });
 
   test("an aborted signal before the write leaves the file untouched", async () => {

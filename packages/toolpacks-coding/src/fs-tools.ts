@@ -1,27 +1,44 @@
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { AiTool } from "@agentkit/core";
+import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
 import { asRecord, optBool, optInt, optString, reqString } from "./args.js";
 import { type Outcome, type PackEnv, defineTool } from "./context.js";
 import { unifiedDiff } from "./diff.js";
 import { type Edit, applyEdits, splitBom } from "./edit-engine.js";
-import { CodingError } from "./errors.js";
+import type { LeaseHolder } from "./coordination.js";
+import { CodingError, fileChangedError, fileNotReadError } from "./errors.js";
 import {
   atomicWrite,
+  createIfAbsent,
   decodeUtf8,
   looksBinary,
   readRegularFile,
   sha256,
 } from "./fs-util.js";
-import { withFileMutationQueue } from "./mutation-queue.js";
 import { confine, isSensitiveSegment } from "./paths.js";
 import { loadIgnoreMatcher } from "./search.js";
+import * as ledger from "./version-ledger.js";
 import { formatSize, splitLines, truncateHead } from "./truncate.js";
 
 const NATIVE_HINT =
   "Prefer the native tools (read_file, list_dir, find_files, code_search, repo_map) over shell commands for exploring code.";
 
 const MAX_READ_PATHS = 8;
+const SHA256_HEX = /^[0-9a-f]{64}$/i;
+
+function holderOf(
+  ctx: AiToolExecutionContext,
+  tool: string,
+  label: string,
+): LeaseHolder {
+  return {
+    ...(ctx.chatId !== undefined ? { chatId: ctx.chatId } : {}),
+    runId: ctx.runId,
+    ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
+    tool,
+    label: label.slice(0, 200),
+  };
+}
 
 interface FileRead {
   text: string;
@@ -39,6 +56,7 @@ async function readOne(
   offset: number,
   limit: number | undefined,
   maxBytes: number,
+  chatId: string | undefined,
 ): Promise<FileRead> {
   const target = await confine(root, path, {
     access: "read",
@@ -62,13 +80,15 @@ async function readOne(
     totalLines: lines.length,
     invalidUtf8: strict === undefined,
   };
-  if (lines.length === 0)
+  if (lines.length === 0) {
+    ledger.recordRead(chatId, target.path, digest, true);
     return {
       ...common,
       text: "(empty file)",
       summary: `read ${path} (empty)`,
       truncated: false,
     };
+  }
   if (offset > lines.length)
     throw new CodingError(
       "offset_out_of_range",
@@ -93,6 +113,13 @@ async function readOne(
     );
   const last = offset + cut.outputLines - 1;
   const more = last < lines.length;
+  // Only a read that shows the whole file may later authorise an overwrite.
+  ledger.recordRead(
+    chatId,
+    target.path,
+    digest,
+    offset === 1 && !more && !cut.truncated,
+  );
   const notice = more
     ? `\n[Showing lines ${offset}-${last} of ${lines.length}${cut.truncatedBy === "bytes" ? ` (${formatSize(maxBytes)} limit)` : ""}. Use offset=${last + 1} to continue.]`
     : "";
@@ -183,6 +210,7 @@ export function readFileTool(env: PackEnv): AiTool {
           offset,
           limit,
           env.limits.readMaxBytes,
+          ctx.chatId,
         );
         return {
           ok: true,
@@ -207,7 +235,15 @@ export function readFileTool(env: PackEnv): AiTool {
       for (const path of paths) {
         ctx.signal?.throwIfAborted();
         try {
-          const one = await readOne(env, root, path, offset, limit, share);
+          const one = await readOne(
+            env,
+            root,
+            path,
+            offset,
+            limit,
+            share,
+            ctx.chatId,
+          );
           blocks.push(`==> ${path} <==\n${one.text}`);
           truncated ||= one.truncated;
           if (one.invalidUtf8)
@@ -313,13 +349,24 @@ export function listDirTool(env: PackEnv): AiTool {
   );
 }
 
+function parseExpectedSha(input: Record<string, unknown>): string | undefined {
+  const value = optString(input, "expectedSha256", 64);
+  if (value === undefined) return undefined;
+  if (!SHA256_HEX.test(value))
+    throw new CodingError(
+      "invalid_arguments",
+      '"expectedSha256" must be 64 hex characters',
+    );
+  return value.toLowerCase();
+}
+
 export function writeFileTool(env: PackEnv): AiTool {
   return defineTool(
     {
       name: "write_file",
       effect: "write",
       capability: "fs.write",
-      description: `Create or overwrite a text file inside the workspace (parent directories are created; .git is refused; max ${formatSize(env.limits.writeMaxBytes)}). For changing part of an existing file use edit_file instead.`,
+      description: `Create or overwrite a text file inside the workspace (parent directories are created; .git is refused; max ${formatSize(env.limits.writeMaxBytes)}). A new file is created only if it does not exist yet. Overwriting an existing file requires that you read it first in this session (or pass expectedSha256 from read_file); it is refused with file_changed if the file changed since. For changing part of an existing file use edit_file instead.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -328,6 +375,11 @@ export function writeFileTool(env: PackEnv): AiTool {
             description: "File path, relative to the workspace root.",
           },
           content: { type: "string", description: "Full new file content." },
+          expectedSha256: {
+            type: "string",
+            description:
+              "sha256 (hex) the existing file must currently have. Default: the version this session last read.",
+          },
         },
         required: ["path", "content"],
         additionalProperties: false,
@@ -343,6 +395,7 @@ export function writeFileTool(env: PackEnv): AiTool {
           "invalid_arguments",
           '"content" must be a string',
         );
+      const explicit = parseExpectedSha(input);
       const data = Buffer.from(content, "utf-8");
       if (data.length > env.limits.writeMaxBytes)
         throw new CodingError(
@@ -355,22 +408,104 @@ export function writeFileTool(env: PackEnv): AiTool {
         allowSensitive: env.allowSensitive,
       } as const;
       const first = await confine(root, path, options);
-      return withFileMutationQueue(first.path, async () => {
-        const existed = (await stat(first.path).catch(() => null)) !== null;
+      const lease = await env.coordinator.acquireFile({
+        root,
+        path: first.path,
+        holder: holderOf(ctx, "write_file", first.relativePath),
+        signal: ctx.signal,
+        maxWaitMs: env.coordinationWaitMs,
+      });
+      try {
         ctx.signal?.throwIfAborted();
         await mkdir(dirname(first.path), { recursive: true });
         // Re-resolve after mkdir: confirms no parent turned into an escape.
         const target = await confine(root, path, options);
+        // One resolution per mutation: the lock, read, write and ledger all use
+        // the locked path, so a path that now resolves elsewhere is refused.
+        if (target.path !== first.path)
+          throw fileChangedError(first.relativePath);
         ctx.signal?.throwIfAborted();
-        await atomicWrite(target.path, data, path);
+        const readLimit = Math.max(
+          env.limits.editMaxFileBytes,
+          env.limits.readMaxFileBytes,
+          env.limits.writeMaxBytes,
+        );
+        const current = await readExisting(target.path, path, readLimit);
+        const digest = sha256(data);
+        if (current === undefined) {
+          // An expected version means "overwrite that file"; it is gone.
+          if (explicit !== undefined)
+            throw fileChangedError(target.relativePath);
+          await createIfAbsent(target.path, data, target.relativePath);
+        } else {
+          let expected = explicit;
+          if (expected === undefined) {
+            const seen = ledger.expected(ctx.chatId, target.path);
+            if (seen === undefined || !seen.full)
+              throw fileNotReadError(target.relativePath, seen !== undefined);
+            expected = seen.sha256;
+          }
+          if (expected !== current) throw fileChangedError(target.relativePath);
+          await atomicWrite(target.path, data, path, async () => {
+            const again = await confine(root, path, options);
+            if (again.path !== target.path)
+              throw fileChangedError(target.relativePath);
+            await assertUnchanged(
+              target.path,
+              path,
+              current,
+              readLimit,
+              target.relativePath,
+            );
+          });
+        }
+        ledger.recordWrite(ctx.chatId, target.path, digest);
+        const existed = current !== undefined;
         return {
           ok: true,
-          text: `${existed ? "Overwrote" : "Created"} ${target.relativePath} (${data.length} bytes)\nsha256: ${sha256(data)}`,
+          text: `${existed ? "Overwrote" : "Created"} ${target.relativePath} (${data.length} bytes)\nsha256: ${digest}`,
           summary: `${existed ? "overwrote" : "created"} ${target.relativePath}`,
+          details: { path: target.relativePath, sha256: digest },
         };
-      });
+      } finally {
+        await lease.release();
+      }
     },
   );
+}
+
+/** sha256 of the regular file at `path`, or undefined when it does not exist. */
+async function readExisting(
+  path: string,
+  label: string,
+  maxBytes: number,
+): Promise<string | undefined> {
+  try {
+    return sha256(await readRegularFile(path, label, maxBytes));
+  } catch (error) {
+    if (error instanceof CodingError && error.code === "not_found")
+      return undefined;
+    throw error;
+  }
+}
+
+/** Last check before a rename: the file must still be the one we validated. */
+async function assertUnchanged(
+  path: string,
+  label: string,
+  digest: string,
+  maxBytes: number,
+  relativePath: string,
+): Promise<void> {
+  let now: string | undefined;
+  try {
+    now = await readExisting(path, label, maxBytes);
+  } catch (error) {
+    if (error instanceof CodingError && error.code === "file_changed")
+      throw fileChangedError(relativePath);
+    throw error;
+  }
+  if (now !== digest) throw fileChangedError(relativePath);
 }
 
 const MAX_EDITS = 50;
@@ -400,7 +535,7 @@ export function editFileTool(env: PackEnv): AiTool {
       effect: "write",
       capability: "fs.write",
       description:
-        "Edit an existing text file with exact text replacement. Pass edits[]; each oldText must match exactly once in the ORIGINAL file (whitespace, quotes and trailing spaces are matched leniently only when no exact match exists) and edits must not overlap. Keep oldText as small as possible while unique. Each line's original terminator (CRLF, LF or CR) and any BOM are preserved; new lines use the file's dominant ending. Files that are not valid UTF-8 are refused. Optional expectedSha256 refuses the edit if the file changed since you read it. Returns a unified diff and the new sha256.",
+        "Edit an existing text file with exact text replacement. Pass edits[]; each oldText must match exactly once in the ORIGINAL file (whitespace, quotes and trailing spaces are matched leniently only when no exact match exists) and edits must not overlap. Keep oldText as small as possible while unique. Each line's original terminator (CRLF, LF or CR) and any BOM are preserved; new lines use the file's dominant ending. Files that are not valid UTF-8 are refused. The edit is refused with file_changed if the file changed since this session last read it (or since the optional expectedSha256). Read the file first. Returns a unified diff and the new sha256.",
       inputSchema: {
         type: "object",
         properties: {
@@ -439,14 +574,21 @@ export function editFileTool(env: PackEnv): AiTool {
       const input = asRecord(raw);
       const path = reqString(input, "path");
       const edits = parseEdits(input["edits"]);
-      const expected = optString(input, "expectedSha256", 64)?.toLowerCase();
+      const explicit = parseExpectedSha(input);
       const root = await env.root();
       const options = {
         access: "write",
         allowSensitive: env.allowSensitive,
       } as const;
       const target = await confine(root, path, options);
-      return withFileMutationQueue(target.path, async () => {
+      const lease = await env.coordinator.acquireFile({
+        root,
+        path: target.path,
+        holder: holderOf(ctx, "edit_file", target.relativePath),
+        signal: ctx.signal,
+        maxWaitMs: env.coordinationWaitMs,
+      });
+      try {
         ctx.signal?.throwIfAborted();
         const buffer = await readRegularFile(
           target.path,
@@ -459,11 +601,11 @@ export function editFileTool(env: PackEnv): AiTool {
             `${path} looks binary; not edited`,
           );
         const before = sha256(buffer);
+        // A partial read is enough here: edits are anchored on oldText.
+        const expected =
+          explicit ?? ledger.expected(ctx.chatId, target.path)?.sha256;
         if (expected !== undefined && expected !== before)
-          throw new CodingError(
-            "sha256_mismatch",
-            `${path} changed: expected sha256 ${expected}, current ${before}. Read it again.`,
-          );
+          throw fileChangedError(target.relativePath);
         const decoded = decodeUtf8(buffer);
         if (decoded === undefined)
           throw new CodingError(
@@ -477,10 +619,21 @@ export function editFileTool(env: PackEnv): AiTool {
           path,
         );
         const out = Buffer.from(bom + output, "utf-8");
-        const current = await confine(root, path, options);
         ctx.signal?.throwIfAborted();
-        await atomicWrite(current.path, out, path);
+        await atomicWrite(target.path, out, path, async () => {
+          const again = await confine(root, path, options);
+          if (again.path !== target.path)
+            throw fileChangedError(target.relativePath);
+          await assertUnchanged(
+            target.path,
+            path,
+            before,
+            env.limits.editMaxFileBytes,
+            target.relativePath,
+          );
+        });
         const after = sha256(out);
+        ledger.recordWrite(ctx.chatId, target.path, after);
         const patch = unifiedDiff(target.relativePath, baseContent, newContent);
         const cut = truncateHead(patch.diff, {
           maxLines: Number.MAX_SAFE_INTEGER,
@@ -496,7 +649,9 @@ export function editFileTool(env: PackEnv): AiTool {
           truncated: cut.truncated,
           details: { path: target.relativePath, sha256: after, diff: diffText },
         };
-      });
+      } finally {
+        await lease.release();
+      }
     },
   );
 }

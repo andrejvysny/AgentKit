@@ -2402,6 +2402,24 @@
                 "description": "Approval only: the privilege the call asked for, recorded so the human sees what was requested. Recording it grants nothing; the host decides what an approval means.",
                 "type": "string"
               },
+              "standing": {
+                "description": "Approval only: the call may be remembered for the rest of the session. Recording it grants nothing.",
+                "properties": {
+                  "digest": {
+                    "description": "Host-computed key of the exact call a standing approval would cover.",
+                    "type": "string"
+                  },
+                  "label": {
+                    "description": "Human-readable summary of what would be remembered.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "digest",
+                  "label"
+                ],
+                "type": "object"
+              },
               "step": {
                 "description": "The 1-based provider step.",
                 "type": "number"
@@ -3593,6 +3611,24 @@
           "requestedMode": {
             "description": "Approval only: the privilege the call asked for, recorded so the human sees what was requested. Recording it grants nothing; the host decides what an approval means.",
             "type": "string"
+          },
+          "standing": {
+            "description": "Approval only: the call may be remembered for the rest of the session. Recording it grants nothing.",
+            "properties": {
+              "digest": {
+                "description": "Host-computed key of the exact call a standing approval would cover.",
+                "type": "string"
+              },
+              "label": {
+                "description": "Human-readable summary of what would be remembered.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "digest",
+              "label"
+            ],
+            "type": "object"
           },
           "step": {
             "description": "The 1-based provider step.",
@@ -7455,6 +7491,24 @@
               "requestedMode": {
                 "description": "Approval only: the privilege the call asked for, recorded so the human sees what was requested. Recording it grants nothing; the host decides what an approval means.",
                 "type": "string"
+              },
+              "standing": {
+                "description": "Approval only: the call may be remembered for the rest of the session. Recording it grants nothing.",
+                "properties": {
+                  "digest": {
+                    "description": "Host-computed key of the exact call a standing approval would cover.",
+                    "type": "string"
+                  },
+                  "label": {
+                    "description": "Human-readable summary of what would be remembered.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "digest",
+                  "label"
+                ],
+                "type": "object"
               },
               "step": {
                 "description": "The 1-based provider step.",

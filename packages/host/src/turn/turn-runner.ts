@@ -33,6 +33,7 @@ import {
   type AgentLoopHooks,
   type AiProviderClient,
   type AiRunEventDraft,
+  type ProviderRetryPolicy,
 } from "@agentkit/core";
 import {
   AgentKitHostError,
@@ -45,6 +46,7 @@ import type { AssistantStore } from "../ports/assistant-store.js";
 import type { AttachmentResolver } from "../ports/attachment-resolver.js";
 import type { ContextProvider } from "../ports/context-provider.js";
 import type { SecretStore } from "../ports/secret-store.js";
+import type { StandingApprovalPolicy } from "../ports/standing-approval.js";
 import type { Clock, IdGenerator, Logger } from "../ports/system.js";
 import type {
   TaskExecution,
@@ -189,6 +191,13 @@ export interface TurnRunnerDeps {
    */
   toolGuards?: ToolGuard[];
   /**
+   * Lets an approved call be remembered for the rest of its session. Absent,
+   * every approvable refusal asks the human each time. Grants are stored on the
+   * session's chat metadata (see `StandingApprovalGrant`) and matched only after
+   * every guard has had its say.
+   */
+  standingApprovals?: StandingApprovalPolicy;
+  /**
    * Names to treat as having side effects a rerun cannot be assumed to repeat
    * safely, on top of every staged tool that declared `effect: "write"`. A host
    * adds names here when a tool under-declares itself — an MCP bridge whose
@@ -322,6 +331,11 @@ export interface TurnRunnerDeps {
   loopHooks?: readonly AgentLoopHooks[];
   /** Per-hook deadline for {@link loopHooks}. Default 5000 ms (core's). */
   loopHookTimeoutMs?: number;
+  /**
+   * Opt-in bounded retry of a main-pass model request after a transient
+   * provider failure with no visible output. Unset: no retry, events unchanged.
+   */
+  providerRetry?: ProviderRetryPolicy;
 }
 
 /**
@@ -794,6 +808,14 @@ export class TurnRunner implements TaskWorker {
             ? {}
             : { allowedToolNames: new Set(profile.tools) }),
           guards: [...(this.deps.toolGuards ?? []), uncertainSideEffectGuard],
+          ...(this.deps.standingApprovals === undefined
+            ? {}
+            : {
+                standing: {
+                  policy: this.deps.standingApprovals,
+                  store: this.deps.store,
+                },
+              }),
         })
       : {
           registry: new AiToolRegistry(),
@@ -1355,6 +1377,9 @@ export class TurnRunner implements TaskWorker {
       ...(this.deps.loopHookTimeoutMs === undefined
         ? {}
         : { hookTimeoutMs: this.deps.loopHookTimeoutMs }),
+      ...(this.deps.providerRetry === undefined
+        ? {}
+        : { providerRetry: this.deps.providerRetry }),
       ...(input.steering === undefined ? {} : { steering: input.steering }),
       ...(input.suspendable === undefined
         ? {}

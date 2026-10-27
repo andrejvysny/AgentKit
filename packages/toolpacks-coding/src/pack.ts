@@ -1,5 +1,6 @@
 import type { AiTool } from "@agentkit/core";
 import type { ToolSetContributor } from "@agentkit/host";
+import { defaultWorkspaceCoordinator } from "./coordination.js";
 import { createEnv } from "./context.js";
 import { gitInspectTool } from "./git-tool.js";
 import { runCommandTool, runTestsTool } from "./exec-tools.js";
@@ -60,9 +61,21 @@ export function createCodingToolPack(
     swept = true;
     void sweepOrphans();
   }
+  const limits = resolveLimits(options.limits);
+  const coordinationWaitMs =
+    options.coordinationWaitMs ??
+    Math.min(20_000, Math.floor(limits.toolTimeoutMs * 0.66));
+  if (
+    !Number.isFinite(coordinationWaitMs) ||
+    coordinationWaitMs <= 0 ||
+    coordinationWaitMs >= limits.toolTimeoutMs
+  )
+    throw new TypeError(
+      "coordinationWaitMs must be positive and below the toolTimeoutMs limit",
+    );
   const env = createEnv({
     workspaceRoot: root,
-    limits: resolveLimits(options.limits),
+    limits,
     allowSensitive: options.allowSensitive ?? false,
     clock: options.clock ?? Date.now,
     sandbox: options.sandbox ?? "required",
@@ -71,6 +84,8 @@ export function createCodingToolPack(
     testCommands: [...(options.testCommands ?? [])],
     platform: options.platform ?? process.platform,
     sandboxExecPath: options.sandboxExecPath ?? SANDBOX_EXEC,
+    coordinator: options.coordinator ?? defaultWorkspaceCoordinator(),
+    coordinationWaitMs,
   });
   return {
     namespace: CODING_NAMESPACE,

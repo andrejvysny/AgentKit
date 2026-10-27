@@ -114,6 +114,26 @@ const warnings = (events: AiRunEvent[]) =>
   events.flatMap((e) => (e.type === "run.warning" ? [e.data.code] : []));
 
 describe("runAgentLoop steering", () => {
+  it("reads a steer after an approved call resumes, before the first request", async () => {
+    const c = client([text("done")]);
+    const resumed = { id: "c1", name: "echo", argumentsJson: "{}" };
+    const seen: number[] = [];
+    const { events } = await loop(c, [tool("echo")], {
+      messages: [
+        ...userMessages,
+        { role: "assistant", content: "", toolCalls: [resumed] },
+      ],
+      resumeCalls: [resumed],
+      steering: source((s) => (s === 1 ? [steer("i1")] : []), seen),
+    });
+    const t = types(events);
+    const applied = t.indexOf("run.input.applied");
+    expect(applied).toBeGreaterThan(t.indexOf("run.tool.succeeded"));
+    expect(applied).toBeLessThan(t.indexOf("run.message.completed"));
+    expect(seen[0]).toBe(1);
+    expect(c.requests[0]?.at(-1)).toEqual({ role: "user", content: "msg-i1" });
+  });
+
   it("places a steer between step 1's tools and step 2's request", async () => {
     const c = client([{ steps: [call("c1", "echo")] }, text("done")]);
     const { events, result } = await loop(c, [tool("echo")], {
@@ -257,6 +277,31 @@ describe("runAgentLoop suspension", () => {
     expect(types(events)).not.toContain("run.completed");
     expect(c.callCount).toBe(1);
     expect(settled).toEqual(["suspended"]);
+  });
+
+  it("carries a standing-approval key onto run.waiting, and only when given", async () => {
+    const standing = { digest: "d".repeat(64), label: "bun test" };
+    const withKey = tool("ask", (ctx) =>
+      ctx.suspend?.({ prompt: "Approve?", kind: "approval", standing }),
+    );
+    const { events } = await loop(
+      client([{ steps: [call("c1", "ask")] }, text("never")]),
+      [withKey],
+      { suspendable: true },
+    );
+    const last = events.at(-1);
+    expect(last?.type === "run.waiting" && last.data.standing).toEqual(
+      standing,
+    );
+    const plain = await loop(
+      client([{ steps: [call("c1", "ask")] }, text("never")]),
+      [ask()],
+      { suspendable: true },
+    );
+    const waiting = plain.events.at(-1);
+    expect(waiting?.type === "run.waiting" && "standing" in waiting.data).toBe(
+      false,
+    );
   });
 
   it("second suspender in a batch fails suspend_conflict", async () => {

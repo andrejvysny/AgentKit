@@ -174,6 +174,20 @@ async function* runAgentLoopUnchecked(
     });
     if (outcome === "cancelled") return finish("cancelled");
     if (outcome === "suspended") return finish("suspended");
+    // The resumed batch is a tool boundary like any other: a steer sent while
+    // the call waited for its approval is read before the next model call.
+    if (input.steering && maxIterations > 0) {
+      yield* applySteering({
+        source: input.steering,
+        runId,
+        step: 1,
+        stamp,
+        messages,
+        applied: appliedSteers,
+        hookTimeoutMs: input.hookTimeoutMs,
+        signal: input.signal,
+      });
+    }
   }
 
   for (let i = 0; i < maxIterations; i++) {

@@ -10,6 +10,7 @@ import {
 import type { AgentInputRecord } from "../ports/agent-input-store.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { Clock, IdGenerator } from "../ports/system.js";
+import type { StandingApprovalGrant } from "../ports/standing-approval.js";
 import { sha256Hex } from "./hash.js";
 import {
   applyPlanGrant,
@@ -19,6 +20,11 @@ import {
   type PlanApprovalPolicy,
 } from "./plan-mode.js";
 import type { AgentAnswerReceipt, AnswerInput } from "./session-types.js";
+import {
+  assertCanRemember,
+  readStandingKey,
+  rememberStandingApproval,
+} from "./standing-approvals.js";
 
 export interface AnswerDeps {
   store: AssistantStore;
@@ -47,24 +53,38 @@ function isApprovalRequest(content: unknown): boolean {
   return (content as { kind?: unknown } | null)?.kind === "approval";
 }
 
-/** `{ decision, note? }` only; anything else is `invalid_input`. */
+/**
+ * `{ decision, note?, remember? }` only; anything else is `invalid_input`.
+ * `remember` is a boolean and only an approval may carry it: a denial has
+ * nothing to remember, and accepting the field there would let a typo read as
+ * consent.
+ */
 function readDecision(
   response: unknown,
   requestId: string,
-): { decision: ApprovalDecision; note?: string } {
+): { decision: ApprovalDecision; note?: string; remember?: boolean } {
   const bad = (): never => {
     throw new AgentKitHostError(
       "invalid_input",
-      'An approval answer must be { decision: "approve" | "deny", note?: string }.',
+      'An approval answer must be { decision: "approve" | "deny", note?: string, remember?: boolean }; remember is only allowed with "approve".',
       { requestId },
     );
   };
   if (typeof response !== "object" || response === null) return bad();
-  const { decision, note, ...rest } = response as Record<string, unknown>;
+  const { decision, note, remember, ...rest } = response as Record<
+    string,
+    unknown
+  >;
   if (decision !== "approve" && decision !== "deny") return bad();
   if (Object.keys(rest).length > 0) return bad();
   if (note !== undefined && typeof note !== "string") return bad();
-  return { decision, ...(note === undefined ? {} : { note }) };
+  if (remember !== undefined && typeof remember !== "boolean") return bad();
+  if (remember !== undefined && decision !== "approve") return bad();
+  return {
+    decision,
+    ...(note === undefined ? {} : { note }),
+    ...(remember === undefined ? {} : { remember }),
+  };
 }
 
 function toolName(content: unknown): string {
@@ -173,6 +193,8 @@ export async function answerHumanRequest(
     }
   }
 
+  await assertRememberEligible(deps.store, input.response, requestId);
+
   return deps.store.transaction(async (tx) => {
     const inputs = tx.inputs;
     if (!inputs)
@@ -250,6 +272,10 @@ export async function answerHumanRequest(
             });
         }
       }
+      // The same repair for a remembered approval: the hash matched, so this
+      // replay carries the same `remember` the first answer did.
+      if (approval0?.remember === true)
+        await writeGrant(tx, request, answerId, now);
       return {
         receipt: {
           requestId,
@@ -341,6 +367,14 @@ export async function answerHumanRequest(
       throw stale("it expired");
 
     if (approval?.decision === "approve") {
+      // Refuse before committing anything the grant could not follow through on
+      // (unreadable or full grant list); a store without rollback would
+      // otherwise keep an answer whose grant was never written.
+      if (approval.remember === true) {
+        if (readStandingKey(request.content) === undefined)
+          throw notEligible(requestId);
+        await assertCanRemember(tx, request.sessionId, `grant:${requestId}`);
+      }
       try {
         await tx.tasks.transitionTask(taskId, ["waiting_approval"], "queued", {
           availableAt: now,
@@ -362,6 +396,10 @@ export async function answerHumanRequest(
             nowIso: now,
             ...(approval.note === undefined ? {} : { note: approval.note }),
           });
+        // AFTER both transitions: a stale, cancelled or lost-race answer threw
+        // above and never reaches this line, so it can never leave a grant.
+        if (approval.remember === true)
+          await writeGrant(tx, request, answerId, now);
       } catch (error) {
         if (
           error instanceof InvalidTaskTransitionError ||
@@ -427,6 +465,64 @@ export async function answerHumanRequest(
       enqueue: { taskId, scopeId: request.sessionId },
     };
   });
+}
+
+function notEligible(requestId: string): AgentKitHostError {
+  return new AgentKitHostError(
+    "invalid_input",
+    "This call is not eligible for a standing approval.",
+    { requestId },
+  );
+}
+
+/**
+ * `remember: true` on a pending request that carries no usable `standing` key is
+ * refused up front, before anything is written. A request that is no longer
+ * pending falls through to the transaction, which reports it as stale or
+ * duplicate like any other answer.
+ */
+async function assertRememberEligible(
+  store: AssistantStore,
+  response: unknown,
+  requestId: string,
+): Promise<void> {
+  const pre = await store.inputs?.getInput(requestId);
+  if (
+    !pre ||
+    pre.kind !== "human_request" ||
+    pre.status !== "pending" ||
+    !isApprovalRequest(pre.content)
+  )
+    return;
+  let remember: boolean | undefined;
+  try {
+    remember = readDecision(response, requestId).remember;
+  } catch {
+    return; // the transaction reports the malformed response
+  }
+  if (remember === true && readStandingKey(pre.content) === undefined)
+    throw notEligible(requestId);
+}
+
+/** Write the grant for an approved request from the `standing` key it carries. */
+async function writeGrant(
+  tx: AssistantStore,
+  request: AgentInputRecord,
+  answerId: string,
+  nowIso: string,
+): Promise<void> {
+  const key = readStandingKey(request.content);
+  if (key === undefined) throw notEligible(request.inputId);
+  const grant: StandingApprovalGrant = {
+    grantId: `grant:${request.inputId}`,
+    digest: key.digest,
+    label: key.label,
+    toolName: toolName(request.content),
+    sourceRequestId: request.inputId,
+    answerId,
+    grantedAt: nowIso,
+  };
+  await rememberStandingApproval(tx, request.sessionId, grant);
 }
 
 /** The human's answer, as the parked call's tool result in the run chain. */

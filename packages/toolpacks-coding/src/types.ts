@@ -1,3 +1,4 @@
+import type { WorkspaceCoordinator } from "./coordination.js";
 import type { CodingLimits } from "./limits.js";
 
 export interface CodingWorkspace {
@@ -71,4 +72,16 @@ export interface CodingToolPackOptions {
    * pack also contributes `submit_plan`, the only way out of plan mode.
    */
   permission?: CodingPermissionAuthority;
+  /**
+   * Serialises file mutations and write-capable commands. Default: one
+   * module-global in-process coordinator shared by every pack in the process.
+   * Pass a lock-dir coordinator to also coordinate across processes.
+   */
+  coordinator?: WorkspaceCoordinator;
+  /**
+   * Longest a file mutation or command waits for a lease held by someone else
+   * before failing with `workspace_busy`. Default 20_000; must be below the
+   * `toolTimeoutMs` limit so the wait ends before the tool is timed out.
+   */
+  coordinationWaitMs?: number;
 }

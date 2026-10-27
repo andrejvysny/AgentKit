@@ -12,10 +12,26 @@ export {
   type CodingPermissionGuardOptions,
 } from "./guard.js";
 export {
+  classifyShellCommand,
+  createCodingStandingApprovals,
+  createHighRiskCommandGuard,
+  type CodingStandingApprovalOptions,
+  type CommandClass,
+} from "./command-policy.js";
+export {
   SUBMIT_PLAN_TOOL_NAME,
   SUBMIT_PLAN_CAPABILITY,
   submitPlanTool,
 } from "./plan-tool.js";
+export {
+  createInProcessWorkspaceCoordinator,
+  type CoordinationWait,
+  type CoordinatorObserver,
+  type LeaseHolder,
+  type WorkspaceCoordinator,
+  type WorkspaceLease,
+} from "./coordination.js";
+export { createLockDirWorkspaceCoordinator } from "./coordination-lockdir.js";
 export { sweepOrphans } from "./process.js";
 export { DEFAULT_CODING_LIMITS, type CodingLimits } from "./limits.js";
 export type {

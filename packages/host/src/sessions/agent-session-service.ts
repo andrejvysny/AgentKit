@@ -16,6 +16,7 @@ import {
 import type { AgentInputRecord } from "../ports/agent-input-store.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { ChatRecord } from "../ports/conversation-store.js";
+import type { StandingApprovalGrant } from "../ports/standing-approval.js";
 import type { Clock, IdGenerator, Logger } from "../ports/system.js";
 import { assertScopeIdle, isTerminalTaskStatus } from "../ports/task-store.js";
 import type { TaskRecord } from "../ports/task-store.js";
@@ -48,6 +49,11 @@ import {
   type SessionExecutionState,
 } from "./plan-mode.js";
 import { answerHumanRequest } from "./human-answer.js";
+import {
+  STANDING_APPROVALS_METADATA_KEY,
+  readStandingApprovals,
+  revokeStandingApproval,
+} from "./standing-approvals.js";
 import {
   exportSession,
   listTurnTasks,
@@ -119,6 +125,10 @@ export class AgentSessionService {
   async createSession(input: CreateSessionInput): Promise<AgentSessionState> {
     if (input.metadata && SESSION_METADATA_KEY in input.metadata)
       invalid(`metadata must not contain ${SESSION_METADATA_KEY}.`);
+    // Grants are written only by an answered approval; a caller-supplied one
+    // would be a standing approval no human gave.
+    if (input.metadata && STANDING_APPROVALS_METADATA_KEY in input.metadata)
+      invalid(`metadata must not contain ${STANDING_APPROVALS_METADATA_KEY}.`);
     if (input.turnKind !== undefined && !isValidSessionTurnKind(input.turnKind))
       invalid(
         "turnKind must be a dotted lowercase task kind outside the reserved chat.* / agentkit.* prefixes.",
@@ -398,11 +408,16 @@ export class AgentSessionService {
     return outcome.receipt;
   }
 
-  /** Approve exactly the call the request names (ADR 0019). */
+  /**
+   * Approve exactly the call the request names (ADR 0019). `remember: true`
+   * also stores a standing approval for the same exact call, when the request
+   * offers one (`invalid_input` otherwise).
+   */
   approve(
     requestId: string,
     answerId: string,
     note?: string,
+    options?: { remember?: boolean },
   ): Promise<AgentAnswerReceipt> {
     return this.answer({
       requestId,
@@ -410,8 +425,34 @@ export class AgentSessionService {
       response: {
         decision: "approve",
         ...(note === undefined ? {} : { note }),
+        ...(options?.remember === undefined
+          ? {}
+          : { remember: options.remember }),
       },
     });
+  }
+
+  /** Every standing approval of the session, revoked ones included, newest first. */
+  async listApprovalGrants(
+    sessionId: string,
+  ): Promise<StandingApprovalGrant[]> {
+    const { chat } = await this.requireSession(sessionId);
+    return readStandingApprovals(chat.metadata).reverse();
+  }
+
+  /**
+   * Stop a standing approval from matching. Idempotent: revoking again returns
+   * the grant with its original `revokedAt`. Calls already running are not
+   * interrupted; the next matching call asks again.
+   */
+  async revokeApprovalGrant(
+    sessionId: string,
+    grantId: string,
+  ): Promise<StandingApprovalGrant> {
+    await this.requireSession(sessionId);
+    return this.deps.store.transaction((tx) =>
+      revokeStandingApproval(tx, sessionId, grantId, this.deps.clock.nowIso()),
+    );
   }
 
   /** Answer the call with a denial result; it never runs. */
@@ -535,6 +576,39 @@ export class AgentSessionService {
   }
 
   /**
+   * Cancel one pending queued follow-up or steer of the session before it is
+   * converted or placed. False when it is no longer pending (a flush, a
+   * settlement or another cancel won); unknown or foreign ids are not found.
+   */
+  async cancelQueuedInput(
+    sessionId: string,
+    inputId: string,
+  ): Promise<boolean> {
+    await this.requireSession(sessionId);
+    return this.deps.store.transaction(async (tx) => {
+      const record = await tx.inputs?.getInput(inputId);
+      if (
+        !tx.inputs ||
+        !record ||
+        record.sessionId !== sessionId ||
+        (record.kind !== "follow_up" && record.kind !== "steer")
+      )
+        throw new RecordNotFoundError(
+          `Queued input ${inputId} not found in ${sessionId}.`,
+          { sessionId, inputId },
+        );
+      if (record.status !== "pending") return false;
+      try {
+        await tx.inputs.transitionInput(inputId, ["pending"], "cancelled");
+        return true;
+      } catch (error) {
+        if (!(error instanceof AgentInputTransitionError)) throw error;
+        return false;
+      }
+    });
+  }
+
+  /**
    * Cancel every pending queued follow-up and steer of the session. Human
    * requests are untouched. Returns how many inputs were cancelled.
    */
@@ -567,22 +641,35 @@ export class AgentSessionService {
   }
 
   /**
-   * Replace the session's Skills and/or context options. Future turns only; an
-   * active task keeps what it was submitted with.
+   * Replace the session's Skills, context options and/or workspace trust flag
+   * (the root never changes). Future turns only; an active task keeps what it
+   * was submitted with.
    */
   async configure(
     sessionId: string,
     patch: {
       skills?: { id: string; revision: string }[];
       context?: SessionContextOptions;
+      /** Whether project instructions from the workspace root are trusted. */
+      workspaceTrusted?: boolean;
     },
   ): Promise<AgentSessionState> {
     await this.deps.store.transaction(async (tx) => {
       const chat = await tx.conversations.getChat(sessionId);
       const descriptor = readSessionDescriptor(chat?.metadata);
       if (!chat || !descriptor) throw this.notASession(sessionId);
+      if (patch.workspaceTrusted !== undefined && !descriptor.workspace)
+        invalid("workspaceTrusted needs a session with a workspace.");
       const next = {
         ...descriptor,
+        ...(patch.workspaceTrusted === undefined || !descriptor.workspace
+          ? {}
+          : {
+              workspace: {
+                ...descriptor.workspace,
+                trusted: patch.workspaceTrusted,
+              },
+            }),
         ...(patch.skills === undefined ? {} : { skills: patch.skills }),
         ...(patch.context === undefined ? {} : { context: patch.context }),
       };

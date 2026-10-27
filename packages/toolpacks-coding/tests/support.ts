@@ -43,16 +43,21 @@ export interface Harness {
     name: string,
     input: unknown,
     signal?: AbortSignal,
+    ctx?: { chatId?: string; toolCallId?: string },
   ): Promise<AiToolResult<unknown>>;
   text(result: AiToolResult<unknown>): string;
   dispose(): Promise<void>;
 }
 
 export async function harness(
-  options: Partial<CodingToolPackOptions> & { root?: string } = {},
+  options: Partial<CodingToolPackOptions> & {
+    root?: string;
+    /** Default chatId of every run; without one no read ledger applies. */
+    chatId?: string;
+  } = {},
 ): Promise<Harness> {
   const root = options.root ?? tempDir();
-  const { root: _ignored, ...rest } = options;
+  const { root: _ignored, chatId: defaultChat, ...rest } = options;
   const pack = createCodingToolPack({
     workspace: { root },
     sandbox: "off",
@@ -63,11 +68,21 @@ export async function harness(
     tools.set(tool.definition.name, tool);
   return {
     root,
-    async run(name, input, signal) {
+    async run(name, input, signal, extra) {
+      const chatId = extra?.chatId ?? defaultChat;
       const tool = tools.get(name);
       if (!tool) throw new Error(`no tool ${name}`);
       return tool.execute(
-        { runId: "t", bindings: [], limits: LIMITS, signal },
+        {
+          runId: "t",
+          bindings: [],
+          limits: LIMITS,
+          signal,
+          ...(chatId !== undefined ? { chatId } : {}),
+          ...(extra?.toolCallId !== undefined
+            ? { toolCallId: extra.toolCallId }
+            : {}),
+        },
         input,
       );
     },
