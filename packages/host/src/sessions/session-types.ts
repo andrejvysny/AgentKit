@@ -42,6 +42,16 @@ export interface CreateSessionInput {
   profile: { id: string; digest?: string };
   providerId?: string;
   model?: string;
+  /** Project instructions root (ADR 0017). */
+  workspace?: { root: string; trusted: boolean };
+  /** Context policy and budget overrides (ADR 0017). */
+  context?: {
+    policy?: "final_answers" | "transcript";
+    windowTokens?: number;
+    reserveTokens?: number;
+  };
+  /** Skills re-selected on every turn. */
+  skills?: { id: string; revision: string }[];
   metadata?: Record<string, unknown>;
 }
 

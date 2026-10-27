@@ -72,12 +72,30 @@ async function ownRunRecords(
   return records.reverse();
 }
 
-/** A run keeps its original ancestry even if a later turn moves the active path. */
+/**
+ * What replays for turns BEFORE the one being answered. `final_answers` is the
+ * long-standing behaviour; `transcript` adds each prior turn's own run records
+ * (tool calls, results, steering) -- see {@link anchoredHistory}.
+ */
+export type HistoryPolicy = "final_answers" | "transcript";
+
+/**
+ * A run keeps its original ancestry even if a later turn moves the active path.
+ *
+ * In `transcript` mode every prior visible assistant placeholder on the path
+ * also brings its own run's records (they live off the active path, hanging
+ * under the placeholder). `orderMessagesForProvider` then slots them before
+ * that placeholder's final content, because the placeholder carries the run's
+ * lowest order key. A prior run whose records no longer descend from its
+ * placeholder is replayed as its final answer alone: one odd old turn must not
+ * fail every later turn of the session.
+ */
 export async function anchoredHistory(
   conversations: ConversationStore,
   chatId: string,
   assistantMessageId: string,
   historyLimit: number,
+  policy: HistoryPolicy = "final_answers",
 ): Promise<MessageRecord[]> {
   const anchor = await requireRecord(conversations, chatId, assistantMessageId);
   if (anchor.role !== "assistant" || anchor.metadata["internal"] === true) {
@@ -102,5 +120,37 @@ export async function anchoredHistory(
   }
   // Current-run tool records are not a history window: a resumed call must keep
   // every result it already produced, even when the chain exceeds that window.
+  if (policy === "transcript") {
+    // A turn submitted under the previous run's last record already has that
+    // run's records among its ancestors; one converted from a queued follow-up
+    // hangs under the placeholder and does not. Either way each record appears
+    // once, and a run is walked with its own cycle guard.
+    const onPath = new Set(ancestors.map((record) => record.id));
+    const priorRuns: MessageRecord[] = [];
+    for (const ancestor of ancestors) {
+      if (
+        ancestor.role !== "assistant" ||
+        ancestor.metadata["internal"] === true ||
+        ancestor.runId === undefined ||
+        ancestor.runId === anchor.runId
+      )
+        continue;
+      try {
+        const records = await ownRunRecords(
+          conversations,
+          ancestor,
+          new Set([ancestor.id]),
+        );
+        priorRuns.push(...records.filter((record) => !onPath.has(record.id)));
+      } catch (error) {
+        if (
+          !(error instanceof AgentKitHostError) ||
+          error.code !== "invalid_history_anchor"
+        )
+          throw error;
+      }
+    }
+    return [...ancestors.reverse(), ...priorRuns, anchor, ...own];
+  }
   return [...ancestors.reverse(), anchor, ...own];
 }

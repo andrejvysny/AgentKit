@@ -140,19 +140,24 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       );
     }
     const payload = (await response.json()) as {
-      data?: Array<{ id?: string; name?: string }>;
+      data?: Array<{ id?: string; name?: string } & Record<string, unknown>>;
     };
     const fetchedAt = nowIso();
     return (payload.data ?? [])
       .filter(
-        (m): m is { id: string; name?: string } => typeof m.id === "string",
+        (m): m is { id: string; name?: string } & Record<string, unknown> =>
+          typeof m.id === "string",
       )
-      .map((m) => ({
-        providerId: this.id,
-        modelId: m.id,
-        displayName: m.name ?? null,
-        fetchedAt,
-      }));
+      .map((m) => {
+        const contextWindowTokens = contextWindowOf(m);
+        return {
+          providerId: this.id,
+          modelId: m.id,
+          displayName: m.name ?? null,
+          ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+          fetchedAt,
+        };
+      });
   }
 
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
@@ -898,6 +903,27 @@ function stripTrailingSlash(url: string): string {
  * body must not be buffered whole just to quote it.
  */
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
+
+/**
+ * Keys servers use for a model's context length: vLLM `max_model_len`, LM
+ * Studio / llama.cpp `context_length`, others `context_window` and
+ * `max_context_length`. The first finite positive integer wins.
+ */
+const CONTEXT_WINDOW_KEYS = [
+  "max_model_len",
+  "context_length",
+  "context_window",
+  "max_context_length",
+] as const;
+
+function contextWindowOf(model: Record<string, unknown>): number | undefined {
+  for (const key of CONTEXT_WINDOW_KEYS) {
+    const value = model[key];
+    if (typeof value === "number" && Number.isInteger(value) && value > 0)
+      return value;
+  }
+  return undefined;
+}
 
 async function safeBody(response: Response): Promise<string> {
   try {

@@ -15,7 +15,10 @@ import type { IdGenerator, Logger } from "../ports/system.js";
 import type { TaskStatus } from "../ports/task-store.js";
 import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import type { TaskExecutionContext } from "../tasks/task-executor.js";
-import type { AgentSessionDescriptor } from "../sessions/descriptor.js";
+import {
+  sessionContentSelection,
+  type AgentSessionDescriptor,
+} from "../sessions/descriptor.js";
 import { readInputContent } from "../sessions/input-content.js";
 import { fencedConversations } from "./fenced-conversations.js";
 import { stageTurnInTransaction, type TurnRequest } from "./submit.js";
@@ -219,6 +222,7 @@ export async function stageNextQueuedTurn(
     const taskId = deps.ids.taskId();
     const userMessageId = deps.ids.messageId();
     const assistantMessageId = deps.ids.messageId();
+    const contentSelection = sessionContentSelection(session);
     const payload: TurnRequest = {
       chatId,
       ...(input.parentMessageId === undefined
@@ -230,6 +234,7 @@ export async function stageNextQueuedTurn(
         : { providerId: session.providerId }),
       assistantMessageId,
       userMessageId,
+      ...(contentSelection === undefined ? {} : { contentSelection }),
     };
     await stageTurnInTransaction(tx, deps, {
       taskId,

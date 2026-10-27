@@ -8,6 +8,7 @@ export * from "./events.js";
 
 // Context bindings
 export * from "./context/resolver.js";
+export * from "./context/token-estimator.js";
 
 // Prompts
 export * from "./prompts/compose.js";

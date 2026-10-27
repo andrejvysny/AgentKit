@@ -262,6 +262,18 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  *   (ADR 0015 §6); the run went on without it. Like `hook_timeout`, it is also
  *   emitted by core loop hooks. The message names the hook, never the thrown
  *   text.
+ * - `context_budget_fallback` — host-emitted on an agent-session turn: nothing
+ *   says how large the model's context window is (no session override, model
+ *   record or provider capability), so the budget assumed 32768 tokens.
+ * - `context_trimmed` — host-emitted on an agent-session turn: the transcript
+ *   was over the window budget and the oldest whole turns were left out of this
+ *   pass. The message carries the turn count and the estimated tokens.
+ * - `skill_unavailable` — host-emitted on an agent-session turn: a Skill the
+ *   session carries over could not be activated (missing, or its revision or
+ *   hash changed). The turn went on without it; the message names the skill id.
+ * - `project_instructions_unavailable` — host-emitted on an agent-session turn:
+ *   an `AGENTS.md` / `CLAUDE.md` could not be read (symlink, outside the root)
+ *   or exceeded its size cap and was truncated.
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
  *   produce them, but hosts layering their own provider adapters on top of this
  *   contract do, so they are part of the shared vocabulary.
@@ -287,7 +299,11 @@ export type AiRunWarningCode =
   | "hook_timeout"
   | "hook_failed"
   | "empty_response"
-  | "emulated_tool_call";
+  | "emulated_tool_call"
+  | "context_budget_fallback"
+  | "context_trimmed"
+  | "skill_unavailable"
+  | "project_instructions_unavailable";
 
 export const AiRunWarningEventSchema = Type.Object({
   type: Type.Literal("run.warning"),

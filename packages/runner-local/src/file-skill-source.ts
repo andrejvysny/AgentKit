@@ -147,3 +147,7 @@ export function fileSkillSource(
     },
   };
 }
+
+// Same `./filesystem` subpath: both read configured roots with the same
+// confinement rules.
+export { fileProjectInstructions } from "./project-instructions.js";
