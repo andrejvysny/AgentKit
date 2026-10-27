@@ -12,6 +12,7 @@ import {
 import { CODING_NAMESPACE } from "./guard.js";
 import { type CodingLimits, DEFAULT_CODING_LIMITS } from "./limits.js";
 import { submitPlanTool } from "./plan-tool.js";
+import { sweepOrphans } from "./process.js";
 import { SANDBOX_EXEC } from "./sandbox.js";
 import { codeSearchTool, findFilesTool, repoMapTool } from "./search-tools.js";
 import type { CodingToolPackOptions } from "./types.js";
@@ -46,12 +47,19 @@ function resolveLimits(
  * It offers every tool on every run; whether a call may proceed is the
  * `CodingPermissionGuard`'s decision, not the contributor's.
  */
+let swept = false;
+
 export function createCodingToolPack(
   options: CodingToolPackOptions,
 ): ToolSetContributor {
   const root = options.workspace?.root;
   if (typeof root !== "string" || !root.startsWith("/"))
     throw new TypeError("workspace.root must be an absolute path");
+  if (!swept) {
+    // A crashed agent never ran its teardown; clear what it left, once.
+    swept = true;
+    void sweepOrphans();
+  }
   const env = createEnv({
     workspaceRoot: root,
     limits: resolveLimits(options.limits),

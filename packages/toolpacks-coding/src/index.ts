@@ -16,6 +16,7 @@ export {
   SUBMIT_PLAN_CAPABILITY,
   submitPlanTool,
 } from "./plan-tool.js";
+export { sweepOrphans } from "./process.js";
 export { DEFAULT_CODING_LIMITS, type CodingLimits } from "./limits.js";
 export type {
   CodingMode,

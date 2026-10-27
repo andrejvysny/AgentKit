@@ -124,11 +124,17 @@ async function runShell(
           ? `killed by ${run.signal}`
           : `exit code ${run.exitCode}`,
     truncated: run.truncated,
-    warnings: sandboxed ? [] : ["sandbox is off: the command ran unconfined"],
+    warnings: [
+      ...(sandboxed ? [] : ["sandbox is off: the command ran unconfined"]),
+      ...(run.teardown.survivors.length > 0
+        ? [`process_survivors: ${run.teardown.survivors.join(",")}`]
+        : []),
+    ],
     details: {
       exitCode: run.exitCode,
       signal: run.signal,
       timedOut: run.timedOut,
+      teardown: run.teardown,
       ...(run.logPath ? { fullLog: run.logPath } : {}),
     },
   };
