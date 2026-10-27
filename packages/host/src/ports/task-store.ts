@@ -73,8 +73,12 @@ export const TASK_TRANSITIONS: Readonly<
     "failed",
     "cancelled",
   ] as const),
+  // `waiting_approval → queued` (ADR 0016 §5): an answered human-input request
+  // re-admits the task through the normal claim path, mirroring
+  // `interrupted → queued`, instead of resuming a lease-less task in place.
   waiting_approval: Object.freeze([
     "running",
+    "queued",
     "completed",
     "failed",
     "cancelled",

@@ -23,6 +23,7 @@ import type { SqliteDatabase as Database } from "./sqlite/driver.js";
 import {
   defaultClock,
   defaultIds,
+  type AgentInputStore,
   type AssistantStore,
   type Clock,
   type ConversationStore,
@@ -42,6 +43,10 @@ import {
   SqliteConnection,
   type TxOwner,
 } from "./sqlite/connection.js";
+import {
+  ensureAgentInputTables,
+  SqliteAgentInputStore,
+} from "./sqlite/agent-input-store.js";
 import { SqliteConversationStore } from "./sqlite/conversation-store.js";
 import { SqliteOutboxStore } from "./sqlite/outbox-store.js";
 import { SqliteProposalStore } from "./sqlite/proposal-store.js";
@@ -179,10 +184,12 @@ export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
  */
 export class SharedSqliteAssistantStore implements AssistantStore {
   private readonly conn: SqliteConnection;
+  private readonly clock: Clock;
   /** Every sub-store, bound to one open transaction — see {@link txView}. */
   private readonly viewFor: (owner: TxOwner) => AssistantStoreStores;
   readonly conversations: ConversationStore;
   readonly tasks: TaskStore;
+  readonly inputs: AgentInputStore;
   readonly proposals: ProposalStore;
   readonly providers: ProviderStore;
   readonly settings: SettingsStore;
@@ -198,6 +205,10 @@ export class SharedSqliteAssistantStore implements AssistantStore {
     );
     const clock = options.clock ?? defaultClock;
     const ids = options.ids ?? defaultIds;
+    this.clock = clock;
+    // Optional table: created on open, never a schema-version step.
+    ensureAgentInputTables(db);
+    this.inputs = new SqliteAgentInputStore(this.conn, clock);
     // SECOND, IDENTICALLY-CONFIGURED INSTANCES rather than a mutable field on
     // the root ones: the token belongs to ONE transaction, and a field would
     // leak it to every other caller of `store.tasks` for as long as that
@@ -260,6 +271,7 @@ export class SharedSqliteAssistantStore implements AssistantStore {
     const view = this.viewFor(owner);
     return {
       ...view,
+      inputs: new SqliteAgentInputStore(this.conn, this.clock, owner),
       transaction: <T>(nested: (tx: AssistantStore) => Promise<T>) =>
         this.conn.withAsyncTx((nestedOwner) => {
           // `nestedOwner` is `owner` on the flattened path and a fresh token

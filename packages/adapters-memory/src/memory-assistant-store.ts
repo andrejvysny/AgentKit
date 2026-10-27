@@ -20,6 +20,7 @@
  * silently mutate later when a DIFFERENT call (e.g. `renewLease` bumping
  * `expiresAt` on the same stored object) touches the same record.
  */
+import { MemoryAgentInputStore } from "./memory-agent-input-store.js";
 import type {
   AiContentPart,
   AiMessageContent,
@@ -2159,6 +2160,7 @@ export class MemoryAssistantStore implements AssistantStore {
   readonly tasks: MemoryTaskStore;
   private readonly rawTasks: MemoryTaskStore;
   readonly proposals: MemoryProposalStore;
+  readonly inputs: MemoryAgentInputStore;
   readonly providers = new MemoryProviderStore();
   readonly settings = new MemorySettingsStore();
   readonly outbox: MemoryOutboxStore;
@@ -2246,6 +2248,10 @@ export class MemoryAssistantStore implements AssistantStore {
       options.outboxClaimVisibilityMs,
       options.outboxMaxAttempts,
     );
+    this.inputs = new MemoryAgentInputStore({
+      clock,
+      withGate: (operation) => this.gate.runExclusive(async () => operation()),
+    });
   }
 
   /**
@@ -2283,6 +2289,9 @@ export class MemoryAssistantStore implements AssistantStore {
       conversations: this.conversations,
       tasks: taskStoreInTransaction(this.rawTasks, owner),
       proposals: this.proposals,
+      inputs: this.inputs.withGate((operation) =>
+        this.gate.runExclusive(async () => operation(), owner),
+      ),
       providers: this.providers,
       settings: this.settings,
       outbox: this.outbox,

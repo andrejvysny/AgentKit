@@ -1,3 +1,4 @@
+import type { AgentInputStore } from "./agent-input-store.js";
 import type { ConversationStore } from "./conversation-store.js";
 import type { OutboxStore } from "./outbox-store.js";
 import type { ProposalStore } from "./proposal-store.js";
@@ -20,6 +21,8 @@ export interface AssistantStore {
   conversations: ConversationStore;
   tasks: TaskStore;
   proposals: ProposalStore;
+  /** Durable steer, follow-up and human-input records; optional so existing host stores remain compatible. */
+  inputs?: AgentInputStore;
   providers: ProviderStore;
   settings: SettingsStore;
   outbox: OutboxStore;

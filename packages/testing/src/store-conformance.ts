@@ -193,6 +193,41 @@ export function describeAssistantStoreConformance(
       }
     });
 
+    it("re-admits a waiting_approval task through queued and claimNext, with a new attempt", async () => {
+      const { store, close } = await create();
+      try {
+        const task = await store.tasks.createTask(makeTaskInput());
+        const first = await store.tasks.claimNext({
+          ownerId: "worker-1",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(first?.task.taskId).toBe(task.taskId);
+        await store.tasks.transitionTask(
+          task.taskId,
+          ["running"],
+          "waiting_approval",
+        );
+        const requeued = await store.tasks.transitionTask(
+          task.taskId,
+          ["waiting_approval"],
+          "queued",
+        );
+        expect(requeued.status).toBe("queued");
+        const second = await store.tasks.claimNext({
+          ownerId: "worker-2",
+          now: new Date(),
+          scopesBusy: [],
+        });
+        expect(second?.task.taskId).toBe(task.taskId);
+        expect(second?.task.status).toBe("running");
+        expect(second?.attempt.attemptId).not.toBe(first?.attempt.attemptId);
+        expect(second?.attempt.attemptNumber).toBe(2);
+      } finally {
+        close?.();
+      }
+    });
+
     // C5: the exclusivity a chat turn is submitted under. The refusal has to be
     // the STORE's, in the same transaction as the insert — a caller's own
     // pre-check is separated from its write by an await and refuses nothing.

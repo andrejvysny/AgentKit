@@ -24,3 +24,4 @@ export * from "./tool-catalog.js";
 export * from "./task-runner.js";
 export * from "./write-policy.js";
 export * from "./proposal-applier.js";
+export * from "./agent-input-store.js";

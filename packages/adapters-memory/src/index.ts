@@ -12,3 +12,4 @@ export * from "./memory-secret-store.js";
 export * from "./memory-provider-continuation-store.js";
 export * from "./memory-connection-store.js";
 export * from "./memory-prompt-template-store.js";
+export * from "./memory-agent-input-store.js";
