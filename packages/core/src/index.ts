@@ -23,6 +23,7 @@ export * from "./tools/tool-calls.js";
 export * from "./tools/validation.js";
 
 // Runs
+export * from "./runs/agent-loop.js";
 export * from "./runs/run-loop.js";
 
 // Providers

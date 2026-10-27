@@ -1,0 +1,197 @@
+import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
+import { createEventStamper } from "../events.js";
+import { newRunId, nowIso } from "../ids.js";
+import type { AiChatRequest } from "../providers/client.js";
+import { boundedRun } from "./bounded-run.js";
+import { streamModelStep } from "./model-step.js";
+import type { RunChatInput, RunChatResult } from "./run-types.js";
+import { executeToolBatch } from "./tool-step.js";
+
+export type AgentLoopInput = RunChatInput;
+export type AgentLoopResult = RunChatResult;
+
+const DEFAULT_MAX_TOOL_ITERATIONS = 4;
+const DEFAULT_MAX_TOOL_CALLS_PER_ITERATION = 8;
+
+/**
+ * Run a multi-turn chat with tool calls. Yields normalized AiRunEvents and
+ * returns a {@link RunChatResult}.
+ *
+ * `input.messages` is never mutated: the loop appends to a private copy and hands
+ * back what it appended. Mutating a caller's array was a hidden side effect that
+ * made a run impossible to retry, fan out, or run twice from the same history —
+ * the second attempt would start from a conversation the first one had rewritten.
+ */
+export function runAgentLoop(
+  input: AgentLoopInput,
+): AsyncGenerator<AiRunEvent, AgentLoopResult, unknown> {
+  return input.budgets || input.executionBudget
+    ? boundedRun(input, runAgentLoopUnchecked)
+    : runAgentLoopUnchecked(input);
+}
+
+async function* runAgentLoopUnchecked(
+  input: AgentLoopInput,
+): AsyncGenerator<AiRunEvent, AgentLoopResult, unknown> {
+  const runId = input.runId ?? newRunId();
+  // Clamped: `0` (or a negative) used to mean "never call the provider" and end
+  // the run as a silent empty success, which reads as a model that answered
+  // nothing rather than as the misconfiguration it is.
+  const maxIterations = Math.max(
+    1,
+    input.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS,
+  );
+  const maxCallsPerIter =
+    input.maxToolCallsPerIteration ?? DEFAULT_MAX_TOOL_CALLS_PER_ITERATION;
+  const toolDefinitions = input.registry.listDefinitions();
+  const messages: AiChatMessage[] = input.messages.slice();
+  const initialLength = messages.length;
+  // EVERY event leaves through this stamper — loop-originated and re-yielded
+  // provider events alike — so one run emits one unbroken, gap-detectable
+  // sequence. A client's own numbering is deliberately overwritten: it counts
+  // per call, and a run spans several calls from possibly several clients.
+  const stamp = createEventStamper({
+    firstSeq: input.firstSeq,
+    attemptId: input.attemptId,
+  });
+  let continuation = input.continuation;
+  const onContinuation: AiChatRequest["onContinuation"] = input.onContinuation
+    ? async (state) => {
+        await input.onContinuation?.(state);
+        continuation = state;
+      }
+    : undefined;
+  let iteration = 0;
+  let finishReason: string | undefined;
+
+  /** Build the generator's return value for whichever terminal we reached. */
+  const finish = (terminal: AgentLoopResult["terminal"]): AgentLoopResult => ({
+    runId,
+    terminal,
+    appendedMessages: messages.slice(initialLength),
+    iterations: iteration,
+  });
+
+  for (let i = 0; i < maxIterations; i++) {
+    iteration = i + 1;
+    if (input.signal?.aborted) {
+      yield stamp({
+        type: "run.cancelled",
+        runId,
+        timestamp: nowIso(),
+        data: { reason: "aborted" },
+      });
+      return finish("cancelled");
+    }
+
+    const step = yield* streamModelStep({
+      input,
+      runId,
+      iteration,
+      messages,
+      toolDefinitions,
+      stamp,
+      getContinuation: () => continuation,
+      onContinuation,
+    });
+    if (step.kind !== "response") return finish(step.kind);
+    const assistantContent = step.content;
+    const turnFinishReason = step.finishReason;
+
+    // Hoisted above the tool-call branch on purpose: a turn cut off at the
+    // token budget usually breaks the TOOL ARGUMENTS (which then fail as
+    // bad_args with no hint why), and that is exactly the case the old
+    // no-tool-calls-only placement never warned about.
+    if (turnFinishReason === "length") {
+      yield stamp({
+        type: "run.warning",
+        runId,
+        timestamp: nowIso(),
+        data: {
+          code: "truncated",
+          message:
+            "Response truncated (finish_reason=length); increase max output tokens.",
+        },
+      });
+    }
+
+    // If the assistant produced tool calls, append the assistant message with tool_calls
+    // and execute each tool, appending role:'tool' messages with tool_call_id.
+    if (step.toolCalls.length > 0) {
+      const outcome = yield* executeToolBatch({
+        input,
+        runId,
+        stamp,
+        messages,
+        maxCallsPerIter,
+        assistantContent,
+        toolCalls: step.toolCalls,
+        duplicateIds: step.duplicateIds,
+        announcedToolCallIds: step.announcedToolCallIds,
+      });
+      if (outcome === "cancelled") return finish("cancelled");
+      // Loop again so the model can react to tool results.
+      continue;
+    }
+
+    // No tool calls; commit final assistant message and finish.
+    // `turnFinishReason` may be the synthetic "incomplete" (stream cut before
+    // the provider said why) — passed through untouched, because defaulting it
+    // to "stop" is precisely the lie that made a half answer look final.
+    finishReason = turnFinishReason ?? "stop";
+    // #4: surface finish_reason="tool_calls" with no reconstructable call — but
+    // only if the provider didn't already emit it during streaming (dedup).
+    if (finishReason === "tool_calls" && !step.sawNoToolCallWarning) {
+      yield stamp({
+        type: "run.warning",
+        runId,
+        timestamp: nowIso(),
+        data: {
+          code: "tool_call_unparseable",
+          message:
+            "Provider reported finish_reason=tool_calls but emitted no usable tool call.",
+        },
+      });
+    }
+    // Cancellation arriving while the last chunk was in flight must not be
+    // committed as a finished answer. Checked HERE, immediately before the
+    // commit and its terminal event: every yield above handed control back to
+    // the consumer, so the signal can have moved since the loop-top check.
+    if (input.signal?.aborted) {
+      yield stamp({
+        type: "run.cancelled",
+        runId,
+        timestamp: nowIso(),
+        data: { reason: "aborted" },
+      });
+      return finish("cancelled");
+    }
+    messages.push({ role: "assistant", content: assistantContent });
+    yield stamp({
+      type: "run.completed",
+      runId,
+      timestamp: nowIso(),
+      data: { iterations: iteration, finishReason },
+    });
+    return finish("completed");
+  }
+
+  yield stamp({
+    type: "run.warning",
+    runId,
+    timestamp: nowIso(),
+    data: {
+      code: "max_iterations",
+      message: `Reached maxToolIterations=${maxIterations} without final answer.`,
+    },
+  });
+  // Exhausting the iteration budget still ends on run.completed (with a warning),
+  // so the terminal reported here matches the event stream.
+  yield stamp({
+    type: "run.completed",
+    runId,
+    timestamp: nowIso(),
+    data: { iterations: iteration, finishReason: "max_iterations" },
+  });
+  return finish("completed");
+}
