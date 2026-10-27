@@ -44,8 +44,34 @@ fixed: sum subtracted instead of adding.
 
 `--session <id>` is the whole of continuation: pass the same id tomorrow and the
 agent still has yesterday's transcript. `--transcript` prints what the store
-holds, including the tool results the model reads. `--resume` adopts a turn a
-previous process left unfinished.
+holds, including the tool results the model reads.
+
+## Session lifecycle
+
+Quitting never loses work and never restarts it. `/quit`, Ctrl-C and SIGTERM
+park a running turn `interrupted` (the runner is `shutdownMode: "interrupt"`,
+`recoveryMode: "manual"`); a second Ctrl-C exits at once. Opening the app again
+runs nothing by itself.
+
+```bash
+bun run src/main.ts --repo ... --resume       # continue the interrupted turn
+bun run src/main.ts --repo ... --list-sessions
+bun run src/main.ts --repo ... --usage        # token usage per turn and total
+bun run src/main.ts --repo ... --export session.json
+bun run src/main.ts --repo ... --effort high  # minimal | low | medium | high
+```
+
+`--resume` first parks turns a killed process left behind (their lease must
+expire, 30s by default, so retry shortly after a SIGKILL), then resumes the
+interrupted turn as the SAME turn — same id, one more attempt — streaming it and
+prompting for approvals as usual. A tool whose outcome the log cannot decide is
+still never re-run without a human.
+
+REPL commands: `/mode <m>`, `/status`, `/transcript`, `/cancel`, `/interrupt`,
+`/resume`, `/turns`, `/usage`, `/export <file>`, `/model <id> [effort]`,
+`/effort <level|off>`, `/quit`. `/model` and `/effort` apply to the NEXT turn;
+a running turn keeps the request it started with. Approval prompts show the
+tool name and a prefix of the arguments hash the approval is bound to.
 
 ## What the host enforces, not what the prompt asks
 
@@ -124,8 +150,13 @@ repository and the real tools — no network, no model:
 - plan mode blocks writes until a human approves the plan, the plan's requested
   mode is shown and not obeyed, and the granted mode can never be plan itself;
 - continuing the session in a new process replays the earlier turns;
+- **quit and resume**: closing the app parks a running turn `interrupted`; a new
+  process resumes the same turn (attempt 2) with no duplicate tool records, and
+  merely opening it runs nothing;
+- the session exports as JSON with its tool call/result pairs, lists, reports
+  usage, and a changed reasoning effort reaches the next provider request;
 - **crash recovery**: a child process is SIGKILLed while a real command is in
-  flight; a new process adopts the turn, reports the interrupted call as
+  flight; a new process parks the turn, `--resume` continues it, reports the interrupted call as
   `tool_result_uncertain` instead of pretending it never ran, refuses to
   re-issue the identical command without a human, and runs it exactly once more
   after approval.
@@ -135,8 +166,9 @@ repository and the real tools — no network, no model:
 - **No agent loop.** `@agentkit/core`'s run loop owns iteration, tool steps and
   cancellation. A second loop is the thing this example must not contain.
 - **No scheduler.** Tasks, leases and recovery belong to `TaskStore` and the
-  task runner; `CodingAgentApp.recover()` is an explicit adoption, so restarting
-  the CLI never by itself resumes a turn.
+  task runner; `CodingAgentApp.recover()` only parks crashed turns as
+  `interrupted`; `resumeTurn()` is the explicit continue, so restarting the CLI
+  never by itself resumes a turn.
 - **No MCP, no attachments, no web UI.** The transport example covers those.
 - **No OneMind imports.** That integration is a later phase; this directory is
   the proof the runtime stands alone.

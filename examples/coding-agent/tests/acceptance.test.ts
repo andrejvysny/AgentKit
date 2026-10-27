@@ -20,8 +20,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
 import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
-import { MockProviderClient, type MockTurn } from "@agentkit/testing";
+import {
+  MockProviderClient,
+  createAbortError,
+  type MockTurn,
+} from "@agentkit/testing";
 import { CodingAgentApp, type PendingApproval } from "../src/app.js";
+import { exportTo } from "../src/commands.js";
 import { CRASH_COMMAND } from "./fixtures/crash-command.js";
 
 const SOURCE_BUG =
@@ -92,6 +97,9 @@ interface OpenOptions {
   mode?: "ask" | "auto_edit" | "full_auto" | "plan";
   script: MockTurn[];
   leaseTtlMs?: number;
+  reasoningEffort?: "minimal" | "low" | "medium" | "high";
+  /** Provider call number (1-based) that parks until its signal aborts. */
+  hangOnCall?: number;
 }
 
 interface Harness {
@@ -100,6 +108,7 @@ interface Harness {
   /** What each provider call was actually sent — the only witness to a
    * reconciled tool result, which lives in the model's history, not the store. */
   requests: AiChatMessage[][];
+  efforts: (string | undefined)[];
   repo: string;
   dbPath: string;
   events: AiRunEvent[];
@@ -110,7 +119,12 @@ class RecordingProvider implements AiProviderClient {
   readonly id = "recording";
   readonly kind = "openai-compatible" as const;
   readonly requests: AiChatMessage[][] = [];
-  constructor(readonly inner: AiProviderClient) {}
+  /** The reasoning effort each request carried (undefined when none). */
+  readonly efforts: (string | undefined)[] = [];
+  constructor(
+    readonly inner: AiProviderClient,
+    private readonly hangOnCall?: number,
+  ) {}
   async capabilities() {
     return this.inner.capabilities();
   }
@@ -119,6 +133,18 @@ class RecordingProvider implements AiProviderClient {
   }
   async *streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
     this.requests.push([...input.messages]);
+    this.efforts.push(input.reasoningEffort);
+    if (this.requests.length === this.hangOnCall) {
+      // Park like a stalled network read: only the run's abort ends it, and the
+      // scripted inner client is NOT consumed, so the retry sees the same script.
+      await new Promise<void>((resolve) => {
+        if (input.signal?.aborted) resolve();
+        input.signal?.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
+      });
+      throw createAbortError();
+    }
     yield* this.inner.streamChat(input);
   }
 }
@@ -129,7 +155,10 @@ async function open(options: OpenOptions): Promise<Harness> {
   const mock = new MockProviderClient();
   mock.setScript(options.script);
   const events: AiRunEvent[] = [];
-  const recorder = new RecordingProvider(mock as unknown as AiProviderClient);
+  const recorder = new RecordingProvider(
+    mock as unknown as AiProviderClient,
+    options.hangOnCall,
+  );
   const app = await CodingAgentApp.open({
     repo,
     dbPath,
@@ -140,12 +169,23 @@ async function open(options: OpenOptions): Promise<Harness> {
     testCommands: ["bun test"],
     providerFactory: () => recorder as unknown as AiProviderClient,
     ...(options.mode === undefined ? {} : { mode: options.mode }),
+    ...(options.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: options.reasoningEffort }),
     ...(options.leaseTtlMs === undefined
       ? {}
       : { leaseTtlMs: options.leaseTtlMs }),
   });
   await app.ensureSession();
-  return { app, mock, requests: recorder.requests, repo, dbPath, events };
+  return {
+    app,
+    mock,
+    requests: recorder.requests,
+    efforts: recorder.efforts,
+    repo,
+    dbPath,
+    events,
+  };
 }
 
 /** One instruction, driven to a terminal state, answering every ask. */
@@ -439,6 +479,10 @@ describe("coding agent — the acceptance run", () => {
     const adopted = async (): Promise<boolean> => {
       for (let attempt = 0; attempt < 120; attempt += 1) {
         await revived.app.recover();
+        // Manual recovery only parks the dead turn; continuing it is the
+        // user's explicit act, which `--resume` performs.
+        const parked = await revived.app.interruptedTurn();
+        if (parked !== undefined) await revived.app.resumeTurn(parked);
         const { events } = await revived.app.eventsAfter(active!.turnId, -1);
         if (
           events.some(
@@ -483,6 +527,129 @@ describe("coding agent — the acceptance run", () => {
     expect(readFileSync(marker, "utf8")).toBe("ran\nran\n");
     await revived.app.close();
   }, 180_000);
+});
+
+describe("coding agent — the session lifecycle", () => {
+  it("quitting interrupts a running turn; a new process resumes the same turn without repeating tools", async () => {
+    const h = await open({
+      mode: "full_auto",
+      hangOnCall: 2,
+      script: [call("c1", "read_file", { path: "AGENTS.md" }), say("unused")],
+    });
+    await h.app.startWorker();
+    const started = await h.app.send("Read the rules, then answer.");
+    if (started.kind !== "turn") throw new Error("expected a turn");
+    const deadline = Date.now() + 20_000;
+    while (h.requests.length < 2) {
+      if (Date.now() > deadline) throw new Error("second request never sent");
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    await h.app.close(); // quit: parks the turn instead of finishing or losing it
+
+    const again = await open({
+      repo: h.repo,
+      dbPath: h.dbPath,
+      mode: "full_auto",
+      script: [say("rules understood")],
+    });
+    expect(await again.app.status(started.turnId)).toBe("interrupted");
+    await again.app.startWorker();
+    // Parked, not restarted: a boot must not start a model call by itself.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(again.requests.length).toBe(0);
+    expect(await again.app.interruptedTurn()).toBe(started.turnId);
+
+    await again.app.resumeTurn(started.turnId);
+    const status = await again.app.waitForTurn(started.turnId, {
+      timeoutMs: 60_000,
+    });
+    expect(status).toBe("completed");
+    const turns = await again.app.turns();
+    expect(turns.length).toBe(1);
+    expect(turns[0]!.turnId).toBe(started.turnId);
+    expect(turns[0]!.attempts).toBe(2);
+    const transcript = await again.app.transcript();
+    expect(transcript.filter((m) => m.toolName === "read_file").length).toBe(1);
+    expect(transcript.some((m) => m.content === "rules understood")).toBe(true);
+    await again.app.close();
+  }, 120_000);
+
+  it("opening an app without resuming runs nothing", async () => {
+    const h = await open({
+      mode: "full_auto",
+      hangOnCall: 1,
+      script: [say("never")],
+    });
+    await h.app.startWorker();
+    const started = await h.app.send("start");
+    if (started.kind !== "turn") throw new Error("expected a turn");
+    while (h.requests.length < 1) await new Promise((r) => setTimeout(r, 25));
+    await h.app.close();
+
+    const again = await open({
+      repo: h.repo,
+      dbPath: h.dbPath,
+      script: [say("must not run")],
+    });
+    await again.app.startWorker();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(again.mock.callCount).toBe(0);
+    expect(await again.app.status(started.turnId)).toBe("interrupted");
+    await again.app.close();
+  }, 60_000);
+
+  it("exports the session with its tool call/result pairs as parseable JSON", async () => {
+    const h = await open({
+      mode: "full_auto",
+      script: [call("c1", "read_file", { path: "AGENTS.md" }), say("done")],
+    });
+    await h.app.startWorker();
+    await run(h, "Read the rules.");
+    const file = join(h.repo, "export.json");
+    await exportTo(h.app, file);
+    const exported = JSON.parse(readFileSync(file, "utf8")) as {
+      format: string;
+      messages: {
+        role: string;
+        toolCalls?: { id: string }[];
+        toolCallId?: string;
+      }[];
+    };
+    expect(exported.format).toBe("agentkit.session.export");
+    const calls = exported.messages.flatMap((m) => m.toolCalls ?? []);
+    expect(calls.map((c) => c.id)).toEqual(["c1"]);
+    const results = exported.messages.filter((m) => m.role === "tool");
+    expect(results.map((m) => m.toolCallId)).toEqual(["c1"]);
+    await h.app.close();
+  });
+
+  it("applies a changed reasoning effort to the next provider request", async () => {
+    const h = await open({
+      mode: "full_auto",
+      script: [say("first"), say("second")],
+    });
+    await h.app.startWorker();
+    await run(h, "one");
+    expect(h.efforts).toEqual([undefined]);
+    await h.app.setModel("mock-model", "high");
+    expect((await h.app.state()).descriptor.reasoningEffort).toBe("high");
+    await run(h, "two");
+    expect(h.efforts[h.efforts.length - 1]).toBe("high");
+    await h.app.close();
+  });
+
+  it("creates a session with --effort and lists it", async () => {
+    const h = await open({ reasoningEffort: "low", script: [] });
+    const sessions = await h.app.listSessions();
+    expect(sessions.map((s) => s.sessionId)).toEqual(["s1"]);
+    expect(sessions[0]).toMatchObject({
+      profileId: "coding",
+      model: "mock-model",
+      reasoningEffort: "low",
+      turns: 0,
+    });
+    await h.app.close();
+  });
 });
 
 describe("coding agent — the CLI", () => {
@@ -557,5 +724,30 @@ describe("coding agent — the CLI", () => {
     expect(r.out).toContain("[user] Read the rules.");
     expect(r.out).toContain("Run `bun test`");
     expect(r.out).toContain("[assistant] rules read");
+  });
+
+  it("lists sessions, prints usage and exports without starting a worker", async () => {
+    const h = await open({ script: [] });
+    await h.app.close();
+    const base = ["--repo", h.repo, "--db", h.dbPath, "--session", "s1"];
+    const listed = await runCli([
+      "--repo",
+      h.repo,
+      "--db",
+      h.dbPath,
+      "--list-sessions",
+    ]);
+    expect(listed.code).toBe(0);
+    expect(listed.out).toContain("s1  profile=coding  model=mock-model");
+    const usage = await runCli([...base, "--usage"]);
+    expect(usage.code).toBe(0);
+    expect(usage.out).toContain("total  requests=0");
+    const file = join(h.repo, "cli-export.json");
+    const exported = await runCli([...base, "--export", file]);
+    expect(exported.code).toBe(0);
+    expect(JSON.parse(readFileSync(file, "utf8")).sessionId).toBe("s1");
+    expect((await runCli([...base, "--effort", "huge", "--usage"])).code).toBe(
+      2,
+    );
   });
 });
