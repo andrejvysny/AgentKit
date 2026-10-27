@@ -360,6 +360,23 @@ function guarded(
     async execute(ctx, args): Promise<AiToolResult<unknown>> {
       ctx.signal?.throwIfAborted();
       const snapshot = structuredClone(args);
+      // The execution-time identity of THIS call, layered over the staging
+      // snapshot. `guardCtx` is what the run was bound to when its tool set was
+      // decided (see `ToolGuardContext`); a guard that answers "may this
+      // session do this" needs the chat the call is actually running for, and
+      // only the tool execution context knows it. Without this a per-session
+      // permission policy would read the staging photograph and judge the wrong
+      // session — or none.
+      const callCtx: ToolGuardContext = {
+        ...guardCtx,
+        ...(ctx.chatId === undefined ? {} : { chatId: ctx.chatId }),
+        ...(ctx.scopeId === undefined
+          ? {}
+          : { scopeId: ctx.scopeId, toolCallId: ctx.toolCallId }),
+        arguments: snapshot,
+        runId: ctx.runId,
+        signal: ctx.signal,
+      };
       const freeze = (value: unknown): unknown => {
         if (value && typeof value === "object") {
           Object.values(value).forEach(freeze);
@@ -377,12 +394,7 @@ function guarded(
         // broken guard is not something to hand it.
         let verdict: ToolGuardVerdict;
         try {
-          verdict = await guard.canExecute!({
-            ...guardCtx,
-            arguments: snapshot,
-            runId: ctx.runId,
-            signal: ctx.signal,
-          });
+          verdict = await guard.canExecute!(callCtx);
         } catch {
           verdict = { allowed: false, reason: TOOL_GUARD_ERROR_MESSAGE };
         }

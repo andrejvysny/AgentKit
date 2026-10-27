@@ -98,9 +98,7 @@ export async function resolveApprovedCalls(
     approvedCalls.set(toolCallId, expected);
     resumeCalls.push(call);
   }
-  resumeCalls.sort(
-    (a, b) => order.indexOf(a.id) - order.indexOf(b.id),
-  );
+  resumeCalls.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
   return {
     resumeCalls,
     approvedCalls,

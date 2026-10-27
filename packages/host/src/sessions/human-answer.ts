@@ -11,12 +11,24 @@ import type { AgentInputRecord } from "../ports/agent-input-store.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { Clock, IdGenerator } from "../ports/system.js";
 import { sha256Hex } from "./hash.js";
+import {
+  applyPlanGrant,
+  planRequestOf,
+  readSessionExecution,
+  type PlanApprovalPolicy,
+} from "./plan-mode.js";
 import type { AgentAnswerReceipt, AnswerInput } from "./session-types.js";
 
 export interface AnswerDeps {
   store: AssistantStore;
   clock: Clock;
   ids: IdGenerator;
+  /**
+   * When wired, an approvable request whose tool is a plan tool is a PLAN
+   * approval: approving it writes the durable execution grant (ADR 0019 part 2)
+   * in this same transaction. Absent, every approval answer is per-call only.
+   */
+  planApproval?: PlanApprovalPolicy;
 }
 
 /** The task to enqueue after the answer's transaction commits. */
@@ -104,6 +116,55 @@ export async function answerHumanRequest(
       },
     });
 
+  // The host's plan veto runs BEFORE the transaction opens: `authorize` is host
+  // code, and a policy that blocks on a socket would otherwise hold the store's
+  // write lock. The authoritative grant write still happens inside the
+  // transaction, against the record re-read there.
+  let policyDenial: string | undefined;
+  {
+    const pre = await deps.store.inputs?.getInput(requestId);
+    if (
+      pre &&
+      pre.kind === "human_request" &&
+      pre.status === "pending" &&
+      deps.planApproval !== undefined &&
+      isApprovalRequest(pre.content)
+    ) {
+      let decision: ApprovalDecision | undefined;
+      try {
+        decision = readDecision(input.response, requestId).decision;
+      } catch {
+        decision = undefined; // the transaction reports the malformed response
+      }
+      const plan =
+        decision === "approve"
+          ? planRequestOf(pre, deps.planApproval)
+          : undefined;
+      if (plan !== undefined && pre.targetTaskId !== undefined) {
+        const note = (input.response as { note?: unknown } | undefined)?.note;
+        const verdict = await deps.planApproval.authorize?.({
+          sessionId: pre.sessionId,
+          turnId: pre.targetTaskId,
+          requestId,
+          planDigest: plan.planDigest,
+          ...(plan.requestedMode === undefined
+            ? {}
+            : { requestedMode: plan.requestedMode }),
+          ...(typeof note === "string" ? { note } : {}),
+        });
+        const allowed =
+          verdict === undefined ||
+          verdict === true ||
+          (typeof verdict === "object" && verdict.allowed === true);
+        if (!allowed)
+          policyDenial =
+            typeof verdict === "object" && verdict.reason !== undefined
+              ? verdict.reason
+              : "the host does not allow approving a plan here";
+      }
+    }
+  }
+
   return deps.store.transaction(async (tx) => {
     const inputs = tx.inputs;
     if (!inputs)
@@ -113,9 +174,20 @@ export async function answerHumanRequest(
       throw new RecordNotFoundError(`Human request not found: ${requestId}`, {
         requestId,
       });
-    const approval = isApprovalRequest(request.content)
+    const approval0 = isApprovalRequest(request.content)
       ? readDecision(input.response, requestId)
       : undefined;
+    const approval =
+      policyDenial === undefined
+        ? approval0
+        : {
+            decision: "deny" as const,
+            note: `plan_not_authorized: ${policyDenial}`,
+          };
+    const plan =
+      approval0?.decision === "approve" && request.status === "pending"
+        ? planRequestOf(request, deps.planApproval)
+        : undefined;
     const envelopeJson =
       approval === undefined
         ? answerEnvelope(input.response)
@@ -145,6 +217,27 @@ export async function answerHumanRequest(
           `Request ${requestId} was already answered differently.`,
           { requestId },
         );
+      // REPAIR, mirroring the missing-tool-record case below: a store without
+      // rollback can have committed the marker and lost the grant, which would
+      // leave an approved plan that authorizes nothing.
+      if (deps.planApproval !== undefined && request.toolCallId !== undefined) {
+        const replay = planRequestOf(request, deps.planApproval);
+        if (replay !== undefined) {
+          const chat = await tx.conversations.getChat(request.sessionId);
+          const granted = chat
+            ? readSessionExecution(chat.metadata)
+            : undefined;
+          if (granted?.grantedPlan?.planDigest !== replay.planDigest)
+            await applyPlanGrant(tx, {
+              sessionId: request.sessionId,
+              requestId,
+              turnId: taskId,
+              plan: replay,
+              policy: deps.planApproval,
+              nowIso: now,
+            });
+        }
+      }
       return {
         receipt: {
           requestId,
@@ -244,6 +337,16 @@ export async function answerHumanRequest(
           answerId,
           appliedMessageId: `${APPROVE_MARKER}${responseHash}`,
         });
+        if (plan !== undefined && deps.planApproval !== undefined)
+          await applyPlanGrant(tx, {
+            sessionId: request.sessionId,
+            requestId,
+            turnId: taskId,
+            plan,
+            policy: deps.planApproval,
+            nowIso: now,
+            ...(approval.note === undefined ? {} : { note: approval.note }),
+          });
       } catch (error) {
         if (
           error instanceof InvalidTaskTransitionError ||
