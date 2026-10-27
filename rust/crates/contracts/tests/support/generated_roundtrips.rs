@@ -27,6 +27,7 @@ fn all_generated_dtos_roundtrip() {
     support::roundtrip::<AiRunEvent>("AiRunEventSchema");
     support::roundtrip::<AiRunEventType>("AiRunEventTypeSchema");
     support::roundtrip::<AiRunFailedEvent>("AiRunFailedEventSchema");
+    support::roundtrip::<AiRunInputAppliedEvent>("AiRunInputAppliedEventSchema");
     support::roundtrip::<AiRunMessageCompletedEvent>("AiRunMessageCompletedEventSchema");
     support::roundtrip::<AiRunMessageDeltaEvent>("AiRunMessageDeltaEventSchema");
     support::roundtrip::<AiRunMessageReasoningDeltaEvent>("AiRunMessageReasoningDeltaEventSchema");
@@ -37,6 +38,7 @@ fn all_generated_dtos_roundtrip() {
     support::roundtrip::<AiRunToolSucceededEvent>("AiRunToolSucceededEventSchema");
     support::roundtrip::<AiRunUsageEvent>("AiRunUsageEventSchema");
     support::roundtrip::<AiRunVerificationEvent>("AiRunVerificationEventSchema");
+    support::roundtrip::<AiRunWaitingEvent>("AiRunWaitingEventSchema");
     support::roundtrip::<AiRunWarningEvent>("AiRunWarningEventSchema");
     support::roundtrip::<AiSourceRef>("AiSourceRefSchema");
     support::roundtrip::<AiTextPart>("AiTextPartSchema");
