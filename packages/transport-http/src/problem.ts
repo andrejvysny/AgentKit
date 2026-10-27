@@ -77,6 +77,14 @@ const STATUS_BY_HOST_CODE = {
   // root-store call. Nothing about the request was wrong and repeating it
   // verbatim will not help, so a 4xx would blame the wrong party.
   transaction_gate_timeout: 500,
+  // Durable agent sessions (ADR 0016): replays and races are client conflicts,
+  // a missing session is a 404, and a store without `inputs` cannot serve them.
+  input_conflict: 409,
+  input_transition_invalid: 409,
+  answer_conflict: 409,
+  answer_stale: 409,
+  session_not_found: 404,
+  sessions_unavailable: 503,
 } satisfies Record<HostErrorCode, number>;
 
 /**
@@ -112,6 +120,7 @@ const TITLE_BY_STATUS: Readonly<Record<number, string>> = Object.freeze({
   429: "Too Many Requests",
   500: "Internal Server Error",
   501: "Not Implemented",
+  503: "Service Unavailable",
 });
 
 /** The one detail every 5xx publishes; the real message goes to the logger. */

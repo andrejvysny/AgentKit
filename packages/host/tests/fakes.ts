@@ -1196,6 +1196,16 @@ export class FakeAgentInputStore implements AgentInputStore {
     record.updatedAt = this.clock.nowIso();
     return structuredClone(record);
   }
+
+  async deleteSessionInputs(sessionId: string): Promise<number> {
+    let deleted = 0;
+    for (const [inputId, record] of this.records) {
+      if (record.sessionId !== sessionId) continue;
+      this.records.delete(inputId);
+      deleted += 1;
+    }
+    return deleted;
+  }
 }
 
 export class FakeAssistantStore implements AssistantStore {

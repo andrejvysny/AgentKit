@@ -127,4 +127,16 @@ export class MemoryAgentInputStore implements AgentInputStore {
       return copy(record);
     });
   }
+
+  async deleteSessionInputs(sessionId: string): Promise<number> {
+    return this.options.withGate(() => {
+      let deleted = 0;
+      for (const [inputId, record] of this.state.records) {
+        if (record.sessionId !== sessionId) continue;
+        this.state.records.delete(inputId);
+        deleted += 1;
+      }
+      return deleted;
+    });
+  }
 }

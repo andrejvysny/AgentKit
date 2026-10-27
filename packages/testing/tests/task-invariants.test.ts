@@ -113,6 +113,17 @@ function cleanView(): TaskInvariantView {
   };
 }
 
+/** `b` of the clean view, parked on a human instead of completed. */
+function parkedB(): TaskRecord {
+  return task({
+    taskId: "b",
+    dependsOn: ["a"],
+    parentTaskId: "a",
+    status: "waiting_approval",
+    finishedAt: undefined,
+  });
+}
+
 /** Apply `mutate` to a clean view and return what the checker said about it. */
 function violationsAfter(mutate: (view: TaskInvariantView) => void): string[] {
   const view = cleanView();
@@ -191,6 +202,43 @@ describe("checkTaskInvariants", () => {
       ];
     });
     expect(found.join("\n")).toContain("no live lease owns it");
+  });
+
+  it("accepts a task parked on a human: no lease, last attempt completed", () => {
+    const found = violationsAfter((view) => {
+      view.tasks = [parkedB(), view.tasks[1]!];
+    });
+    expect(found).toEqual([]);
+  });
+
+  it("catches a parked task that still has a running attempt or a live lease", () => {
+    const found = violationsAfter((view) => {
+      view.tasks = [parkedB(), view.tasks[1]!];
+      view.attempts = [
+        view.attempts[0]!,
+        attempt({
+          attemptId: "att-b-1",
+          taskId: "b",
+          status: "running",
+          endedAt: undefined,
+        }),
+      ];
+      view.liveLeases = [lease({ taskId: "b", observedAt: 9 })];
+    });
+    const text = found.join("\n");
+    expect(text).toContain("a parked task holds none");
+    expect(text).toContain("still holds a live lease");
+  });
+
+  it("catches a parked task whose last attempt did not complete", () => {
+    const found = violationsAfter((view) => {
+      view.tasks = [parkedB(), view.tasks[1]!];
+      view.attempts = [
+        view.attempts[0]!,
+        attempt({ attemptId: "att-b-1", taskId: "b", status: "abandoned" }),
+      ];
+    });
+    expect(found.join("\n")).toContain("parking ends the attempt completed");
   });
 
   it("catches a live lease left over a task that already landed", () => {

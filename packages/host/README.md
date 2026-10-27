@@ -179,6 +179,57 @@ dispatcher's `ExecutorNotFoundError` at claim time, never a submit-time
 refusal. See [Custom turn
 executors](../../docs/architecture.md#custom-turn-executors).
 
+## Agent sessions (ADR 0016)
+
+`AgentSessionService` is a facade over `TurnRunner`, `TaskService` and the
+optional `AssistantStore.inputs` port. A session is a chat that carries a
+descriptor; a turn is a `chat.turn` task; anything that cannot start a turn now
+(a follow-up, a steer, a question for the user) is a durable input. The
+constructor throws `sessions_unavailable` when the store has no `inputs`.
+
+```ts
+import {
+  AgentSessionService,
+  TaskService,
+  createUserInputContributor,
+} from "@agentkit/host";
+
+// Register the opt-in `request_user_input` tool on the TurnRunner:
+//   new TurnRunner({ ..., contributors: [createUserInputContributor()] })
+const sessions = new AgentSessionService({
+  store, turns: turnRunner, tasks: new TaskService({ store, taskRunner, ids, clock }),
+  taskRunner, clock, ids,
+});
+
+const { sessionId } = await sessions.createSession({
+  profile: { id: "coder" },
+  providerId: "openai",
+  model: "gpt-5",
+});
+const turn = await sessions.send(sessionId, { content: "Refactor the parser" });
+// While the turn runs: queue the next one, or steer this one.
+await sessions.followUp(sessionId, { inputId: "fu-1", content: "Then add tests" });
+await sessions.steer(sessionId, { inputId: "st-1", content: "Keep the old API" });
+
+// A parked turn exposes its question; the answer re-queues the task.
+const { waiting } = await sessions.getState(sessionId);
+if (waiting) {
+  await sessions.answer({
+    requestId: waiting.inputId,
+    answerId: "ans-1",
+    response: { choice: "b" },
+  });
+}
+// After a failed or cancelled turn, release the oldest queued input:
+await sessions.flushQueue(sessionId);
+```
+
+Repeating an `answer` with the same `answerId` and response returns the first
+receipt (`duplicate: true`); a different response is `answer_conflict`, and a
+cancelled, expired or already-resumed request is `answer_stale`. `fork` copies
+history and the descriptor but not pending inputs; `setModel` affects future
+turns only.
+
 ## Port implementation checklist
 
 Implementing `AssistantStore` for your own backend (Postgres, Redis, a

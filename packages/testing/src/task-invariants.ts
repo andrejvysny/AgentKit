@@ -62,7 +62,15 @@ function isTerminal(status: TaskStatus): boolean {
 
 /** A task whose worker holds it: claimed and not yet landed. */
 function isHeld(status: TaskStatus): boolean {
-  return status === "running" || status === "waiting_approval";
+  return status === "running";
+}
+
+/**
+ * A task parked on a human (ADR 0016 §5): started, but no worker holds it. Its
+ * lease is released and every attempt has settled, the last one `completed`.
+ */
+function isParked(status: TaskStatus): boolean {
+  return status === "waiting_approval";
 }
 
 /**
@@ -339,6 +347,21 @@ function checkAttemptStructure(
         `task ${task.taskId} is terminal (${task.status}) but still has ${running} running attempts`,
       );
     }
+    if (isParked(task.status)) {
+      if (running !== 0) {
+        say(
+          `task ${task.taskId} is parked (${task.status}) but still has ${running} running attempts; a parked task holds none`,
+        );
+      }
+      const last = [...attempts]
+        .sort((a, b) => a.attemptNumber - b.attemptNumber)
+        .at(-1);
+      if (last === undefined || last.status !== "completed") {
+        say(
+          `task ${task.taskId} is parked (${task.status}) but its last attempt is ${last?.status ?? "missing"}; parking ends the attempt completed`,
+        );
+      }
+    }
     if (task.status === "queued" && attempts.length !== 0) {
       say(
         `task ${task.taskId} is queued but has ${attempts.length} attempts; a queued task was never claimed`,
@@ -603,7 +626,12 @@ function checkDependencies(
   say: Say,
 ): void {
   for (const task of view.tasks) {
-    if (!isHeld(task.status) && task.status !== "completed") continue;
+    if (
+      !isHeld(task.status) &&
+      !isParked(task.status) &&
+      task.status !== "completed"
+    )
+      continue;
     for (const dependencyId of task.dependsOn ?? []) {
       const dependency = byId.get(dependencyId);
       if (!dependency) {
