@@ -36,6 +36,7 @@ import {
 } from "@agentkit/core";
 import {
   AgentKitHostError,
+  ExecutionInterruptedError,
   LeaseLostError,
   RecordNotFoundError,
   UsageDeniedError,
@@ -510,6 +511,10 @@ export class TurnRunner implements TaskWorker {
           this.runTurn(ctx, chatId, request, assistantMessageId),
         );
     } catch (err) {
+      if (ctx.signal.reason instanceof ExecutionInterruptedError) {
+        await this.interruptQuietly(ctx);
+        return;
+      }
       const message = publicErrorMessage(err);
       await this.landFailure(ctx, err, message, assistantMessageId);
       if (
@@ -1838,6 +1843,42 @@ export class TurnRunner implements TaskWorker {
     if (!this.deps.secrets || typeof ref !== "string") return provider;
     const apiKey = await this.deps.secrets.get(ref);
     return apiKey === null ? provider : { ...provider, apiKey };
+  }
+
+  /**
+   * Park the task `interrupted` for a later resume. Interrupted is not terminal:
+   * no terminal event is emitted (the same task and event stream continue), and
+   * the assistant placeholder is left exactly as a crash would leave it so the
+   * next attempt follows the existing recovery path. The attempt ends
+   * `cancelled`, never `abandoned` (which counts toward poisonCount).
+   */
+  private async interruptQuietly(ctx: TaskExecutionContext): Promise<void> {
+    const { store, logger } = this.deps;
+    try {
+      await store.transaction(async (tx) => {
+        const task = await tx.tasks.getTask(ctx.task.taskId);
+        await tx.tasks.endAttempt({
+          attemptId: ctx.attemptId,
+          status: "cancelled",
+          error: "interrupted",
+          leaseToken: ctx.leaseToken,
+        });
+        if (task?.status === "running") {
+          await tx.tasks.transitionTask(
+            ctx.task.taskId,
+            ["running"],
+            "interrupted",
+            { error: "interrupted" },
+            { leaseToken: ctx.leaseToken },
+          );
+        }
+      });
+    } catch (error) {
+      logger?.warn("could not park interrupted turn", {
+        taskId: ctx.task.taskId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /** Finalize visible state and the attempt before publishing the terminal task. */

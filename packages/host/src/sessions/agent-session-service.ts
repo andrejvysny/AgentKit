@@ -40,10 +40,19 @@ import {
   type SessionExecutionState,
 } from "./plan-mode.js";
 import { answerHumanRequest } from "./human-answer.js";
+import {
+  exportSession,
+  listTurnTasks,
+  sessionUsage,
+  summarizeTurn,
+} from "./session-report.js";
 import type {
   AgentAnswerReceipt,
   AgentSendResult,
+  AgentSessionExport,
   AgentSessionState,
+  AgentSessionUsage,
+  AgentTurnSummary,
   AnswerInput,
   CreateSessionInput,
   FollowUpInput,
@@ -304,19 +313,55 @@ export class AgentSessionService {
   }
 
   async cancel(sessionId: string, turnId: string): Promise<void> {
-    await this.requireSession(sessionId);
-    const task = await this.deps.store.tasks.getTask(turnId);
-    if (!task || task.scopeId !== sessionId)
-      throw new RecordNotFoundError(
-        `Turn ${turnId} not found in ${sessionId}.`,
-        {
-          sessionId,
-          turnId,
-        },
-      );
+    const task = await this.requireTurn(sessionId, turnId);
     const wasParked = task.status === "waiting_approval";
     await this.deps.tasks.cancelTask(turnId);
     if (wasParked) await this.cancelRequests(sessionId, turnId);
+  }
+
+  /**
+   * Stop a turn RESUMABLY (distinct from {@link cancel}): the turn parks
+   * `interrupted` with its id, events and records intact, and
+   * {@link resume} continues it with a new attempt.
+   */
+  async interrupt(sessionId: string, turnId: string): Promise<void> {
+    await this.requireTurn(sessionId, turnId);
+    await this.deps.tasks.interruptTask(turnId);
+  }
+
+  /** Continue an interrupted turn; any other status is `invalid_state`. */
+  async resume(sessionId: string, turnId: string): Promise<void> {
+    const task = await this.requireTurn(sessionId, turnId);
+    if (task.status !== "interrupted")
+      throw new AgentKitHostError(
+        "invalid_state",
+        `Turn ${turnId} is ${task.status}; only an interrupted turn can resume.`,
+        { sessionId, turnId, status: task.status },
+      );
+    await this.deps.tasks.resumeTask(turnId);
+  }
+
+  /** The session's turns, oldest first. */
+  async listTurns(sessionId: string): Promise<AgentTurnSummary[]> {
+    await this.requireSession(sessionId);
+    return (await listTurnTasks(this.deps.store, sessionId)).map(summarizeTurn);
+  }
+
+  /** Provider-reported token usage per turn, plus the context window it fills. */
+  async getUsage(sessionId: string): Promise<AgentSessionUsage> {
+    const { descriptor } = await this.requireSession(sessionId);
+    return sessionUsage(this.deps.store, sessionId, descriptor);
+  }
+
+  /** A JSON-serializable history: active-path messages, turns, inputs. No secrets. */
+  async exportSession(sessionId: string): Promise<AgentSessionExport> {
+    const { descriptor, chat } = await this.requireSession(sessionId);
+    return exportSession(this.deps.store, {
+      sessionId,
+      descriptor,
+      chatMetadata: chat.metadata,
+      exportedAt: this.deps.clock.nowIso(),
+    });
   }
 
   async answer(input: AnswerInput): Promise<AgentAnswerReceipt> {
@@ -470,6 +515,20 @@ export class AgentSessionService {
     const descriptor = readSessionDescriptor(chat?.metadata);
     if (!chat || !descriptor) throw this.notASession(sessionId);
     return { chat, descriptor, sessionId };
+  }
+
+  private async requireTurn(
+    sessionId: string,
+    turnId: string,
+  ): Promise<TaskRecord> {
+    await this.requireSession(sessionId);
+    const task = await this.deps.store.tasks.getTask(turnId);
+    if (!task || task.scopeId !== sessionId)
+      throw new RecordNotFoundError(
+        `Turn ${turnId} not found in ${sessionId}.`,
+        { sessionId, turnId },
+      );
+    return task;
   }
 
   private async activeTurn(sessionId: string): Promise<TaskRecord | undefined> {

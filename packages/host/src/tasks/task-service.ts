@@ -123,6 +123,17 @@ export class TaskService {
     await this.deps.taskRunner.resume(taskId);
   }
 
+  /** Resumable stop of a task: it parks `interrupted` and `resumeTask` continues it. */
+  async interruptTask(taskId: string): Promise<void> {
+    if (!this.deps.taskRunner.requestInterrupt) {
+      throw new AgentKitHostError(
+        "interrupt_unsupported",
+        "This task runner does not support interrupt.",
+      );
+    }
+    await this.deps.taskRunner.requestInterrupt(taskId);
+  }
+
   /**
    * Create a task and hand it to the queue.
    *

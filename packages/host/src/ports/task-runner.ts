@@ -68,6 +68,14 @@ export interface TaskRunner {
   requestCancel(taskId: string): Promise<void>;
 
   /**
+   * Ask the task to stop RESUMABLY: queued → `interrupted` outright; a running
+   * one has its signal aborted with `ExecutionInterruptedError` and the worker
+   * parks it `interrupted` (not terminal, no terminal event). `resume` continues
+   * the same task with a new attempt.
+   */
+  requestInterrupt?(taskId: string): Promise<void>;
+
+  /**
    * Startup pass: expire dead leases, end their attempts as `abandoned`,
    * reconcile interrupted applies by operation id, then re-enqueue or
    * dead-letter. Runs before any worker starts claiming.

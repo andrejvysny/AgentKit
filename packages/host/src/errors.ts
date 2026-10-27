@@ -392,3 +392,19 @@ export class SessionsUnavailableError extends NamedHostError {
     super("sessions_unavailable", message, details);
   }
 }
+
+/**
+ * The reason an execution's `AbortSignal` was aborted for a resumable
+ * interrupt, as opposed to a cancel.
+ *
+ * Used ONLY as an abort reason, never thrown to callers: a worker that sees
+ * `signal.reason instanceof ExecutionInterruptedError` parks the task as
+ * `interrupted` (same task, same event stream, resumable) instead of landing it
+ * terminal.
+ */
+export class ExecutionInterruptedError extends Error {
+  constructor(message = "execution interrupted") {
+    super(message);
+    this.name = "ExecutionInterruptedError";
+  }
+}

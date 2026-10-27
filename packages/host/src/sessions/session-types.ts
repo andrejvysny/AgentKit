@@ -109,3 +109,81 @@ export interface AnswerInput {
   answerId: string;
   response: unknown;
 }
+
+/** One `chat.turn` of a session, as {@link AgentSessionService.listTurns} reports it. */
+export interface AgentTurnSummary {
+  turnId: string;
+  status: TaskStatus;
+  /** Attempts made so far; an interrupted-and-resumed turn counts each one. */
+  attempts: number;
+  /** When the turn was enqueued. */
+  createdAt: string;
+  finishedAt?: string;
+  model?: string;
+  providerId?: string;
+  error?: string;
+}
+
+/** Provider-reported usage of one turn, summed over its settled requests. */
+export interface AgentTurnUsage {
+  turnId: string;
+  requests: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  /** Prompt tokens of the turn's newest request that reported any. */
+  lastPromptTokens?: number;
+}
+
+export interface AgentSessionUsage {
+  sessionId: string;
+  turns: AgentTurnUsage[];
+  totals: {
+    requests: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  /** Window the next request is budgeted against (descriptor, then model, then fallback). */
+  contextWindowTokens: number;
+  contextWindowSource: "descriptor" | "model" | "capabilities" | "fallback";
+  /** Provider-reported context fill of the newest request, when any reported. */
+  lastPromptTokens?: number;
+}
+
+/** One active-path message in an {@link AgentSessionExport}. */
+export interface AgentExportMessage {
+  id: string;
+  role: "user" | "assistant" | "tool" | "system";
+  content: unknown;
+  toolCalls?: unknown[];
+  toolCallId?: string;
+  runId?: string;
+  /** Only the allow-listed keys; see `EXPORT_METADATA_KEYS` in session-report.ts. */
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+/** A self-contained, JSON-serializable history of a session. */
+export interface AgentSessionExport {
+  format: "agentkit.session.export";
+  version: 1;
+  exportedAt: string;
+  sessionId: string;
+  descriptor: AgentSessionDescriptor;
+  execution?: SessionExecutionState;
+  messages: AgentExportMessage[];
+  turns: AgentTurnSummary[];
+  /** Every steer, follow-up and human request, approvals with status and answer. */
+  inputs: AgentInputRecord[];
+  /** Derived context summaries, when the store keeps them. */
+  summaries?: {
+    summaryId: string;
+    coversThroughMessageId: string;
+    firstKeptMessageId: string;
+    summary: string;
+    model: string;
+    providerId?: string;
+    createdAt: string;
+  }[];
+}
