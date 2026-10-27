@@ -121,6 +121,21 @@ calling. Its three pieces:
   (`{ runId, terminal, appendedMessages, iterations }`). It does not mutate
   its caller's `messages` array — it copies, appends, and hands back only
   what it appended, so the same history can be retried or run twice.
+- **`runAgentLoop()`** — the ONE model/tool loop `runChat()` is a frozen
+  facade over ([ADR 0015](adr/0015-unified-agent-runtime.md)), in
+  [`packages/core/src/runs/agent-loop.ts`](../packages/core/src/runs/agent-loop.ts).
+  Each iteration is a model step (`model-step.ts`: one provider request,
+  returning a typed `ModelStepOutcome`) and, when the model asked for tools, a
+  tool batch (`tool-step.ts`, invoking through `executeToolSafely` in
+  `tool-exec.ts`). It takes everything `runChat()` does plus ordered
+  lifecycle **hooks** (`loop-hooks.ts`): observers at run start, step start,
+  model response, tool result and settlement, and a `beforeToolCall` gate
+  that can only DENY — never rewrite arguments or grant anything; host
+  `ToolGuard`s still run inside `execute`, after it. Without hooks the event
+  stream is byte-identical to `runChat()`'s. A source-level architecture test
+  ([`packages/testing/tests/architecture.test.ts`](../packages/testing/tests/architecture.test.ts))
+  allowlists every provider-call, tool-invocation and loop-driver site, so a
+  second loop cannot appear unreviewed.
 
 `@agentkit/core` has no storage, no queue, no HTTP framework. Nothing in it
 survives a process restart; that is `@agentkit/host`'s job.

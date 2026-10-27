@@ -319,7 +319,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
 @@ -982,8 +933,6 @@
      input.ctx.signal.throwIfAborted();
      const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
-     const generator = runChat({
+     const generator = runAgentLoop({
 -      ...continuationRequest(input.providerContinuation),
 -      runContent: input.runContent,
        client: input.client,

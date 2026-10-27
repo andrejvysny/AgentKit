@@ -24,7 +24,8 @@ import {
   AiToolRegistry,
   createEventStamper,
   resolveToolLimits,
-  runChat,
+  runAgentLoop,
+  type AgentLoopHooks,
   type AiProviderClient,
   type AiRunEventDraft,
 } from "@agentkit/core";
@@ -224,6 +225,16 @@ export interface TurnRunnerDeps {
   logger?: Logger;
   maxToolIterations?: number;
   historyLimit?: number;
+  /**
+   * Ordered `runAgentLoop` hooks run on every pass of every turn (ADR 0015 §6):
+   * observers, plus a `beforeToolCall` gate that can only DENY. They never
+   * widen authority — `toolGuards` still run inside each tool's `execute`,
+   * after the gate — and their warnings land in the turn's durable log.
+   * Unset: passes run exactly as before, with no extra awaits or events.
+   */
+  loopHooks?: readonly AgentLoopHooks[];
+  /** Per-hook deadline for {@link loopHooks}. Default 5000 ms (core's). */
+  loopHookTimeoutMs?: number;
 }
 
 /**
@@ -948,7 +959,8 @@ export class TurnRunner implements TaskWorker {
   }
 
   /**
-   * One `runChat` invocation, with its events appended and projected.
+   * One `runAgentLoop` invocation (the loop `runChat` fronts), with its events
+   * appended and projected.
    *
    * `firstSeq` comes from the store rather than from a counter in this class:
    * several passes share a task id, and only the log knows where the last one
@@ -981,7 +993,7 @@ export class TurnRunner implements TaskWorker {
     );
     input.ctx.signal.throwIfAborted();
     const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
-    const generator = runChat({
+    const generator = runAgentLoop({
       ...continuationRequest(input.providerContinuation),
       runContent: input.runContent,
       client: input.client,
@@ -1003,6 +1015,12 @@ export class TurnRunner implements TaskWorker {
       ...(input.maxToolIterations === undefined
         ? {}
         : { maxToolIterations: input.maxToolIterations }),
+      ...(this.deps.loopHooks === undefined
+        ? {}
+        : { hooks: this.deps.loopHooks }),
+      ...(this.deps.loopHookTimeoutMs === undefined
+        ? {}
+        : { hookTimeoutMs: this.deps.loopHookTimeoutMs }),
     });
 
     let failureCode: string | undefined;
