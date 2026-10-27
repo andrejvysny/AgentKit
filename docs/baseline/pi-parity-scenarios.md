@@ -30,7 +30,7 @@ Status values:
 | S3 | Edit file with conflict detection | `packages/coding-agent/test/edit-tool-legacy-input.test.ts`, `file-mutation-queue.test.ts` | M4 | pinned (source) |
 | S4 | Run tests / bounded shell with timeout and teardown | `packages/coding-agent/test/exec.test.ts`, `bash-close-hang-windows.test.ts`; OneMind `pi-worker/shell-isolation.test.ts`, `bash-exploration.test.ts` | M4/M5 | pinned (source) |
 | S5 | Multi-tool turn, tool results balanced, parallel vs sequential | `packages/agent/test/agent-loop.test.ts` (`executeToolCalls*`), `packages/coding-agent/test/nested-tool-calls.test.ts` | M1 (loop), exists (`golden: tool-run`, `tool-cap-run`) | AgentKit (M1) |
-| S6 | Tool gated by host approval; denial fed back to model | OneMind `pi-worker/gate.test.ts` | M1 deny-only hook + existing `ToolGuard`; M5 durable approvals | AgentKit (M1/M5) |
+| S6 | Tool gated by host approval; denial fed back to model | OneMind `pi-worker/gate.test.ts` | `packages/host/src/sessions/human-answer.ts`, `packages/host/src/turn/approval-resume.ts`; `packages/host/tests/approval-resume.test.ts`, `examples/coding-agent/tests/acceptance.test.ts` | AgentKit (done) |
 | S7 | Follow-up turn after settlement | `packages/agent/test/agent.test.ts` (`followUp`) | M2 | AgentKit (M2); not a OneMind blocker |
 | S8 | Mid-run steering placed after the current tool batch | `packages/agent/test/agent.test.ts` (steering, `continue()` semantics) | M2 | AgentKit (M2); not a OneMind blocker |
 | S9 | Abort mid-stream / mid-tool; no post-cancel dispatch | `packages/agent/test/agent.test.ts`, `agent-loop.test.ts`; OneMind `pi-worker/worker.test.ts` | exists (`golden: cancelled-run`, `run-loop-cancellation*.test.ts`) | AgentKit (done) |
@@ -40,7 +40,9 @@ Status values:
 | S13 | Model change mid-session with continuation safety | `packages/coding-agent/test/agent-session-dynamic-provider.test.ts` | M2 (`setModel`) + existing continuation validation | AgentKit (M2) |
 | S14 | Retry on transient provider failure | `packages/coding-agent/test/agent-session-retry.test.ts` | exists (host retry / pass boundary) | AgentKit (done) |
 | S15 | Event stream fidelity for a UI (start / deltas / tool start-end / settled) | OneMind `pi-worker/events.test.ts`, `pi/parser.test.ts` | M1 event mapping (ADR 0015 §event mapping) | AgentKit (M1) |
-| S16 | End-to-end coding task: read → edit → test → review → follow-up → compact → stop → resume | composite of S2–S12 | M7 example + M8 side-by-side | BLOCKED (M6) |
+| S16 | End-to-end coding task: read → edit → test → review → follow-up → compact → stop → resume | composite of S2–S12 | `examples/coding-agent/tests/acceptance.test.ts` (real tools, real sqlite, scripted provider); the live-model half is M8 side-by-side | AgentKit (done, offline) |
+| S17 | Plan mode: reads allowed, writes refused finally until a human approves the plan | no Pi equivalent (Pi has no plan mode) | `packages/toolpacks-coding/src/guard.ts`, `packages/host/src/sessions/plan-mode.ts`; `packages/toolpacks-coding/tests/plan-flow.test.ts`, `packages/host/tests/plan-mode.test.ts` | AgentKit (done) |
+| S18 | Profile tool allowlist and role ceiling enforced by the host, not by prompt text | Pi: role is prompt text only | `packages/host/src/profiles/agent-profile.ts`, `packages/host/src/turn/registry-staging.ts`; `packages/host/tests/profiles.test.ts` | AgentKit (done) |
 
 ## Crash matrix (canonical page §12)
 
@@ -52,7 +54,7 @@ Every case requires explicit durable state, no lost authoritative event, and no 
 | C2 | Mid-stream | exists: `packages/runner-local/tests/e2e-vertical-slice.test.ts` slice D (the provider parks past the lease TTL, and a second runner recovers onto attempt 2) | AgentKit (done) |
 | C3 | After model reply, before durable log | M2 crash matrix | AgentKit (M2) |
 | C4 | Before tool call | M2 crash matrix | AgentKit (M2) |
-| C5 | After tool side effect, before receipt | M2 (records current at-least-once behaviour); M5 receipts | AgentKit (M2/M5) |
+| C5 | After tool side effect, before receipt | `packages/host/src/turn/side-effects.ts`, `packages/host/src/turn/history-reconcile.ts`; `packages/host/tests/side-effects.test.ts`, `packages/runner-local/tests/e2e-sessions-crash.test.ts` (C5/C5b), `examples/coding-agent/tests/acceptance.test.ts` (SIGKILL of a real child process) | AgentKit (done) |
 | C6 | While waiting for human input | M2 | AgentKit (M2) |
 | C7 | After compaction, before checkpoint | M3 | pinned (source) |
 | C8 | Application quit and OS kill | M2 (restart), M8 (packaged app) | AgentKit (M2/M8) |
@@ -68,5 +70,5 @@ Every case requires explicit durable state, no lost authoritative event, and no 
 | X5 | Shell injection, network and exfiltration | M5 (OS sandbox) | pinned (OneMind `pi-worker/shell-isolation.test.ts`) |
 | X6 | MCP tools misclassified as reads | M5 (reuse Code Mode A10) | open |
 | X7 | Tool cancellation and stale callbacks | M1 (no post-cancel dispatch) | AgentKit (M1) |
-| X8 | Permission mode / role inversion | M5/M7 | open |
+| X8 | Permission mode / role inversion | `packages/toolpacks-coding/src/guard.ts` (the ceiling is checked before the mode and its refusal carries no approval), `packages/host/src/profiles/agent-profile.ts`; `packages/toolpacks-coding/tests/guard.test.ts`, `packages/host/tests/profiles.test.ts` | AgentKit (done) |
 | X9 | A loop hook cannot widen authority | M1 (deny-only gate, ToolGuard stays final) | AgentKit (M1) |

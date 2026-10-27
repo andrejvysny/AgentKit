@@ -138,10 +138,16 @@ through a diff. Output is capped at 50 KB.
 | `ask` | allow | refuse `approval_required: <tool>` | refuse (same) |
 | `auto_edit` | allow | allow | refuse `approval_required: <tool>` |
 | `full_auto` | allow | allow | allow |
+| `plan` | allow | refuse FINAL | refuse FINAL |
 
 A role ceiling always wins (`role_ceiling: <role> may not use <class> tools (<tool>)`). The guard never inspects a
 command's text to approve it. `ask` cannot approve anything yet: durable approval arrives in M5, and until then
 `approval_required` is a plain refusal.
+
+**Arrived in M5** ([ADR 0019](0019-human-approval-plan-mode-and-side-effect-receipts.md)): `approval_required`
+refusals became approvable (a human can overrule them, bound to the exact call and its argument hash), `plan` was
+added as a mode whose write/exec refusals are final and whose only way out is a `submit_plan` the human approves, and
+the mode/role a session runs under became host-owned (`CodingPermissionAuthority`) rather than a constructor argument.
 
 ## Alternatives considered (rejected)
 
