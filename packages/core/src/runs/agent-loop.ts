@@ -11,6 +11,8 @@ import {
 } from "./loop-hooks.js";
 import { streamModelStep } from "./model-step.js";
 import type { RunChatInput, RunChatResult } from "./run-types.js";
+import type { AgentSteeringSource } from "./session-seams.js";
+import { applySteering } from "./steering-step.js";
 import { executeToolBatch } from "./tool-step.js";
 
 export interface AgentLoopInput extends RunChatInput {
@@ -18,8 +20,20 @@ export interface AgentLoopInput extends RunChatInput {
   hooks?: readonly AgentLoopHooks[];
   /** Per-call hook deadline; non-positive or non-finite disables it. */
   hookTimeoutMs?: number;
+  /**
+   * Durable user messages placed at step boundaries (ADR 0016 section 3).
+   * Absent: the loop never polls, so no extra awaits.
+   */
+  steering?: AgentSteeringSource;
+  /**
+   * Lets a tool pause the run for human input via `ctx.suspend` (ADR 0016
+   * section 5). Off: tools get no `suspend` and "suspended" is unreachable.
+   */
+  suspendable?: boolean;
 }
-export type AgentLoopResult = RunChatResult;
+export type AgentLoopResult = Omit<RunChatResult, "terminal"> & {
+  terminal: RunChatResult["terminal"] | "suspended";
+};
 
 const DEFAULT_MAX_TOOL_ITERATIONS = 4;
 const DEFAULT_MAX_TOOL_CALLS_PER_ITERATION = 8;
@@ -33,6 +47,12 @@ const DEFAULT_MAX_TOOL_CALLS_PER_ITERATION = 8;
  * made a run impossible to retry, fan out, or run twice from the same history —
  * the second attempt would start from a conversation the first one had rewritten.
  */
+export function runAgentLoop(
+  input: AgentLoopInput & { suspendable?: false },
+): AsyncGenerator<AiRunEvent, RunChatResult, unknown>;
+export function runAgentLoop(
+  input: AgentLoopInput,
+): AsyncGenerator<AiRunEvent, AgentLoopResult, unknown>;
 export function runAgentLoop(
   input: AgentLoopInput,
 ): AsyncGenerator<AiRunEvent, AgentLoopResult, unknown> {
@@ -109,6 +129,9 @@ async function* runAgentLoopUnchecked(
     appendedMessages: messages.slice(initialLength),
     iterations: iteration,
   });
+
+  // Steers placed so far; a source may redeliver an id it has not yet marked.
+  const appliedSteers = new Set<string>();
 
   const hooked = hasHooks(input);
   if (hooked) {
@@ -208,6 +231,25 @@ async function* runAgentLoopUnchecked(
         announcedToolCallIds: step.announcedToolCallIds,
       });
       if (outcome === "cancelled") return finish("cancelled");
+      // No terminal event: run.waiting was the last one the batch yielded.
+      if (outcome === "suspended") return finish("suspended");
+      // Steers are polled ONLY here: after tools ran and another model call
+      // follows. Not before step 1, after a final answer, or on the last
+      // iteration; leftovers stay pending and the host turns them into
+      // follow-ups at settlement. (Pi would keep going after a final answer;
+      // we do not, so the persisted history is exactly what the model saw.)
+      if (input.steering && i + 1 < maxIterations) {
+        yield* applySteering({
+          source: input.steering,
+          runId,
+          step: iteration + 1,
+          stamp,
+          messages,
+          applied: appliedSteers,
+          hookTimeoutMs: input.hookTimeoutMs,
+          signal: input.signal,
+        });
+      }
       // Loop again so the model can react to tool results.
       continue;
     }

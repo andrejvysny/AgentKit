@@ -12,5 +12,7 @@ export type { RunChatInput, RunChatResult } from "./run-types.js";
 export function runChat(
   input: RunChatInput,
 ): AsyncGenerator<AiRunEvent, RunChatResult, unknown> {
-  return runAgentLoop(input);
+  // `suspendable: false` selects the overload whose result cannot be
+  // "suspended": a non-suspendable loop never returns it.
+  return runAgentLoop({ ...input, suspendable: false });
 }

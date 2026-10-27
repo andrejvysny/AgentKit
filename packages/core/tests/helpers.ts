@@ -6,9 +6,9 @@ import type { RunChatResult } from "../src/runs/run-loop.js";
  * events and the return value. `for await` throws the return value away, which
  * is exactly the mistake this helper exists to prevent in tests.
  */
-export async function collectRun(
-  gen: AsyncGenerator<AiRunEvent, RunChatResult, unknown>,
-): Promise<{ events: AiRunEvent[]; result: RunChatResult }> {
+export async function collectRun<R = RunChatResult>(
+  gen: AsyncGenerator<AiRunEvent, R, unknown>,
+): Promise<{ events: AiRunEvent[]; result: R }> {
   const events: AiRunEvent[] = [];
   for (;;) {
     const next = await gen.next();

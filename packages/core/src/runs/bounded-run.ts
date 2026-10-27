@@ -3,6 +3,7 @@ import { AiToolRegistry } from "../tools/registry.js";
 import { createEventStamper } from "../events.js";
 import { newRunId, nowIso } from "../ids.js";
 import { ExecutionBudget, ExecutionBudgetError } from "./execution-budget.js";
+import type { AgentLoopResult } from "./agent-loop.js";
 import type { RunChatInput, RunChatResult } from "./run-types.js";
 import { boundedClient } from "./bounded-provider.js";
 
@@ -33,8 +34,8 @@ export async function* boundedRun(
   input: RunChatInput,
   run: (
     input: RunChatInput,
-  ) => AsyncGenerator<AiRunEvent, RunChatResult, unknown>,
-): AsyncGenerator<AiRunEvent, RunChatResult, unknown> {
+  ) => AsyncGenerator<AiRunEvent, AgentLoopResult, unknown>,
+): AsyncGenerator<AiRunEvent, AgentLoopResult, unknown> {
   const budget =
     input.executionBudget ??
     new ExecutionBudget(input.budgets, { signal: input.signal });
