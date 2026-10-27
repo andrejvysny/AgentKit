@@ -177,13 +177,22 @@ export class TreeTracker {
   constructor(
     private readonly rootPid: number,
     private readonly intervalMs = 100,
+    private readonly maxIntervalMs = 1000,
   ) {}
 
+  /**
+   * Fast while a command is young (that is when shells fork and detach), then
+   * backing off: one `ps` costs tens of ms, and a 10-minute build sampled at
+   * 100 ms would spend a large share of a core on watching itself.
+   */
   start(): void {
+    let delay = this.intervalMs;
     const tick = () => {
       if (this.stopped) return;
       void this.sample().finally(() => {
-        if (!this.stopped) this.timer = setTimeout(tick, this.intervalMs);
+        if (this.stopped) return;
+        this.timer = setTimeout(tick, delay);
+        delay = Math.min(this.maxIntervalMs, Math.ceil(delay * 1.25));
       });
     };
     tick();
