@@ -254,7 +254,12 @@ export type AiRunToolFailedEvent = Static<typeof AiRunToolFailedEventSchema>;
  *   `VerificationHook`) did not answer inside its deadline, so the turn went on
  *   WITHOUT what it would have contributed — no bindings, no system prompt, one
  *   contributor's tools missing. The turn is degraded, not failed, and the hook
- *   may still settle later; its answer is discarded.
+ *   may still settle later; its answer is discarded. Also core-emitted: a
+ *   `runAgentLoop` hook (ADR 0015 §6) that exceeded its deadline.
+ * - `hook_failed` — core-emitted: a `runAgentLoop` observer hook threw
+ *   (ADR 0015 §6); the run went on without it. Like `hook_timeout`, it is also
+ *   emitted by core loop hooks. The message names the hook, never the thrown
+ *   text.
  * - `empty_response`, `emulated_tool_call` — host-emitted. The runtime does not
  *   produce them, but hosts layering their own provider adapters on top of this
  *   contract do, so they are part of the shared vocabulary.
@@ -278,6 +283,7 @@ export type AiRunWarningCode =
   | "tool_late_result"
   | "retry_pass"
   | "hook_timeout"
+  | "hook_failed"
   | "empty_response"
   | "emulated_tool_call";
 
