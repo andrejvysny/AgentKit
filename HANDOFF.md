@@ -1,3 +1,5 @@
+> **Superseded (2026-10-27).** Historical record of the 2026-09-02 hardening tranche. Current status: Plane AGENTKIT-30..33 and [`docs/baseline/`](docs/baseline/m0-2026-10-27.md).
+
 # Handoff — AgentKit hardening tranche 2
 
 Session 2 · 2026-09-02

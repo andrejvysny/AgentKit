@@ -27,8 +27,8 @@ describe("golden traces", () => {
 
       it("stamps the CURRENT contractVersion on every event", () => {
         // Pinned to the live constant, not merely "some non-empty string": a
-        // contract bump that nobody re-recorded against must fail all five
-        // traces here, rather than waiting for the chat-only replay below to
+        // contract bump that nobody re-recorded against must fail every
+        // trace here, rather than waiting for the chat-only replay below to
         // be the single test that notices.
         const events = loadGoldenTrace(name);
         for (const e of events) {
@@ -42,8 +42,7 @@ describe("golden traces", () => {
   // run-loop and confirm each still produces the same (normalized) events as
   // its frozen trace. This is what would catch a run-loop change that
   // silently altered an event shape without anyone regenerating the golden
-  // traces — for all five scenarios (chat-only, tool-run, cancelled-run,
-  // failed-run, usage-run), not just chat-only.
+  // traces — for every scenario in GOLDEN_TRACE_NAMES, not just chat-only.
   for (const name of GOLDEN_TRACE_NAMES) {
     it(`replays ${name} live and matches the golden trace`, async () => {
       const events = await GOLDEN_SCENARIOS[name]();

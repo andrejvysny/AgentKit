@@ -1,3 +1,5 @@
+> **Superseded (2026-10-27).** Historical record of the 2026-09-02 hardening tranche. Current status: Plane AGENTKIT-30..33 and [`docs/baseline/`](docs/baseline/m0-2026-10-27.md).
+
 # TODO — hardening tranche 2 (plan: ~/.claude/plans/act-as-senior-software-linked-seal.md, ADR 0014, contract 0.4.0 → 0.5.0)
 
 Updated: 2026-09-02 (session 2)
