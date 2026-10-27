@@ -20,6 +20,7 @@ import type { TaskExecutionContext } from "../tasks/task-executor.js";
 import type { ResolvedHookTimeouts } from "./hook-deadline.js";
 import { isHookTimeout, withHookDeadline } from "./hook-deadline.js";
 import { reconcileOrphanToolCalls } from "./history-reconcile.js";
+import type { UncertainCall } from "./side-effects.js";
 import { orderMessagesForProvider } from "./message-order.js";
 import type { TurnRunnerDeps } from "./turn-runner.js";
 import { anchoredHistory, type HistoryPolicy } from "./anchored-history.js";
@@ -321,7 +322,11 @@ export async function assembleMessages(
   chatId: string,
   assistantMessageId: string,
   systemPrompt: string | null,
-  options?: { policy?: HistoryPolicy },
+  options?: {
+    policy?: HistoryPolicy;
+    /** Calls that started and never reported: reconciled as uncertain. */
+    uncertain?: ReadonlyMap<string, UncertainCall>;
+  },
 ): Promise<AiChatMessage[]> {
   return (
     await assembleMessagesWithIds(
@@ -350,6 +355,12 @@ export async function assembleMessagesWithIds(
     policy?: HistoryPolicy;
     /** Calls awaiting an approved execution: left dangling, not reconciled. */
     exceptToolCallIds?: ReadonlySet<string>;
+    /**
+     * Calls the durable log says STARTED and never reported: their synthetic
+     * results say so instead of claiming a clean failure (see
+     * `side-effects.ts`).
+     */
+    uncertain?: ReadonlyMap<string, UncertainCall>;
   },
 ): Promise<{ messages: AiChatMessage[]; recordIds: string[] }> {
   const records = await anchoredHistory(
@@ -432,6 +443,7 @@ export async function assembleMessagesWithIds(
   const reconciled = reconcileOrphanToolCalls(
     messages,
     options?.exceptToolCallIds,
+    options?.uncertain,
   );
   const recordIds: string[] = [];
   let lastId = "";

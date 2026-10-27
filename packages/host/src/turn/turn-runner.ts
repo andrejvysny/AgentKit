@@ -115,6 +115,15 @@ import {
 } from "./session-turn.js";
 import { resolveApprovedCalls } from "./approval-resume.js";
 import {
+  createMutatingToolClassifier,
+  createUncertainSideEffectGuard,
+  findUncertainCalls,
+  type UncertainCall,
+} from "./side-effects.js";
+
+/** How many unfinished runs of one chat a single turn may consult. */
+const UNCERTAIN_SCAN_LIMIT = 20;
+import {
   RETRY_MAX_TOOL_ITERATIONS,
   filterToolTurns,
   shouldRetryChatOnly,
@@ -168,6 +177,22 @@ export interface TurnRunnerDeps {
    * callable, exactly as before the port existed. See {@link ToolGuard}.
    */
   toolGuards?: ToolGuard[];
+  /**
+   * Names to treat as having side effects a rerun cannot be assumed to repeat
+   * safely, on top of every staged tool that declared `effect: "write"`. A host
+   * adds names here when a tool under-declares itself — an MCP bridge whose
+   * server does not mark its write tools is the case this exists for.
+   */
+  mutatingToolNames?: readonly string[];
+  /** Names exempt from side-effect reconciliation, winning over the above. */
+  exemptMutatingToolNames?: readonly string[];
+  /**
+   * Turn off "started but never reported" reconciliation. Default on: a call the
+   * log shows began but never finished is reported to the model as uncertain,
+   * and cannot be re-issued identically without a human. Off restores the
+   * previous behaviour of calling every such gap a clean failure.
+   */
+  uncertainSideEffects?: boolean;
   context?: ContextProvider;
   runContent?: RunContentProvider;
   verification?: VerificationHook;
@@ -658,6 +683,17 @@ export class TurnRunner implements TaskWorker {
       toolCalling === "off"
         ? false
         : toolCalling === "on" || capabilities?.toolCalling !== false;
+    // Side-effect receipts (ADR 0019 part 3). The guard is staged BEFORE the
+    // durable log has been read, so it reads through holders this turn fills in
+    // below; a guard that froze an empty map here would freeze the feature off.
+    const uncertainHold: {
+      current: ReadonlyMap<string, UncertainCall>;
+      approved: ReadonlyMap<string, string> | undefined;
+    } = { current: new Map(), approved: undefined };
+    const uncertainSideEffectGuard = createUncertainSideEffectGuard({
+      uncertain: () => uncertainHold.current,
+      approvedCalls: () => uncertainHold.approved,
+    });
     const staged = stageTools
       ? await stageRegistry({
           contributors: this.deps.contributors,
@@ -674,9 +710,7 @@ export class TurnRunner implements TaskWorker {
           },
           hasPrimaryBinding,
           contributeTimeoutMs: this.hookTimeouts.contribute,
-          ...(this.deps.toolGuards === undefined
-            ? {}
-            : { guards: this.deps.toolGuards }),
+          guards: [...(this.deps.toolGuards ?? []), uncertainSideEffectGuard],
         })
       : {
           registry: new AiToolRegistry(),
@@ -770,6 +804,20 @@ export class TurnRunner implements TaskWorker {
     const exceptToolCallIds = new Set(
       approvals?.resumeCalls.map((call) => call.id),
     );
+    uncertainHold.approved = approvals?.approvedCalls;
+    // What the durable log says started and never reported. An attempt that died
+    // mid-tool leaves that mark, and nothing else in the store can tell a
+    // rerun-safe gap from one whose command may already have run.
+    uncertainHold.current =
+      this.deps.uncertainSideEffects === false
+        ? new Map()
+        : await this.findUncertainCalls(
+            store,
+            chatId,
+            task.taskId,
+            staged.registry,
+            ctx.signal,
+          );
     // Agent sessions replay full transcripts under a token budget and carry
     // project instructions; every other chat assembles exactly as before.
     const assembleHistory = async (
@@ -779,7 +827,9 @@ export class TurnRunner implements TaskWorker {
       prompt: string | null,
     ): Promise<AiChatMessage[]> =>
       session === undefined
-        ? assembleMessages(deps, historyChatId, anchorId, prompt)
+        ? assembleMessages(deps, historyChatId, anchorId, prompt, {
+            uncertain: uncertainHold.current,
+          })
         : this.assembleSessionHistory({
             ctx,
             session,
@@ -794,6 +844,7 @@ export class TurnRunner implements TaskWorker {
             client,
             limits,
             exceptToolCallIds,
+            uncertain: uncertainHold.current,
           });
     const assembled = await assembleHistory(
       this.deps,
@@ -1233,6 +1284,45 @@ export class TurnRunner implements TaskWorker {
    * asked is "is there budget left at all", and that question does not need the
    * estimate to be right to be worth asking.
    */
+  /**
+   * The calls of this turn's run, and of the unfinished runs in its scope, that
+   * the durable log shows having STARTED without ever reporting an outcome.
+   *
+   * The scope is bounded on purpose: this turn's task always, plus at most
+   * {@link UNCERTAIN_SCAN_LIMIT} not-cleanly-completed tasks of the same chat.
+   * Reading every historical run's log on every turn to ask a question only a
+   * crash can make non-empty is a tax no turn should pay.
+   */
+  private async findUncertainCalls(
+    store: AssistantStore,
+    chatId: string,
+    taskId: string,
+    registry: AiToolRegistry,
+    signal?: AbortSignal,
+  ): Promise<Map<string, UncertainCall>> {
+    const written = registry
+      .list()
+      .filter((tool) => tool.definition.effect === "write")
+      .map((tool) => tool.definition.name);
+    const isMutating = createMutatingToolClassifier({
+      stagedNames: written,
+      extra: this.deps.mutatingToolNames ?? [],
+      exempt: this.deps.exemptMutatingToolNames ?? [],
+      effectOf: (name) => registry.get(name)?.definition.effect,
+    });
+    const runIds = new Set<string>([taskId]);
+    const tasks = await store.tasks.listByScope(chatId).catch(() => []);
+    let scanned = 0;
+    for (const scoped of tasks) {
+      if (scanned >= UNCERTAIN_SCAN_LIMIT) break;
+      if (scoped.taskId === taskId || scoped.status === "completed") continue;
+      runIds.add(scoped.taskId);
+      scanned += 1;
+    }
+    signal?.throwIfAborted();
+    return findUncertainCalls(store, runIds, isMutating);
+  }
+
   private async authorizeUsage(input: PassInput): Promise<void> {
     const usage = this.deps.usage;
     if (usage === undefined) return;
@@ -1416,6 +1506,8 @@ export class TurnRunner implements TaskWorker {
     limits: AiToolLimits;
     /** Approved calls awaiting execution: not orphans, so no synthetic result. */
     exceptToolCallIds: ReadonlySet<string>;
+    /** Calls that started and never reported: reconciled as uncertain. */
+    uncertain: ReadonlyMap<string, UncertainCall>;
   }): Promise<AiChatMessage[]> {
     const { ctx, session } = input;
     let systemPrompt = input.systemPrompt;
@@ -1441,6 +1533,7 @@ export class TurnRunner implements TaskWorker {
       {
         policy: session.context?.policy ?? "transcript",
         exceptToolCallIds: input.exceptToolCallIds,
+        uncertain: input.uncertain,
       },
     );
 
