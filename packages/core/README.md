@@ -25,8 +25,12 @@ persisted event log, proposal review) is `@agentkit/host`'s job; see
   Ajv schema compiled once per tool at registration), `tools/limits.ts`
   (`resolveToolLimits`, UTF-8-safe `truncateString`/`truncateArray`),
   `tools/validation.ts` (`parseToolArguments`, Ajv error mapping).
-- `runs/` — `runChat()`, the run-loop primitive; `RunChatInput` /
-  `RunChatResult`.
+- `runs/` — `runChat()`, the frozen chat facade (`RunChatInput` /
+  `RunChatResult`), over `runAgentLoop()` — the single model/tool loop
+  (`agent-loop.ts` → `model-step.ts` + `tool-step.ts`), which additionally
+  accepts ordered lifecycle `hooks` (`loop-hooks.ts`: observers plus a
+  deny-only `beforeToolCall` gate) and `hookTimeoutMs`. See
+  [ADR 0015](../../docs/adr/0015-unified-agent-runtime.md).
 - `context/` — `context/resolver.ts`: pure filter helpers over
   `AiContextBinding[]` (`findPrimary`, `findByRefId`).
 - `prompts/` — `composeSystemPrompt()`.

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Unified agent runtime M0–M1
+
+Records the M0 baseline (`docs/baseline/`) and the unified-runtime decision
+([ADR 0015](docs/adr/0015-unified-agent-runtime.md)): one model/tool loop,
+one durable host. `runChat()` is now a frozen facade over `runAgentLoop()`,
+split into a model step and a tool batch with no behaviour change (golden
+traces byte-identical). `runAgentLoop()` adds ordered lifecycle hooks —
+observers plus a deny-only `beforeToolCall` gate (`tool_hook_denied`) — and
+`TurnRunnerDeps.loopHooks` bridges them into host turns, with `ToolGuard`
+still final. New `run.warning` code `hook_failed` (additive; contract stays
+0.7.0). A source-level architecture test pins the single loop and the
+absence of any Pi runtime dependency.
+
 ## 0.7.0 — Unpublished Responses candidate
 
 Adds an independently authored Responses provider using an injected trusted
