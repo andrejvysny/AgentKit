@@ -8,6 +8,7 @@ import type {
   AiToolResult,
 } from "@agentkit/contracts";
 import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
+import type { WorkspaceCoordinator } from "./coordination.js";
 import { CodingError } from "./errors.js";
 import type { CodingLimits } from "./limits.js";
 import { canonicalRoot } from "./paths.js";
@@ -23,6 +24,9 @@ export interface PackEnv {
   testCommands: readonly string[];
   platform: NodeJS.Platform;
   sandboxExecPath: string;
+  coordinator: WorkspaceCoordinator;
+  /** Longest a mutation waits for a lease before `workspace_busy`. */
+  coordinationWaitMs: number;
   /** Canonical workspace root (resolved lazily, cached). */
   root(): Promise<string>;
   /** Private scratch directory outside the workspace (created lazily). */
@@ -41,6 +45,8 @@ export interface EnvInit {
   testCommands: readonly string[];
   platform: NodeJS.Platform;
   sandboxExecPath: string;
+  coordinator: WorkspaceCoordinator;
+  coordinationWaitMs: number;
 }
 
 export function createEnv(init: EnvInit): PackEnv {
@@ -56,6 +62,8 @@ export function createEnv(init: EnvInit): PackEnv {
     testCommands: init.testCommands,
     platform: init.platform,
     sandboxExecPath: init.sandboxExecPath,
+    coordinator: init.coordinator,
+    coordinationWaitMs: init.coordinationWaitMs,
     root() {
       root ??= canonicalRoot(init.workspaceRoot);
       return root;

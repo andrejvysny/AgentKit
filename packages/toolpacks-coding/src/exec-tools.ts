@@ -40,7 +40,29 @@ export function sanitizedEnv(
   return env;
 }
 
+const SURVIVOR_RECHECK_MS = 2000;
+
+/** Pids from `pids` still alive after waiting up to `ms` for them to exit. */
+async function waitForExit(pids: number[], ms: number): Promise<number[]> {
+  let alive = pids;
+  const deadline = Date.now() + ms;
+  while (alive.length > 0) {
+    alive = alive.filter((pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false; // ESRCH (gone) or EPERM (not ours): not ours to wait on
+      }
+    });
+    if (alive.length === 0 || Date.now() >= deadline) break;
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  return alive;
+}
+
 interface ShellRequest {
+  tool: string;
   command: string;
   cwd: string | undefined;
   timeoutSec: number;
@@ -89,17 +111,39 @@ async function runShell(
         request.command,
       ]
     : ["-c", request.command];
-  const run = await runBounded({
-    file,
-    args,
-    cwd: cwd.path,
-    env: sanitizedEnv(base, scratch),
-    timeoutMs: request.timeoutSec * 1000,
+  // Every command may write, so every command takes the exclusive lease; it is
+  // held from before spawn until the process tree has been torn down (and, if
+  // survivors remain, until they are gone or a short re-check gives up).
+  const lease = await env.coordinator.acquireWorkspace({
+    root,
+    holder: {
+      ...(ctx.chatId !== undefined ? { chatId: ctx.chatId } : {}),
+      runId: ctx.runId,
+      ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
+      tool: request.tool,
+      label: request.command.slice(0, 200),
+    },
     signal: ctx.signal,
-    scratch,
-    logName: `command-${env.clock()}-${randomBytes(4).toString("hex")}.log`,
-    limits: env.limits,
+    maxWaitMs: env.coordinationWaitMs,
   });
+  let stragglers: number[] = [];
+  let run: Awaited<ReturnType<typeof runBounded>>;
+  try {
+    run = await runBounded({
+      file,
+      args,
+      cwd: cwd.path,
+      env: sanitizedEnv(base, scratch),
+      timeoutMs: request.timeoutSec * 1000,
+      signal: ctx.signal,
+      scratch,
+      logName: `command-${env.clock()}-${randomBytes(4).toString("hex")}.log`,
+      limits: env.limits,
+    });
+    stragglers = await waitForExit(run.teardown.survivors, SURVIVOR_RECHECK_MS);
+  } finally {
+    await lease.release();
+  }
   if (run.spawnError)
     throw new CodingError("spawn_failed", run.spawnError.slice(0, 500));
   const footer = run.timedOut
@@ -128,6 +172,11 @@ async function runShell(
       ...(sandboxed ? [] : ["sandbox is off: the command ran unconfined"]),
       ...(run.teardown.survivors.length > 0
         ? [`process_survivors: ${run.teardown.survivors.join(",")}`]
+        : []),
+      ...(stragglers.length > 0
+        ? [
+            `lease released while processes were still running: ${stragglers.join(",")}`,
+          ]
         : []),
     ],
     details: {
@@ -170,6 +219,7 @@ export function runCommandTool(env: PackEnv): AiTool {
     async (ctx, raw) => {
       const input = asRecord(raw);
       return runShell(env, ctx, {
+        tool: "run_command",
         command: reqString(input, "command", MAX_COMMAND_CHARS),
         cwd: optString(input, "cwd"),
         timeoutSec:
@@ -212,6 +262,7 @@ export function runTestsTool(env: PackEnv): AiTool {
           `"${command.slice(0, 200)}" is not a configured test command. Allowed: ${allowed}`,
         );
       return runShell(env, ctx, {
+        tool: "run_tests",
         command,
         cwd: undefined,
         timeoutSec: l.commandMaxTimeoutSec,

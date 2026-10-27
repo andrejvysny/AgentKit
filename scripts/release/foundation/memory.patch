@@ -68,7 +68,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      return doomed.length;
    }
  
-@@ -2166,7 +2152,6 @@ export class MemoryAssistantStore implements AssistantStore {
+@@ -2192,7 +2178,6 @@ export class MemoryAssistantStore implements AssistantStore {
    readonly providers = new MemoryProviderStore();
    readonly settings = new MemorySettingsStore();
    readonly outbox: MemoryOutboxStore;
@@ -76,7 +76,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
  
    /** The FIFO {@link transaction} and `claimNext` queue on — one unit of work at a time. */
    private readonly gate: MemoryTxGate;
-@@ -2177,11 +2162,8 @@ export class MemoryAssistantStore implements AssistantStore {
+@@ -2203,11 +2188,8 @@ export class MemoryAssistantStore implements AssistantStore {
      this.gate = new MemoryTxGate(
        options.transactionGateTimeoutMs ?? DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
      );
@@ -90,7 +90,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      );
      this.rawTasks = new MemoryTaskStore(
        clock,
-@@ -2189,7 +2171,6 @@ export class MemoryAssistantStore implements AssistantStore {
+@@ -2215,7 +2197,6 @@ export class MemoryAssistantStore implements AssistantStore {
        options.leaseTtlMs,
        options,
        this.gate,
@@ -98,7 +98,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      );
      const fencedWrites = new Set([
        "createTask",
-@@ -2233,18 +2214,6 @@ export class MemoryAssistantStore implements AssistantStore {
+@@ -2260,18 +2241,6 @@ export class MemoryAssistantStore implements AssistantStore {
        },
      });
      this.proposals = new MemoryProposalStore(clock);
@@ -117,7 +117,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      this.outbox = new MemoryOutboxStore(
        clock,
        options.outboxClaimVisibilityMs,
-@@ -2303,9 +2272,6 @@ export class MemoryAssistantStore implements AssistantStore {
+@@ -2330,9 +2299,6 @@ export class MemoryAssistantStore implements AssistantStore {
        providers: this.providers,
        settings: this.settings,
        outbox: this.outbox,

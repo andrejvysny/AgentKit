@@ -26,6 +26,7 @@ export * from "./tools/validation.js";
 // Runs
 export * from "./runs/agent-loop.js";
 export * from "./runs/loop-hooks.js";
+export * from "./runs/provider-retry.js";
 export * from "./runs/run-loop.js";
 export * from "./runs/session-seams.js";
 

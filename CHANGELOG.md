@@ -2,6 +2,18 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**Coding tool pack refuses lost updates.** `@agentkit/toolpacks-coding`:
+
+- `edit_file` and an overwriting `write_file` are checked against the version the session last read (`read_file`
+  records it per `chatId`, with whether the read was whole); a mismatch is the new `file_changed`, an overwrite
+  without a whole-file read is `file_not_read`. New files are create-if-absent. The target is re-hashed and its
+  canonical path re-checked immediately before the atomic rename. `write_file` gains optional `expectedSha256`;
+  `edit_file`'s mismatch code `sha256_mismatch` is replaced by `file_changed`.
+- File mutations of one canonical file serialise across all packs in the process; every `run_command`/`run_tests`
+  holds an exclusive workspace lease. Reads never wait. Waits are capped (`coordinationWaitMs`, `workspace_busy`).
+  New `coordinator` option, `createInProcessWorkspaceCoordinator`, `createLockDirWorkspaceCoordinator`
+  (cross-process, stale-pid and pid-reuse recovery), `CoordinatorObserver`.
+
 **One interrupt API, OneMind runtime fixes upstreamed.** The OneMind candidate patches `onemind.4`–`onemind.10` are
 now in source, merged with the M7 resumable interrupt.
 
@@ -16,6 +28,14 @@ now in source, merged with the M7 resumable interrupt.
 - Responses: SIWC error recovery classification, inert `response.metadata` events, and account-profile empty terminal
   output recovered from completed output items.
 
+**Opt-in provider retry.** `RunChatInput.providerRetry` (`ProviderRetryPolicy`: `maxAttempts` 1..6, `baseDelayMs`,
+`maxDelayMs`, test seams `random`/`sleep`) retries a model request after a transient provider failure (`network_error`,
+`empty_body`, `incomplete_stream`, `provider_error`, HTTP 408/425/429/500/502/503/504/529, `service_unavailable`,
+`usage_limit`) only while nothing from that request was shown or acted on (no delta, reasoning delta, completed message
+or tool request). Exponential backoff with +-20% jitter, never switches provider; each retry emits a `run.warning`
+`provider_retry`; abort during backoff yields `run.cancelled`. `TurnRunnerDeps.providerRetry` enables it for main
+passes (the compaction summarizer is unchanged). Absent: behaviour and events are unchanged.
+
 **Host APIs for product coding agents.**
 
 - `PlanApprovalPolicy.grantedMode` may be a function `({ sessionId }) => string | Promise<string>`, resolved before the
@@ -26,6 +46,21 @@ now in source, merged with the M7 resumable interrupt.
   for future turns, validated like `createSession`.
 - `TurnRunnerDeps.untrustedProjectInstructions: "label" | "skip"` (default `label`): `skip` loads no project
   instructions for a session whose workspace is untrusted.
+
+**Standing approvals and shell command policy.**
+
+- `StandingApprovalPolicy` host port and `TurnRunnerDeps.standingApprovals`: a human can approve an exact call and
+  remember it for the session. `run.waiting` gains an optional `standing: { digest, label }` (absent events are
+  unchanged; Rust fixtures regenerated). `AgentSessionService.approve(..., { remember })`, `listApprovalGrants`,
+  `revokeApprovalGrant`; grants live in chat metadata `agentkit.session.approvals` (max 256), written in the answer's
+  transaction. A final refusal still wins; unreadable grants match nothing. `createSession` rejects a caller-supplied
+  `agentkit.session.approvals` metadata key.
+- `AgentSessionService.configure(sessionId, { workspaceTrusted })` changes the workspace trust flag for future turns.
+- `AgentSessionService.cancelQueuedInput(sessionId, inputId)` cancels one pending follow-up or steer (false when it is
+  no longer pending). A queued input converted into a turn now gets the turn id `turn:<inputId>`, like a sent one. A
+  steer sent while a call waited for approval is read right after the approved call runs, before the next request.
+- `@agentkit/toolpacks-coding`: `classifyShellCommand`, `createCodingStandingApprovals` and
+  `createHighRiskCommandGuard` (high-risk commands always need a fresh approval, even in `full_auto`).
 
 **Coding tool pack hardening** ([ADR 0018](docs/adr/0018-coding-tool-pack.md)).
 

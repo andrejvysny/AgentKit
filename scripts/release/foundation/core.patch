@@ -1,7 +1,7 @@
 diff --git a/packages/core/src/index.ts b/packages/core/src/index.ts
 --- a/packages/core/src/index.ts
 +++ b/packages/core/src/index.ts
-@@ -37,7 +37,5 @@ export * from "./providers/sse.js";
+@@ -38,7 +38,5 @@ export * from "./providers/sse.js";
  export * from "./providers/openai-compatible.js";
  
  export * from "./runs/execution-budget.js";
@@ -101,8 +101,8 @@ diff --git a/packages/core/src/runs/model-step.ts b/packages/core/src/runs/model
 -import type { AiChatRequest } from "../providers/client.js";
  import { dedupeToolCallIds } from "../tools/tool-calls.js";
  import { errorMessageOf, isAbortError } from "./errors.js";
- import type { RunChatInput } from "./run-types.js";
-@@ -20,12 +19,6 @@ export interface ModelStepContext {
+ import {
+@@ -26,12 +25,6 @@ export interface ModelStepContext {
    messages: readonly AiChatMessage[];
    toolDefinitions: AiToolDefinition[];
    stamp: EventStamper;
@@ -115,7 +115,7 @@ diff --git a/packages/core/src/runs/model-step.ts b/packages/core/src/runs/model
  }
  
  export type ModelStepOutcome =
-@@ -56,8 +49,6 @@ export async function* streamModelStep(
+@@ -109,8 +102,6 @@ async function* streamModelAttempt(
      messages,
      toolDefinitions,
      stamp,
@@ -124,7 +124,7 @@ diff --git a/packages/core/src/runs/model-step.ts b/packages/core/src/runs/model
    } = ctx;
    // Deltas are display-only; the turn's authoritative content + tool calls come
    // from run.message.completed (so non-streaming providers that emit a single
-@@ -82,8 +73,6 @@ export async function* streamModelStep(
+@@ -144,8 +135,6 @@ async function* streamModelAttempt(
    // as a raw rejection, leaving the run with no terminal event at all. Catch it
    // here and turn it into the one terminal event the contract promises.
    try {
@@ -133,7 +133,7 @@ diff --git a/packages/core/src/runs/model-step.ts b/packages/core/src/runs/model
      for await (const event of input.client.streamChat({
        runId,
        model: input.model,
-@@ -93,12 +82,6 @@ export async function* streamModelStep(
+@@ -155,12 +144,6 @@ async function* streamModelAttempt(
        maxOutputTokens: input.maxOutputTokens,
        reasoningEffort: input.reasoningEffort,
        signal: input.signal,
@@ -149,7 +149,7 @@ diff --git a/packages/core/src/runs/model-step.ts b/packages/core/src/runs/model
 diff --git a/packages/core/src/runs/run-types.ts b/packages/core/src/runs/run-types.ts
 --- a/packages/core/src/runs/run-types.ts
 +++ b/packages/core/src/runs/run-types.ts
-@@ -3,23 +3,11 @@ import type {
+@@ -3,24 +3,12 @@ import type {
    AiContextBinding,
    AiToolLimits,
  } from "@agentkit/contracts";
@@ -161,6 +161,7 @@ diff --git a/packages/core/src/runs/run-types.ts b/packages/core/src/runs/run-ty
 +import type { AiProviderClient, AiReasoningEffort } from "../providers/client.js";
  import type { AiToolRegistry } from "../tools/registry.js";
  import type { ExecutionBudget, ExecutionBudgets } from "./execution-budget.js";
+ import type { ProviderRetryPolicy } from "./provider-retry.js";
  
 -export interface RunChatInput
 -  extends Pick<

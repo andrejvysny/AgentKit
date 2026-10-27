@@ -42,6 +42,13 @@ export interface AgentSuspendRequest {
    * can see what was really being requested; the host never treats it as granted.
    */
   requestedMode?: string;
+  /**
+   * Approval only: this call may be covered by a durable, session-scoped
+   * standing approval. `digest` is the host-computed key the host will store if
+   * the human chooses to remember the approval; `label` is what they are shown.
+   * Recorded on the request, never obeyed by the loop.
+   */
+  standing?: { digest: string; label: string };
 }
 
 /** Deterministic, so a restarted attempt derives the same id for the same call. */

@@ -16,7 +16,16 @@ import type {
   ToolGuardContext,
   ToolGuardVerdict,
 } from "../ports/tool-guard.js";
+import type { AssistantStore } from "../ports/assistant-store.js";
+import type {
+  StandingApprovalKey,
+  StandingApprovalPolicy,
+} from "../ports/standing-approval.js";
 import { argsSha256Of } from "../sessions/hash.js";
+import {
+  MAX_STANDING_APPROVAL_LABEL,
+  findActiveGrant,
+} from "../sessions/standing-approvals.js";
 import { isHookTimeout, withHookDeadline } from "./hook-deadline.js";
 
 export interface StageRegistryInput {
@@ -46,6 +55,12 @@ export interface StageRegistryInput {
    * A profile enforced only by prompt text is a profile that says nothing.
    */
   allowedToolNames?: ReadonlySet<string>;
+  /**
+   * Durable, session-scoped "approved this exact call before" memory. Absent —
+   * the default — every approvable refusal asks, exactly as before it existed.
+   * The store is read fresh on every call that reaches it, never cached.
+   */
+  standing?: { policy: StandingApprovalPolicy; store: AssistantStore };
 }
 
 /** The staged tool set: the registry the run loop uses, plus who owns what. */
@@ -210,7 +225,7 @@ export async function stageRegistry(
     };
     if (!(await isVisible(guards, guardCtx, input.ctx))) continue;
     try {
-      registry.register(guarded(tool, guards, guardCtx));
+      registry.register(guarded(tool, guards, guardCtx, input.standing));
       namespaces.set(tool.definition.name, namespace);
     } catch (err) {
       // A name collision or an uncompilable input schema disqualifies ONE tool;
@@ -373,6 +388,7 @@ function guarded(
   tool: AiTool,
   guards: readonly ToolGuard[],
   guardCtx: ToolGuardContext,
+  standing?: StageRegistryInput["standing"],
 ): AiTool {
   const gates = guards.filter((guard) => guard.canExecute !== undefined);
   if (gates.length === 0) return tool;
@@ -435,14 +451,27 @@ function guarded(
         const granted = ctx.metadata?.["approvedCalls"] as
           | ReadonlyMap<string, string>
           | undefined;
-        if (
+        const spendable =
           toolCallId !== undefined &&
           granted?.get(toolCallId) === argsSha256 &&
-          !consumed.has(toolCallId)
-        ) {
+          !consumed.has(toolCallId);
+        // Asked only after the one-use approval has failed, and only for calls
+        // that reached here through approvable refusals (denial wins above).
+        const key: StandingApprovalKey | null =
+          !spendable && standing !== undefined
+            ? await standingKeyOf(standing, callCtx, approvable)
+            : null;
+        if (spendable) {
           // One use: a second execute of the same call id in this attempt
           // goes back to asking.
           consumed.add(toolCallId);
+        } else if (
+          standing !== undefined &&
+          key !== null &&
+          (await hasActiveGrant(standing.store, callCtx.chatId, key.digest))
+        ) {
+          // A remembered approval of this exact call: run it, as the one-use
+          // branch does.
         } else if (ctx.suspend) {
           ctx.suspend({
             prompt:
@@ -461,6 +490,9 @@ function guarded(
                     (r) => r.requestedMode !== undefined,
                   )!.requestedMode,
                 }),
+            ...(key === null
+              ? {}
+              : { standing: { digest: key.digest, label: key.label } }),
           });
           // The core discards a suspended call's result.
           return refusal(ctx, first.reason);
@@ -472,4 +504,48 @@ function guarded(
       return tool.execute(ctx, snapshot);
     },
   };
+}
+
+/**
+ * The standing key for a call, or null. A policy that THROWS, or answers with a
+ * malformed key, has not said "remember this": the call asks like any other.
+ */
+async function standingKeyOf(
+  standing: NonNullable<StageRegistryInput["standing"]>,
+  callCtx: ToolGuardContext,
+  approvable: readonly ApprovableRefusal[],
+): Promise<StandingApprovalKey | null> {
+  if (callCtx.chatId === undefined) return null;
+  try {
+    const key = await standing.policy.keyFor(
+      callCtx,
+      approvable.map((r) => ({ reason: r.reason })),
+    );
+    if (
+      key === null ||
+      !/^[0-9a-f]{64}$/.test(key.digest) ||
+      key.label === "" ||
+      key.label.length > MAX_STANDING_APPROVAL_LABEL
+    )
+      return null;
+    return key;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the chat's CURRENT metadata holds an active grant for this digest. */
+async function hasActiveGrant(
+  store: AssistantStore,
+  chatId: string | undefined,
+  digest: string,
+): Promise<boolean> {
+  if (chatId === undefined) return false;
+  try {
+    const chat = await store.conversations.getChat(chatId);
+    return findActiveGrant(chat?.metadata, digest) !== undefined;
+  } catch {
+    // An unreadable store has not allowed anything: ask the human.
+    return false;
+  }
 }

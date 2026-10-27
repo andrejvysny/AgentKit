@@ -1,8 +1,16 @@
 import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, lstat, open, rename, stat, unlink } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  lstat,
+  open,
+  rename,
+  stat,
+  unlink,
+} from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { CodingError } from "./errors.js";
+import { CodingError, fileCreatedElsewhereError } from "./errors.js";
 
 export function sha256(data: Buffer | string): string {
   return createHash("sha256").update(data).digest("hex");
@@ -86,11 +94,16 @@ export function looksBinary(buffer: Buffer): boolean {
   return buffer.subarray(0, 8192).includes(0);
 }
 
-/** Write via a temp file in the same directory, then rename over the target. */
+/**
+ * Write via a temp file in the same directory, then rename over the target.
+ * `beforeRename` runs after the temp file is durable and immediately before
+ * the rename; throwing from it aborts the write and removes the temp file.
+ */
 export async function atomicWrite(
   path: string,
   data: Buffer,
   label: string,
+  beforeRename?: () => Promise<void>,
 ): Promise<void> {
   const existing = await stat(path).catch(() => null);
   if (existing && !existing.isFile())
@@ -112,9 +125,46 @@ export async function atomicWrite(
       await handle.close();
     }
     if (existing) await chmod(temp, existing.mode & 0o7777);
+    await beforeRename?.();
     await rename(temp, path);
   } catch (error) {
     await unlink(temp).catch(() => undefined);
     throw error;
+  }
+}
+
+/**
+ * Create `path` only if it does not exist: write a temp file, then `link()` it
+ * into place (EEXIST when someone else got there first), then drop the temp.
+ */
+export async function createIfAbsent(
+  path: string,
+  data: Buffer,
+  label: string,
+): Promise<void> {
+  const temp = join(
+    dirname(path),
+    `.${basename(path)}.${randomBytes(6).toString("hex")}.tmp`,
+  );
+  try {
+    const handle = await open(
+      temp,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+      0o666,
+    );
+    try {
+      await handle.writeFile(data);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    try {
+      await link(temp, path);
+    } catch (error) {
+      if (errno(error) === "EEXIST") throw fileCreatedElsewhereError(label);
+      throw error;
+    }
+  } finally {
+    await unlink(temp).catch(() => undefined);
   }
 }

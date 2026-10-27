@@ -419,6 +419,44 @@ describe("clearQueue", () => {
   });
 });
 
+describe("cancelQueuedInput", () => {
+  it("cancels one queued input and leaves the rest queued", async () => {
+    const f = await setup();
+    await newSession(f);
+    const first = await turnOf(f, "s1", "q1");
+    await f.service.followUp("s1", { inputId: "fu-1", content: "q2" });
+    await f.service.followUp("s1", { inputId: "fu-2", content: "q3" });
+    expect(await f.service.cancelQueuedInput("s1", "fu-1")).toBe(true);
+    expect(await f.service.cancelQueuedInput("s1", "fu-1")).toBe(false);
+    expect((await f.inputs.getInput("fu-2"))?.status).toBe("pending");
+
+    await claimAndDrive(f, first.turnId);
+    expect((await f.inputs.getInput("fu-1"))?.status).toBe("cancelled");
+    expect((await f.inputs.getInput("fu-2"))?.status).toBe("converted");
+    // A converted input names its turn like a sent one: `turn:<inputId>`.
+    expect((await f.inputs.getInput("fu-2"))?.appliedTaskId).toBe("turn:fu-2");
+  });
+
+  it("refuses human requests, foreign sessions and unknown ids", async () => {
+    const f = await setup();
+    await newSession(f);
+    askScript(f);
+    const turn = await turnOf(f, "s1", "ask me");
+    await drive(f, turn.turnId);
+    const requestId = humanRequestId(turn.turnId, "call-1");
+    expect(await codeOf(f.service.cancelQueuedInput("s1", requestId))).toBe(
+      "not_found",
+    );
+    expect(await codeOf(f.service.cancelQueuedInput("s1", "nope"))).toBe(
+      "not_found",
+    );
+    expect(await codeOf(f.service.cancelQueuedInput("nope", "fu-1"))).toBe(
+      "session_not_found",
+    );
+    expect((await f.inputs.getInput(requestId))?.status).toBe("pending");
+  });
+});
+
 describe("configure", () => {
   it("updates skills and context for future turns only", async () => {
     const f = await setup();

@@ -10,6 +10,7 @@ import type {
 } from "../providers/client.js";
 import type { AiToolRegistry } from "../tools/registry.js";
 import type { ExecutionBudget, ExecutionBudgets } from "./execution-budget.js";
+import type { ProviderRetryPolicy } from "./provider-retry.js";
 
 export interface RunChatInput
   extends Pick<
@@ -51,6 +52,11 @@ export interface RunChatInput
    */
   defaultToolTimeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * Opt-in bounded retry of a model request after a transient provider failure
+   * that produced no visible output. Absent: behaviour and events unchanged.
+   */
+  providerRetry?: ProviderRetryPolicy;
   /** Override runId for deterministic tests. */
   runId?: string;
   /**

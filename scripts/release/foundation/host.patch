@@ -191,7 +191,7 @@ diff --git a/packages/host/src/turn/projection.ts b/packages/host/src/turn/proje
          // A new assistant turn supersedes any turn still waiting for its calls:
          // late `run.tool.requested` events belong to THIS turn, not the last one.
          delete state.pendingAssistantMessageId;
-@@ -523,7 +515,6 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
+@@ -526,7 +518,6 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
    return {
      createState(input: RunProjectionStateInput): RunProjectionState {
        return {
@@ -213,7 +213,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
  import { runWithSignal } from "./run-with-signal.js";
  import { publicErrorMessage } from "./error-message.js";
  import { fencedConversations } from "./fenced-conversations.js";
-@@ -731,15 +725,6 @@ export class TurnRunner implements TaskWorker {
+@@ -753,15 +747,6 @@ export class TurnRunner implements TaskWorker {
      const configuredProvider = await this.withSecret(provider);
      ctx.signal.throwIfAborted();
      const client = this.deps.providerFactory(configuredProvider);
@@ -229,7 +229,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
  
      const bindings = await this.resolveBindings(ctx, chatId);
      const hasPrimaryBinding = bindings.some(
-@@ -837,16 +822,13 @@ export class TurnRunner implements TaskWorker {
+@@ -867,16 +852,13 @@ export class TurnRunner implements TaskWorker {
            : [
                `## Agent profile: ${profile.label ?? profile.id}\n${profile.instructions}`,
              ]),
@@ -249,7 +249,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
        chatId,
        assistantMessageId,
        providerId: provider.id,
-@@ -950,7 +932,7 @@ export class TurnRunner implements TaskWorker {
+@@ -980,7 +962,7 @@ export class TurnRunner implements TaskWorker {
        assistantMessageId,
        systemPrompt,
      );
@@ -258,7 +258,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
        const systemIndex = assembled[0]?.role === "system" ? 1 : 0;
        assembled.splice(systemIndex, 0, ...selectedContent.messages);
      }
-@@ -961,20 +943,6 @@ export class TurnRunner implements TaskWorker {
+@@ -991,20 +973,6 @@ export class TurnRunner implements TaskWorker {
      const initialMessages = assembled.slice();
  
      const basePass = {
@@ -279,7 +279,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
        task,
        chatId,
        ctx,
-@@ -1028,7 +996,6 @@ export class TurnRunner implements TaskWorker {
+@@ -1058,7 +1026,6 @@ export class TurnRunner implements TaskWorker {
      let passesRun = 1;
  
      if (
@@ -287,7 +287,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
        shouldRetryChatOnly({ terminal, registryHadTools }) &&
        !ctx.signal.aborted &&
        state.toolCallIds.size === 0 &&
-@@ -1075,26 +1042,10 @@ export class TurnRunner implements TaskWorker {
+@@ -1105,26 +1072,10 @@ export class TurnRunner implements TaskWorker {
          "empty_response",
          "The model completed the turn without an answer; asking the original question once more.",
        );
@@ -315,7 +315,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
          registry: new AiToolRegistry(),
          maxToolIterations: RETRY_MAX_TOOL_ITERATIONS,
        });
-@@ -1311,8 +1262,6 @@ export class TurnRunner implements TaskWorker {
+@@ -1341,8 +1292,6 @@ export class TurnRunner implements TaskWorker {
      input.ctx.signal.throwIfAborted();
      const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
      const generator = runAgentLoop({
@@ -324,7 +324,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
        client: input.client,
        registry: input.registry,
        model: input.model,
-@@ -1363,11 +1312,6 @@ export class TurnRunner implements TaskWorker {
+@@ -1396,11 +1345,6 @@ export class TurnRunner implements TaskWorker {
      for (;;) {
        const next = await generator.next();
        if (next.done) {
@@ -336,7 +336,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
          return {
            terminal: next.value.terminal,
            appendedMessages: next.value.appendedMessages,
-@@ -1446,10 +1390,7 @@ export class TurnRunner implements TaskWorker {
+@@ -1479,10 +1423,7 @@ export class TurnRunner implements TaskWorker {
        chatId: input.chatId,
        providerId: input.providerId,
        model: input.model,
@@ -348,7 +348,7 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
      });
      if (decision.allowed) return;
  
-@@ -1956,13 +1897,9 @@ export class TurnRunner implements TaskWorker {
+@@ -2012,13 +1953,9 @@ export class TurnRunner implements TaskWorker {
      try {
        const chatId = ctx.task.payload.chatId;
        if (assistantMessageId !== undefined && typeof chatId === "string") {

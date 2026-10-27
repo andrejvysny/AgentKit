@@ -525,6 +525,23 @@ export const AiRunWaitingEventSchema = Type.Object({
           "Approval only: the privilege the call asked for, recorded so the human sees what was requested. Recording it grants nothing; the host decides what an approval means.",
       }),
     ),
+    standing: Type.Optional(
+      Type.Object(
+        {
+          digest: Type.String({
+            description:
+              "Host-computed key of the exact call a standing approval would cover.",
+          }),
+          label: Type.String({
+            description: "Human-readable summary of what would be remembered.",
+          }),
+        },
+        {
+          description:
+            "Approval only: the call may be remembered for the rest of the session. Recording it grants nothing.",
+        },
+      ),
+    ),
   }),
 });
 export type AiRunWaitingEvent = Static<typeof AiRunWaitingEventSchema>;

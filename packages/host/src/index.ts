@@ -60,6 +60,7 @@ export * from "./prompts/run-content.js";
 export * from "./sessions/descriptor.js";
 export * from "./sessions/hash.js";
 export * from "./sessions/plan-mode.js";
+export * from "./sessions/standing-approvals.js";
 export * from "./sessions/session-types.js";
 export * from "./sessions/agent-session-service.js";
 export * from "./sessions/user-input-tool.js";

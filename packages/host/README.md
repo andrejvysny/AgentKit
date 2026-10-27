@@ -230,6 +230,36 @@ cancelled, expired or already-resumed request is `answer_stale`. `fork` copies
 history and the descriptor but not pending inputs; `setModel` affects future
 turns only.
 
+### Standing approvals
+
+A human may approve an approvable tool call **and remember it** for the rest of
+the session. Opt in with `TurnRunnerDeps.standingApprovals`, a
+`StandingApprovalPolicy`: its `keyFor(ctx, refusals)` returns a
+`{ digest, label }` for a call that may be covered (the digest must fold in
+everything that makes repeating it safe) or `null` for one that never may. A
+policy that throws counts as `null`.
+
+- The `run.waiting` event (and the stored request content) then carries
+  `standing: { digest, label }`. Without a policy nothing changes, byte for byte.
+- `sessions.approve(requestId, answerId, note?, { remember: true })` (or
+  `answer({ response: { decision: "approve", remember: true } })`) writes a
+  `StandingApprovalGrant` into the chat metadata (`agentkit.session.approvals`,
+  max 256) in the answering transaction. `remember` with a denial, a non-boolean,
+  or on a request that offered no `standing` is `invalid_input`; a stale,
+  cancelled or lost-race answer never writes one. `remember` is part of the
+  response hash, so replaying an answer with another `remember` is
+  `answer_conflict`.
+- Matching happens in the guarded tool, AFTER every guard has answered and the
+  one-use approval has failed: a final refusal still wins, and only calls whose
+  refusals were all approvable are ever looked up. Grants are read fresh from the
+  store on every call. Unreadable grant data matches nothing and is never
+  overwritten.
+- `sessions.listApprovalGrants(sessionId)` (newest first, revoked included) and
+  `sessions.revokeApprovalGrant(sessionId, grantId)` (idempotent; running calls
+  are not interrupted).
+- `sessions.configure(sessionId, { workspaceTrusted })` flips the descriptor's
+  `workspace.trusted` for future turns; the root never changes.
+
 ### Context for session turns (ADR 0017)
 
 A session turn replays the full transcript of earlier turns (tool calls,
