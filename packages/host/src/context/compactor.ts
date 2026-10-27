@@ -47,6 +47,12 @@ export const TOOL_RESULT_MAX_CHARS = 2000;
 
 const READ_TOOLS: ReadonlySet<string> = new Set(["read_file", "code_search"]);
 const MODIFY_TOOLS: ReadonlySet<string> = new Set(["edit_file", "write_file"]);
+const COMMAND_TOOLS: ReadonlySet<string> = new Set([
+  "run_command",
+  "run_tests",
+]);
+const MAX_COMMANDS = 20;
+const MAX_COMMAND_CHARS = 200;
 
 export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
@@ -272,6 +278,32 @@ export function serializeConversation(
   return parts.join("\n\n");
 }
 
+/** Commands run by `run_command` / `run_tests`, in call order, each cut short. */
+export function extractCommands(messages: readonly AiChatMessage[]): string[] {
+  const commands: string[] = [];
+  for (const message of messages) {
+    for (const call of message.toolCalls ?? []) {
+      if (!COMMAND_TOOLS.has(call.name)) continue;
+      try {
+        const command = (
+          JSON.parse(call.argumentsJson) as { command?: unknown }
+        ).command;
+        if (typeof command === "string" && command !== "")
+          commands.push(command.slice(0, MAX_COMMAND_CHARS));
+      } catch {}
+    }
+  }
+  return commands;
+}
+
+const COMMANDS_BLOCK = /<commands-run>\n([\s\S]*?)\n<\/commands-run>/;
+
+/** The previous summary is the only place earlier commands survive. */
+function commandsOf(summary: string | undefined): string[] {
+  const block = summary === undefined ? null : COMMANDS_BLOCK.exec(summary);
+  return block?.[1] === undefined ? [] : block[1].split("\n");
+}
+
 export function extractFileDetails(messages: readonly AiChatMessage[]): {
   readFiles: string[];
   modifiedFiles: string[];
@@ -298,10 +330,13 @@ export function extractFileDetails(messages: readonly AiChatMessage[]): {
   };
 }
 
-function formatFileOperations(details: {
-  readFiles: string[];
-  modifiedFiles: string[];
-}): string {
+function formatFileOperations(
+  details: {
+    readFiles: string[];
+    modifiedFiles: string[];
+  },
+  commands: readonly string[],
+): string {
   const sections: string[] = [];
   if (details.readFiles.length > 0)
     sections.push(
@@ -311,6 +346,8 @@ function formatFileOperations(details: {
     sections.push(
       `<modified-files>\n${details.modifiedFiles.join("\n")}\n</modified-files>`,
     );
+  if (commands.length > 0)
+    sections.push(`<commands-run>\n${commands.join("\n")}\n</commands-run>`);
   return sections.length === 0 ? "" : `\n\n${sections.join("\n\n")}`;
 }
 
@@ -455,7 +492,11 @@ export async function compactSessionContext(
       .sort(),
     modifiedFiles: [...modified].sort(),
   };
-  const summary = `${text}${formatFileOperations(details)}`;
+  const commands = [
+    ...commandsOf(input.previous?.summary),
+    ...extractCommands(covered),
+  ].slice(-MAX_COMMANDS);
+  const summary = `${text}${formatFileOperations(details, commands)}`;
   const coveredAll = body.slice(0, keptFrom);
   const record: ContextSummaryRecord = {
     summaryId: input.summaryId,

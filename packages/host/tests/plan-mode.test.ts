@@ -334,6 +334,22 @@ describe("plan approval", () => {
     expect(state.waitingApproval?.toolCallId).toBe("call-1");
   });
 
+  it("keeps a parked approval through a refused compaction request", async () => {
+    const f = fixture();
+    const s = await createSession(f, "s1", "plan");
+    const { taskId, requestId } = await parkPlanRequest(f, s);
+    // Compaction runs on a turn's own pass; a live turn is refused, not changed.
+    await expect(f.service.compact(s)).rejects.toMatchObject({
+      code: "chat_busy",
+    });
+    const state = await f.service.getState(s);
+    expect(state.activeTurn?.status).toBe("waiting_approval");
+    expect(state.waitingApproval?.toolCallId).toBe("call-1");
+    const receipt = await f.service.approve(requestId, "ans-1");
+    expect(receipt.turnId).toBe(taskId);
+    expect(receipt.duplicate).toBe(false);
+  });
+
   it("without a policy wired, a plan answer is only a per-call approval", async () => {
     const f = fixture(null);
     const s = await createSession(f, "s1", "plan");

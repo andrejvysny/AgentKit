@@ -215,3 +215,24 @@ flag stays, so the next turn tries again.
   record, contiguous event seq), reuse without a second compaction, invalidation by branch switch, fork and edit,
   summarizer failure falling back to trimming, manual compaction and its flag, non-session chats unaffected.
 - `describeContextSummaryStoreConformance` on both adapters; `scripts/live/compaction-session.ts` (manual, real model).
+
+## Tool-result elision
+
+Compaction and trimming act only once the window is nearly full; until then a long coding session resends every old
+`read_file` and command output on every request. The provider view therefore elides large tool results from older
+turns, in `assembleSessionHistory` between assembly and `applySessionSummaries`, so compaction and the budget see the
+elided sizes.
+
+- A turn starts at every `user` message (steering included). Tool messages before the last `keepRecentTurns` (default
+  2) turns whose text exceeds `maxChars` (default 6000) become first 2000 + last 1000 characters around a marker saying
+  how many characters were elided and that the tool can be called again. Text parts of a parts-shaped result are cut the
+  same way; other parts, assistant/user/system messages, `toolCallId`, `toolCalls` and the current turn are never touched.
+- Canonical history is untouched and `recordIds` stay aligned (content replaced, message count unchanged), so summary
+  source hashes and branch invalidation are unaffected. No event is appended; the count is a debug log line.
+- Override with `context.toolResultElision: { keepRecentTurns?, maxChars? }`; `false` disables. A malformed value makes
+  the descriptor unreadable, like the other `context` options.
+- Summaries also keep what was executed: `run_command` / `run_tests` command strings (last 20, each at most 200
+  characters) are appended as a `<commands-run>` block and carried over from the previous summary.
+- A pending approval or question needs no special handling: it lives in the input store and the current turn, both
+  outside elision and kept by compaction. `compact()` is refused with `chat_busy` while such a turn is live; tests in
+  `context-compaction.test.ts` and `plan-mode.test.ts` pin this.

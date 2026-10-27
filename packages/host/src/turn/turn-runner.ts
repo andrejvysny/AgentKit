@@ -63,6 +63,10 @@ import {
 } from "../context/instructions.js";
 import { applySessionSummaries } from "../context/session-compaction.js";
 import {
+  elideStaleToolResults,
+  resolveToolResultElision,
+} from "../context/tool-result-elision.js";
+import {
   fitToBudget,
   resolveContextWindow,
   resolveReserveTokens,
@@ -1614,6 +1618,19 @@ export class TurnRunner implements TaskWorker {
       (sum, message) => sum + estimator.estimateMessage(message),
       0,
     );
+    const elision = resolveToolResultElision(
+      session.context?.toolResultElision,
+    );
+    const elided =
+      elision === undefined
+        ? undefined
+        : elideStaleToolResults(assembled.messages, elision);
+    if (elided !== undefined && elided.elided > 0)
+      this.deps.logger?.debug("elided stale tool results", {
+        chatId: input.chatId,
+        elided: elided.elided,
+        savedChars: elided.savedChars,
+      });
     const messages = await applySessionSummaries({
       store: this.deps.store,
       clock: this.deps.clock,
@@ -1626,7 +1643,7 @@ export class TurnRunner implements TaskWorker {
       providerId: input.providerId,
       limits: input.limits,
       signal: ctx.signal,
-      messages: assembled.messages,
+      messages: elided?.messages ?? assembled.messages,
       recordIds: assembled.recordIds,
       windowTokens: window.windowTokens,
       reserveTokens,

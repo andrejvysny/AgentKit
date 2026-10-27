@@ -13,6 +13,7 @@ import {
   UPDATE_SUMMARIZATION_PROMPT,
   applyValidSummary,
   compactSessionContext,
+  extractCommands,
   findCut,
   hashSource,
   serializeConversation,
@@ -151,6 +152,46 @@ describe("compactSessionContext", () => {
     expect(user).toContain("[Assistant tool calls]: read_file(path=");
     expect(user).not.toContain("q3");
     expect(user.endsWith(SUMMARIZATION_PROMPT)).toBe(true);
+  });
+
+  it("keeps executed commands in the summary, bounded", async () => {
+    const run = (id: string, name: string, command: string): AiChatMessage => ({
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id, name, argumentsJson: JSON.stringify({ command }) }],
+    });
+    const calls = [
+      run("r1", "run_command", "bun install"),
+      run("r2", "run_tests", "bun test"),
+      run("r3", "code_search", "ignored"),
+      run("r4", "run_command", "x".repeat(500)),
+    ];
+    expect(extractCommands(calls)).toEqual([
+      "bun install",
+      "bun test",
+      "x".repeat(200),
+    ]);
+
+    const { messages, recordIds } = transcript();
+    const withRuns = [
+      messages[0],
+      calls[0],
+      calls[1],
+      ...messages.slice(1),
+    ] as AiChatMessage[];
+    const outcome = await compactSessionContext(
+      baseInput(summarizer(), {
+        messages: withRuns,
+        recordIds: ["r1", "r2", ...recordIds],
+      }),
+    );
+    if (!outcome?.ok) throw new Error("expected a summary");
+    expect(outcome.record.summary).toContain(
+      "<commands-run>\nbun install\nbun test\n</commands-run>",
+    );
+    const plain = await compactSessionContext(baseInput(summarizer()));
+    if (!plain?.ok) throw new Error("expected a summary");
+    expect(plain.record.summary).not.toContain("<commands-run>");
   });
 
   it("returns undefined when only the current turn exists", async () => {
