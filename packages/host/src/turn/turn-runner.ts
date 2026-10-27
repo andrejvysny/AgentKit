@@ -61,6 +61,7 @@ import {
   loadProjectInstructions,
   type ProjectInstructionsSource,
 } from "../context/instructions.js";
+import { applySessionSummaries } from "../context/session-compaction.js";
 import {
   fitToBudget,
   resolveContextWindow,
@@ -93,6 +94,7 @@ import {
 } from "./hook-deadline.js";
 import {
   assembleMessages,
+  assembleMessagesWithIds,
   estimatePromptTokens,
   lastUserRequestOf,
   resolveAttachments,
@@ -771,6 +773,8 @@ export class TurnRunner implements TaskWorker {
             capabilities,
             registry,
             runContentMessages: selectedContent.messages,
+            client,
+            limits,
           });
     const assembled = await assembleHistory(
       this.deps,
@@ -1377,6 +1381,8 @@ export class TurnRunner implements TaskWorker {
     capabilities: AiProviderCapabilities | null;
     registry: AiToolRegistry;
     runContentMessages: readonly AiChatMessage[];
+    client: AiProviderClient;
+    limits: AiToolLimits;
   }): Promise<AiChatMessage[]> {
     const { ctx, session } = input;
     let systemPrompt = input.systemPrompt;
@@ -1394,7 +1400,7 @@ export class TurnRunner implements TaskWorker {
       if (instructions)
         systemPrompt = appendToSystemPrompt(systemPrompt, instructions.text);
     }
-    const messages = await assembleMessages(
+    const assembled = await assembleMessagesWithIds(
       this.deps,
       input.chatId,
       input.assistantMessageId,
@@ -1416,17 +1422,41 @@ export class TurnRunner implements TaskWorker {
       );
     }
     const estimator = this.deps.tokenEstimator ?? defaultTokenEstimator;
+    const reserveTokens = resolveReserveTokens(
+      window.windowTokens,
+      session.context?.reserveTokens,
+    );
+    const toolTokens = estimateTools(input.registry.listDefinitions());
+    const extraTokens = input.runContentMessages.reduce(
+      (sum, message) => sum + estimator.estimateMessage(message),
+      0,
+    );
+    const messages = await applySessionSummaries({
+      store: this.deps.store,
+      clock: this.deps.clock,
+      estimator,
+      session,
+      chatId: input.chatId,
+      taskId: ctx.task.taskId,
+      client: input.client,
+      model: input.model,
+      providerId: input.providerId,
+      limits: input.limits,
+      signal: ctx.signal,
+      messages: assembled.messages,
+      recordIds: assembled.recordIds,
+      windowTokens: window.windowTokens,
+      reserveTokens,
+      budgetTokens:
+        window.windowTokens - reserveTokens - toolTokens - extraTokens,
+      emitWarning: (code, message) => this.emitWarning(ctx, code, message),
+      appendEvent: (draft) => this.appendHostEvent(ctx, draft),
+    });
     const fit = fitToBudget(messages, {
       windowTokens: window.windowTokens,
-      reserveTokens: resolveReserveTokens(
-        window.windowTokens,
-        session.context?.reserveTokens,
-      ),
-      toolTokens: estimateTools(input.registry.listDefinitions()),
-      extraTokens: input.runContentMessages.reduce(
-        (sum, message) => sum + estimator.estimateMessage(message),
-        0,
-      ),
+      reserveTokens,
+      toolTokens,
+      extraTokens,
       estimator,
     });
     if (fit.overflow) {

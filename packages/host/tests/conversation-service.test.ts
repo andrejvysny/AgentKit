@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { ConversationService } from "../src/index.js";
+import {
+  ConversationService,
+  type ContextSummaryRecord,
+} from "../src/index.js";
+import { MemoryContextSummaryStore } from "../../adapters-memory/src/memory-context-summary-store.js";
 import {
   FakeAgentInputStore,
   FakeAssistantStore,
@@ -77,6 +81,39 @@ describe("ConversationService.deleteChat", () => {
 
     expect(await store.inputs.getInput(`in-${chat.id}`)).toBeUndefined();
     expect(await store.inputs.getInput("in-chat-other")).toBeDefined();
+  });
+
+  it("purges the session's context summaries, and only that session's", async () => {
+    const { store, service } = await setup();
+    const summaries = new MemoryContextSummaryStore({
+      withGate: async (operation) => operation(),
+    });
+    store.summaries = summaries;
+    const { chat } = await seedChat(store, "chat-summaries");
+    await seedChat(store, "chat-other");
+    for (const sessionId of [chat.id, "chat-other"]) {
+      const record: ContextSummaryRecord = {
+        summaryId: `sum-${sessionId}`,
+        sessionId,
+        coversThroughMessageId: "a",
+        firstKeptMessageId: "b",
+        summary: "s",
+        sourceHash: "h",
+        tokensBefore: 2,
+        tokensAfter: 1,
+        model: "m",
+        summarizerRevision: "agentkit-compaction-v1",
+        details: { readFiles: [], modifiedFiles: [] },
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+      await summaries.saveSummary(record);
+    }
+    await store.tasks.deleteByScope(chat.id);
+
+    await service.deleteChat(chat.id);
+
+    expect(await summaries.listSummaries(chat.id)).toEqual([]);
+    expect(await summaries.listSummaries("chat-other")).toHaveLength(1);
   });
 
   it("refuses with chat_busy while a task in the chat's scope is running, and deletes nothing", async () => {

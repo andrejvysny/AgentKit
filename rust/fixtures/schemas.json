@@ -1222,6 +1222,83 @@
     ],
     "type": "object"
   },
+  "AiRunContextCompactedEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "coveredMessages": {
+            "type": "number"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "const": "threshold",
+                "type": "string"
+              },
+              {
+                "const": "manual",
+                "type": "string"
+              }
+            ]
+          },
+          "summaryId": {
+            "type": "string"
+          },
+          "tokensAfter": {
+            "type": "number"
+          },
+          "tokensBefore": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "summaryId",
+          "tokensBefore",
+          "tokensAfter",
+          "coveredMessages",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.context.compacted",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
   "AiRunEventBaseSchema": {
     "properties": {
       "attemptId": {
@@ -1287,6 +1364,10 @@
           },
           {
             "const": "run.usage",
+            "type": "string"
+          },
+          {
+            "const": "run.context.compacted",
             "type": "string"
           },
           {
@@ -2065,6 +2146,83 @@
           },
           "data": {
             "properties": {
+              "coveredMessages": {
+                "type": "number"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "const": "threshold",
+                    "type": "string"
+                  },
+                  {
+                    "const": "manual",
+                    "type": "string"
+                  }
+                ]
+              },
+              "summaryId": {
+                "type": "string"
+              },
+              "tokensAfter": {
+                "type": "number"
+              },
+              "tokensBefore": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "summaryId",
+              "tokensBefore",
+              "tokensAfter",
+              "coveredMessages",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.context.compacted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
               "deficiencies": {
                 "items": {
                   "type": "string"
@@ -2471,6 +2629,10 @@
       },
       {
         "const": "run.usage",
+        "type": "string"
+      },
+      {
+        "const": "run.context.compacted",
         "type": "string"
       },
       {
@@ -6958,6 +7120,83 @@
           },
           "type": {
             "const": "run.usage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "coveredMessages": {
+                "type": "number"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "const": "threshold",
+                    "type": "string"
+                  },
+                  {
+                    "const": "manual",
+                    "type": "string"
+                  }
+                ]
+              },
+              "summaryId": {
+                "type": "string"
+              },
+              "tokensAfter": {
+                "type": "number"
+              },
+              "tokensBefore": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "summaryId",
+              "tokensBefore",
+              "tokensAfter",
+              "coveredMessages",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.context.compacted",
             "type": "string"
           }
         },

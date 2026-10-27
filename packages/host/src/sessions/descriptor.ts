@@ -1,5 +1,11 @@
 /** Chat metadata key holding the {@link AgentSessionDescriptor} (ADR 0016 §1). */
 export const SESSION_METADATA_KEY = "agentkit.session";
+/**
+ * Chat metadata key `AgentSessionService.compact` sets (an ISO timestamp); the
+ * next session turn compacts below the threshold and clears it (ADR 0017 part 2).
+ */
+export const COMPACT_REQUESTED_METADATA_KEY =
+  "agentkit.session.compactRequestedAt";
 
 /** What a chat records once it is an agent session. */
 export interface AgentSessionDescriptor {
@@ -23,6 +29,8 @@ export interface SessionContextOptions {
   windowTokens?: number;
   /** Tokens kept free for the reply. Default 16384, at most half the window. */
   reserveTokens?: number;
+  /** Newest tokens left uncompacted when summarizing. Default 20000. */
+  keepRecentTokens?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -99,11 +107,18 @@ function readContext(raw: unknown): SessionContextOptions | null | undefined {
     return null;
   const windowTokens = readPositiveInt(raw["windowTokens"]);
   const reserveTokens = readPositiveInt(raw["reserveTokens"]);
-  if (windowTokens === null || reserveTokens === null) return null;
+  const keepRecentTokens = readPositiveInt(raw["keepRecentTokens"]);
+  if (
+    windowTokens === null ||
+    reserveTokens === null ||
+    keepRecentTokens === null
+  )
+    return null;
   return {
     ...(policy === undefined ? {} : { policy }),
     ...(windowTokens === undefined ? {} : { windowTokens }),
     ...(reserveTokens === undefined ? {} : { reserveTokens }),
+    ...(keepRecentTokens === undefined ? {} : { keepRecentTokens }),
   };
 }
 

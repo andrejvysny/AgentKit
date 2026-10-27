@@ -98,6 +98,7 @@ export class ConversationService {
       const deletedTasks = await tx.tasks.deleteByScope(chatId);
       const deletedProposals = await tx.proposals.deleteByChat(chatId);
       if (tx.inputs) await tx.inputs.deleteSessionInputs(chatId);
+      if (tx.summaries) await tx.summaries.deleteSessionSummaries(chatId);
       this.deps.logger?.info("chat deleted", {
         chatId,
         deletedTasks,

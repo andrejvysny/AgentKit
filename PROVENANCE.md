@@ -19,7 +19,7 @@ is vendored.
 
 ## Third-party adaptations
 
-`packages/toolpacks-coding` adapts MIT-licensed code. Each adapted file starts with a header naming the upstream
+`packages/toolpacks-coding` and `packages/host/src/context/compactor.ts` adapt MIT-licensed code. Each adapted file starts with a header naming the upstream
 repository, path and commit, plus the upstream copyright line. Nothing was copied wholesale; each file is a
 selective, TypeScript-strict rewrite. Neither upstream repository was modified.
 
@@ -31,6 +31,9 @@ selective, TypeScript-strict rewrite. Neither upstream repository was modified.
 | `packages/toolpacks-coding/src/truncate.ts` | `packages/coding-agent/src/core/tools/truncate.ts` |
 | `packages/toolpacks-coding/src/mutation-queue.ts` | `packages/coding-agent/src/core/tools/file-mutation-queue.ts` |
 | `packages/toolpacks-coding/src/process.ts` | `packages/coding-agent/src/utils/shell.ts` (`killProcessTree`), `packages/coding-agent/src/core/tools/bash.ts` (timeout, tail truncation, full log) |
+| `packages/host/src/context/compactor.ts` (summarization and update prompts, cut-point rule) | `packages/coding-agent/src/core/compaction/compaction.ts` (`SUMMARIZATION_PROMPT`, `UPDATE_SUMMARIZATION_PROMPT`, `findCutPoint`) |
+| `packages/host/src/context/compactor.ts` (system prompt, conversation serialization, file-operation tracking) | `packages/coding-agent/src/core/compaction/utils.ts` (`SUMMARIZATION_SYSTEM_PROMPT`, `serializeConversation`, `extractFileOpsFromMessage`, `formatFileOperations`) |
+| `packages/core/src/context/token-estimator.ts` (chars/4 heuristic; constants only) | `packages/coding-agent/src/core/compaction/compaction.ts` (`estimateTokens`) |
 
 ### OneMind (`andrejvysny/OneMind`; Copyright (c) 2026 OneMind contributors; MIT)
 

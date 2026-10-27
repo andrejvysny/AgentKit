@@ -3,6 +3,7 @@ import { SCHEMA_V8, SCHEMA_VERSION } from "../schema.js";
 import { SCHEMA_V9_PROVIDER_CONTINUATIONS } from "../provider-continuation-schema.js";
 import { SCHEMA_V10_MESSAGE_ARCHIVES } from "../message-archive-schema.js";
 import { AGENT_INPUTS_TABLE_SQL } from "./agent-input-store.js";
+import { CONTEXT_SUMMARIES_TABLE_SQL } from "./context-summary-store.js";
 import { normalizeRow, type SqliteDatabase } from "./driver.js";
 
 export interface SqliteMigration {
@@ -25,6 +26,7 @@ const OPTIONAL_TABLES = {
   prompt_templates:
     "CREATE TABLE prompt_templates (id TEXT NOT NULL, revision TEXT NOT NULL, template TEXT NOT NULL, PRIMARY KEY(id, revision))",
   agent_inputs: AGENT_INPUTS_TABLE_SQL,
+  context_summaries: CONTEXT_SUMMARIES_TABLE_SQL,
 };
 
 function assertOptionalTables(db: SqliteDatabase): void {

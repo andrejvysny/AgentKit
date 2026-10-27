@@ -24,6 +24,7 @@ import {
   defaultClock,
   defaultIds,
   type AgentInputStore,
+  type ContextSummaryStore,
   type AssistantStore,
   type Clock,
   type ConversationStore,
@@ -47,6 +48,10 @@ import {
   ensureAgentInputTables,
   SqliteAgentInputStore,
 } from "./sqlite/agent-input-store.js";
+import {
+  ensureContextSummaryTables,
+  SqliteContextSummaryStore,
+} from "./sqlite/context-summary-store.js";
 import { SqliteConversationStore } from "./sqlite/conversation-store.js";
 import { SqliteOutboxStore } from "./sqlite/outbox-store.js";
 import { SqliteProposalStore } from "./sqlite/proposal-store.js";
@@ -190,6 +195,7 @@ export class SharedSqliteAssistantStore implements AssistantStore {
   readonly conversations: ConversationStore;
   readonly tasks: TaskStore;
   readonly inputs: AgentInputStore;
+  readonly summaries: ContextSummaryStore;
   readonly proposals: ProposalStore;
   readonly providers: ProviderStore;
   readonly settings: SettingsStore;
@@ -209,6 +215,8 @@ export class SharedSqliteAssistantStore implements AssistantStore {
     // Optional table: created on open, never a schema-version step.
     ensureAgentInputTables(db);
     this.inputs = new SqliteAgentInputStore(this.conn, clock);
+    ensureContextSummaryTables(db);
+    this.summaries = new SqliteContextSummaryStore(this.conn);
     // SECOND, IDENTICALLY-CONFIGURED INSTANCES rather than a mutable field on
     // the root ones: the token belongs to ONE transaction, and a field would
     // leak it to every other caller of `store.tasks` for as long as that
@@ -272,6 +280,7 @@ export class SharedSqliteAssistantStore implements AssistantStore {
     return {
       ...view,
       inputs: new SqliteAgentInputStore(this.conn, this.clock, owner),
+      summaries: new SqliteContextSummaryStore(this.conn, owner),
       transaction: <T>(nested: (tx: AssistantStore) => Promise<T>) =>
         this.conn.withAsyncTx((nestedOwner) => {
           // `nestedOwner` is `owner` on the flattened path and a fresh token
