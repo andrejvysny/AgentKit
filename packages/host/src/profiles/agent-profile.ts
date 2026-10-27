@@ -130,9 +130,12 @@ export const BUILT_IN_PROFILES: readonly AgentProfile[] = Object.freeze([
     kind: "chat",
     label: "General chat agent",
     instructions: CHAT_INSTRUCTIONS,
-    // No tools: a chat that quietly acquired a shell is a profile bug.
+    // No tools: a chat that quietly acquired a shell is a profile bug. The
+    // supervisor ceiling is the backstop for a host that contributes tools and
+    // forgets that this profile was supposed to have none.
     tools: [],
     permissionMode: "read_only",
+    role: "supervisor",
     limits: Object.freeze({ maxToolIterations: 1, historyLimit: 40 }),
     resources: Object.freeze({ projectInstructions: false }),
   },
@@ -204,6 +207,10 @@ export const BUILT_IN_PROFILES: readonly AgentProfile[] = Object.freeze([
     instructions: RESEARCH_INSTRUCTIONS,
     tools: Object.freeze([...EXPLORE, "run_command"]),
     permissionMode: "ask",
+    // Reviewer, not implementer: a research agent that lists no write tools is
+    // one careless profile edit away from having some, and the ceiling is what
+    // makes that a refusal rather than a pull request.
+    role: "reviewer",
     limits: Object.freeze({ maxToolIterations: 40, historyLimit: 300 }),
     resources: Object.freeze({ projectInstructions: true }),
   },
@@ -218,7 +225,12 @@ export const BUILT_IN_PROFILES: readonly AgentProfile[] = Object.freeze([
       "write_file",
       "run_command",
     ]),
-    permissionMode: "ask",
+    // The point of `automation` is that nobody is watching: `ask` would park
+    // every write on a human who never arrives. What stands in their place is
+    // the workspace confinement, the role ceiling and these limits — so a host
+    // schedules this profile on a workspace it has decided to trust.
+    permissionMode: "full_auto",
+    role: "implementer",
     limits: Object.freeze({
       maxToolIterations: 25,
       maxToolCallsPerIteration: 4,
@@ -355,17 +367,23 @@ export function effectiveLimits(
  * a mode the user set), then the profile, then the caller's fallback. The model
  * appears nowhere in that list, which is the point.
  */
-export function createProfilePermissionAuthority(deps: {
+export function createProfilePermissionAuthority<
+  M extends string = string,
+>(deps: {
   store: AssistantStore;
   profiles: ProfileRegistry;
-  fallbackMode?: string;
+  /**
+   * Not an inference site: a caller that passes a literal must not narrow the
+   * authority's whole mode type to that one string.
+   */
+  fallbackMode?: NoInfer<M>;
   fallbackRole?: AgentRole;
   resolveSessionId?: (ctx: {
     chatId?: string;
     runId?: string;
   }) => string | undefined | Promise<string | undefined>;
 }): {
-  modeOf(ctx: { chatId?: string; runId?: string }): Promise<string | undefined>;
+  modeOf(ctx: { chatId?: string; runId?: string }): Promise<M | undefined>;
   roleOf(ctx: {
     chatId?: string;
     runId?: string;
@@ -391,7 +409,12 @@ export function createProfilePermissionAuthority(deps: {
   return {
     async modeOf(ctx) {
       const { execution, profile } = await lookUp(ctx);
-      return execution?.mode ?? profile?.permissionMode ?? deps.fallbackMode;
+      // A profile's mode is a string, because profiles are pack-agnostic; the
+      // host that wires a pack to a profile is the one that knows which mode
+      // names that pack understands.
+      return (execution?.mode ??
+        profile?.permissionMode ??
+        deps.fallbackMode) as M | undefined;
     },
     async roleOf(ctx) {
       const { profile } = await lookUp(ctx);

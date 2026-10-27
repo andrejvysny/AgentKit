@@ -151,6 +151,12 @@ export function executionStateForGrant(
   nowIso: string,
   prior?: SessionExecutionState,
 ): SessionExecutionState {
+  if (grant.mode === PLAN_MODE)
+    throw new AgentKitHostError(
+      "invalid_input",
+      "a plan approval may not grant plan mode: it is the escalation out of it, not a destination.",
+      { grantedMode: grant.mode },
+    );
   return {
     version: 1,
     mode: grant.mode,
