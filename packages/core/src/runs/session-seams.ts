@@ -36,6 +36,12 @@ export interface AgentSuspendRequest {
   kind?: "input" | "approval";
   /** Approval only: sha-256 hex of the call's canonical JSON arguments. */
   argsSha256?: string;
+  /**
+   * Approval only: the privilege the call asked for (a plan asking for a
+   * permission mode, a command asking for a scope). It is RECORDED so the human
+   * can see what was really being requested; the host never treats it as granted.
+   */
+  requestedMode?: string;
 }
 
 /** Deterministic, so a restarted attempt derives the same id for the same call. */

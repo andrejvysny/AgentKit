@@ -179,6 +179,7 @@ export async function* executeToolBatch(
         expiresAt?: string;
         kind?: "input" | "approval";
         argsSha256?: string;
+        requestedMode?: string;
       }
     | undefined;
   // Cancellation must still answer the suspended call, or its tool_call_id
@@ -327,6 +328,9 @@ export async function* executeToolBatch(
             ...(request?.expiresAt ? { expiresAt: request.expiresAt } : {}),
             ...(request?.kind ? { kind: request.kind } : {}),
             ...(request?.argsSha256 ? { argsSha256: request.argsSha256 } : {}),
+            ...(request?.requestedMode
+              ? { requestedMode: request.requestedMode }
+              : {}),
           };
         }
       : undefined;
@@ -351,7 +355,7 @@ export async function* executeToolBatch(
     sealed = true;
 
     if (suspendRequest) {
-      const { prompt, expiresAt, kind, argsSha256 } =
+      const { prompt, expiresAt, kind, argsSha256, requestedMode } =
         suspendRequest as AgentSuspendRequest;
       const fail = (message: string, code: string) =>
         failTool(
@@ -386,6 +390,7 @@ export async function* executeToolBatch(
           ...(expiresAt ? { expiresAt } : {}),
           ...(kind ? { kind } : {}),
           ...(argsSha256 ? { argsSha256 } : {}),
+          ...(requestedMode ? { requestedMode } : {}),
         };
       }
       continue;
@@ -563,6 +568,9 @@ export async function* executeToolBatch(
         ...(suspension.expiresAt ? { expiresAt: suspension.expiresAt } : {}),
         ...(suspension.kind ? { kind: suspension.kind } : {}),
         ...(suspension.argsSha256 ? { argsSha256: suspension.argsSha256 } : {}),
+        ...(suspension.requestedMode
+          ? { requestedMode: suspension.requestedMode }
+          : {}),
       },
     });
     return "suspended";

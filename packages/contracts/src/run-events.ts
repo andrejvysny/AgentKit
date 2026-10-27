@@ -515,6 +515,12 @@ export const AiRunWaitingEventSchema = Type.Object({
           "Approval only: sha-256 hex of the call's canonical JSON arguments.",
       }),
     ),
+    requestedMode: Type.Optional(
+      Type.String({
+        description:
+          "Approval only: the privilege the call asked for, recorded so the human sees what was requested. Recording it grants nothing; the host decides what an approval means.",
+      }),
+    ),
   }),
 });
 export type AiRunWaitingEvent = Static<typeof AiRunWaitingEventSchema>;

@@ -118,7 +118,10 @@ export function createCodingPermissionGuard(
             return {
               allowed: false,
               reason: `plan_approval_required: ${name}`,
-              approval: { preview: planPreview(ctx.arguments) },
+              approval: {
+                preview: planPreview(ctx.arguments),
+                requestedMode: planRequestedMode(ctx.arguments),
+              },
             };
           return { allowed: true };
         }
@@ -137,6 +140,13 @@ export function createCodingPermissionGuard(
       };
     },
   };
+}
+
+/** The mode the plan asks for; recorded for the human, never obeyed. */
+function planRequestedMode(args: unknown): string | undefined {
+  if (typeof args !== "object" || args === null) return undefined;
+  const mode = (args as { mode?: unknown }).mode;
+  return typeof mode === "string" ? mode : undefined;
 }
 
 /** The text the human is asked to approve a plan on. */
