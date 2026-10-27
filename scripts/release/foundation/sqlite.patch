@@ -1,7 +1,7 @@
 diff --git a/packages/adapters-sqlite/src/shared-assistant-store.ts b/packages/adapters-sqlite/src/shared-assistant-store.ts
 --- a/packages/adapters-sqlite/src/shared-assistant-store.ts
 +++ b/packages/adapters-sqlite/src/shared-assistant-store.ts
-@@ -30,7 +30,6 @@
+@@ -32,7 +32,6 @@ import {
    type OutboxStore,
    type ProposalStore,
    type ProviderStore,
@@ -9,17 +9,17 @@ diff --git a/packages/adapters-sqlite/src/shared-assistant-store.ts b/packages/a
    type SettingsStore,
    type TaskAgingOptions,
    type TaskStore,
-@@ -46,7 +45,6 @@
+@@ -56,7 +55,6 @@ import { SqliteConversationStore } from "./sqlite/conversation-store.js";
  import { SqliteOutboxStore } from "./sqlite/outbox-store.js";
  import { SqliteProposalStore } from "./sqlite/proposal-store.js";
  import { SqliteProviderStore } from "./sqlite/provider-store.js";
 -import { SqliteProviderContinuationStore } from "./sqlite/provider-continuation-store.js";
  import { SqliteSettingsStore } from "./sqlite/settings-store.js";
  import { SqliteTaskStore } from "./sqlite/task-store.js";
-
-@@ -107,12 +105,7 @@
+ 
+@@ -117,12 +115,7 @@ export function writeGateFor(
  // ---------------------------------------------------------------------------
-
+ 
  /** {@link AssistantStore} minus `transaction` — the six sub-stores alone. */
 -type AssistantStoreStores = Omit<
 -  AssistantStore,
@@ -28,18 +28,18 @@ diff --git a/packages/adapters-sqlite/src/shared-assistant-store.ts b/packages/a
 -  continuations: ProviderContinuationStore;
 -};
 +type AssistantStoreStores = Omit<AssistantStore, "transaction">;
-
+ 
  export interface SqliteAssistantStoreOptions extends TaskAgingOptions {
    /** Defaults to {@link defaultClock} (real wall-clock). */
-@@ -187,7 +180,6 @@
+@@ -200,7 +193,6 @@ export class SharedSqliteAssistantStore implements AssistantStore {
    readonly providers: ProviderStore;
    readonly settings: SettingsStore;
    readonly outbox: OutboxStore;
 -  readonly continuations: ProviderContinuationStore;
-
+ 
    constructor(db: Database, options: SqliteAssistantStoreOptions = {}) {
      const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
-@@ -214,11 +206,6 @@
+@@ -233,11 +225,6 @@ export class SharedSqliteAssistantStore implements AssistantStore {
        ),
        proposals: new SqliteProposalStore(this.conn, clock, owner),
        providers: new SqliteProviderStore(this.conn, owner),
@@ -51,7 +51,7 @@ diff --git a/packages/adapters-sqlite/src/shared-assistant-store.ts b/packages/a
        settings: new SqliteSettingsStore(this.conn, owner),
        outbox: new SqliteOutboxStore(
          this.conn,
-@@ -233,7 +220,6 @@
+@@ -252,7 +239,6 @@ export class SharedSqliteAssistantStore implements AssistantStore {
      this.tasks = root.tasks;
      this.proposals = root.proposals;
      this.providers = root.providers;

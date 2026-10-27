@@ -1,26 +1,20 @@
-diff --git a/packages/agentkit/README.md b/packages/agentkit/README.md
---- a/packages/agentkit/README.md
-+++ b/packages/agentkit/README.md
-@@ -9,10 +9,11 @@
-
- ## Install
-
--The current source is the unpublished `0.7.0` Responses candidate. The independent
--`0.6.0` migration foundation candidate is projected reproducibly from the same Git
--source using reviewed exclusions and inverse patches. Install only an exact
--qualified artifact and verify its digest. No release tag was published here.
-+This artifact is the unpublished `0.6.0` migration foundation candidate,
-+projected from the current source without the Responses provider or private
-+continuation APIs. It retains schema 10, archive support, managed connectors,
-+skills and templates. Install only an exact qualified artifact and verify its
-+digest. No release tag was published here.
-
- No installable release tag was found in the 2026-10-06 audit. The earlier `0.5.0`
- source version was prepared metadata, not a published artifact. Install an exact
+diff --git a/docs/migration/openpcb.md b/docs/migration/openpcb.md
+--- a/docs/migration/openpcb.md
++++ b/docs/migration/openpcb.md
+@@ -94,7 +94,8 @@ version. For submit-time pinning, the trusted application must persist an immuta
+ provider registration per generation, submit its explicit ID and model, and retain it while a
+ run can resume. Renderer-supplied references must not select arbitrary vault entries. Validate
+ this adapter against OPENPCB-115's queued-run rotation/deletion fixtures. Responses clients also
+-freeze their trusted connection identity; see the [Responses protocol](../providers/responses.md).
++freeze their trusted connection identity; the separate Responses 0.7.0 track
++ships that protocol documentation.
+ Foundation does not require that adapter.
+ 
+ ## Provider and domain ports
 diff --git a/packages/adapters-sqlite/README.md b/packages/adapters-sqlite/README.md
 --- a/packages/adapters-sqlite/README.md
 +++ b/packages/adapters-sqlite/README.md
-@@ -59,16 +59,9 @@
+@@ -59,16 +59,9 @@ migration adds private `provider_run_scopes` and `provider_continuations` tables
  Original v8 files upgrade transactionally; fresh databases initialize the same
  immutable v8 baseline and apply that migration. Migrated table definitions are
  checked on reopen, so a version marker alone cannot authorize a foreign layout.
@@ -37,10 +31,10 @@ diff --git a/packages/adapters-sqlite/README.md b/packages/adapters-sqlite/READM
 +The v9 continuation tables remain reserved storage history in this foundation
 +artifact. The Responses provider and private continuation store APIs are absent;
 +retaining their DDL preserves the exact v8-to-v9-to-v10 migration chain.
-
+ 
  Version 8
  added `idx_messages_run ON messages(chat_id, run_id, depth, order_key)` — the
-@@ -136,9 +129,9 @@
+@@ -136,9 +129,9 @@ open transaction and every statement issued on it belongs to that one, so
  WRITES from other callers — a second `transaction()`, a worker's `claimNext`,
  an ordinary `updateChat`, and a `SqliteMcpServerConfigStore` sharing the handle
  — wait for it and then run in a transaction of their own rather than joining
@@ -50,28 +44,34 @@ diff --git a/packages/adapters-sqlite/README.md b/packages/adapters-sqlite/READM
 +one whose rollback would erase them. Durable task, event and projected-message
 +reads also wait for unrelated transactions to commit; transaction-owner views
 +can read their own writes.
-
+ 
  **The queue is FIFO across both kinds.** A transaction and a root write take a
  slot in the same queue when they are issued, and run in that order. Re-checking
-@@ -278,7 +271,7 @@
+@@ -278,7 +271,7 @@ v6 added chat lifecycle and full-text search:
  | `settings` (single row, `id = 1`) | `SettingsStore` |
  | `mcp_servers` | `McpServerConfigStore` (`@agentkit/mcp-client`) — served by the standalone `SqliteMcpServerConfigStore`, not by the aggregate. |
  | `outbox` | `OutboxStore` |
 -| `provider_run_scopes`, `provider_continuations` | Private `ProviderContinuationStore`; never REST DTOs. |
 +| `provider_run_scopes`, `provider_continuations` | Reserved v9 migration tables; private continuation APIs ship only in the Responses candidate. |
  | `fencing_counter` (single row) | *not a port record* — backs `TaskStore.acquireLease`'s store-global monotonic fencing token. |
-
+ 
  Notes:
-diff --git a/docs/migration/openpcb.md b/docs/migration/openpcb.md
---- a/docs/migration/openpcb.md
-+++ b/docs/migration/openpcb.md
-@@ -91,7 +91,8 @@
- provider registration per generation, submit its explicit ID and model, and retain it while a
- run can resume. Renderer-supplied references must not select arbitrary vault entries. Validate
- this adapter against OPENPCB-115's queued-run rotation/deletion fixtures. Responses clients also
--freeze their trusted connection identity; see the [Responses protocol](../providers/responses.md).
-+freeze their trusted connection identity; the separate Responses 0.7.0 track
-+ships that protocol documentation.
- Foundation does not require that adapter.
-
- ## Provider and domain ports
+diff --git a/packages/agentkit/README.md b/packages/agentkit/README.md
+--- a/packages/agentkit/README.md
++++ b/packages/agentkit/README.md
+@@ -9,10 +9,11 @@ right — one install, one version, explicit runtime entry points.
+ 
+ ## Install
+ 
+-The current source is the unpublished `0.7.0` Responses candidate. The independent
+-`0.6.0` migration foundation candidate is projected reproducibly from the same Git
+-source using reviewed exclusions and inverse patches. Install only an exact
+-qualified artifact and verify its digest. No release tag was published here.
++This artifact is the unpublished `0.6.0` migration foundation candidate,
++projected from the current source without the Responses provider or private
++continuation APIs. It retains schema 10, archive support, managed connectors,
++skills and templates. Install only an exact qualified artifact and verify its
++digest. No release tag was published here.
+ 
+ No installable release tag was found in the 2026-10-06 audit. The earlier `0.5.0`
+ source version was prepared metadata, not a published artifact. Install an exact

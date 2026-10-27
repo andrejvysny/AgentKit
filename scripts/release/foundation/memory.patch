@@ -1,17 +1,18 @@
 diff --git a/packages/adapters-memory/src/index.ts b/packages/adapters-memory/src/index.ts
 --- a/packages/adapters-memory/src/index.ts
 +++ b/packages/adapters-memory/src/index.ts
-@@ -9,6 +9,5 @@
+@@ -9,7 +9,6 @@
  export * from "./memory-assistant-store.js";
  export * from "./memory-mcp-server-config-store.js";
  export * from "./memory-secret-store.js";
 -export * from "./memory-provider-continuation-store.js";
  export * from "./memory-connection-store.js";
  export * from "./memory-prompt-template-store.js";
+ export * from "./memory-agent-input-store.js";
 diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/adapters-memory/src/memory-assistant-store.ts
 --- a/packages/adapters-memory/src/memory-assistant-store.ts
 +++ b/packages/adapters-memory/src/memory-assistant-store.ts
-@@ -28,7 +28,6 @@
+@@ -30,7 +30,6 @@ import type {
    AiProviderModel,
    TaskEventEnvelope,
  } from "@agentkit/contracts";
@@ -19,26 +20,26 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
  import {
    ACTION_ID_RELEASING_STATUSES,
    AgentKitHostError,
-@@ -415,7 +414,6 @@
+@@ -417,7 +416,6 @@ export class MemoryConversationStore implements ConversationStore {
      private readonly clock: Clock,
      private readonly ids: IdGenerator,
      private readonly checkFence?: (fence: RunWriteFence) => void,
 -    private readonly onDeleteChat?: (chatId: string) => void,
    ) {}
-
+ 
    private requireFence(fence: RunWriteFence): void {
-@@ -502,7 +500,6 @@
+@@ -504,7 +502,6 @@ export class MemoryConversationStore implements ConversationStore {
      this.messagesByChat.delete(chatId);
      this.orderKeys.delete(chatId);
      this.chats.delete(chatId);
 -    this.onDeleteChat?.(chatId);
    }
-
+ 
    async appendMessage(
-@@ -658,15 +655,6 @@
+@@ -660,15 +657,6 @@ export class MemoryConversationStore implements ConversationStore {
      return record ? copyMessage(record) : null;
    }
-
+ 
 -  /** Synchronous lookup keeps continuation validation and mutation in one tick. */
 -  messageChatIdOf(messageId: string): string | null {
 -    return this.messagesById.get(messageId)?.chatId ?? null;
@@ -51,7 +52,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
    async lastMessageOfRun(
      chatId: string,
      runId: string,
-@@ -1073,7 +1061,6 @@
+@@ -1075,7 +1063,6 @@ export class MemoryTaskStore implements TaskStore {
      private readonly gate: MemoryTxGate = new MemoryTxGate(
        DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
      ),
@@ -59,23 +60,23 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
    ) {
      this.aging = resolveTaskAging(aging);
    }
-@@ -1205,7 +1192,6 @@
+@@ -1207,7 +1194,6 @@ export class MemoryTaskStore implements TaskStore {
        this.eventIds.delete(task.taskId);
        this.tasks.delete(task.taskId);
      }
 -    this.onDeleteTasks?.();
      return doomed.length;
    }
-
-@@ -2162,7 +2148,6 @@
+ 
+@@ -2166,7 +2152,6 @@ export class MemoryAssistantStore implements AssistantStore {
    readonly providers = new MemoryProviderStore();
    readonly settings = new MemorySettingsStore();
    readonly outbox: MemoryOutboxStore;
 -  readonly continuations: MemoryProviderContinuationStore;
-
+ 
    /** The FIFO {@link transaction} and `claimNext` queue on — one unit of work at a time. */
    private readonly gate: MemoryTxGate;
-@@ -2173,11 +2158,8 @@
+@@ -2177,11 +2162,8 @@ export class MemoryAssistantStore implements AssistantStore {
      this.gate = new MemoryTxGate(
        options.transactionGateTimeoutMs ?? DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
      );
@@ -89,7 +90,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      );
      this.rawTasks = new MemoryTaskStore(
        clock,
-@@ -2185,7 +2167,6 @@
+@@ -2189,7 +2171,6 @@ export class MemoryAssistantStore implements AssistantStore {
        options.leaseTtlMs,
        options,
        this.gate,
@@ -97,7 +98,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      );
      const fencedWrites = new Set([
        "createTask",
-@@ -2229,18 +2210,6 @@
+@@ -2233,18 +2214,6 @@ export class MemoryAssistantStore implements AssistantStore {
        },
      });
      this.proposals = new MemoryProposalStore(clock);
@@ -116,7 +117,7 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      this.outbox = new MemoryOutboxStore(
        clock,
        options.outboxClaimVisibilityMs,
-@@ -2286,9 +2255,6 @@
+@@ -2303,9 +2272,6 @@ export class MemoryAssistantStore implements AssistantStore {
        providers: this.providers,
        settings: this.settings,
        outbox: this.outbox,
