@@ -67,6 +67,16 @@ class ParkedClient extends Recording {
   }
 }
 
+/** Never settles and never looks at its signal: only a race can end it. */
+class DeafClient extends Recording {
+  override streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
+    this.requests.push(input);
+    return (async function* () {
+      await new Promise<void>(() => {});
+    })();
+  }
+}
+
 const echo: AiTool = {
   definition: {
     name: "echo",
@@ -101,7 +111,7 @@ interface Options {
     reasoningEffort?: "low" | "high";
     contentSelection?: RunContentSelection;
   };
-  parked?: boolean;
+  parked?: boolean | "deaf";
   withBudgets?: boolean;
   projectInstructions?: ProjectInstructionsSource;
   runContent?: RunContentProvider;
@@ -123,7 +133,12 @@ async function run(options: Options) {
   mock.setScript(
     options.script ?? [{ steps: [{ kind: "text", content: "ok" }] }],
   );
-  const client = options.parked ? new ParkedClient(mock) : new Recording(mock);
+  const client =
+    options.parked === "deaf"
+      ? new DeafClient(mock)
+      : options.parked
+        ? new ParkedClient(mock)
+        : new Recording(mock);
   const runner = new TurnRunner({
     store: harness.store,
     taskRunner: harness.taskRunner,
@@ -274,6 +289,16 @@ describe("profile limits", () => {
         (e) => e.type === "run.failed" || e.type === "run.cancelled",
       );
       expect(terminal?.type).toBe("run.failed");
+      const task = await f.harness.store.tasks.getTask(f.taskId);
+      expect(task?.status).toBe("failed");
+    });
+
+    it(`attemptBudgetMs ends a provider that ignores its signal (host budgets: ${withBudgets})`, async () => {
+      const f = await run({
+        profile: profileWith({ limits: { attemptBudgetMs: 30 } }),
+        parked: "deaf",
+        withBudgets,
+      });
       const task = await f.harness.store.tasks.getTask(f.taskId);
       expect(task?.status).toBe("failed");
     });

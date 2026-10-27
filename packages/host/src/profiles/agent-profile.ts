@@ -336,10 +336,20 @@ export function validateProfile(profile: AgentProfile): AgentProfile {
         bad(`role reviewer may not list edit/write tools: ${over.join(", ")}`);
     }
   }
+  if (
+    profile.reasoningEffort !== undefined &&
+    !["minimal", "low", "medium", "high"].includes(profile.reasoningEffort)
+  )
+    bad(`reasoningEffort "${profile.reasoningEffort}" is not a known level`);
   if (profile.limits !== undefined) {
     for (const [key, value] of Object.entries(profile.limits))
-      if (value !== undefined && (!Number.isFinite(value) || value <= 0))
-        bad(`limits.${key} must be a positive number`);
+      if (value !== undefined && (!Number.isInteger(value) || value <= 0))
+        bad(`limits.${key} must be a positive integer`);
+    // setTimeout clamps anything above 2^31-1 ms to ~1 ms: a "very long"
+    // budget would fire at once.
+    const budgetMs = profile.limits.attemptBudgetMs;
+    if (budgetMs !== undefined && budgetMs > 2_147_483_647)
+      bad("limits.attemptBudgetMs must be at most 2147483647");
   }
   return profile;
 }
