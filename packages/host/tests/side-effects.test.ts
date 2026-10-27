@@ -89,6 +89,32 @@ describe("findUncertainCalls", () => {
     expect(uncertain.get("c1")?.argsSha256).toHaveLength(64);
   });
 
+  it("a call parked for approval is not uncertain; its resumed run is", async () => {
+    const parked = [
+      ["run.tool.requested", "c1", "run_command"],
+      ["run.tool.running", "c1", "run_command"],
+      ["run.waiting", "c1", "run_command"],
+    ] as EventSpec[];
+    const store = storeWith({
+      parked: events(parked),
+      resumed: events([...parked, ["run.tool.running", "c1", "run_command"]]),
+      rerun: events([
+        ["run.tool.running", "c2", "edit_file"],
+        ["run.tool.failed", "c2", "edit_file"],
+        ["run.tool.running", "c2", "edit_file"],
+      ]),
+    });
+    expect((await findUncertainCalls(store, ["parked"], isMutating)).size).toBe(
+      0,
+    );
+    expect([
+      ...(await findUncertainCalls(store, ["resumed"], isMutating)).keys(),
+    ]).toEqual(["c1"]);
+    expect([
+      ...(await findUncertainCalls(store, ["rerun"], isMutating)).keys(),
+    ]).toEqual(["c2"]);
+  });
+
   it("leaves a call that never started alone", async () => {
     const uncertain = await findUncertainCalls(
       storeWith({
