@@ -31,6 +31,14 @@ import {
   type AgentSessionDescriptor,
 } from "./descriptor.js";
 import { sha256Hex } from "./hash.js";
+import {
+  executionStateForMode,
+  planRequestOf,
+  readSessionExecution,
+  withSessionExecution,
+  type PlanApprovalPolicy,
+  type SessionExecutionState,
+} from "./plan-mode.js";
 import { answerHumanRequest } from "./human-answer.js";
 import type {
   AgentAnswerReceipt,
@@ -53,6 +61,13 @@ export interface AgentSessionServiceDeps {
   clock: Clock;
   ids: IdGenerator;
   logger?: Logger;
+  /**
+   * Plan-mode escalation policy (ADR 0019 part 2). When wired, an approval
+   * answer for one of `toolNames` writes the session's execution grant in the
+   * same transaction that re-admits the parked turn. Absent, plan approvals
+   * are never honored and a session in plan mode stays read-only.
+   */
+  planApproval?: PlanApprovalPolicy;
 }
 
 type QueueKind = "follow_up" | "steer";
@@ -102,22 +117,81 @@ export class AgentSessionService {
     const metadata = { ...input.metadata, [SESSION_METADATA_KEY]: raw };
     if (readSessionDescriptor(metadata) === undefined)
       invalid("profile.id must be a non-empty string.");
+    if (input.executionMode !== undefined && SESSION_METADATA_KEY in metadata)
+      // `withSessionExecution` keeps the descriptor; validate the mode first so
+      // a bad one cannot half-create the session.
+      executionStateForMode(input.executionMode, this.deps.clock.nowIso());
     const chat = await this.deps.store.conversations.createChat({
       ...(input.sessionId === undefined ? {} : { id: input.sessionId }),
       ...(input.title === undefined ? {} : { title: input.title }),
-      metadata,
+      metadata:
+        input.executionMode === undefined
+          ? metadata
+          : withSessionExecution(
+              metadata,
+              executionStateForMode(
+                input.executionMode,
+                this.deps.clock.nowIso(),
+              ),
+            ),
     });
     return this.getState(chat.id);
   }
 
+  /** The session's durable permission state, when one was ever set. */
+  async getExecution(
+    sessionId: string,
+  ): Promise<SessionExecutionState | undefined> {
+    const { chat } = await this.requireSession(sessionId);
+    return readSessionExecution(chat.metadata);
+  }
+
+  /**
+   * An explicit, persisted mode switch by the HOST or the user — never by the
+   * model. Entering `plan` drops any grant, so a session that was cleared to
+   * edit cannot read its way back into write access without a new approval.
+   */
+  async setExecutionMode(
+    sessionId: string,
+    mode: string,
+  ): Promise<SessionExecutionState> {
+    const now = this.deps.clock.nowIso();
+    return this.deps.store.transaction(async (tx) => {
+      const chat = await tx.conversations.getChat(sessionId);
+      if (chat === null)
+        throw new SessionNotFoundError(`Session not found: ${sessionId}`, {
+          sessionId,
+        });
+      if (readSessionDescriptor(chat.metadata) === undefined)
+        throw new SessionNotFoundError(
+          `Session ${sessionId} is not an agent session.`,
+          { sessionId },
+        );
+      const state = executionStateForMode(
+        mode,
+        now,
+        readSessionExecution(chat.metadata),
+      );
+      await tx.conversations.updateChat(sessionId, {
+        metadata: withSessionExecution(chat.metadata, state),
+      });
+      return state;
+    });
+  }
+
   async getState(sessionId: string): Promise<AgentSessionState> {
-    const { descriptor } = await this.requireSession(sessionId);
+    const { descriptor, chat } = await this.requireSession(sessionId);
     const active = await this.activeTurn(sessionId);
     const records = await this.inputs().listInputs({
       sessionId,
       statuses: ["pending"],
     });
     const waiting = records.find((record) => record.kind === "human_request");
+    const execution = readSessionExecution(chat.metadata);
+    const waitingPlan =
+      waiting !== undefined
+        ? planRequestOf(waiting, this.deps.planApproval)
+        : undefined;
     return {
       sessionId,
       descriptor,
@@ -129,6 +203,17 @@ export class AgentSessionService {
       ...(waiting && approvalOf(waiting)
         ? { waitingApproval: approvalOf(waiting) }
         : {}),
+      ...(waiting && waitingPlan
+        ? {
+            waitingPlan: {
+              requestId: waiting.inputId,
+              toolName:
+                (waiting.content as { toolName?: string }).toolName ?? "",
+              ...waitingPlan,
+            },
+          }
+        : {}),
+      ...(execution ? { execution } : {}),
     };
   }
 
@@ -249,7 +334,10 @@ export class AgentSessionService {
     return this.answer({
       requestId,
       answerId,
-      response: { decision: "approve", ...(note === undefined ? {} : { note }) },
+      response: {
+        decision: "approve",
+        ...(note === undefined ? {} : { note }),
+      },
     });
   }
 

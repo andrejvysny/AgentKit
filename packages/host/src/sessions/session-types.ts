@@ -2,6 +2,7 @@ import type { AiContentPart } from "@agentkit/contracts";
 import type { AgentInputRecord } from "../ports/agent-input-store.js";
 import type { TaskStatus } from "../ports/task-store.js";
 import type { AgentSessionDescriptor } from "./descriptor.js";
+import type { SessionExecutionState } from "./plan-mode.js";
 
 /** What a caller may send as a message body. */
 export type SessionContent = string | AiContentPart[];
@@ -23,6 +24,19 @@ export interface AgentSessionState {
     argsSha256: string;
     prompt: string;
   };
+  /**
+   * Set when the pending approval is a PLAN approval (ADR 0019 part 2): the
+   * session is blocked until a human approves the plan as a whole.
+   */
+  waitingPlan?: {
+    requestId: string;
+    toolName: string;
+    planDigest: string;
+    plan?: string;
+    requestedMode?: string;
+  };
+  /** The session's durable execution state, when one was ever set. */
+  execution?: SessionExecutionState;
 }
 
 export type AgentSendResult =
@@ -61,6 +75,11 @@ export interface CreateSessionInput {
   };
   /** Skills re-selected on every turn. */
   skills?: { id: string; revision: string }[];
+  /**
+   * Initial permission mode (e.g. `"plan"` to start read-only, or `"read_only"`
+   * for a constrained role). Absent means the host's configured default.
+   */
+  executionMode?: string;
   metadata?: Record<string, unknown>;
 }
 

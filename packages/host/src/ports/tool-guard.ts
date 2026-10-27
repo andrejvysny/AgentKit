@@ -6,8 +6,19 @@ export interface ToolGuardContext {
   arguments?: unknown;
   runId?: string;
   signal?: AbortSignal;
-  /** Absent when the question is chat-independent (`ToolCatalog.listTools()`). */
+  /**
+   * The chat the call is running for, at execution time.
+   *
+   * At STAGING this is the chat whose run is being staged; at `canExecute` it
+   * is re-read from the tool execution context, because a per-session policy
+   * ("this session is in plan mode") that judged the staging-time photograph
+   * would be judging a session it was not asked about.
+   */
   chatId?: string;
+  /** The run's write scope, at execution time (`TaskRecord.scopeId`). */
+  scopeId?: string;
+  /** The model's id for this call, at execution time. */
+  toolCallId?: string;
   /**
    * The run's resolved bindings — empty when there is no chat.
    *

@@ -11,6 +11,7 @@ import {
 } from "./fs-tools.js";
 import { CODING_NAMESPACE } from "./guard.js";
 import { type CodingLimits, DEFAULT_CODING_LIMITS } from "./limits.js";
+import { submitPlanTool } from "./plan-tool.js";
 import { SANDBOX_EXEC } from "./sandbox.js";
 import { codeSearchTool, findFilesTool, repoMapTool } from "./search-tools.js";
 import type { CodingToolPackOptions } from "./types.js";
@@ -26,6 +27,7 @@ export const CODING_TOOL_NAMES: readonly string[] = Object.freeze([
   "write_file",
   "run_command",
   "run_tests",
+  "submit_plan",
 ]);
 
 function resolveLimits(
@@ -75,6 +77,10 @@ export function createCodingToolPack(
         writeFileTool(env),
         runCommandTool(env),
         runTestsTool(env),
+        // Always offered: a session that enters plan mode needs the way out
+        // present in the same run that enters it. Outside plan mode the guard
+        // allows it and the tool reports, truthfully, what was granted.
+        submitPlanTool(env, options.permission),
       ];
     },
     async dispose() {

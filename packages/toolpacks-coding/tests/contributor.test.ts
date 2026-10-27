@@ -17,19 +17,20 @@ const EXPECTED: Record<string, [string, string]> = {
   write_file: ["write", "fs.write"],
   run_command: ["write", "process.exec"],
   run_tests: ["write", "process.exec"],
+  submit_plan: ["read", "plan"],
 };
 
 describe("createCodingToolPack", () => {
   const pack = createCodingToolPack({ workspace: { root: "/tmp" } });
   const limits = { profile: "small", maxBytes: 16384 } as const;
 
-  test("registers 10 tools under the valid, unreserved namespace coding", async () => {
+  test("registers 11 tools under the valid, unreserved namespace coding", async () => {
     expect(pack.namespace).toBe("coding");
     expect(TOOL_NAMESPACE_PATTERN.test(pack.namespace)).toBe(true);
     expect(RESERVED_TOOL_NAMESPACES).not.toContain(pack.namespace);
     const tools = await pack.contribute({ bindings: [], limits });
     expect(tools.map((t) => t.definition.name)).toEqual([...CODING_TOOL_NAMES]);
-    expect(tools).toHaveLength(10);
+    expect(tools).toHaveLength(11);
   });
 
   test("effect, capability, timeout, description and strict schemas", async () => {
@@ -46,7 +47,14 @@ describe("createCodingToolPack", () => {
     const registry = new AiToolRegistry();
     for (const tool of await pack.contribute({ bindings: [], limits }))
       registry.register(tool);
-    expect(registry.size()).toBe(10);
+    expect(registry.size()).toBe(11);
+    expect(registry.validateInput("submit_plan", { plan: "do it" })).toEqual(
+      [],
+    );
+    expect(
+      registry.validateInput("submit_plan", { plan: "do it", extra: 1 }),
+    ).not.toEqual([]);
+    expect(registry.validateInput("submit_plan", {})).not.toEqual([]);
     expect(registry.validateInput("read_file", { path: "a.ts" })).toEqual([]);
     expect(
       registry.validateInput("read_file", { path: "a.ts", x: 1 }),
