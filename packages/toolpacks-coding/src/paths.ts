@@ -40,7 +40,7 @@ const SENSITIVE_NAMES = new Set([
   ".pypirc",
   ".git-credentials",
   ".htpasswd",
-  "service-account.json",
+  ".pgpass",
 ]);
 /** A name that merely starts with one of these is sensitive (`id_rsa.pub`). */
 const SENSITIVE_PREFIXES = [
@@ -51,7 +51,10 @@ const SENSITIVE_PREFIXES = [
   "id_ed448",
   "credentials",
   "secrets",
+  "service-account",
 ];
+/** Terraform state holds provider credentials in clear (`x.tfstate.backup`). */
+const SENSITIVE_INFIXES = [".tfstate"];
 /** Committed `.env` templates document configuration; real env files do not. */
 const TEMPLATE_SUFFIXES = [
   ".example",
@@ -72,6 +75,7 @@ export const SENSITIVE_GIT_EXCLUDES: readonly string[] = [
     [...SENSITIVE_EXTENSIONS].map((ext) => `:(exclude,glob)**/*${ext}`),
     [...SENSITIVE_NAMES].map((name) => `:(exclude,glob)**/${name}`),
     SENSITIVE_PREFIXES.map((name) => `:(exclude,glob)**/${name}*`),
+    SENSITIVE_INFIXES.map((infix) => `:(exclude,glob)**/*${infix}*`),
     [":(exclude,glob)**/.env", ":(exclude,glob)**/.env.*"],
     [":(exclude,glob)**/*.env"],
   );
@@ -84,6 +88,7 @@ export function isSensitiveSegment(raw: string): boolean {
     return true;
   if (SENSITIVE_PREFIXES.some((prefix) => segment.startsWith(prefix)))
     return true;
+  if (SENSITIVE_INFIXES.some((infix) => segment.includes(infix))) return true;
   if (segment.startsWith(".env"))
     return !TEMPLATE_SUFFIXES.some((suffix) => segment.endsWith(suffix));
   if (segment.endsWith(".env")) return true;

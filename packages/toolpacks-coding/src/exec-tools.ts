@@ -8,7 +8,11 @@ import { confine } from "./paths.js";
 import { runBounded } from "./process.js";
 import { sandboxAvailable, sandboxProfile, toolchainPaths } from "./sandbox.js";
 
-const SECRET_NAME = /(TOKEN|SECRET|PASSWORD|KEY|CREDENTIAL)/i;
+const SECRET_NAME =
+  /(TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL|AUTH|COOKIE|SESSION|PRIVATE)/i;
+const AGENT_VARS = new Set(["SSH_AUTH_SOCK", "GPG_AGENT_INFO"]);
+/** A URL with userinfo (`scheme://user:pass@host`) carries a credential. */
+const CREDENTIAL_URL = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
 const MAX_COMMAND_CHARS = 16_384;
 
 /** Process env minus secrets; PATH, HOME, LANG and TERM always survive. */
@@ -18,7 +22,13 @@ export function sanitizedEnv(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(source)) {
-    if (value === undefined || SECRET_NAME.test(name)) continue;
+    if (
+      value === undefined ||
+      AGENT_VARS.has(name) ||
+      SECRET_NAME.test(name) ||
+      CREDENTIAL_URL.test(value)
+    )
+      continue;
     env[name] = value;
   }
   env["PATH"] = source["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -70,6 +80,7 @@ async function runShell(
           root,
           scratch,
           network: env.network,
+          allowGitWrites: env.allowGitWrites,
           readable: toolchainPaths(base),
         }),
         "/bin/bash",

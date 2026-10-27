@@ -172,6 +172,73 @@ describe("git_inspect", () => {
     execFileSync("rm", ["-f", script]);
   });
 
+  describe("repository-configured drivers never run", () => {
+    // git skips a clean filter when the index stat data is fresh, so the
+    // baseline touches the file to force the filter, as an attacker would.
+    async function trapped(setup: (root: string, marker: string) => void) {
+      const h = await repo();
+      const marker = join(h.root, "..", `drv-${Date.now()}-${Math.random()}`);
+      put(h.root, ".gitattributes", "* filter=x\n*.txt diff=y\n");
+      setup(h.root, marker);
+      put(h.root, "a.txt", "one\ntwo\nthree\n");
+      return { h, marker };
+    }
+    const touch = (m: string) => `touch '${m}'; cat`;
+
+    const cases: Array<[string, (root: string, marker: string) => void]> = [
+      [
+        "clean filter",
+        (root, m) => git(root, "config", "filter.x.clean", touch(m)),
+      ],
+      [
+        "smudge filter",
+        (root, m) => {
+          git(root, "config", "filter.x.smudge", touch(m));
+          git(root, "config", "filter.x.clean", "cat");
+        },
+      ],
+      [
+        "process filter",
+        (root, m) => git(root, "config", "filter.x.process", `touch '${m}'`),
+      ],
+      [
+        "textconv",
+        (root, m) => git(root, "config", "diff.y.textconv", touch(m)),
+      ],
+      [
+        "diff.external",
+        (root, m) => git(root, "config", "diff.external", `touch '${m}'; :`),
+      ],
+      [
+        "include.path",
+        (root, m) => {
+          put(root, "../inc.cfg", `[filter "x"]\n\tclean = ${touch(m)}\n`);
+          git(root, "config", "include.path", join(root, "..", "inc.cfg"));
+        },
+      ],
+    ];
+
+    for (const [name, setup] of cases) {
+      test(`${name} is neutralized for status, diff, show`, async () => {
+        const { h, marker } = await trapped(setup);
+        for (const command of ["status", "diff", "show"]) {
+          const r = await h.run("git_inspect", { command });
+          expect(r.ok).toBe(true);
+          expect(h.text(r).length).toBeGreaterThan(0);
+        }
+        expect(existsSync(marker)).toBe(false);
+      });
+    }
+
+    test("an unreadable config fails closed", async () => {
+      const h = await repo();
+      put(h.root, ".git/config", "[core\n\tbroken = \n");
+      const r = await h.run("git_inspect", { command: "status" });
+      expect(r.ok).toBe(false);
+      expect(h.text(r)).toContain("git_config_unreadable");
+    });
+  });
+
   test("the argv is fixed, hook-free and shell-free", () => {
     const args = buildGitArgs(
       "/r",
@@ -180,12 +247,11 @@ describe("git_inspect", () => {
     );
     expect(args.slice(0, 2)).toEqual(["-C", "/r"]);
     expect(args.slice(2, 2 + GIT_SAFETY_ARGS.length)).toEqual([
-      "--no-pager",
-      "-c",
-      "core.hooksPath=/dev/null",
-      "-c",
-      "core.fsmonitor=false",
+      ...GIT_SAFETY_ARGS,
     ]);
+    expect(GIT_SAFETY_ARGS).toContain("core.hooksPath=/dev/null");
+    expect(GIT_SAFETY_ARGS).toContain("core.fsmonitor=false");
+    expect(GIT_SAFETY_ARGS).toContain("core.sshCommand=false");
     expect(args).toContain("--no-ext-diff");
     expect(args).toContain("--no-textconv");
     expect(args.indexOf("--")).toBeGreaterThan(args.indexOf("HEAD~1"));

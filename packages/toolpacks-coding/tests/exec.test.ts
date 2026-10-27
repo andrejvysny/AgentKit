@@ -171,6 +171,39 @@ describe("run_command (sandbox off, portable)", () => {
     expect(env["TMPDIR"]).toBe("/scratch");
   });
 
+  test("sanitizedEnv drops agent sockets, auth-ish names and credential URLs", () => {
+    const env = sanitizedEnv(
+      {
+        SSH_AUTH_SOCK: "/tmp/agent.sock",
+        GPG_AGENT_INFO: "x",
+        MY_COOKIE: "c",
+        SESSION_ID: "s",
+        DB_PASSWD: "p",
+        MY_PRIVATE_THING: "k",
+        REMOTE: "https://user:pw@example.com/repo.git",
+        PLAIN_URL: "https://example.com/repo.git",
+        ALSO_OK: "ssh://git@example.com/x",
+        LANG: "en_US.UTF-8",
+        FOO: "1",
+      },
+      "/scratch",
+    );
+    for (const k of [
+      "SSH_AUTH_SOCK",
+      "GPG_AGENT_INFO",
+      "MY_COOKIE",
+      "SESSION_ID",
+      "DB_PASSWD",
+      "MY_PRIVATE_THING",
+      "REMOTE",
+    ])
+      expect(env[k]).toBeUndefined();
+    expect(env["PLAIN_URL"]).toBe("https://example.com/repo.git");
+    expect(env["ALSO_OK"]).toBe("ssh://git@example.com/x");
+    expect(env["LANG"]).toBe("en_US.UTF-8");
+    expect(env["FOO"]).toBe("1");
+  });
+
   test("killProcessTree on a dead pid does not throw", () => {
     expect(() => killProcessTree(2_000_000_000)).not.toThrow();
   });
@@ -306,6 +339,27 @@ describe.skipIf(!darwin)(`run_command (macOS sandbox; ${REASON})`, () => {
     expect(r.ok).toBe(false);
     expect(h.text(r).match(/Operation not permitted/g)?.length).toBe(2);
     expect(existsSync(join(h.root, ".git", "hooks", "pre-commit"))).toBe(false);
+  });
+
+  test(".git is read-only by default and writable with allowGitWrites", async () => {
+    const h = await harness({ sandbox: "required" });
+    mkdirSync(join(h.root, ".git"), { recursive: true });
+    const denied = await h.run("run_command", { command: "touch .git/x" });
+    expect(denied.ok).toBe(false);
+    expect(h.text(denied)).toContain("Operation not permitted");
+    expect(existsSync(join(h.root, ".git", "x"))).toBe(false);
+
+    const open = await harness({ sandbox: "required", allowGitWrites: true });
+    mkdirSync(join(open.root, ".git", "hooks"), { recursive: true });
+    put(open.root, ".git/config", "[core]\n");
+    const ok = await open.run("run_command", { command: "touch .git/x" });
+    expect(ok.ok).toBe(true);
+    expect(existsSync(join(open.root, ".git", "x"))).toBe(true);
+    const still = await open.run("run_command", {
+      command: "echo y >> .git/config; touch .git/hooks/h",
+    });
+    expect(still.ok).toBe(false);
+    expect(existsSync(join(open.root, ".git", "hooks", "h"))).toBe(false);
   });
 
   test("the node/bun toolchain still starts", async () => {

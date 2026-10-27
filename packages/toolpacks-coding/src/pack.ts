@@ -59,6 +59,7 @@ export function createCodingToolPack(
     clock: options.clock ?? Date.now,
     sandbox: options.sandbox ?? "required",
     network: options.network ?? false,
+    allowGitWrites: options.allowGitWrites ?? false,
     testCommands: [...(options.testCommands ?? [])],
     platform: options.platform ?? process.platform,
     sandboxExecPath: options.sandboxExecPath ?? SANDBOX_EXEC,

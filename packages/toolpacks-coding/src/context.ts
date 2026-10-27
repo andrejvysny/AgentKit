@@ -19,6 +19,7 @@ export interface PackEnv {
   clock: () => number;
   sandbox: "required" | "off";
   network: boolean;
+  allowGitWrites: boolean;
   testCommands: readonly string[];
   platform: NodeJS.Platform;
   sandboxExecPath: string;
@@ -36,6 +37,7 @@ export interface EnvInit {
   clock: () => number;
   sandbox: "required" | "off";
   network: boolean;
+  allowGitWrites: boolean;
   testCommands: readonly string[];
   platform: NodeJS.Platform;
   sandboxExecPath: string;
@@ -50,6 +52,7 @@ export function createEnv(init: EnvInit): PackEnv {
     clock: init.clock,
     sandbox: init.sandbox,
     network: init.network,
+    allowGitWrites: init.allowGitWrites,
     testCommands: init.testCommands,
     platform: init.platform,
     sandboxExecPath: init.sandboxExecPath,

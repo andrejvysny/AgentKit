@@ -9,6 +9,19 @@ const lines = (n: number, make = (i: number) => `line ${i}`) =>
   Array.from({ length: n }, (_, i) => make(i + 1)).join("\n");
 
 describe("read_file", () => {
+  test.each([
+    ".pgpass",
+    "infra/terraform.tfstate",
+    "infra/terraform.tfstate.backup",
+    "service-account-prod.json",
+  ])("refuses credential file %s", async (rel) => {
+    const h = await harness();
+    put(h.root, rel, "secret");
+    const r = await h.run("read_file", { path: rel });
+    expect(r.ok).toBe(false);
+    expect(h.text(r)).toContain("path_sensitive");
+  });
+
   test("numbers lines with a tab and no notice for a short file", async () => {
     const h = await harness();
     put(h.root, "a.txt", "alpha\nbeta\ngamma\n");
