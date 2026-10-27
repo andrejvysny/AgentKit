@@ -60,7 +60,7 @@ export type ToolGuardVerdict =
        * refusal is final. Denial wins: one final refusal among several makes
        * the call final, whatever the others say.
        */
-      approval?: { preview?: string };
+      approval?: { preview?: string; requestedMode?: string };
     };
 
 /**

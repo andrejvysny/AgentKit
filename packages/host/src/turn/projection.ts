@@ -458,6 +458,7 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
     const { requestId, toolCallId, toolName, prompt, expiresAt, kind } =
       event.data;
     const argsSha256 = event.data.argsSha256;
+    const requestedMode = event.data.requestedMode;
     await store.inputs.createInput({
       inputId: requestId,
       sessionId: state.chatId,
@@ -467,6 +468,7 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
         toolName,
         ...(kind === undefined ? {} : { kind }),
         ...(argsSha256 === undefined ? {} : { argsSha256 }),
+        ...(requestedMode === undefined ? {} : { requestedMode }),
       },
       contentHash: await sha256Hex(
         JSON.stringify({
@@ -476,6 +478,7 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
           expiresAt,
           ...(kind === undefined ? {} : { kind }),
           ...(argsSha256 === undefined ? {} : { argsSha256 }),
+          ...(requestedMode === undefined ? {} : { requestedMode }),
         }),
       ),
       targetTaskId: ctx.task.taskId,

@@ -47,6 +47,12 @@ pub struct AiRunWaitingEventData {
         skip_serializing_if = "Optional::is_absent"
     )]
     pub args_sha256: Optional<AiProviderKind>,
+    #[serde(
+        rename = "requestedMode",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub requested_mode: Optional<AiProviderKind>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -61,6 +67,7 @@ crate::impl_json_deserialize!(AiRunWaitingEventData, |value: Value| {
         expires_at: crate::optional_field(&mut object, "expiresAt")?,
         kind: crate::optional_field(&mut object, "kind")?,
         args_sha256: crate::optional_field(&mut object, "argsSha256")?,
+        requested_mode: crate::optional_field(&mut object, "requestedMode")?,
         extra: object.into_iter().collect(),
     };
     Ok(output)

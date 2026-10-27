@@ -323,6 +323,7 @@ async function isVisible(
 interface ApprovableRefusal {
   reason: string;
   preview?: string;
+  requestedMode?: string;
 }
 
 function refusal(
@@ -449,6 +450,17 @@ function guarded(
               `Approve ${guardCtx.tool.name}?`,
             kind: "approval",
             argsSha256,
+            // What the CALL asked for, recorded so the human can see it and the
+            // host can ignore it. A plan may request `full_auto`; obeying that
+            // request would make the model the author of its own permissions.
+            ...(approvable.find((r) => r.requestedMode !== undefined)
+              ?.requestedMode === undefined
+              ? {}
+              : {
+                  requestedMode: approvable.find(
+                    (r) => r.requestedMode !== undefined,
+                  )!.requestedMode,
+                }),
           });
           // The core discards a suspended call's result.
           return refusal(ctx, first.reason);
