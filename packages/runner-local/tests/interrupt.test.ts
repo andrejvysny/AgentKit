@@ -104,6 +104,8 @@ interface World {
   toolGate: Gate;
   /** Times the `bump` tool body started. */
   bumps: number;
+  /** The effect `bump` declares; "write" makes an interrupted call uncertain. */
+  effect: "read" | "write";
   runners: SingleProcessTaskRunner[];
   handles: WorkerHandle[];
 }
@@ -124,7 +126,7 @@ function toolContributor(world: World): ToolSetContributor {
     definition: {
       name: "bump",
       version: "1.0.0",
-      effect: "read",
+      effect: world.effect,
       capability: "bump",
       description: "bump",
       inputSchema: { type: "object", properties: {} },
@@ -146,12 +148,16 @@ function toolContributor(world: World): ToolSetContributor {
   return { namespace: "test", contribute: async () => [tool] };
 }
 
-async function createWorld(plan: CallPlan[]): Promise<World> {
+async function createWorld(
+  plan: CallPlan[],
+  effect: "read" | "write" = "read",
+): Promise<World> {
   const world: World = {
     store: new MemoryAssistantStore(),
     provider: new PlannedProvider(plan),
     toolGate: new Gate(),
     bumps: 0,
+    effect,
     runners: [],
     handles: [],
   };
@@ -399,6 +405,29 @@ describe("interrupt a running turn", () => {
     const events = await eventsOf(world, turnId);
     expect(events.map((e) => e.seq)).toEqual(events.map((_, i) => i));
     expect((await world.store.tasks.getTask(turnId))?.poisonCount).toBe(0);
+  });
+
+  it("an interrupted WRITE call comes back uncertain and is not re-run", async () => {
+    const world = await createWorld(
+      [{ turn: toolCall("call-1", "bump") }, { turn: text("DONE") }],
+      "write",
+    );
+    const n = node(world);
+    await seed(n);
+    await n.start();
+    const turnId = await send(n, "hello");
+    await world.toolGate.whenParked();
+    await n.service.interrupt(SESSION, turnId);
+    await waitStatus(world, turnId, "interrupted");
+    world.toolGate.release();
+    await Bun.sleep(20);
+
+    await n.service.resume(SESSION, turnId);
+    await waitStatus(world, turnId, "completed");
+    expect(world.bumps).toBe(1);
+    const resumedPass = world.provider.calls[1] ?? [];
+    const result = resumedPass.find((m) => m.role === "tool");
+    expect(String(result?.content)).toContain("tool_result_uncertain");
   });
 });
 

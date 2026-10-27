@@ -185,9 +185,37 @@ This is a facade over the existing services. It adds no scheduler, queue runner 
 | `cancel(turnId)` | `TaskService.cancelTask` |
 | `answer(...)` | §5 |
 | `fork(sessionId, fromMessageId)` | `forkChat` + descriptor copy. Pending inputs and provider continuation are not copied. |
-| `setModel(sessionId, { providerId?, model })` | descriptor update for future turns |
+| `setModel(sessionId, { providerId?, model, reasoningEffort? })` | descriptor update for future turns; `reasoningEffort: null` clears it |
+| `interrupt(sessionId, turnId)` / `resume(sessionId, turnId)` | `TaskService.interruptTask` / `resumeTask` (§6a) |
+| `listTurns`, `getUsage`, `exportSession` | read-only reports over `TaskStore`, `run.usage` events and the active branch (§6b) |
 
 Events are the existing run-event feed and SSE stream. A session subscriber follows the active turn's task id.
+
+### 6a. Interrupt is not cancel (added 2026-10-27)
+
+`cancel` ends a turn; `interrupt` stops it so it can continue. The runner aborts the attempt with an
+`ExecutionInterruptedError` reason (`packages/host/src/errors.ts`), and the turn lands `running → interrupted`
+with its attempt ended `cancelled`. It is never ended `abandoned`, because that counts toward the store-owned
+`poisonCount`. No terminal event is written: the task, its event sequence and its conversation records stay
+exactly as a crash would leave them, so `resume` → `interrupted → queued` → the next attempt follows the
+existing recovery path. That includes the side-effect receipts of ADR 0019 part 3: a mutating call that was
+running when the interrupt hit is reconciled as uncertain, never silently rerun.
+
+`SingleProcessTaskRunner` gains `requestInterrupt(taskId)` and `shutdownMode: "interrupt"`. With
+`recoveryMode: "manual"`, that is the desktop policy: quitting parks running turns, and the next launch neither
+redispatches them nor the queued ones until the user resumes. An interrupted turn still holds its session's
+scope: `send` answers `chat_busy` (or queues with `whenBusy: "follow_up"`) until the turn is resumed or
+cancelled. Interrupting a `waiting_approval` turn is a no-op; it is already parked.
+
+### 6b. Inspecting and exporting a session (added 2026-10-27)
+
+`exportSession` returns `{ format: "agentkit.session.export", version: 1, … }` with the descriptor, the
+execution state, the active-branch messages, the turns, every input record (approvals with their answers) and
+the derived summaries. Message metadata is an allow-list (`EXPORT_METADATA_KEYS` in
+`sessions/session-report.ts`); provider continuation state lives in its own store and is never read, and no
+provider config or secret is part of an export. `getUsage` sums the settled (`finalForCall`) `run.usage`
+events per turn and reports the newest request's provider-reported prompt tokens next to the resolved context
+window, which is the honest measure of context fill.
 
 ### 7. Compatibility
 
