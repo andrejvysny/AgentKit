@@ -16,14 +16,23 @@ import {
   errorEnvelope,
   safeStringify,
   serializeToolResult,
-  type ToolFailureDetail,
 } from "./tool-envelope.js";
 import { executeToolSafely } from "./tool-exec.js";
-import type { RunChatInput } from "./run-types.js";
+import type { AgentLoopInput } from "./agent-loop.js";
+import { describeValidationErrors, failTool } from "./tool-failure.js";
+import {
+  frozenClone,
+  hasHooks,
+  runObservers,
+  runToolGate,
+  TOOL_HOOK_DENIED_CODE,
+} from "./loop-hooks.js";
 
 export interface ToolBatchContext {
-  input: RunChatInput;
+  input: AgentLoopInput;
   runId: string;
+  /** 1-based loop iteration, handed to hooks. */
+  step: number;
   stamp: EventStamper;
   /** The loop's private history; the batch appends the assistant + tool messages. */
   messages: AiChatMessage[];
@@ -46,6 +55,7 @@ export async function* executeToolBatch(
   const {
     input,
     runId,
+    step,
     stamp,
     messages,
     maxCallsPerIter,
@@ -85,6 +95,22 @@ export async function* executeToolBatch(
       },
     });
   }
+
+  const hooked = hasHooks(input);
+  const toolResult = (
+    tc: AiToolCall,
+    status: "succeeded" | "failed",
+    errorCode?: string,
+  ) =>
+    runObservers(input, runId, stamp, "onToolResult", {
+      runId,
+      step,
+      toolCallId: tc.id,
+      toolName: tc.name,
+      status,
+      errorCode,
+      signal: input.signal,
+    });
 
   const limitedToolCalls = toolCalls.slice(0, maxCallsPerIter);
   const skippedToolCalls = toolCalls.slice(maxCallsPerIter);
@@ -161,6 +187,7 @@ export async function* executeToolBatch(
         err,
         "tool_missing",
       );
+      if (hooked) yield* toolResult(tc, "failed", "tool_missing");
       continue;
     }
     const parsed = parseToolArguments(tc.argumentsJson);
@@ -175,6 +202,7 @@ export async function* executeToolBatch(
         err,
         "bad_args",
       );
+      if (hooked) yield* toolResult(tc, "failed", "bad_args");
       continue;
     }
     const args = parsed.value;
@@ -204,7 +232,44 @@ export async function* executeToolBatch(
           retryable: false,
         },
       );
+      if (hooked) yield* toolResult(tc, "failed", "schema_invalid");
       continue;
+    }
+
+    if (hooked) {
+      const gate = await runToolGate(input, {
+        runId,
+        step,
+        toolCallId: tc.id,
+        toolName: tc.name,
+        args: frozenClone(args),
+        signal: input.signal,
+      });
+      if (!gate.allowed) {
+        yield* failTool(
+          stamp,
+          runId,
+          messages,
+          input.limits.maxBytes,
+          tc,
+          gate.message,
+          TOOL_HOOK_DENIED_CODE,
+          { phase: "guard", retryable: false },
+        );
+        yield* toolResult(tc, "failed", TOOL_HOOK_DENIED_CODE);
+        continue;
+      }
+      // Same rule as the loop-top check: nothing dispatches after cancel.
+      if (input.signal?.aborted) {
+        yield* balanceCancelled(tc);
+        yield stamp({
+          type: "run.cancelled",
+          runId,
+          timestamp: nowIso(),
+          data: { reason: "aborted" },
+        });
+        return "cancelled";
+      }
     }
 
     const result = await executeToolSafely(
@@ -252,6 +317,7 @@ export async function* executeToolBatch(
           "result_unserializable",
           { phase: "execution", retryable: false },
         );
+        if (hooked) yield* toolResult(tc, "failed", "result_unserializable");
         continue;
       }
       const modelResultJson = serialized.envelopeJson;
@@ -280,6 +346,7 @@ export async function* executeToolBatch(
         toolCallId: tc.id,
         name: tc.name,
       });
+      if (hooked) yield* toolResult(tc, "succeeded");
     } else if (result.ok && !result.value.ok) {
       // Tool ran but reported failure: emit failed + feed an error envelope.
       const envelope = buildEnvelope(result.value, input.limits);
@@ -295,6 +362,7 @@ export async function* executeToolBatch(
           "result_unserializable",
           { phase: "execution", retryable: false },
         );
+        if (hooked) yield* toolResult(tc, "failed", "result_unserializable");
         continue;
       }
       // Capped like every other model-facing failure text: this comes
@@ -327,6 +395,7 @@ export async function* executeToolBatch(
         toolCallId: tc.id,
         name: tc.name,
       });
+      if (hooked) yield* toolResult(tc, "failed", "tool_failed");
     } else if (!result.ok) {
       yield* failTool(
         stamp,
@@ -338,6 +407,7 @@ export async function* executeToolBatch(
         "exec_failed",
         { phase: "execution", retryable: result.retryable },
       );
+      if (hooked) yield* toolResult(tc, "failed", "exec_failed");
     }
   }
 
@@ -362,53 +432,8 @@ export async function* executeToolBatch(
       toolCallId: tc.id,
       name: tc.name,
     });
+    if (hooked) yield* toolResult(tc, "failed", "tool_call_cap");
   }
   // Loop again so the model can react to tool results.
   return "continue";
-}
-
-/**
- * Emit a run.tool.failed event and append the matching error tool message.
- *
- * `maxBytes` is the run's output budget: a thrown error's message is arbitrary
- * host text (a stack, a dumped row, a whole HTTP body) and it lands in
- * `messages`, so it is capped exactly like a successful result's prose is.
- */
-function* failTool(
-  stamp: EventStamper,
-  runId: string,
-  messages: AiChatMessage[],
-  maxBytes: number,
-  tc: AiToolCall,
-  rawErrorMessage: string,
-  errorCode: string,
-  detail: ToolFailureDetail = {},
-): Generator<AiRunEvent, void, unknown> {
-  const errorMessage = truncateString(
-    rawErrorMessage,
-    envelopeTextBudget(maxBytes),
-  ).value;
-  yield stamp({
-    type: "run.tool.failed",
-    runId,
-    timestamp: nowIso(),
-    data: { toolCallId: tc.id, toolName: tc.name, errorMessage, errorCode },
-  });
-  messages.push({
-    role: "tool",
-    content: JSON.stringify(errorEnvelope(errorCode, errorMessage, detail)),
-    toolCallId: tc.id,
-    name: tc.name,
-  });
-}
-
-/** Turn schema validation errors into an actionable, model-facing message. */
-function describeValidationErrors(
-  toolName: string,
-  errors: ValidationError[],
-): string {
-  const detail = errors
-    .map((e) => (e.path ? `${e.path}: ${e.message}` : e.message))
-    .join("; ");
-  return `Invalid arguments for ${toolName}: ${detail}. Fix the arguments and call again.`;
 }

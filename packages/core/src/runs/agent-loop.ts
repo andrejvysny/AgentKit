@@ -3,11 +3,22 @@ import { createEventStamper } from "../events.js";
 import { newRunId, nowIso } from "../ids.js";
 import type { AiChatRequest } from "../providers/client.js";
 import { boundedRun } from "./bounded-run.js";
+import {
+  type AgentLoopHooks,
+  hasHooks,
+  notifySettled,
+  runObservers,
+} from "./loop-hooks.js";
 import { streamModelStep } from "./model-step.js";
 import type { RunChatInput, RunChatResult } from "./run-types.js";
 import { executeToolBatch } from "./tool-step.js";
 
-export type AgentLoopInput = RunChatInput;
+export interface AgentLoopInput extends RunChatInput {
+  /** Ordered lifecycle hooks (ADR 0015 section 6). Absent or empty: no cost. */
+  hooks?: readonly AgentLoopHooks[];
+  /** Per-call hook deadline; non-positive or non-finite disables it. */
+  hookTimeoutMs?: number;
+}
 export type AgentLoopResult = RunChatResult;
 
 const DEFAULT_MAX_TOOL_ITERATIONS = 4;
@@ -25,9 +36,36 @@ const DEFAULT_MAX_TOOL_CALLS_PER_ITERATION = 8;
 export function runAgentLoop(
   input: AgentLoopInput,
 ): AsyncGenerator<AiRunEvent, AgentLoopResult, unknown> {
+  // No hooks: hand back the loop itself, so the hookless path pays for no
+  // extra generator layer (and stays the exact code path `runChat` always was).
+  if (!hasHooks(input)) return runLoop(input);
+  return withSettledHooks(input);
+}
+
+function runLoop(
+  input: AgentLoopInput,
+): AsyncGenerator<AiRunEvent, AgentLoopResult, unknown> {
   return input.budgets || input.executionBudget
     ? boundedRun(input, runAgentLoopUnchecked)
     : runAgentLoopUnchecked(input);
+}
+
+/** Drives the (bounded or plain) loop, then fires `onSettled`. */
+async function* withSettledHooks(
+  input: AgentLoopInput,
+): AsyncGenerator<AiRunEvent, AgentLoopResult, unknown> {
+  const result = yield* runLoop(input);
+  // After the terminal event, best-effort: a failing hook cannot change how
+  // the run ended. A consumer that abandons the generator early (`.return()`)
+  // never gets here, so it gets no `onSettled`.
+  if (hasHooks(input)) {
+    await notifySettled(input, {
+      runId: result.runId,
+      terminal: result.terminal,
+      iterations: result.iterations,
+    });
+  }
+  return result;
 }
 
 async function* runAgentLoopUnchecked(
@@ -72,6 +110,17 @@ async function* runAgentLoopUnchecked(
     iterations: iteration,
   });
 
+  const hooked = hasHooks(input);
+  if (hooked) {
+    yield* runObservers(input, runId, stamp, "onRunStart", {
+      runId,
+      model: input.model,
+      toolNames: toolDefinitions.map((d) => d.name),
+      messageCount: messages.length,
+      signal: input.signal,
+    });
+  }
+
   for (let i = 0; i < maxIterations; i++) {
     iteration = i + 1;
     if (input.signal?.aborted) {
@@ -82,6 +131,24 @@ async function* runAgentLoopUnchecked(
         data: { reason: "aborted" },
       });
       return finish("cancelled");
+    }
+    if (hooked) {
+      yield* runObservers(input, runId, stamp, "onStepStart", {
+        runId,
+        step: iteration,
+        messages: Object.freeze(messages.slice()),
+        signal: input.signal,
+      });
+      // Hooks are awaited: the signal can have moved while they ran.
+      if (input.signal?.aborted) {
+        yield stamp({
+          type: "run.cancelled",
+          runId,
+          timestamp: nowIso(),
+          data: { reason: "aborted" },
+        });
+        return finish("cancelled");
+      }
     }
 
     const step = yield* streamModelStep({
@@ -97,6 +164,16 @@ async function* runAgentLoopUnchecked(
     if (step.kind !== "response") return finish(step.kind);
     const assistantContent = step.content;
     const turnFinishReason = step.finishReason;
+    if (hooked) {
+      yield* runObservers(input, runId, stamp, "onModelResponse", {
+        runId,
+        step: iteration,
+        content: assistantContent,
+        toolCalls: step.toolCalls,
+        finishReason: turnFinishReason,
+        signal: input.signal,
+      });
+    }
 
     // Hoisted above the tool-call branch on purpose: a turn cut off at the
     // token budget usually breaks the TOOL ARGUMENTS (which then fail as
@@ -121,6 +198,7 @@ async function* runAgentLoopUnchecked(
       const outcome = yield* executeToolBatch({
         input,
         runId,
+        step: iteration,
         stamp,
         messages,
         maxCallsPerIter,

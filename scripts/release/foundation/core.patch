@@ -63,9 +63,9 @@ diff --git a/packages/core/src/runs/agent-loop.ts b/packages/core/src/runs/agent
  import { newRunId, nowIso } from "../ids.js";
 -import type { AiChatRequest } from "../providers/client.js";
  import { boundedRun } from "./bounded-run.js";
- import { streamModelStep } from "./model-step.js";
- import type { RunChatInput, RunChatResult } from "./run-types.js";
-@@ -54,13 +53,6 @@ async function* runAgentLoopUnchecked(
+ import {
+   type AgentLoopHooks,
+@@ -83,13 +82,6 @@ async function* runAgentLoopUnchecked(
      firstSeq: input.firstSeq,
      attemptId: input.attemptId,
    });
@@ -79,7 +79,7 @@ diff --git a/packages/core/src/runs/agent-loop.ts b/packages/core/src/runs/agent
    let iteration = 0;
    let finishReason: string | undefined;
  
-@@ -91,8 +83,6 @@ async function* runAgentLoopUnchecked(
+@@ -149,8 +141,6 @@ async function* runAgentLoopUnchecked(
        messages,
        toolDefinitions,
        stamp,
