@@ -494,18 +494,27 @@ export class TurnRunner implements TaskWorker {
     const request = payload as TurnRequest;
     let budget: ExecutionBudget | undefined;
     try {
+      // Resolved here, not in runTurn: the deadline must sit on the race this
+      // method awaits, or a hook that ignores its signal outlives it.
+      const attemptBudgetMs = await this.attemptBudgetMsFor(chatId);
       if (this.deps.executionBudgets) {
         budget = await createTurnBudget(
           this.deps.store,
           ctx,
           this.deps.executionBudgets,
         );
+      } else if (attemptBudgetMs !== undefined) {
+        budget = new ExecutionBudget({}, { signal: ctx.signal });
+      }
+      if (budget) {
         ctx = { ...ctx, signal: budget.signal };
         this.executionBudgets.set(ctx, budget);
       }
       if (budget)
-        await budget.race(() =>
-          this.runTurn(ctx, chatId, request, assistantMessageId),
+        await budget.race(
+          () => this.runTurn(ctx, chatId, request, assistantMessageId),
+          attemptBudgetMs,
+          "attempt",
         );
       else
         await runWithSignal(ctx.signal, () =>
@@ -609,24 +618,17 @@ export class TurnRunner implements TaskWorker {
    * `AbortSignal.timeout` timers are unref'd, so a turn that finishes early
    * leaves nothing to clean up.
    */
-  private armAttemptBudget(
-    ctx: TaskExecutionContext,
-    attemptBudgetMs: number | undefined,
-  ): TaskExecutionContext {
-    if (attemptBudgetMs === undefined) return ctx;
-    let budget = this.executionBudgets.get(ctx);
-    if (!budget) {
-      budget = new ExecutionBudget({}, { signal: ctx.signal });
-      ctx = { ...ctx, signal: budget.signal };
-      this.executionBudgets.set(ctx, budget);
-    }
-    const armed = budget;
-    AbortSignal.timeout(attemptBudgetMs).addEventListener(
-      "abort",
-      () => armed.timeout("attempt"),
-      { once: true },
+  /** The session profile's per-attempt wall-clock budget, when it sets one. */
+  private async attemptBudgetMsFor(
+    chatId: string,
+  ): Promise<number | undefined> {
+    const profiles = this.deps.profiles;
+    if (profiles === undefined || this.deps.store.inputs === undefined)
+      return undefined;
+    const session = readSessionDescriptor(
+      (await this.deps.store.conversations.getChat(chatId))?.metadata,
     );
-    return ctx;
+    return profiles.forSession(session)?.limits.attemptBudgetMs;
   }
 
   private async runTurn(
@@ -651,8 +653,8 @@ export class TurnRunner implements TaskWorker {
     // The agent profile, resolved by the HOST from the session's descriptor.
     // Its tool allowlist is enforced at staging and its limits cap — never
     // raise — this host's; its `instructions` are the only part the model is
-    // trusted with. Resolved first: its model, skills and attempt budget all
-    // feed decisions made before the tools are staged.
+    // trusted with. Resolved first: its model and skills feed decisions made
+    // before the tools are staged.
     const profile = this.deps.profiles?.forSession(session);
     const profileLimits = effectiveLimits(profile, {
       ...(this.deps.maxToolIterations === undefined
@@ -662,7 +664,6 @@ export class TurnRunner implements TaskWorker {
         ? {}
         : { historyLimit: this.deps.historyLimit }),
     });
-    ctx = this.armAttemptBudget(ctx, profileLimits.attemptBudgetMs);
     // Session Skills come from the descriptor, so one that has since vanished
     // or changed is a warning, not a failed turn.
     const unavailableSkills: string[] = [];

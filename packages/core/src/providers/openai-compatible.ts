@@ -295,12 +295,15 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           promptTokens: counts.prompt_tokens,
           completionTokens: counts.completion_tokens,
           totalTokens: counts.total_tokens,
-          ...(counts.prompt_tokens_details?.cached_tokens === undefined
+          // Servers send `null` for details they do not track; the event
+          // contract is a number or absent, never null.
+          ...(typeof counts.prompt_tokens_details?.cached_tokens !== "number"
             ? {}
             : {
                 cachedPromptTokens: counts.prompt_tokens_details.cached_tokens,
               }),
-          ...(counts.completion_tokens_details?.reasoning_tokens === undefined
+          ...(typeof counts.completion_tokens_details?.reasoning_tokens !==
+          "number"
             ? {}
             : {
                 reasoningTokens:
@@ -548,10 +551,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
     body: Record<string, unknown>,
     detail: string,
   ): Record<string, unknown> | undefined {
-    if (
-      "reasoning_effort" in body &&
-      /reasoning_effort|reasoning/i.test(detail)
-    ) {
+    if ("reasoning_effort" in body && /reasoning[_.]effort/i.test(detail)) {
       const { reasoning_effort: _dropped, ...rest } = body;
       return rest;
     }
