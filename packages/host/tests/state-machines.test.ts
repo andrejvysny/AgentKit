@@ -126,10 +126,10 @@ describe("TASK_TRANSITIONS — exhaustive matrix", () => {
         }
       }
     }
-    // queued(4) + running(5) + waiting_approval(4) + interrupted(2).
+    // queued(4) + running(5) + waiting_approval(5) + interrupted(2).
     // queued's third edge is `failed`, which exists only for the dependency
     // cascade in `claimNext` — see the table's own comment.
-    expect(legal).toBe(15);
+    expect(legal).toBe(16);
   });
 
   it("declares exactly the documented edges", () => {
@@ -149,6 +149,7 @@ describe("TASK_TRANSITIONS — exhaustive matrix", () => {
     ]);
     expect(TASK_TRANSITIONS.waiting_approval).toEqual([
       "running",
+      "queued",
       "completed",
       "failed",
       "cancelled",

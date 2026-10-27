@@ -20,6 +20,10 @@ export * from "./golden/golden.js";
 // @agentkit/adapters-sqlite, which both pass it).
 export * from "./store-conformance.js";
 
+// AgentInputStore conformance: durable steer / follow-up / human-input records
+// (ADR 0016 §2), the optional `AssistantStore.inputs` member.
+export * from "./agent-input-conformance.js";
+
 // MCP server-config conformance: the same idea for the standalone
 // McpServerConfigStore port (@agentkit/mcp-client), which is NOT part of the
 // AssistantStore aggregate and so cannot be graded through its harness.

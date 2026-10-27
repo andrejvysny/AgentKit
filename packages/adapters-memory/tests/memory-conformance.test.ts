@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { describeAssistantStoreConformance } from "@agentkit/testing";
+import {
+  describeAgentInputStoreConformance,
+  describeAssistantStoreConformance,
+} from "@agentkit/testing";
 import { MemoryAssistantStore } from "../src/index.js";
 
 describeAssistantStoreConformance({
@@ -29,6 +32,15 @@ describeAssistantStoreConformance({
     // already in memory. The flag exists for an adapter that ships no
     // `searchMessages` at all.
     capabilities: { atomicTransactions: false, search: true },
+  }),
+  test: { describe, it, expect },
+});
+
+describeAgentInputStoreConformance({
+  name: "MemoryAssistantStore",
+  create: async () => ({
+    store: new MemoryAssistantStore(),
+    capabilities: { atomicTransactions: false },
   }),
   test: { describe, it, expect },
 });

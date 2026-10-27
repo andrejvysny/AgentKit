@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { describeAssistantStoreConformance } from "@agentkit/testing";
+import {
+  describeAgentInputStoreConformance,
+  describeAssistantStoreConformance,
+} from "@agentkit/testing";
 import { SqliteAssistantStore } from "../src/index.js";
 
 describeAssistantStoreConformance({
@@ -23,6 +26,19 @@ describeAssistantStoreConformance({
     return {
       store,
       capabilities: { atomicTransactions: true, search: true },
+      close: () => store.close(),
+    };
+  },
+  test: { describe, it, expect },
+});
+
+describeAgentInputStoreConformance({
+  name: "SqliteAssistantStore (:memory:)",
+  create: async () => {
+    const store = new SqliteAssistantStore(":memory:");
+    return {
+      store,
+      capabilities: { atomicTransactions: true },
       close: () => store.close(),
     };
   },

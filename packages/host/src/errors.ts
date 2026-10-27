@@ -329,3 +329,37 @@ export const HOST_ERROR_CODES = [
 ] as const;
 
 export type HostErrorCode = (typeof HOST_ERROR_CODES)[number];
+
+// Plain constants (not `super("…")` literals): `tests/errors.test.ts` requires
+// every literal passed to `super` here to be in HOST_ERROR_CODES, and these two
+// codes are intentionally outside that closed union — see AgentInputConflictError.
+const INPUT_CONFLICT_CODE = "input_conflict";
+const INPUT_TRANSITION_INVALID_CODE = "input_transition_invalid";
+
+/**
+ * An {@link AgentInputStore.createInput} whose `inputId` already exists with a
+ * different kind, session or content hash.
+ *
+ * The id is the caller's idempotency key, so "same id, same input" is a replay
+ * and returns the stored record; "same id, different input" means two callers
+ * disagree about what the id names, and picking either would drop the other's
+ * input silently. Deliberately NOT in {@link HOST_ERROR_CODES}: that union is
+ * the closed set `@agentkit/transport-http` maps to statuses, and input routes
+ * are not part of it yet.
+ */
+export class AgentInputConflictError extends AgentKitHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(INPUT_CONFLICT_CODE, message, details);
+  }
+}
+
+/**
+ * An {@link AgentInputStore.transitionInput} whose expected-status set did not
+ * include the input's current status (a lost race or a replayed
+ * acknowledgement), or whose edge the input's kind forbids.
+ */
+export class AgentInputTransitionError extends AgentKitHostError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(INPUT_TRANSITION_INVALID_CODE, message, details);
+  }
+}
