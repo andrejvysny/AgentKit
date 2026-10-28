@@ -157,6 +157,7 @@ describe("tree teardown", () => {
       expect(await settled(pid)).toBe(true);
       const teardown = (r.data as { teardown: unknown }).teardown;
       expect(teardown).toEqual({
+        state: "stopped",
         escalated: true,
         survivors: [],
         scan: "ok",
@@ -178,6 +179,7 @@ describe("tree teardown", () => {
       expect(r.ok).toBe(false);
       expect(await settled(pid)).toBe(true);
       expect((r.data as { teardown: unknown }).teardown).toEqual({
+        state: "stopped",
         escalated: false,
         survivors: [],
         scan: "ok",

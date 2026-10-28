@@ -23,6 +23,7 @@ import {
   findMarkedProcesses,
   scanMarked,
   TreeTracker,
+  processGroupMembers,
 } from "./process-tree.js";
 import { formatSize, truncateTail } from "./truncate.js";
 
@@ -54,6 +55,9 @@ export interface RunSpec {
   scratch: string;
   logName: string;
   limits: CodingLimits;
+  /** Supplied by durable command ownership; generated here for direct callers. */
+  execId?: string;
+  onSpawn?: (pid: number) => Promise<void>;
 }
 
 export interface RunResult {
@@ -63,6 +67,7 @@ export interface RunResult {
   truncated: boolean;
   notice: string;
   logPath?: string | undefined;
+  fullLogTruncated: boolean;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
@@ -73,6 +78,7 @@ export interface RunResult {
 
 /** What the teardown of one command found and had to do. */
 export interface Teardown {
+  state: "stopped" | "survivors" | "unknown";
   /** True when SIGTERM was not enough and SIGKILL was sent. */
   escalated: boolean;
   /** Marked pids still alive after SIGKILL. */
@@ -98,7 +104,7 @@ function pidAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
 }
 
@@ -115,13 +121,13 @@ interface TerminateSpec {
  * SIGTERM the group and every marked pid, wait `graceMs`, SIGKILL what is
  * left, then report what still lives. `seen` counts distinct marked pids.
  */
-async function terminate(
+export async function terminate(
   spec: TerminateSpec,
 ): Promise<Teardown & { seen: number }> {
   const known = new Set<number>();
   let scan: Teardown["scan"] = "ok";
   const refresh = async () => {
-    const pids = await spec.find();
+    const pids = await spec.find().catch(() => null);
     if (pids === null) scan = "unsupported";
     else for (const pid of pids) known.add(pid);
   };
@@ -135,7 +141,13 @@ async function terminate(
 
   await refresh();
   if (known.size === 0 && !remaining())
-    return { escalated: false, survivors: [], scan, seen: 0 };
+    return {
+      state: scan === "ok" ? "stopped" : "unknown",
+      escalated: false,
+      survivors: [],
+      scan,
+      seen: 0,
+    };
   // Freeze first so nothing can fork between discovery and the signal; rescan
   // until the set stops growing. A stopped process only sees SIGTERM once
   // continued, hence the SIGCONT.
@@ -160,10 +172,22 @@ async function terminate(
   if (survivors.length > 0 && scan === "ok") {
     // A zombie nobody reaped still answers kill(pid, 0) but has no
     // environment to find; only a process the scan still sees is a survivor.
-    const live = await spec.find();
-    if (live) survivors = survivors.filter((pid) => live.includes(pid));
+    const live = await spec.find().catch(() => null);
+    if (live === null) scan = "unsupported";
+    else survivors = survivors.filter((pid) => live.includes(pid));
   }
-  return { escalated, survivors, scan, seen: known.size };
+  return {
+    state:
+      survivors.length > 0
+        ? "survivors"
+        : scan === "ok"
+          ? "stopped"
+          : "unknown",
+    escalated,
+    survivors,
+    scan,
+    seen: known.size,
+  };
 }
 
 /**
@@ -175,6 +199,13 @@ async function terminate(
 export async function sweepOrphans(
   options: { graceMs?: number } = {},
 ): Promise<number> {
+  return (await sweepOrphansDetailed(options)).seen;
+}
+
+/** Await this verdict before admitting mutations; inspection failure is unknown. */
+export async function sweepOrphansDetailed(
+  options: { graceMs?: number } = {},
+): Promise<Teardown & { seen: number }> {
   try {
     const find = async () => {
       const all = await scanMarked();
@@ -182,13 +213,18 @@ export async function sweepOrphans(
         ? all.filter((m) => !pidAlive(m.ownerPid)).map((m) => m.pid)
         : null;
     };
-    const { seen } = await terminate({
+    return await terminate({
       find,
       graceMs: Math.min(options.graceMs ?? 2000, KILL_GRACE_CAP_MS),
     });
-    return seen;
   } catch {
-    return 0;
+    return {
+      state: "unknown",
+      escalated: false,
+      survivors: [],
+      scan: "unsupported",
+      seen: 0,
+    };
   }
 }
 
@@ -199,8 +235,20 @@ class Tail {
   private total = 0;
   private spill: WriteStream | undefined;
   private spilled = 0;
+  private logFailed = false;
   private dropped = false;
   logPath: string | undefined;
+
+  get fullLogTruncated(): boolean {
+    return (
+      this.logPath !== undefined &&
+      (this.logFailed || this.spilled < this.total)
+    );
+  }
+
+  recordStoredBytes(bytes: number): void {
+    this.spilled = bytes;
+  }
 
   constructor(
     private readonly limits: CodingLimits,
@@ -225,6 +273,7 @@ class Tail {
     this.logPath = join(this.scratch, this.logName);
     this.spill = createWriteStream(this.logPath, { flags: "w", mode: 0o600 });
     this.spill.on("error", () => {
+      this.logFailed = true;
       this.spill = undefined;
     });
     for (const chunk of this.chunks) this.writeSpill(chunk);
@@ -271,7 +320,9 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
   let child: ChildProcess;
   // Inherited by every descendant, which is how teardown and the crash sweep
   // find the ones that left the process group.
-  const execId = `${process.pid}:${randomUUID()}`;
+  if (spec.signal?.aborted)
+    return failedSpawn(new Error("command aborted before spawn"));
+  const execId = spec.execId ?? `${process.pid}:${randomUUID()}`;
   try {
     child = spawn(spec.file, spec.args, {
       cwd: spec.cwd,
@@ -294,12 +345,15 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
       : undefined;
   tracker?.start();
   const find = async (): Promise<number[] | null> => {
-    const [marked, tracked] = await Promise.all([
+    const [marked, tracked, grouped] = await Promise.all([
       findMarkedProcesses(execId),
       tracker ? tracker.sample() : Promise.resolve([]),
+      child.pid !== undefined
+        ? processGroupMembers(child.pid)
+        : Promise.resolve([]),
     ]);
-    if (marked === null && tracked === null) return null;
-    return [...new Set([...(marked ?? []), ...(tracked ?? [])])];
+    if (marked === null || tracked === null || grouped === null) return null;
+    return [...new Set([...marked, ...tracked, ...grouped])];
   };
   let teardownRun: Promise<Teardown> | undefined;
   const tearDown = (): Promise<Teardown> => {
@@ -308,7 +362,8 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
       find,
       graceMs: Math.min(spec.limits.commandKillGraceMs, KILL_GRACE_CAP_MS),
     })
-      .then(({ escalated, survivors, scan }) => ({
+      .then(({ state, escalated, survivors, scan }) => ({
+        state,
         escalated,
         survivors,
         scan,
@@ -327,7 +382,7 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
   if (spec.signal?.aborted) onAbort();
   else spec.signal?.addEventListener("abort", onAbort, { once: true });
 
-  await new Promise<void>((resolveRun) => {
+  const finished = new Promise<void>((resolveRun) => {
     let settled = false;
     let grace: NodeJS.Timeout | undefined;
     const finish = () => {
@@ -370,6 +425,15 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
     });
     child.once("close", finish);
   });
+  if (child.pid !== undefined && spec.onSpawn) {
+    try {
+      await spec.onSpawn(child.pid);
+    } catch (error) {
+      spawnError = error instanceof Error ? error.message : String(error);
+      await tearDown();
+    }
+  }
+  await finished;
   clearTimeout(timer);
   spec.signal?.removeEventListener("abort", onAbort);
   // Sweep stragglers left by a command that exited with children alive.
@@ -384,7 +448,9 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
   if (!keptAll && !tail.logPath && !collected.dropped) {
     // Everything is still in memory: the model gets the full log's path too.
     tail.logPath = join(spec.scratch, spec.logName);
-    await writeFile(tail.logPath, collected.buffer, { mode: 0o600 });
+    const stored = collected.buffer.subarray(0, spec.limits.commandMaxLogBytes);
+    await writeFile(tail.logPath, stored, { mode: 0o600 });
+    tail.recordStoredBytes(stored.length);
   }
   const result: RunResult = {
     output: cut.content,
@@ -398,6 +464,7 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
           tail.logPath,
         ),
     logPath: tail.logPath,
+    fullLogTruncated: tail.fullLogTruncated,
     exitCode,
     signal: exitSignal,
     timedOut,
@@ -411,13 +478,19 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
     return {
       output: "",
       truncated: false,
+      fullLogTruncated: false,
       notice: "",
       exitCode: null,
       signal: null,
       timedOut: false,
-      aborted: false,
+      aborted: spec.signal?.aborted ?? false,
       spawnError: error instanceof Error ? error.message : String(error),
-      teardown: { escalated: false, survivors: [], scan: "ok" },
+      teardown: {
+        state: "stopped",
+        escalated: false,
+        survivors: [],
+        scan: "ok",
+      },
     };
   }
 }

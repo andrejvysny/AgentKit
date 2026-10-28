@@ -6,7 +6,7 @@
  * kill is the only net for those.
  */
 import { execFile } from "node:child_process";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 
 export const EXEC_ID_ENV = "AGENTKIT_EXEC_ID";
 
@@ -74,8 +74,19 @@ async function scanProc(): Promise<MarkedProcess[]> {
   const found: MarkedProcess[] = [];
   for (const name of await readdir("/proc")) {
     if (!/^\d+$/.test(name)) continue;
+    const info = await stat(`/proc/${name}`).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT" || error.code === "ESRCH") return undefined;
+        throw error;
+      },
+    );
+    if (!info || (process.getuid && info.uid !== process.getuid())) continue;
     const raw = await readFile(`/proc/${name}/environ`, "latin1").catch(
-      () => "",
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT" || error.code === "ESRCH") return "";
+        // An unreadable process might carry our marker. Absence is unproven.
+        throw error;
+      },
     );
     const mark = parseEnviron(raw, Number(name));
     if (mark) found.push(mark);
@@ -110,6 +121,23 @@ export async function findMarkedProcesses(
 ): Promise<number[] | null> {
   const all = await scanMarked();
   return all ? all.filter((m) => m.execId === execId).map((m) => m.pid) : null;
+}
+
+/** Ignore zombies: they cannot execute or write, even before their parent reaps. */
+export async function processGroupMembers(
+  pgid: number,
+): Promise<number[] | null> {
+  try {
+    const rows = await run("/bin/ps", ["-axo", "pid=,pgid=,stat="]);
+    return rows.split("\n").flatMap((line) => {
+      const row = /^\s*(\d+)\s+(\d+)\s+(\S+)/.exec(line);
+      return row && Number(row[2]) === pgid && !row[3]?.startsWith("Z")
+        ? [Number(row[1])]
+        : [];
+    });
+  } catch {
+    return null;
+  }
 }
 
 export interface PsRow {

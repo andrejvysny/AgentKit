@@ -12,6 +12,7 @@
  * arrive in a later wave; these live in the test folder and ship to nobody.
  */
 import type { AiToolCall, TaskEventEnvelope } from "@agentkit/contracts";
+import { MemoryToolExecutionStore } from "../../adapters-memory/src/memory-tool-execution-store.js";
 import {
   ACTION_ID_RELEASING_STATUSES,
   AgentInputConflictError,
@@ -1216,6 +1217,7 @@ export class FakeAssistantStore implements AssistantStore {
   readonly providers = new FakeProviderStore();
   readonly settings = new FakeSettingsStore();
   readonly outbox: FakeOutboxStore;
+  readonly toolExecutions: MemoryToolExecutionStore;
   /** Absent unless a test opts in — see {@link FakeAgentInputStore}. */
   inputs?: AgentInputStore;
   /** Absent unless a test opts in (ADR 0017 part 2). */
@@ -1228,6 +1230,18 @@ export class FakeAssistantStore implements AssistantStore {
     this.tasks = new FakeTaskStore(clock, ids);
     this.proposals = new FakeProposalStore(clock);
     this.outbox = new FakeOutboxStore(clock);
+    this.toolExecutions = new MemoryToolExecutionStore({
+      withGate: async (operation) => operation(),
+      assertFence: (fence) => {
+        const lease = this.tasks.leases.get(fence.taskId);
+        if (
+          !lease ||
+          lease.leaseToken !== fence.leaseToken ||
+          new Date(lease.expiresAt) <= clock.now()
+        )
+          throw new LeaseLostError("Stale execution fence.");
+      },
+    });
   }
 
   async transaction<T>(fn: (tx: AssistantStore) => Promise<T>): Promise<T> {

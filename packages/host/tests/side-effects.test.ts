@@ -70,6 +70,51 @@ function assistant(toolCallId: string, name: string): AiChatMessage {
 }
 
 describe("findUncertainCalls", () => {
+  it("an older completed receipt cannot erase a current run with the same call ID", async () => {
+    const digest = await argsSha256Of({ command: "make deploy" });
+    const common = {
+      toolCallId: "shared-call",
+      toolName: "run_command",
+      argsSha256: digest,
+      contextSha256: "b".repeat(64),
+      attemptId: "attempt",
+    };
+    const store = storeWith({ current: [], old: [] });
+    store.toolExecutions = {
+      admit: async () => false,
+      complete: async () => {},
+      listByRun: async (runId) => [
+        {
+          ...common,
+          runId,
+          executionId: runId,
+          status: runId === "current" ? "admitted" : "completed",
+          ...(runId === "old"
+            ? {
+                result: {
+                  ok: true,
+                  data: {},
+                  sources: [],
+                  warnings: [],
+                  truncated: false,
+                  limits: { profile: "small", maxBytes: 1024 },
+                },
+              }
+            : {}),
+        },
+      ],
+    };
+    const uncertain = await findUncertainCalls(
+      store,
+      ["current", "old"],
+      isMutating,
+    );
+    expect(uncertain.size).toBe(1);
+    expect(uncertain.get("shared-call")).toMatchObject({
+      runId: "current",
+      approvalGeneration: "current",
+    });
+  });
   it("flags a mutating call that started and never reported", async () => {
     const uncertain = await findUncertainCalls(
       storeWith({
@@ -166,7 +211,9 @@ describe("findUncertainCalls", () => {
         },
       },
     } as unknown as AssistantStore;
-    expect((await findUncertainCalls(broken, ["t1"], isMutating)).size).toBe(0);
+    await expect(
+      findUncertainCalls(broken, ["t1"], isMutating),
+    ).rejects.toMatchObject({ code: "recovery_history_unreadable" });
   });
 });
 
@@ -256,7 +303,7 @@ describe("the uncertain side-effect guard", () => {
     ).toBeDefined();
   });
 
-  it("lets a different call through, and lets the identical one through once approved", async () => {
+  it("allows a different call but still requires generation-bound admission for an old approval", async () => {
     const map = await uncertainCall();
     const digest = map.get("c1")?.argsSha256;
     const guard = createUncertainSideEffectGuard({
@@ -268,7 +315,7 @@ describe("the uncertain side-effect guard", () => {
     );
     expect(different).toEqual({ allowed: true });
     const approved = await guard.canExecute?.(await ctx("new-2"));
-    expect(approved).toEqual({ allowed: true });
+    expect(approved?.allowed).toBe(false);
     // Same arguments, a call nobody approved: still refused.
     const notApproved = await guard.canExecute?.(await ctx("new-3"));
     expect(notApproved?.allowed).toBe(false);

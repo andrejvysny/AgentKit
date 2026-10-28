@@ -2183,7 +2183,8 @@ describe("TurnRunner.disposeContributors", () => {
         error: () => {},
       },
     });
-    await runner.disposeContributors();
+    await expect(runner.disposeContributors()).rejects.toThrow(AggregateError);
+    await expect(runner.disposeContributors()).rejects.toThrow(AggregateError);
     expect(log).toEqual(["good"]);
     expect(warnings).toEqual(["tool contributor dispose failed"]);
   });

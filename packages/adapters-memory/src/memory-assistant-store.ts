@@ -21,6 +21,7 @@
  * `expiresAt` on the same stored object) touches the same record.
  */
 import { MemoryAgentInputStore } from "./memory-agent-input-store.js";
+import { MemoryToolExecutionStore } from "./memory-tool-execution-store.js";
 import { MemoryContextSummaryStore } from "./memory-context-summary-store.js";
 import type {
   AiContentPart,
@@ -2188,6 +2189,7 @@ export class MemoryAssistantStore implements AssistantStore {
   private readonly rawTasks: MemoryTaskStore;
   readonly proposals: MemoryProposalStore;
   readonly inputs: MemoryAgentInputStore;
+  readonly toolExecutions: MemoryToolExecutionStore;
   readonly summaries: MemoryContextSummaryStore;
   readonly providers = new MemoryProviderStore();
   readonly settings = new MemorySettingsStore();
@@ -2215,7 +2217,10 @@ export class MemoryAssistantStore implements AssistantStore {
       options.leaseTtlMs,
       options,
       this.gate,
-      () => this.continuations.pruneDeletedRuns(),
+      () => {
+        this.continuations.pruneDeletedRuns();
+        this.toolExecutions.pruneDeletedRuns();
+      },
     );
     const fencedWrites = new Set([
       "createTask",
@@ -2284,6 +2289,12 @@ export class MemoryAssistantStore implements AssistantStore {
     this.summaries = new MemoryContextSummaryStore({
       withGate: (operation) => this.gate.runExclusive(async () => operation()),
     });
+    this.toolExecutions = new MemoryToolExecutionStore({
+      withGate: (operation) => this.gate.runExclusive(async () => operation()),
+      assertFence: (fence) =>
+        this.rawTasks.assertLeaseCurrent(fence.taskId, fence.leaseToken),
+      taskExists: (runId) => this.rawTasks.tasks.has(runId),
+    });
   }
 
   /**
@@ -2325,6 +2336,9 @@ export class MemoryAssistantStore implements AssistantStore {
         this.gate.runExclusive(async () => operation(), owner),
       ),
       summaries: this.summaries.withGate((operation) =>
+        this.gate.runExclusive(async () => operation(), owner),
+      ),
+      toolExecutions: this.toolExecutions.withGate((operation) =>
         this.gate.runExclusive(async () => operation(), owner),
       ),
       providers: this.providers,

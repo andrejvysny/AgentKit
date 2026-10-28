@@ -45,6 +45,7 @@ export * from "./conversation/conversation-service.js";
 export * from "./turn/message-order.js";
 export * from "./turn/history-reconcile.js";
 export * from "./turn/side-effects.js";
+export * from "./ports/tool-execution-store.js";
 export * from "./turn/emulated-tool-call.js";
 export * from "./turn/hook-deadline.js";
 export * from "./turn/registry-staging.js";

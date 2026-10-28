@@ -115,6 +115,8 @@ import {
 import { createRunProjector, type RunProjector } from "./projection.js";
 import type { PassInput, PassResult, PassState } from "./pass-types.js";
 import { stageRegistry } from "./registry-staging.js";
+import { sessionWithAdmittedContext } from "../sessions/admitted-context.js";
+import { boundedContextClient } from "../context/bounded-context-client.js";
 import {
   hasUnansweredRequest,
   parkTurn,
@@ -134,8 +136,6 @@ import {
   type UncertainCall,
 } from "./side-effects.js";
 
-/** How many unfinished runs of one chat a single turn may consult. */
-const UNCERTAIN_SCAN_LIMIT = 20;
 import {
   RETRY_MAX_TOOL_ITERATIONS,
   filterToolTurns,
@@ -368,7 +368,7 @@ export class TurnRunner implements TaskWorker {
    * Whether {@link disposeContributors} has already run. A host wires the call
    * into a signal handler, and a signal can arrive twice.
    */
-  private contributorsDisposed = false;
+  private contributorsDisposal: Promise<void> | undefined;
 
   /**
    * The event → conversation projection, shared verbatim with any host executor
@@ -393,26 +393,34 @@ export class TurnRunner implements TaskWorker {
    * Release every contributor that holds something open — the shutdown half of
    * `ToolSetContributor`'s lifecycle.
    *
-   * Idempotent by design: a second call does nothing, because the natural place
-   * to wire this is a SIGINT/SIGTERM handler and the second Ctrl-C must not
-   * close a client connection twice. A contributor that throws is logged and
-   * skipped rather than allowed to strand the ones after it — shutdown that
-   * gives up halfway leaks more than the error it reported.
+   * Concurrent and repeated callers await the same cleanup verdict. All hooks
+   * run even after a failure; their failures are aggregated and propagated so
+   * shutdown cannot claim success before required cleanup has succeeded.
    */
   async disposeContributors(): Promise<void> {
-    if (this.contributorsDisposed) return;
-    this.contributorsDisposed = true;
+    this.contributorsDisposal ??= this.disposeAllContributors();
+    return this.contributorsDisposal;
+  }
+
+  private async disposeAllContributors(): Promise<void> {
+    const failures: unknown[] = [];
     for (const contributor of this.deps.contributors) {
       if (contributor.dispose === undefined) continue;
       try {
         await contributor.dispose();
       } catch (err) {
+        failures.push(err);
         this.deps.logger?.warn("tool contributor dispose failed", {
           namespace: contributor.namespace,
           error: err instanceof Error ? err.message : String(err),
         });
       }
     }
+    if (failures.length > 0)
+      throw new AggregateError(
+        failures,
+        "Required contributor cleanup failed.",
+      );
   }
 
   /**
@@ -666,12 +674,16 @@ export class TurnRunner implements TaskWorker {
     // Session mode: a chat opts in through its metadata, and only a store that
     // keeps durable inputs can honour it. Anything else runs exactly as before.
     const inputs = store.inputs;
-    const session =
+    const currentSession =
       inputs === undefined
         ? undefined
         : readSessionDescriptor(
             (await store.conversations.getChat(chatId))?.metadata,
           );
+    const session =
+      currentSession === undefined
+        ? undefined
+        : sessionWithAdmittedContext(currentSession, task.payload);
     // The agent profile, resolved by the HOST from the session's descriptor.
     // Its tool allowlist is enforced at staging and its limits cap — never
     // raise — this host's; its `instructions` are the only part the model is
@@ -808,6 +820,14 @@ export class TurnRunner implements TaskWorker {
             ? {}
             : { allowedToolNames: new Set(profile.tools) }),
           guards: [...(this.deps.toolGuards ?? []), uncertainSideEffectGuard],
+          durable: {
+            store,
+            ctx,
+            context: { workspace: session?.workspace },
+            isMutating: (name) =>
+              !this.deps.exemptMutatingToolNames?.includes(name) &&
+              this.deps.mutatingToolNames?.includes(name) === true,
+          },
           ...(this.deps.standingApprovals === undefined
             ? {}
             : {
@@ -909,24 +929,6 @@ export class TurnRunner implements TaskWorker {
       await parkTurn(store, ctx, assistantMessageId, state.content);
       return;
     }
-    // Approved calls that never ran execute first, ahead of any model request
-    // (ADR 0019); their ids stay out of orphan reconciliation.
-    const approvals =
-      session === undefined
-        ? undefined
-        : await resolveApprovedCalls(store, ctx, {
-            chatId,
-            assistantMessageId,
-            ...(state.lastMessageId === undefined
-              ? {}
-              : { lastMessageId: state.lastMessageId }),
-          });
-    if (approvals?.lastMessageId !== undefined)
-      state.lastMessageId = approvals.lastMessageId;
-    const exceptToolCallIds = new Set(
-      approvals?.resumeCalls.map((call) => call.id),
-    );
-    uncertainHold.approved = approvals?.approvedCalls;
     // What the durable log says started and never reported. An attempt that died
     // mid-tool leaves that mark, and nothing else in the store can tell a
     // rerun-safe gap from one whose command may already have run.
@@ -940,6 +942,25 @@ export class TurnRunner implements TaskWorker {
             staged.registry,
             ctx.signal,
           );
+    // Approved calls that never ran execute first, ahead of any model request
+    // (ADR 0019); their ids stay out of orphan reconciliation.
+    const approvals =
+      session === undefined
+        ? undefined
+        : await resolveApprovedCalls(store, ctx, {
+            chatId,
+            assistantMessageId,
+            uncertain: uncertainHold.current,
+            ...(state.lastMessageId === undefined
+              ? {}
+              : { lastMessageId: state.lastMessageId }),
+          });
+    if (approvals?.lastMessageId !== undefined)
+      state.lastMessageId = approvals.lastMessageId;
+    const exceptToolCallIds = new Set(
+      approvals?.resumeCalls.map((call) => call.id),
+    );
+    uncertainHold.approved = approvals?.approvedCalls;
     // Agent sessions replay full transcripts under a token budget and carry
     // project instructions; every other chat assembles exactly as before.
     const assembleHistory = async (
@@ -1041,7 +1062,11 @@ export class TurnRunner implements TaskWorker {
             ...(approvals && approvals.resumeCalls.length > 0
               ? {
                   resumeCalls: approvals.resumeCalls,
-                  toolMetadata: { approvedCalls: approvals.approvedCalls },
+                  toolMetadata: {
+                    approvedCalls: approvals.approvedCalls,
+                    approvedRequests: approvals.approvedRequests,
+                    approvedGenerations: approvals.approvedGenerations,
+                  },
                 }
               : {}),
           }),
@@ -1339,11 +1364,24 @@ export class TurnRunner implements TaskWorker {
       input.messages,
     );
     input.ctx.signal.throwIfAborted();
+    const client = await boundedContextClient(input.client, {
+      store: this.deps.store,
+      task: input.task,
+      chatId: input.chatId,
+      providerId: input.providerId,
+      model: input.model,
+      clock: this.deps.clock,
+      ids: this.deps.ids,
+      attemptId: input.ctx.attemptId,
+      ...(this.deps.tokenEstimator === undefined
+        ? {}
+        : { estimator: this.deps.tokenEstimator }),
+    });
     const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
     const generator = runAgentLoop({
       ...continuationRequest(input.providerContinuation),
       runContent: input.runContent,
-      client: input.client,
+      client,
       registry: input.registry,
       model: input.model,
       messages,
@@ -1432,13 +1470,9 @@ export class TurnRunner implements TaskWorker {
    * estimate to be right to be worth asking.
    */
   /**
-   * The calls of this turn's run, and of the unfinished runs in its scope, that
-   * the durable log shows having STARTED without ever reporting an outcome.
-   *
-   * The scope is bounded on purpose: this turn's task always, plus at most
-   * {@link UNCERTAIN_SCAN_LIMIT} not-cleanly-completed tasks of the same chat.
-   * Reading every historical run's log on every turn to ask a question only a
-   * crash can make non-empty is a tax no turn should pay.
+   * Include every run: a completed turn can still contain an admitted tool
+   * whose body timed out, and old unresolved effects do not become safe after
+   * a fixed number of newer turns.
    */
   private async findUncertainCalls(
     store: AssistantStore,
@@ -1458,13 +1492,9 @@ export class TurnRunner implements TaskWorker {
       effectOf: (name) => registry.get(name)?.definition.effect,
     });
     const runIds = new Set<string>([taskId]);
-    const tasks = await store.tasks.listByScope(chatId).catch(() => []);
-    let scanned = 0;
+    const tasks = await store.tasks.listByScope(chatId);
     for (const scoped of tasks) {
-      if (scanned >= UNCERTAIN_SCAN_LIMIT) break;
-      if (scoped.taskId === taskId || scoped.status === "completed") continue;
       runIds.add(scoped.taskId);
-      scanned += 1;
     }
     signal?.throwIfAborted();
     return findUncertainCalls(store, runIds, isMutating);

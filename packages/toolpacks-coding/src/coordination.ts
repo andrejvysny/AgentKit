@@ -16,6 +16,10 @@
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { CodingError } from "./errors.js";
+import {
+  createLockDirWorkspaceCoordinator,
+  defaultWorkspaceCoordinationDir,
+} from "./coordination-lockdir.js";
 
 export interface LeaseHolder {
   chatId?: string;
@@ -38,7 +42,43 @@ export interface WorkspaceLease {
   release(): Promise<void>;
 }
 
+/** One admitted shell invocation, distinct from authorization consumption. */
+export interface ExecutionIntent {
+  runId: string;
+  toolCallId?: string;
+  executionAttemptId: string;
+  execId: string;
+}
+
+export interface ExecutionCleanup {
+  executionAttemptId: string;
+  state: "stopped" | "survivors" | "unknown";
+  survivors: number[];
+  reason?: string;
+}
+
+/** Durable command ownership lives in the exclusive marker itself. */
+export interface ExecutionLease extends WorkspaceLease {
+  beginExecution(intent: ExecutionIntent): Promise<void>;
+  spawned(identity: { pid: number; processStart?: string }): Promise<void>;
+  finishExecution(cleanup: ExecutionCleanup): Promise<void>;
+}
+
+export function isExecutionLease(
+  lease: WorkspaceLease,
+): lease is ExecutionLease {
+  return (
+    "beginExecution" in lease &&
+    "spawned" in lease &&
+    "finishExecution" in lease
+  );
+}
+
 export interface WorkspaceCoordinator {
+  /** Inspect durable ownership before a pack admits mutations. Never clears unknown state. */
+  reconcileWorkspace?(root: string): Promise<ExecutionCleanup[]>;
+  /** Persist a blocker before an uncertain startup cleanup can admit mutations. */
+  quarantineWorkspace?(root: string, cleanup: ExecutionCleanup): Promise<void>;
   /** Shared workspace lease + exclusive lock on one canonical file. Waits while a workspace-exclusive lease is held or requested. */
   acquireFile(input: {
     root: string;
@@ -411,9 +451,8 @@ export function createInProcessWorkspaceCoordinator(
 let shared: InProcessCoordinator | undefined;
 
 /**
- * The one coordinator every pack in this process uses unless told otherwise.
- * Lock-dir coordinators also take their in-process leases from it, so packs on
- * either kind exclude each other.
+ * Shared local gate for durable lock-dir coordinators. Explicit in-process
+ * coordinators support file-only coordination, not durable shell ownership.
  */
 export function defaultInProcessCoordinator(): InProcessCoordinator {
   shared ??= new InProcessCoordinator();
@@ -421,5 +460,7 @@ export function defaultInProcessCoordinator(): InProcessCoordinator {
 }
 
 export function defaultWorkspaceCoordinator(): WorkspaceCoordinator {
-  return defaultInProcessCoordinator();
+  return createLockDirWorkspaceCoordinator({
+    dir: defaultWorkspaceCoordinationDir(),
+  });
 }

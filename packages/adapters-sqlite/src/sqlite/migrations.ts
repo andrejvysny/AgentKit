@@ -4,6 +4,7 @@ import { SCHEMA_V9_PROVIDER_CONTINUATIONS } from "../provider-continuation-schem
 import { SCHEMA_V10_MESSAGE_ARCHIVES } from "../message-archive-schema.js";
 import { AGENT_INPUTS_TABLE_SQL } from "./agent-input-store.js";
 import { CONTEXT_SUMMARIES_TABLE_SQL } from "./context-summary-store.js";
+import { TOOL_EXECUTIONS_TABLE_SQL } from "./tool-execution-store.js";
 import { normalizeRow, type SqliteDatabase } from "./driver.js";
 
 export interface SqliteMigration {
@@ -21,6 +22,7 @@ export const MIN_SUPPORTED_SCHEMA_VERSION = 8;
 
 // Optional stores share the owned database without changing its core version.
 const OPTIONAL_TABLES = {
+  tool_executions: TOOL_EXECUTIONS_TABLE_SQL,
   connector_connections:
     "CREATE TABLE connector_connections (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, record TEXT NOT NULL)",
   prompt_templates:
