@@ -115,6 +115,11 @@ impl ToolResult {
 #[derive(Clone, Debug)]
 pub struct ToolContext {
     pub run_id: String,
+    /// Stable identity of the model's logical tool call. Hosts bind durable
+    /// execution receipts to it; it never changes across attempts.
+    pub tool_call_id: Option<String>,
+    /// Durable execution attempt this call runs under, from the task lease.
+    pub attempt_id: Option<String>,
     pub chat_id: Option<String>,
     pub scope_id: Option<String>,
     pub user_id: Option<String>,
@@ -124,6 +129,32 @@ pub struct ToolContext {
     /// Durable hosts supply authority; standalone calls have no task lease.
     pub dispatch_guard: Option<Arc<dyn crate::DispatchGuard>>,
     pub metadata: Map<String, Value>,
+    /// Filled by a tool that must wait for a human instead of answering;
+    /// `None` in hosts that cannot park (the tool must then deny).
+    pub suspension: Option<Arc<SuspendSlot>>,
+}
+
+impl ToolContext {
+    /// The deterministic request id for this call (`hreq:<run>:<call>`):
+    /// the same logical request across attempts and retries.
+    pub fn waiting_request_id(&self) -> String {
+        format!(
+            "hreq:{}:{}",
+            self.run_id,
+            self.tool_call_id.as_deref().unwrap_or("")
+        )
+    }
+    /// Ask a human and park the run. False when this host cannot park: the
+    /// tool must then produce its own refusal, never a silent success.
+    pub fn request_human(&self, request: HumanRequestSpec) -> bool {
+        match &self.suspension {
+            Some(slot) => {
+                slot.set(request);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -234,4 +265,77 @@ pub trait RunEventSink: Send + Sync {
     ) -> Result<(), CoreError> {
         self.append(event).await
     }
+}
+
+/// A tool's typed request to park the run until a human answers. The host
+/// persists it as the durable human-request record of the parked turn
+/// (ADR 0016 §2); nothing about this decision is inferred from result text.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HumanRequestSpec {
+    /// Deterministic request id (`hreq:<taskId>:<toolCallId>`); the store's
+    /// idempotency key across attempts and retries.
+    pub request_id: String,
+    /// The request record's content: `kind` (`input` | `approval`),
+    /// `toolName`, `argsSha256`, `prompt`, optional `standing` for
+    /// exact-call remembering.
+    #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
+    pub content: Value,
+    /// Digest of `content`; how a replayed answer is told from a conflict.
+    pub content_hash: String,
+    /// ISO-8601 expiry; `None` never expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+/// The one-shot channel a tool uses to hand the run its human request.
+/// Filling it suspends the run at the tool boundary instead of recording a
+/// result for the call.
+#[derive(Debug, Default)]
+pub struct SuspendSlot {
+    request: std::sync::Mutex<Option<HumanRequestSpec>>,
+}
+
+impl SuspendSlot {
+    /// Called by the tool; the first request wins, later ones are ignored
+    /// because the run stops at the first.
+    pub fn set(&self, request: HumanRequestSpec) {
+        let mut slot = self
+            .request
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.is_none() {
+            *slot = Some(request);
+        }
+    }
+    pub(crate) fn take(&self) -> Option<HumanRequestSpec> {
+        self.request
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+    }
+}
+
+/// The host's park authority: called once the run has durably recorded its
+/// `run.waiting` event. The host commits the parked turn (status, attempt,
+/// lease, request record) here; returning `Err` fails the run honestly.
+#[async_trait]
+pub trait SuspendSink: Send + Sync {
+    async fn park(&self, request: &HumanRequestSpec, tool_call_id: &str) -> Result<(), CoreError>;
+}
+
+/// One steer the host offers the run at a tool boundary (ADR 0016 §3):
+/// the durable input's id and the user message it places.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SteeringItem {
+    pub input_id: String,
+    pub message: ChatMessage,
+}
+
+/// The host's pending steers for this run. The loop polls ONLY at a tool
+/// boundary; a source that throws or hangs costs the run nothing — the steers
+/// stay pending with the host and become follow-ups at settlement.
+#[async_trait]
+pub trait SteeringSource: Send + Sync {
+    async fn pending(&self) -> Vec<SteeringItem>;
 }

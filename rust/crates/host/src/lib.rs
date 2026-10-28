@@ -15,6 +15,7 @@ mod ports;
 mod proposals;
 mod retry;
 mod runner;
+mod session;
 mod subscription;
 
 pub use budget::{parse_budget_limits, restore_execution_budget};
@@ -27,6 +28,7 @@ pub use ports::*;
 pub use proposals::*;
 pub use retry::*;
 pub use runner::*;
+pub use session::*;
 pub use subscription::*;
 
 use agentkit_store::{LeaseFence, SqliteStore, StoreError, TaskRecord};
@@ -56,6 +58,12 @@ pub struct ExecutionContext {
     pub task: TaskRecord,
     pub attempt_id: String,
     pub cancellation: CancellationToken,
+    /// Set when the durable task records an interrupt request; the run stops
+    /// at its next safe boundary and the host parks the turn.
+    pub interruption: CancellationToken,
+    /// Filled by the park sink when a tool asked a human; the runner then
+    /// skips settling because the park already ended the attempt.
+    pub(crate) suspension: Arc<Mutex<Option<agentkit_core::HumanRequestSpec>>>,
     pub(crate) store: SqliteStore,
     pub(crate) fence: LeaseFence,
     pub(crate) runtime: SharedRuntime,

@@ -235,7 +235,10 @@ pub fn definition(name: &str, effect: &str) -> ToolDefinition {
 
 pub fn context() -> ToolContext {
     ToolContext {
+        suspension: None,
         run_id: "run".into(),
+        tool_call_id: None,
+        attempt_id: None,
         chat_id: Some("chat".into()),
         scope_id: Some("document".into()),
         user_id: Some("trusted-user".into()),
@@ -259,6 +262,7 @@ pub fn contribution() -> ToolContributionContext {
         cancellation: CancellationToken::new(),
         has_primary_binding: true,
         timeout_ms: 20,
+        durable: None,
     }
 }
 

@@ -111,8 +111,9 @@ fn pid_alive(pid: i32) -> bool {
 
 /// Owner liveness for markers whose `owner_pid` may exceed a real `pid_t`
 /// (TS accepts any positive safe integer; `process.kill(pid, 0)` answers
-/// ESRCH/EINVAL for absurd values, i.e. "not alive").
-fn owner_alive(pid: i64) -> bool {
+/// ESRCH/EINVAL for absurd values, i.e. "not alive"). Also the liveness
+/// probe for workspace quarantine survivor pids.
+pub(crate) fn owner_alive(pid: i64) -> bool {
     pid <= i32::MAX as i64 && pid_alive(pid as i32)
 }
 

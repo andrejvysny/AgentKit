@@ -336,6 +336,28 @@ impl SqliteStore {
         .await
     }
 
+    /// Read-modify-write the chat record inside ONE actor job, so a
+    /// concurrent writer cannot slip between the read and the write and
+    /// silently drop this update. A closure error rolls the write back.
+    pub async fn mutate_chat<F, T>(&self, chat_id: &str, now: i64, mutate: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut ChatRecord) -> Result<T> + Send + 'static,
+    {
+        let chat_id = chat_id.to_owned();
+        self.call(move |db| {
+            let mut chat: ChatRecord = required(db, "chats", "id", &chat_id)?;
+            let value = mutate(&mut chat)?;
+            chat.updated_at = ConversationTimestamp::from_epoch_millis(now)?;
+            db.execute(
+                "UPDATE chats SET record=? WHERE id=?",
+                params![json(db, &chat)?, chat_id],
+            )?;
+            Ok(value)
+        })
+        .await
+    }
+
     pub async fn append_message(
         &self,
         input: MessageInput,

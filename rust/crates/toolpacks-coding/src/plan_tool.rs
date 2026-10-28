@@ -138,8 +138,7 @@ pub fn submit_plan_tool(
                             error.to_string(),
                             ctx.cancellation.is_cancelled(),
                         )
-                    })?
-                {
+                    })? {
                     // An authority without a real `planApproved` reads exactly
                     // like "no authority wired" (TS checks the method exists).
                     None => return Ok(recorded()),
@@ -217,7 +216,10 @@ mod tests {
 
     fn context() -> ToolContext {
         ToolContext {
+            suspension: None,
             run_id: "run-1".to_owned(),
+            tool_call_id: None,
+            attempt_id: None,
             chat_id: Some("chat-1".to_owned()),
             scope_id: None,
             user_id: None,

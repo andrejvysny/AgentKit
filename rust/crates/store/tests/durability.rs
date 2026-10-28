@@ -151,12 +151,14 @@ fn foreign_and_newer_databases_are_refused_without_database_writes() {
     drop(SqliteStore::open(&newer, 2).unwrap());
     {
         let connection = rusqlite::Connection::open(&newer).unwrap();
-        connection.pragma_update(None, "user_version", 3).unwrap();
+        connection
+            .pragma_update(None, "user_version", agentkit_store::SCHEMA_VERSION + 1)
+            .unwrap();
     }
     let before = std::fs::read(&newer).unwrap();
     assert!(matches!(
         SqliteStore::open(&newer, 2),
-        Err(StoreError::UnsupportedVersion(3))
+        Err(StoreError::UnsupportedVersion(v)) if v == agentkit_store::SCHEMA_VERSION + 1
     ));
     assert_eq!(std::fs::read(&newer).unwrap(), before);
 }

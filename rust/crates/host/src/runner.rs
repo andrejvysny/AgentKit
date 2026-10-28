@@ -33,6 +33,20 @@ impl Default for HostOptions {
     }
 }
 
+/// The host asks a planner for the queued work behind a settled session
+/// turn and stages the first eligible candidate, in the runner's own path.
+/// This is how a durable session keeps its queue moving without the runner
+/// knowing anything about sessions, inputs, or descriptors.
+#[async_trait::async_trait]
+pub trait SessionFlushPlanner: Send + Sync {
+    /// Inputs queued behind this settled turn, in arrival order, fully
+    /// staged; empty when the turn was not a session turn.
+    async fn flush_candidates(
+        &self,
+        settled: &TaskRecord,
+    ) -> HostResult<Vec<agentkit_store::StageQueuedTurn>>;
+}
+
 #[derive(Clone)]
 pub struct AgentHost {
     pub(crate) store: SqliteStore,
@@ -41,6 +55,27 @@ pub struct AgentHost {
     active: Arc<Mutex<HashMap<String, CancellationToken>>>,
     options: HostOptions,
     owner_id: String,
+    wake: Arc<tokio::sync::Notify>,
+    flush_planner: Arc<Mutex<Option<Arc<dyn SessionFlushPlanner>>>>,
+}
+
+/// A handle the session service uses to rouse idle workers when work appears
+/// (a submitted turn, a queued input promoted, an answered request). It is
+/// deliberately opaque: holders cannot cancel or inspect the worker.
+#[derive(Clone)]
+pub struct WakeHandle {
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl WakeHandle {
+    pub(crate) fn new(notify: Arc<tokio::sync::Notify>) -> Self {
+        Self { notify }
+    }
+    /// Best-effort rouse; the worker also polls, so a lost wake only costs
+    /// one poll interval, never a stranded task.
+    pub fn wake(&self) {
+        self.notify.notify_one();
+    }
 }
 
 impl AgentHost {
@@ -83,7 +118,29 @@ impl AgentHost {
             options,
             executors: Arc::new(executors),
             active: Arc::new(Mutex::new(HashMap::new())),
+            wake: Arc::new(tokio::sync::Notify::new()),
+            flush_planner: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Attach the durable session service so settled session turns promote
+    /// their queued inputs in the runner's own path. Wiring is late-bound
+    /// because the service needs the host's wake handle.
+    pub async fn set_session_flush_planner(&self, planner: Arc<dyn SessionFlushPlanner>) {
+        *self.flush_planner.lock().await = Some(planner);
+        self.wake.notify_one();
+    }
+
+    /// The handle the durable session service uses to rouse workers without
+    /// owning the host.
+    pub fn wake_handle(&self) -> WakeHandle {
+        WakeHandle::new(self.wake.clone())
+    }
+
+    /// Rouse an idle worker now; correctness never depends on this because
+    /// the worker also polls on `poll_interval_ms`.
+    pub fn wake(&self) {
+        self.wake.notify_one();
     }
 
     pub async fn submit(&self, input: SubmitTask) -> HostResult<RunHandle> {
@@ -100,6 +157,7 @@ impl AgentHost {
             },
             Err(error) => return Err(error.into()),
         };
+        self.wake.notify_one();
         Ok(self.run_handle(&task.task_id))
     }
 
@@ -153,10 +211,12 @@ impl AgentHost {
     }
 
     pub async fn resume(&self, task_id: &str) -> HostResult<TaskRecord> {
-        Ok(self
+        let task = self
             .store
             .resume_task(task_id, self.runtime.now_ms())
-            .await?)
+            .await?;
+        self.wake.notify_one();
+        Ok(task)
     }
 
     pub fn start_worker(&self) -> WorkerHandle {
@@ -212,6 +272,7 @@ impl AgentHost {
             } else {
                 tokio::select! {
                     _=stop.cancelled()=>return Ok(()),
+                    _=self.wake.notified()=>{},
                     _=tokio::time::sleep(Duration::from_millis(self.options.poll_interval_ms))=>{}
                 }
             }
@@ -247,6 +308,8 @@ impl AgentHost {
         let context = ExecutionContext {
             task: claimed.task,
             cancellation: CancellationToken::new(),
+            interruption: CancellationToken::new(),
+            suspension: Arc::new(Mutex::new(None)),
             attempt_id: claimed.lease.attempt_id.clone(),
             store: self.store.clone(),
             fence: claimed.lease.fence(),
@@ -281,6 +344,11 @@ impl AgentHost {
         };
         let execution = async {
             executor.execute(context.clone()).await?;
+            if context.suspension.lock().await.is_some() {
+                // A parked turn never reaches verification: the answer, not
+                // this attempt, decides what comes next.
+                return Ok(());
+            }
             if let Some(hook) = &self.options.verification
                 && !executor.handles_verification()
             {
@@ -311,6 +379,26 @@ impl AgentHost {
                 _ = heartbeat.tick() => self.heartbeat(&context).await?,
             }
         };
+        // A parked turn was committed by the park itself: the attempt and
+        // lease are already gone, and settling would fight the park.
+        if context.suspension.lock().await.is_some() {
+            return outcome;
+        }
+        if outcome.is_ok()
+            && context.interruption.is_cancelled()
+            && self
+                .store
+                .get_task(&context.task.task_id)
+                .await?
+                .is_some_and(|task| task.status == TaskStatus::Running)
+        {
+            // The loop stopped at a safe boundary on the durable interrupt:
+            // park it with the attempt and lease ended.
+            self.store
+                .park_interrupted(context.fence.clone(), self.runtime.now_ms())
+                .await?;
+            return Ok(());
+        }
         self.settle(&context, outcome).await
     }
 
@@ -327,13 +415,12 @@ impl AgentHost {
             context.cancellation.cancel();
             return Err(error.into());
         }
-        if self
-            .store
-            .get_task(&context.task.task_id)
-            .await?
-            .is_some_and(|task| task.cancel_requested)
-        {
+        let task = self.store.get_task(&context.task.task_id).await?;
+        if task.as_ref().is_some_and(|task| task.cancel_requested) {
             context.cancellation.cancel();
+        }
+        if task.as_ref().is_some_and(|task| task.interrupt_requested) {
+            context.interruption.cancel();
         }
         Ok(())
     }
@@ -385,6 +472,26 @@ impl AgentHost {
                 messages: vec![],
             })
             .await?;
+        self.flush_after_settle(&context.task).await?;
+        // A settled turn can have promoted queued work (the session settle
+        // path enqueues the next turn); rouse a worker for it immediately.
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    /// Promote the first queued input waiting behind a settled turn. The
+    /// store's staging transaction carries its own busy check, so racing
+    /// submitters and concurrent flushes cannot double-start the scope.
+    async fn flush_after_settle(&self, settled: &TaskRecord) -> HostResult<()> {
+        let planner = self.flush_planner.lock().await.clone();
+        let Some(planner) = planner else {
+            return Ok(());
+        };
+        for candidate in planner.flush_candidates(settled).await? {
+            if self.store.stage_queued_turn(candidate).await?.is_some() {
+                break; // one turn at a time; the next flush follows its settle
+            }
+        }
         Ok(())
     }
 

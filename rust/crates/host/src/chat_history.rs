@@ -120,6 +120,8 @@ pub(super) fn assemble(
     limit: usize,
     anchor: &str,
     system_prompt: Option<String>,
+    receipts: &[agentkit_store::ExecutionReceiptRecord],
+    run_id: &str,
 ) -> Vec<ChatMessage> {
     let start = records.len().saturating_sub(limit);
     let ordered = order_messages_for_provider(records.into_iter().skip(start).collect());
@@ -129,6 +131,16 @@ pub(super) fn assemble(
     }
     let mut declared = HashSet::new();
     for record in ordered {
+        // An inactive record is normally not part of the active chain —
+        // except one written BY THIS RUN (a denial, an answered human
+        // request, an approval mismatch): those are internal, deliberately
+        // unactivated, and still answer this run's calls (the TypeScript
+        // anchored-history rule).
+        if !record.active
+            && !(record.run_id.as_deref() == Some(run_id) && record.metadata["internal"] == true)
+        {
+            continue;
+        }
         if record.id == anchor
             || record.metadata["placeholder"] == true
             || record.metadata["canonicalProviderDisplay"] == true
@@ -164,9 +176,19 @@ pub(super) fn assemble(
             metadata: None,
         });
     }
-    reconcile(messages)
+    reconcile(
+        messages,
+        receipts
+            .iter()
+            // Later inserts overwrite: the last receipt per call id wins.
+            .map(|record| (record.tool_call_id.clone(), record))
+            .collect(),
+    )
 }
-fn reconcile(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+fn reconcile(
+    messages: Vec<ChatMessage>,
+    receipts: std::collections::HashMap<String, &agentkit_store::ExecutionReceiptRecord>,
+) -> Vec<ChatMessage> {
     let mut answered: HashSet<String> = messages
         .iter()
         .filter(|message| message.role == "tool")
@@ -178,10 +200,46 @@ fn reconcile(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         result.push(message);
         for call in calls {
             if answered.insert(call.id.clone()) {
-                let text =
-                    "missing tool result for persisted tool call; reconciled as synthetic failure";
-                let envelope = json!({"ok":false,"status":"error","summary":text,"warnings":[],"truncated":false,"data":{"errorCode":"tool_result_missing","errorMessage":text}});
-                let mut missing = ChatMessage::text("tool", &envelope.to_string());
+                // Reconcile against the durable receipt before falling back
+                // to the generic synthetic failure (ADR 0020): a completed
+                // receipt replays its recorded result; an admitted receipt
+                // is an uncertain effect that must not be reissued.
+                let (text, code) = match receipts.get(&call.id) {
+                    Some(record)
+                        if record.status == agentkit_store::ExecutionReceiptStatus::Completed =>
+                    {
+                        match record
+                            .result
+                            .as_ref()
+                            .and_then(|value| serde_json::from_value::<agentkit_core::ToolResult>(value.clone()).ok())
+                        {
+                            Some(stored) => (
+                                agentkit_core::tool_model_envelope(&stored, &stored.limits),
+                                None,
+                            ),
+                            None => (
+                                "admitted execution has no durable result; uncertain side effect, do not reissue".into(),
+                                Some("tool_effect_uncertain"),
+                            ),
+                        }
+                    }
+                    Some(_) => (
+                        "admitted execution has no durable result; uncertain side effect, do not reissue"
+                            .into(),
+                        Some("tool_effect_uncertain"),
+                    ),
+                    None => (
+                        "missing tool result for persisted tool call; reconciled as synthetic failure"
+                            .into(),
+                        Some("tool_result_missing"),
+                    ),
+                };
+                let envelope = match code {
+                    None => text,
+                    Some(code) => json!({"ok":false,"status":"error","summary":text,"warnings":[],"truncated":false,"data":{"errorCode":code,"errorMessage":text}})
+                        .to_string(),
+                };
+                let mut missing = ChatMessage::text("tool", &envelope);
                 missing.tool_call_id = Some(call.id);
                 missing.name = Some(call.name);
                 result.push(missing);
@@ -222,6 +280,9 @@ impl DurableEvents {
         let event = serde_json::to_value(event).map_err(|_| {
             CoreError::new("event_serialization_failed", "event serialization failed")
         })?;
+        if event["type"] == "run.input.applied" {
+            return self.persist_steered(&event).await;
+        }
         let mut projected = vec![];
         for message in messages {
             let final_answer = message.role == "assistant" && message.tool_calls.is_empty();
@@ -307,6 +368,66 @@ impl DurableEvents {
             )
             .await;
         }
+        Ok(())
+    }
+}
+
+impl DurableEvents {
+    /// The projection of a placed steer (ADR 0016 §3): the durable input's
+    /// content becomes a user record and the input is receipted APPLIED —
+    /// in ONE transaction with the event, so the log and the history never
+    /// disagree about what the model saw. An input that vanished or carries
+    /// unreadable content costs the message only; the event still lands.
+    async fn persist_steered(&self, event: &Value) -> Result<(), CoreError> {
+        let input_id = event["data"]["inputId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let record = self
+            .context
+            .store
+            .get_input(input_id.clone())
+            .await
+            .map_err(|_| CoreError::new("event_persistence_failed", "event persistence failed"))?;
+        let content = record
+            .as_ref()
+            .and_then(|record| record.content.get("content"))
+            .filter(|content| content.is_string() || content.is_array())
+            .cloned();
+        let (messages, applies) = match content {
+            Some(content) => {
+                let message_id = self.context.runtime.id();
+                (
+                    vec![MessageInput {
+                        id: Some(message_id.clone()),
+                        chat_id: self.chat_id.clone(),
+                        run_id: Some(self.context.task.task_id.clone()),
+                        role: "user".into(),
+                        content,
+                        metadata: json!({"internal": true, "steering": true, "inputId": input_id}),
+                        ..MessageInput::default()
+                    }],
+                    vec![agentkit_store::AppliedSteer {
+                        input_id,
+                        message_id,
+                    }],
+                )
+            }
+            None => (vec![], vec![]),
+        };
+        self.context
+            .store
+            .append_projected_inputs(agentkit_store::AppendProjectedInputs {
+                fence: self.context.fence.clone(),
+                events: vec![event.clone()],
+                messages,
+                creates: vec![],
+                applies,
+                task_id: self.context.task.task_id.clone(),
+                now: self.context.runtime.now_ms(),
+            })
+            .await
+            .map_err(|_| CoreError::new("event_persistence_failed", "event persistence failed"))?;
         Ok(())
     }
 }

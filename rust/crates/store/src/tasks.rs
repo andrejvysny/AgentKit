@@ -11,6 +11,7 @@ mod lifecycle;
 mod retry;
 mod runtime_state;
 pub(crate) use events::append;
+pub(crate) use lifecycle::end_attempt;
 
 pub(crate) fn save(db: &Connection, task: &TaskRecord) -> Result<()> {
     let status = json(db, &task.status)?.trim_matches('"').to_owned();
@@ -54,7 +55,7 @@ pub(crate) fn lifecycle_event(
     Ok(())
 }
 
-fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
+pub(crate) fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
     if get::<TaskRecord>(db, "tasks", "id", &input.task_id)?.is_some() {
         return Err(StoreError::Duplicate(input.task_id));
     }
@@ -100,6 +101,7 @@ fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
         cancel_requested: false,
         runtime_state: None,
         retry_pending: false,
+        interrupt_requested: false,
     };
     db.execute(
         "INSERT INTO tasks VALUES(?,?,?,?)",
@@ -331,6 +333,9 @@ fn dependencies(db: &Connection, task: &mut TaskRecord, now: i64) -> Result<bool
 fn start(db: &Connection, mut task: TaskRecord, input: &ClaimInput) -> Result<ClaimedTask> {
     task.status = TaskStatus::Running;
     task.retry_pending = false;
+    // A fresh attempt starts clean: a durable interrupt request belongs to
+    // the attempt that observed it, not to whatever runs next.
+    task.interrupt_requested = false;
     task.attempt_count += 1;
     task.started_at = Some(input.now);
     let attempt = AttemptRecord {

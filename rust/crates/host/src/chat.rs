@@ -11,6 +11,8 @@ pub use correction::CorrectionConfig;
 #[path = "chat_hooks.rs"]
 mod hooks;
 pub use hooks::{AttachmentBudgets, ChatExecutorOptions, ChatHookTimeouts};
+#[path = "session_run.rs"]
+mod session_run;
 
 /// A fixed provider binding or an immutable task snapshot determines the account.
 pub struct ChatExecutor {
@@ -97,7 +99,13 @@ impl TaskExecutor for ChatExecutor {
         if chat_id != context.task.scope_id {
             return Err(HostError::Execution("chat scope mismatch".into()));
         }
-        let records = context.store.messages(chat_id, false).await?;
+        let loaded = context.store.messages(chat_id, true).await?;
+        // The active chain is what the continuation and the anchor see.
+        let records: Vec<_> = loaded
+            .iter()
+            .filter(|message| message.active)
+            .cloned()
+            .collect();
         let anchor = context.task.payload["assistantMessageId"]
             .as_str()
             .map(str::to_owned)
@@ -122,19 +130,45 @@ impl TaskExecutor for ChatExecutor {
         )
         .await?;
         let resolved = hooks::resolve_context(&self.options, &context, chat_id).await?;
+        // A session turn steers at tool boundaries and runs the exact calls
+        // its answered approvals authorized (ADR 0016 §3, ADR 0019 §2).
+        let session = session_run::is_session_turn(&context, chat_id).await?;
+        let (approvals, resume_calls) = if session {
+            session_run::resolve_approved_calls(&context, chat_id, &anchor).await?
+        } else {
+            (std::collections::HashMap::new(), vec![])
+        };
         let registry = hooks::stage_registry(
             &self.options,
             &context,
             chat_id,
             self.tools.clone(),
             &resolved.bindings,
+            approvals,
         )
         .await?;
+        // Read the history AFTER the resume pass wrote its records: an
+        // approval-mismatch refusal appended moments ago must be visible to
+        // the model in this same attempt, not only after a restart.
         let messages = history::assemble(
-            records,
+            context.store.messages(chat_id, true).await?,
             self.options.history_limit,
             &anchor,
             resolved.system_prompt.clone(),
+            // Unanswered persisted calls reconcile against durable receipts,
+            // never against an assumed absence (ADR 0020). Receipts are read
+            // per chat: the calls being reconciled were recorded under the
+            // run that owned them, not the run replaying history.
+            &context
+                .store
+                .list_executions_by_chat(chat_id.to_owned())
+                .await
+                .map_err(|error| {
+                    HostError::Execution(format!(
+                        "Cannot read durable execution receipts; mutations remain blocked. ({error})"
+                    ))
+                })?,
+            &context.task.task_id,
         );
         let runtime: Arc<dyn agentkit_core::Runtime> =
             Arc::new(CoreRuntime(context.runtime.clone()));
@@ -190,6 +224,15 @@ impl TaskExecutor for ChatExecutor {
             runtime,
             event_sink: Some(sink.clone()),
             dispatch_guard: Some(context.dispatch_guard()),
+            suspender: Some(Arc::new(ParkSink {
+                context: context.clone(),
+            })),
+            interruption: Some(context.interruption.clone()),
+            steering: session.then(|| {
+                Arc::new(session_run::SessionSteering::new(context.clone(), chat_id))
+                    as Arc<dyn agentkit_core::SteeringSource>
+            }),
+            resume_calls,
             ..RunOptions::default()
         };
         let prepared = hooks::PreparedProvider {
@@ -211,6 +254,53 @@ impl TaskExecutor for ChatExecutor {
         session.execute().await
     }
 }
+/// Parks the turn when a tool asked a human (ADR 0016 §2). The `run.waiting`
+/// event and the pending records are already durable (the event sink wrote
+/// them); this commits the park itself: status, attempt, lease, and the
+/// request record that the answer path will settle.
+struct ParkSink {
+    context: ExecutionContext,
+}
+
+#[async_trait]
+impl agentkit_core::SuspendSink for ParkSink {
+    async fn park(
+        &self,
+        request: &agentkit_core::HumanRequestSpec,
+        tool_call_id: &str,
+    ) -> Result<(), agentkit_core::CoreError> {
+        let now = self.context.runtime.now_ms();
+        let parked = self
+            .context
+            .store
+            .park_turn(agentkit_store::ParkTurn {
+                fence: self.context.fence.clone(),
+                assistant_message: None,
+                events: vec![],
+                request: Some(agentkit_store::CreateAgentInput {
+                    input_id: request.request_id.clone(),
+                    session_id: self.context.task.scope_id.clone(),
+                    kind: agentkit_store::AgentInputKind::HumanRequest,
+                    content: request.content.clone(),
+                    content_hash: request.content_hash.clone(),
+                    target_task_id: Some(self.context.task.task_id.clone()),
+                    on_settled: None,
+                    attempt_id: Some(self.context.attempt_id.clone()),
+                    tool_call_id: Some(tool_call_id.to_owned()),
+                    expires_at: request.expires_at.clone(),
+                }),
+                now,
+            })
+            .await
+            .map_err(|error| agentkit_core::CoreError::new("park_failed", &error.to_string()))?;
+        // Idempotent replay: the deterministic request id parks once; a
+        // second park of the same call finds the task already parked.
+        let _ = parked;
+        *self.context.suspension.lock().await = Some(request.clone());
+        Ok(())
+    }
+}
+
 fn required<'a>(value: &'a Value, key: &str) -> HostResult<&'a str> {
     value[key]
         .as_str()

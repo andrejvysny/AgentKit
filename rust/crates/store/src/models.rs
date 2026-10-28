@@ -76,6 +76,9 @@ pub struct TaskRecord {
     #[serde(default)]
     /// Durable backoff reserves a running scope while no attempt owns a lease.
     pub retry_pending: bool,
+    #[serde(default)]
+    /// Durable request to interrupt the running turn at a safe boundary.
+    pub interrupt_requested: bool,
 }
 
 #[derive(Clone, Debug)]

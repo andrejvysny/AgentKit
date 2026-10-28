@@ -342,9 +342,9 @@ mod tests {
         started_rx.await.expect("started");
         let waiter = {
             let path = path.clone();
-            tokio::spawn(async move {
-                with_file_mutation_queue(&path, || async move { Ok(()) }).await
-            })
+            tokio::spawn(
+                async move { with_file_mutation_queue(&path, || async move { Ok(()) }).await },
+            )
         };
         tokio::time::sleep(Duration::from_millis(50)).await;
         waiter.abort();

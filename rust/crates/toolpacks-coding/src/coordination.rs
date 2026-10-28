@@ -147,9 +147,7 @@ impl PendingRelease {
 
     /// Hand the release to a `WorkspaceLease`, which now owns its cleanup.
     pub(crate) fn consume(mut self) -> ReleaseFn {
-        self.release
-            .take()
-            .expect("pending release consumed once")
+        self.release.take().expect("pending release consumed once")
     }
 }
 
@@ -179,6 +177,59 @@ pub struct AcquireWorkspaceInput {
     pub max_wait_ms: Option<u64>,
 }
 
+/// Evidence that cleanup was not positively established: the command's
+/// process tree still had live members when the lease was released.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuarantineEvidence {
+    pub pids: Vec<i32>,
+    pub holder: LeaseHolder,
+}
+
+/// Unresolved-cleanup record for a workspace root (ADR 0020). A quarantine
+/// is lifted only by positive evidence — every recorded process exited —
+/// or by explicit recovery via [`WorkspaceCoordinator::clear_workspace_quarantine`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceQuarantine {
+    pub root: String,
+    pub pids: Vec<i32>,
+    pub holder: LeaseHolder,
+    pub quarantined_at_ms: u64,
+}
+
+/// Cleanup is positively established when the record lists processes and
+/// none of them is alive. An empty pid list is an *unknown* survivor set
+/// (e.g. an unreadable durable record) and stays blocked until explicit
+/// recovery; a pid of `-1` is never probed.
+pub(crate) fn all_quarantined_exited(pids: &[i32]) -> bool {
+    !pids.is_empty()
+        && pids
+            .iter()
+            .all(|pid| !crate::process::owner_alive(*pid as i64))
+}
+
+pub(crate) fn quarantine_error(quarantine: &WorkspaceQuarantine) -> CodingError {
+    let who = if quarantine.pids.is_empty() {
+        "an unknown surviving process".to_owned()
+    } else {
+        format!(
+            "process(es) {}",
+            quarantine
+                .pids
+                .iter()
+                .map(i32::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
+    CodingError::new(
+        "workspace_quarantined",
+        format!(
+            "workspace cleanup is unresolved: {who} from {} '{}' (run {}) may still be writing; the workspace stays blocked until the processes exit or recovery is recorded.",
+            quarantine.holder.tool, quarantine.holder.label, quarantine.holder.run_id
+        ),
+    )
+}
+
 #[async_trait]
 pub trait WorkspaceCoordinator: Send + Sync {
     /// Shared workspace lease + exclusive lock on one canonical file. Waits
@@ -190,6 +241,19 @@ pub trait WorkspaceCoordinator: Send + Sync {
         &self,
         input: AcquireWorkspaceInput,
     ) -> Result<WorkspaceLease, CodingError>;
+    /// Record that a released workspace still had live processes; every
+    /// later acquisition of that root is blocked until cleanup is positively
+    /// established or recovery is recorded.
+    async fn quarantine_workspace(&self, root: &str, evidence: &QuarantineEvidence);
+    /// Live quarantine for the root, if any. Records whose processes have
+    /// all exited are cleared here (positive cleanup evidence).
+    async fn workspace_quarantine(
+        &self,
+        root: &str,
+    ) -> Result<Option<WorkspaceQuarantine>, CodingError>;
+    /// Explicit operator recovery from an unresolved state. Returns whether
+    /// a record was removed.
+    async fn clear_workspace_quarantine(&self, root: &str) -> Result<bool, CodingError>;
 }
 
 pub trait CoordinatorObserver: Send + Sync {
@@ -639,7 +703,9 @@ where
         let caller_aborted = cancellation
             .as_ref()
             .is_some_and(CancellationToken::is_cancelled);
-        if busy.load(Ordering::SeqCst) && !caller_aborted {
+        // An unresolved-cleanup refusal keeps its own code: it is not a
+        // "someone is busy" wait and recovery does not come from retrying.
+        if busy.load(Ordering::SeqCst) && !caller_aborted && error.code != "workspace_quarantined" {
             busy_error(&tracker.last_holders(), max_wait_ms)
         } else {
             error
@@ -653,6 +719,7 @@ pub struct InProcessCoordinator {
     workspaces: Arc<GateMap>,
     files: Arc<GateMap>,
     observer: Option<Arc<dyn CoordinatorObserver>>,
+    quarantines: Arc<Mutex<HashMap<String, WorkspaceQuarantine>>>,
 }
 
 impl InProcessCoordinator {
@@ -661,6 +728,56 @@ impl InProcessCoordinator {
             workspaces: Arc::new(GateMap::new()),
             files: Arc::new(GateMap::new()),
             observer,
+            quarantines: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn live_quarantine(&self, root: &str) -> Option<WorkspaceQuarantine> {
+        let mut quarantines = self.quarantines.lock().expect("quarantine lock");
+        let quarantine = quarantines.get(root)?;
+        if all_quarantined_exited(&quarantine.pids) {
+            // Positive cleanup evidence: every recorded process exited.
+            quarantines.remove(root);
+            return None;
+        }
+        Some(quarantine.clone())
+    }
+
+    /// Block until the root carries no live quarantine, the caller cancels,
+    /// or the acquisition's wait budget expires. Unlike gate waits this one
+    /// keeps its own deadline so the surfaced error stays
+    /// `workspace_quarantined` rather than a generic busy.
+    async fn await_clear(
+        &self,
+        root: &str,
+        cancellation: &Option<CancellationToken>,
+        max_wait_ms: Option<u64>,
+    ) -> Result<(), CodingError> {
+        let deadline =
+            max_wait_ms.map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
+        loop {
+            let Some(quarantine) = self.live_quarantine(root) else {
+                return Ok(());
+            };
+            if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+                return Err(quarantine_error(&quarantine));
+            }
+            let Some(token) = cancellation else {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                continue;
+            };
+            tokio::select! {
+                _ = token.cancelled() => {
+                    // The wait budget (or the caller) ended while an
+                    // unresolved cleanup still blocks the root: surface the
+                    // quarantine, not a generic abort/busy.
+                    return Err(match self.live_quarantine(root) {
+                        Some(quarantine) => quarantine_error(&quarantine),
+                        None => abort_error(),
+                    });
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
+            }
         }
     }
 
@@ -708,8 +825,11 @@ impl InProcessCoordinator {
         holder: &LeaseHolder,
         cancellation: &Option<CancellationToken>,
         tracker: &WaitTracker,
+        quarantine_wait_ms: Option<u64>,
     ) -> Result<WorkspaceLease, CodingError> {
         let root = canonical_root_key(root).await;
+        self.await_clear(&root, cancellation, quarantine_wait_ms)
+            .await?;
         let path = canonical_file_key(path).await;
         let mut release_shared = PendingRelease::new(
             self.acquire_single(
@@ -739,9 +859,10 @@ impl InProcessCoordinator {
             )
             .await
         {
-            Ok(release_file) => {
-                Ok(WorkspaceLease::new(vec![release_file, release_shared.consume()]))
-            }
+            Ok(release_file) => Ok(WorkspaceLease::new(vec![
+                release_file,
+                release_shared.consume(),
+            ])),
             Err(error) => {
                 if let Some(release) = release_shared.take() {
                     release().await;
@@ -757,8 +878,11 @@ impl InProcessCoordinator {
         holder: &LeaseHolder,
         cancellation: &Option<CancellationToken>,
         tracker: &WaitTracker,
+        quarantine_wait_ms: Option<u64>,
     ) -> Result<WorkspaceLease, CodingError> {
         let root = canonical_root_key(root).await;
+        self.await_clear(&root, cancellation, quarantine_wait_ms)
+            .await?;
         let release = self
             .acquire_single(
                 &self.workspaces,
@@ -786,6 +910,7 @@ impl WorkspaceCoordinator for InProcessCoordinator {
         let path = input.path.clone();
         let this = self.clone();
         let tracked_tracker = tracker.clone();
+        let quarantine_ms = input.max_wait_ms;
         let result = with_wait_cap(
             input.cancellation.clone(),
             input.max_wait_ms,
@@ -797,8 +922,15 @@ impl WorkspaceCoordinator for InProcessCoordinator {
                 let path = path.clone();
                 let holder = holder.clone();
                 Box::pin(async move {
-                    this.acquire_file_tracked(&root, &path, &holder, &cancellation, &tracker)
-                        .await
+                    this.acquire_file_tracked(
+                        &root,
+                        &path,
+                        &holder,
+                        &cancellation,
+                        &tracker,
+                        quarantine_ms,
+                    )
+                    .await
                 })
             },
         )
@@ -817,6 +949,7 @@ impl WorkspaceCoordinator for InProcessCoordinator {
         let root = input.root.clone();
         let this = self.clone();
         let tracked_tracker = tracker.clone();
+        let quarantine_ms = input.max_wait_ms;
         let result = with_wait_cap(
             input.cancellation.clone(),
             input.max_wait_ms,
@@ -827,14 +960,54 @@ impl WorkspaceCoordinator for InProcessCoordinator {
                 let root = root.clone();
                 let holder = holder.clone();
                 Box::pin(async move {
-                    this.acquire_workspace_tracked(&root, &holder, &cancellation, &tracker)
-                        .await
+                    this.acquire_workspace_tracked(
+                        &root,
+                        &holder,
+                        &cancellation,
+                        &tracker,
+                        quarantine_ms,
+                    )
+                    .await
                 })
             },
         )
         .await?;
         tracker.acquired(observer.as_ref());
         Ok(result)
+    }
+
+    async fn quarantine_workspace(&self, root: &str, evidence: &QuarantineEvidence) {
+        let root = canonical_root_key(root).await;
+        self.quarantines.lock().expect("quarantine lock").insert(
+            root.clone(),
+            WorkspaceQuarantine {
+                root,
+                pids: evidence.pids.clone(),
+                holder: evidence.holder.clone(),
+                quarantined_at_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|since| since.as_millis() as u64)
+                    .unwrap_or_default(),
+            },
+        );
+    }
+
+    async fn workspace_quarantine(
+        &self,
+        root: &str,
+    ) -> Result<Option<WorkspaceQuarantine>, CodingError> {
+        let root = canonical_root_key(root).await;
+        Ok(self.live_quarantine(&root))
+    }
+
+    async fn clear_workspace_quarantine(&self, root: &str) -> Result<bool, CodingError> {
+        let root = canonical_root_key(root).await;
+        Ok(self
+            .quarantines
+            .lock()
+            .expect("quarantine lock")
+            .remove(&root)
+            .is_some())
     }
 }
 
@@ -871,6 +1044,116 @@ mod tests {
             tool: tool.into(),
             label: label.into(),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quarantine_blocks_writers_until_survivors_exit() {
+        let coordinator = InProcessCoordinator::new(None);
+        let root = temp_dir("quarantine-root");
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("pid") as i32;
+        coordinator
+            .quarantine_workspace(
+                &root,
+                &QuarantineEvidence {
+                    pids: vec![pid],
+                    holder: holder("r1", "command", "long build"),
+                },
+            )
+            .await;
+        let error = coordinator
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("r2", "command", "next"),
+                cancellation: None,
+                max_wait_ms: Some(120),
+            })
+            .await
+            .expect_err("quarantined workspace blocks commands");
+        assert_eq!(error.code, "workspace_quarantined");
+        assert!(error.message.contains("long build"), "{error:?}");
+        // The edit path (file lease) is blocked by the same evidence.
+        let file_error = coordinator
+            .acquire_file(AcquireFileInput {
+                root: root.clone(),
+                path: format!("{root}/f.txt"),
+                holder: holder("r3", "edit_file", "edit f"),
+                cancellation: None,
+                max_wait_ms: Some(120),
+            })
+            .await
+            .expect_err("quarantined workspace blocks edits too");
+        assert_eq!(file_error.code, "workspace_quarantined");
+        // Positive cleanup evidence: the survivors exited.
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        assert!(
+            coordinator
+                .workspace_quarantine(&root)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let mut lease = coordinator
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("r4", "command", "next"),
+                cancellation: None,
+                max_wait_ms: Some(1_000),
+            })
+            .await
+            .expect("clean after survivors exit");
+        lease.release().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unknown_survivors_block_until_explicit_recovery() {
+        let coordinator = InProcessCoordinator::new(None);
+        let root = temp_dir("quarantine-unknown");
+        // An empty pid list is an *unknown* survivor set (e.g. an unreadable
+        // durable record): it never auto-clears.
+        coordinator
+            .quarantine_workspace(
+                &root,
+                &QuarantineEvidence {
+                    pids: vec![],
+                    holder: holder("r1", "command", "crashed"),
+                },
+            )
+            .await;
+        assert!(
+            coordinator
+                .workspace_quarantine(&root)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let error = coordinator
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("r2", "command", "next"),
+                cancellation: None,
+                max_wait_ms: Some(80),
+            })
+            .await
+            .expect_err("unknown survivors keep blocking");
+        assert_eq!(error.code, "workspace_quarantined");
+        // Explicit recovery from the unresolved state.
+        assert!(coordinator.clear_workspace_quarantine(&root).await.unwrap());
+        assert!(!coordinator.clear_workspace_quarantine(&root).await.unwrap());
+        let mut lease = coordinator
+            .acquire_workspace(AcquireWorkspaceInput {
+                root,
+                holder: holder("r3", "command", "next"),
+                cancellation: None,
+                max_wait_ms: Some(1_000),
+            })
+            .await
+            .expect("clean after recovery");
+        lease.release().await;
     }
 
     fn temp_dir(name: &str) -> String {
@@ -1318,7 +1601,13 @@ mod tests {
         let inner_file = file.clone();
         let waiter = tokio::spawn(async move {
             let mut lease = inner
-                .acquire_file(file_input(&inner_root, &inner_file, "d", "edit_file", "f.txt"))
+                .acquire_file(file_input(
+                    &inner_root,
+                    &inner_file,
+                    "d",
+                    "edit_file",
+                    "f.txt",
+                ))
                 .await
                 .expect("d acquires");
             lease.release().await;

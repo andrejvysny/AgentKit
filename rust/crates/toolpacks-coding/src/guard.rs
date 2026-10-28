@@ -4,18 +4,18 @@
 //! (`src-ts/src/code/tool-authority.ts`, MIT). Modes and the `ToolGuard`
 //! port are AgentKit's own.
 //!
-//! Divergence (tracked): the TypeScript verdict carries an `approval`
-//! payload (`{ preview?, requestedMode? }`) consumed by the TS host's ADR
-//! 0019 human-approval flow. The Rust host's [`ToolGuardVerdict::Refused`]
-//! carries only the reason string until that host flow is ported; reason
-//! strings are byte-identical, and refusals without a portable approval
-//! hint (role ceiling, final plan blocks) behave identically. The
-//! `approval_required:` / `plan_approval_required:` verdicts therefore
-//! remain final refusals on this surface.
+//! The approvable verdicts (`approval_required:`, `plan_approval_required:`)
+//! carry their reason, preview, and requested mode in
+//! [`ToolGuardVerdict::AwaitingHuman`]; the host wrapper turns one into the
+//! durable human request (ADR 0019). Reason strings stay byte-identical to
+//! TypeScript; final refusals (role ceiling, plan-mode blocks) carry no
+//! approval and cannot be answered open.
 
 use std::sync::Arc;
 
-use agentkit_host::{HostResult, ToolGuard, ToolGuardContext, ToolGuardVerdict};
+use serde_json::Value;
+
+use agentkit_host::{ApprovalAsk, HostResult, ToolGuard, ToolGuardContext, ToolGuardVerdict};
 use async_trait::async_trait;
 
 use crate::plan_tool::{SUBMIT_PLAN_CAPABILITY, SUBMIT_PLAN_TOOL_NAME};
@@ -158,9 +158,11 @@ impl ToolGuard for CodingPermissionGuard {
                 // Reads run free; only the plan submission itself needs the
                 // human.
                 if self.plan_tools.iter().any(|plan| plan == &name) {
-                    return Ok(ToolGuardVerdict::Refused(format!(
-                        "plan_approval_required: {name}"
-                    )));
+                    return Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
+                        reason: format!("plan_approval_required: {name}"),
+                        preview: plan_preview(context.arguments.as_ref()),
+                        requested_mode: plan_requested_mode(context.arguments.as_ref()),
+                    }));
                 }
                 return Ok(ToolGuardVerdict::Allowed);
             }
@@ -177,10 +179,34 @@ impl ToolGuard for CodingPermissionGuard {
                 "read_only: {name} is not allowed"
             )));
         }
-        Ok(ToolGuardVerdict::Refused(format!(
-            "approval_required: {name}"
-        )))
+        Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
+            reason: format!("approval_required: {name}"),
+            preview: None,
+            requested_mode: None,
+        }))
     }
+}
+
+/// The mode the plan asks for; recorded for the human, never obeyed.
+fn plan_requested_mode(args: Option<&Value>) -> Option<String> {
+    args?.get("mode")?.as_str().map(str::to_owned)
+}
+
+/// The text the human is asked to approve a plan on.
+fn plan_preview(args: Option<&Value>) -> Option<String> {
+    let args = args?;
+    let plan = args.get("plan")?.as_str()?;
+    if plan.trim().is_empty() {
+        return None;
+    }
+    Some(match args.get("mode").and_then(Value::as_str) {
+        Some(mode) => format!(
+            "{plan}
+
+(requested mode: {mode})"
+        ),
+        None => plan.to_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -195,6 +221,7 @@ mod tests {
         ToolGuardContext {
             contribution: ToolContributionContext {
                 chat_id: Some("chat-1".into()),
+                durable: None,
                 run_id: "run-1".into(),
                 scope_id: None,
                 actor: Value::Null,
@@ -228,6 +255,7 @@ mod tests {
         {
             ToolGuardVerdict::Allowed => String::new(),
             ToolGuardVerdict::Refused(reason) => reason,
+            ToolGuardVerdict::AwaitingHuman(ask) => ask.reason,
         }
     }
 
@@ -250,6 +278,7 @@ mod tests {
         {
             ToolGuardVerdict::Allowed => "allowed",
             ToolGuardVerdict::Refused(_) => "refused",
+            ToolGuardVerdict::AwaitingHuman(_) => "awaiting_human",
         };
         assert_eq!(verdict, "allowed");
     }

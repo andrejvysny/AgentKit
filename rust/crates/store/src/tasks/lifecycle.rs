@@ -16,7 +16,7 @@ pub(super) fn dead_letter(
     lifecycle_event(db, task, "task.dead_lettered", now)
 }
 
-pub(super) fn end_attempt(
+pub(crate) fn end_attempt(
     db: &Connection,
     lease: &Lease,
     status: &str,
@@ -87,6 +87,28 @@ impl SqliteStore {
 
     /// Event evidence, message projections, task/attempt terminal state, and lease release commit together.
     pub async fn settle(&self, input: SettleTask) -> Result<TaskRecord> {
+        self.settle_inner(input, None).await
+    }
+
+    /// Session-aware settle (ADR 0016 §5): the settling turn also settles
+    /// its durable inputs in the SAME transaction — leftover steers marked
+    /// `cancel` are cancelled, and on a completed turn the first queued
+    /// follow-up is converted into the next task, so the queue advances
+    /// without a window where the follow-up is converted but the turn is not
+    /// terminal (or the reverse).
+    pub async fn settle_session(
+        &self,
+        input: SettleTask,
+        extra: crate::session_ops::SessionSettle,
+    ) -> Result<TaskRecord> {
+        self.settle_inner(input, Some(extra)).await
+    }
+
+    async fn settle_inner(
+        &self,
+        input: SettleTask,
+        extra: Option<crate::session_ops::SessionSettle>,
+    ) -> Result<TaskRecord> {
         self.call(move |db| {
             if !input.status.is_terminal() {
                 return Err(StoreError::InvalidTransition(
@@ -125,6 +147,15 @@ impl SqliteStore {
             end_attempt(&transaction, &lease, &status, input.now, task.error.clone())?;
             lifecycle_event(&transaction, &task, "task.settled", input.now)?;
             transaction.execute("DELETE FROM leases WHERE task_id=?", [&task.task_id])?;
+            if let Some(extra) = &extra {
+                crate::session_ops::settle_session_inputs(
+                    &transaction,
+                    &task,
+                    task.status == TaskStatus::Completed,
+                    input.now,
+                    extra,
+                )?;
+            }
             transaction.commit()?;
             Ok(task)
         })
@@ -139,12 +170,25 @@ impl SqliteStore {
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &task_id)?;
             if !task.status.is_terminal() {
                 task.cancel_requested = true;
-                if matches!(task.status, TaskStatus::Queued | TaskStatus::Interrupted)
-                    || task.retry_pending
+                if matches!(
+                    task.status,
+                    TaskStatus::Queued | TaskStatus::Interrupted | TaskStatus::WaitingApproval
+                ) || task.retry_pending
                 {
+                    // Nothing is running to notice: a queued, interrupted,
+                    // backoff-parked, or approval-parked turn cancels now.
+                    // A parked turn holds no lease, and the approver may
+                    // never answer, so waiting for an answer would strand it.
                     task.status = TaskStatus::Cancelled;
                     task.finished_at = Some(now);
                     task.retry_pending = false;
+                    task.interrupt_requested = false;
+                    crate::session_ops::cancel_turn_requests(
+                        &transaction,
+                        &task.scope_id,
+                        &task.task_id,
+                        now,
+                    )?;
                 }
                 save(&transaction, &task)?;
                 lifecycle_event(&transaction, &task, "task.cancel_requested", now)?;

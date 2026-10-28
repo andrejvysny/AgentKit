@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 
 use crate::args::{as_record, opt_int, opt_string, req_string};
 use crate::context::{Outcome, PackEnv, ToolEffect, ToolSpec, define_tool};
-use crate::coordination::{AcquireWorkspaceInput, LeaseHolder};
+use crate::coordination::{AcquireWorkspaceInput, LeaseHolder, QuarantineEvidence};
 use crate::errors::CodingError;
 use crate::paths::{ConfineOptions, PathAccess, confine};
 use crate::process::{RunSpec, run_bounded};
@@ -225,8 +225,9 @@ async fn run_shell(
             holder: LeaseHolder {
                 chat_id: ctx.chat_id.clone(),
                 run_id: ctx.run_id.clone(),
-                // `ToolContext` carries no toolCallId; the record keeps it unset.
-                tool_call_id: None,
+                // The host supplies the model call's stable identity; the
+                // durable intent binds run + tool call + attempt (ADR 0020).
+                tool_call_id: ctx.tool_call_id.clone(),
                 tool: request.tool.to_owned(),
                 label: slice_utf16(&request.command, 200),
             },
@@ -252,6 +253,27 @@ async fn run_shell(
     })
     .await;
     let stragglers = wait_for_exit(&run.teardown.survivors, SURVIVOR_RECHECK_MS).await;
+    if !stragglers.is_empty() {
+        // Cleanup is not positively established (ADR 0020): the lease may
+        // be released (a wedge with no recovery path helps nobody), but the
+        // workspace stays quarantined — every later acquisition blocks
+        // until these processes exit or recovery is recorded.
+        env.coordinator
+            .quarantine_workspace(
+                &root,
+                &QuarantineEvidence {
+                    pids: stragglers.clone(),
+                    holder: LeaseHolder {
+                        chat_id: ctx.chat_id.clone(),
+                        run_id: ctx.run_id.clone(),
+                        tool_call_id: ctx.tool_call_id.clone(),
+                        tool: request.tool.to_owned(),
+                        label: slice_utf16(&request.command, 200),
+                    },
+                },
+            )
+            .await;
+    }
     lease.release().await;
     if let Some(spawn_error) = &run.spawn_error {
         return Err(CodingError::new(
@@ -342,6 +364,18 @@ async fn run_shell(
             } else {
                 vec![format!(
                     "lease released while processes were still running: {}",
+                    stragglers
+                        .iter()
+                        .map(|pid| pid.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )]
+            },
+            if stragglers.is_empty() {
+                vec![]
+            } else {
+                vec![format!(
+                    "workspace quarantined until these processes exit or recovery is recorded: {}",
                     stragglers
                         .iter()
                         .map(|pid| pid.to_string())
@@ -563,7 +597,10 @@ mod tests {
 
     fn context() -> ToolContext {
         ToolContext {
+            suspension: None,
             run_id: "test-run".to_owned(),
+            tool_call_id: None,
+            attempt_id: None,
             chat_id: None,
             scope_id: None,
             user_id: None,

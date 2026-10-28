@@ -34,14 +34,16 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::coordination::{
     AcquireFileInput, AcquireWorkspaceInput, CoordinationWait, CoordinatorObserver,
-    InProcessCoordinator, LeaseHolder, ReleaseFn, WaitKind, WaitTracker, WorkspaceCoordinator,
-    WorkspaceLease, abort_error, canonical_file_key, canonical_root_key,
-    default_in_process_coordinator, spawn_release, with_wait_cap,
+    InProcessCoordinator, LeaseHolder, QuarantineEvidence, ReleaseFn, WaitKind, WaitTracker,
+    WorkspaceCoordinator, WorkspaceLease, WorkspaceQuarantine, abort_error, all_quarantined_exited,
+    canonical_file_key, canonical_root_key, default_in_process_coordinator, quarantine_error,
+    spawn_release, with_wait_cap,
 };
 use crate::errors::CodingError;
 use crate::fs_util::sha256;
@@ -583,9 +585,110 @@ struct LockDirCoordinator {
     inner: Arc<InProcessCoordinator>,
 }
 
+impl LockDirCoordinator {
+    fn quarantine_path(&self, key: &str) -> String {
+        format!("{}/{}/quarantine.json", self.dir, sha256(key.as_bytes()))
+    }
+
+    /// Read the durable quarantine for the root. An unparseable record is an
+    /// *unknown* survivor set: cleanup was not positively established, so it
+    /// keeps blocking until explicit recovery (empty pids never auto-clear).
+    async fn read_quarantine(&self, key: &str) -> Result<Option<WorkspaceQuarantine>, CodingError> {
+        let path = self.quarantine_path(key);
+        let text = match tokio::fs::read_to_string(&path).await {
+            Err(error) if errno_is(&error, libc::ENOENT) => return Ok(None),
+            Err(error) => return Err(io_error(&error)),
+            Ok(text) => text,
+        };
+        let unknown = || WorkspaceQuarantine {
+            root: key.to_owned(),
+            pids: Vec::new(),
+            holder: LeaseHolder {
+                chat_id: None,
+                run_id: "unknown".to_owned(),
+                tool_call_id: None,
+                tool: "unknown".to_owned(),
+                label: "unreadable quarantine record".to_owned(),
+            },
+            quarantined_at_ms: 0,
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return Ok(Some(unknown()));
+        };
+        let field = |name: &str| {
+            value
+                .get(name)
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned()
+        };
+        Ok(Some(WorkspaceQuarantine {
+            root: key.to_owned(),
+            pids: value
+                .get("pids")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_i64)
+                        .map(|pid| pid as i32)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            holder: LeaseHolder {
+                chat_id: value
+                    .get("chatId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                run_id: field("runId"),
+                tool_call_id: value
+                    .get("toolCallId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                tool: field("tool"),
+                label: field("label"),
+            },
+            quarantined_at_ms: value
+                .get("quarantinedAtMs")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+        }))
+    }
+
+    /// Durable counterpart of the in-process quarantine wait: blocks every
+    /// acquisition of the root while a quarantine record still names live
+    /// processes; exits when they are gone (record deleted as positively
+    /// established) or the wait budget/cancellation fires.
+    async fn await_clear(
+        &self,
+        root: &str,
+        cancellation: &Option<CancellationToken>,
+        max_wait_ms: Option<u64>,
+    ) -> Result<(), CodingError> {
+        let key = canonical_root_key(root).await;
+        let deadline = max_wait_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+        loop {
+            let Some(quarantine) = self.read_quarantine(&key).await? else {
+                return Ok(());
+            };
+            if all_quarantined_exited(&quarantine.pids) {
+                // Positive cleanup evidence: retire the record, then re-check.
+                remove(&self.quarantine_path(&key)).await?;
+                continue;
+            }
+            if deadline.is_some_and(|at| Instant::now() >= at) {
+                return Err(quarantine_error(&quarantine));
+            }
+            sleep(self.poll_ms, cancellation).await?;
+        }
+    }
+}
+
 #[async_trait]
 impl WorkspaceCoordinator for LockDirCoordinator {
     async fn acquire_file(&self, input: AcquireFileInput) -> Result<WorkspaceLease, CodingError> {
+        self.await_clear(&input.root, &input.cancellation, input.max_wait_ms)
+            .await?;
         let tracker = WaitTracker::default();
         let observer = self.observer.clone();
         let inner = Arc::clone(&self.inner);
@@ -607,7 +710,7 @@ impl WorkspaceCoordinator for LockDirCoordinator {
                 let (tracker, observer) = (tracked, tracked_observer);
                 Box::pin(async move {
                     let held = inner
-                        .acquire_file_tracked(&root, &path, &holder, &cancellation, &tracker)
+                        .acquire_file_tracked(&root, &path, &holder, &cancellation, &tracker, None)
                         .await?;
                     let mut locks = PendingLocks::new(&on_error);
                     let outcome: Result<(), CodingError> = async {
@@ -655,6 +758,8 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         &self,
         input: AcquireWorkspaceInput,
     ) -> Result<WorkspaceLease, CodingError> {
+        self.await_clear(&input.root, &input.cancellation, input.max_wait_ms)
+            .await?;
         let tracker = WaitTracker::default();
         let observer = self.observer.clone();
         let inner = Arc::clone(&self.inner);
@@ -674,7 +779,7 @@ impl WorkspaceCoordinator for LockDirCoordinator {
                 let (tracker, observer) = (tracked, tracked_observer);
                 Box::pin(async move {
                     let held = inner
-                        .acquire_workspace_tracked(&root, &holder, &cancellation, &tracker)
+                        .acquire_workspace_tracked(&root, &holder, &cancellation, &tracker, None)
                         .await?;
                     let mut locks = PendingLocks::new(&on_error);
                     let outcome: Result<(), CodingError> = async {
@@ -710,6 +815,72 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         .await?;
         tracker.acquired(observer.as_ref());
         Ok(lease)
+    }
+
+    async fn quarantine_workspace(&self, root: &str, evidence: &QuarantineEvidence) {
+        let key = canonical_root_key(root).await;
+        let path = self.quarantine_path(&key);
+        if let Some(parent) = std::path::Path::new(&path).parent()
+            && let Err(error) = tokio::fs::create_dir_all(parent).await
+        {
+            report(&self.on_error, &io_error(&error).message);
+            return;
+        }
+        let record = serde_json::json!({
+            "pids": evidence.pids,
+            "quarantinedAtMs": now_ms() as u64,
+            "runId": evidence.holder.run_id,
+            "chatId": evidence.holder.chat_id,
+            "toolCallId": evidence.holder.tool_call_id,
+            "tool": evidence.holder.tool,
+            "label": evidence.holder.label,
+        });
+        // Written whole via the atomic create helper's sibling: quarantine
+        // must never be observable half-written.
+        let temp = format!("{path}.tmp-{}", uuid::Uuid::new_v4().simple());
+        let written: Result<(), CodingError> = async {
+            let mut file = tokio::fs::File::create(&temp)
+                .await
+                .map_err(|error| io_error(&error))?;
+            file.write_all(record.to_string().as_bytes())
+                .await
+                .map_err(|error| io_error(&error))?;
+            file.flush().await.map_err(|error| io_error(&error))?;
+            match tokio::fs::rename(&temp, &path).await {
+                Err(error) => Err(io_error(&error)),
+                Ok(()) => Ok(()),
+            }
+        }
+        .await;
+        if let Err(error) = written {
+            let _ = tokio::fs::remove_file(&temp).await;
+            report(&self.on_error, &error.message);
+        }
+    }
+
+    async fn workspace_quarantine(
+        &self,
+        root: &str,
+    ) -> Result<Option<WorkspaceQuarantine>, CodingError> {
+        let key = canonical_root_key(root).await;
+        let Some(quarantine) = self.read_quarantine(&key).await? else {
+            return Ok(None);
+        };
+        if all_quarantined_exited(&quarantine.pids) {
+            remove(&self.quarantine_path(&key)).await?;
+            return Ok(None);
+        }
+        Ok(Some(quarantine))
+    }
+
+    async fn clear_workspace_quarantine(&self, root: &str) -> Result<bool, CodingError> {
+        let key = canonical_root_key(root).await;
+        let path = self.quarantine_path(&key);
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(true),
+            Err(error) if errno_is(&error, libc::ENOENT) => Ok(false),
+            Err(error) => Err(io_error(&error)),
+        }
     }
 }
 
@@ -827,6 +998,109 @@ mod tests {
         let _ = child.kill().await;
         let _ = child.wait().await;
         pid
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn durable_quarantine_survives_coordinator_recreation() {
+        let dir = temp_dir("quarantine-dir");
+        let root = temp_dir("quarantine-root");
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("pid") as i32;
+        let (first, errors) = coordinator(&dir, None);
+        first
+            .quarantine_workspace(
+                &root,
+                &QuarantineEvidence {
+                    pids: vec![pid],
+                    holder: holder("r1", "command", "long build"),
+                },
+            )
+            .await;
+        assert!(errors.lock().expect("errors").is_empty());
+        // A fresh coordinator over the same directory — the restart analogue
+        // — must see the on-disk record.
+        let (second, _) = coordinator(&dir, None);
+        let error = second
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("r2", "command", "next"),
+                cancellation: None,
+                max_wait_ms: Some(120),
+            })
+            .await
+            .expect_err("durable quarantine blocks commands");
+        assert_eq!(error.code, "workspace_quarantined");
+        let quarantine = second
+            .workspace_quarantine(&root)
+            .await
+            .unwrap()
+            .expect("recorded");
+        assert_eq!(quarantine.pids, vec![pid]);
+        assert_eq!(quarantine.holder.run_id, "r1");
+        // Explicit recovery lifts it for every instance.
+        assert!(second.clear_workspace_quarantine(&root).await.unwrap());
+        assert!(!second.clear_workspace_quarantine(&root).await.unwrap());
+        let mut lease = second
+            .acquire_workspace(AcquireWorkspaceInput {
+                root,
+                holder: holder("r3", "command", "next"),
+                cancellation: None,
+                max_wait_ms: Some(1_000),
+            })
+            .await
+            .expect("clean after recovery");
+        lease.release().await;
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn durable_quarantine_lifts_on_positive_evidence_and_blocks_on_corruption() {
+        let dir = temp_dir("quarantine-evidence-dir");
+        let root = temp_dir("quarantine-evidence-root");
+        let (first, _) = coordinator(&dir, None);
+        first
+            .quarantine_workspace(
+                &root,
+                &QuarantineEvidence {
+                    pids: vec![dead_pid().await as i32],
+                    holder: holder("r1", "command", "done"),
+                },
+            )
+            .await;
+        // All recorded processes are gone: positively established cleanup.
+        assert!(first.workspace_quarantine(&root).await.unwrap().is_none());
+        let file = format!("{root}/f.txt");
+        std::fs::write(&file, "x").expect("write file");
+        let mut lease = first
+            .acquire_file(AcquireFileInput {
+                root: root.clone(),
+                path: file,
+                holder: holder("r2", "edit_file", "edit f"),
+                cancellation: None,
+                max_wait_ms: Some(1_000),
+            })
+            .await
+            .expect("clean after survivors exited");
+        lease.release().await;
+        // An unreadable record is an unknown survivor set: it keeps blocking
+        // until explicit recovery, never reading as absence.
+        let ws = ws_dir(&dir, &root).await;
+        std::fs::write(format!("{ws}/quarantine.json"), "not json").expect("write record");
+        let error = first
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("r3", "command", "next"),
+                cancellation: None,
+                max_wait_ms: Some(80),
+            })
+            .await
+            .expect_err("unknown survivors keep blocking");
+        assert_eq!(error.code, "workspace_quarantined");
+        assert!(first.clear_workspace_quarantine(&root).await.unwrap());
     }
 
     /// Inject the clock: make the file look `ms` milliseconds older.

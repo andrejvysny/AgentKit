@@ -372,7 +372,10 @@ mod tests {
 
     fn context() -> ToolContext {
         ToolContext {
+            suspension: None,
             run_id: "test-run".to_owned(),
+            tool_call_id: None,
+            attempt_id: None,
             chat_id: None,
             scope_id: None,
             user_id: None,
@@ -449,7 +452,11 @@ mod tests {
             repo_map_tool(&env),
         ] {
             let result = run(&tool, json!({ "pattern": "x", "path": long_path })).await;
-            assert!(!result.ok, "{} must reject an oversized path", tool.definition().name);
+            assert!(
+                !result.ok,
+                "{} must reject an oversized path",
+                tool.definition().name
+            );
             assert!(
                 text(&result).contains("\"path\" is longer than 4096 characters"),
                 "{}: {}",

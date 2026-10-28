@@ -17,3 +17,9 @@ pub use run::{run_chat, RunHandle, RunOptions, RunResult, Terminal};
 pub use runtime::{Runtime, SystemRuntime};
 pub use tokio_util::sync::CancellationToken;
 pub use types::*;
+
+/// Model-facing envelope for a tool result. Hosts reconciling durable history
+/// must render a replayed recorded result exactly as live dispatch did.
+pub fn tool_model_envelope(result: &ToolResult, limits: &ToolLimits) -> String {
+    envelope::stringify(&envelope::build(result, limits))
+}
