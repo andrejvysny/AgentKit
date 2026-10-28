@@ -55,13 +55,16 @@ impl NativeStore {
     /// Create the session service over this store: host + chat executor +
     /// durable session service + background worker, with crash recovery run
     /// before the worker claims any work. `onEvent` receives every
-    /// provider/tool callback as a JSON envelope.
+    /// provider/tool callback as a JSON envelope. `optionsJson` configures
+    /// the shutdown deadline and the JS-tool Rust authority (see
+    /// `SessionService::build`); an unsupported value fails the call.
     #[napi]
     pub async fn create_service(
         &self,
         on_event: ThreadsafeFunction<String>,
+        options_json: Option<String>,
     ) -> Result<crate::service::SessionService> {
-        crate::service::SessionService::build(self.handle()?, on_event).await
+        crate::service::SessionService::build(self.handle()?, on_event, options_json).await
     }
 }
 

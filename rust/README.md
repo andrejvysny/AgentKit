@@ -22,7 +22,7 @@ remaining qualification requirements are in [the parity specification](../docs/r
 | `agentkit-client` | Native HTTP client, replay decoding and presentation state |
 | `agentkit-mcp` | Official `rmcp` transports with the frozen TypeScript protocol revisions |
 | `agentkit-rust` | Feature-selected integration facade; contracts only by default |
-| `agentkit-napi` | Node-API binding behind `@agentkit/native` (handles, promises, one durable-event iterator); see [the binding milestone](../../docs/rust/native-binding-milestone.md) |
+| `agentkit-napi` | Node-API binding behind `@agentkit/native` (handles, promises, pull-based durable-event subscriptions); see [the binding milestone](../../docs/rust/native-binding-milestone.md) |
 
 The facade's `runtime`, `durable`, `client`, `http`, `mcp`, and `keychain` features
 select integrations explicitly. Contracts also compile for

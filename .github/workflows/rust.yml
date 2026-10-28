@@ -60,6 +60,16 @@ jobs:
         # If the committed loader/d.ts drifted from what the Rust source
         # exports, the freshly built files differ from the checkout.
         run: git diff --exit-code -- packages/native/generated
+      - name: Packed native package installs and runs a scripted turn
+        # Build packages/native, npm pack it, npm install the tarball into an
+        # isolated temp directory OUTSIDE the repo, and drive one in-memory
+        # scripted turn through the INSTALLED @agentkit/native under both Bun
+        # and node with no Rust toolchain reachable on PATH — proving the
+        # packed loader is binary-backed, not build-backed. Linux scope: the
+        # macOS runners are qualified by the matrix gates above and the
+        # packed-consumer gates here target the linux-x64 artifact.
+        if: runner.os == 'Linux'
+        run: node rust/scripts/check-native-package.mjs
       - run: bun test
         env:
           AGENTKIT_REQUIRE_NATIVE: "1"
@@ -77,9 +87,14 @@ jobs:
   # (`agentkit-toolpacks-coding`) and the facade re-exporting it (`agentkit-rust`)
   # are excluded because sandboxed command execution is built on Unix process
   # APIs (`libc::kill`, process groups, signals) with no Windows backend yet —
-  # a named roadmap-M4 gap, not a silent skip. Node/Bun steps stay out of this
-  # job deliberately: the `better-sqlite3` install failure used to mask every
-  # Rust result on Windows, and TS distribution gets qualified when the native
+  # a named roadmap-M4 gap, not a silent skip. Bun IS provisioned here (with
+  # `bun install --frozen-lockfile --ignore-scripts`, so the historical
+  # `better-sqlite3` install failure can never mask a Rust result again) and
+  # the five Bun-spawning MCP fixture tests run as a REQUIRED step below —
+  # the Windows job is self-contained, not vacuous. The client interop suite
+  # (all_routes, interoperability, typescript_boundaries), which drives the
+  # full TypeScript service harness, stays in the `native` job's
+  # mixed-runtime gate, and TS distribution gets qualified when the native
   # binding ships.
   native-windows:
     runs-on: windows-latest
@@ -96,18 +111,35 @@ jobs:
         working-directory: rust
       - run: cargo clippy --workspace --exclude agentkit-rust --exclude agentkit-toolpacks-coding --all-targets --all-features --locked -- -D warnings
         working-directory: rust
-      # Pure-native suite only. The client interop tests (all_routes,
-      # interoperability, typescript_boundaries) spawn Bun against the
-      # TypeScript service and belong to the mixed-runtime gate in the
-      # `native` job; this runner deliberately has no Bun or JS dependencies,
-      # so the explicit opt-out keeps the pure-native result honest instead of
-      # panicking on a missing Bun. The workflow structure test requires this
-      # variable here and forbids it in `native`.
-      - name: Pure-native cargo test (Bun interop suite runs in the native job)
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      # The stdio MCP fixtures import the pinned `mcp-sdk-v1` workspace alias
+      # (npm:@modelcontextprotocol/sdk@1.30.0), so the mixed-runtime step
+      # below needs node_modules — but not any compiled devDependency:
+      # --ignore-scripts keeps native install scripts (better-sqlite3) out of
+      # this job's critical path.
+      - run: bun install --frozen-lockfile --ignore-scripts
+      # Workspace-wide pure-native suite. The client interop tests
+      # (all_routes, interoperability, typescript_boundaries) spawn Bun
+      # against the TypeScript service harness and belong to the mixed-runtime
+      # gate in the `native` job, so this step opts them out explicitly. The
+      # MCP Bun fixture tests are NOT lost to this opt-out: the required step
+      # immediately below re-runs them for real. The workflow structure test
+      # pins this variable here, forbids it in `native`, and requires the
+      # Bun-provisioned MCP step.
+      - name: Pure-native cargo test (client interop suite runs in the native job)
         run: cargo test --workspace --exclude agentkit-rust --exclude agentkit-toolpacks-coding --all-features --locked
         working-directory: rust
         env:
           AGENTKIT_SKIP_TS_INTEROP: "1"
+      - name: MCP mixed-runtime fixture tests (Bun required, never skipped here)
+        # Bun and the fixture SDK are provisioned in this job, so these five
+        # fixture-spawning tests are a required gate: without Bun, or with
+        # the fixture SDK missing, the harness fails loudly instead of
+        # passing vacuously.
+        run: cargo test -p agentkit-mcp --test bridge --test native --test security --test shapes --test manager --all-features --locked
+        working-directory: rust
   contracts:
     runs-on: ubuntu-latest
     steps:

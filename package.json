@@ -60,6 +60,7 @@
     "lint:fix": "biome check --write .",
     "test:coverage": "bun test --coverage",
     "qualify:package": "node scripts/qualify-package.mjs",
+    "check:native-package": "node rust/scripts/check-native-package.mjs",
     "source:digest": "node scripts/source-digest.mjs",
     "snapshot:release": "node scripts/snapshot-release.mjs",
     "test:coding-agent": "bun test examples/coding-agent",

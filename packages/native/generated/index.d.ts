@@ -21,9 +21,11 @@ export declare class NativeStore {
    * Create the session service over this store: host + chat executor +
    * durable session service + background worker, with crash recovery run
    * before the worker claims any work. `onEvent` receives every
-   * provider/tool callback as a JSON envelope.
+   * provider/tool callback as a JSON envelope. `optionsJson` configures
+   * the shutdown deadline and the JS-tool Rust authority (see
+   * `SessionService::build`); an unsupported value fails the call.
    */
-  createService(onEvent: ((err: Error | null, arg: string) => any)): Promise<SessionService>
+  createService(onEvent: ((err: Error | null, arg: string) => any), optionsJson?: string | undefined | null): Promise<SessionService>
 }
 
 export declare class SessionService {
@@ -72,10 +74,25 @@ export declare class SessionService {
    */
   detach(): void
   /**
-   * Reject every outstanding callback, stop and drain the worker, release
-   * the store clone. Idempotent: a second close is a no-op.
+   * Shutdown: `Open → Closing → Closed` in one atomic sequence.
+   * Entering Closing rejects outstanding callbacks AND new JS dispatches
+   * under the same lock (no insert-after-drain window), then the service
+   * stops taking operations, cancels subscriptions, and awaits the
+   * worker. Active runs observe the closing bridge, fail their next
+   * callback honestly, and settle durably — close never fakes success,
+   * and rejecting a JS promise never claims to stop external effects the
+   * callback already started. If the worker does not finish draining
+   * within `closeTimeoutMs`, close still completes and `closeUncertain`
+   * reports that cleanup could not be established. Idempotent;
+   * concurrent callers await the same completion.
    */
   close(): Promise<void>
+  /**
+   * True when a `close()` completed without establishing that owned
+   * execution had drained (the worker deadline expired). Durable state
+   * stays authoritative; this flag records what close could not prove.
+   */
+  get closeUncertain(): boolean
 }
 
 /**

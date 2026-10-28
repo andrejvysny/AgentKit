@@ -1,8 +1,9 @@
 # M3 — First Native TypeScript Binding: Design and Backlog
 
 Status: FIRST SLICE IMPLEMENTED (crate `agentkit-napi` + package
-`@agentkit/native`, validated on x86_64-linux / Bun 1.4.4 / Node-API 9).
-The supported matrix beyond that cell, prebuilt-binary packaging, and the
+`@agentkit/native`, validated on x86_64-linux with Bun 1.4.4 and Node
+v22.20.0, Node-API 9; the packed-consumer gate runs both runtimes).
+The supported matrix beyond those cells, prebuilt-binary packaging, and the
 npm export cutover remain open; see "First slice: what shipped" and the
 backlog below. The TS wire authority is unchanged: contract `0.7.0`, REST
 `v1`, frozen at `36577829cfbfd78e5b0492d826f46ba6131835b6`.
@@ -29,44 +30,73 @@ generator's `ToTs`/TS codegen is deliberately NOT used for wire types):
 - `NativeStore.open/memory` — one store actor thread per instance; a busy
   file rejects `already_owned` and a recovery-unreadable file rejects
   `recovery_unreadable`; drop never joins the thread.
-- `NativeHost` (`bindingSmoke` proves the async tokio boundary) plus
-  `NativeRegistry` with the **real contributed coding pack**
-  (`contributed_coding_pack()`).
-- `SessionService`: create/send/steer/followUp/answer/cancel/interrupt/
-  resume/flushQueue/getState, 1:1 with `AgentSessionService` request/
-  response JSON; `getState` is the only sync method (store actor query).
-- `subscribe(afterSeq)` durable-event iterator: one `tokio::spawn` reader
-  per subscription, bounded queue (64), terminate `subscription_overflow`,
-  resubscribe from the cursor; an unresolved queue slot holds the callback
-  — no drops.
+- `store.createService(options?)` builds the whole Rust pipeline per
+  service: `JsBridge` (callback router), `JsToolContributor`,
+  `AgentHost`, `ChatExecutor` with a `JsProvider`, and
+  `AgentSessionService` — no `NativeHost`/`NativeRegistry` mirrors, and
+  no session/governance logic duplicated in TS.
+- JS-contributed tools run under **Rust-side authority**:
+  `BindingAuthority` + `JsToolGuard` (mode from
+  `jsToolAuthority.configuredMode`, default `ask`) +
+  `BindingPlanPolicy` (approved-plan escalation grants
+  `planGrantMode`; `plan` is never grantable). Plan-mode blocking,
+  per-call approval, and plan escalation never consult JS; unsupported
+  authority configurations reject at construction, not silently.
+- `SessionService`: create/send/steer/followUp/answer/approve/deny/
+  cancel/interrupt/resume/flushQueue/getState/getExecution/listTurns/
+  exportSession/getUsage, 1:1 with `AgentSessionService` request/response
+  JSON; tool descriptors pass through verbatim (null-as-absent fields
+  fixed, so `effect`/`capability`/`readOnly` survive the boundary).
+- `subscribeTurn(taskId, afterSeq?)` → `SubscriptionHandle.poll(limit,
+  waitMs)`: pull-based committed-event follower, batches capped at 64
+  (out-of-range `limit` rejects), durable cursor — a slow consumer
+  backpressures the follower instead of overflowing a queue; `cancel()`
+  and `done()` are sync.
 - `registerTool(definition, fn)` and `setProvider(fn)`: per-invocation
   references, reject maps to the normal tool/provider failure path
   (`tool_execution_failed`, `provider: <reason>`), no panic, and the full
   admission/receipt/guard/gate layers run around contributed callbacks.
-- `close()` awaited shutdown (worker handle + store actor) + handle
-  release; registry keys are generation-tagged `(id, generation)` so
-  stale-handle use errors `internal_error` rather than aliasing.
+- `service.close()` follows `Open → Closing → Closed`: no new callbacks
+  dispatch, outstanding ones settle honestly, the worker drain is awaited
+  up to `closeTimeoutMs` (default 5000), concurrent callers share one
+  completion, and `closeUncertain` records what drain could not prove.
+  `detach()` releases the event-loop reference so a live handle cannot
+  keep the process alive. Closing releases the store clone, then
+  `store.close()` releases the file lock.
 - Provider functions deliver the final chat result as one chunk —
   provider streaming deltas stay backlog item 1, and this boundary is
   labeled, not hidden.
 
-Validation for this slice (x86_64-linux, Bun 1.4.4): the vertical slice
-(accept → tool → approval park → answer → resume → terminal + receipt →
-close → reopen → replay) plus store lock, dropped-iterator, provider
-rejection, tool rejection, unknown-code redaction, and the code-list
-parity tests — `bun test` in `packages/native`; the binding suites are
-skipped without the built binary and **hard-fail** under
-`AGENTKIT_REQUIRE_NATIVE=1` (M2.1 A4 rule); the native CI job builds the
-binary and sets that flag, and `git diff --exit-code` gates freshness of
-the committed loader/d.ts.
+Validation for this slice (x86_64-linux, Bun 1.4.4 and Node v22.20.0):
+the vertical slice (accept → tool → approval park → answer → resume →
+terminal + receipt → close → reopen → replay) plus store lock,
+dropped-iterator, provider rejection, tool rejection, unknown-code
+redaction, code-list parity, plan/guard authority enforcement
+(JS-contributed writes park under `ask`, an approved plan durably grants
+`planGrantMode`, unsupported configurations reject at construction),
+the `Open → Closing → Closed` lifecycle (concurrent `close()` callers
+share one completion; closing dispatches no new callbacks), and
+tool-descriptor passthrough — 16 binding tests / 90 assertions across
+3 files via `bun test` in `packages/native`, plus 10 Rust unit tests in
+`agentkit-napi`. The binding suites skip cleanly without the built
+binary and **hard-fail** under `AGENTKIT_REQUIRE_NATIVE=1` (M2.1 A4
+rule). CI: the `native` matrix job (ubuntu + macOS, Node 24 / Bun 1.4.0)
+builds the binary, sets that flag, runs
+`rust/scripts/check-native-package.mjs` (real `npm pack` → extracted
+package imported under both Bun and system Node), and gates freshness of
+the committed loader/d.ts with `git diff --exit-code`; a separate
+self-contained Windows job compiles the whole workspace including the
+binding crate.
 
 Open gaps versus the design above, all named, none silent: streaming
 deltas and the provider-completion vs durable-settled lane (backlog 1);
-`AbortSignal` mapping on promise APIs; the cross-runtime matrix (Node
-20/22/24 — CI builds+tests the binding on the same matrix, not yet
-established for this slice); the crash-kill child test; conformance
-harness reuse through the public API; prebuilt per-triple packages and
-the install-never-cargo story.
+`AbortSignal` mapping on promise APIs; Node 20 (CI covers Node 24 on the
+matrix, local gate covers Node 22; 20 is untested); the crash-kill child
+test; conformance harness reuse through the public API; prebuilt
+per-triple packages and the install-never-cargo story; and macOS/Windows
+runner re-validation of the C2 fixes (macOS `undefined_dynamic_lookup`
+link args, Windows conditional import) — both fail-closed fixed locally,
+the runners record the qualification on push.
 
 ## Goal
 
@@ -214,6 +244,13 @@ test-written first, covering:
    the whole matrix.
 6. Migration policy for existing TS schema-9 databases (separate identity;
    explicit, reviewed, never implicit).
+7. Windows client interop: qualify the client mixed-runtime suite
+   (`all_routes`, `interoperability`, `typescript_boundaries` — the
+   Bun-spawned TypeScript service harness) on the Windows runner and then
+   lift the `AGENTKIT_SKIP_TS_INTEROP` opt-out from the `native-windows`
+   workspace step. Until then those tests run only in the `native` job; the
+   Windows job's required mixed-runtime scope is the five Bun-spawning MCP
+   fixture tests (workflow structure test pins both halves of that policy).
 
 ## Definition of done (M3)
 

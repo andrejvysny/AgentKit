@@ -12,18 +12,21 @@ use std::collections::HashMap;
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use agentkit_core::ToolRegistry;
 use agentkit_host::{
     AgentHost, AgentSessionService, AgentSessionServiceDeps, CHAT_TURN_TASK_KIND, ChatExecutor,
     ChatExecutorOptions, HostOptions, HostResult, RunHandle, RunUpdate, SharedRuntime,
-    TaskExecutor, WorkerHandle,
+    TaskExecutor, ToolContributor, ToolGuard, WorkerHandle,
 };
+use agentkit_toolpacks_coding::types::{CodingMode, CodingPermissionAuthority};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, Notify, mpsc};
 
+use crate::authority::{BindingAuthority, BindingPlanPolicy, JsToolGuard, PlanConfiguration};
 use crate::errors;
 use crate::jsbridge::JsBridge;
 use crate::provider::JsProvider;
@@ -31,6 +34,8 @@ use crate::tool::JsToolContributor;
 
 const MAX_POLL_BATCH: i32 = 64;
 const DEFAULT_POLL_WAIT_MS: u64 = 25;
+const DEFAULT_CLOSE_TIMEOUT_MS: u64 = 5_000;
+const MAX_CLOSE_TIMEOUT_MS: u64 = 300_000;
 
 struct Core {
     host: AgentHost,
@@ -44,6 +49,21 @@ struct Core {
 pub struct SessionService {
     core: Mutex<Option<Core>>,
     bridge: Arc<JsBridge>,
+    gate: Arc<CloseGate>,
+    close_timeout: Duration,
+    uncertain: Arc<AtomicBool>,
+}
+
+/// One-shot shutdown coordination: concurrent `close` callers await the
+/// same completion instead of racing the teardown or returning early.
+struct CloseGate {
+    state: Mutex<GateState>,
+    wake: Notify,
+}
+
+struct GateState {
+    busy: bool,
+    done: bool,
 }
 
 #[napi]
@@ -52,22 +72,36 @@ impl SessionService {
     /// executor + session service + worker. Recovery runs before the worker
     /// claims any task, so restart reconciliation always precedes new
     /// modifying work. Exposed on the JS side as `NativeStore.createService`.
+    ///
+    /// `optionsJson` (optional): `{closeTimeoutMs?, jsToolAuthority?:
+    /// {configuredMode?, planToolNames?, planGrantMode?}}`. JS write tools
+    /// are governed by the Rust coding-pack authority (plan mode blocks
+    /// them; ask mode asks per call; only plan-tool approval escalates,
+    /// durably) — an unsupported configuration is refused at construction,
+    /// never silently ignored.
     pub(crate) async fn build(
         store_handle: agentkit_store::SqliteStore,
         on_event: ThreadsafeFunction<String>,
+        options_json: Option<String>,
     ) -> Result<Self> {
+        let options = parse_service_options(options_json.as_deref())?;
         let bridge = Arc::new(JsBridge::new(on_event));
         let runtime: SharedRuntime = std::sync::Arc::new(agentkit_host::SystemRuntime);
         let contributor = Arc::new(JsToolContributor::new(Arc::clone(&bridge)));
+        let authority = Arc::new(BindingAuthority::new());
+        let guard = JsToolGuard::new(
+            Arc::clone(&authority) as Arc<dyn CodingPermissionAuthority>,
+            options.configured_mode,
+            options.plan.clone(),
+        );
         let executor: Arc<dyn TaskExecutor> = Arc::new(
             ChatExecutor::new(
                 Arc::new(JsProvider::new(Arc::clone(&bridge))),
                 Arc::new(ToolRegistry::new()),
             )
             .with_options(ChatExecutorOptions {
-                tool_contributors: vec![
-                    Arc::clone(&contributor) as Arc<dyn agentkit_host::ToolContributor>
-                ],
+                tool_contributors: vec![Arc::clone(&contributor) as Arc<dyn ToolContributor>],
+                tool_guards: vec![Arc::new(guard) as Arc<dyn ToolGuard>],
                 ..Default::default()
             }),
         );
@@ -81,11 +115,14 @@ impl SessionService {
         let service = AgentSessionService::new(AgentSessionServiceDeps {
             store: store_handle,
             runtime,
-            plan_approval: None,
+            plan_approval: Some(Arc::new(BindingPlanPolicy::new(options.plan.clone()))),
             wake: Some(host.wake_handle()),
         });
         host.set_session_flush_planner(Arc::new(service.clone()))
             .await;
+        // Bound before the worker exists: a run can never query an unbound
+        // authority and fall back to the configured mode by accident.
+        authority.bind(service.clone());
         // Crash-reconcile interrupted turns BEFORE the worker can claim work.
         host.recover().await.map_err(errors::host)?;
         let worker = host.start_worker();
@@ -98,6 +135,15 @@ impl SessionService {
                 subscriptions: Mutex::new(Vec::new()),
             })),
             bridge,
+            gate: Arc::new(CloseGate {
+                state: Mutex::new(GateState {
+                    busy: false,
+                    done: false,
+                }),
+                wake: Notify::new(),
+            }),
+            close_timeout: options.close_timeout,
+            uncertain: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -397,25 +443,69 @@ impl SessionService {
             .map_err(|message| errors::internal(&message))
     }
 
-    /// Reject every outstanding callback, stop and drain the worker, release
-    /// the store clone. Idempotent: a second close is a no-op.
+    /// Shutdown: `Open → Closing → Closed` in one atomic sequence.
+    /// Entering Closing rejects outstanding callbacks AND new JS dispatches
+    /// under the same lock (no insert-after-drain window), then the service
+    /// stops taking operations, cancels subscriptions, and awaits the
+    /// worker. Active runs observe the closing bridge, fail their next
+    /// callback honestly, and settle durably — close never fakes success,
+    /// and rejecting a JS promise never claims to stop external effects the
+    /// callback already started. If the worker does not finish draining
+    /// within `closeTimeoutMs`, close still completes and `closeUncertain`
+    /// reports that cleanup could not be established. Idempotent;
+    /// concurrent callers await the same completion.
     #[napi]
     pub async fn close(&self) -> Result<()> {
-        let mut core = self
-            .core
-            .lock()
-            .await
-            .take()
-            .ok_or_else(|| errors::closed("the session service is closed"))?;
-        self.bridge.reject_all();
-        for subscription in core.subscriptions.lock().await.drain(..) {
-            subscription.cancel();
+        loop {
+            let mut waited = Box::pin(self.gate.wake.notified());
+            waited.as_mut().enable();
+            {
+                let mut state = self.gate.state.lock().await;
+                if state.done {
+                    return Ok(());
+                }
+                if state.busy {
+                    drop(state);
+                    waited.await;
+                    continue;
+                }
+                state.busy = true;
+            }
+            let outcome = self.shutdown_once().await;
+            let mut state = self.gate.state.lock().await;
+            state.busy = false;
+            state.done = outcome.is_ok();
+            drop(state);
+            self.gate.wake.notify_waiters();
+            return outcome;
         }
-        if let Some(worker) = core.worker.take() {
-            worker.shutdown().await.map_err(errors::host)?;
+    }
+
+    async fn shutdown_once(&self) -> Result<()> {
+        self.bridge.start_closing();
+        let core = self.core.lock().await.take();
+        if let Some(mut core) = core {
+            for subscription in core.subscriptions.lock().await.drain(..) {
+                subscription.cancel();
+            }
+            if let Some(worker) = core.worker.take() {
+                match tokio::time::timeout(self.close_timeout, worker.shutdown()).await {
+                    Ok(result) => result.map_err(errors::host)?,
+                    Err(_) => self.uncertain.store(true, Ordering::SeqCst),
+                }
+            }
+            drop(core);
         }
-        drop(core);
+        self.bridge.mark_closed();
         Ok(())
+    }
+
+    /// True when a `close()` completed without establishing that owned
+    /// execution had drained (the worker deadline expired). Durable state
+    /// stays authoritative; this flag records what close could not prove.
+    #[napi(getter)]
+    pub fn close_uncertain(&self) -> bool {
+        self.uncertain.load(Ordering::SeqCst)
     }
 }
 
@@ -600,6 +690,110 @@ fn optional_string(object: &Value, key: &str) -> Result<Option<String>> {
     }
 }
 
+/// Descriptor-raw scalar fields: an explicit `null` is a malformed-present
+/// value (the native descriptor reader's direction), never laundered into
+/// an absence by the binding.
+fn optional_string_strict(object: &Value, key: &str) -> Result<Option<String>> {
+    match object.get(key) {
+        None => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(Value::Null) => Err(errors::invalid(format!(
+            "{key} must be a string; explicit null is malformed, not absent"
+        ))),
+        Some(_) => Err(errors::invalid(format!(
+            "{key} must be a string when present"
+        ))),
+    }
+}
+
+/// Construction-time service configuration. Everything here selects Rust
+/// behavior; an unsupported value fails construction rather than being
+/// silently ignored, so the binding never advertises a policy it cannot
+/// enforce.
+struct ServiceOptions {
+    close_timeout: Duration,
+    configured_mode: CodingMode,
+    plan: PlanConfiguration,
+}
+
+impl Default for ServiceOptions {
+    fn default() -> Self {
+        Self {
+            close_timeout: Duration::from_millis(DEFAULT_CLOSE_TIMEOUT_MS),
+            configured_mode: CodingMode::Ask,
+            plan: PlanConfiguration {
+                tool_names: vec!["submit_plan".to_owned()],
+                granted_mode: CodingMode::Ask,
+            },
+        }
+    }
+}
+
+fn parse_service_options(text: Option<&str>) -> Result<ServiceOptions> {
+    let Some(text) = text else {
+        return Ok(ServiceOptions::default());
+    };
+    let object = parse_object(text, "the service options")?;
+    let mut options = ServiceOptions::default();
+    if let Some(value) = object.get("closeTimeoutMs") {
+        let millis = value
+            .as_u64()
+            .filter(|value| *value <= MAX_CLOSE_TIMEOUT_MS)
+            .ok_or_else(|| {
+                errors::invalid(format!(
+                    "closeTimeoutMs must be an integer between 0 and {MAX_CLOSE_TIMEOUT_MS}"
+                ))
+            })?;
+        options.close_timeout = Duration::from_millis(millis);
+    }
+    if let Some(value) = object.get("jsToolAuthority") {
+        let authority = value
+            .as_object()
+            .ok_or_else(|| errors::invalid("jsToolAuthority must be an object when present"))?;
+        if let Some(mode) = authority.get("configuredMode") {
+            options.configured_mode = parse_mode(mode, "configuredMode")?;
+        }
+        if let Some(mode) = authority.get("planGrantMode") {
+            let granted = parse_mode(mode, "planGrantMode")?;
+            if granted == CodingMode::Plan {
+                return Err(errors::invalid(
+                    "planGrantMode must move the session out of plan mode, not into it",
+                ));
+            }
+            options.plan.granted_mode = granted;
+        }
+        if let Some(names) = authority.get("planToolNames") {
+            let items = names
+                .as_array()
+                .ok_or_else(|| errors::invalid("planToolNames must be an array when present"))?;
+            if items.is_empty() {
+                return Err(errors::invalid("planToolNames must not be empty"));
+            }
+            let mut parsed = Vec::with_capacity(items.len());
+            for item in items {
+                let name = item
+                    .as_str()
+                    .filter(|text| !text.is_empty())
+                    .ok_or_else(|| {
+                        errors::invalid("planToolNames entries must be non-empty strings")
+                    })?;
+                if !parsed.iter().any(|existing: &String| existing == name) {
+                    parsed.push(name.to_owned());
+                }
+            }
+            options.plan.tool_names = parsed;
+        }
+    }
+    Ok(options)
+}
+
+fn parse_mode(value: &Value, key: &str) -> Result<CodingMode> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| errors::invalid(format!("{key} must be a string")))?;
+    CodingMode::parse(text).ok_or_else(|| errors::invalid(format!("unknown {key} \"{text}\"")))
+}
+
 fn parse_when_busy(object: &Value) -> Result<WhenBusy> {
     match object.get("whenBusy") {
         None | Some(Value::Null) => Ok(WhenBusy::Reject),
@@ -639,9 +833,13 @@ fn parse_create_session(text: &str) -> Result<CreateSessionInput> {
         .filter(|text| !text.is_empty())
         .ok_or_else(|| errors::invalid("profileId is required and must be a non-empty string"))?;
     let skills = match object.get("skills") {
-        None | Some(Value::Null) => None,
+        None => None,
         Some(Value::Array(items)) => Some(items.clone()),
-        Some(_) => return Err(errors::invalid("skills must be an array when present")),
+        // A present non-array (null included) reaches the native reader
+        // unchanged: `[null]` fails the Skills entry grammar exactly as the
+        // internal path does — explicit null is malformed-present, not
+        // absent, and the binding must not launder it away beforehand.
+        Some(value) => Some(vec![value.clone()]),
     };
     let metadata = match object.get("metadata") {
         None | Some(Value::Null) => None,
@@ -652,13 +850,13 @@ fn parse_create_session(text: &str) -> Result<CreateSessionInput> {
         session_id: optional_string(&object, "sessionId")?,
         title: optional_string(&object, "title")?,
         profile_id,
-        profile_digest: optional_string(&object, "profileDigest")?,
-        provider_id: optional_string(&object, "providerId")?,
-        model: optional_string(&object, "model")?,
-        workspace: object.get("workspace").cloned().filter(|v| !v.is_null()),
-        context: object.get("context").cloned().filter(|v| !v.is_null()),
+        profile_digest: optional_string_strict(&object, "profileDigest")?,
+        provider_id: optional_string_strict(&object, "providerId")?,
+        model: optional_string_strict(&object, "model")?,
+        workspace: object.get("workspace").cloned(),
+        context: object.get("context").cloned(),
         skills,
-        turn_kind: optional_string(&object, "turnKind")?,
+        turn_kind: optional_string_strict(&object, "turnKind")?,
         execution_mode: optional_string(&object, "executionMode")?,
         metadata,
     })
