@@ -1,5 +1,6 @@
 import { AiContentPartSchema } from "./content.js";
 import { Type, type Static } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import { AiJsonSchemaObjectSchema } from "./json-schema.js";
 import { AiSourceRefSchema } from "./source-ref.js";
 
@@ -98,6 +99,11 @@ export type AiToolResult<T = unknown> = Omit<
   Static<typeof AiToolResultSchema>,
   "data"
 > & { data: T };
+
+/** Validate results recovered from durable storage before restoring them. */
+export function isAiToolResult(value: unknown): value is AiToolResult<unknown> {
+  return Value.Check(AiToolResultSchema, value);
+}
 
 /**
  * Balanced model-facing envelope (Wave 0 §0.2). `data` carries `modelData` when present,

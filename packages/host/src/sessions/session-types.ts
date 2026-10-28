@@ -1,4 +1,7 @@
-import type { AiContentPart } from "@agentkit/contracts";
+import type {
+  AiContentPart,
+  AiRunContextAdmittedEvent,
+} from "@agentkit/contracts";
 import type { AgentInputRecord } from "../ports/agent-input-store.js";
 import type { TaskStatus } from "../ports/task-store.js";
 import type { AgentSessionDescriptor } from "./descriptor.js";
@@ -139,6 +142,7 @@ export interface AgentTurnUsage {
   totalTokens: number;
   /** Prompt tokens of the turn's newest request that reported any. */
   lastPromptTokens?: number;
+  lastContextAdmission?: AiRunContextAdmittedEvent["data"];
 }
 
 export interface AgentSessionUsage {
@@ -150,10 +154,17 @@ export interface AgentSessionUsage {
     completionTokens: number;
     totalTokens: number;
   };
-  /** Window the next request is budgeted against (descriptor, then model, then fallback). */
-  contextWindowTokens: number;
-  contextWindowSource: "descriptor" | "model" | "capabilities" | "fallback";
-  /** Provider-reported context fill of the newest request, when any reported. */
+  /** Admitted window of the active turn, else the latest turn; unknown for legacy turns. */
+  contextWindowTokens: number | null;
+  contextWindowSource:
+    | "descriptor"
+    | "model"
+    | "capabilities"
+    | "fallback"
+    | "unknown";
+  contextTurnId?: string;
+  contextAdmission?: AiRunContextAdmittedEvent["data"];
+  /** Provider-reported input of this same turn's newest request, when any reported. */
   lastPromptTokens?: number;
 }
 

@@ -14,6 +14,7 @@ export const AiRunEventTypeSchema = Type.Union([
   Type.Literal("run.warning"),
   Type.Literal("run.usage"),
   Type.Literal("run.context.compacted"),
+  Type.Literal("run.context.admitted"),
   Type.Literal("run.verification"),
   Type.Literal("run.input.applied"),
   Type.Literal("run.waiting"),
@@ -430,6 +431,30 @@ export type AiRunContextCompactedEvent = Static<
   typeof AiRunContextCompactedEventSchema
 >;
 
+/** Host estimate immediately before one provider dispatch; never provider-reported usage. */
+export const AiRunContextAdmittedEventSchema = Type.Object({
+  type: Type.Literal("run.context.admitted"),
+  ...runEventBaseFields,
+  data: Type.Object({
+    requestId: Type.String(),
+    windowTokens: Type.Number(),
+    windowSource: Type.Union([
+      Type.Literal("descriptor"),
+      Type.Literal("model"),
+      Type.Literal("capabilities"),
+      Type.Literal("fallback"),
+    ]),
+    reserveTokens: Type.Number(),
+    toolTokens: Type.Number(),
+    extraTokens: Type.Number(),
+    estimatedInputTokens: Type.Number(),
+    budgetTokens: Type.Number(),
+  }),
+});
+export type AiRunContextAdmittedEvent = Static<
+  typeof AiRunContextAdmittedEventSchema
+>;
+
 /**
  * The outcome of ONE verification of this run — "did the work actually land?"
  * as answered after a pass, not as narrated by the model.
@@ -526,6 +551,17 @@ export const AiRunWaitingEventSchema = Type.Object({
           "Approval only: sha-256 hex of the call's canonical JSON arguments.",
       }),
     ),
+    approvalGeneration: Type.Optional(
+      Type.String({
+        description:
+          "Stable host-generated authorization generation for an uncertain operation.",
+      }),
+    ),
+    contextSha256: Type.Optional(
+      Type.String({
+        description: "Approval only: host-computed execution-context binding.",
+      }),
+    ),
     requestedMode: Type.Optional(
       Type.String({
         description:
@@ -598,6 +634,7 @@ export const AiRunEventSchema = Type.Union([
   AiRunWarningEventSchema,
   AiRunUsageEventSchema,
   AiRunContextCompactedEventSchema,
+  AiRunContextAdmittedEventSchema,
   AiRunVerificationEventSchema,
   AiRunInputAppliedEventSchema,
   AiRunWaitingEventSchema,
@@ -624,6 +661,7 @@ export type AiRunEvent =
   | AiRunWarningEvent
   | AiRunUsageEvent
   | AiRunContextCompactedEvent
+  | AiRunContextAdmittedEvent
   | AiRunVerificationEvent
   | AiRunInputAppliedEvent
   | AiRunWaitingEvent

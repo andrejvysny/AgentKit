@@ -20,6 +20,7 @@ import {
   type AgentSessionDescriptor,
 } from "../sessions/descriptor.js";
 import { readInputContent } from "../sessions/input-content.js";
+import { sessionWithAdmittedContext } from "../sessions/admitted-context.js";
 import { fencedConversations } from "./fenced-conversations.js";
 import { stageTurnInTransaction, type TurnRequest } from "./submit.js";
 import type { TurnRunnerDeps } from "./turn-runner.js";
@@ -225,8 +226,12 @@ export async function stageNextQueuedTurn(
     const userMessageId = deps.ids.messageId();
     const assistantMessageId = deps.ids.messageId();
     const contentSelection = sessionContentSelection(session);
+    const stored = next.content as Record<string, unknown>;
+    const pinned = "sessionContext" in stored;
+    const context = sessionWithAdmittedContext(session, stored).context ?? null;
     const payload: TurnRequest = {
       chatId,
+      ...(pinned ? { sessionContext: context } : {}),
       ...(input.parentMessageId === undefined
         ? {}
         : { parentMessageId: input.parentMessageId }),

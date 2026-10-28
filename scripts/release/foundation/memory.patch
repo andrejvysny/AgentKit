@@ -52,22 +52,6 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
    async lastMessageOfRun(
      chatId: string,
      runId: string,
-@@ -1075,7 +1063,6 @@ export class MemoryTaskStore implements TaskStore {
-     private readonly gate: MemoryTxGate = new MemoryTxGate(
-       DEFAULT_TRANSACTION_GATE_TIMEOUT_MS,
-     ),
--    private readonly onDeleteTasks?: () => void,
-   ) {
-     this.aging = resolveTaskAging(aging);
-   }
-@@ -1207,7 +1194,6 @@ export class MemoryTaskStore implements TaskStore {
-       this.eventIds.delete(task.taskId);
-       this.tasks.delete(task.taskId);
-     }
--    this.onDeleteTasks?.();
-     return doomed.length;
-   }
- 
 @@ -2192,7 +2178,6 @@ export class MemoryAssistantStore implements AssistantStore {
    readonly providers = new MemoryProviderStore();
    readonly settings = new MemorySettingsStore();
@@ -90,11 +74,14 @@ diff --git a/packages/adapters-memory/src/memory-assistant-store.ts b/packages/a
      );
      this.rawTasks = new MemoryTaskStore(
        clock,
-@@ -2215,7 +2197,6 @@ export class MemoryAssistantStore implements AssistantStore {
+@@ -2215,10 +2197,9 @@ export class MemoryAssistantStore implements AssistantStore {
        options.leaseTtlMs,
        options,
        this.gate,
--      () => this.continuations.pruneDeletedRuns(),
+       () => {
+-        this.continuations.pruneDeletedRuns();
+         this.toolExecutions.pruneDeletedRuns();
+       },
      );
      const fencedWrites = new Set([
        "createTask",

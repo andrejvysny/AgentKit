@@ -3,6 +3,7 @@
  *
  * Layout under `<dir>/<sha256(root)>/`:
  *   exclusive.lock           workspace-exclusive marker (command running)
+ *   quarantine.lock          unresolved startup or legacy command ownership
  *   shared-<pid>-<uuid>.lock one per in-flight file lease
  *   file-<sha256(path)>.lock one per locked canonical file
  * Every lock file holds JSON `{pid, processStart, tool, label, createdAt}` and
@@ -11,40 +12,43 @@
  * `label` is only a 12-char hash of the holder's label: command text never
  * reaches the lock directory.
  *
- * A lock is stale when its pid is gone (`process.kill(pid, 0)` -> ESRCH) or
- * the pid now has a different start time (`ps -o lstart=`; pid reuse). A stale
- * lock is reclaimed by renaming it to a unique tombstone and re-checking the
- * tombstone's content before deleting it; if the tombstone turns out to hold a
- * live holder's lock, it is linked back (no overwrite) and treated as owned by
- * that holder.
+ * Plain abandoned leases are reclaimed only by one elected reclaimer per
+ * record generation; a hard-link receipt prevents stale readers from touching
+ * newer ownership. Execution intent is fsynced into the existing exclusive
+ * marker before spawn. Unknown/surviving executions and damaged records remain
+ * blocked regardless of owner death. They are never released then quarantined.
  *
  * In-process fairness comes from the module-global in-process coordinator,
  * which is always acquired first, so packs using either kind of coordinator
  * in one process exclude each other.
  *
- * Limits: same host and same pid namespace only (pids and `ps` mean nothing
- * across machines or containers sharing the directory); if `ps` is
- * unavailable only pid liveness is checked; release failures are reported via
- * `onError` and never change a tool result. An uncoordinated external editor
+ * Limits: same host, OS user and pid namespace only. Reclaim receipts remain
+ * as small safety records. Unknown inspection never proves cleanup. Historical
+ * commands whose old leases were already released and whose marker/ancestry is
+ * hidden cannot be reconstructed. An uncoordinated external editor
  * takes none of these locks; the tools' content checks detect its changes
  * instead.
  */
-import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  link,
-  mkdir,
-  readFile,
-  readdir,
-  rename,
-  stat,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { link, mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import {
+  code,
+  holderOf,
+  liveOwner,
+  ownerIsDead,
+  processStart,
+  readRecord,
+  remove,
+  type LockRecord,
+  type OnError,
+} from "./coordination-record.js";
+import { executionLease } from "./coordination-execution.js";
+import { importLegacyOwnership } from "./coordination-migration.js";
+import { persistRecord } from "./coordination-storage.js";
 import {
   type CoordinatorObserver,
+  type ExecutionCleanup,
   type LeaseHolder,
   WaitTracker,
   type WorkspaceCoordinator,
@@ -56,171 +60,8 @@ import {
   withWaitCap,
 } from "./coordination.js";
 
-const runPs = promisify(execFile);
-
-interface LockRecord {
-  pid: number;
-  /** `ps -o lstart=` of the owner when it took the lock; absent if unknown. */
-  processStart?: string;
-  tool: string;
-  /** sha256(label).slice(0, 12). */
-  label: string;
-  createdAt: number;
-}
-
-type OnError = (error: unknown) => void;
-
-/** An unparseable lock file this old is garbage, not a half-written lock. */
-const CORRUPT_GRACE_MS = 5000;
-const START_TTL_MS = 1000;
-
-function code(error: unknown): string | undefined {
-  return typeof error === "object" && error !== null && "code" in error
-    ? String(error.code)
-    : undefined;
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return code(error) !== "ESRCH";
-  }
-}
-
 function sha(value: string): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-const starts = new Map<number, { value: string | undefined; at: number }>();
-
-/** Process start time as printed by ps; undefined when it cannot be read. */
-async function processStart(pid: number): Promise<string | undefined> {
-  const cached = starts.get(pid);
-  const ttl = pid === process.pid ? Number.POSITIVE_INFINITY : START_TTL_MS;
-  if (cached && Date.now() - cached.at < ttl) return cached.value;
-  let value: string | undefined;
-  try {
-    const { stdout } = await runPs("ps", ["-o", "lstart=", "-p", String(pid)], {
-      env: { ...process.env, LC_ALL: "C" },
-    });
-    value = stdout.trim() || undefined;
-  } catch {
-    value = undefined; // ps missing or pid gone: callers fall back to liveness
-  }
-  starts.set(pid, { value, at: Date.now() });
-  return value;
-}
-
-async function isStale(record: LockRecord): Promise<boolean> {
-  if (!pidAlive(record.pid)) return true;
-  if (record.processStart === undefined) return false;
-  const now = await processStart(record.pid);
-  return now !== undefined && now !== record.processStart;
-}
-
-function holderOf(record: LockRecord): LeaseHolder {
-  return {
-    runId: `pid-${record.pid}`,
-    tool: record.tool,
-    label: record.label,
-  };
-}
-
-const UNKNOWN: LockRecord = {
-  pid: -1,
-  tool: "unknown",
-  label: "unreadable lock file",
-  createdAt: 0,
-};
-
-function isRecord(value: unknown): value is LockRecord {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as LockRecord).pid === "number" &&
-    typeof (value as LockRecord).tool === "string"
-  );
-}
-
-async function remove(path: string): Promise<void> {
-  try {
-    await unlink(path);
-  } catch (error) {
-    if (code(error) !== "ENOENT") throw error;
-  }
-}
-
-async function readRecord(
-  path: string,
-): Promise<LockRecord | "gone" | "corrupt"> {
-  let text: string;
-  try {
-    text = await readFile(path, "utf8");
-  } catch (error) {
-    if (code(error) === "ENOENT") return "gone";
-    throw error;
-  }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return isRecord(parsed) ? parsed : "corrupt";
-  } catch {
-    return "corrupt";
-  }
-}
-
-function sameOwner(a: LockRecord, b: LockRecord): boolean {
-  return a.pid === b.pid && a.processStart === b.processStart;
-}
-
-/**
- * Take a stale (or corrupt) lock out of the way. Returns the live record when
- * the file turned out to belong to someone else after all.
- */
-async function reclaim(
-  path: string,
-  judged: LockRecord | "corrupt",
-  onError: OnError,
-): Promise<LockRecord | undefined> {
-  const tomb = `${path}.stale-${randomUUID()}`;
-  try {
-    await rename(path, tomb);
-  } catch (error) {
-    if (code(error) === "ENOENT") return undefined;
-    throw error;
-  }
-  const moved = await readRecord(tomb);
-  const unchanged =
-    moved === "gone" ||
-    (judged === "corrupt"
-      ? moved === "corrupt"
-      : moved !== "corrupt" && sameOwner(moved, judged));
-  if (unchanged) {
-    await remove(tomb).catch(onError);
-    return undefined;
-  }
-  // We displaced a different holder's lock. link() never overwrites, so put it
-  // back if the name is still free; either way that holder owns the lock.
-  await link(tomb, path).catch(onError);
-  await remove(tomb).catch(onError);
-  return moved === "corrupt" ? UNKNOWN : moved;
-}
-
-/** The live owner of a lock file, or undefined (also after reclaiming a stale one). */
-async function liveOwner(
-  path: string,
-  onError: OnError,
-): Promise<LockRecord | undefined> {
-  const record = await readRecord(path);
-  if (record === "gone") return undefined;
-  if (record === "corrupt") {
-    const info = await stat(path).catch(() => null);
-    if (info && Date.now() - info.mtimeMs < CORRUPT_GRACE_MS) return UNKNOWN;
-    return reclaim(path, "corrupt", onError);
-  }
-  if (!(await isStale(record))) return record;
-  return reclaim(path, record, onError);
 }
 
 async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -247,6 +88,7 @@ async function tryCreate(
 ): Promise<boolean> {
   const start = await processStart(process.pid);
   const record: LockRecord = {
+    lockId: randomUUID(),
     pid: process.pid,
     ...(start !== undefined ? { processStart: start } : {}),
     tool: holder.tool,
@@ -254,7 +96,7 @@ async function tryCreate(
     createdAt: Date.now(),
   };
   const temp = join(dir, `.tmp-${randomUUID()}`);
-  await writeFile(temp, JSON.stringify(record), { flag: "wx" });
+  await writeFile(temp, JSON.stringify(record), { flag: "wx", mode: 0o600 });
   try {
     await link(temp, path);
     return true;
@@ -280,6 +122,61 @@ class LockDir {
     return join(this.wsDir, "exclusive.lock");
   }
 
+  private async blocker(): Promise<LockRecord | undefined> {
+    return (
+      (await liveOwner(join(this.wsDir, "quarantine.lock"), this.onError)) ??
+      (await liveOwner(this.marker, this.onError))
+    );
+  }
+
+  async quarantine(cleanup: ExecutionCleanup): Promise<void> {
+    await persistRecord(
+      join(this.wsDir, "quarantine.lock"),
+      {
+        lockId: randomUUID(),
+        pid: process.pid,
+        tool: "startup_cleanup",
+        label: "unresolved process cleanup",
+        createdAt: Date.now(),
+        execution: {
+          runId: "startup",
+          executionAttemptId: cleanup.executionAttemptId,
+          execId: `${process.pid}:${cleanup.executionAttemptId}`,
+          cleanup,
+        },
+      },
+      true,
+    );
+  }
+
+  async reconcile(): Promise<ExecutionCleanup[]> {
+    const quarantine = await readRecord(join(this.wsDir, "quarantine.lock"));
+    const record =
+      quarantine === "gone" ? await readRecord(this.marker) : quarantine;
+    if (record === "gone") return [];
+    if (record === "corrupt")
+      return [
+        {
+          executionAttemptId: "unreadable-workspace-owner",
+          state: "unknown",
+          survivors: [],
+          reason: "workspace ownership is unreadable",
+        },
+      ];
+    const execution = record.execution;
+    if (!execution || execution.cleanup?.state === "stopped") return [];
+    if (execution.cleanup) return [execution.cleanup];
+    if (!(await ownerIsDead(record))) return [];
+    return [
+      {
+        executionAttemptId: execution.executionAttemptId,
+        state: "unknown",
+        survivors: [],
+        reason: "execution owner died before cleanup proof was persisted",
+      },
+    ];
+  }
+
   async acquireShared(
     holder: LeaseHolder,
     signal: AbortSignal | undefined,
@@ -290,13 +187,13 @@ class LockDir {
       `shared-${process.pid}-${randomUUID()}.lock`,
     );
     for (;;) {
-      const first = await liveOwner(this.marker, this.onError);
+      const first = await this.blocker();
       if (!first) {
         await tryCreate(this.wsDir, entry, holder, this.onError);
         // A marker may have appeared between the check and our entry.
         let second: LockRecord | undefined;
         try {
-          second = await liveOwner(this.marker, this.onError);
+          second = await this.blocker();
         } catch (error) {
           await remove(entry).catch(this.onError);
           throw error;
@@ -314,7 +211,17 @@ class LockDir {
     signal: AbortSignal | undefined,
     block: Block,
   ): Promise<string> {
-    while (!(await tryCreate(this.wsDir, this.marker, holder, this.onError))) {
+    for (;;) {
+      const quarantine = await liveOwner(
+        join(this.wsDir, "quarantine.lock"),
+        this.onError,
+      );
+      if (quarantine) {
+        block("workspace", [holderOf(quarantine)]);
+        await sleep(this.pollMs, signal);
+        continue;
+      }
+      if (await tryCreate(this.wsDir, this.marker, holder, this.onError)) break;
       const owner = await liveOwner(this.marker, this.onError);
       if (!owner) continue;
       block("workspace", [holderOf(owner)]);
@@ -322,6 +229,15 @@ class LockDir {
     }
     try {
       for (;;) {
+        const quarantine = await liveOwner(
+          join(this.wsDir, "quarantine.lock"),
+          this.onError,
+        );
+        if (quarantine) {
+          block("workspace", [holderOf(quarantine)]);
+          await sleep(this.pollMs, signal);
+          continue;
+        }
         const live = await this.liveShared();
         if (live.length === 0) return this.marker;
         block("workspace", live.map(holderOf));
@@ -362,7 +278,7 @@ class LockDir {
   }
 }
 
-/** Removes each path on its own and always frees the in-process gate. */
+/** Attempts every release, then propagates failures to the cleanup boundary. */
 function leaseOf(
   inner: WorkspaceLease,
   paths: string[],
@@ -373,18 +289,23 @@ function leaseOf(
     async release() {
       if (done) return;
       done = true;
+      const failures: unknown[] = [];
       for (const path of paths) {
         try {
           await remove(path);
         } catch (error) {
           onError(error);
+          failures.push(error);
         }
       }
       try {
         await inner.release();
       } catch (error) {
         onError(error);
+        failures.push(error);
       }
+      if (failures.length > 0)
+        throw new AggregateError(failures, "workspace lease release failed");
     },
   };
 }
@@ -399,8 +320,10 @@ export function createLockDirWorkspaceCoordinator(options: {
   dir: string;
   observer?: CoordinatorObserver;
   pollMs?: number;
-  /** Receives non-fatal cleanup errors. Default: `process.emitWarning`. */
+  /** Observes cleanup errors, which also propagate to the caller. Default: `process.emitWarning`. */
   onError?: (error: unknown) => void;
+  /** Profile-local lock namespaces from versions predating shared coordination. */
+  legacyDirs?: readonly string[];
 }): WorkspaceCoordinator {
   const inner = defaultInProcessCoordinator();
   const pollMs = options.pollMs ?? 50;
@@ -409,11 +332,18 @@ export function createLockDirWorkspaceCoordinator(options: {
   async function open(root: string): Promise<{ key: string; dir: LockDir }> {
     const key = await canonicalRootKey(root);
     const wsDir = join(options.dir, sha(key));
-    await mkdir(wsDir, { recursive: true });
+    await mkdir(wsDir, { recursive: true, mode: 0o700 });
+    await importLegacyOwnership(wsDir, sha(key), options.legacyDirs ?? []);
     return { key, dir: new LockDir(wsDir, pollMs, onError) };
   }
 
   return {
+    async quarantineWorkspace(root, cleanup) {
+      await (await open(root)).dir.quarantine(cleanup);
+    },
+    async reconcileWorkspace(root) {
+      return (await open(root)).dir.reconcile();
+    },
     async acquireFile(input) {
       const tracker = new WaitTracker(options.observer);
       const lease = await withWaitCap(input, tracker, async (signal) => {
@@ -466,7 +396,10 @@ export function createLockDirWorkspaceCoordinator(options: {
               holders,
             });
           paths.push(await dir.acquireExclusive(input.holder, signal, block));
-          return leaseOf(held, paths, onError);
+          return await executionLease(
+            leaseOf(held, paths, onError),
+            paths[0] as string,
+          );
         } catch (error) {
           await leaseOf(held, paths, onError).release();
           throw error;
@@ -476,4 +409,12 @@ export function createLockDirWorkspaceCoordinator(options: {
       return lease;
     },
   };
+}
+
+/** One same-host namespace across app data profiles, scoped to the OS user. */
+export function defaultWorkspaceCoordinationDir(): string {
+  return join(
+    "/tmp",
+    `agentkit-workspace-locks-${process.getuid?.() ?? "user"}`,
+  );
 }

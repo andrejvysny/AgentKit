@@ -44,6 +44,55 @@ function read(directory: string, path: string): string {
   return readFileSync(join(directory, path), "utf8");
 }
 
+function assertDurableExecutionPreserved(directory: string): void {
+  for (const path of [
+    "packages/host/src/ports/tool-execution-store.ts",
+    "packages/host/src/turn/durable-execution.ts",
+    "packages/host/src/turn/registry-staging.ts",
+    "packages/host/src/turn/guarded-tool.ts",
+    "packages/host/src/turn/approval-resume.ts",
+    "packages/adapters-memory/src/memory-tool-execution-store.ts",
+    "packages/adapters-sqlite/src/sqlite/tool-execution-store.ts",
+    "packages/adapters-sqlite/src/sqlite/migrations.ts",
+  ])
+    expect(read(directory, path)).toBe(read(fixtureRoot, path));
+  expect(
+    read(directory, "packages/host/src/ports/assistant-store.ts"),
+  ).toContain(
+    'import type { ToolExecutionStore } from "./tool-execution-store.js"',
+  );
+  expect(
+    read(directory, "packages/host/src/ports/assistant-store.ts"),
+  ).toContain("toolExecutions?: ToolExecutionStore");
+  const sqlite = read(
+    directory,
+    "packages/adapters-sqlite/src/shared-assistant-store.ts",
+  );
+  expect(sqlite).toContain("ensureToolExecutionTables(db)");
+  expect(sqlite).toContain("new SqliteToolExecutionStore");
+  expect(
+    read(directory, "packages/adapters-memory/src/memory-assistant-store.ts"),
+  ).toContain("new MemoryToolExecutionStore");
+  expect(
+    read(directory, "packages/adapters-memory/src/memory-assistant-store.ts"),
+  ).toContain("this.toolExecutions.pruneDeletedRuns()");
+  expect(
+    read(directory, "packages/adapters-memory/src/memory-assistant-store.ts"),
+  ).toContain("this.onDeleteTasks?.()");
+  expect(read(directory, "packages/host/src/turn/turn-runner.ts")).toContain(
+    "durable:",
+  );
+  const context = read(
+    directory,
+    "packages/host/src/context/bounded-context-client.ts",
+  );
+  expect(context).toContain("messageTokens > budgetTokens");
+  expect(context).toContain('type: "run.context.admitted"');
+  expect(read(directory, "packages/host/src/turn/turn-runner.ts")).toContain(
+    "const client = await boundedContextClient(input.client",
+  );
+}
+
 describe.skipIf(!integrated)("current-source foundation projection", () => {
   beforeAll(() => {
     scratch = mkdtempSync(join(tmpdir(), "agentkit-snapshot-test-"));
@@ -59,6 +108,13 @@ describe.skipIf(!integrated)("current-source foundation projection", () => {
     expect(read(first, "snapshot-provenance.json")).toBe(
       read(second, "snapshot-provenance.json"),
     );
+    assertDurableExecutionPreserved(first);
+    expect(
+      read(first, "packages/host/src/context/bounded-context-client.ts"),
+    ).not.toContain("client.protocol");
+    expect(
+      read(first, "packages/host/src/context/bounded-context-client.ts"),
+    ).not.toContain("request.runContent");
     for (const path of foundationExclusions)
       expect(existsSync(join(first, path))).toBe(false);
     for (const path of [
@@ -176,6 +232,12 @@ describe.skipIf(!integrated)("current-source foundation projection", () => {
 
   it("retains Responses source and schema 10 in separate candidate", () => {
     const directory = snapshot("responses", "responses");
+    assertDurableExecutionPreserved(directory);
+    expect(
+      read(directory, "packages/host/src/context/bounded-context-client.ts"),
+    ).toBe(
+      read(fixtureRoot, "packages/host/src/context/bounded-context-client.ts"),
+    );
     expect(read(directory, "packages/core/src/providers/responses.ts")).toBe(
       read(fixtureRoot, "packages/core/src/providers/responses.ts"),
     );

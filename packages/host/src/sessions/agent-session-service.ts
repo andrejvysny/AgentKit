@@ -49,6 +49,7 @@ import {
   type SessionExecutionState,
 } from "./plan-mode.js";
 import { answerHumanRequest } from "./human-answer.js";
+import { admittedContext } from "./admitted-context.js";
 import {
   STANDING_APPROVALS_METADATA_KEY,
   readStandingApprovals,
@@ -765,6 +766,7 @@ export class AgentSessionService {
     const contentSelection = sessionContentSelection(descriptor);
     const result = await this.deps.turns.submitMessage({
       chatId: session.sessionId,
+      sessionContext: admittedContext(descriptor),
       content,
       kind: sessionTurnKind(descriptor),
       ...(inputId === undefined ? {} : { taskId: turnIdFor(inputId) }),
@@ -814,7 +816,13 @@ export class AgentSessionService {
       );
       // The turn settled between the refusal and now: start over as idle.
       if (active === undefined) continue;
-      return this.queueInput(sessionId, kind, request, active);
+      return this.queueInput(
+        sessionId,
+        kind,
+        request,
+        active,
+        session.descriptor,
+      );
     }
     throw (
       busy ??
@@ -827,6 +835,7 @@ export class AgentSessionService {
     kind: QueueKind,
     request: QueueRequest,
     active: TaskRecord,
+    descriptor: AgentSessionDescriptor,
   ): Promise<AgentSendResult> {
     const inputId = request.inputId ?? invalid("inputId is required to queue.");
     let targetTaskId: string | undefined;
@@ -843,7 +852,10 @@ export class AgentSessionService {
       inputId,
       sessionId,
       kind,
-      content: { content: request.content },
+      content: {
+        content: request.content,
+        sessionContext: admittedContext(descriptor),
+      },
       contentHash: await this.hashOf(kind, request.content),
       ...(targetTaskId === undefined ? {} : { targetTaskId }),
       ...(kind === "steer" && request.onSettled
