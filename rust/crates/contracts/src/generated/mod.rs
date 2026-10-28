@@ -42,6 +42,8 @@ mod ai_run_cancelled_event;
 pub use ai_run_cancelled_event::*;
 mod ai_run_completed_event;
 pub use ai_run_completed_event::*;
+mod ai_run_context_admitted_event;
+pub use ai_run_context_admitted_event::*;
 mod ai_run_context_compacted_event;
 pub use ai_run_context_compacted_event::*;
 mod ai_run_event_base;

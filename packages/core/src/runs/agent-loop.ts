@@ -5,7 +5,7 @@ import type {
 } from "@agentkit/contracts";
 import { createEventStamper } from "../events.js";
 import { newRunId, nowIso } from "../ids.js";
-import type { AiChatRequest } from "../providers/client.js";
+import type { AiChatRequest, AiProviderClient } from "../providers/client.js";
 import { boundedRun } from "./bounded-run.js";
 import {
   type AgentLoopHooks,
@@ -13,6 +13,14 @@ import {
   notifySettled,
   runObservers,
 } from "./loop-hooks.js";
+import {
+  ModelRoutingError,
+  resolveStepClient,
+  selectStepModel,
+  type ModelRef,
+  type ModelRouter,
+  type ModelSelectionContext,
+} from "./model-router.js";
 import { streamModelStep } from "./model-step.js";
 import type { RunChatInput, RunChatResult } from "./run-types.js";
 import type { AgentSteeringSource } from "./session-seams.js";
@@ -43,6 +51,45 @@ export interface AgentLoopInput extends RunChatInput {
   resumeCalls?: readonly AiToolCall[];
   /** Merged into every tool context's `metadata` (host-owned, e.g. approvals). */
   toolMetadata?: Readonly<Record<string, unknown>>;
+  /**
+   * Optional capability-aware model routing (Phase B / B3). Absent: the run is
+   * pinned to `client` + `model`, the exact pre-B3 path. Present: consulted
+   * before EVERY provider request; the loop still owns iteration, budget and
+   * events — routing never forks a second execution engine.
+   */
+  modelRouter?: ModelRouter;
+  /**
+   * Resolve an authorized client for a routed provider. REQUIRED for any run
+   * whose router may cross providers: without it a cross-provider selection
+   * fails closed (`provider_unresolved`) — no silent remote fallback.
+   * Credentials stay host-owned: the host hands back a client, the loop never
+   * sees a key.
+   */
+  resolveClient?: (
+    providerId: string,
+  ) => AiProviderClient | Promise<AiProviderClient>;
+  /**
+   * Capabilities the steps of this run need (e.g. `["toolCalling"]`). Passed
+   * verbatim to the router's selection context; validation against model
+   * metadata is the host's authorization job.
+   */
+  requiredCapabilities?: readonly string[];
+  /**
+   * Host authorization hook, awaited BEFORE dispatch. MUST throw to veto a
+   * selection (role ceiling, model allow-list, capability-metadata check).
+   * A veto fails the run with `run.failed` errorCode `authorization_denied`.
+   */
+  authorizeModelSelection?: (
+    selection: ModelRef,
+    context: ModelSelectionContext,
+  ) => void | Promise<void>;
+  /**
+   * What a model switch must do to existing provider continuation state.
+   * Default `"reject"`: a switch while `continuation` exists fails the run
+   * (`continuation_conflict`) rather than silently discarding or forwarding
+   * opaque state across an incompatible model.
+   */
+  continuationModelSwitch?: "reject" | "reset";
 }
 export type AgentLoopResult = Omit<RunChatResult, "terminal"> & {
   terminal: RunChatResult["terminal"] | "suspended";
@@ -126,12 +173,22 @@ async function* runAgentLoopUnchecked(
     attemptId: input.attemptId,
   });
   let continuation = input.continuation;
+  let hasContinuation = continuation !== undefined;
   const onContinuation: AiChatRequest["onContinuation"] = input.onContinuation
     ? async (state) => {
         await input.onContinuation?.(state);
         continuation = state;
+        hasContinuation = true;
       }
     : undefined;
+  // Routing state (B3). With no router these never move and the loop keeps
+  // dispatching on `input` itself — the pinned-model path is unchanged.
+  let currentModelRef: ModelRef = {
+    providerId: input.client.id,
+    modelId: input.model,
+  };
+  let routedClient: AiProviderClient | undefined;
+  const routedClients = new Map<string, AiProviderClient>();
   let iteration = 0;
   let finishReason: string | undefined;
 
@@ -220,8 +277,77 @@ async function* runAgentLoopUnchecked(
       }
     }
 
+    let stepInput: AgentLoopInput = input;
+    if (input.modelRouter) {
+      // One selection per provider request (B3). Any refusal — malformed ref,
+      // unauthorized provider, continuation conflict, host veto — ends the
+      // run with a terminal `run.failed`; nothing is dispatched on a refused
+      // selection.
+      try {
+        const selection = await selectStepModel({
+          router: input.modelRouter,
+          current: currentModelRef,
+          runId,
+          step: iteration,
+          requiredCapabilities: input.requiredCapabilities ?? [],
+          signal: input.signal,
+          hasContinuation,
+          continuationSwitchPolicy: input.continuationModelSwitch ?? "reject",
+          authorize: input.authorizeModelSelection,
+        });
+        if (selection) {
+          if (input.continuationModelSwitch === "reset") {
+            // Host-authorized discard of opaque provider state: it must never
+            // be forwarded to a model that did not create it.
+            continuation = undefined;
+            hasContinuation = false;
+          }
+          if (selection.providerId !== routedClient?.id) {
+            const cached = routedClients.get(selection.providerId);
+            if (cached) {
+              routedClient = cached;
+            } else {
+              const resolved = await resolveStepClient(
+                input.client,
+                selection,
+                input.resolveClient,
+              );
+              // A routed request must not escape the budget wrapper the
+              // host-installed instrumentation put on the run's own client.
+              routedClient = input.wrapClient
+                ? input.wrapClient(resolved)
+                : resolved;
+              routedClients.set(selection.providerId, routedClient);
+            }
+          }
+          currentModelRef = selection;
+        }
+        if (routedClient) {
+          stepInput = {
+            ...input,
+            client: routedClient,
+            model: currentModelRef.modelId,
+          };
+        }
+      } catch (err) {
+        yield stamp({
+          type: "run.failed",
+          runId,
+          timestamp: nowIso(),
+          data: {
+            errorCode:
+              err instanceof ModelRoutingError
+                ? err.code
+                : "model_routing_failed",
+            errorMessage: err instanceof Error ? err.message : String(err),
+          },
+        });
+        return finish("failed");
+      }
+    }
+
     const step = yield* streamModelStep({
-      input,
+      input: stepInput,
       runId,
       iteration,
       messages,

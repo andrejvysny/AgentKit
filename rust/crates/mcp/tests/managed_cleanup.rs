@@ -2,7 +2,11 @@
 mod support;
 use agentkit_mcp::*;
 use std::{sync::Arc, time::Duration};
-use support::{Secrets, token};
+use support::token;
+// Only the unix-gated hung-stdio test constructs a Secrets store; an
+// unconditional import is dead code on Windows and dies under -D warnings.
+#[cfg(unix)]
+use support::Secrets;
 
 #[tokio::test]
 async fn manager_drop_revokes_retained_tools_and_closes_their_transport() {

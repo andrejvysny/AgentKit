@@ -155,6 +155,8 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           modelId: m.id,
           displayName: m.name ?? null,
           ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+          metadataSource: "provider" as const,
+          metadataFetchedAt: fetchedAt,
           fetchedAt,
         };
       });
@@ -175,7 +177,11 @@ export class OpenAiCompatibleClient implements AiProviderClient {
       type: "run.started",
       runId,
       timestamp: nowIso(),
-      data: { model: input.model, toolCount: input.tools?.length ?? 0 },
+      data: {
+        model: input.model,
+        toolCount: input.tools?.length ?? 0,
+        providerId: this.id,
+      },
     });
 
     // A role that cannot carry content parts had images dropped on the way to
@@ -292,6 +298,7 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           // iteration the call belongs to.
           step: 0,
           model: input.model,
+          providerId: this.id,
           promptTokens: counts.prompt_tokens,
           completionTokens: counts.completion_tokens,
           totalTokens: counts.total_tokens,

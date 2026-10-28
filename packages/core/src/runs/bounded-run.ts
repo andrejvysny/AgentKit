@@ -46,6 +46,7 @@ export async function* boundedRun(
     runId,
     signal: budget.signal,
     client: boundedClient(input.client, budget),
+    wrapClient: (client) => boundedClient(client, budget),
     registry: boundedRegistry(input.registry, budget),
   });
   try {

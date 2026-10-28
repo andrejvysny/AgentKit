@@ -217,10 +217,24 @@ async fn stdio_repeated_cursor_page_bounds_and_precancel_are_bounded() {
 #[test]
 fn protocol_freeze_matches_installed_typescript_sdk_and_excludes_newer_rmcp_revision() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let source = std::fs::read_to_string(
-        root.join("node_modules/@modelcontextprotocol/sdk/dist/esm/types.js"),
-    )
-    .unwrap();
+    // The workspace pins the SDK under the `mcp-sdk-v1` alias (the root no
+    // longer installs `@modelcontextprotocol/sdk` directly); accept either
+    // layout and say which paths were probed if neither exists.
+    let candidates = [
+        "node_modules/mcp-sdk-v1/dist/esm/types.js",
+        "node_modules/@modelcontextprotocol/sdk/dist/esm/types.js",
+    ];
+    let source = candidates
+        .iter()
+        .map(|candidate| root.join(candidate))
+        .find_map(|path| std::fs::read_to_string(&path).ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "protocol-freeze fixture: TypeScript MCP SDK not found at any of {:?} - \
+                 run `bun install --frozen-lockfile` at the repository root first",
+                candidates,
+            )
+        });
     let latest = source
         .split("LATEST_PROTOCOL_VERSION = '")
         .nth(1)

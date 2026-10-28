@@ -8,6 +8,8 @@ import {
   parsePsTable,
   parseExecId,
   parsePsOutput,
+  scanMarked,
+  type ProcFs,
 } from "../src/process-tree.js";
 import { sweepOrphans } from "../src/process.js";
 import { cleanup, harness } from "./support.js";
@@ -111,6 +113,77 @@ describe("process-tree parsers", () => {
     });
     expect(parseEnviron("A=1\0", 77)).toBeUndefined();
     expect(parseEnviron("AGENTKIT_EXEC_ID=nope\0", 77)).toBeUndefined();
+  });
+
+  // The Linux /proc scan's failure policy (GitHub runners host same-uid
+  // hardened services whose environ answers EACCES; treating that as an
+  // unprovable absence quarantined every workspace on Linux).
+  const myUid = process.getuid ? process.getuid() : 0;
+  const procFs = (
+    table: Record<
+      string,
+      { uid?: number; environ?: string; readCode?: string; gone?: boolean }
+    >,
+  ): ProcFs => ({
+    readdir: async () => Object.keys(table),
+    stat: async (path) => {
+      const pid = path.split("/")[2] as string;
+      const e = table[pid] as { uid?: number; gone?: boolean };
+      if (e.gone) {
+        throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      }
+      return { uid: e.uid ?? myUid };
+    },
+    readFile: async (path) => {
+      const pid = path.split("/")[2] as string;
+      const e = table[pid] as { environ?: string; readCode?: string };
+      if (e.readCode) {
+        throw Object.assign(new Error(e.readCode), { code: e.readCode });
+      }
+      return e.environ ?? "";
+    },
+  });
+
+  test("a same-uid EACCES process is skipped, the scan stays ok", async () => {
+    const marks = await scanMarked(
+      "linux",
+      procFs({
+        "1306": { readCode: "EACCES" },
+        "1307": { environ: "AGENTKIT_EXEC_ID=5:abc\0" },
+      }),
+    );
+    expect(marks).not.toBeNull();
+    expect(marks?.map((m) => m.pid)).toEqual([1307]);
+  });
+
+  test("an all-EACCES scan proves absence and reports none, not unknown", async () => {
+    const marks = await scanMarked(
+      "linux",
+      procFs({ "1306": { readCode: "EACCES" } }),
+    );
+    expect(marks).toEqual([]);
+  });
+
+  test("any other environ failure leaves absence unproven (null)", async () => {
+    const marks = await scanMarked(
+      "linux",
+      procFs({ "1306": { readCode: "EIO" } }),
+    );
+    expect(marks).toBeNull();
+  });
+
+  test("a foreign-uid process is skipped without reading its environ", async () => {
+    let read = false;
+    const fs: ProcFs = {
+      readdir: async () => ["900"],
+      stat: async () => ({ uid: myUid === 0 ? 1 : 0 }),
+      readFile: async () => {
+        read = true;
+        return "";
+      },
+    };
+    expect(await scanMarked("linux", fs)).toEqual([]);
+    expect(read).toBe(false);
   });
 });
 

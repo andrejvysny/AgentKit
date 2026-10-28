@@ -29,10 +29,12 @@
 import {
   AiToolRegistry,
   resolveToolLimits,
+  runAgentLoop,
   runChat,
 } from "../packages/core/src/index.js";
 import type { AiTool } from "../packages/core/src/index.js";
 import type { AiChatMessage } from "../packages/contracts/src/index.js";
+import { createCassette } from "../packages/cassette/src/index.js";
 import { MockProviderClient } from "../packages/testing/src/mock-provider.js";
 import type { MockTurn } from "../packages/testing/src/mock-provider.js";
 
@@ -130,6 +132,34 @@ async function drain(
 }
 
 const history = longHistory(1_000);
+
+async function drainWith(
+  client: unknown,
+  messages: readonly AiChatMessage[],
+  extra: Record<string, unknown>,
+): Promise<number> {
+  const registry = new AiToolRegistry();
+  registry.register(echoTool());
+  let events = 0;
+  const generator = runAgentLoop({
+    client,
+    registry,
+    model: "bench",
+    messages,
+    limits: LIMITS,
+    ...extra,
+  } as never) as unknown as AsyncGenerator<unknown, { terminal: string }>;
+  for (;;) {
+    const next = await generator.next();
+    if (next.done) {
+      if (next.value.terminal !== "completed")
+        throw new Error(`bench run ended ${next.value.terminal}`);
+      return events;
+    }
+    events++;
+  }
+}
+
 const shapes: Shape[] = [
   {
     name: "(a) text-only, 1k-message history",
@@ -160,7 +190,58 @@ const shapes: Shape[] = [
       });
     },
   },
+  // B5 seams (Phase B): compared against (b), which is the same shape
+  // through the identical loop without the seam.
+  {
+    name: "(d) 10 tool calls + cassette OFF wrapper",
+    run: async () => {
+      const client = new MockProviderClient();
+      client.setScript(toolScript(10, 1));
+      const cassette = createCassette({ mode: "off" });
+      try {
+        return await drainWith(
+          cassette.provider(client),
+          [{ role: "user", content: "go" }],
+          { maxToolIterations: 11 },
+        );
+      } finally {
+        await cassette.close();
+      }
+    },
+  },
+  {
+    name: "(e) 10 tool calls + sticky model router",
+    run: () => {
+      const client = new MockProviderClient();
+      client.setScript(toolScript(10, 1));
+      return drainWith(client, [{ role: "user", content: "go" }], {
+        maxToolIterations: 11,
+        modelRouter: {
+          selectModel: (ctx: { previousModel?: unknown }) =>
+            ctx.previousModel ?? {
+              providerId: "mock",
+              modelId: "bench",
+            },
+        },
+      });
+    },
+  },
 ];
+
+async function timeToFirstEvent(): Promise<number> {
+  const client = new MockProviderClient();
+  client.setScript([{ steps: [{ kind: "text", content: "Answer." }] }]);
+  const generator = runChat({
+    client,
+    registry: new AiToolRegistry(),
+    model: "bench",
+    messages: history,
+    limits: LIMITS,
+  });
+  const start = performance.now();
+  await generator.next();
+  return performance.now() - start;
+}
 
 function percentile(sortedAsc: number[], p: number): number {
   const index = Math.min(
@@ -193,5 +274,17 @@ for (const shape of shapes) {
   samples.sort((a, b) => a - b);
   console.log(
     `${shape.name}: events=${events} p50=${fmt(percentile(samples, 50))} p95=${fmt(percentile(samples, 95))} rssDelta=${rssDeltaMb.toFixed(1)}MB`,
+  );
+}
+
+// (f) streaming time-to-first-event: loop-side latency added in front of the
+// provider's first frame (1k-message history, so request assembly dominates).
+{
+  for (let i = 0; i < WARMUP; i++) await timeToFirstEvent();
+  const samples: number[] = [];
+  for (let i = 0; i < RUNS; i++) samples.push(await timeToFirstEvent());
+  samples.sort((a, b) => a - b);
+  console.log(
+    `(f) time-to-first-event (1k history): p50=${fmt(percentile(samples, 50))} p95=${fmt(percentile(samples, 95))}`,
   );
 }

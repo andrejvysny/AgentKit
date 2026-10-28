@@ -41,11 +41,30 @@ export interface UsageRecord {
   runId: string;
   callId: string;
   attempt: number;
+  /**
+   * The provider that produced the numbers: the id the emitting client put on
+   * the event, falling back to the id the projector was told to bill against.
+   * A routed run bills a switch to the provider it switched TO, not the one the
+   * turn started on — the empty string means nobody named one, and the record
+   * is kept anyway (see the note above).
+   */
   providerId: string;
   model: string;
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /**
+   * Prompt tokens served from the provider's prompt cache, only when the
+   * provider reported them — a recorder prices those below the uncached ones,
+   * and inventing a zero would overbill a call the provider discounted.
+   */
+  cachedPromptTokens?: number;
+  /**
+   * Completion tokens spent on hidden reasoning, only when the provider
+   * reported them. Some providers bill them at the output rate, so a recorder
+   * that never sees them underbills every reasoning model it prices.
+   */
+  reasoningTokens?: number;
   /**
    * True when these are the call's settled numbers — the last word for this
    * `callId`. False for an interim report from a stream still in flight, which

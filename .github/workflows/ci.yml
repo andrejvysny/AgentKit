@@ -245,11 +245,33 @@ jobs:
         env:
           AGENTKIT_SQLITE_DRIVER: bun
 
+  # The coding pack's production default is a fail-closed macOS seatbelt
+  # sandbox: on Linux the shell tools refuse to run unsandboxed, and the
+  # acceptance suite runs unsandboxed inside a throwaway repository fixture
+  # there. This job is the evidence that the REAL sandbox works — the same
+  # suite plus the sandbox-specific pack tests, on the platform that enforces
+  # them. A Linux skip is not macOS support.
+  macos-coding:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      # No skips here: fail loudly if a sandbox test is silently skipped.
+      - name: coding pack + coding agent (real macOS sandbox)
+        run: |
+          set -o pipefail
+          bun test packages/toolpacks-coding examples/coding-agent 2>&1 | tee macos-coding.log
+          grep -q "(skip" macos-coding.log && { echo "sandbox tests skipped on macOS"; exit 1; } || true
+
   # Branch protection can require this stable name. All required matrices
   # must complete successfully; skipped or cancelled jobs never qualify.
   qualification:
     if: always()
-    needs: [bun, lint, node-smoke, pack-smoke, umbrella-smoke, sqlite-node, sqlite-bun]
+    needs: [bun, lint, macos-coding, node-smoke, pack-smoke, umbrella-smoke, sqlite-node, sqlite-bun]
     runs-on: ubuntu-latest
     steps:
       - name: require all qualification jobs
@@ -260,5 +282,5 @@ jobs:
             const jobs = Object.entries(JSON.parse(process.env.RESULTS));
             const failed = jobs.filter(([, job]) => job.result !== "success");
             for (const [name, job] of failed) console.error(name + ": " + job.result);
-            if (jobs.length !== 7 || failed.length) process.exit(1);
+            if (jobs.length !== 8 || failed.length) process.exit(1);
           '

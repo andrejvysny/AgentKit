@@ -60,29 +60,51 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
 diff --git a/packages/core/src/runs/agent-loop.ts b/packages/core/src/runs/agent-loop.ts
 --- a/packages/core/src/runs/agent-loop.ts
 +++ b/packages/core/src/runs/agent-loop.ts
-@@ -5,7 +5,6 @@ import type {
+@@ -5,7 +5,7 @@ import type {
  } from "@agentkit/contracts";
  import { createEventStamper } from "../events.js";
  import { newRunId, nowIso } from "../ids.js";
--import type { AiChatRequest } from "../providers/client.js";
+-import type { AiChatRequest, AiProviderClient } from "../providers/client.js";
++import type { AiProviderClient } from "../providers/client.js";
  import { boundedRun } from "./bounded-run.js";
  import {
    type AgentLoopHooks,
-@@ -125,13 +124,6 @@ async function* runAgentLoopUnchecked(
+@@ -172,15 +172,6 @@ async function* runAgentLoopUnchecked(
      firstSeq: input.firstSeq,
      attemptId: input.attemptId,
    });
 -  let continuation = input.continuation;
+-  let hasContinuation = continuation !== undefined;
 -  const onContinuation: AiChatRequest["onContinuation"] = input.onContinuation
 -    ? async (state) => {
 -        await input.onContinuation?.(state);
 -        continuation = state;
+-        hasContinuation = true;
 -      }
 -    : undefined;
-   let iteration = 0;
-   let finishReason: string | undefined;
- 
-@@ -213,8 +205,6 @@ async function* runAgentLoopUnchecked(
+   // Routing state (B3). With no router these never move and the loop keeps
+   // dispatching on `input` itself — the pinned-model path is unchanged.
+   let currentModelRef: ModelRef = {
+@@ -291,17 +282,11 @@ async function* runAgentLoopUnchecked(
+           step: iteration,
+           requiredCapabilities: input.requiredCapabilities ?? [],
+           signal: input.signal,
+-          hasContinuation,
++          hasContinuation: false,
+           continuationSwitchPolicy: input.continuationModelSwitch ?? "reject",
+           authorize: input.authorizeModelSelection,
+         });
+         if (selection) {
+-          if (input.continuationModelSwitch === "reset") {
+-            // Host-authorized discard of opaque provider state: it must never
+-            // be forwarded to a model that did not create it.
+-            continuation = undefined;
+-            hasContinuation = false;
+-          }
+           if (selection.providerId !== routedClient?.id) {
+             const cached = routedClients.get(selection.providerId);
+             if (cached) {
+@@ -353,8 +338,6 @@ async function* runAgentLoopUnchecked(
        messages,
        toolDefinitions,
        stamp,

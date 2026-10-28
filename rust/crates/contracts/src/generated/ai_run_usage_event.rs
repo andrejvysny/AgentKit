@@ -32,6 +32,12 @@ pub struct AiRunUsageEventData {
     #[serde(rename = "model")]
     pub model: AiProviderKind,
     #[serde(
+        rename = "providerId",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub provider_id: Optional<AiProviderKind>,
+    #[serde(
         rename = "promptTokens",
         default,
         skip_serializing_if = "Optional::is_absent",
@@ -80,6 +86,7 @@ crate::impl_json_deserialize!(AiRunUsageEventData, |value: Value| {
         attempt: crate::required_field(&mut object, "attempt")?,
         step: crate::required_field(&mut object, "step")?,
         model: crate::required_field(&mut object, "model")?,
+        provider_id: crate::optional_field(&mut object, "providerId")?,
         prompt_tokens: crate::optional_field(&mut object, "promptTokens")?,
         completion_tokens: crate::optional_field(&mut object, "completionTokens")?,
         total_tokens: crate::optional_field(&mut object, "totalTokens")?,

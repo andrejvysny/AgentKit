@@ -53,6 +53,14 @@ export interface RunChatInput
   defaultToolTimeoutMs?: number;
   signal?: AbortSignal;
   /**
+   * Internal seam (set by `boundedRun`): wraps a provider client in the
+   * budget instrumentation. The agent loop applies it to every client it
+   * dispatches on — including clients resolved by model routing — so a routed
+   * provider request consumes the SAME budget as the run's own. Never set by
+   * consumers.
+   */
+  wrapClient?: (client: AiProviderClient) => AiProviderClient;
+  /**
    * Opt-in bounded retry of a model request after a transient provider failure
    * that produced no visible output. Absent: behaviour and events unchanged.
    */

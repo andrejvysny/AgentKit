@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import {
   environment,
@@ -21,10 +21,14 @@ async function child(database: string, ready: string): Promise<never> {
     () => env.runner.retryDeadline("run") === 1200,
     "child retry intent",
   );
+  // The parent polls for the file's existence and parses it immediately;
+  // a direct Bun.write can be observed half-written on a loaded runner
+  // (JSON "Unexpected EOF"). Publish atomically: write beside, rename in.
   await Bun.write(
-    ready,
+    `${ready}.tmp`,
     JSON.stringify({ retryDue: env.runner.retryDeadline("run") }),
   );
+  await rename(`${ready}.tmp`, ready);
   return new Promise<never>(() => {
     setInterval(() => {}, 1000);
   });

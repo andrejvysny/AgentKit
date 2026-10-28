@@ -44,6 +44,10 @@
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js"
     },
+    "./cassette": {
+      "types": "./dist/cassette/index.d.ts",
+      "import": "./dist/cassette/index.js"
+    },
     "./mcp-client": {
       "types": "./dist/mcp-client/index.d.ts",
       "import": "./dist/mcp-client/index.js"

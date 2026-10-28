@@ -29,6 +29,7 @@ const jobs = workflow.jobs;
 const required = [
   "bun",
   "lint",
+  "macos-coding",
   "node-smoke",
   "pack-smoke",
   "umbrella-smoke",
@@ -59,7 +60,11 @@ describe("routine CI runtime qualification", () => {
       expect(jobs[name]?.needs).toBeUndefined();
       expect(jobs[name]?.["continue-on-error"]).toBeUndefined();
       expect(commands(name)).toContain("bun install --frozen-lockfile");
-      if (name !== "lint") expect(commands(name)).toContain("bun run build");
+      // The macOS job qualifies the sandbox runtime from source; a compiled
+      // artifact adds no macOS-specific signal (the build is platform-neutral
+      // and already gated by the Linux jobs).
+      if (!["lint", "macos-coding"].includes(name))
+        expect(commands(name)).toContain("bun run build");
     }
   });
 

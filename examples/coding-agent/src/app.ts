@@ -100,6 +100,13 @@ export interface CodingAgentOptions {
   mode?: CodingMode;
   /** Commands `run_tests` may run. Default ["bun test"]. */
   testCommands?: readonly string[];
+  /**
+   * Shell isolation for run_command/run_tests. Default "required": on
+   * non-macOS hosts the shell tools then refuse to run at all (fail-closed).
+   * "off" exists for explicitly isolated test fixtures only — never flip it in
+   * production wiring.
+   */
+  sandbox?: "required" | "off";
   /** Injected by the acceptance test; production uses the real client. */
   providerFactory?: (config: {
     baseUrl: string;
@@ -211,6 +218,7 @@ export class CodingAgentApp {
         workspace: { root: resolve(options.repo) },
         testCommands: options.testCommands ?? ["bun test"],
         permission: authority,
+        ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
       }),
       ...(options.extraContributors ?? []),
     ];

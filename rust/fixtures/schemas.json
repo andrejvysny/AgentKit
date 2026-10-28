@@ -1100,13 +1100,105 @@
       "fetchedAt": {
         "type": "string"
       },
+      "maxOutputTokens": {
+        "type": "number"
+      },
+      "metadataFetchedAt": {
+        "type": "string"
+      },
+      "metadataSource": {
+        "anyOf": [
+          {
+            "const": "host",
+            "type": "string"
+          },
+          {
+            "const": "provider",
+            "type": "string"
+          },
+          {
+            "const": "preset",
+            "type": "string"
+          }
+        ]
+      },
       "modelId": {
         "type": "string"
+      },
+      "pricing": {
+        "properties": {
+          "cachedInputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "type": "string"
+          },
+          "effectiveDate": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "inputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "outputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "priceSource": {
+            "anyOf": [
+              {
+                "const": "host",
+                "type": "string"
+              },
+              {
+                "const": "provider",
+                "type": "string"
+              },
+              {
+                "const": "preset",
+                "type": "string"
+              }
+            ]
+          },
+          "reasoningTokensBilledAsOutput": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "currency",
+          "priceSource"
+        ],
+        "type": "object"
       },
       "providerId": {
         "type": "string"
       },
+      "reasoningEfforts": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "supportsAudio": {
+        "type": "boolean"
+      },
+      "supportsJsonMode": {
+        "type": "boolean"
+      },
+      "supportsReasoning": {
+        "type": "boolean"
+      },
+      "supportsStreaming": {
+        "type": "boolean"
+      },
       "supportsToolCalling": {
+        "type": "boolean"
+      },
+      "supportsVision": {
         "type": "boolean"
       }
     },
@@ -1208,6 +1300,103 @@
       },
       "type": {
         "const": "run.completed",
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "runId",
+      "timestamp",
+      "contractVersion",
+      "eventId",
+      "seq",
+      "data"
+    ],
+    "type": "object"
+  },
+  "AiRunContextAdmittedEventSchema": {
+    "properties": {
+      "attemptId": {
+        "description": "Groups the events of one attempt when a run is retried.",
+        "type": "string"
+      },
+      "contractVersion": {
+        "description": "CONTRACT_VERSION the emitter spoke.",
+        "type": "string"
+      },
+      "data": {
+        "properties": {
+          "budgetTokens": {
+            "type": "number"
+          },
+          "estimatedInputTokens": {
+            "type": "number"
+          },
+          "extraTokens": {
+            "type": "number"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "reserveTokens": {
+            "type": "number"
+          },
+          "toolTokens": {
+            "type": "number"
+          },
+          "windowSource": {
+            "anyOf": [
+              {
+                "const": "descriptor",
+                "type": "string"
+              },
+              {
+                "const": "model",
+                "type": "string"
+              },
+              {
+                "const": "capabilities",
+                "type": "string"
+              },
+              {
+                "const": "fallback",
+                "type": "string"
+              }
+            ]
+          },
+          "windowTokens": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "requestId",
+          "windowTokens",
+          "windowSource",
+          "reserveTokens",
+          "toolTokens",
+          "extraTokens",
+          "estimatedInputTokens",
+          "budgetTokens"
+        ],
+        "type": "object"
+      },
+      "eventId": {
+        "description": "Unique per event; the key for dedup on replay.",
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "seq": {
+        "description": "Strictly increasing within a run; the ordering key.",
+        "type": "number"
+      },
+      "timestamp": {
+        "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+        "type": "string"
+      },
+      "type": {
+        "const": "run.context.admitted",
         "type": "string"
       }
     },
@@ -1371,6 +1560,10 @@
             "type": "string"
           },
           {
+            "const": "run.context.admitted",
+            "type": "string"
+          },
+          {
             "const": "run.verification",
             "type": "string"
           },
@@ -1422,6 +1615,9 @@
           "data": {
             "properties": {
               "model": {
+                "type": "string"
+              },
+              "providerId": {
                 "type": "string"
               },
               "toolCount": {
@@ -2077,6 +2273,9 @@
               "promptTokens": {
                 "type": "number"
               },
+              "providerId": {
+                "type": "string"
+              },
               "reasoningTokens": {
                 "type": "number"
               },
@@ -2203,6 +2402,103 @@
           },
           "type": {
             "const": "run.context.compacted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "budgetTokens": {
+                "type": "number"
+              },
+              "estimatedInputTokens": {
+                "type": "number"
+              },
+              "extraTokens": {
+                "type": "number"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "reserveTokens": {
+                "type": "number"
+              },
+              "toolTokens": {
+                "type": "number"
+              },
+              "windowSource": {
+                "anyOf": [
+                  {
+                    "const": "descriptor",
+                    "type": "string"
+                  },
+                  {
+                    "const": "model",
+                    "type": "string"
+                  },
+                  {
+                    "const": "capabilities",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fallback",
+                    "type": "string"
+                  }
+                ]
+              },
+              "windowTokens": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "requestId",
+              "windowTokens",
+              "windowSource",
+              "reserveTokens",
+              "toolTokens",
+              "extraTokens",
+              "estimatedInputTokens",
+              "budgetTokens"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.context.admitted",
             "type": "string"
           }
         },
@@ -2369,8 +2665,16 @@
           },
           "data": {
             "properties": {
+              "approvalGeneration": {
+                "description": "Stable host-generated authorization generation for an uncertain operation.",
+                "type": "string"
+              },
               "argsSha256": {
                 "description": "Approval only: sha-256 hex of the call's canonical JSON arguments.",
+                "type": "string"
+              },
+              "contextSha256": {
+                "description": "Approval only: host-computed execution-context binding.",
                 "type": "string"
               },
               "expiresAt": {
@@ -2678,6 +2982,10 @@
       },
       {
         "const": "run.context.compacted",
+        "type": "string"
+      },
+      {
+        "const": "run.context.admitted",
         "type": "string"
       },
       {
@@ -3027,6 +3335,9 @@
       "data": {
         "properties": {
           "model": {
+            "type": "string"
+          },
+          "providerId": {
             "type": "string"
           },
           "toolCount": {
@@ -3427,6 +3738,9 @@
           "promptTokens": {
             "type": "number"
           },
+          "providerId": {
+            "type": "string"
+          },
           "reasoningTokens": {
             "type": "number"
           },
@@ -3579,8 +3893,16 @@
       },
       "data": {
         "properties": {
+          "approvalGeneration": {
+            "description": "Stable host-generated authorization generation for an uncertain operation.",
+            "type": "string"
+          },
           "argsSha256": {
             "description": "Approval only: sha-256 hex of the call's canonical JSON arguments.",
+            "type": "string"
+          },
+          "contextSha256": {
+            "description": "Approval only: host-computed execution-context binding.",
             "type": "string"
           },
           "expiresAt": {
@@ -5861,13 +6183,105 @@
       "fetchedAt": {
         "type": "string"
       },
+      "maxOutputTokens": {
+        "type": "number"
+      },
+      "metadataFetchedAt": {
+        "type": "string"
+      },
+      "metadataSource": {
+        "anyOf": [
+          {
+            "const": "host",
+            "type": "string"
+          },
+          {
+            "const": "provider",
+            "type": "string"
+          },
+          {
+            "const": "preset",
+            "type": "string"
+          }
+        ]
+      },
       "modelId": {
         "type": "string"
+      },
+      "pricing": {
+        "properties": {
+          "cachedInputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "type": "string"
+          },
+          "effectiveDate": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "inputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "outputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "priceSource": {
+            "anyOf": [
+              {
+                "const": "host",
+                "type": "string"
+              },
+              {
+                "const": "provider",
+                "type": "string"
+              },
+              {
+                "const": "preset",
+                "type": "string"
+              }
+            ]
+          },
+          "reasoningTokensBilledAsOutput": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "currency",
+          "priceSource"
+        ],
+        "type": "object"
       },
       "providerId": {
         "type": "string"
       },
+      "reasoningEfforts": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "supportsAudio": {
+        "type": "boolean"
+      },
+      "supportsJsonMode": {
+        "type": "boolean"
+      },
+      "supportsReasoning": {
+        "type": "boolean"
+      },
+      "supportsStreaming": {
+        "type": "boolean"
+      },
       "supportsToolCalling": {
+        "type": "boolean"
+      },
+      "supportsVision": {
         "type": "boolean"
       }
     },
@@ -6512,6 +6926,9 @@
           "data": {
             "properties": {
               "model": {
+                "type": "string"
+              },
+              "providerId": {
                 "type": "string"
               },
               "toolCount": {
@@ -7167,6 +7584,9 @@
               "promptTokens": {
                 "type": "number"
               },
+              "providerId": {
+                "type": "string"
+              },
               "reasoningTokens": {
                 "type": "number"
               },
@@ -7293,6 +7713,103 @@
           },
           "type": {
             "const": "run.context.compacted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
+              "budgetTokens": {
+                "type": "number"
+              },
+              "estimatedInputTokens": {
+                "type": "number"
+              },
+              "extraTokens": {
+                "type": "number"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "reserveTokens": {
+                "type": "number"
+              },
+              "toolTokens": {
+                "type": "number"
+              },
+              "windowSource": {
+                "anyOf": [
+                  {
+                    "const": "descriptor",
+                    "type": "string"
+                  },
+                  {
+                    "const": "model",
+                    "type": "string"
+                  },
+                  {
+                    "const": "capabilities",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fallback",
+                    "type": "string"
+                  }
+                ]
+              },
+              "windowTokens": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "requestId",
+              "windowTokens",
+              "windowSource",
+              "reserveTokens",
+              "toolTokens",
+              "extraTokens",
+              "estimatedInputTokens",
+              "budgetTokens"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.context.admitted",
             "type": "string"
           }
         },
@@ -7459,8 +7976,16 @@
           },
           "data": {
             "properties": {
+              "approvalGeneration": {
+                "description": "Stable host-generated authorization generation for an uncertain operation.",
+                "type": "string"
+              },
               "argsSha256": {
                 "description": "Approval only: sha-256 hex of the call's canonical JSON arguments.",
+                "type": "string"
+              },
+              "contextSha256": {
+                "description": "Approval only: host-computed execution-context binding.",
                 "type": "string"
               },
               "expiresAt": {

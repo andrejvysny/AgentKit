@@ -35,6 +35,12 @@ packages/client                @agentkit/client (optional adapter)
 packages/react                 @agentkit/react (optional adapter)
   headless React hooks over that client: optimistic submit, streamed
   deltas, branch switching, proposals, providers; react is a peer
+
+packages/cassette              @agentkit/cassette (optional adapter)
+  deterministic record & replay of provider and tool effects (ADR 0021):
+  wraps the AiProviderClient / AiTool boundary the loop already consumes,
+  so it cannot bypass ToolGuard, budgets, hooks or approval policy;
+  replay is offline by construction and fixtures carry no secrets by default
         │
         ▼  depends on
 --------------------------------------------------------------

@@ -6,34 +6,109 @@ import { createAgentKitClient } from "@agentkit/client";
 const root = resolve(import.meta.dir, "../../..");
 let build: Promise<void> | undefined;
 
+/**
+ * Native interop is qualified by the Rust workflow, where the toolchain is
+ * set up and the fixture is built from a fetched dependency cache. The plain
+ * TypeScript `bun test` must not conflate the two: it skips native-backed
+ * tests unless the environment explicitly asks for them.
+ */
+export function nativeInteropRequested(): boolean {
+  return (
+    process.env["AGENTKIT_NATIVE_FIXTURE"] !== undefined ||
+    process.env["AGENTKIT_TEST_BACKEND"] === "rust" ||
+    process.env["AGENTKIT_RUN_RUST_CONFORMANCE"] === "1" ||
+    process.env["AGENTKIT_RUN_RUST_RUNNER_CONFORMANCE"] === "1" ||
+    process.env["AGENTKIT_RUN_RUST_INTEROP"] === "1"
+  );
+}
+
+/** Defined when native tests should skip, naming how to enable them. */
+export const nativeFixtureSkipReason: string | undefined =
+  nativeInteropRequested()
+    ? undefined
+    : "native interop belongs to the Rust workflow; run it there, or set AGENTKIT_RUN_RUST_INTEROP=1 / AGENTKIT_NATIVE_FIXTURE=<binary> to qualify it here";
+
+async function runCargo(
+  args: string[],
+): Promise<{ code: number; stderr: string }> {
+  const child = Bun.spawn(["cargo", ...args], {
+    cwd: root,
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const stderr = await new Response(child.stderr).text();
+  return { code: await child.exited, stderr };
+}
+
+function infraDiagnosis(detail: string): string {
+  return (
+    `Native HTTP fixture preparation failed — this is a test-infrastructure ` +
+    `problem, not a product failure. ${detail}\n` +
+    `Preparation steps: (1) resolve dependencies with ` +
+    `\`cargo fetch --manifest-path rust/Cargo.toml --locked\` during a ` +
+    `network-permitted setup phase, (2) build with \`cargo build ` +
+    `--manifest-path rust/Cargo.toml -p agentkit-host --features http ` +
+    `--example http_fixture --locked\`, or (3) point ` +
+    `AGENTKIT_NATIVE_FIXTURE at a prebuilt rust/target/debug/examples/http_fixture. ` +
+    `Set AGENTKIT_CARGO_OFFLINE=1 only once dependency availability is ` +
+    `established (the Rust workflow does this after its cargo test step).`
+  );
+}
+
+async function prepareFixture(): Promise<void> {
+  const manifest = ["--manifest-path", "rust/Cargo.toml"];
+  const buildArgs = [
+    "build",
+    ...manifest,
+    "-p",
+    "agentkit-host",
+    "--features",
+    "http",
+    "--example",
+    "http_fixture",
+    "--locked",
+  ];
+  if (process.env["AGENTKIT_CARGO_OFFLINE"] === "1") {
+    // The caller asserts the dependency cache is complete.
+    const offline = await runCargo([...buildArgs, "--offline"]);
+    if (offline.code !== 0)
+      throw new Error(
+        infraDiagnosis(
+          `offline build (AGENTKIT_CARGO_OFFLINE=1):\n${offline.stderr}`,
+        ),
+      );
+    return;
+  }
+  // Setup phase: resolve dependencies while the network is permitted.
+  const fetched = await runCargo(["fetch", ...manifest, "--locked"]);
+  if (fetched.code === 0) {
+    // Availability established — build against the local cache.
+    const offline = await runCargo([...buildArgs, "--offline"]);
+    if (offline.code === 0) return;
+    // A cache the resolver disagrees with is an infrastructure problem, but
+    // one online retry distinguishes "cache incomplete" from "build broken".
+    const online = await runCargo(buildArgs);
+    if (online.code === 0) return;
+    throw new Error(
+      infraDiagnosis(
+        `build failed after a successful fetch:\noffline:\n${offline.stderr}\nonline:\n${online.stderr}`,
+      ),
+    );
+  }
+  // No network (or fetch otherwise failed): the cache may still be complete.
+  const offline = await runCargo([...buildArgs, "--offline"]);
+  if (offline.code === 0) return;
+  throw new Error(
+    infraDiagnosis(
+      `both dependency resolution and the offline build failed:\nfetch:\n${fetched.stderr}\noffline build:\n${offline.stderr}`,
+    ),
+  );
+}
+
 async function ensureBinary(): Promise<string> {
   const override = process.env["AGENTKIT_NATIVE_FIXTURE"];
   if (override !== undefined) return override;
-  build ??= (async () => {
-    const child = Bun.spawn(
-      [
-        "cargo",
-        "build",
-        "--manifest-path",
-        "rust/Cargo.toml",
-        "-p",
-        "agentkit-host",
-        "--features",
-        "http",
-        "--example",
-        "http_fixture",
-        "--offline",
-      ],
-      {
-        cwd: root,
-        stdout: "ignore",
-        stderr: "pipe",
-      },
-    );
-    const errors = await new Response(child.stderr).text();
-    if ((await child.exited) !== 0)
-      throw new Error(`Native HTTP fixture build failed: ${errors}`);
-  })();
+  build ??= prepareFixture();
   await build;
   return join(root, "rust/target/debug/examples/http_fixture");
 }

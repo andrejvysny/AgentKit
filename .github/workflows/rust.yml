@@ -14,7 +14,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # windows-2022, not windows-latest: the latest image ships Visual
+        # Studio 18, which the node-gyp bundled by better-sqlite3's
+        # prebuild-install fallback cannot discover ("unknown version"), so
+        # the native SQLite build dies in `bun install`. windows-2022 has the
+        # VS 2022 toolchain node-gyp finds.
+        os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -41,11 +46,20 @@ jobs:
         working-directory: rust
       - run: cargo test --workspace --all-features --locked
         working-directory: rust
+      - name: Prepare native HTTP fixture
+        # Explicit setup phase: dependencies were resolved by the cargo test
+        # step above; build the example the TypeScript interop tests run
+        # against, so the tests themselves never touch the network.
+        run: cargo build -p agentkit-host --features http --example http_fixture --locked
+        working-directory: rust
       - name: Shared store and client interoperability
-        run: bun test scripts/tests/rust-store-conformance.test.ts scripts/tests/rust-runner-conformance.test.ts packages/client/tests/rust-interop.test.ts packages/client/tests/rust-stream-boundaries.test.ts packages/react/tests/rust-interop.test.ts packages/transport-http/tests/rust-interop.test.ts
+        run: bun test scripts/tests/rust-store-conformance.test.ts scripts/tests/rust-runner-conformance.test.ts packages/client/tests/rust-interop.test.ts packages/client/tests/rust-stream-boundaries.test.ts packages/react/tests/rust-interop.test.ts packages/transport-http/tests/rust-interop.test.ts packages/transport-http/tests/rust-sequence-parity.test.ts
         env:
           AGENTKIT_RUN_RUST_CONFORMANCE: "1"
           AGENTKIT_RUN_RUST_RUNNER_CONFORMANCE: "1"
+          # The build above established dependency availability, so the
+          # fixture builder may stay offline.
+          AGENTKIT_CARGO_OFFLINE: "1"
       - name: Existing client and React behavior against Rust
         run: bun test --timeout 60000 packages/client/tests packages/react/tests
         env:

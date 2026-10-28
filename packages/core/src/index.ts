@@ -25,6 +25,9 @@ export * from "./tools/validation.js";
 
 // Runs
 export * from "./runs/agent-loop.js";
+export * from "./runs/model-router.js";
+export * from "./runs/observability.js";
+export * from "./runs/usage-accounting.js";
 export * from "./runs/loop-hooks.js";
 export * from "./runs/provider-retry.js";
 export * from "./runs/run-loop.js";
@@ -32,6 +35,7 @@ export * from "./runs/session-seams.js";
 
 // Providers
 export * from "./providers/client.js";
+export * from "./providers/model-metadata.js";
 export { redactDiagnostic } from "./providers/diagnostics.js";
 export * from "./providers/presets.js";
 export * from "./providers/sse.js";

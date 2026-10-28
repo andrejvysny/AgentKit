@@ -28,7 +28,14 @@ describe("run_command (sandbox off, portable)", () => {
       command: "echo hello; echo oops >&2",
     });
     expect(ok.ok).toBe(true);
-    expect(h.text(ok)).toBe("hello\noops\n[exit code 0]");
+    // stdout and stderr arrive on independent pipes; their relative order in
+    // the merged tail is a timing fact of the machine, not a contract
+    // (runners under load have emitted "oops" before "hello"). Pin the
+    // members and the exit-code notice, not the interleaving.
+    const merged = h.text(ok).split("\n");
+    expect(merged).toContain("hello");
+    expect(merged).toContain("oops");
+    expect(merged.at(-1)).toBe("[exit code 0]");
     expect(ok.warnings).toEqual(["sandbox is off: the command ran unconfined"]);
     const bad = await h.run("run_command", { command: "exit 3" });
     expect(bad.ok).toBe(false);

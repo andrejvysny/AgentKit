@@ -109,6 +109,8 @@ export class ResponsesClient implements AiProviderClient {
         providerId: this.id,
         modelId: id,
         displayName: typeof label === "string" ? label : null,
+        metadataSource: "provider" as const,
+        metadataFetchedAt: fetchedAt,
         fetchedAt,
       });
     }
@@ -123,7 +125,11 @@ export class ResponsesClient implements AiProviderClient {
     yield stamp({
       ...base,
       type: "run.started",
-      data: { model: input.model, toolCount: input.tools?.length ?? 0 },
+      data: {
+        model: input.model,
+        toolCount: input.tools?.length ?? 0,
+        providerId: this.id,
+      },
     });
     try {
       yield* this.requestChat(input, stamp, base, callId, state);
@@ -135,7 +141,7 @@ export class ResponsesClient implements AiProviderClient {
           /* Diagnostics cannot change run outcomes. */
         }
       }
-      yield* failedUsage(input, state.usage(), stamp, base, callId);
+      yield* failedUsage(input, state.usage(), stamp, base, callId, this.id);
       if (
         input.signal?.aborted ||
         (error instanceof Error && error.name === "AbortError")
@@ -213,7 +219,7 @@ export class ResponsesClient implements AiProviderClient {
     }
     const result = state.finish(input.tools);
     await this.persistContinuation(input, body, result);
-    yield* completedEvents(input, result, text, stamp, base, callId);
+    yield* completedEvents(input, result, text, stamp, base, callId, this.id);
   }
 
   private async persistContinuation(
@@ -400,6 +406,7 @@ function* completedEvents(
   stamp: EventStamper,
   base: EventBase,
   callId: string,
+  providerId: string,
 ): Generator<AiRunEvent> {
   if (result.content.length > text.length)
     yield stamp({
@@ -416,6 +423,7 @@ function* completedEvents(
         attempt: 1,
         step: 0,
         model: input.model,
+        providerId,
         source: "stream",
         finalForCall: true,
         ...usageCounts(result.usage),
@@ -466,6 +474,7 @@ function* failedUsage(
   stamp: EventStamper,
   base: EventBase,
   callId: string,
+  providerId: string,
 ): Generator<AiRunEvent> {
   if (!usage) return;
   let counts: ReturnType<typeof usageCounts>;
@@ -482,6 +491,7 @@ function* failedUsage(
       attempt: 1,
       step: 0,
       model: input.model,
+      providerId,
       source: "stream",
       finalForCall: false,
       ...counts,

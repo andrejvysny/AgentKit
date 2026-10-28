@@ -133,7 +133,12 @@ export async function resolveApprovedCalls(
   }
   // A committed result that never reached projection is replayed through the
   // wrapper, which returns the receipt without invoking the tool again.
+  // ADMITTED receipts must NOT resume: the call's outcome is uncertain, and
+  // the model learns that from the reconciled history (ADR 0019 part 3).
+  // Re-issuing the identical call is what goes to a human (the uncertain
+  // guard), never an automatic re-execution here.
   for (const receipt of receipts) {
+    if (receipt.status !== "completed") continue;
     const call = declared.get(receipt.toolCallId);
     if (
       call &&
