@@ -21,18 +21,21 @@
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::Duration;
 
 use agentkit_toolpacks_coding::coordination::{
     AcquireFileInput, AcquireWorkspaceInput, CommandCleanupIdentity, ExecutionIntent, LeaseHolder,
-    WorkspaceCoordinator, WorkspaceLease, create_in_process_workspace_coordinator,
+    QuarantineEvidence, WorkspaceCoordinator, WorkspaceLease, canonical_root_key,
+    create_in_process_workspace_coordinator,
 };
 use agentkit_toolpacks_coding::coordination_lockdir::{
     LockDirCoordinatorOptions, create_lockdir_workspace_coordinator,
 };
 use agentkit_toolpacks_coding::errors::CodingError;
+use agentkit_toolpacks_coding::fs_util::sha256;
 
 static GATE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
@@ -692,4 +695,223 @@ async fn every_unresolved_lockdir_intent_survives_an_existing_quarantine() {
         .await
         .expect("recovery across all preserved identities admits work");
     lease.release().await;
+}
+
+// ---------------------------------------------------------------------------
+// (D) In-process coordinator: a DRIVER-created quarantine is durable.
+//     The assessor's reopen defect: `quarantine_execution` recorded only
+//     in memory, the driver treated the `Ok` as sufficient replacement
+//     evidence, deleted the durable intent — and a fresh coordinator over
+//     the same store admitted modifying work while the marked child lived.
+// ---------------------------------------------------------------------------
+
+/// The in-process coordinator's durable journal directory for a root
+/// (same layout `write_intent_file`/`write_quarantine_file` use).
+async fn journal_dir_for(root: &str) -> PathBuf {
+    let key = canonical_root_key(root).await;
+    std::env::temp_dir()
+        .join("agentkit-exec-intents")
+        .join(sha256(key.as_bytes()))
+}
+
+fn now_wall_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_millis() as u64
+}
+
+/// A live child leading its own process group: the recorded `pgid` the
+/// quarantine's positive-exit probe consults, with a liveness nobody can
+/// forge (kill(-pgid, 0) answers "populated" while it lives).
+fn live_group_child() -> (i32, std::process::Child) {
+    let child = std::process::Command::new("/bin/sleep")
+        .arg("300")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("spawn group child");
+    (child.id() as i32, child)
+}
+
+/// The assessor's reopen defect, pinned at the coordinator level: a
+/// driver-published command quarantine must survive the coordinator drop
+/// AND repeated reopens (durable `quarantine.json` in the intent journal),
+/// deny modifying work every time, and lift only on positive exit.
+#[tokio::test(flavor = "multi_thread")]
+async fn in_process_driver_quarantine_survives_reopen_until_positive_exit() {
+    let _serial = gate().lock().await;
+    let workspace = tempfile::tempdir().expect("workspace");
+    let root = workspace.path().to_string_lossy().into_owned();
+    let execution_id = format!("durableq-{}", uuid::Uuid::new_v4().simple());
+    let (child_pid, mut child) = live_group_child();
+
+    let coordinator = create_in_process_workspace_coordinator(None);
+    let identity = CommandCleanupIdentity {
+        execution_id: execution_id.clone(),
+        owner_pid: i64::from(std::process::id()),
+        pgid: Some(child_pid),
+        spawned_at_ms: now_wall_ms(),
+    };
+    coordinator
+        .record_execution_intent(&ExecutionIntent {
+            root: root.clone(),
+            identity: identity.clone(),
+            holder: holder("quarantined-run"),
+            spawned: true,
+        })
+        .await
+        .expect("intent publishes");
+    coordinator
+        .quarantine_execution(
+            &root,
+            &QuarantineEvidence {
+                pids: vec![child_pid],
+                holder: holder("quarantined-run"),
+            },
+            &identity,
+        )
+        .await
+        .expect("command quarantine publishes durably");
+
+    let journal = journal_dir_for(&root).await;
+    assert!(
+        journal.join("quarantine.json").exists(),
+        "the driver quarantine has a durable record: {}",
+        journal.display()
+    );
+    assert_eq!(
+        journal_intents(&[&execution_id]).len(),
+        1,
+        "the durable intent is retained alongside the quarantine"
+    );
+
+    // Repeated reopens over the SAME store deny modifying work.
+    drop(coordinator);
+    for cycle in 1..=3 {
+        let reopened = create_in_process_workspace_coordinator(None);
+        let error = acquire(reopened.as_ref(), &root, &format!("run-{cycle}"), 200)
+            .await
+            .expect_err(&format!("in-process reopen cycle {cycle} still blocks"));
+        assert_eq!(error.code, "workspace_quarantined", "{error:?}");
+        assert!(
+            journal.join("quarantine.json").exists(),
+            "denial never consumes the durable record (cycle {cycle})"
+        );
+        drop(reopened);
+    }
+
+    // Positive exit: the recorded process dies → the probe settles → the
+    // quarantine lifts on evidence and work is admitted again.
+    let _ = child.kill();
+    let _ = child.wait();
+    let last = create_in_process_workspace_coordinator(None);
+    let mut lease = acquire(last.as_ref(), &root, "after-exit", 2_000)
+        .await
+        .expect("positive exit lifts the durable quarantine");
+    lease.release().await;
+    assert!(
+        !journal.join("quarantine.json").exists(),
+        "the lifted quarantine retires its durable record"
+    );
+    let _ = std::fs::remove_dir_all(&journal);
+}
+
+/// A failed durable publication of the quarantine is an `Err` — and the
+/// ORIGINAL evidence (the durable intent) is preserved, fail-closed: the
+/// root keeps blocking in memory, nothing is half-retired, and once the
+/// journal is writable again the quarantine publishes durably.
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_in_process_quarantine_publication_keeps_original_evidence() {
+    let _serial = gate().lock().await;
+    let workspace = tempfile::tempdir().expect("workspace");
+    let root = workspace.path().to_string_lossy().into_owned();
+    let execution_id = format!("qpubfail-{}", uuid::Uuid::new_v4().simple());
+    let (child_pid, mut child) = live_group_child();
+
+    let coordinator = create_in_process_workspace_coordinator(None);
+    let identity = CommandCleanupIdentity {
+        execution_id: execution_id.clone(),
+        owner_pid: i64::from(std::process::id()),
+        pgid: Some(child_pid),
+        spawned_at_ms: now_wall_ms(),
+    };
+    coordinator
+        .record_execution_intent(&ExecutionIntent {
+            root: root.clone(),
+            identity: identity.clone(),
+            holder: holder("quarantined-run"),
+            spawned: true,
+        })
+        .await
+        .expect("intent publishes");
+    let journal = journal_dir_for(&root).await;
+
+    // Inject: journal not writable → quarantine publication MUST fail.
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o500))
+        .expect("make journal read-only");
+    let error = coordinator
+        .quarantine_execution(
+            &root,
+            &QuarantineEvidence {
+                pids: vec![child_pid],
+                holder: holder("quarantined-run"),
+            },
+            &identity,
+        )
+        .await
+        .expect_err("unwritable journal fails the durable publication");
+    assert_eq!(error.code, "io_error", "{error:?}");
+    assert_eq!(
+        journal_intents(&[&execution_id]).len(),
+        1,
+        "the original durable evidence survives the failed publication"
+    );
+    // Fail closed: the failed publication still blocks the root.
+    let blocked = acquire(coordinator.as_ref(), &root, "blocked", 200)
+        .await
+        .expect_err("failed quarantine publication keeps the root blocked");
+    assert_eq!(blocked.code, "workspace_quarantined", "{blocked:?}");
+
+    // Restore writability: the quarantine now publishes durably, and a
+    // REOPENED coordinator still denies the next modifying lease.
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o755))
+        .expect("restore journal");
+    coordinator
+        .quarantine_execution(
+            &root,
+            &QuarantineEvidence {
+                pids: vec![child_pid],
+                holder: holder("quarantined-run"),
+            },
+            &identity,
+        )
+        .await
+        .expect("quarantine publishes once the journal is writable");
+    assert!(journal.join("quarantine.json").exists());
+    drop(coordinator);
+    let reopened = create_in_process_workspace_coordinator(None);
+    let error = acquire(reopened.as_ref(), &root, "next-writer", 200)
+        .await
+        .expect_err("the published quarantine blocks modifying work");
+    assert_eq!(error.code, "workspace_quarantined", "{error:?}");
+
+    // Explicit recovery resolves the state (and retires the durable
+    // record); the live child is reaped on every path.
+    let last = create_in_process_workspace_coordinator(None);
+    assert!(
+        last.clear_workspace_quarantine(&root)
+            .await
+            .expect("recovery"),
+        "recovery reports the durable record it retired"
+    );
+    let mut lease = acquire(last.as_ref(), &root, "recovered", 2_000)
+        .await
+        .expect("explicit recovery admits work");
+    lease.release().await;
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&journal);
 }

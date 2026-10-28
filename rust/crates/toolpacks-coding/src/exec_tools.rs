@@ -277,7 +277,7 @@ async fn run_shell(
     );
     let outcome = execution.await_result().await;
     let run = outcome.run;
-    let stragglers = outcome.stragglers;
+    let cleanup = outcome.cleanup;
     if let Some(error) = outcome.quarantine_error {
         return Err(error);
     }
@@ -365,36 +365,41 @@ async fn run_shell(
                         .join(",")
                 )]
             },
-            if stragglers.is_empty() && run.teardown.scan != crate::process::TeardownScan::Unsupported {
+            if run.teardown.suspects.is_empty() {
+                // Suspects are never killed (they may be unrelated); they
+                // surface here as uncertainty and in the quarantine.
                 vec![]
             } else {
-                let who = if stragglers.is_empty() {
-                    "unknown survivors (teardown scan unsupported on this platform)".to_owned()
-                } else {
-                    stragglers
+                vec![format!(
+                    "environ_denied_suspects: {} (unreadable environ, possibly this command's \
+                     children; not killed, cleanup stays uncertain until they exit or recovery \
+                     is recorded)",
+                    run.teardown
+                        .suspects
                         .iter()
                         .map(|pid| pid.to_string())
                         .collect::<Vec<_>>()
                         .join(",")
-                };
-                vec![format!(
-                    "lease released while cleanup was not positively established: {who}"
                 )]
             },
-            if stragglers.is_empty() && run.teardown.scan != crate::process::TeardownScan::Unsupported {
+            // The driver's explicit verdict — not a survivors-emptiness
+            // guess — decides these two warnings: uncertainty is never
+            // reported as a released-and-settled cleanup.
+            if cleanup.is_clean() {
                 vec![]
             } else {
-                let who = if stragglers.is_empty() {
-                    "unknown survivors (teardown scan unsupported on this platform)".to_owned()
-                } else {
-                    stragglers
-                        .iter()
-                        .map(|pid| pid.to_string())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                };
                 vec![format!(
-                    "workspace quarantined until these processes exit or recovery is recorded: {who}"
+                    "lease released while cleanup was not positively established: {}",
+                    cleanup.uncertainty().describe()
+                )]
+            },
+            if cleanup.is_clean() {
+                vec![]
+            } else {
+                vec![format!(
+                    "workspace quarantined until cleanup is positively established or recovery \
+                     is recorded: {}",
+                    cleanup.uncertainty().describe()
                 )]
             },
         ]
