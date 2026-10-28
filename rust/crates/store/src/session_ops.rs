@@ -1298,7 +1298,11 @@ pub struct StagedCandidate {
 }
 
 /// The host-supplied conversion candidates, in queue order (follow-ups
-/// first, then steers not marked `cancel`).
+/// first, then steers not marked `cancel`). They are the settlement's
+/// preferred staging, not its whole decision: the settle transaction re-reads
+/// the queue itself and stages anything the snapshot could not have named
+/// (see `settle_session_inputs`), so no interleaving can leave a promotable
+/// input pending behind a terminal turn.
 pub struct SessionSettle {
     pub convert: Vec<StagedCandidate>,
 }
@@ -1366,12 +1370,178 @@ pub(crate) fn settle_session_inputs(
     if busy.is_some() {
         return Ok(());
     }
+    // Eligibility selection belongs INSIDE this transaction: the pending
+    // set is re-read here, against the state this commit is about to write,
+    // so a settlement never commits a terminal turn with promotable work
+    // still queued and a silent worker. The host's staged list keeps the
+    // queue order and the ids it minted; whatever it could not have known
+    // about is staged from the settling turn and converted here instead —
+    // an input that arrived after the snapshot was taken, and the candidate
+    // behind one that was cancelled in the same window (a supplied
+    // candidate that is gone, cancelled or no longer pending simply loses
+    // its CAS here, which is exactly what lets the scan move on).
+    let mut promoted = false;
     for candidate in &extra.convert {
         if convert_candidate(db, &task.scope_id, candidate, now)? {
+            promoted = true;
+            break;
+        }
+    }
+    if promoted {
+        return Ok(());
+    }
+    for record in promotable_pending(db, task, &extra.convert)? {
+        let Promotion::Stage(candidate) = stage_missed(task, &record, now)? else {
+            continue;
+        };
+        if convert_candidate(db, &task.scope_id, &candidate, now)? {
             break;
         }
     }
     Ok(())
+}
+
+/// One queued input the settlement must still try, and the staged turn it
+/// becomes. `Promotion::Skip` is the staging filter: unusable content, or a
+/// steer this settlement may not claim, stays pending and visible — it must
+/// never abort a healthy settlement with an error.
+enum Promotion {
+    Stage(Box<StagedCandidate>),
+    Skip,
+}
+
+/// The queued inputs this settlement may promote that the host's snapshot
+/// did not stage: pending follow-ups, plus steers with no target or aimed
+/// at the settling turn and not marked `cancel` — the same population the
+/// top of [`settle_session_inputs`] arbitrates, in arrival order.
+fn promotable_pending(
+    db: &Connection,
+    task: &TaskRecord,
+    supplied: &[StagedCandidate],
+) -> Result<Vec<AgentInputRecord>> {
+    let pending = list_inputs(
+        db,
+        &AgentInputQuery {
+            session_id: task.scope_id.clone(),
+            kinds: Some(vec![
+                crate::agent_inputs::AgentInputKind::FollowUp,
+                crate::agent_inputs::AgentInputKind::Steer,
+            ]),
+            statuses: Some(vec![AgentInputStatus::Pending]),
+            target_task_id: None,
+        },
+    )?;
+    Ok(pending
+        .into_iter()
+        .filter(|record| {
+            !supplied
+                .iter()
+                .any(|candidate| candidate.input_id == record.input_id)
+                && promotable(record, task)
+        })
+        .collect())
+}
+
+/// The settlement's own eligibility rules for one queued input (mirrors the
+/// service's staging filter; see [`stage_missed`]).
+fn promotable(record: &AgentInputRecord, task: &TaskRecord) -> bool {
+    if record.kind == crate::agent_inputs::AgentInputKind::Steer {
+        // A steer aimed at some OTHER turn is that turn's business: the
+        // settle path only arbitrates steers with no target or aimed at the
+        // settling turn, whose own row is already terminal in this
+        // transaction.
+        if record
+            .target_task_id
+            .as_deref()
+            .is_some_and(|target| target != task.task_id)
+        {
+            return false;
+        }
+        // `cancel` steers were cancelled above; converting one here would
+        // contradict the policy the human set.
+        if record.on_settled == Some(crate::agent_inputs::AgentInputSettlePolicy::Cancel) {
+            return false;
+        }
+    }
+    queue_content(&record.content).is_some()
+}
+
+/// Stage the turn a snapshot missed. The settling turn is the template: it
+/// carries the same session descriptor snapshot every promoted turn of this
+/// session carries (`model`, `providerId`, `chatId`), so the promoted task
+/// is what the service would have staged — with ids derived from the input
+/// itself, which keeps the promotion idempotent (`turn:<inputId>`, and for
+/// a steer the same `steer:<inputId>` receipt the in-run projection uses).
+fn stage_missed(task: &TaskRecord, record: &AgentInputRecord, now: i64) -> Result<Promotion> {
+    let Some(content) = queue_content(&record.content) else {
+        return Ok(Promotion::Skip);
+    };
+    let steer = record.kind == crate::agent_inputs::AgentInputKind::Steer;
+    let user_message_id = if steer {
+        format!("steer:{}", record.input_id)
+    } else {
+        format!("msg_q:{}", record.input_id)
+    };
+    let assistant_message_id = format!("msg_a:{}", record.input_id);
+    let task_id = format!("turn:{}", record.input_id);
+    let mut payload = task.payload.as_object().cloned().unwrap_or_default();
+    // A promoted queued turn is a root turn, exactly like the service's
+    // staging: the settling turn's parent is nobody's parent.
+    payload.remove("parentMessageId");
+    payload.insert(
+        "assistantMessageId".into(),
+        Value::from(assistant_message_id.clone()),
+    );
+    payload.insert("userMessageId".into(), Value::from(user_message_id.clone()));
+    Ok(Promotion::Stage(Box::new(StagedCandidate {
+        input_id: record.input_id.clone(),
+        task: SubmitTask {
+            task_id: task_id.clone(),
+            kind: task.kind.clone(),
+            scope_id: task.scope_id.clone(),
+            payload: Value::Object(payload),
+            priority: 0,
+            now,
+            available_at: None,
+            depends_on: vec![],
+            parent_task_id: None,
+            exclusive_scope: true,
+        },
+        messages: vec![
+            MessageInput {
+                id: Some(user_message_id.clone()),
+                chat_id: task.scope_id.clone(),
+                role: "user".into(),
+                content,
+                parent_message_id: None,
+                ..Default::default()
+            },
+            MessageInput {
+                id: Some(assistant_message_id),
+                chat_id: task.scope_id.clone(),
+                run_id: Some(task_id),
+                role: "assistant".into(),
+                content: Value::String(String::new()),
+                parent_message_id: Some(user_message_id),
+                metadata: json!({"placeholder": true}),
+                ..Default::default()
+            },
+        ],
+    })))
+}
+
+/// What [`convert_candidate`] can write: a non-empty string or a non-empty
+/// content-block array under `{"content": ...}`. Anything else stays
+/// pending and visible; a poison record must never abort a healthy
+/// settlement.
+fn queue_content(content: &Value) -> Option<Value> {
+    let value = content.get("content")?;
+    let usable = match value {
+        Value::String(text) => !text.is_empty(),
+        Value::Array(blocks) => !blocks.is_empty(),
+        _ => false,
+    };
+    usable.then(|| value.clone())
 }
 
 /// Convert one queued input into a turn: insert the task, append its
