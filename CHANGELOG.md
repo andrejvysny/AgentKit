@@ -27,6 +27,27 @@ regression matrix (openai-compatible streaming, fragmented tool-argument assembl
 bodies, usage fragments, provider retry with its warning, cancellation during backoff, foreign-connection continuation
 rejection, routed model switch with the tool body proven not to re-execute) runs offline against throwing transports.
 
+**Cassette hardening (C2) and host-level replay.** Recordings never overwrite a fixture: publication is atomic,
+exclusive and owner-only (`0600`), with size caps on write and read. Recording caps (`maxEffects`), per-recorder
+effect identities and a `redactPolicy` application hook join the built-in denylist and credential-shape scrubbing —
+which now also catches secrets embedded in free-form strings. `verify` compares payload digests (including pinned
+usage and tool-result hashes), and terminal error/abort steps are part of the trace. Tool arguments are replay-critical
+control data: recorded scrubbed under every capture, hashed out of stream events under metadata capture, and restored
+into replayed events by hash. A full `TurnRunner` turn — context assembly, durable task events, contributor tools —
+records to a fixture and replays offline with an identical durable event sequence while the provider transport and
+tool bodies are proven never touched.
+
+**Routing authority and honest accounting (ADR 0022 hardening).** Any model switch — provider or model — requires
+the host `authorizeModelSelection` hook; its absence is no consent and the run fails closed without ever resolving
+the refused client. `TurnRunnerDeps.routing` wires router, `resolveClient`, required capabilities and the
+continuation-switch policy into the unified loop, and every routed `(providerId, modelId)` pair is put to the
+`UsageAuthorizer` before dispatch. `model-step` now owns per-step usage identity: all attempts of one provider call
+share a `callId` with a 1-based `attempt` counter (previously every retry masqueraded as a fresh first attempt), and
+the reducer dedups by `(callId, attempt)` with callId-less events counted individually. The cost estimator leaves
+pricing with a future `effectiveDate` unpriced ("pricing not yet effective"), the host usage meter attributes the
+EVENT provider (routed usage no longer bills the session's provider), and cached/reasoning tokens reach the
+`UsageRecord` port instead of being dropped.
+
 **Source-attributed model metadata, optional routing, deterministic accounting (ADR 0022).** `AiProviderModel`
 gained optional capability facts and a versioned pricing block with `metadataSource` provenance
 (`host > provider > preset`, field by field — unknown stays unknown). `runAgentLoop` accepts an optional
