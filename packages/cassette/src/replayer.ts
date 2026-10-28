@@ -83,11 +83,19 @@ export class Replayer {
     effect: RecordedProviderEffect,
     request: RecordedProviderRequest,
   ): CassetteError {
+    if (process.env.AGENTKIT_CASSETTE_DEBUG) {
+      console.log("MISMATCH live:", JSON.stringify(request));
+      console.log("MISMATCH rec :", JSON.stringify(effect.request));
+    }
     return new CassetteError(
       "cassette_mismatch",
       `replay provider call does not match the fixture at position ${this.cursor}: ` +
         `requested model=${request.model} messages=${request.messageShape.length}; ` +
-        `recorded model=${effect.request.model} messages=${effect.request.messageShape.length}`,
+        `recorded model=${effect.request.model} messages=${effect.request.messageShape.length}; ` +
+        `tools live=${request.toolsFingerprint.slice(0, 12)} ` +
+        `recorded=${effect.request.toolsFingerprint.slice(0, 12)}; ` +
+        `runContent live=${String(request.hasRunContent)} ` +
+        `recorded=${String(effect.request.hasRunContent)}`,
       {
         position: this.cursor,
         effectId: effect.effectId,

@@ -39,8 +39,11 @@ const DEFAULT_MAX_EFFECTS = 50_000;
  * trace; error codes, finish reasons and usage shapes distinguish events
  * that share a type, so `verify` compares payloads, not just kinds.
  */
-export function eventStep(event: AiRunEvent): string {
-  const recorded = recordRunEvent(event, "metadata");
+export function eventStep(
+  event: AiRunEvent,
+  capture: CassetteCapture = "metadata",
+): string {
+  const recorded = recordRunEvent(event, capture);
   if (recorded === undefined) return `${event.type}|r`;
   let data = recorded.data;
   if (event.type === "run.usage" && data && typeof data === "object") {
@@ -103,7 +106,7 @@ export class Recorder {
   }): RecordedProviderEffect {
     const trace: EffectTrace = { steps: [] };
     for (const event of params.events) {
-      trace.steps.push(eventStep(event));
+      trace.steps.push(eventStep(event, this.capture));
       if (event.type === "run.usage") {
         const data: Record<string, unknown> =
           typeof event.data === "object" && event.data !== null

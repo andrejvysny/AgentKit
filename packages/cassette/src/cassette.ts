@@ -223,11 +223,17 @@ class Cassette {
     const cassette = this;
     return {
       async *[Symbol.asyncIterator]() {
+        // The view must be built under the capture policy it will be
+        // COMPARED under: record uses this cassette's; replay/verify use the
+        // fixture's (a replay cassette does not get to choose the fixture's
+        // policy — mismatching captures would compare a metadata view against
+        // content fingerprints and fail every call).
+        const gate = cassette.mode === "record" ? null : await cassette.ready();
         const view = providerRequestView(
           inner.id,
           inner.kind,
           request,
-          cassette.capture,
+          gate ? gate.capture : cassette.capture,
           cassette.policy,
         );
         if (cassette.mode === "record") {
@@ -375,7 +381,7 @@ class Cassette {
     if (!expected) return;
     const legacyTypeOnly = expected.steps.every((step) => !step.includes("|"));
     const liveTypes = liveEvents.map((event) =>
-      legacyTypeOnly ? event.type : eventStep(event),
+      legacyTypeOnly ? event.type : eventStep(event, replayer.capture),
     );
     if (terminalStep !== undefined) liveTypes.push(terminalStep);
     if (JSON.stringify(expected.steps) !== JSON.stringify(liveTypes))
