@@ -1,6 +1,9 @@
 name: debug-scan (temporary)
 on:
   workflow_dispatch:
+  push:
+    branches: [agentkit-phase-a-b]
+    paths: [.github/workflows/debug-scan.yml]
 jobs:
   scan:
     runs-on: ubuntu-latest

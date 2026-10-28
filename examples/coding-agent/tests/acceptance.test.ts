@@ -606,8 +606,8 @@ describe("coding agent — the acceptance run", () => {
     // neither re-runs an uncertain mutation nor slips past the block silently.
     const refusal = revived.requests
       .flat()
-      .filter(
-        (m) => m.role === "tool" && typeof m.content === "string"
+      .filter((m) =>
+        m.role === "tool" && typeof m.content === "string"
           ? m.content.includes("workspace_busy")
           : false,
       );
