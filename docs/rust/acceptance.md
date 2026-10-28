@@ -253,8 +253,32 @@ were re-qualified locally with Node v22.20.0 installed.
 - `cargo check -p agentkit-contracts --target wasm32-unknown-unknown --locked`
   passes (the `wasm32-unknown-unknown` rustup target must be installed; the CI
   job adds it explicitly).
-- `bun run lint` reports 0 errors (five pre-existing lint infos unchanged);
-  `bun run typecheck` and `bun scripts/export-rust-fixtures.ts --check` pass.
+- Executing the packaged-consumers gate (`node rust/scripts/check-packages.mjs
+  --offline`, previously dead behind the name-only workflow step) exposed a
+  second latent defect: it built the packaged-contracts test binaries into a
+  persistent `rust/target/package-consumer`, while the tests bake
+  `CARGO_MANIFEST_DIR` for fixture paths and the script deletes the extracted
+  sources after each run. Cargo's fingerprint does not track that macro, so a
+  rerun reused a binary pointing at the previous run's deleted temporary
+  directory and every fixture-backed parity test failed `NotFound`. The build
+  directory now lives inside the per-run temporary directory; two consecutive
+  runs pass (11 crate archives, isolated all-feature consumer).
+- Under workspace-wide concurrency the recovery suites exposed a real
+  classification defect: the `/proc` marker scan treated a transient
+  iteration error — and `/proc`'s hash-ordered readdir missing a recently
+  inserted entry — as "no marked processes", so an intent with a genuinely
+  live marked child could be retired as positively gone (the dangerous
+  direction: a false positive-gone admits modifying work onto a live
+  effect). `scan_marked` now unions two independent passes and retries
+  transient per-entry errors; the classification paths
+  (`crashed_execution_survivors`, `cleanup_positively_established`) retry
+  the whole scan before accepting UNKNOWN. The crash fixture additionally
+  waits for post-exec marker visibility and carries the live harness pid in
+  its marker so sibling test binaries' once-per-process orphan sweeps (which
+  kill owner-dead markers machine-wide) cannot reap it mid-assertion.
+  Compatibility note: the frozen TypeScript `process-tree.ts` performs a
+  single pass with the same failure direction; this hardening is a
+  deliberate, safety-justified deviation, not a parity regression.
 - Main suite `AGENTKIT_SKIP_NATIVE=1 bun test`: 2,888 passed, 22 skipped,
   0 failed (18,668 assertions, 229 files).
 - Native-backed suites `AGENTKIT_TEST_BACKEND=rust bun test packages/client/tests
@@ -269,8 +293,15 @@ were re-qualified locally with Node v22.20.0 installed.
   SHA; the first push of this branch must record those job results before the
   matrix rows may move from **Not run**.
 - The first native binding milestone (M3) design and ordered backlog live in
-  [native-binding-milestone.md](native-binding-milestone.md); no binding code
-  exists yet.
+  [native-binding-milestone.md](native-binding-milestone.md). The **first
+  slice is now implemented**: crate `agentkit-napi` plus workspace package
+  `@agentkit/native` (`packages/native`). Scope, validated surface, and
+  named open gaps (streaming deltas, `AbortSignal`, Node matrix, crash-kill
+  test, prebuilt per-triple packages) are recorded there; the binding tests
+  skip without the built binary and hard-fail under
+  `AGENTKIT_REQUIRE_NATIVE=1`, which the native CI job sets after building.
+  No npm publication or export cutover has occurred; the package is
+  `private`.
 
 ## Remaining release gates
 

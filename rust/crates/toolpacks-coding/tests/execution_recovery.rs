@@ -61,11 +61,28 @@ async fn wait_until_gone(pid: i32, seconds: u64) -> bool {
     }
 }
 
-fn intent(root: &str, owner_pid: i32, nonce: &str, pgid: Option<i32>) -> ExecutionIntent {
+/// Construct the durable intent the pre-crash host records.
+///
+/// The owner pid appears twice with two different roles, deliberately split
+/// for the test: the execution id — what the marked child carries in
+/// `AGENTKIT_EXEC_ID` — names the LIVE test-harness pid so the startup
+/// orphan sweep a sibling test binary triggers (`sweep_orphans` runs once
+/// per process on the first real command) does not reap the crashed-but-live
+/// fixture mid-assertion; the sweep only kills marked processes whose owner
+/// pid is dead. `owner_pid` is the actually crashed host the intent records,
+/// which is what recovery must observe dead. In production both are the same
+/// host pid; nothing there changes.
+fn intent(
+    root: &str,
+    marker_owner_pid: i32,
+    owner_pid: i32,
+    nonce: &str,
+    pgid: Option<i32>,
+) -> ExecutionIntent {
     ExecutionIntent {
         root: root.to_owned(),
         identity: CommandCleanupIdentity {
-            execution_id: format!("{owner_pid}:{nonce}"),
+            execution_id: format!("{marker_owner_pid}:{nonce}"),
             owner_pid: i64::from(owner_pid),
             pgid,
             spawned_at_ms: 1_700_000_000_000,
@@ -81,6 +98,10 @@ fn intent(root: &str, owner_pid: i32, nonce: &str, pgid: Option<i32>) -> Executi
 /// the driver gives a command, so a crash leaves an identifiable live group.
 struct CrashFixture {
     owner_pid: i32,
+    /// Pid named inside the marked child's `AGENTKIT_EXEC_ID` — the live
+    /// harness, so sibling binaries' orphan sweeps spare the fixture while
+    /// its recorded owner is dead (see `intent`).
+    marker_owner_pid: i32,
     marked_pid: i32,
     nonce: String,
     owner: std::process::Child,
@@ -92,7 +113,13 @@ fn detach() -> std::process::Stdio {
 }
 
 impl CrashFixture {
-    fn spawn() -> Self {
+    /// Spawn owner + marked child and WAIT until the marked command has
+    /// actually exec'd: a forked-but-not-exec'd child has an empty environ
+    /// and no process group yet, so the marker scan would (conservatively,
+    /// correctly) classify UNKNOWN — which is not the settled state the
+    /// recovery assertions describe. Production tolerates the window; the
+    /// test may not depend on it.
+    async fn spawn() -> Self {
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         let owner = std::process::Command::new("/bin/sleep")
             .arg("300")
@@ -102,9 +129,10 @@ impl CrashFixture {
             .spawn()
             .expect("spawn owner");
         let owner_pid = owner.id() as i32;
+        let marker_owner_pid = std::process::id() as i32;
         let marked = std::process::Command::new("/bin/sleep")
             .arg("300")
-            .env("AGENTKIT_EXEC_ID", format!("{owner_pid}:{nonce}"))
+            .env("AGENTKIT_EXEC_ID", format!("{marker_owner_pid}:{nonce}"))
             .stdin(detach())
             .stdout(detach())
             .stderr(detach())
@@ -112,13 +140,30 @@ impl CrashFixture {
             .spawn()
             .expect("spawn marked child");
         let marked_pid = marked.id() as i32;
-        Self {
+        let me = Self {
             owner_pid,
+            marker_owner_pid,
             marked_pid,
             nonce,
             owner,
             marked,
+        };
+        let exec_id = format!("{}:{}", me.marker_owner_pid, me.nonce);
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+        loop {
+            if let Some(pids) =
+                agentkit_toolpacks_coding::process_tree::find_marked_processes(&exec_id).await
+                && pids.contains(&me.marked_pid)
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the marked child never presented its execution marker"
+            );
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         }
+        me
     }
 
     /// Simulate the host crash: SIGKILL the owner (no teardown runs) and
@@ -186,10 +231,11 @@ async fn crashed_live_process_group_stays_uncertain_until_positive_evidence() {
     let workspace = tempfile::tempdir().expect("workspace");
     let root = workspace.path().to_string_lossy().into_owned();
     let coordinator = create_in_process_workspace_coordinator(None);
-    let mut crash = CrashFixture::spawn();
+    let mut crash = CrashFixture::spawn().await;
     coordinator
         .record_execution_intent(&intent(
             &root,
+            crash.marker_owner_pid,
             crash.owner_pid,
             &crash.nonce,
             Some(crash.marked_pid),
@@ -225,7 +271,7 @@ async fn crashed_live_process_group_stays_uncertain_until_positive_evidence() {
         .expect("SAFE command identity preserved");
     assert_eq!(
         identity.execution_id,
-        format!("{}:{}", crash.owner_pid, crash.nonce)
+        format!("{}:{}", crash.marker_owner_pid, crash.nonce)
     );
     assert_eq!(identity.owner_pid, i64::from(crash.owner_pid));
     assert_eq!(identity.pgid, Some(crash.marked_pid));
@@ -277,12 +323,18 @@ async fn crashed_execution_with_no_survivors_reopens_clean() {
     let workspace = tempfile::tempdir().expect("workspace");
     let root = workspace.path().to_string_lossy().into_owned();
     let coordinator = create_in_process_workspace_coordinator(None);
-    let mut crash = CrashFixture::spawn();
+    let mut crash = CrashFixture::spawn().await;
     let nonce = crash.nonce.clone();
     let owner = crash.owner_pid;
     let pgid = crash.marked_pid;
     coordinator
-        .record_execution_intent(&intent(&root, owner, &nonce, Some(pgid)))
+        .record_execution_intent(&intent(
+            &root,
+            crash.marker_owner_pid,
+            owner,
+            &nonce,
+            Some(pgid),
+        ))
         .await
         .expect("intent publishes");
     crash.crash_owner();
@@ -326,11 +378,12 @@ async fn lockdir_intent_survives_reopen_and_blocks_until_explicit_recovery() {
     };
 
     let coordinator = create_lockdir_workspace_coordinator(options());
-    let mut crash = CrashFixture::spawn();
+    let mut crash = CrashFixture::spawn().await;
     let nonce = crash.nonce.clone();
     coordinator
         .record_execution_intent(&intent(
             &root,
+            crash.marker_owner_pid,
             crash.owner_pid,
             &nonce,
             Some(crash.marked_pid),
@@ -385,7 +438,7 @@ async fn lockdir_intent_survives_reopen_and_blocks_until_explicit_recovery() {
             .identity
             .as_ref()
             .map(|identity| identity.execution_id.clone()),
-        Some(format!("{}:{}", crash.owner_pid, nonce))
+        Some(format!("{}:{}", crash.marker_owner_pid, nonce))
     );
 
     // The survivor is still alive: an operator's explicit recovery lifts the
@@ -418,10 +471,16 @@ async fn unknown_group_keeps_the_root_blocked_until_explicit_recovery() {
     let workspace = tempfile::tempdir().expect("workspace");
     let root = workspace.path().to_string_lossy().into_owned();
     let coordinator = create_in_process_workspace_coordinator(None);
-    let mut crash = CrashFixture::spawn();
+    let mut crash = CrashFixture::spawn().await;
     let nonce = crash.nonce.clone();
     coordinator
-        .record_execution_intent(&intent(&root, crash.owner_pid, &nonce, None))
+        .record_execution_intent(&intent(
+            &root,
+            crash.marker_owner_pid,
+            crash.owner_pid,
+            &nonce,
+            None,
+        ))
         .await
         .expect("intent publishes");
     crash.crash_owner();
@@ -468,10 +527,16 @@ async fn corrupt_intent_blocks_instead_of_silently_retiring() {
     let workspace = tempfile::tempdir().expect("workspace");
     let root = workspace.path().to_string_lossy().into_owned();
     let coordinator = create_in_process_workspace_coordinator(None);
-    let mut crash = CrashFixture::spawn();
+    let mut crash = CrashFixture::spawn().await;
     let nonce = crash.nonce.clone();
     coordinator
-        .record_execution_intent(&intent(&root, crash.owner_pid, &nonce, None))
+        .record_execution_intent(&intent(
+            &root,
+            crash.marker_owner_pid,
+            crash.owner_pid,
+            &nonce,
+            None,
+        ))
         .await
         .expect("intent publishes");
     crash.crash_owner();

@@ -114,7 +114,27 @@ async fn run(file: &str, args: &[&str]) -> Result<String, std::io::Error> {
 async fn scan_proc() -> Result<Vec<MarkedProcess>, std::io::Error> {
     let mut found = Vec::new();
     let mut dir = tokio::fs::read_dir("/proc").await?;
-    while let Some(entry) = dir.next_entry().await? {
+    loop {
+        // A transient iteration error (a pid vanishing under the cursor,
+        // descriptor pressure under a loaded suite) must not turn the whole
+        // scan into an unknown survivor set — that is a conservative block,
+        // but it is not the truth. Retry briefly; a persistent failure still
+        // returns Err, and the caller keeps treating it as unknown.
+        let mut entry = None;
+        for attempt in 0..3u32 {
+            match dir.next_entry().await {
+                Ok(next) => {
+                    entry = next;
+                    break;
+                }
+                Err(err) if attempt + 1 < 3 => {
+                    let _ = err;
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        let Some(entry) = entry else { break };
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if !NUMERIC.is_match(&name) {
@@ -123,6 +143,9 @@ async fn scan_proc() -> Result<Vec<MarkedProcess>, std::io::Error> {
         let Ok(pid) = name.parse::<i32>() else {
             continue;
         };
+        // TS parity: an unreadable environ (kernel threads, processes of
+        // other users on a shared machine — EPERM there is permanent, so
+        // retrying would stall the whole scan) simply carries no marker.
         let raw = tokio::fs::read(format!("/proc/{name}/environ"))
             .await
             .unwrap_or_default();
@@ -139,18 +162,36 @@ async fn scan_proc() -> Result<Vec<MarkedProcess>, std::io::Error> {
 /// Every marked process except this one; None when the platform cannot be
 /// scanned or the scan failed. Never throws.
 pub async fn scan_marked(platform: &str) -> Option<Vec<MarkedProcess>> {
-    let all = if platform == "darwin" {
-        match run("/bin/ps", &["-axwwE", "-o", "pid=,command="]).await {
-            Ok(text) => parse_ps_output(&text),
-            Err(_) => return None,
+    let all: Vec<MarkedProcess> = match platform {
+        "darwin" => run("/bin/ps", &["-axwwE", "-o", "pid=,command="])
+            .await
+            .ok()
+            .map(|text| parse_ps_output(&text))?,
+        "linux" => {
+            // /proc readdir is hash-ordered and unstable under churn: an
+            // entry inserted after iteration passed its bucket can be
+            // missed by a single pass. Missing a survivor is the dangerous
+            // direction (a false "positively gone" retires an intent and
+            // admits modifying work onto a live effect), so take the UNION
+            // of two passes. Any one successful pass is enough to scan;
+            // only when every pass fails is the platform unscannable.
+            let first = scan_proc().await;
+            let second = scan_proc().await;
+            match (first, second) {
+                (Ok(a), Ok(b)) => {
+                    let mut a = a;
+                    for mark in b {
+                        if !a.iter().any(|seen| seen.pid == mark.pid) {
+                            a.push(mark);
+                        }
+                    }
+                    a
+                }
+                (Ok(a), Err(_)) | (Err(_), Ok(a)) => a,
+                (Err(_), Err(_)) => return None,
+            }
         }
-    } else if platform == "linux" {
-        match scan_proc().await {
-            Ok(all) => all,
-            Err(_) => return None,
-        }
-    } else {
-        return None;
+        _ => return None,
     };
     let me = process_id() as i32;
     Some(all.into_iter().filter(|mark| mark.pid != me).collect())
