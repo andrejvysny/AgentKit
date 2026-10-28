@@ -603,7 +603,24 @@ impl GuardedTool {
 
 /// The durable approval request the answer path will settle. Content and
 /// hash mirror the TypeScript projection field-for-field and in order:
-/// the same call parks the same request bytes.
+/// the same call, in the same ask state, parks the same request bytes.
+/// Identity: `(run, tool call)` for an ordinary ask, plus the uncertainty
+/// generation for an uncertain reissue. The extra component is load-
+/// bearing, not decoration: the SAME run can present a second uncertain
+/// generation for one tool-call identity (answer generation N → the
+/// approved execution is admitted → a crash leaves that admission
+/// unresolved as generation N+1). The store keys the human-request row by
+/// input id and refuses same-id-different-content rewrites, so an id
+/// derived only from run + call would make the second ask a content-hash
+/// COLLISION against the already-answered first row: the park would die
+/// `park_failed` and the human could never be asked about N+1. With the
+/// generation in the id each ask gets its own row, its own answer, and
+/// its own hash. Safety is unchanged by the shape: a generation's answer
+/// still authorizes exactly its own reissue — the one-use grant is spent
+/// at admission (UNIQUE approval index), and both the host's `covers`
+/// gate and the store's pending-generation gate compare the grant's
+/// `uncertainty_generation` against the unresolved receipt's execution id
+/// — so generation N's answer can never spend itself on generation N+1.
 fn approval_spec(
     context: &ToolContext,
     definition: &agentkit_core::ToolDefinition,
@@ -615,19 +632,22 @@ fn approval_spec(
         .tool_call_id
         .clone()
         .unwrap_or_else(|| "unknown".to_owned());
-    let request_id = format!("hreq:{}:{tool_call_id}", context.run_id);
+    // The exact unresolved execution an uncertain reissue asks about; an
+    // answer is bound to this generation (it is part of the hashed
+    // envelope AND of the request identity), so answering an older
+    // uncertainty can never authorize a newer one — nor collide with it.
+    let uncertainty = approvable
+        .iter()
+        .find_map(|ask| ask.uncertainty_generation.clone());
+    let request_id = match &uncertainty {
+        Some(generation) => format!("hreq:{}:{tool_call_id}:{generation}", context.run_id),
+        None => format!("hreq:{}:{tool_call_id}", context.run_id),
+    };
     let prompt = approvable
         .iter()
         .find_map(|ask| ask.preview.clone())
         .unwrap_or_else(|| format!("Approve {}?", definition.name));
     let requested_mode = approvable.iter().find_map(|ask| ask.requested_mode.clone());
-    // The exact unresolved execution an uncertain reissue asks about; an
-    // answer is bound to this generation (it is part of the hashed
-    // envelope), so answering an older uncertainty can never authorize a
-    // newer one.
-    let uncertainty = approvable
-        .iter()
-        .find_map(|ask| ask.uncertainty_generation.clone());
     let mut content = serde_json::Map::new();
     content.insert("prompt".into(), prompt.clone().into());
     content.insert("toolName".into(), definition.name.clone().into());
