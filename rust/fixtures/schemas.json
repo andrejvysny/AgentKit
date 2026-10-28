@@ -1516,6 +1516,9 @@
               "model": {
                 "type": "string"
               },
+              "providerId": {
+                "type": "string"
+              },
               "toolCount": {
                 "type": "number"
               }
@@ -2168,6 +2171,9 @@
               },
               "promptTokens": {
                 "type": "number"
+              },
+              "providerId": {
+                "type": "string"
               },
               "reasoningTokens": {
                 "type": "number"
@@ -3121,6 +3127,9 @@
           "model": {
             "type": "string"
           },
+          "providerId": {
+            "type": "string"
+          },
           "toolCount": {
             "type": "number"
           }
@@ -3518,6 +3527,9 @@
           },
           "promptTokens": {
             "type": "number"
+          },
+          "providerId": {
+            "type": "string"
           },
           "reasoningTokens": {
             "type": "number"
@@ -6698,6 +6710,9 @@
               "model": {
                 "type": "string"
               },
+              "providerId": {
+                "type": "string"
+              },
               "toolCount": {
                 "type": "number"
               }
@@ -7350,6 +7365,9 @@
               },
               "promptTokens": {
                 "type": "number"
+              },
+              "providerId": {
+                "type": "string"
               },
               "reasoningTokens": {
                 "type": "number"

@@ -73,6 +73,11 @@ export const AiRunStartedEventSchema = Type.Object({
   data: Type.Object({
     model: Type.String(),
     toolCount: Type.Number(),
+    /**
+     * The provider that answered, when the client knows its own identity.
+     * Set only when the client stamps it; absent means unknown.
+     */
+    providerId: Type.Optional(Type.String()),
   }),
 });
 export type AiRunStartedEvent = Static<typeof AiRunStartedEventSchema>;
@@ -383,6 +388,8 @@ export const AiRunUsageEventSchema = Type.Object({
     attempt: Type.Number(),
     step: Type.Number(),
     model: Type.String(),
+    /** The provider that produced this usage, when the client stamps it. */
+    providerId: Type.Optional(Type.String()),
     promptTokens: Type.Optional(Type.Number()),
     completionTokens: Type.Optional(Type.Number()),
     totalTokens: Type.Optional(Type.Number()),
