@@ -27,11 +27,12 @@ pub mod process_tree;
 pub mod sandbox;
 pub mod search;
 pub mod search_tools;
-pub mod session_authority;
 pub mod truncate;
 pub mod types;
 pub mod version_ledger;
 
+pub use agentkit_core::permission::PLAN_MODE_BLOCKED_HINT;
+pub use agentkit_host::SessionExecutionAuthority;
 pub use args::{as_record, opt_bool, opt_int, opt_string, req_string};
 pub use command_policy::{
     CommandClass, HighRiskCommandGuard, ShellArgs, classify_shell_command,
@@ -60,9 +61,7 @@ pub use errors::{
 pub use fs_util::{
     atomic_write, create_if_absent, decode_utf8, looks_binary, read_regular_file, sha256,
 };
-pub use guard::{
-    CODING_NAMESPACE, CodingPermissionGuard, CodingPermissionGuardOptions, PLAN_MODE_BLOCKED_HINT,
-};
+pub use guard::{CODING_NAMESPACE, CodingPermissionGuard, CodingPermissionGuardOptions};
 pub use limits::{CodingLimits, CodingLimitsOverride};
 pub use mutation_queue::with_file_mutation_queue;
 pub use pack::{CODING_TOOL_NAMES, CodingToolPack, create_coding_tool_pack};
@@ -80,7 +79,6 @@ pub use sandbox::{
     SANDBOX_EXEC, SandboxEnvironment, SandboxPolicy, sandbox_available, sandbox_profile,
     toolchain_paths,
 };
-pub use session_authority::SessionExecutionAuthority;
 pub use truncate::{
     TruncatedBy, Truncation, TruncationLimits, format_size, split_lines, truncate_head,
     truncate_tail,

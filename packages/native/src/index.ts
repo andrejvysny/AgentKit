@@ -157,6 +157,20 @@ class CallbackRouter {
   private provider: ProviderFunction | null = null;
   private tools = new Map<string, RegisteredTool>();
   private closed = false;
+  /**
+   * Dispatched callbacks whose user function has not settled yet. The
+   * Rust bridge CANNOT carry this count: `Closing` drains its pending map
+   * (rejecting the Rust-side waiter) while the user promise may still be
+   * running outside the runtime. This counter spans exactly the window
+   * the runtime cannot control — from entering the user function until
+   * its promise settles — and survives `close()`, because that is when
+   * the distinction matters.
+   */
+  private inFlight = 0;
+
+  get pendingEffects(): number {
+    return this.inFlight;
+  }
 
   setProvider(provider: ProviderFunction | null): void {
     this.provider = provider;
@@ -198,9 +212,11 @@ class CallbackRouter {
           );
           return;
         }
-        const result = await provider(envelope.request as ProviderRequest);
-        resolveCall(callId, JSON.stringify(result ?? {}), null);
-        return;
+        const outcome = await this.dispatchUser(async () => {
+          const result = await provider(envelope.request as ProviderRequest);
+          resolveCall(callId, JSON.stringify(result ?? {}), null);
+        });
+        return outcome;
       }
       if (envelope.kind === "tool") {
         const request = envelope.request as ToolCallRequest;
@@ -209,8 +225,10 @@ class CallbackRouter {
           resolveCall(callId, null, `no JS tool named ${request?.name}`);
           return;
         }
-        const outcome = await tool.run(request.input, request);
-        resolveCall(callId, JSON.stringify(outcome ?? {}), null);
+        await this.dispatchUser(async () => {
+          const outcome = await tool.run(request.input, request);
+          resolveCall(callId, JSON.stringify(outcome ?? {}), null);
+        });
         return;
       }
       resolveCall(callId, null, `unknown callback kind`);
@@ -220,6 +238,19 @@ class CallbackRouter {
         null,
         error instanceof Error ? error.message : String(error),
       );
+    }
+  }
+
+  /** One entry into USER code and its settlement — the only window the
+   * runtime cannot control, counted for `pendingEffects`. Errors pass
+   * through to the caller's rejection handling; the counter always
+   * settles. */
+  private async dispatchUser(run: () => Promise<void>): Promise<void> {
+    this.inFlight += 1;
+    try {
+      await run();
+    } finally {
+      this.inFlight -= 1;
     }
   }
 }
@@ -536,7 +567,14 @@ export class NativeSessionService {
    * dispatched, outstanding ones settle honestly, and the worker drain is
    * awaited up to `closeTimeoutMs`. Idempotent, and concurrent callers all
    * await the same completion. Closing releases the store clone so the
-   * store can then be closed. */
+   * store can then be closed.
+   *
+   * SCOPE: `close()` stops the RUNTIME. It does not promise that external
+   * effects started by an already-dispatched JS callback have stopped —
+   * those continue outside the runtime, which only guarantees it never
+   * fabricates their outcome (the durable receipt stays admitted-without-
+   * result). `pendingCallbacks` is the observability for that gap; do not
+   * treat `close()` alone as quiescing external effects. */
   async close(): Promise<void> {
     const started = this.closing;
     if (started) return started;
@@ -560,8 +598,20 @@ export class NativeSessionService {
 
   /** True when the last `close()` completed without establishing that
    * owned execution had drained. Durable state stays authoritative; this
-   * only records what close could not prove. */
+   * only records what close could not prove. It describes WORKER DRAIN
+   * only — never quiescence of external JS effects. */
   get closeUncertain(): boolean {
     return this.raw.closeUncertain === true;
+  }
+
+  /** Dispatched JS callbacks whose settlement has not arrived. After
+   * `close()` this counts callbacks already handed to JS whose promises
+   * are still unsettled — the observable count of external effects the
+   * runtime cannot promise stopped. Zero means every dispatched call
+   * settled (or was never dispatched). Counts USER-code windows: a call
+   * still queued in the bridge but not yet entered is not an external
+   * effect (Closing rejects it without running it). */
+  get pendingCallbacks(): number {
+    return this.router.pendingEffects;
   }
 }

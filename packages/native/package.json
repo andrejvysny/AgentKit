@@ -31,7 +31,9 @@
   "files": [
     "dist",
     "src",
-    "generated",
+    "generated/index.js",
+    "generated/index.d.ts",
+    "generated/*.node",
     "error-codes.json",
     "README.md"
   ],

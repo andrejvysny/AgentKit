@@ -16,7 +16,6 @@ agentkit-store = { path = "../store", version = "0.1.0" }
 agentkit-host = { path = "../host", version = "0.1.0" }
 agentkit-core = { path = "../core", version = "0.1.0" }
 agentkit-contracts = { path = "../contracts", version = "0.1.0" }
-agentkit-toolpacks-coding = { path = "../toolpacks-coding", version = "0.1.0" }
 napi = { version = "=3.15.0", default-features = false, features = ["napi9", "async", "tokio_rt"] }
 napi-derive = { version = "=3.6.13", default-features = false, features = ["strict", "type-def"] }
 serde.workspace = true

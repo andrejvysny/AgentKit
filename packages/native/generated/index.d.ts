@@ -85,12 +85,27 @@ export declare class SessionService {
    * within `closeTimeoutMs`, close still completes and `closeUncertain`
    * reports that cleanup could not be established. Idempotent;
    * concurrent callers await the same completion.
+   *
+   * SHUTDOWN SCOPE — what `close()` does and does not promise:
+   * * It stops the runtime: no new dispatch, no new runs, worker drained
+   *   (or `closeUncertain` records the unproven drain).
+   * * It does NOT quiesce external effects a dispatched JS callback
+   *   already started. A callback handed to JS before Closing may
+   *   continue acting after `close()` resolves; the runtime only
+   *   guarantees it never fabricates that effect's outcome — the durable
+   *   receipt stays admitted-without-result and recovery treats it as
+   *   uncertain. Use the JS wrapper's `pendingCallbacks` to observe
+   *   dispatched, unsettled callbacks before relying on any stronger
+   *   shutdown claim.
    */
   close(): Promise<void>
   /**
    * True when a `close()` completed without establishing that owned
    * execution had drained (the worker deadline expired). Durable state
    * stays authoritative; this flag records what close could not prove.
+   * It describes WORKER DRAIN only — it never claims external JS effects
+   * stopped; the JS wrapper's `pendingCallbacks` is the observability
+   * for dispatched, unsettled callbacks.
    */
   get closeUncertain(): boolean
 }

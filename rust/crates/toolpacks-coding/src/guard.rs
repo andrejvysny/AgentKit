@@ -18,61 +18,16 @@ use serde_json::Value;
 use agentkit_host::{ApprovalAsk, HostResult, ToolGuard, ToolGuardContext, ToolGuardVerdict};
 use async_trait::async_trait;
 
-use crate::plan_tool::{SUBMIT_PLAN_CAPABILITY, SUBMIT_PLAN_TOOL_NAME};
+use agentkit_core::permission::{
+    BlockedFinal, PLAN_MODE_BLOCKED_HINT, PermissionDecision, classify_capability, decide,
+    role_ceiling_allows,
+};
+
+use crate::plan_tool::SUBMIT_PLAN_TOOL_NAME;
 use crate::types::{CodingMode, CodingPermissionAuthority, CodingRole, PermissionContext};
 
 /// The namespace the coding contributor registers under.
 pub const CODING_NAMESPACE: &str = "coding";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ToolClass {
-    Read,
-    Write,
-    Exec,
-}
-
-impl ToolClass {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Read => "read",
-            Self::Write => "write",
-            Self::Exec => "exec",
-        }
-    }
-}
-
-fn class_by_capability(capability: &str) -> Option<ToolClass> {
-    Some(match capability {
-        "fs.read" => ToolClass::Read,
-        "git.read" => ToolClass::Read,
-        "fs.write" => ToolClass::Write,
-        "process.exec" => ToolClass::Exec,
-        // `submit_plan` has no side effects; its whole effect is the human
-        // decision.
-        SUBMIT_PLAN_CAPABILITY => ToolClass::Read,
-        _ => return None,
-    })
-}
-
-fn role_ceiling(role: CodingRole) -> &'static [ToolClass] {
-    match role {
-        CodingRole::Supervisor => &[ToolClass::Read],
-        CodingRole::Reviewer => &[ToolClass::Read, ToolClass::Exec],
-        CodingRole::Implementer => &[ToolClass::Read, ToolClass::Write, ToolClass::Exec],
-    }
-}
-
-fn mode_allows(mode: CodingMode) -> &'static [ToolClass] {
-    match mode {
-        CodingMode::ReadOnly | CodingMode::Ask | CodingMode::Plan => &[ToolClass::Read],
-        CodingMode::AutoEdit => &[ToolClass::Read, ToolClass::Write],
-        CodingMode::FullAuto => &[ToolClass::Read, ToolClass::Write, ToolClass::Exec],
-    }
-}
-
-/// What the model is told when plan mode blocks it: the way out, by name.
-pub const PLAN_MODE_BLOCKED_HINT: &str =
-    "plan mode: propose the change with submit_plan and wait for the user to approve it.";
 
 pub struct CodingPermissionGuardOptions {
     /// The mode to use when the session's own authority states none.
@@ -124,7 +79,7 @@ impl ToolGuard for CodingPermissionGuard {
             return Ok(ToolGuardVerdict::Allowed);
         }
         let name = context.tool.name.clone();
-        let Some(tool_class) = class_by_capability(&context.tool.capability) else {
+        let Some(tool_class) = classify_capability(&context.tool.capability) else {
             return Ok(ToolGuardVerdict::Refused(format!(
                 "unknown_capability: {} ({})",
                 name, context.tool.capability
@@ -138,7 +93,7 @@ impl ToolGuard for CodingPermissionGuard {
             Some(authority) => authority.role_of(&chat).await?.unwrap_or(self.default_role),
             None => self.default_role,
         };
-        if !role_ceiling(role).contains(&tool_class) {
+        if !role_ceiling_allows(role, tool_class) {
             return Ok(ToolGuardVerdict::Refused(format!(
                 "role_ceiling: {} may not use {} tools ({})",
                 role.as_str(),
@@ -153,39 +108,38 @@ impl ToolGuard for CodingPermissionGuard {
                 .unwrap_or(self.configured_mode),
             None => self.configured_mode,
         };
-        if mode == CodingMode::Plan {
-            if tool_class == ToolClass::Read {
-                // Reads run free; only the plan submission itself needs the
-                // human.
-                if self.plan_tools.iter().any(|plan| plan == &name) {
-                    return Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
-                        reason: format!("plan_approval_required: {name}"),
-                        preview: plan_preview(context.arguments.as_ref()),
-                        requested_mode: plan_requested_mode(context.arguments.as_ref()),
-                        uncertainty_generation: None,
-                    }));
-                }
-                return Ok(ToolGuardVerdict::Allowed);
+        match decide(
+            mode,
+            tool_class,
+            self.plan_tools.iter().any(|plan| plan == &name),
+        ) {
+            PermissionDecision::Allowed => Ok(ToolGuardVerdict::Allowed),
+            PermissionDecision::PlanApprovalRequired => {
+                Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
+                    reason: format!("plan_approval_required: {name}"),
+                    preview: plan_preview(context.arguments.as_ref()),
+                    requested_mode: plan_requested_mode(context.arguments.as_ref()),
+                    uncertainty_generation: None,
+                }))
             }
-            return Ok(ToolGuardVerdict::Refused(format!(
-                "{PLAN_MODE_BLOCKED_HINT} ({name} is a {} tool)",
-                tool_class.as_str()
-            )));
+            PermissionDecision::BlockedFinal(BlockedFinal::PlanMode { tool_class }) => {
+                Ok(ToolGuardVerdict::Refused(format!(
+                    "{PLAN_MODE_BLOCKED_HINT} ({name} is a {} tool)",
+                    tool_class.as_str()
+                )))
+            }
+            PermissionDecision::BlockedFinal(BlockedFinal::ReadOnly) => Ok(
+                ToolGuardVerdict::Refused(format!("read_only: {name} is not allowed")),
+            ),
+            PermissionDecision::ApprovalRequired => {
+                Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
+                    reason: format!("approval_required: {name}"),
+                    preview: None,
+                    requested_mode: None,
+                    uncertainty_generation: None,
+                }))
+            }
         }
-        if mode_allows(mode).contains(&tool_class) {
-            return Ok(ToolGuardVerdict::Allowed);
-        }
-        if mode == CodingMode::ReadOnly {
-            return Ok(ToolGuardVerdict::Refused(format!(
-                "read_only: {name} is not allowed"
-            )));
-        }
-        Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
-            reason: format!("approval_required: {name}"),
-            preview: None,
-            requested_mode: None,
-            uncertainty_generation: None,
-        }))
     }
 }
 
@@ -381,7 +335,12 @@ mod tests {
                 .starts_with("plan mode:")
         );
         assert_eq!(
-            verdict(&guard, SUBMIT_PLAN_CAPABILITY, SUBMIT_PLAN_TOOL_NAME).await,
+            verdict(
+                &guard,
+                crate::plan_tool::SUBMIT_PLAN_CAPABILITY,
+                SUBMIT_PLAN_TOOL_NAME,
+            )
+            .await,
             "plan_approval_required: submit_plan"
         );
     }

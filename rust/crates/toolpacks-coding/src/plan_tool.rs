@@ -24,7 +24,7 @@ use crate::types::CodingPermissionAuthority;
 pub const SUBMIT_PLAN_TOOL_NAME: &str = "submit_plan";
 
 /// The capability `submit_plan` declares; the guard classes it as a read.
-pub const SUBMIT_PLAN_CAPABILITY: &str = "plan";
+pub const SUBMIT_PLAN_CAPABILITY: &str = agentkit_core::permission::PLAN_CAPABILITY;
 
 const MAX_PLAN_CHARS: usize = 16_000;
 
