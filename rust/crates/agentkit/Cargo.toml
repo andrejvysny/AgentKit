@@ -15,6 +15,7 @@ durable = ["runtime", "dep:agentkit-host", "dep:agentkit-store"]
 client = ["dep:agentkit-client"]
 http = ["durable", "dep:agentkit-transport-http", "agentkit-host/http"]
 mcp = ["dep:agentkit-mcp"]
+coding = ["durable", "dep:agentkit-toolpacks-coding"]
 keychain = ["runtime", "agentkit-connections/os-keychain"]
 
 [dependencies]
@@ -26,3 +27,4 @@ agentkit-store = { path = "../store", version = "0.1.0", optional = true }
 agentkit-client = { path = "../client", version = "0.1.0", optional = true }
 agentkit-transport-http = { path = "../transport-http", version = "0.1.0", optional = true }
 agentkit-mcp = { path = "../mcp", version = "0.1.0", optional = true }
+agentkit-toolpacks-coding = { path = "../toolpacks-coding", version = "0.1.0", optional = true }

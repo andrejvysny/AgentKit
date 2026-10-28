@@ -23,6 +23,12 @@ is vendored.
 repository, path and commit, plus the upstream copyright line. Nothing was copied wholesale; each file is a
 selective, TypeScript-strict rewrite. Neither upstream repository was modified.
 
+`rust/crates/toolpacks-coding` is a Rust port of `packages/toolpacks-coding` and therefore inherits these
+adaptations transitively: its `edit_engine.rs`/`truncate.rs` descend from the Pi-derived files, and
+`paths.rs`/`search.rs`/`sandbox.rs`/`guard.rs` (role-ceiling table) from the OneMind-derived files listed
+below. No upstream was vendored; each Rust module rewrites its TypeScript source, which carries the upstream
+headers.
+
 ### Pi (`earendil-works/pi`, v1.4.0, commit `4a080252f06caf63a525d7873c5d94d3c23887e0`; Copyright (c) 2025 Mario Zechner; MIT)
 
 | AgentKit file | Upstream path |

@@ -219,6 +219,54 @@ async fn guard_visibility_and_runtime_revocation_preserve_guard_envelope() {
 }
 
 #[tokio::test]
+async fn guards_receive_the_live_call_arguments() {
+    use std::sync::Mutex;
+    struct ArgumentGuard {
+        seen: Mutex<Vec<Option<Value>>>,
+    }
+    #[async_trait]
+    impl ToolGuard for ArgumentGuard {
+        async fn can_execute(&self, context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+            self.seen.lock().unwrap().push(context.arguments.clone());
+            let blocked = context
+                .arguments
+                .as_ref()
+                .and_then(|arguments| arguments.get("block"))
+                .and_then(Value::as_bool)
+                == Some(true);
+            Ok(if blocked {
+                ToolGuardVerdict::Refused("blocked by arguments".into())
+            } else {
+                ToolGuardVerdict::Allowed
+            })
+        }
+    }
+    let calls = Arc::new(AtomicUsize::new(0));
+    let contributor: Arc<dyn ToolContributor> =
+        Arc::new(contributor("document", vec![read("read_document", &calls)]));
+    let guard = Arc::new(ArgumentGuard {
+        seen: Mutex::new(vec![]),
+    });
+    let guards: Vec<Arc<dyn ToolGuard>> = vec![guard.clone()];
+    let staged = stage_tools(&[contributor], &guards, contribution())
+        .await
+        .unwrap();
+    let tool = staged.registry.get("read_document").unwrap();
+
+    let first = json!({ "block": false, "n": 1 });
+    assert!(tool.execute(context(), first.clone()).await.unwrap().ok);
+    let second = json!({ "block": true, "n": 2 });
+    let refused = tool.execute(context(), second.clone()).await.unwrap();
+    assert!(!refused.ok);
+    assert_eq!(refused.summary.as_deref(), Some("blocked by arguments"));
+    // Each `canExecute` saw ITS OWN call's arguments, in call order.
+    let seen = guard.seen.lock().unwrap();
+    assert_eq!(seen.as_slice(), &[Some(first), Some(second)]);
+    drop(seen);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn thrown_guard_errors_and_context_mismatch_never_dispatch_tool() {
     let calls = Arc::new(AtomicUsize::new(0));
     let contributor: Arc<dyn ToolContributor> =

@@ -1,0 +1,28 @@
+[package]
+name = "agentkit-toolpacks-coding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Confined coding tool pack for AgentKit: filesystem read/search/edit, read-only git, sandboxed commands"
+repository = "https://github.com/andrejvysny/AgentKit"
+
+[dependencies]
+agentkit-contracts = { path = "../contracts", version = "0.1.0" }
+agentkit-core = { path = "../core", version = "0.1.0" }
+agentkit-host = { path = "../host", version = "0.1.0" }
+async-trait.workspace = true
+futures.workspace = true
+libc = "0.2"
+regex = "=1.13.1"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "process"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+unicode-normalization = "=0.1.26"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
