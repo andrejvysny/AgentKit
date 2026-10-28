@@ -1,10 +1,14 @@
 import { appendFileSync } from "node:fs";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+// Resolved through the repo-root workspace install: the SDK v1 is pinned as
+// the `mcp-sdk-v1` alias (see packages/mcp-client/package.json), the same way
+// packages/mcp-client/tests/fixtures/mcp-peer.mjs imports it. `@modelcontextprotocol/sdk`
+// itself is no longer installed under its own name.
+import { Server } from "mcp-sdk-v1/server/index.js";
+import { StdioServerTransport } from "mcp-sdk-v1/server/stdio.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "mcp-sdk-v1/types.js";
 
 const server = new Server(
   { name: "agentkit-native-fixture", version: "1" },
