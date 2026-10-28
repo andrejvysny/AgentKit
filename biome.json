@@ -68,6 +68,11 @@
       "formatter": { "enabled": false }
     },
     {
+      "includes": ["packages/native/generated/**"],
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false }
+    },
+    {
       "includes": [
         "packages/mcp-client/tests/**",
         "packages/testing/src/mcp-config-conformance.ts",

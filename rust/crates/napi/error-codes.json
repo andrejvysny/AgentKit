@@ -1,0 +1,29 @@
+{
+  "$comment": "Single-source error-code contract for the native binding. Both the Rust tests (crates/napi) and the TS tests (packages/native) read this file; the binding must surface exactly these stable codes and never leak Rust debug formatting as behavior. Unknown internal failures map to internal_error with a redacted message.",
+  "codes": [
+    "already_owned",
+    "answer_conflict",
+    "callback_rejected",
+    "chat_busy",
+    "closed",
+    "foreign_database",
+    "input_conflict",
+    "internal_error",
+    "invalid_handle",
+    "invalid_input",
+    "invalid_state",
+    "not_a_directory",
+    "not_found",
+    "not_implemented",
+    "recovery_unreadable",
+    "session_not_found",
+    "shell_isolation_unavailable",
+    "spawn_failed",
+    "store_closed",
+    "subscription_overflow",
+    "unsupported_field",
+    "unsupported_version",
+    "workspace_busy",
+    "workspace_quarantined"
+  ]
+}
