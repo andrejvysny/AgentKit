@@ -6,9 +6,9 @@ import {
   type ExecutionIntent,
   type ExecutionLease,
 } from "./coordination.js";
-import { processStart } from "./coordination-record.js";
 import { CodingError } from "./errors.js";
 import { runBounded, type RunResult, type RunSpec } from "./process.js";
+import type { ProcessDiscovery } from "./process-identity.js";
 
 interface CommandLabel {
   tool: string;
@@ -33,7 +33,20 @@ async function acquireCommandLease(
     signal: ctx.signal,
     maxWaitMs: env.coordinationWaitMs,
   });
-  if (isExecutionLease(lease)) return lease;
+  if (isExecutionLease(lease)) {
+    try {
+      const revalidate = ctx.metadata?.["revalidateExecutionAuthorization"];
+      if (typeof revalidate === "function" && (await revalidate()) !== true)
+        throw new Error("authorization changed");
+      return lease;
+    } catch {
+      await lease.release();
+      throw new CodingError(
+        "approval_context_changed",
+        "Command authorization changed while waiting for workspace access; approve the updated command context.",
+      );
+    }
+  }
   await lease.release();
   throw new CodingError(
     "durable_coordination_required",
@@ -47,16 +60,31 @@ async function executeCommand(
   spec: RunSpec,
 ): Promise<RunResult> {
   await lease.beginExecution(intent);
+  let persistence = Promise.resolve();
+  const persist = (write: () => Promise<void>): Promise<void> => {
+    persistence = persistence.then(write);
+    return persistence;
+  };
   return runBounded({
     ...spec,
     execId: intent.execId,
-    onSpawn: async (pid) => {
-      const started = await processStart(pid);
-      await lease.spawned({
-        pid,
-        ...(started ? { processStart: started } : {}),
-      });
-    },
+    onSpawn: (pid, identity, guardianProtocol) =>
+      persist(() =>
+        lease.spawned({
+          pid,
+          ...(identity ? { startIdentity: identity.startIdentity } : {}),
+          ...(guardianProtocol ? { guardianProtocol } : {}),
+        }),
+      ),
+    onDiscovery: (discovery: ProcessDiscovery & { closed?: boolean }) =>
+      persist(async () => {
+        await lease.observed?.(
+          discovery.identities,
+          discovery.complete,
+          discovery.closed,
+          discovery.sealed,
+        );
+      }),
   });
 }
 

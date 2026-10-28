@@ -9,19 +9,50 @@ import {
   type ToolSetContributor,
 } from "../src/index.js";
 import { sessionWithAdmittedContext } from "../src/sessions/admitted-context.js";
+import { boundedContextClient } from "../src/context/bounded-context-client.js";
 import { FakeAgentInputStore, createHarness } from "./fakes.js";
 
 class Provider extends MockProviderClient {
   calls = 0;
+  requests: AiChatRequest[] = [];
+  constructor(readonly maxOutputTokens?: number) {
+    super();
+  }
   override streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
     this.calls += 1;
+    this.requests.push(input);
     return super.streamChat(input);
   }
 }
 
+it("bounds the output ceiling by the admitted reserve at the provider boundary", async () => {
+  const f = await fixture({ windowTokens: 4096, reserveTokens: 1024 });
+  const id = await send(f, "first");
+  const task = await f.store.tasks.getTask(id);
+  if (!task) throw new Error("Missing turn");
+  const client = await boundedContextClient(f.mock, {
+    ...f,
+    task,
+    chatId: "s",
+    providerId: "p",
+    model: "m",
+    attemptId: "output-attempt",
+  });
+  f.mock.setScript([{ steps: [{ kind: "text", content: "answer" }] }]);
+  for await (const _event of client.streamChat({
+    runId: id,
+    model: "m",
+    messages: [{ role: "user", content: "x".repeat(8192) }],
+    maxOutputTokens: 4096,
+  })) {
+  }
+  expect(f.mock.requests[0]?.maxOutputTokens).toBe(1024);
+});
+
 async function fixture(
   context?: { windowTokens: number; reserveTokens?: number },
   contributors: ToolSetContributor[] = [],
+  maxOutputTokens?: number,
 ) {
   const h = createHarness();
   h.store.inputs = new FakeAgentInputStore(h.clock);
@@ -33,7 +64,7 @@ async function fixture(
     defaultModel: "m",
     enabled: true,
   });
-  const mock = new Provider();
+  const mock = new Provider(maxOutputTokens);
   const runner = new TurnRunner({
     ...h,
     providerFactory: () => mock,
@@ -50,6 +81,113 @@ async function fixture(
   });
   return { ...h, runner, mock, service };
 }
+
+async function outputClient(f: Awaited<ReturnType<typeof fixture>>) {
+  const id = await send(f, "first");
+  const task = await f.store.tasks.getTask(id);
+  if (!task) throw new Error("Missing turn");
+  const client = await boundedContextClient(f.mock, {
+    ...f,
+    task,
+    chatId: "s",
+    providerId: "p",
+    model: "m",
+    attemptId: "output-attempt",
+  });
+  f.mock.setScript([{ steps: [{ kind: "text", content: "answer" }] }]);
+  return {
+    client,
+    request: {
+      runId: id,
+      model: "m",
+      messages: [{ role: "user" as const, content: "short" }],
+    },
+  };
+}
+
+it.each([undefined, 128, 1024, 4096])(
+  "forwards explicit output limits and matching diagnostics for requested %s",
+  async (requested) => {
+    const f = await fixture({ windowTokens: 4096, reserveTokens: 1024 });
+    const { client, request } = await outputClient(f);
+    const events = [];
+    for await (const event of client.streamChat({
+      ...request,
+      ...(requested === undefined ? {} : { maxOutputTokens: requested }),
+    }))
+      events.push(event);
+    const expected = Math.min(requested ?? 1024, 1024);
+    expect(f.mock.requests[0]?.maxOutputTokens).toBe(expected);
+    expect(
+      events.find((event) => event.type === "run.context.admitted"),
+    ).toMatchObject({
+      data: { reserveTokens: 1024, maxOutputTokens: expected },
+    });
+  },
+);
+
+it.each([0, -1, NaN, Infinity, 1.5])(
+  "refuses invalid explicit output limit %s without dispatch",
+  async (maxOutputTokens) => {
+    const f = await fixture({ windowTokens: 4096, reserveTokens: 1024 });
+    const { client, request } = await outputClient(f);
+    const events = [];
+    for await (const event of client.streamChat({
+      ...request,
+      maxOutputTokens,
+    }))
+      events.push(event);
+    expect(f.mock.calls).toBe(0);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "run.failed",
+        data: {
+          errorCode: "invalid_max_output_tokens",
+          errorMessage: expect.any(String),
+        },
+      }),
+    );
+  },
+);
+
+it("includes the client's immutable output ceiling in admission and rejects an invalid client ceiling", async () => {
+  for (const ceiling of [64, 0]) {
+    const f = await fixture(
+      { windowTokens: 4096, reserveTokens: 1024 },
+      [],
+      ceiling,
+    );
+    const { client, request } = await outputClient(f);
+    const events = [];
+    for await (const event of client.streamChat({
+      ...request,
+      maxOutputTokens: 4096,
+    }))
+      events.push(event);
+    expect(client.maxOutputTokens).toBe(ceiling);
+    expect(f.mock.calls).toBe(ceiling === 0 ? 0 : 1);
+    if (ceiling > 0)
+      expect(
+        events.find((event) => event.type === "run.context.admitted"),
+      ).toMatchObject({ data: { maxOutputTokens: ceiling } });
+  }
+});
+
+it("sets a positive ceiling for a two-token window and refuses a window with no reply budget", async () => {
+  for (const windowTokens of [2, 1]) {
+    const f = await fixture({ windowTokens, reserveTokens: 1 });
+    const { client, request } = await outputClient(f);
+    const events = [];
+    for await (const event of client.streamChat({ ...request, messages: [] }))
+      events.push(event);
+    expect(f.mock.calls).toBe(windowTokens === 2 ? 1 : 0);
+    if (windowTokens === 2) expect(f.mock.requests[0]?.maxOutputTokens).toBe(1);
+    else
+      expect(events.find((event) => event.type === "run.failed")).toMatchObject(
+        { data: { errorCode: "context_overflow" } },
+      );
+  }
+});
 
 async function send(
   f: Awaited<ReturnType<typeof fixture>>,
@@ -293,6 +431,9 @@ it("bounds post-tool requests, preserves request sequencing and accepts a later 
   const next = await send(f, "short follow-up", "next");
   await drive(f, next);
   expect(f.mock.calls).toBe(2);
+  expect(
+    f.mock.requests.every((request) => request.maxOutputTokens === 1500),
+  ).toBe(true);
   expect((await f.store.tasks.getTask(next))?.status).toBe("completed");
   expect(await f.service.getUsage("s")).toMatchObject({
     contextTurnId: next,

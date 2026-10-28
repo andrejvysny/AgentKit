@@ -10,6 +10,11 @@ import {
   resolve,
 } from "node:path";
 import { sanitizedEnv } from "./exec-tools.js";
+import { executableName, shellWords } from "./command-words.js";
+import {
+  directScriptFiles,
+  leadingExecutable,
+} from "./command-script-inputs.js";
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
@@ -208,7 +213,11 @@ async function boundedContents(
   }
 }
 
-async function bindFile(path: string, state: FingerprintFiles): Promise<void> {
+async function bindFile(
+  path: string,
+  state: FingerprintFiles,
+  required = false,
+): Promise<void> {
   try {
     const canonical = await realpath(path);
     const info = await stat(canonical);
@@ -234,6 +243,7 @@ async function bindFile(path: string, state: FingerprintFiles): Promise<void> {
       createHash("sha256").update(contents).digest("hex"),
     ]);
   } catch (error) {
+    if (required) throw error;
     if (!isAbsent(error)) throw error;
     // Missing metadata is covered too: its later appearance changes the key.
     if (
@@ -245,6 +255,18 @@ async function bindFile(path: string, state: FingerprintFiles): Promise<void> {
       throw error;
     state.entries.push([path, null]);
   }
+}
+
+async function bindDirectFile(
+  root: string,
+  path: string,
+  state: FingerprintFiles,
+): Promise<void> {
+  const canonical = await realpath(path);
+  const inside = relative(root, canonical);
+  if (isAbsolute(inside) || inside === ".." || inside.startsWith("../"))
+    throw new Error("direct command input outside workspace");
+  await bindFile(path, state, true);
 }
 
 async function bindMetadata(
@@ -279,19 +301,15 @@ async function bindScriptEntrypoints(
     for (const name of [script, `pre${script}`, `post${script}`]) {
       const command = scripts?.[name];
       if (typeof command !== "string") continue;
-      for (const word of command.split(/[\s"';|&]+/)) {
-        if (!/^[\w./-]+\.(?:[cm]?[jt]s|py|sh|rb|pl)$/.test(word)) continue;
-        const path = resolve(dir, word);
-        const inside = relative(root, path);
-        if (isAbsolute(inside) || inside === ".." || inside.startsWith("../"))
-          throw new Error("script entrypoint outside workspace");
-        await bindFile(path, state);
-      }
+      for (const word of directScriptFiles(command))
+        await bindDirectFile(root, resolve(dir, word), state);
+      await bindExplicitConfigs(root, dir, shellWords(command), {}, state);
     }
   }
 }
 
 async function bindExplicitConfigs(
+  root: string,
   cwd: string,
   tokens: string[],
   env: NodeJS.ProcessEnv,
@@ -302,24 +320,51 @@ async function bindExplicitConfigs(
     "--project",
     "--manifest-path",
     "--modfile",
+    "--preload",
+    "--require",
+    "--import",
+    "--loader",
   ]);
-  if (tokens.includes("tsc")) flags.add("-p");
+  const typescript = leadingExecutable(tokens) === "tsc";
+  if (typescript) flags.add("-p");
   if (tokens.includes("pytest")) flags.add("-c");
+  if (tokens.some((token) => /^(node(js)?|bun)$/.test(executableName(token))))
+    flags.add("-r");
   for (const [index, token] of tokens.entries()) {
-    const [flag, attached] = token.split("=", 2);
+    const equal = token.indexOf("=");
+    const short = /^-[pcr].+/.test(token) && flags.has(token.slice(0, 2));
+    const flag = short
+      ? token.slice(0, 2)
+      : equal === -1
+        ? token
+        : token.slice(0, equal);
+    const attached = short
+      ? token.slice(2)
+      : equal === -1
+        ? undefined
+        : token.slice(equal + 1);
     if (!flags.has(flag!)) continue;
     const file = attached ?? tokens[index + 1];
-    if (file === undefined) throw new Error("missing runner configuration");
+    if (file === undefined || file === "" || file.startsWith("-"))
+      throw new Error("missing runner configuration");
     const path = resolve(cwd, file);
     const info = await stat(path);
-    await bindFile(
-      info.isDirectory() ? join(path, "tsconfig.json") : path,
+    const projectDirectory =
+      info.isDirectory() &&
+      typescript &&
+      (flag === "--project" || flag === "-p");
+    if (info.isDirectory() && !projectDirectory)
+      throw new Error("direct command input must be a file");
+    await bindDirectFile(
+      root,
+      projectDirectory ? join(path, "tsconfig.json") : path,
       state,
     );
   }
   for (const name of ["BASH_ENV", "ENV", "npm_config_userconfig"]) {
     const file = env[name];
-    if (file !== undefined) await bindFile(resolve(cwd, file), state);
+    if (file !== undefined)
+      await bindDirectFile(root, resolve(cwd, file), state);
   }
 }
 
@@ -358,7 +403,7 @@ export async function commandFingerprint(
   };
   await bindMetadata(dirs, state);
   await bindScriptEntrypoints(root, dirs, tokens, state);
-  await bindExplicitConfigs(cwd, tokens, env, state);
+  await bindExplicitConfigs(root, cwd, tokens, env, state);
   return createHash("sha256")
     .update(
       JSON.stringify({

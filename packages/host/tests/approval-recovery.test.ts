@@ -114,6 +114,9 @@ it("legacy .14 running-without-result stays uncertain after repark/restart", asy
   f.store.close();
   const raw = new Database(path);
   raw.exec("DROP TABLE tool_executions");
+  raw.exec(
+    "UPDATE task_events SET payload = json_remove(payload, '$.data.admissionProtocol') WHERE type = 'run.tool.running'",
+  );
   raw.close();
   f = await open(path, state);
   expect(await f.store.toolExecutions.listByRun(runId)).toEqual([]);

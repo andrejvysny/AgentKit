@@ -1,12 +1,13 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { link, readFile, stat, unlink } from "node:fs/promises";
+import { readFile, unlink } from "node:fs/promises";
 import { promisify } from "node:util";
 import type {
   ExecutionCleanup,
   ExecutionIntent,
   LeaseHolder,
 } from "./coordination.js";
+import { withRecordClaim } from "./coordination-claim.js";
+import { inspectProcess, type ProcessIdentity } from "./process-identity.js";
 
 const runPs = promisify(execFile);
 
@@ -15,12 +16,24 @@ export interface LockRecord {
   pid: number;
   /** `ps -o lstart=` of the owner when it took the lock; absent if unknown. */
   processStart?: string;
+  startIdentity?: string;
   tool: string;
   /** sha256(label).slice(0, 12). */
   label: string;
   createdAt: number;
   execution?: ExecutionIntent & {
-    process?: { pid: number; processStart?: string };
+    process?: {
+      pid: number;
+      startIdentity?: string;
+      processStart?: string;
+      guardianProtocol?: "agentkit-command-guardian-v1";
+    };
+    discovery?: {
+      identities: ProcessIdentity[];
+      complete: boolean;
+      closed?: boolean;
+      sealed?: boolean;
+    };
     cleanup?: ExecutionCleanup;
   };
 }
@@ -47,10 +60,13 @@ function pidAlive(pid: number): boolean {
 const starts = new Map<number, { value: string | undefined; at: number }>();
 
 /** Process start time as printed by ps; undefined when it cannot be read. */
-export async function processStart(pid: number): Promise<string | undefined> {
+export async function processStart(
+  pid: number,
+  fresh = false,
+): Promise<string | undefined> {
   const cached = starts.get(pid);
   const ttl = pid === process.pid ? Number.POSITIVE_INFINITY : START_TTL_MS;
-  if (cached && Date.now() - cached.at < ttl) return cached.value;
+  if (!fresh && cached && Date.now() - cached.at < ttl) return cached.value;
   let value: string | undefined;
   try {
     const { stdout } = await runPs("ps", ["-o", "lstart=", "-p", String(pid)], {
@@ -68,16 +84,20 @@ async function isStale(record: LockRecord): Promise<boolean> {
   // A dead host says nothing about detached descendants or pre-spawn intent.
   if (record.execution && record.execution.cleanup?.state !== "stopped")
     return false;
-  if (!pidAlive(record.pid)) return true;
-  if (record.processStart === undefined) return false;
-  const now = await processStart(record.pid);
-  return now !== undefined && now !== record.processStart;
+  return ownerIsDead(record);
 }
 
 export async function ownerIsDead(record: LockRecord): Promise<boolean> {
+  if (record.startIdentity) {
+    const inspection = await inspectProcess({
+      pid: record.pid,
+      startIdentity: record.startIdentity,
+    });
+    return ["gone", "reused", "zombie"].includes(inspection.state);
+  }
   if (!pidAlive(record.pid)) return true;
   if (!record.processStart) return false;
-  const now = await processStart(record.pid);
+  const now = await processStart(record.pid, true);
   return now !== undefined && now !== record.processStart;
 }
 
@@ -99,13 +119,26 @@ const UNKNOWN: LockRecord = {
   createdAt: 0,
 };
 
+function validIdentity(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const identity = value as ProcessIdentity;
+  return (
+    Number.isSafeInteger(identity.pid) &&
+    identity.pid > 0 &&
+    typeof identity.startIdentity === "string" &&
+    identity.startIdentity.length > 0
+  );
+}
+
 function isRecord(value: unknown): value is LockRecord {
   if (typeof value !== "object" || value === null) return false;
   const record = value as LockRecord;
   if (
     !Number.isSafeInteger(record.pid) ||
     record.pid <= 0 ||
-    typeof record.tool !== "string"
+    typeof record.tool !== "string" ||
+    (record.startIdentity !== undefined &&
+      (typeof record.startIdentity !== "string" || !record.startIdentity))
   )
     return false;
   if (!("execution" in record)) return true;
@@ -117,6 +150,29 @@ function isRecord(value: unknown): value is LockRecord {
     typeof execution.executionAttemptId !== "string" ||
     !execution.executionAttemptId ||
     typeof execution.execId !== "string"
+  )
+    return false;
+  if (
+    execution.process &&
+    (!Number.isSafeInteger(execution.process.pid) ||
+      execution.process.pid <= 0 ||
+      (execution.process.startIdentity !== undefined &&
+        !validIdentity(execution.process)) ||
+      (execution.process.guardianProtocol !== undefined &&
+        execution.process.guardianProtocol !== "agentkit-command-guardian-v1"))
+  )
+    return false;
+  const discovery = execution.discovery;
+  if (
+    discovery &&
+    (!Array.isArray(discovery.identities) ||
+      !discovery.identities.every(validIdentity) ||
+      typeof discovery.complete !== "boolean" ||
+      (discovery.closed !== undefined &&
+        typeof discovery.closed !== "boolean") ||
+      (discovery.sealed !== undefined &&
+        typeof discovery.sealed !== "boolean") ||
+      ((discovery.closed || discovery.sealed) && !discovery.complete))
   )
     return false;
   if (!("cleanup" in execution)) return true;
@@ -158,47 +214,13 @@ export async function readRecord(
   }
 }
 
-/**
- * A permanent hard-link receipt elects exactly one reclaimer per record.
- * Stale readers can never unlink a newer marker or reopen a claimed generation.
- */
 async function reclaim(
   path: string,
   judged: LockRecord,
 ): Promise<LockRecord | undefined> {
-  const expected = JSON.stringify(judged);
-  const digest = createHash("sha256").update(expected).digest("hex");
-  const claim = `${path}.reclaimed-${digest}`;
-  try {
-    await link(path, claim);
-  } catch (error) {
-    if (code(error) === "ENOENT") return undefined;
-    if (code(error) === "EEXIST") {
-      const current = await readRecord(path);
-      return current === "gone"
-        ? undefined
-        : current === "corrupt"
-          ? UNKNOWN
-          : current;
-    }
-    throw error;
-  }
-  const [original, claimed, record] = await Promise.all([
-    stat(path).catch(() => undefined),
-    stat(claim),
-    readRecord(claim),
-  ]);
-  if (
-    original &&
-    original.ino === claimed.ino &&
-    original.dev === claimed.dev &&
-    record !== "gone" &&
-    record !== "corrupt" &&
-    JSON.stringify(record) === expected
-  ) {
-    await remove(path);
-    return undefined;
-  }
+  await withRecordClaim(path, judged, async () => {
+    if (await isStale(judged)) await remove(path);
+  });
   const current = await readRecord(path);
   return current === "gone"
     ? undefined

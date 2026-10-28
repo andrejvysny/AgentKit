@@ -47,7 +47,8 @@ cannot hide these literal words. `env -S`/`--split-string`, shell inline executi
 (`sh`/`bash`/`zsh`/`dash`/`ksh`/`fish` `-c`, including bundled flags), and supported
 interpreter evaluation forms require a fresh decision even for benign code.
 These include Python/PyPy `-c`, Node/Bun/Ruby/Perl/Lua `-e`, Node `-p`, PHP `-r`,
-Deno `eval`, PowerShell command/encoded-command, and awk programs.
+Deno `eval`, PowerShell command/encoded-command, and awk programs. Node stdin
+evaluation and supported Node/Bun data-URL startup imports also require approval.
 
 This is a conservative literal scan, not a complete shell parser or a proof of
 arbitrary code's effects. Variable-generated executable names, aliases, custom
@@ -102,8 +103,14 @@ The fingerprint covers:
   Vitest/Vite/Jest, ESLint, Prettier and Biome configuration. Missing recognized
   files are bound too, so adding one invalidates the grant.
 - Literal direct script-entrypoint files named by the selected package script
-  and its pre/post hooks; explicit `--config`, `--project`, `--manifest-path`,
-  `--modfile`, TypeScript `-p` and pytest `-c` files. Source files discovered or
+  and its pre/post hooks, including extensionless direct executables and supported
+  interpreter entrypoints; explicit `--config`, `--project`, `--manifest-path`,
+  `--modfile`, `--preload`, `--require`, `--import`, `--loader`, supported `-r`,
+  TypeScript `-p` and pytest `-c` files, including repeated and attached values.
+  These direct inputs must resolve to bounded regular files inside the workspace.
+  Ambiguous interpreter options, nested npx/bunx runners other than literal
+  `tsc`, and nested Bun run/build entrypoints decline standing authorization.
+  Source files discovered or
   imported by those entrypoints are not hashed. Ordinary project source/test
   edits remain covered unless they change one of these bound inputs.
 - A fixed set of relevant environment variables, after the runner's secret
@@ -155,12 +162,13 @@ Mutations refuse lost updates; reads are never blocked.
   means "unknown".
 - **Serialisation.** Mutations of one canonical file (symlink aliases
   collapse; `realpath` returns on-disk case on macOS) run one at a time across
-  every pack in the process, through one module-global in-process coordinator
+  cooperating processes, through the shared durable workspace coordinator
   (`coordinator` option to override).
 - **Shell.** Every `run_command` / `run_tests` holds an exclusive workspace
-  lease from before spawn until the process tree is torn down; if survivors
-  remain it is held up to 2 s more and a warning is added when they are still
-  running. It waits for in-flight file mutations and blocks new ones (FIFO,
+  lease from before spawn until cleanup is positively verified. Surviving
+  processes or unknown cleanup preserve a durable workspace quarantine across
+  restart; a timeout or fresh approval never releases it. It waits for
+  in-flight file mutations and blocks new ones (FIFO,
   writer preference). No command is exempt: even `git log` can run config-
   defined programs. Waiting honours the call's abort signal.
   `CoordinatorObserver.onWaiting` reports who waits on whom.
@@ -172,8 +180,17 @@ Mutations refuse lost updates; reads are never blocked.
   files under `dir`, on top of the module-global in-process coordinator. A
   lock is stale when its pid is dead or its `ps` start time changed. Lock
   files hold the tool name and a hash of the label, never command text.
-  Limits: same host and pid namespace only; without `ps` only pid liveness is
-  checked.
+  Limits: same host and pid namespace only; missing process-identity evidence
+  blocks reclamation. Darwin start times have second precision, and inspection
+  followed by signaling is not atomic.
+- **Verified recovery.** `coordinator.recoverWorkspace(root)` returns structured
+  `clear`, `recovered`, or `blocked` evidence. Supported guardian commands are
+  frozen, their census is durably sealed before final termination, and cleanup
+  can resume after another crash. Active owners, incomplete historical evidence
+  and missing native shutdown acknowledgments remain blocked. No approval or
+  timeout bypasses these checks. Hidden detached descendants that remove their
+  marker between samples remain outside the supported census. See
+  [ADR 0020](../../docs/adr/0020-execution-ownership-and-recovery.md).
 - **Limitation.** An uncoordinated external editor takes none of these locks;
   the content checks detect its changes but cannot stop a write that lands
   between the last check and the rename.

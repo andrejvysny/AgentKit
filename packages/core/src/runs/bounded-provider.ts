@@ -104,6 +104,9 @@ export function boundedClient(
   return {
     id: client.id,
     kind: client.kind,
+    ...(client.maxOutputTokens === undefined
+      ? {}
+      : { maxOutputTokens: client.maxOutputTokens }),
     capabilities: (signal, model) => client.capabilities(signal, model),
     listModels: (signal) => client.listModels(signal),
     streamChat: (input) => boundedProviderStream(client, budget, input),

@@ -80,9 +80,8 @@ export function createEnv(init: EnvInit): PackEnv {
             throw new CodingCleanupError(startup);
           await init.coordinator.quarantineWorkspace(path, result);
         }
-        const cleanup =
-          (await init.coordinator.reconcileWorkspace?.(path)) ?? [];
-        for (const result of cleanup) commands.record(result);
+        // Foreign ownership fences workspace leases; it is not this pack's command cleanup responsibility.
+        await init.coordinator.reconcileWorkspace?.(path);
         return path;
       });
       return root;

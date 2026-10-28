@@ -5,8 +5,14 @@
  * A process that scrubs its own environment (`env -i`) escapes it; the group
  * kill is the only net for those.
  */
-import { execFile } from "node:child_process";
 import { readFile, readdir, stat } from "node:fs/promises";
+import {
+  identityKey,
+  observeProcess,
+  readProcessTable,
+  type ProcessDiscovery,
+  type ProcessIdentity,
+} from "./process-identity.js";
 
 export const EXEC_ID_ENV = "AGENTKIT_EXEC_ID";
 
@@ -59,85 +65,118 @@ export function parseEnviron(
   return undefined;
 }
 
-function run(file: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      file,
-      args,
-      { maxBuffer: 64 * 1024 * 1024, timeout: 10_000 },
-      (error, stdout) => (error ? reject(error) : resolve(stdout)),
-    );
-  });
+export interface MarkedIdentity extends MarkedProcess, ProcessIdentity {
+  guardian?: boolean;
+}
+export interface MarkedDiscovery {
+  processes: MarkedIdentity[];
+  complete: boolean;
 }
 
-async function scanProc(): Promise<MarkedProcess[]> {
-  const found: MarkedProcess[] = [];
+async function linuxMarked(): Promise<MarkedDiscovery> {
+  const processes: MarkedIdentity[] = [];
+  let complete = true;
   for (const name of await readdir("/proc")) {
-    if (!/^\d+$/.test(name)) continue;
-    const info = await stat(`/proc/${name}`).catch(
-      (error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT" || error.code === "ESRCH") return undefined;
-        throw error;
-      },
-    );
-    if (!info || (process.getuid && info.uid !== process.getuid())) continue;
-    const raw = await readFile(`/proc/${name}/environ`, "latin1").catch(
-      (error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT" || error.code === "ESRCH") return "";
-        // An unreadable process might carry our marker. Absence is unproven.
-        throw error;
-      },
-    );
-    const mark = parseEnviron(raw, Number(name));
-    if (mark) found.push(mark);
+    if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
+    try {
+      const info = await stat(`/proc/${name}`);
+      if (process.getuid && info.uid !== process.getuid()) continue;
+      const before = await observeProcess(Number(name));
+      if (before === "gone") continue;
+      if (before === "unknown") {
+        complete = false;
+        continue;
+      }
+      if (before.state === "zombie") continue;
+      const raw = await readFile(`/proc/${name}/environ`, "latin1");
+      const mark = parseEnviron(raw, Number(name));
+      if (!mark) continue;
+      const command = await readFile(`/proc/${name}/cmdline`, "latin1");
+      const after = await observeProcess(mark.pid);
+      if (
+        typeof after === "string" ||
+        after.startIdentity !== before.startIdentity
+      ) {
+        complete = false;
+        continue;
+      }
+      processes.push({
+        ...mark,
+        startIdentity: before.startIdentity,
+        ...(command.includes("agentkit-command-guardian-v1")
+          ? { guardian: true }
+          : {}),
+      });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ESRCH") complete = false;
+    }
   }
-  return found;
+  return { processes, complete };
 }
 
-/**
- * Every marked process except this one; null when the platform cannot be
- * scanned or the scan failed. Never throws.
- */
+/** Partial discoveries are retained when other processes cannot be inspected. */
+export async function scanMarkedIdentities(): Promise<MarkedDiscovery> {
+  try {
+    if (process.platform === "linux") return await linuxMarked();
+    if (process.platform !== "darwin")
+      return { processes: [], complete: false };
+    const table = await readProcessTable(true);
+    const processes = table.processes.flatMap((row) => {
+      const token = PS_TOKEN.exec(row.command ?? "")?.[1];
+      const mark = token ? parseExecId(token) : undefined;
+      return mark && row.pid !== process.pid
+        ? [
+            {
+              pid: row.pid,
+              startIdentity: row.startIdentity,
+              ...mark,
+              ...(row.command?.includes("agentkit-command-guardian-v1")
+                ? { guardian: true }
+                : {}),
+            },
+          ]
+        : [];
+    });
+    return { processes, complete: table.complete };
+  } catch {
+    return { processes: [], complete: false };
+  }
+}
+
+/** Legacy numeric view; teardown uses scanMarkedIdentities instead. */
 export async function scanMarked(
   platform: NodeJS.Platform = process.platform,
 ): Promise<MarkedProcess[] | null> {
-  try {
-    let all: MarkedProcess[];
-    if (platform === "darwin")
-      all = parsePsOutput(
-        await run("/bin/ps", ["-axwwE", "-o", "pid=,command="]),
-      );
-    else if (platform === "linux") all = await scanProc();
-    else return null;
-    return all.filter((mark) => mark.pid !== process.pid);
-  } catch {
-    return null;
-  }
+  if (platform !== process.platform) return null;
+  const result = await scanMarkedIdentities();
+  return result.complete
+    ? result.processes.map(({ pid, execId, ownerPid }) => ({
+        pid,
+        execId,
+        ownerPid,
+      }))
+    : null;
 }
 
-/** Pids carrying exactly this exec id; null when unsupported. */
 export async function findMarkedProcesses(
   execId: string,
 ): Promise<number[] | null> {
   const all = await scanMarked();
-  return all ? all.filter((m) => m.execId === execId).map((m) => m.pid) : null;
+  return all
+    ? all.filter((mark) => mark.execId === execId).map((mark) => mark.pid)
+    : null;
 }
 
-/** Ignore zombies: they cannot execute or write, even before their parent reaps. */
 export async function processGroupMembers(
   pgid: number,
 ): Promise<number[] | null> {
-  try {
-    const rows = await run("/bin/ps", ["-axo", "pid=,pgid=,stat="]);
-    return rows.split("\n").flatMap((line) => {
-      const row = /^\s*(\d+)\s+(\d+)\s+(\S+)/.exec(line);
-      return row && Number(row[2]) === pgid && !row[3]?.startsWith("Z")
-        ? [Number(row[1])]
-        : [];
-    });
-  } catch {
-    return null;
-  }
+  const table = await readProcessTable();
+  return table.complete
+    ? table.processes
+        .filter((row) => row.pgid === pgid && row.state !== "zombie")
+        .map((row) => row.pid)
+    : null;
 }
 
 export interface PsRow {
@@ -197,55 +236,58 @@ export function descendantsOf(
  * known, unless it is created and orphaned between two samples.
  */
 export class TreeTracker {
-  private readonly seen = new Map<number, string>();
+  private readonly seen = new Map<string, ProcessIdentity>();
   private timer: NodeJS.Timeout | undefined;
   private stopped = false;
-  private rootGone = false;
+  private pending: Promise<unknown> = Promise.resolve();
 
   constructor(
-    private readonly rootPid: number,
+    private readonly root: ProcessIdentity | undefined,
+    private readonly onSample?: (discovery: ProcessDiscovery) => Promise<void>,
     private readonly intervalMs = 100,
     private readonly maxIntervalMs = 1000,
   ) {}
 
-  /**
-   * Fast while a command is young (that is when shells fork and detach), then
-   * backing off: one `ps` costs tens of ms, and a 10-minute build sampled at
-   * 100 ms would spend a large share of a core on watching itself.
-   */
   start(): void {
     let delay = this.intervalMs;
-    const tick = () => {
+    const tick = (): void => {
       if (this.stopped) return;
-      void this.sample().finally(() => {
-        if (this.stopped) return;
-        this.timer = setTimeout(tick, delay);
-        delay = Math.min(this.maxIntervalMs, Math.ceil(delay * 1.25));
-      });
+      this.pending = this.sample()
+        .then((result) => this.onSample?.(result))
+        .catch(() => {})
+        .finally(() => {
+          if (this.stopped) return;
+          this.timer = setTimeout(tick, delay);
+          delay = Math.min(this.maxIntervalMs, Math.ceil(delay * 1.25));
+        });
     };
     tick();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
+    await this.pending;
   }
 
-  /** Sample now; the tracked pids that are still the same live processes. */
-  async sample(): Promise<number[] | null> {
-    let rows: PsRow[];
-    try {
-      rows = parsePsTable(await run("/bin/ps", ["-axo", "pid=,ppid=,lstart="]));
-    } catch {
-      return null;
+  async sample(): Promise<ProcessDiscovery> {
+    const table = await readProcessTable();
+    const byKey = new Map(
+      table.processes.map((row) => [identityKey(row), row]),
+    );
+    const seeds = [...this.seen.values(), ...(this.root ? [this.root] : [])]
+      .filter((identity) => byKey.has(identityKey(identity)))
+      .map(({ pid }) => pid);
+    const rows = descendantsOf(
+      table.processes.map((row) => ({ ...row, started: row.startIdentity })),
+      seeds,
+    );
+    for (const row of rows) {
+      if (row.pid !== process.pid) {
+        const identity = { pid: row.pid, startIdentity: row.started };
+        this.seen.set(identityKey(identity), identity);
+      }
     }
-    const byPid = new Map(rows.map((row) => [row.pid, row]));
-    for (const [pid, started] of this.seen)
-      if (byPid.get(pid)?.started !== started) this.seen.delete(pid);
-    if (!byPid.has(this.rootPid)) this.rootGone = true;
-    const seeds = this.rootGone ? [] : [this.rootPid];
-    for (const row of descendantsOf(rows, [...seeds, ...this.seen.keys()]))
-      if (row.pid !== process.pid) this.seen.set(row.pid, row.started);
-    return [...this.seen.keys()];
+    return { identities: [...this.seen.values()], complete: table.complete };
   }
 }

@@ -12,6 +12,7 @@ import type { StandingApprovalPolicy } from "../ports/standing-approval.js";
 import { isHookTimeout, withHookDeadline } from "./hook-deadline.js";
 import type { DurableExecution } from "./durable-execution.js";
 import { guarded } from "./guarded-tool.js";
+import { markDurableMutationWrapper } from "./admission-protocol.js";
 export {
   TOOL_GUARD_REFUSED_CODE,
   TOOL_GUARD_ERROR_MESSAGE,
@@ -210,9 +211,20 @@ export async function stageRegistry(
     };
     if (!(await isVisible(guards, guardCtx, input.ctx))) continue;
     try {
-      registry.register(
-        guarded(tool, guards, guardCtx, input.standing, input.durable),
+      const wrapped = guarded(
+        tool,
+        guards,
+        guardCtx,
+        input.standing,
+        input.durable,
       );
+      if (
+        input.durable !== undefined &&
+        (tool.definition.effect === "write" ||
+          input.durable.isMutating?.(tool.definition.name) === true)
+      )
+        markDurableMutationWrapper(wrapped);
+      registry.register(wrapped);
       namespaces.set(tool.definition.name, namespace);
     } catch (err) {
       // A name collision or an uncompilable input schema disqualifies ONE tool;

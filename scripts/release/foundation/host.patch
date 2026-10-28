@@ -367,10 +367,8 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
 diff --git a/packages/host/src/context/bounded-context-client.ts b/packages/host/src/context/bounded-context-client.ts
 --- a/packages/host/src/context/bounded-context-client.ts
 +++ b/packages/host/src/context/bounded-context-client.ts
-@@ -66,10 +66,6 @@ export async function boundedContextClient(
-   return {
-     id: client.id,
-     kind: client.kind,
+@@ -72,8 +72,4 @@ export async function boundedContextClient(
+       : { maxOutputTokens: client.maxOutputTokens }),
 -    ...(client.protocol === undefined ? {} : { protocol: client.protocol }),
 -    ...(client.connectionIdentity === undefined
 -      ? {}
@@ -378,9 +376,7 @@ diff --git a/packages/host/src/context/bounded-context-client.ts b/packages/host
      ...(client.tracksTransportRequests === undefined
        ? {}
        : { tracksTransportRequests: client.tracksTransportRequests }),
-@@ -94,10 +90,7 @@ async function* guardedStream(
- ): AsyncIterable<AiRunEvent> {
-   const { window, reserveTokens, estimator, stamp } = deps;
+@@ -133,8 +129,5 @@ function requestAdmission(
    const toolTokens = estimateTools(request.tools ?? []);
 -  const extraTokens = (request.runContent?.messages ?? []).reduce(
 -    (sum, message) => sum + estimator.estimateMessage(message),

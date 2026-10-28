@@ -120,6 +120,11 @@ export function isHighRisk(raw: string): boolean {
   const tokens = words.map(executableName);
   if (hasInlineEvaluation(words)) return true;
   if (
+    tokens.some((token) => /^(node(js)?|bun)$/.test(token)) &&
+    raw.includes("<")
+  )
+    return true;
+  if (
     tokens.includes("env") &&
     words.some(
       (word) => word.startsWith("--split-string") || word.startsWith("-S"),
@@ -158,6 +163,23 @@ function hasInlineEvaluation(words: string[]): boolean {
       return rest.some((arg) => /^-[a-z]*c/.test(arg));
     if (/^(python([0-9]+(\.[0-9]+)*)?|pypy[0-9]*)$/.test(token))
       return rest.some((arg) => arg === "-" || /^-[a-z]*c/.test(arg));
+    if (
+      /^node(js)?$/.test(token) &&
+      (rest.length === 0 ||
+        rest.every((arg) => arg.startsWith("-")) ||
+        rest.some((arg) => arg === "-" || /^--input-type(=|$)/.test(arg)))
+    )
+      return true;
+    if (
+      /^(node(js)?|bun)$/.test(token) &&
+      rest.some(
+        (arg, i) =>
+          /^--(import|loader|preload|require)=data:/.test(arg) ||
+          (/^--(import|loader|preload|require)$/.test(arg) &&
+            rest[i + 1]?.startsWith("data:")),
+      )
+    )
+      return true;
     if (/^(node(js)?|bun|ruby|perl|lua|luajit)$/.test(token))
       return rest.some(
         (arg) => /^--(eval|print)(=|$)/.test(arg) || /^-[a-z]*[ep]/.test(arg),

@@ -115,6 +115,7 @@ import {
 import { createRunProjector, type RunProjector } from "./projection.js";
 import type { PassInput, PassResult, PassState } from "./pass-types.js";
 import { stageRegistry } from "./registry-staging.js";
+import { stampAdmissionProtocol } from "./admission-protocol.js";
 import { sessionWithAdmittedContext } from "../sessions/admitted-context.js";
 import { boundedContextClient } from "../context/bounded-context-client.js";
 import {
@@ -1552,6 +1553,12 @@ export class TurnRunner implements TaskWorker {
     input: PassInput,
   ): Promise<void> {
     input.ctx.signal.throwIfAborted();
+    if (event.type === "run.tool.running")
+      event = stampAdmissionProtocol(
+        event,
+        input.registry,
+        input.ctx.attemptId,
+      );
     await this.projector.project(
       {
         task: input.task,

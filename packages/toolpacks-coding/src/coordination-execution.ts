@@ -7,9 +7,11 @@ import type {
 import { readRecord, type LockRecord } from "./coordination-record.js";
 import { CodingError } from "./errors.js";
 import { persistRecord } from "./coordination-storage.js";
+import type { ProcessIdentity } from "./process-identity.js";
 
 class DurableExecutionLease implements ExecutionLease {
   private released = false;
+  private writes: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly inner: WorkspaceLease,
@@ -31,15 +33,17 @@ class DurableExecutionLease implements ExecutionLease {
     return record;
   }
 
-  private async update(
-    change: (record: LockRecord) => LockRecord,
-  ): Promise<void> {
-    if (this.released)
-      throw new CodingError(
-        "cleanup_unknown",
-        "workspace lease is already released",
-      );
-    await persistRecord(this.marker, change(await this.current()));
+  private update(change: (record: LockRecord) => LockRecord): Promise<void> {
+    const write = this.writes.then(async () => {
+      if (this.released)
+        throw new CodingError(
+          "cleanup_unknown",
+          "workspace lease is already released",
+        );
+      await persistRecord(this.marker, change(await this.current()));
+    });
+    this.writes = write.catch(() => {});
+    return write;
   }
 
   async beginExecution(intent: ExecutionIntent): Promise<void> {
@@ -55,7 +59,9 @@ class DurableExecutionLease implements ExecutionLease {
 
   async spawned(identity: {
     pid: number;
+    startIdentity?: string;
     processStart?: string;
+    guardianProtocol?: "agentkit-command-guardian-v1";
   }): Promise<void> {
     await this.update((record) => {
       if (!record.execution)
@@ -63,6 +69,38 @@ class DurableExecutionLease implements ExecutionLease {
       return {
         ...record,
         execution: { ...record.execution, process: identity },
+      };
+    });
+  }
+
+  async observed(
+    identities: ProcessIdentity[],
+    complete: boolean,
+    closed = false,
+    sealed = false,
+  ): Promise<void> {
+    await this.update((record) => {
+      if (!record.execution)
+        throw new CodingError("cleanup_unknown", "execution intent missing");
+      const known = new Map(
+        (record.execution.discovery?.identities ?? []).map((identity) => [
+          `${identity.pid}:${identity.startIdentity}`,
+          identity,
+        ]),
+      );
+      for (const identity of identities)
+        known.set(`${identity.pid}:${identity.startIdentity}`, identity);
+      return {
+        ...record,
+        execution: {
+          ...record.execution,
+          discovery: {
+            identities: [...known.values()],
+            complete,
+            closed,
+            sealed,
+          },
+        },
       };
     });
   }
@@ -83,6 +121,7 @@ class DurableExecutionLease implements ExecutionLease {
 
   async release(): Promise<void> {
     if (this.released) return;
+    await this.writes;
     const record = await this.current();
     if (record.execution && record.execution.cleanup?.state !== "stopped")
       throw new CodingError(

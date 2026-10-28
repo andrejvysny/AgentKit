@@ -16,6 +16,11 @@ const COVERED = [
   "bash -lc 'printf inert'",
   "python3 -c 'print(1)'",
   "node --eval='1'",
+  "node -",
+  "node --input-type=module -",
+  "node < ./input.js",
+  "node --import=data:text/javascript,console.log(1)",
+  "node --import 'data:text/javascript,console.log(1)'",
 ];
 const MODES: CodingMode[] = [
   "read_only",

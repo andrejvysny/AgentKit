@@ -429,11 +429,15 @@ describe("interrupt a running turn", () => {
     await Bun.sleep(20);
 
     await n.service.resume(SESSION, turnId);
+    await waitStatus(world, turnId, "waiting_approval");
+    expect(world.bumps).toBe(1);
+    expect(world.provider.calls).toHaveLength(1);
+    const waiting = (await n.service.getState(SESSION)).waiting!;
+    expect(waiting.toolCallId).toBe("call-1");
+    expect(JSON.stringify(waiting.content)).toContain("uncertain");
+    await n.service.deny(waiting.inputId, "deny-uncertain");
     await waitStatus(world, turnId, "completed");
     expect(world.bumps).toBe(1);
-    const resumedPass = world.provider.calls[1] ?? [];
-    const result = resumedPass.find((m) => m.role === "tool");
-    expect(String(result?.content)).toContain("tool_result_uncertain");
   });
 });
 

@@ -72,6 +72,7 @@ describe("bounded standing approval fingerprint", () => {
     "scripts/test.js",
   ])("changed bound input invalidates: %s", async (path) => {
     const first = await key();
+    writeFileSync(join(root, "scripts", "changed.js"), "console.log(2);\n");
     writeFileSync(
       join(root, path),
       path === "package.json"
@@ -160,5 +161,250 @@ describe("bounded standing approval fingerprint", () => {
     expect(first).not.toBeNull();
     writeFileSync(cli, "#!/bin/sh\nexit 1\n");
     expect((await key("npx tsc --noEmit"))?.digest).not.toBe(first?.digest);
+  });
+
+  test.each([
+    "--preload ./first.ts --preload ./second.ts",
+    "--preload=./first.ts --preload=./second.ts",
+    "--preload ./first.ts --preload=./second.ts",
+    "--config ./first.ts --config=./second.ts",
+  ])("every repeated/attached direct input is bound: %s", async (flags) => {
+    writeFileSync(join(root, "first.ts"), "export const first = 1;\n");
+    writeFileSync(join(root, "second.ts"), "export const second = 1;\n");
+    const first = await key(`bun test ${flags}`);
+    expect(first).not.toBeNull();
+    writeFileSync(join(root, "second.ts"), "export const second = 2;\n");
+    const second = await key(`bun test ${flags}`);
+    expect(second).not.toBeNull();
+    expect(second?.digest).not.toBe(first?.digest);
+    writeFileSync(join(root, "source.ts"), "export const unrelated = 3;\n");
+    expect(await key(`bun test ${flags}`)).toEqual(second);
+  });
+
+  test.each(["./scripts/test", "'./scripts/test'", "./scripts/test --check"])(
+    "extensionless literal package executable is bound: %s",
+    async (script) => {
+      writeFileSync(join(root, "scripts", "test"), "#!/bin/sh\nexit 0\n", {
+        mode: 0o755,
+      });
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ scripts: { test: script } }),
+      );
+      const first = await key();
+      expect(first).not.toBeNull();
+      writeFileSync(join(root, "scripts", "test"), "#!/bin/sh\nexit 1\n");
+      expect((await key())?.digest).not.toBe(first?.digest);
+    },
+  );
+
+  test.each([
+    "--preload ./missing.ts",
+    "--preload=./missing.ts",
+    "--preload",
+    "--preload=",
+    "--config=./missing.json",
+    "--preload ./scripts",
+    "--preload=external-package",
+  ])(
+    "unresolved supported direct input declines standing: %s",
+    async (flags) => {
+      expect(await key(`bun test ${flags}`)).toBeNull();
+    },
+  );
+
+  test.each([
+    "./scripts/missing",
+    "node scripts/missing.js",
+    "node --require ./missing scripts/test.js",
+    "bun --preload=./missing scripts/test.js",
+  ])("unresolved package entrypoint declines standing: %s", async (script) => {
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { test: script } }),
+    );
+    expect(await key()).toBeNull();
+  });
+
+  test("direct input escaping workspace declines standing", async () => {
+    symlinkSync("/bin/sh", join(root, "bootstrap.ts"));
+    expect(await key("bun test --preload ./bootstrap.ts")).toBeNull();
+  });
+
+  test.each([
+    "--preload ./scripts",
+    "--preload=./scripts",
+    "--config ./scripts",
+    "--project ./scripts",
+  ])(
+    "non-TypeScript directory input cannot bind an unrelated tsconfig: %s",
+    async (flags) => {
+      writeFileSync(join(root, "scripts", "tsconfig.json"), "{}\n");
+      expect(await key(`bun test ${flags}`)).toBeNull();
+    },
+  );
+
+  test.each(["--project ./scripts", "-p ./scripts", "-p./scripts"])(
+    "TypeScript project directory binds its tsconfig: %s",
+    async (flags) => {
+      writeFileSync(join(root, "bin", "tsc"), "#!/bin/sh\nexit 0\n", {
+        mode: 0o755,
+      });
+      writeFileSync(join(root, "scripts", "tsconfig.json"), "{}\n");
+      const first = await key(`tsc ${flags}`);
+      expect(first).not.toBeNull();
+      writeFileSync(
+        join(root, "scripts", "tsconfig.json"),
+        '{"strict":true}\n',
+      );
+      expect((await key(`tsc ${flags}`))?.digest).not.toBe(first?.digest);
+    },
+  );
+
+  test("ordinary tsc argument cannot enable directory project semantics", async () => {
+    writeFileSync(join(root, "scripts", "tsconfig.json"), "{}\n");
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({
+        scripts: { test: "node scripts/test.js --project ./scripts tsc" },
+      }),
+    );
+    expect(await key()).toBeNull();
+  });
+
+  test.each([
+    "tsc",
+    "npx tsc",
+    "bunx tsc",
+    "MODE=test tsc",
+    "env MODE=test tsc",
+    "command tsc",
+  ])(
+    "leading TypeScript runner retains directory semantics: %s",
+    async (runner) => {
+      writeFileSync(join(root, "scripts", "tsconfig.json"), "{}\n");
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ scripts: { test: `${runner} --project ./scripts` } }),
+      );
+      const first = await key();
+      expect(first).not.toBeNull();
+      writeFileSync(
+        join(root, "scripts", "tsconfig.json"),
+        '{"strict":true}\n',
+      );
+      expect((await key())?.digest).not.toBe(first?.digest);
+    },
+  );
+
+  test.each([
+    "node -r./bootstrap scripts/test.js",
+    "node --require=./bootstrap scripts/test.js",
+    "bun --preload=./bootstrap --preload ./second.ts scripts/test.js",
+  ])(
+    "package startup flags bind literal attached/repeated inputs: %s",
+    async (script) => {
+      writeFileSync(join(root, "bootstrap"), "// bootstrap 1\n");
+      writeFileSync(join(root, "second.ts"), "export const second = 1;\n");
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ scripts: { test: script } }),
+      );
+      const first = await key();
+      expect(first).not.toBeNull();
+      writeFileSync(join(root, "bootstrap"), "// bootstrap 2\n");
+      const second = await key();
+      expect(second).not.toBeNull();
+      expect(second?.digest).not.toBe(first?.digest);
+    },
+  );
+
+  test.each([
+    "bun ./scripts/test",
+    "node --require ./bootstrap.js ./scripts/test",
+    "node -r./bootstrap.js ./scripts/test",
+    "node --require=./bootstrap.js --import ./second.ts ./scripts/test",
+    "bun --preload ./bootstrap.js ./scripts/test",
+  ])(
+    "extensionless interpreter entry after supported flags is bound: %s",
+    async (script) => {
+      writeFileSync(join(root, "scripts", "test"), "// direct entry 1\n");
+      writeFileSync(join(root, "bootstrap.js"), "// bootstrap\n");
+      writeFileSync(join(root, "second.ts"), "// import\n");
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ scripts: { test: script } }),
+      );
+      const first = await key();
+      expect(first).not.toBeNull();
+      writeFileSync(join(root, "scripts", "test"), "// direct entry 2\n");
+      const second = await key();
+      expect(second).not.toBeNull();
+      expect(second?.digest).not.toBe(first?.digest);
+    },
+  );
+
+  test.each([
+    "node --unsupported ./scripts/test",
+    "node --require ./bootstrap.js ./scripts/missing",
+    "bun ./scripts/missing",
+  ])(
+    "ambiguous or missing direct interpreter entry declines standing: %s",
+    async (script) => {
+      writeFileSync(join(root, "bootstrap.js"), "// bootstrap\n");
+      writeFileSync(join(root, "scripts", "test"), "// direct entry\n");
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ scripts: { test: script } }),
+      );
+      expect(await key()).toBeNull();
+    },
+  );
+
+  test.each([
+    "bun run ./scripts/test",
+    "bun run test:unit",
+    "bun build ./scripts/test",
+  ])("nested Bun entry ambiguity declines standing: %s", async (script) => {
+    writeFileSync(join(root, "scripts", "test"), "// direct entry\n");
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { test: script } }),
+    );
+
+    expect(await key()).toBeNull();
+  });
+
+  test("package Bun test keeps unrelated discovered source edits covered", async () => {
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { test: "bun test" } }),
+    );
+    const first = await key();
+    expect(first).not.toBeNull();
+    writeFileSync(
+      join(root, "discovered.test.ts"),
+      "export const ordinary = 1;\n",
+    );
+    expect(await key()).toEqual(first);
+    writeFileSync(
+      join(root, "discovered.test.ts"),
+      "export const ordinary = 2;\n",
+    );
+    expect(await key()).toEqual(first);
+  });
+
+  test.each([
+    "cd scripts && ./test",
+    "env -i ./scripts/test",
+    "node --require $BOOTSTRAP scripts/test.js",
+    "npx node ./scripts/test",
+    "bunx node ./scripts/test",
+  ])("unsupported command resolution declines standing: %s", async (script) => {
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { test: script } }),
+    );
+    expect(await key()).toBeNull();
   });
 });

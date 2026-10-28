@@ -24,6 +24,7 @@ import type { UncertainCall } from "./side-effects.js";
 import { orderMessagesForProvider } from "./message-order.js";
 import type { TurnRunnerDeps } from "./turn-runner.js";
 import { anchoredHistory, type HistoryPolicy } from "./anchored-history.js";
+import { providerHumanAnswerContent } from "../sessions/approval-denial.js";
 
 /** Default number of messages replayed to the provider. */
 const DEFAULT_HISTORY_LIMIT = 200;
@@ -434,7 +435,7 @@ export async function assembleMessagesWithIds(
       const toolName = record.metadata["toolName"];
       messages.push({
         role: "tool",
-        content: record.content,
+        content: await providerHumanAnswerContent(deps.store, record),
         toolCallId: record.toolCallId,
         ...(typeof toolName === "string" ? { name: toolName } : {}),
       });
