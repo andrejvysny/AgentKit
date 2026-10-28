@@ -270,7 +270,15 @@ async fn read_capped<R: AsyncReadExt + Unpin>(
             Ok(read) => {
                 collected.extend_from_slice(&chunk[..read]);
                 if collected.len() > max_bytes {
-                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                    // Windows cannot signal by pid; the child is left to
+                    // finish (git output is bounded in practice; the git
+                    // pack is not Windows-qualified — see milestone backlog).
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL)
+                    };
+                    #[cfg(not(unix))]
+                    let _ = pid;
                     return (collected, true);
                 }
             }
@@ -335,7 +343,12 @@ async fn run_git(
     };
     let timed_out = async {
         tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
-        unsafe { libc::kill(pid, libc::SIGKILL) };
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(pid, libc::SIGKILL)
+        };
+        #[cfg(not(unix))]
+        let _ = pid;
     };
     let aborted = async {
         match &cancellation {

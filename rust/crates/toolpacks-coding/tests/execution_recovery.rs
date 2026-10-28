@@ -85,11 +85,24 @@ fn intent(
             execution_id: format!("{marker_owner_pid}:{nonce}"),
             owner_pid: i64::from(owner_pid),
             pgid,
-            spawned_at_ms: 1_700_000_000_000,
+            spawned_at_ms: now_wall_ms(),
         },
         holder: holder("crashed-run"),
         spawned: pgid.is_some(),
     }
+}
+
+/// Wall-clock ms since epoch, matching what the real driver records in
+/// `spawned_at_ms`. The recovery scan uses that anchor to exclude long-lived
+/// same-user daemons (dumpable=0, EPERM environ — `systemd --user`,
+/// `sshd`, …) from the survivor-uncertainty set; a frozen historical constant
+/// would defeat the filter and every scan on a shared machine would stay
+/// uncertain forever.
+fn now_wall_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_millis() as u64
 }
 
 /// Spawn the controlled "host" process (a disposable `sleep`) whose pid the
@@ -275,7 +288,12 @@ async fn crashed_live_process_group_stays_uncertain_until_positive_evidence() {
     );
     assert_eq!(identity.owner_pid, i64::from(crash.owner_pid));
     assert_eq!(identity.pgid, Some(crash.marked_pid));
-    assert_eq!(identity.spawned_at_ms, 1_700_000_000_000);
+    assert!(
+        identity.spawned_at_ms >= now_wall_ms().saturating_sub(600_000)
+            && identity.spawned_at_ms <= now_wall_ms() + 1_000,
+        "the recorded spawn time round-trips unchanged: {}",
+        identity.spawned_at_ms
+    );
     assert!(quarantine.pids.contains(&crash.marked_pid));
 
     // The edit path is blocked by the same evidence.
