@@ -16,7 +16,7 @@ remaining qualification requirements are in [the parity specification](../docs/r
 | `agentkit-contracts` | Portable Serde contracts, offline schema validation, routes and idempotency |
 | `agentkit-core` | Provider protocols, streaming, bounded tool execution and budgets |
 | `agentkit-store` | SQLite actor, atomic state changes, leases, projections and recovery |
-| `agentkit-host` | Durable execution, native run handles, proposal application and optional HTTP backend |
+| `agentkit-host` | Durable execution, agent sessions with steering/human input/plan grants, native run handles, proposal application and optional HTTP backend |
 | `agentkit-connections` | Application namespaces, immutable selection, consent, secret-store and network ports |
 | `agentkit-transport-http` | Axum REST/SSE boundary over an authenticated backend |
 | `agentkit-client` | Native HTTP client, replay decoding and presentation state |

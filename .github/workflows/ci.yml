@@ -22,7 +22,13 @@ jobs:
 
       - run: bun run typecheck
 
+      # Native cross-language tests are qualified in the `native` job of
+      # rust.yml (pinned Rust, locked fetch, prebuilt fixture). This job has no
+      # prepared Cargo cache, so native-dependent tests skip deterministically
+      # instead of failing on `cargo build`.
       - run: bun test
+        env:
+          AGENTKIT_SKIP_NATIVE: "1"
 
       - run: bun run build
 
@@ -51,7 +57,7 @@ jobs:
       - name: bun test --coverage
         run: |
           set -o pipefail
-          bun test --coverage --coverage-reporter=text --coverage-reporter=lcov \
+          AGENTKIT_SKIP_NATIVE=1 bun test --coverage --coverage-reporter=text --coverage-reporter=lcov \
             | tee coverage-summary.txt
 
       - name: publish coverage summary

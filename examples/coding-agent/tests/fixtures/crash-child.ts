@@ -42,6 +42,9 @@ const app = await CodingAgentApp.open({
   model: "mock-model",
   baseUrl: "http://127.0.0.1:1",
   mode: "full_auto",
+  // Deliberate: this fixture must really execute its command so the host can
+  // die mid-mutation; sandbox isolation is not what the crash test qualifies.
+  sandbox: "off",
   leaseTtlMs: Number(leaseTtl ?? 1_500),
   providerFactory: () => mock as never,
 });

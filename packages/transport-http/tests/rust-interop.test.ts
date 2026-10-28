@@ -14,18 +14,22 @@ import {
   type RestOperation,
 } from "@agentkit/contracts";
 import {
+  nativeBackendAvailable,
   startNativeServer,
   type NativeServer,
 } from "../../../rust/tests/support/http-server.js";
 let server: NativeServer;
 beforeEach(async () => {
+  if (!nativeBackendAvailable) return;
   server = await startNativeServer();
 }, 60_000);
 afterEach(async () => {
   await server?.stop();
 });
 
-test("all 48 REST operations exercise native host and explicit optional-service boundaries", async () => {
+test.skipIf(!nativeBackendAvailable)(
+  "all 48 REST operations exercise native host and explicit optional-service boundaries",
+  async () => {
   const client = server.client;
   const covered = new Set<RestOperation>();
   const call = async <T>(

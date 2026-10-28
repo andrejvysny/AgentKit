@@ -6,7 +6,23 @@ import { createAgentKitClient } from "@agentkit/client";
 const root = resolve(import.meta.dir, "../../..");
 let build: Promise<void> | undefined;
 
+// Cross-language tests need a compiled native fixture. The intentional job for
+// them is the `native` job in .github/workflows/rust.yml: pinned toolchain,
+// locked dependency fetch, warm cargo cache, one prebuilt fixture. Ordinary
+// TypeScript CI (`.github/workflows/ci.yml`) sets AGENTKIT_SKIP_NATIVE=1
+// because it has no prepared Cargo cache — an offline `cargo build` there
+// fails on missing registry packages and every native test would fail for a
+// test-setup reason, not a product reason. Native tests must gate on this
+// flag with test.skipIf/describe.skipIf, and the jobs that run them must not
+// set the variable.
+export const nativeBackendAvailable =
+  process.env["AGENTKIT_SKIP_NATIVE"] !== "1";
+
 async function ensureBinary(): Promise<string> {
+  if (!nativeBackendAvailable)
+    throw new Error(
+      "Native fixture disabled via AGENTKIT_SKIP_NATIVE=1; gate the test with nativeBackendAvailable instead of reaching the fixture.",
+    );
   const override = process.env["AGENTKIT_NATIVE_FIXTURE"];
   if (override !== undefined) return override;
   build ??= (async () => {
@@ -22,7 +38,7 @@ async function ensureBinary(): Promise<string> {
         "http",
         "--example",
         "http_fixture",
-        "--offline",
+        "--locked",
       ],
       {
         cwd: root,

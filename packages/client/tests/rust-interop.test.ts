@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
 import {
+  nativeBackendAvailable,
   startCompatibilityServer,
   startNativeServer,
 } from "../../../rust/tests/support/http-server.js";
 import { runPhase } from "../src/index.js";
 
 for (const backend of ["typescript", "rust"] as const) {
-  test(`same client full-turn assertions against ${backend}`, async () => {
+  const skip = backend === "rust" && !nativeBackendAvailable;
+  (skip ? test.skip : test)(`same client full-turn assertions against ${backend}`, async () => {
     const server = await startCompatibilityServer(backend);
     try {
       const client = server.client;
@@ -58,7 +60,9 @@ for (const backend of ["typescript", "rust"] as const) {
   }, 60_000);
 }
 
-test("native SQLite state survives process restart", async () => {
+test.skipIf(!nativeBackendAvailable)(
+  "native SQLite state survives process restart",
+  async () => {
   let server = await startNativeServer();
   try {
     const chat = await server.client.createChat({ title: "Persisted" });
@@ -87,7 +91,9 @@ test("native SQLite state survives process restart", async () => {
   }
 }, 60_000);
 
-test("unchanged TypeScript SSE client reconnects to native durable cursor after a cut", async () => {
+test.skipIf(!nativeBackendAvailable)(
+  "unchanged TypeScript SSE client reconnects to native durable cursor after a cut",
+  async () => {
   const { createAgentKitClient } = await import("../src/index.js");
   const server = await startNativeServer();
   const resumes: (string | null)[] = [];
@@ -160,7 +166,8 @@ test("unchanged TypeScript SSE client reconnects to native durable cursor after 
 }, 60_000);
 
 for (const backend of ["typescript", "rust"] as const) {
-  test(`raw JSON numbers follow JavaScript overflow semantics against ${backend}`, async () => {
+  const skip = backend === "rust" && !nativeBackendAvailable;
+  (skip ? test.skip : test)(`raw JSON numbers follow JavaScript overflow semantics against ${backend}`, async () => {
     const { startTestServer } = await import("./support/server.js");
     const server = await startTestServer({ backend });
     try {
@@ -201,7 +208,9 @@ for (const backend of ["typescript", "rust"] as const) {
   }, 60_000);
 }
 
-test("native test control uses a separate listener and credential", async () => {
+test.skipIf(!nativeBackendAvailable)(
+  "native test control uses a separate listener and credential",
+  async () => {
   const server = await startNativeServer();
   try {
     const provider = await server.client.createProvider({

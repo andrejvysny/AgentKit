@@ -1,12 +1,16 @@
 import "./support/dom.js";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { expect, test } from "bun:test";
-import { startCompatibilityServer } from "../../../rust/tests/support/http-server.js";
+import {
+  nativeBackendAvailable,
+  startCompatibilityServer,
+} from "../../../rust/tests/support/http-server.js";
 import { useChat, useProviders, useRun } from "../src/index.js";
 import { strictWrapper, wrapper } from "./support/render.js";
 
 for (const backend of ["typescript", "rust"] as const) {
-  test(`same useChat assertions against ${backend}`, async () => {
+  const skip = backend === "rust" && !nativeBackendAvailable;
+  (skip ? test.skip : test)(`same useChat assertions against ${backend}`, async () => {
     const server = await startCompatibilityServer(backend);
     const chat = await server.client.createChat({ title: "React native" });
     const mounted = renderHook(() => useChat(chat.id), {
@@ -44,7 +48,7 @@ for (const backend of ["typescript", "rust"] as const) {
     }
   }, 60_000);
 
-  test(`same StrictMode useRun and provider assertions against ${backend}`, async () => {
+  (skip ? test.skip : test)(`same StrictMode useRun and provider assertions against ${backend}`, async () => {
     const server = await startCompatibilityServer(backend);
     try {
       const chat = await server.client.createChat({});
