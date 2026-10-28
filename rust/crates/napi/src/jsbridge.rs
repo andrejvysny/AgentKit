@@ -6,7 +6,13 @@
 //! in-flight call: its pending entry is removed by settle, rejection, abort,
 //! or shutdown — never by GC. A rejected callback becomes the tool/provider
 //! failure path (`callback_rejected`), never a panic and never a dangling
-//! reference. Shutdown rejects every outstanding callback.
+//! reference.
+//!
+//! The bridge owns an explicit `Open → Closing → Closed` lifecycle. Entering
+//! `Closing` atomically rejects NEW dispatches and drains every outstanding
+//! one under the same lock, so no call can be inserted after the drain and
+//! then wait for JS that will never run again. That atomicity is why the
+//! state lives inside the pending lock rather than in a separate flag.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
@@ -25,6 +31,18 @@ struct Pending {
     sender: oneshot::Sender<std::result::Result<Value, String>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BridgeState {
+    Open,
+    Closing,
+    Closed,
+}
+
+struct Inner {
+    state: BridgeState,
+    pending: HashMap<String, Pending>,
+}
+
 /// Global routing so the exported resolver can find the owning bridge from a
 /// bare call id. Entries exist only while a call is in flight.
 static CALLS: LazyLock<Mutex<HashMap<String, Weak<JsBridge>>>> =
@@ -38,14 +56,17 @@ fn calls() -> &'static Mutex<HashMap<String, Weak<JsBridge>>> {
 /// outstanding provider/tool calls keyed by their call ids.
 pub(crate) struct JsBridge {
     deliver: Mutex<ThreadsafeFunction<String>>,
-    pending: Mutex<HashMap<String, Pending>>,
+    inner: Mutex<Inner>,
 }
 
 impl JsBridge {
     pub(crate) fn new(deliver: ThreadsafeFunction<String>) -> Self {
         Self {
             deliver: Mutex::new(deliver),
-            pending: Mutex::new(HashMap::new()),
+            inner: Mutex::new(Inner {
+                state: BridgeState::Open,
+                pending: HashMap::new(),
+            }),
         }
     }
 
@@ -65,7 +86,10 @@ impl JsBridge {
 
     /// Deliver a request to JS and await the JS resolver. Cancellation
     /// (worker stop, close, abort token) removes the pending entry so a late
-    /// resolve is ignored instead of resurrecting a dead call.
+    /// resolve is ignored instead of resurrecting a dead call. Once closing
+    /// begins, NEW dispatches fail fast: an active run then sees an ordinary
+    /// callback failure and settles honestly (receipts keep the uncertainty;
+    /// nothing pretends success).
     pub(crate) async fn request(
         self: Arc<Self>,
         kind: PendingKind,
@@ -78,10 +102,18 @@ impl JsBridge {
             PendingKind::Provider => "provider",
             PendingKind::Tool => "tool",
         };
-        self.pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(call_id.to_owned(), Pending { sender });
+        {
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if inner.state != BridgeState::Open {
+                return Err(format!(
+                    "the {label} callback was not dispatched: the binding is closing"
+                ));
+            }
+            inner.pending.insert(call_id.to_owned(), Pending { sender });
+        }
         calls()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -118,35 +150,52 @@ impl JsBridge {
     /// id (a wrapper bug or a replay) is ignored — the first answer wins.
     pub(crate) fn settle(&self, call_id: &str, result: std::result::Result<Value, String>) {
         if let Some(pending) = self
-            .pending
+            .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pending
             .remove(call_id)
         {
             let _ = pending.sender.send(result);
+            calls()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(call_id);
         }
     }
 
     fn cancel(&self, call_id: &str, reason: &str) {
         if let Some(pending) = self
-            .pending
+            .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pending
             .remove(call_id)
         {
             let _ = pending.sender.send(Err(reason.to_owned()));
+            calls()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(call_id);
         }
     }
 
-    /// Shutdown rejects every outstanding callback so no Rust future waits
-    /// on JS that will never run again.
-    pub(crate) fn reject_all(&self) {
-        let drained: Vec<(String, Pending)> = self
-            .pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .drain()
-            .collect();
+    /// `Open → Closing`, atomically with the drain: entering `Closing`
+    /// rejects every outstanding callback and makes further dispatches
+    /// fail fast under the same lock, so there is no insert-after-drain
+    /// window. Returns false when the bridge was already closing.
+    pub(crate) fn start_closing(&self) -> bool {
+        let drained: Vec<(String, Pending)> = {
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if inner.state != BridgeState::Open {
+                return false;
+            }
+            inner.state = BridgeState::Closing;
+            inner.pending.drain().collect()
+        };
         for (id, pending) in drained {
             calls()
                 .lock()
@@ -156,6 +205,16 @@ impl JsBridge {
                 "the binding closed before the callback settled".to_owned()
             ));
         }
+        true
+    }
+
+    /// `Closing → Closed`; no dispatch path can distinguish it from Closing,
+    /// but teardown observability keeps the lifecycle honest.
+    pub(crate) fn mark_closed(&self) {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .state = BridgeState::Closed;
     }
 }
 

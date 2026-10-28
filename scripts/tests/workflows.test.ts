@@ -80,9 +80,14 @@ describe("workflow structural validity", () => {
 });
 
 describe("Rust native workflow qualification", () => {
-  it("keeps the packaged-consumer gate as a real step in the native matrix", () => {
+  it("keeps the packaged-consumer gates as real steps in the native matrix", () => {
     expect(commands(rust.jobs.native)).toContain(
       "node rust/scripts/check-packages.mjs --offline",
+    );
+    // The packed @agentkit/native install gate must also be a required
+    // step — a tarball a consumer cannot install must not ship silently.
+    expect(commands(rust.jobs.native)).toContain(
+      "node rust/scripts/check-native-package.mjs",
     );
   });
 
@@ -97,16 +102,40 @@ describe("Rust native workflow qualification", () => {
       expect(step.env?.AGENTKIT_SKIP_TS_INTEROP).toBeUndefined();
   });
 
-  it("qualifies Windows as pure-native with the Bun interop suite explicitly opted out", () => {
-    for (const step of rust.jobs["native-windows"]?.steps ?? [])
-      expect(step.uses ?? "").not.toContain("setup-bun");
-    const windowsTest = rust.jobs["native-windows"]?.steps.find((step) =>
-      step.run?.includes("cargo test"),
+  it("qualifies Windows self-contained: Bun-provisioned MCP interop is required, pure-native scope stays explicit", () => {
+    const windows = rust.jobs["native-windows"];
+    const uses = (windows?.steps ?? []).map((step) => step.uses ?? "");
+    // Bun is provisioned so the mixed-runtime MCP fixture tests genuinely
+    // run on Windows — the job must not be a vacuous skip-only scope.
+    expect(uses.some((use) => use.includes("setup-bun"))).toBe(true);
+    expect(commands(windows)).toContain(
+      "bun install --frozen-lockfile --ignore-scripts",
     );
+    const windowsTest = windows?.steps.find((step) =>
+      step.run?.includes("cargo test --workspace"),
+    );
+    // The workspace-wide pure-native step still opts the client interop
+    // suite (native job's mixed-runtime gate) out explicitly, and the
+    // Unix-only coding-pack exclusion stays named.
     expect(windowsTest?.env?.AGENTKIT_SKIP_TS_INTEROP).toBe("1");
-    // The Unix-only coding-pack scope must stay explicit.
     expect(windowsTest?.run).toContain("--exclude agentkit-toolpacks-coding");
     expect(windowsTest?.run).toContain("--exclude agentkit-rust");
+    // The Bun-spawning MCP fixture tests are a REQUIRED Windows step: no
+    // skip opt-out, so a missing Bun or fixture SDK fails loudly instead of
+    // passing vacuously.
+    const mcpInterop = windows?.steps.find((step) =>
+      step.run?.includes("-p agentkit-mcp"),
+    );
+    expect(mcpInterop).toBeDefined();
+    for (const needle of [
+      "--test bridge",
+      "--test native",
+      "--test security",
+      "--test shapes",
+      "--test manager",
+    ])
+      expect(mcpInterop?.run).toContain(needle);
+    expect(mcpInterop?.env?.AGENTKIT_SKIP_TS_INTEROP).toBeUndefined();
   });
 
   it("aggregates native qualification so skipped or missing jobs never pass", () => {

@@ -228,6 +228,26 @@ class CallbackRouter {
 // Store
 // ---------------------------------------------------------------------------
 
+/** Construction-time service configuration. Every field selects NATIVE
+ * behavior — plan-mode blocking, per-call approval, and the plan-approval
+ * escalation all run on the Rust coding-pack authority, never in JS. */
+export interface NativeServiceOptions {
+  /** How long `close()` waits for owned execution to drain before it
+   * completes and reports `closeUncertain`. Default 5000. */
+  closeTimeoutMs?: number;
+  jsToolAuthority?: {
+    /** Mode applied when a session has no durable execution state yet.
+     * Default `ask` (every JS write call needs one human approval). */
+    configuredMode?: "read_only" | "ask" | "auto_edit" | "full_auto" | "plan";
+    /** Tools whose approvable refusal is a PLAN approval. Default
+     * `["submit_plan"]`. */
+    planToolNames?: string[];
+    /** The mode an approved plan durably grants. Never `plan`. Default
+     * `ask`. */
+    planGrantMode?: "read_only" | "ask" | "auto_edit" | "full_auto";
+  };
+}
+
 export class NativeStore {
   private readonly raw: RawNativeStore;
   private closed = false;
@@ -249,19 +269,27 @@ export class NativeStore {
   }
 
   /** Create a session service over this store with one JS provider slot
-   * and the JS tool registry. */
-  async createService(): Promise<NativeSessionService> {
+   * and the JS tool registry. Options select Rust-side behavior (shutdown
+   * deadline, JS-tool authority); unsupported values fail with
+   * `invalid_input` — the binding never advertises a policy it cannot
+   * enforce. */
+  async createService(
+    options?: NativeServiceOptions,
+  ): Promise<NativeSessionService> {
     if (this.closed) {
       throw new NativeAgentError("closed", "the native store is closed");
     }
     const router = new CallbackRouter();
     const raw = await lift(() =>
-      this.raw.createService((err: Error | null, payload: string) => {
-        // Callee-handled threadsafe function: `err` carries a delivery
-        // failure; the pending call still gets reaped by Rust shutdown.
-        if (err !== null) return;
-        void router.handle(payload);
-      }),
+      this.raw.createService(
+        (err: Error | null, payload: string) => {
+          // Callee-handled threadsafe function: `err` carries a delivery
+          // failure; the pending call still gets reaped by Rust shutdown.
+          if (err !== null) return;
+          void router.handle(payload);
+        },
+        options === undefined ? null : JSON.stringify(options),
+      ),
     );
     return new NativeSessionService(raw, router, this);
   }
@@ -357,7 +385,7 @@ export class NativeSessionService {
   /** Kept alive while the service exists: the store clone the worker and
    * session service run on must not be collected under the service. */
   readonly store: NativeStore;
-  private closed = false;
+  private closing: Promise<void> | null = null;
 
   constructor(
     raw: RawSessionService,
@@ -504,23 +532,36 @@ export class NativeSessionService {
     return new TurnSubscription(raw);
   }
 
-  /** Reject outstanding callbacks, stop the worker, drain store writes.
-   * Idempotent. Closing the service releases the store clone so the store
-   * can then be closed. */
+  /** `Open → Closing → Closed` on the Rust side: no new callbacks are
+   * dispatched, outstanding ones settle honestly, and the worker drain is
+   * awaited up to `closeTimeoutMs`. Idempotent, and concurrent callers all
+   * await the same completion. Closing releases the store clone so the
+   * store can then be closed. */
   async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    try {
-      // Release the event-loop reference first: a closed service must never
-      // keep the process alive, even if the class object is still referenced.
+    const started = this.closing;
+    if (started) return started;
+    const run = (async () => {
       try {
-        this.raw.detach();
-      } catch {
-        // Detach is best-effort; the async close below is authoritative.
+        // Release the event-loop reference first: a closed service must never
+        // keep the process alive, even if the class object is still referenced.
+        try {
+          this.raw.detach();
+        } catch {
+          // Detach is best-effort; the async close below is authoritative.
+        }
+        await lift(() => this.raw.close());
+      } finally {
+        this.router.close();
       }
-      await lift(() => this.raw.close());
-    } finally {
-      this.router.close();
-    }
+    })();
+    this.closing = run;
+    return run;
+  }
+
+  /** True when the last `close()` completed without establishing that
+   * owned execution had drained. Durable state stays authoritative; this
+   * only records what close could not prove. */
+  get closeUncertain(): boolean {
+    return this.raw.closeUncertain === true;
   }
 }

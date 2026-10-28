@@ -12,6 +12,9 @@ use napi::bindgen_prelude::*;
 #[macro_use]
 extern crate napi_derive;
 
+mod authority;
+#[cfg(test)]
+mod authority_tests;
 mod errors;
 mod jsbridge;
 mod provider;

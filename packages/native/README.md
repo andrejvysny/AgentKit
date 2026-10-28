@@ -9,8 +9,12 @@ TypeScript. The wire types are JSON mirrors of the Rust serde shapes
 async iterator, nothing else.
 
 Status: **first slice** (see `docs/rust/native-binding-milestone.md`).
-Qualified on x86_64-linux with Bun; the Node matrix, provider streaming
-deltas, `AbortSignal` mapping, and prebuilt per-triple packages are open.
+Qualified on x86_64-linux with Bun and Node 22 (packed-consumer gate); the
+wider Node matrix, provider streaming deltas, `AbortSignal` mapping, and
+prebuilt per-triple packages are open. The Rust core's unix process/lease
+code compiles for Windows with fail-closed fallbacks (signals become no-ops,
+liveness probes answer "alive", quarantines stay blocked) — Windows
+qualification is CI-policy, not local, until the runner records it.
 Until then this package is `private` in the workspace and is consumed
 through relative imports in tests, not npm.
 
@@ -42,19 +46,17 @@ gate.
 
 ## Quickstart
 
+Every call takes and returns JSON mirrors of the Rust serde shapes; the
+working, tested versions of these calls live in `tests/smoke.test.ts`.
+
 ```ts
-import { NativeStore, NativeHost, NativeRegistry, SessionService } from
-  "../../packages/native/src/index.js"; // until the npm export story lands
+import { NativeStore } from "../../packages/native/src/index.js"; // until the npm export story lands
 
-const store = await NativeStore.open("/state/agentkit.sqlite");
-const host = await NativeHost.create();
-const registry = await NativeRegistry.create();
-await registry.registerCodingPack(); // the real contributed coding pack
+const store = await NativeStore.open("/state/agentkit.sqlite"); // or NativeStore.inMemory()
+const service = await store.createService({ closeTimeoutMs: 5_000 });
 
-const service = await SessionService.create({ store, host, registry });
-
-await service.setProvider(async (req) => ({
-  content: "echo: " + req.messages.at(-1)?.content,
+service.setProvider(async (request) => ({
+  content: "echo: " + request.messages.at(-1)?.content,
   stopReason: "stop",
 }));
 
@@ -66,33 +68,34 @@ await service.registerTool(
   async (input) => ({ content: String((input as { text: string }).text) }),
 );
 
-const { sessionId } = await service.createSession({ workspaceDir: "/work",
-  workspaceCanonical: "/work", runnerId: "native", providerId: "js" });
+await service.createSession({ sessionId: "s1", profileId: "p1", model: "test-model" });
+const sent = await service.send("s1", { content: "run the echo tool" });
+// send/followUp/steer return a discriminated result: { kind: "turn", turnId }
+// or a queued/rejected variant — match on `kind`.
 
-const sub = service.subscribe(0); // durable committed events, from seq 0
-const { taskId } = await service.send(sessionId, "run the echo tool");
-
-let terminal;
-for await (const ev of sub) {
-  if (ev.kind === "task" &&
-      ["completed", "failed", "cancelled"].includes(ev.task.status)) {
-    terminal = ev.task;
-    break;
+if (sent.kind === "turn") {
+  const sub = await service.subscribeTurn(sent.turnId, 0); // durable events from seq 0
+  for (;;) {
+    const { events, done } = await sub.poll(64, 100); // bounded batch, capped wait
+    for (const event of events) consume(event);
+    if (done) break; // done only after the settled terminal update
   }
 }
-await sub.close();
 
-const state = service.getState(sessionId); // sync: store actor query
-console.log(terminal?.status, state?.executionReceipts.length);
+const state = await service.getState("s1");
+const usage = await service.getUsage("s1");
 
-await service.close(); // awaited shutdown: releases the file lock
+await service.close(); // Open → Closing → Closed; idempotent, concurrent-safe
+await store.close();  // releases the file lock — service closes first
 ```
 
-An approval round trip is observable through the same surface: the run
-parks (`run.waiting` event, `getState().pendingHumanRequests`),
-`answer(sessionId, requestId, answers, answerId)` resumes it, and the
-execution receipt completes in the durable log. Reusing an `answerId`
-with different content rejects `answer_conflict`.
+Approvals surface through the same calls: the run parks (`run.waiting`,
+visible in `getState().pendingHumanRequests`), `approve(requestId,
+answerId)` or `deny(requestId, answerId, note)` answer it, and structured
+human input goes through `answer({ ... })`. Reusing an `answerId` with
+different content rejects `answer_conflict`. `closeUncertain` records
+whether the last `close()` could not prove the worker drained — durable
+state stays authoritative either way.
 
 ## Rules the binding enforces
 
@@ -102,13 +105,16 @@ with different content rejects `answer_conflict`.
 - **One owner per file.** `NativeStore.open` on a held file rejects
   `already_owned`; a recovery-unreadable database rejects
   `recovery_unreadable`. Ownership releases only via awaited `close()`.
-- **Bounded queues, never blocks.** A subscription's Rust→JS queue holds
-  64 events; overflow terminates the iterator with
-  `subscription_overflow` and the client resubscribes from its durable
-  cursor — nothing is lost, the runtime is never stalled.
-- **Opaque, generation-tagged handles.** No pointers cross the boundary;
-  a released or stale handle id errors `internal_error` instead of
-  aliasing a newer object.
+- **Pull-based subscriptions, never blocks.** `poll(limit, waitMs)` drains
+  the next committed events (batch capped at 64, `limit` outside `1..=64`
+  rejects); the stream is pull-based, so a slow JS consumer applies
+  backpressure to the follower instead of overflowing a queue, and the
+  cursor is durable — a resubscribe from `afterSeq` replays exactly.
+  Nothing is dropped, the runtime is never stalled.
+- **No pointers cross the boundary.** Only napi object handles, JSON
+  strings, and stable error codes; settling an already-settled or unknown
+  callback id returns `false` instead of throwing, and `close()` settles
+  every outstanding callback exactly once.
 - **Callbacks are guests.** A rejected JS provider/tool callback maps to
   the normal failure path (`provider: <reason>`,
   `tool_execution_failed`) — never a panic, never a dangling reference —

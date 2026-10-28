@@ -4,17 +4,23 @@
 
 **Native TS binding, first slice.** `rust/crates/napi` (`agentkit-napi`, napi-rs 3.x) and the workspace
 package `@agentkit/native` expose the Rust runtime to Node/Bun over JSON mirrors of the serde wire shapes:
-`NativeStore` (actor-per-instance, `already_owned`/`recovery_unreadable` fail closed), `SessionService`
-(create/send/steer/followUp/answer/cancel/interrupt/resume/flushQueue/getState), a bounded durable-event
-`subscribe(afterSeq)` iterator that terminates `subscription_overflow` instead of blocking the runtime,
-`registerTool`/`setProvider` JS callbacks wrapped by the real admission/receipt/guard/quarantine layers, and
-an awaited `close()` that releases the store actor and the file lock. Dropping a JS wrapper or iterator never
-cancels durable execution; only `close()`/`cancel()` do. The generated loader and `index.d.ts` are committed
-(typecheck needs no Rust build); the platform `.node` is a build artifact. The binding suites skip without
-the binary and hard-fail under `AGENTKIT_REQUIRE_NATIVE=1`; the native CI job builds it, sets that flag, and
-gates loader freshness with `git diff --exit-code`. Provider functions deliver the final result as one chunk
-— streaming deltas, `AbortSignal` mapping, the Node matrix, and prebuilt per-triple packages remain open
-(`docs/rust/native-binding-milestone.md`).
+`NativeStore` (actor-per-instance, `already_owned`/`recovery_unreadable` fail closed) and
+`store.createService()`, which builds the whole Rust pipeline — `AgentHost`, `ChatExecutor`,
+`AgentSessionService` — with JS-contributed tools and providers running under the Rust-side
+`BindingAuthority`/`JsToolGuard`/`BindingPlanPolicy` (plan-mode blocking, per-call approval, and
+approved-plan escalation never consult JS). `SessionService` covers create/send/steer/followUp/answer/
+approve/deny/cancel/interrupt/resume/flushQueue/getState/getExecution/listTurns/exportSession/getUsage;
+`subscribeTurn(taskId, afterSeq)` is a pull-based durable-event follower (`poll(limit, waitMs)`, batches
+capped at 64, durable cursor, backpressure instead of overflow). `service.close()` runs
+`Open → Closing → Closed` — concurrent callers share one completion, outstanding callbacks settle
+honestly, `closeUncertain` records an undrained close — and dropping a JS wrapper never cancels durable
+execution. Provider functions deliver the final result as one chunk; streaming deltas, `AbortSignal`
+mapping, the Node matrix beyond the qualified cells, and prebuilt per-triple packages remain open
+(`docs/rust/native-binding-milestone.md`). The generated loader and `index.d.ts` are committed
+(typecheck needs no Rust build); the platform `.node` is a build artifact. The binding suites skip
+without the binary and hard-fail under `AGENTKIT_REQUIRE_NATIVE=1`; the native CI job builds it, sets
+that flag, runs the packed-consumer gate (`npm pack` → imported under Bun and Node), and gates loader
+freshness with `git diff --exit-code`.
 
 **Coding tool pack ported to Rust.** `rust/crates/toolpacks-coding` is the native port of
 `@agentkit/toolpacks-coding`; the TypeScript package is unchanged and remains the contract of record. Eleven
