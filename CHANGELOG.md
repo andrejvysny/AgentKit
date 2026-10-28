@@ -18,6 +18,13 @@ regression coverage for conflicting edits, external modification mid-flight, sym
 races, validation-to-write drift, cancelled lock holders, stale and reused pids, malformed lock files, lease timeouts
 and command teardown; conflicting writes never silently overwrite, and uncertain states fail explicitly.
 
+**Linux orphan-scan boundary.** The startup command-ownership sweep no longer treats `EACCES` on a same-uid
+`/proc/<pid>/environ` as an unprovable absence: a process that cleared its dumpable flag has kernel-enforced itself
+out of inspection and cannot be one of our (always dumpable) spawned children, the same way the workspace lock never
+defended against external editors. Previously this quarantined every coding workspace on GitHub's Linux runners, where
+hardened same-uid services answer `EACCES`, hanging all command execution on `startup_cleanup`. Any other scan failure
+still fails closed.
+
 **`@agentkit/cassette` — deterministic effect record & replay (ADR 0021).** An optional package wrapping the
 `AiProviderClient` / `AiTool` boundary: `off` (default) / `record` / `replay`. Strict replay — order-preserving,
 fingerprint-matched, never falls through to live. Fixtures are validated, secrets are absent by default (prompts,
