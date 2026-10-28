@@ -72,21 +72,32 @@ the vertical slice (accept → tool → approval park → answer → resume →
 terminal + receipt → close → reopen → replay) plus store lock,
 dropped-iterator, provider rejection, tool rejection, unknown-code
 redaction, code-list parity, plan/guard authority enforcement
-(JS-contributed writes park under `ask`, an approved plan durably grants
-`planGrantMode`, unsupported configurations reject at construction),
-the `Open → Closing → Closed` lifecycle (concurrent `close()` callers
-share one completion; closing dispatches no new callbacks), and
-tool-descriptor passthrough — 16 binding tests / 90 assertions across
-3 files via `bun test` in `packages/native`, plus 10 Rust unit tests in
-`agentkit-napi`. The binding suites skip cleanly without the built
-binary and **hard-fail** under `AGENTKIT_REQUIRE_NATIVE=1` (M2.1 A4
+(JS-contributed writes park under `ask`, a command-bearing `process.exec`
+tool parks even under `auto_edit` — the SAME `agentkit_core::permission`
+matrix the coding pack's guard runs, a read-effect plan submission still
+reaches the human, an approved plan durably grants `planGrantMode`,
+unsupported configurations reject at construction), the durable ask's
+argument identity (`argsSha256` over canonical arguments), the
+`Open → Closing → Closed` lifecycle (concurrent `close()` callers share
+one completion; closing dispatches no new callbacks; `closeUncertain`
+means WORKER DRAIN only — `pendingCallbacks` is the observability for
+dispatched, unsettled JS effects), and tool-descriptor passthrough —
+19 binding tests / 127 assertions across 3 files via `bun test` in
+`packages/native`, plus 12 Rust unit tests in `agentkit-napi` and the
+shared-matrix table tests in `agentkit-core`. The binding suites skip
+cleanly without the built binary and **hard-fail** under
+`AGENTKIT_REQUIRE_NATIVE=1` (M2.1 A4
 rule). CI: the `native` matrix job (ubuntu + macOS, Node 24 / Bun 1.4.0)
 builds the binary, sets that flag, runs
-`rust/scripts/check-native-package.mjs` (real `npm pack` → extracted
-package imported under both Bun and system Node), and gates freshness of
-the committed loader/d.ts with `git diff --exit-code`; a separate
-self-contained Windows job compiles the whole workspace including the
-binding crate.
+`rust/scripts/check-native-package.mjs` (real `npm pack` → the INSTALLED
+package driven through the full acceptance lifecycle — send → committed
+events → approval wait → answer → resume → terminal receipt → cancel →
+awaited close, then a fresh-process reopen with durable replay — under
+both Bun and Node, cargo-free), and gates freshness of the committed
+loader/d.ts with `git diff --exit-code`; a separate
+self-contained Windows job compiles the workspace including the binding
+crate — which no longer pulls the Unix-only coding pack at all, since
+the shared authority is portable (`agentkit-core`/`agentkit-host`).
 
 Open gaps versus the design above, all named, none silent: streaming
 deltas and the provider-completion vs durable-settled lane (backlog 1);
@@ -127,10 +138,19 @@ the binding exposes handles, promises, and async iteration — nothing else.
 
 ## Supported matrix
 
-Verified on the same SHA, both runtimes, x86_64-linux locally and the full
-matrix in CI: Node 20, 22, 24 (current LTS lines) and Bun 1.4.x. Every
-matrix cell runs the same conformance spec (below); a cell that cannot run
-is reported as skipped, never as passed (M2.1 A4 rule).
+Evidence, tied to what actually ran — branch `m2.1-hardening`, this
+qualification round on top of `850a740`. A cell that has not run is
+listed unverified and never counted as passed (M2.1 A4 rule):
+
+| Cell | Evidence | Status |
+| --- | --- | --- |
+| x86_64-linux · Bun 1.4.4 | binding suites under `AGENTKIT_REQUIRE_NATIVE=1` + packed acceptance gate, local | **verified** |
+| x86_64-linux · Node 22.20.0 | packed acceptance gate: full lifecycle + fresh-process reopen, `rust/scripts/check-native-package.mjs`, local | **verified** |
+| ubuntu-latest · Node 24 + Bun 1.4.0 | `native` matrix job: addon build, loader freshness, suites under the flag, packed acceptance gate | runner-recorded on push |
+| macos-latest · Node 24 + Bun 1.4.0 | same matrix job; macOS links with `rustc-link-arg=-Wl,-undefined,dynamic_lookup` only — the `-tests` key variant was REJECTED by Cargo (no supporting test target) and removed; harness binaries link via the in-crate `#[cfg(test)]` napi stubs | runner-recorded on push |
+| windows-latest | `native-windows` job: workspace minus the Unix-only coding pack; the binding crate dropped its coding-pack dependency entirely (shared permission authority is portable in `agentkit-core`/`agentkit-host`), so no Unix process APIs sit on its build path | runner-recorded on push |
+| Node 20 | — | **untested**, named gap |
+| aarch64 targets, release-profile prebuilds, install-never-cargo | — | **not shipped**, named gap |
 
 ## The first vertical slice (acceptance scenario)
 

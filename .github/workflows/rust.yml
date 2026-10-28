@@ -60,15 +60,16 @@ jobs:
         # If the committed loader/d.ts drifted from what the Rust source
         # exports, the freshly built files differ from the checkout.
         run: git diff --exit-code -- packages/native/generated
-      - name: Packed native package installs and runs a scripted turn
+      - name: Packed native package installs and runs the acceptance lifecycle
         # Build packages/native, npm pack it, npm install the tarball into an
-        # isolated temp directory OUTSIDE the repo, and drive one in-memory
-        # scripted turn through the INSTALLED @agentkit/native under both Bun
-        # and node with no Rust toolchain reachable on PATH — proving the
-        # packed loader is binary-backed, not build-backed. Linux scope: the
-        # macOS runners are qualified by the matrix gates above and the
-        # packed-consumer gates here target the linux-x64 artifact.
-        if: runner.os == 'Linux'
+        # isolated temp directory OUTSIDE the repo, and drive the FULL
+        # acceptance lifecycle through the INSTALLED @agentkit/native — send
+        # → committed events → approval wait → answer → resume → terminal
+        # receipt → cancel → awaited close — plus a fresh-process reopen with
+        # durable replay, under both Bun and node, with no Rust toolchain
+        # reachable on PATH. Runs on EVERY matrix OS (Linux and macOS): the
+        # packed artifact a consumer installs must qualify on the same SHA
+        # and platform that built it, not only on Linux.
         run: node rust/scripts/check-native-package.mjs
       - run: bun test
         env:

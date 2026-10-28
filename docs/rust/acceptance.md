@@ -357,7 +357,59 @@ were re-qualified locally with Node v22.20.0 installed.
   workspace, and imports the committed loader + built addon under both Bun
   and system Node; the package is `private: true` with an explicit `files`
   list. The MCP fixture suites now import the fixture SDK by alias and
-  surface child-process stderr on startup failure instead of a bare hang.
+  and surface child-process stderr on startup failure instead of a bare hang.
+
+### M3 corrective round validation record (2026-10-28, on top of the qualification round)
+
+- Live cleanup uncertainty closed: a teardown where the detailed `/proc` scan
+  reports no survivors but one marked suspect is alive with an unreadable
+  environment can no longer retire the intent and release the lease. Every
+  cleanup decision path (completion, timeout, cancellation, drain, crash
+  recovery, startup sweep) consumes an explicit `Clean`/`Uncertain` outcome
+  built from the discovery view's survivor∪suspect union; suspects are
+  confirmed across repeat scans, reported and never killed; group-liveness
+  requires sustained probes; zombies no longer fabricate suspects. The
+  in-process coordinator's quarantine is durable (`quarantine.json` beside
+  the intent journal, fail closed on loss) and the intent is retained until
+  recovery positively establishes cleanup — which additionally requires every
+  pid the record names to be dead. Regression coverage includes the assessor
+  scenario without `prctl` and a real double-forked, `setsid`'d marked child
+  that outlives its group ([cleanup_uncertainty.rs](../../rust/crates/toolpacks-coding/tests/cleanup_uncertainty.rs));
+  four consecutive full-suite runs green.
+- Queue/resume races closed: follow-up admission is one store write
+  transaction (`queue_or_stage_turn` — active-task check, durable insert and
+  next-turn staging cannot interleave), settlement-cancelled steers are never
+  staged, fallback promotion reads the session's persisted descriptor instead
+  of the calling turn's cached mode, and `resume` deduplicates a restart whose
+  completion already landed. 290 host+store tests green.
+- One permission authority: the effect/classifier decision moved to
+  `agentkit_core::permission` and both the coding `ToolGuard` and the binding
+  `JsToolGuard` delegate to it, so a JS-contributed `run_command` requires
+  approval under `auto_edit` (previously the binding's own guard let it
+  through) and a self-declared plan tool is governed by plan-mode policy
+  before the read-effect rule — matching `submit_plan`. The shared decision
+  is dependency-free, so the binding no longer pulls the Unix-only coding
+  pack (Windows compile gate).
+- Shutdown honesty and observability: the JS wrapper exposes
+  `pendingCallbacks` (dispatched-but-unsettled callbacks); `close()` and
+  `closeUncertain` are documented as worker drain only — they never claim
+  external JS effects stopped, and an admitted-without-result receipt stays
+  uncertain to recovery rather than fabricating an outcome.
+- Qualification: 15-gate battery — rustfmt, clippy (`--all-targets
+  --all-features -D warnings`), workspace tests (736 passed, 0 failed), the
+  recovery suites ×3, wasm contracts, offline package consumers, biome (733
+  files), fixture export `--check`, typecheck, main Bun suite (2907 passed),
+  `build:native`, generated-loader freshness, the binding suite under
+  `AGENTKIT_REQUIRE_NATIVE=1` (19 tests / 127 assertions across 3 files) plus
+  12 `agentkit-napi` unit tests, and the packed-consumer gate running the
+  full acceptance lifecycle (send → events → approval → answer → resume →
+  terminal receipt → cancel → awaited close) and a fresh-process reopen with
+  durable replay from an `npm pack`-installed package under Bun 1.4.4 and
+  Node v22.20.0 with no reachable toolchain.
+- Limits of this round: no `PR_SET_DUMPABLE=0` reproduction exists (the real
+  detached marked child is the proxy); macOS/Windows qualification is
+  recorded by the CI native matrix jobs at push, not claimed here; no release
+  prebuilds, no npm publication, Node 20 untested.
 
 ## Remaining release gates
 

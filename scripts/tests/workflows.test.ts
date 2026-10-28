@@ -5,6 +5,7 @@ interface Step {
   name?: string;
   run?: string;
   uses?: string;
+  if?: string;
   env?: Record<string, string>;
   "working-directory"?: string;
 }
@@ -89,6 +90,15 @@ describe("Rust native workflow qualification", () => {
     expect(commands(rust.jobs.native)).toContain(
       "node rust/scripts/check-native-package.mjs",
     );
+    // And it runs on EVERY matrix OS: the packed acceptance lifecycle
+    // (approval round-trip, cancel, awaited close, fresh-process reopen)
+    // qualifies the artifact on the platform that built it — an
+    // `if: runner.os` restriction here would silently narrow the gate.
+    const packedStep = (rust.jobs.native?.steps ?? []).find((step) =>
+      (step.run ?? "").includes("check-native-package.mjs"),
+    );
+    expect(packedStep).toBeDefined();
+    expect(packedStep.if).toBeUndefined();
   });
 
   it("runs the mixed Bun interop suite as a required step without the skip opt-out", () => {
