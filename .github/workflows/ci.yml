@@ -262,9 +262,10 @@ jobs:
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: |
-          node --input-type=module -e '
-            const jobs = Object.entries(JSON.parse(process.env.RESULTS));
-            const failed = jobs.filter(([, job]) => job.result !== "success");
-            for (const [name, job] of failed) console.error(name + ": " + job.result);
-            if (jobs.length !== 7 || failed.length) process.exit(1);
-          '
+          # jq (preinstalled on ubuntu-latest) instead of node: the gate is
+          # the thing that must never depend on a runtime it is auditing, and
+          # a missing or skipped suite must never count as success.
+          echo "$RESULTS" | jq -e '
+            (keys | length) == 7
+            and (to_entries | all(.value.result == "success"))
+          ' || exit 1

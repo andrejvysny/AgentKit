@@ -33,12 +33,10 @@ describe("run_command (sandbox off, portable)", () => {
     // both stream lines are present exactly once, and the exit marker is last.
     const out = h.text(ok);
     expect(out.endsWith("\n[exit code 0]")).toBe(true);
-    expect(
-      out
-        .slice(0, -"\n[exit code 0]".length)
-        .split("\n")
-        .sort(),
-    ).toEqual(["hello", "oops"]);
+    expect(out.slice(0, -"\n[exit code 0]".length).split("\n").sort()).toEqual([
+      "hello",
+      "oops",
+    ]);
     expect(ok.warnings).toEqual(["sandbox is off: the command ran unconfined"]);
     const bad = await h.run("run_command", { command: "exit 3" });
     expect(bad.ok).toBe(false);

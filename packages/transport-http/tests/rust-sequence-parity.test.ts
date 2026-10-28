@@ -159,47 +159,49 @@ test("TypeScript client dedupes finite numeric high water without requiring inte
 test.skipIf(!nativeBackendAvailable)(
   "native SQLite SSE preserves numeric sequences and resumes exclusively at the last event",
   async () => {
-  let native = await startNativeServer();
-  const source = events([-0.5, 0.25, 0.5, 4.75, 2 ** 53, 2 ** 53 + 2, 1e308]);
-  source[0]!.eventId = "";
-  try {
-    const response = await fetch(`${native.controlUrl}/tasks`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${native.controlToken}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        operation: "seedNumericRun",
-        taskId: "numeric",
-        events: source,
-      }),
-    });
-    expect(response.status).toBe(200);
-    for (const [cursor, start] of [
-      [undefined, 0],
-      ["unknown", 0],
-      ["", 0],
-      ["numeric-1", 2],
-      ["numeric-4", 5],
-      ["numeric-6", 7],
-    ] as const) {
-      const received = [];
+    let native = await startNativeServer();
+    const source = events([-0.5, 0.25, 0.5, 4.75, 2 ** 53, 2 ** 53 + 2, 1e308]);
+    source[0]!.eventId = "";
+    try {
+      const response = await fetch(`${native.controlUrl}/tasks`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${native.controlToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          operation: "seedNumericRun",
+          taskId: "numeric",
+          events: source,
+        }),
+      });
+      expect(response.status).toBe(200);
+      for (const [cursor, start] of [
+        [undefined, 0],
+        ["unknown", 0],
+        ["", 0],
+        ["numeric-1", 2],
+        ["numeric-4", 5],
+        ["numeric-6", 7],
+      ] as const) {
+        const received = [];
+        for await (const event of native.client.streamRun("numeric", {
+          ...(cursor === undefined ? {} : { lastEventId: cursor }),
+          maxRetries: 0,
+        }))
+          received.push(event.seq);
+        expect(received).toEqual(source.slice(start).map((event) => event.seq));
+      }
+      native = await native.restart();
+      const replay = [];
       for await (const event of native.client.streamRun("numeric", {
-        ...(cursor === undefined ? {} : { lastEventId: cursor }),
         maxRetries: 0,
       }))
-        received.push(event.seq);
-      expect(received).toEqual(source.slice(start).map((event) => event.seq));
+        replay.push(event.seq);
+      expect(replay).toEqual(source.map((event) => event.seq));
+    } finally {
+      await native.stop();
     }
-    native = await native.restart();
-    const replay = [];
-    for await (const event of native.client.streamRun("numeric", {
-      maxRetries: 0,
-    }))
-      replay.push(event.seq);
-    expect(replay).toEqual(source.map((event) => event.seq));
-  } finally {
-    await native.stop();
-  }
-}, 60_000);
+  },
+  60_000,
+);

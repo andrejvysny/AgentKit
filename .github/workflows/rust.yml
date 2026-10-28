@@ -53,7 +53,14 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - name: Verify packaged consumers
-      - run: node rust/scripts/check-packages.mjs --offline
+        run: node rust/scripts/check-packages.mjs --offline
+      - name: Mixed Rust/TypeScript client interop (required, never skipped here)
+        # The pure Bun-free cargo test above also runs these; this named step
+        # keeps the mixed-runtime coverage visible as its own required gate.
+        # The workflow structure test refuses AGENTKIT_SKIP_TS_INTEROP in this
+        # job, so a silent skip here cannot pass.
+        run: cargo test -p agentkit-client --test interoperability --test all_routes --test typescript_boundaries --all-features --locked
+        working-directory: rust
   # Windows qualifies the portable scope only: contracts, core execution, the
   # durable store, host services, transport, client and MCP. The coding pack
   # (`agentkit-toolpacks-coding`) and the facade re-exporting it (`agentkit-rust`)
@@ -78,8 +85,18 @@ jobs:
         working-directory: rust
       - run: cargo clippy --workspace --exclude agentkit-rust --exclude agentkit-toolpacks-coding --all-targets --all-features --locked -- -D warnings
         working-directory: rust
-      - run: cargo test --workspace --exclude agentkit-rust --exclude agentkit-toolpacks-coding --all-features --locked
+      # Pure-native suite only. The client interop tests (all_routes,
+      # interoperability, typescript_boundaries) spawn Bun against the
+      # TypeScript service and belong to the mixed-runtime gate in the
+      # `native` job; this runner deliberately has no Bun or JS dependencies,
+      # so the explicit opt-out keeps the pure-native result honest instead of
+      # panicking on a missing Bun. The workflow structure test requires this
+      # variable here and forbids it in `native`.
+      - name: Pure-native cargo test (Bun interop suite runs in the native job)
+        run: cargo test --workspace --exclude agentkit-rust --exclude agentkit-toolpacks-coding --all-features --locked
         working-directory: rust
+        env:
+          AGENTKIT_SKIP_TS_INTEROP: "1"
   contracts:
     runs-on: ubuntu-latest
     steps:
@@ -95,3 +112,25 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo check -p agentkit-contracts --target wasm32-unknown-unknown --locked
         working-directory: rust
+  # Branch protection can require this stable name. All native matrices and
+  # every gate job must complete successfully; a skipped, cancelled or
+  # missing suite never counts as success. The workflow structure test
+  # (scripts/tests/workflows.test.ts) executes this gate script with crafted
+  # results and pins the env policy that keeps the mixed-runtime and
+  # packaged-consumer suites from silently skipping.
+  qualification:
+    if: always()
+    needs: [native, native-windows, contracts]
+    runs-on: ubuntu-latest
+    steps:
+      - name: require all native qualification jobs
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          # No node here: the gate must pass on the bare runner (and be
+          # testable on hosts without a node binary). jq is preinstalled on
+          # ubuntu-latest. A missing or skipped suite is never success.
+          echo "$RESULTS" | jq -e '
+            (keys | length) == 3
+            and (to_entries | all(.value.result == "success"))
+          ' || exit 1
