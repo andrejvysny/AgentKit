@@ -463,7 +463,12 @@ impl DurableEvents {
     /// one transaction before the run ever saw the item. This path is an
     /// observer — it persists the event and NEVER re-projects the message
     /// (a second record for the same input would show the model a
-    /// steering that happened once).
+    /// steering that happened once). Because this transaction runs AFTER
+    /// the placement transaction, it may be lost to a crash while the
+    /// placement stands: the placement pair is the unit of record and the
+    /// event is its projection, so `session_run::backfill_applied_steers`
+    /// re-derives the missing announcement from the durable input + record
+    /// at the start of every later attempt of this run.
     async fn persist_steered(&self, event: &Value) -> Result<(), CoreError> {
         self.context
             .store

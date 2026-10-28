@@ -10,7 +10,8 @@ use agentkit_core::{
 use agentkit_host::*;
 use agentkit_store::{
     AgentInputKind, AgentInputQuery, AgentInputStatus, ClaimInput, CreateAgentInput,
-    ExecutionReceiptAdmission, ExecutionReceiptStatus, SettleTask, SqliteStore, TaskStatus,
+    ExecutionReceiptAdmission, ExecutionReceiptStatus, RecoveryMode, SettleTask, SqliteStore,
+    TaskStatus,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -64,9 +65,32 @@ impl ChatProvider for Scripted {
     }
 }
 
+/// A body the same-run uncertainty test can stop between admission and
+/// result: when armed, the tool enters, marks itself seen, and waits for
+/// the test to pull the process down (abort the attempt) — the honest
+/// crash residue of an admitted-without-result receipt.
+struct Gate {
+    armed: AtomicBool,
+    entered: AtomicBool,
+    release: AtomicBool,
+}
+
+impl Gate {
+    fn arm(&self) {
+        self.armed.store(true, Ordering::SeqCst);
+        self.entered.store(false, Ordering::SeqCst);
+        self.release.store(false, Ordering::SeqCst);
+    }
+
+    fn release(&self) {
+        self.release.store(true, Ordering::SeqCst);
+    }
+}
+
 struct Mutate {
     definition: ToolDefinition,
     hits: Arc<AtomicUsize>,
+    gate: Arc<Gate>,
 }
 
 #[async_trait]
@@ -76,6 +100,12 @@ impl Tool for Mutate {
     }
     async fn execute(&self, context: ToolContext, _: Value) -> Result<ToolResult, CoreError> {
         self.hits.fetch_add(1, Ordering::SeqCst);
+        if self.gate.armed.load(Ordering::SeqCst) {
+            self.gate.entered.store(true, Ordering::SeqCst);
+            while !self.gate.release.load(Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            }
+        }
         Ok(ToolResult {
             ok: true,
             data: Some(json!({"done": true})),
@@ -176,6 +206,7 @@ struct Fixture {
     hits: Arc<AtomicUsize>,
     requests: Arc<Mutex<Vec<ChatRequest>>>,
     ask: Arc<AtomicBool>,
+    gate: Arc<Gate>,
 }
 
 async fn fixture(
@@ -196,11 +227,35 @@ async fn fixture_with(
     standing: bool,
     plan: Option<Arc<dyn PlanApprovalPolicy>>,
 ) -> Fixture {
+    fixture_with_options(
+        tool,
+        arguments_json,
+        guarded,
+        standing,
+        plan,
+        HostOptions::default(),
+    )
+    .await
+}
+
+async fn fixture_with_options(
+    tool: &'static str,
+    arguments_json: &'static str,
+    guarded: &'static str,
+    standing: bool,
+    plan: Option<Arc<dyn PlanApprovalPolicy>>,
+    options: HostOptions,
+) -> Fixture {
     let store = SqliteStore::memory(64).unwrap();
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let hits = Arc::new(AtomicUsize::new(0));
     let requests = Arc::new(Mutex::new(vec![]));
     let ask = Arc::new(AtomicBool::new(false));
+    let gate = Arc::new(Gate {
+        armed: AtomicBool::new(false),
+        entered: AtomicBool::new(false),
+        release: AtomicBool::new(false),
+    });
 
     let definition: ToolDefinition = serde_json::from_value(json!({
         "name": tool, "version": "1", "effect": "write",
@@ -223,6 +278,7 @@ async fn fixture_with(
                 tool: Arc::new(Mutate {
                     definition,
                     hits: hits.clone(),
+                    gate: gate.clone(),
                 }),
             })],
             tool_guards: vec![Arc::new(AskGuard {
@@ -241,7 +297,7 @@ async fn fixture_with(
         store.clone(),
         HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), executor)]),
         runtime.clone(),
-        HostOptions::default(),
+        options,
     )
     .unwrap();
     let service = AgentSessionService::new(AgentSessionServiceDeps {
@@ -276,6 +332,7 @@ async fn fixture_with(
         hits,
         requests,
         ask,
+        gate,
     }
 }
 
@@ -730,6 +787,166 @@ async fn a_later_uncertainty_requires_a_new_answer() {
     );
 }
 
+/// The same run can present TWO uncertain generations for one tool-call
+/// identity: the generation-N execution admitted after the human's answer
+/// dies before recording its result, leaving generation N+1 unresolved.
+/// Each generation must get its own request row and its own answer: the
+/// answered generation-N row must not collide with (and thereby fail the
+/// park of) the generation-N+1 ask, and its consumed grant must not
+/// authorize the newer uncertainty.
+#[tokio::test]
+async fn a_second_uncertainty_in_the_same_run_needs_its_own_answer() {
+    let f = fixture_with_options(
+        "write_file",
+        ARGS_A,
+        "other",
+        false,
+        None,
+        HostOptions {
+            max_attempts: 10,
+            ..Default::default()
+        },
+    )
+    .await;
+    f.set_ask(true);
+    let turn = f.send("mutate it", "t1").await;
+
+    // -- generation N: the first execution is admitted and dies before its
+    // result, all under THIS run. A real attempt is pulled down mid-body
+    // (process death): the receipt stays admitted and NO tool record
+    // answers the call — honest crash residue, not a settled failure.
+    f.gate.arm();
+    let host = f.host.clone();
+    let running = tokio::spawn(async move { host.run_once().await });
+    let gate = f.gate.clone();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async move {
+        while !gate.entered.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the first execution started");
+    running.abort();
+    let first = agentkit_host::execution_id(&turn, "call-1", None);
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        1,
+        "the crashed execution entered the body exactly once"
+    );
+    f.store
+        .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
+        .await
+        .unwrap();
+    f.service.resume("s1", &turn).await.unwrap();
+
+    // The run re-presents the call; the unresolved generation N parks its
+    // own request, which names exactly that execution.
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        1,
+        "the re-presented call never runs again while its generation is unanswered"
+    );
+    let request_one = f.pending(&turn).await.into_iter().next().unwrap();
+    assert_eq!(request_one.content["uncertaintyGeneration"], first);
+    f.service
+        .approve(&request_one.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+
+    // -- generation N+1: the approved execution is admitted and dies before
+    // its result. The attempt is pulled down mid-body, so the admission
+    // stays uncertain and NO tool record answers the call.
+    f.gate.arm();
+    let host = f.host.clone();
+    let running = tokio::spawn(async move { host.run_once().await });
+    let gate = f.gate.clone();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async move {
+        while !gate.entered.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the approved execution started");
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        2,
+        "the generation-N answer opened exactly one execution"
+    );
+    running.abort();
+    let second = agentkit_host::execution_id(&turn, "call-1", Some(&request_one.input_id));
+    f.store
+        .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
+        .await
+        .unwrap();
+    f.service.resume("s1", &turn).await.unwrap();
+
+    // The SAME run must ask again — its own second row, naming the newer
+    // generation. Before the identity fix this park died `park_failed`:
+    // the second request reused the answered first row's id with different
+    // content, and the store's idempotency gate refused the rewrite.
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.status(&turn).await,
+        TaskStatus::WaitingApproval,
+        "the newer uncertainty re-parks the run for its own answer"
+    );
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        2,
+        "an answered generation cannot authorize a newer uncertainty"
+    );
+    let requests = f.pending(&turn).await;
+    assert_eq!(requests.len(), 1, "the second ask is its own pending row");
+    let request_two = &requests[0];
+    assert_eq!(request_two.content["uncertaintyGeneration"], second);
+    assert_eq!(request_two.content["kind"], "approval");
+    assert_ne!(
+        request_two.input_id, request_one.input_id,
+        "generation N+1 cannot collide with the answered row of generation N"
+    );
+    assert_ne!(
+        request_two.content_hash, request_one.content_hash,
+        "each generation's request hashes its own bytes"
+    );
+    let receipts = f.store.list_executions_by_chat("s1".into()).await.unwrap();
+    assert!(
+        receipts.iter().any(|record| record.execution_id == second
+            && record.status == ExecutionReceiptStatus::Admitted),
+        "the crashed generation remains admitted evidence"
+    );
+
+    // Only the newer generation's own answer spends a fresh grant.
+    f.service
+        .approve(&request_two.input_id, "ans-2", None, None)
+        .await
+        .unwrap();
+    f.gate.release();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::Completed);
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        3,
+        "the new answer opened exactly the new generation"
+    );
+    let receipts = f.store.list_executions_by_chat("s1".into()).await.unwrap();
+    assert!(
+        receipts.iter().any(|record| record.execution_id == second
+            && record.status == ExecutionReceiptStatus::Admitted),
+        "the crashed generation stays on the record — completion is earned, not overwritten"
+    );
+    assert!(
+        receipts
+            .iter()
+            .any(|record| record.approval_request_id.as_deref()
+                == Some(request_two.input_id.as_str())
+                && record.status == ExecutionReceiptStatus::Completed),
+        "the second answer's grant carried the completing execution"
+    );
+}
+
 #[tokio::test]
 async fn approvals_survive_every_javascript_number_spelling() {
     // One JavaScript-semantic parser at every digest site: what the
@@ -767,4 +984,173 @@ async fn approvals_survive_every_javascript_number_spelling() {
             "{arguments_json} is the operation the human approved, unchanged"
         );
     }
+}
+
+/// A plan-grant policy with a switch: reachable (`down` false) it grants
+/// `granted`, unreachable it errors on both calls and counts every
+/// consultation so a test can prove a denial never asks it.
+struct WatchPolicy {
+    tool: &'static str,
+    granted: &'static str,
+    down: AtomicBool,
+    consulted: AtomicUsize,
+}
+
+impl WatchPolicy {
+    fn new(tool: &'static str, granted: &'static str, down: bool) -> Self {
+        Self {
+            tool,
+            granted,
+            down: AtomicBool::new(down),
+            consulted: AtomicUsize::new(0),
+        }
+    }
+    fn unavailable(&self) -> HostResult<()> {
+        self.consulted.fetch_add(1, Ordering::SeqCst);
+        if self.down.load(Ordering::SeqCst) {
+            return Err(HostError::Execution("the grant service is down".into()));
+        }
+        Ok(())
+    }
+    fn count(&self) -> usize {
+        self.consulted.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl PlanApprovalPolicy for WatchPolicy {
+    fn tool_names(&self) -> Vec<String> {
+        vec![self.tool.into()]
+    }
+    async fn granted_mode(&self, _: &str) -> HostResult<String> {
+        self.unavailable()?;
+        Ok(self.granted.into())
+    }
+    async fn authorize(&self, _: &PlanGrantIntent<'_>) -> HostResult<PlanAuthorization> {
+        self.unavailable()?;
+        Ok(PlanAuthorization::Allowed)
+    }
+}
+
+/// The denial half of a plan request is the human's own decision: it must
+/// persist — note included — with the grant service unreachable. Consulting
+/// the escalation policy for a denial turns "no" into an error, which leaves
+/// the request pending and the parked turn waiting forever.
+#[tokio::test]
+async fn a_denied_plan_request_is_recorded_with_the_grant_policy_down() {
+    let policy = Arc::new(WatchPolicy::new("submit_plan", "default", true));
+    let f = fixture("submit_plan", false, Some(policy.clone())).await;
+    f.set_ask(true);
+    let turn = f.send("plan it", "t1").await;
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
+    let request = f.pending(&turn).await.into_iter().next().unwrap();
+    assert_eq!(request.content["toolName"], "submit_plan");
+
+    let receipt = f
+        .service
+        .deny(&request.input_id, "ans-1", Some("not from this plan"))
+        .await
+        .expect("a denial never depends on the grant service");
+    assert!(!receipt.duplicate);
+    assert_eq!(
+        policy.count(),
+        0,
+        "a denial is not an escalation: neither granted_mode nor authorize ran"
+    );
+
+    // The request is answered, durably, with the human's note.
+    assert!(f.pending(&turn).await.is_empty());
+    let answered = f
+        .store
+        .get_input(request.input_id.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(answered.status, AgentInputStatus::Answered);
+    assert_eq!(answered.answer_id.as_deref(), Some("ans-1"));
+    let answer_record_id = answered.applied_message_id.clone().unwrap_or_default();
+    let record = f
+        .store
+        .messages("s1", false)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|message| message.id == answer_record_id)
+        .expect("the answer appended its tool record");
+    let envelope: Value =
+        serde_json::from_str(record.content.as_str().unwrap()).expect("an answer envelope");
+    assert_eq!(envelope["data"]["errorCode"], "approval_denied");
+    assert_eq!(envelope["data"]["errorMessage"], "not from this plan");
+
+    // The turn is re-admitted: nothing awaits an answer any more, and the
+    // denied call never runs.
+    assert_eq!(f.status(&turn).await, TaskStatus::Queued);
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::Completed);
+    assert_eq!(f.hits.load(Ordering::SeqCst), 0, "a denial is final");
+}
+
+/// Fail-closed stays fail-closed: an APPROVAL still needs the grant policy,
+/// so with it down the answer is refused and the request keeps awaiting a
+/// legitimate decision.
+#[tokio::test]
+async fn an_approved_plan_request_still_refuses_a_down_grant_policy() {
+    let policy = Arc::new(WatchPolicy::new("submit_plan", "default", true));
+    let f = fixture("submit_plan", false, Some(policy.clone())).await;
+    f.set_ask(true);
+    let turn = f.send("plan it", "t1").await;
+    f.host.run_once().await.unwrap();
+    let request = f.pending(&turn).await.into_iter().next().unwrap();
+    let error = f
+        .service
+        .approve(&request.input_id, "ans-1", None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_input");
+    assert!(policy.count() > 0, "an approval does consult the policy");
+    assert_eq!(
+        f.pending(&turn).await.len(),
+        1,
+        "the request still awaits a decision"
+    );
+    assert!(f.service.get_execution("s1").await.unwrap().is_none());
+    assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
+}
+
+/// A replayed or stale answer is an observation: it never re-spends the
+/// one-shot grant and never depends on the grant policy still being
+/// reachable.
+#[tokio::test]
+async fn a_replayed_plan_answer_never_consults_the_grant_policy() {
+    let policy = Arc::new(WatchPolicy::new("submit_plan", "default", false));
+    let f = fixture("submit_plan", false, Some(policy.clone())).await;
+    f.set_ask(true);
+    let turn = f.send("plan it", "t1").await;
+    f.host.run_once().await.unwrap();
+    let request = f.pending(&turn).await.into_iter().next().unwrap();
+    f.service
+        .approve(&request.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+    let before = policy.count();
+    assert!(before > 0, "the answer itself consulted the policy");
+
+    policy.down.store(true, Ordering::SeqCst);
+    let replay = f
+        .service
+        .answer(&AnswerInput {
+            request_id: request.input_id.clone(),
+            answer_id: "ans-1".into(),
+            response: json!({"decision": "approve"}),
+        })
+        .await
+        .expect("a replay is an observation, not a new grant");
+    assert!(replay.duplicate);
+    assert_eq!(
+        policy.count(),
+        before,
+        "the replay consulted the policy not at all"
+    );
 }

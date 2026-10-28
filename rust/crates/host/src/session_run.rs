@@ -10,8 +10,8 @@ use crate::session::{read_session_descriptor, session_turn_kind};
 use crate::*;
 use agentkit_core::{ChatMessage, SteeringItem, SteeringSource, ToolCall};
 use agentkit_store::{
-    AgentInputKind, AgentInputQuery, AgentInputStatus, AppendProjectedInputs, MessageInput,
-    MessageRecord, is_approval_request,
+    AgentInputKind, AgentInputQuery, AgentInputRecord, AgentInputStatus, AppendProjectedInputs,
+    MessageInput, MessageRecord, is_approval_request,
 };
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -31,12 +31,29 @@ pub(crate) async fn is_session_turn(context: &ExecutionContext, chat_id: &str) -
 /// Steers pending for this turn, offered to the loop at tool boundaries.
 /// A placement persists the user record and receipts the input as applied
 /// in ONE fenced transaction, so a crash cannot show the model a steer the
-/// history does not contain — nor lose one it did see. Applied steers are
-/// never offered again, including after a resume: the durable status, not
-/// in-memory state, is the dedupe.
+/// history does not contain — nor lose one it did see. DELIVERY is the
+/// durable `run.input.applied` announcement, not the placement: until the
+/// log carries an input's announcement, this source re-offers placements
+/// applied to the run, so a poll future dropped between commit and return
+/// (the timeout race) or an attempt that died before the event sink ran
+/// cannot silently swallow a steering. The loop's `applied_steers` set
+/// absorbs the repetition within an attempt; [`backfill_applied_steers`]
+/// reconciles the log at attempt start after a crash. Announced inputs are
+/// never offered again — the durable log, not in-memory state, is the
+/// dedupe.
 pub(crate) struct SessionSteering {
     context: ExecutionContext,
     chat_id: String,
+    /// Incremental view of this task's announcement log: a poll must not
+    /// rescan a log that one run can grow to thousands of events, so the
+    /// cursor and the seen-announcement ids live across polls.
+    ledger: tokio::sync::Mutex<AnnouncementLedger>,
+}
+
+#[derive(Default)]
+struct AnnouncementLedger {
+    cursor: Option<f64>,
+    announced: HashSet<String>,
 }
 
 impl SessionSteering {
@@ -44,13 +61,111 @@ impl SessionSteering {
         Self {
             context,
             chat_id: chat_id.to_owned(),
+            ledger: tokio::sync::Mutex::new(AnnouncementLedger::default()),
         }
+    }
+
+    /// Steers durably applied to this run whose announcement the log does
+    /// not carry yet — the exact predicate `backfill_applied_steers`
+    /// reconciles against, minus the append. Never throws: a failed read
+    /// simply offers nothing extra this poll (the next poll retries).
+    async fn applied_unannounced(&self) -> Vec<AgentInputRecord> {
+        let candidates = match self
+            .context
+            .store
+            .list_inputs(AgentInputQuery {
+                session_id: self.chat_id.clone(),
+                kinds: Some(vec![AgentInputKind::Steer]),
+                statuses: Some(vec![AgentInputStatus::Applied]),
+                target_task_id: Some(self.context.task.task_id.clone()),
+            })
+            .await
+        {
+            Ok(records) if !records.is_empty() => records,
+            _ => return vec![],
+        };
+        let mut ledger = self.ledger.lock().await;
+        loop {
+            let batch = match self
+                .context
+                .store
+                .events_after_number(&self.context.task.task_id, ledger.cursor, 10_000)
+                .await
+            {
+                Ok(batch) => batch,
+                Err(_) => return vec![],
+            };
+            let Some(seq) = batch.last().map(|record| record.seq) else {
+                break;
+            };
+            for record in batch {
+                let event = &record.event;
+                if event["type"] == "run.input.applied"
+                    && let Some(input_id) = event["data"]["inputId"].as_str()
+                {
+                    ledger.announced.insert(input_id.to_owned());
+                }
+            }
+            if ledger.cursor.is_none_or(|seen| seq > seen) {
+                ledger.cursor = Some(seq);
+            } else {
+                break;
+            }
+        }
+        let mut reoffers = vec![];
+        for record in candidates {
+            if ledger.announced.contains(&record.input_id) {
+                continue;
+            }
+            let Some(message_id) = record.applied_message_id.as_deref() else {
+                continue;
+            };
+            // Re-offer only what the placement actually committed: Applied
+            // WITH its projected record on this run.
+            let placed = match self.context.store.get_message(message_id).await {
+                Ok(Some(message)) => {
+                    message.run_id.as_deref() == Some(self.context.task.task_id.as_str())
+                }
+                _ => false,
+            };
+            if placed {
+                reoffers.push(record);
+            }
+        }
+        reoffers
     }
 }
 
 #[async_trait]
 impl SteeringSource for SessionSteering {
     async fn pending(&self) -> Vec<SteeringItem> {
+        // Placements from earlier polls whose announcement never reached
+        // the log come first: they arrived before anything this poll will
+        // place, and the loop's `applied_steers` set makes the repetition
+        // invisible to the model.
+        let mut items: Vec<SteeringItem> = self
+            .applied_unannounced()
+            .await
+            .into_iter()
+            .filter_map(|record| {
+                let content = record
+                    .content
+                    .get("content")
+                    .filter(|content| content.is_string() || content.is_array())?
+                    .clone();
+                Some(SteeringItem {
+                    input_id: record.input_id,
+                    message: ChatMessage {
+                        role: "user".into(),
+                        content,
+                        name: None,
+                        tool_call_id: None,
+                        tool_calls: vec![],
+                        metadata: None,
+                    },
+                })
+            })
+            .collect();
         let records = match self
             .context
             .store
@@ -63,9 +178,8 @@ impl SteeringSource for SessionSteering {
             .await
         {
             Ok(records) => records,
-            Err(_) => return vec![],
+            Err(_) => return items,
         };
-        let mut items = vec![];
         for record in records {
             let Some(content) = record
                 .content
@@ -124,6 +238,122 @@ impl SteeringSource for SessionSteering {
         }
         items
     }
+}
+
+/// Reconciliation of the `run.input.applied` announcement (ADR 0016 §3).
+///
+/// The recovery contract for the steer pair is: THE PLACEMENT TRANSACTION
+/// IS THE UNIT OF RECORD. [`SessionSteering::pending`] commits the Applied
+/// CAS, the single projected user record, and the applied receipt in ONE
+/// fenced store transaction; that triple — the input's Applied status plus
+/// `appliedMessageId` plus the durable record — is authoritative for
+/// "this input was applied to this run". Placement is the point of no
+/// return: once committed, the steer is in the durable history and the
+/// model sees it (immediately, or on any later attempt when history is
+/// rebuilt from records). The `run.input.applied` run event is a
+/// projection of that triple — an announcement for external observers of
+/// the event log — written later by the event sink in its own transaction.
+/// Nothing in the host derives behavior from the event; it is consumed
+/// only through the task-event cursor.
+///
+/// A crash or a failed event write between the two transactions therefore
+/// leaves durable truth ahead of the log. Recovery reconciles the log to
+/// the truth: every attempt of the run (this runs at attempt setup, before
+/// the loop derives its own event sequence) gives each input durably
+/// applied against this run — whose projected record exists — exactly one
+/// `run.input.applied` event. The operation is idempotent: already
+/// announced inputs are skipped, so it is safe on every attempt, including
+/// the first (which has no applied inputs yet). The backfilled event
+/// carries `step: 0` with `reconciled: true`: the provider step the dead
+/// attempt polled at is loop-local and unrecoverable, so 0 is the honest
+/// sentinel ("announced by reconciliation"), never a 1-based step lie.
+pub(crate) async fn backfill_applied_steers(
+    context: &ExecutionContext,
+    chat_id: &str,
+) -> HostResult<()> {
+    let applied = context
+        .store
+        .list_inputs(AgentInputQuery {
+            session_id: chat_id.to_owned(),
+            kinds: Some(vec![AgentInputKind::Steer]),
+            statuses: Some(vec![AgentInputStatus::Applied]),
+            target_task_id: Some(context.task.task_id.clone()),
+        })
+        .await?;
+    if applied.is_empty() {
+        return Ok(());
+    }
+    // The run's own announcement set, cursor-paged because one task's log
+    // can outgrow the store's per-call event page. Dedupe is by data.inputId.
+    let mut announced: HashSet<String> = HashSet::new();
+    let mut cursor: Option<f64> = None;
+    loop {
+        let batch = context
+            .store
+            .events_after_number(&context.task.task_id, cursor, 10_000)
+            .await?;
+        let Some(seq) = batch.last().map(|record| record.seq) else {
+            break;
+        };
+        for record in batch {
+            let event = &record.event;
+            if event["type"] == "run.input.applied"
+                && let Some(input_id) = event["data"]["inputId"].as_str()
+            {
+                announced.insert(input_id.to_owned());
+            }
+        }
+        if cursor.is_none_or(|seen| seq > seen) {
+            cursor = Some(seq);
+        } else {
+            // A log whose page does not advance is broken; stop rather
+            // than spin. Missing announcements then stay visible as the
+            // gap they are.
+            break;
+        }
+    }
+    for record in applied {
+        // The query above already restricts to STEER + Applied: exactly the
+        // live emitter's population. Answered approvals carry an `applied`
+        // stamp too, but they resume through the approval path, which emits
+        // no `run.input.applied`; promoted queued turns enter as their own
+        // turn. Neither may be announced here.
+        if announced.contains(&record.input_id) {
+            continue;
+        }
+        let Some(message_id) = record.applied_message_id.clone() else {
+            continue;
+        };
+        // Only announce what the placement actually committed: Applied
+        // WITH its projected record on this run. An Applied input without
+        // the record is not a placed steer and stays unannounced.
+        let placed = context
+            .store
+            .get_message(&message_id)
+            .await?
+            .is_some_and(|message| {
+                message.run_id.as_deref() == Some(context.task.task_id.as_str())
+            });
+        if !placed {
+            continue;
+        }
+        // The canonical event envelope (seq, timestamp, contractVersion,
+        // attemptId, fence, event gate) belongs to `ExecutionContext::emit`
+        // — a reconciled announcement must be indistinguishable from a
+        // live one apart from its honest step sentinel.
+        context
+            .emit(
+                "run.input.applied",
+                serde_json::json!({
+                    "inputId": record.input_id,
+                    "kind": "steer",
+                    "step": 0,
+                    "reconciled": true,
+                }),
+            )
+            .await?;
+    }
+    Ok(())
 }
 
 /// Resolve the answered approvals that target this turn (port of
@@ -251,6 +481,15 @@ pub(crate) async fn resolve_approved_calls(
             append_approval_mismatch(context, chat_id, anchor, call).await?;
             continue;
         }
+        // `list_inputs` returns requests by ascending insertion `order`, so
+        // when one call carries several answered asks (an ordinary approval
+        // and a later uncertain reissue — or generations N then N+1 of the
+        // same ask) the NEWEST answer is the live grant in this map. The
+        // older answers stay as durable history and stay unspendable:
+        // admission compares the grant's `uncertainty_generation` against
+        // the unresolved receipt's execution id (host `covers` + the
+        // store's pending-generation gate), and the receipt's UNIQUE
+        // approval index spends each answer exactly once.
         approvals.insert(
             call_id.clone(),
             crate::governance::ApprovalGrant {
@@ -320,4 +559,219 @@ async fn append_approval_mismatch(
         })
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agentkit_store::{
+        AgentInputPatch, ClaimInput, CreateAgentInput, MessageInput, SqliteStore, SubmitTask,
+    };
+    use serde_json::json;
+    use tokio_util::sync::CancellationToken;
+
+    /// A claimed task plus the execution context the runner would build,
+    /// on real wall-clock time so `SystemRuntime` never outlives the lease.
+    async fn harness() -> (SqliteStore, ExecutionContext) {
+        let store = SqliteStore::memory(8).unwrap();
+        let now = SystemRuntime.now_ms();
+        store
+            .create_chat("chat", None, json!({}), now)
+            .await
+            .unwrap();
+        let user = MessageInput {
+            id: Some("run-user".into()),
+            chat_id: "chat".into(),
+            run_id: None,
+            role: "user".into(),
+            content: json!("go"),
+            ..MessageInput::default()
+        };
+        store
+            .submit_turn(
+                SubmitTask {
+                    task_id: "run".into(),
+                    kind: "session_turn".into(),
+                    scope_id: "chat".into(),
+                    payload: json!({"chatId": "chat"}),
+                    priority: 0,
+                    now,
+                    available_at: None,
+                    depends_on: vec![],
+                    parent_task_id: None,
+                    exclusive_scope: false,
+                },
+                vec![user],
+            )
+            .await
+            .unwrap();
+        let claimed = store
+            .claim_with_concurrency(
+                ClaimInput {
+                    owner_id: "worker".into(),
+                    now,
+                    ttl_ms: 1_000_000_000,
+                    kinds: vec![],
+                    busy_scopes: vec![],
+                    max_attempts: 3,
+                },
+                1,
+            )
+            .await
+            .unwrap()
+            .expect("the queued turn claims");
+        let context = ExecutionContext {
+            task: claimed.task,
+            attempt_id: claimed.lease.attempt_id.clone(),
+            cancellation: CancellationToken::new(),
+            interruption: CancellationToken::new(),
+            suspension: Arc::new(Mutex::new(None::<agentkit_core::HumanRequestSpec>)),
+            store: store.clone(),
+            fence: claimed.lease.fence(),
+            runtime: Arc::new(SystemRuntime),
+            event_gate: Arc::new(Mutex::new(())),
+        };
+        (store, context)
+    }
+
+    fn steer(id: &str) -> CreateAgentInput {
+        CreateAgentInput {
+            input_id: id.into(),
+            session_id: "chat".into(),
+            kind: AgentInputKind::Steer,
+            content: json!({"content": "watch out"}),
+            content_hash: format!("hash-{id}"),
+            target_task_id: Some("run".into()),
+            on_settled: None,
+            attempt_id: None,
+            tool_call_id: None,
+            expires_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unannounced_placement_is_reoffered_until_the_log_carries_it() {
+        let (store, context) = harness().await;
+        store.create_input(steer("st-1"), 2000).await.unwrap();
+        let steering = SessionSteering::new(context.clone(), "chat");
+
+        // First poll: the fenced CAS placement delivers.
+        let items = steering.pending().await;
+        assert_eq!(items.len(), 1, "the pending steer is placed and offered");
+        assert_eq!(items[0].input_id, "st-1");
+        assert_eq!(items[0].message.content, json!("watch out"));
+        let record = store.get_input("st-1".into()).await.unwrap().unwrap();
+        assert_eq!(record.status, AgentInputStatus::Applied);
+        assert_eq!(record.applied_message_id.as_deref(), Some("steer:st-1"));
+
+        // The poll future died AFTER the placement committed (the timeout
+        // race) — the durable side says applied, the log never announced,
+        // and the Pending list can no longer recover the steering. The next
+        // poll must re-offer it; only the announcement closes the window.
+        let items = steering.pending().await;
+        assert_eq!(items.len(), 1, "an unannounced placement re-offers");
+        assert_eq!(items[0].input_id, "st-1");
+
+        context
+            .emit(
+                "run.input.applied",
+                json!({"inputId": "st-1", "kind": "steer", "step": 1}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            steering.pending().await.is_empty(),
+            "the announcement is the delivery ledger"
+        );
+
+        // A fresh source (the next attempt) agrees: the log, not memory,
+        // is the dedupe.
+        let fresh = SessionSteering::new(context.clone(), "chat");
+        assert!(fresh.pending().await.is_empty());
+
+        // However many polls re-offered, exactly one durable record exists.
+        let messages = store.messages("chat", false).await.unwrap();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.id == "steer:st-1")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_announces_what_a_crash_left_between_placement_and_log() {
+        let (store, context) = harness().await;
+        store.create_input(steer("st-2"), 2000).await.unwrap();
+        let steering = SessionSteering::new(context.clone(), "chat");
+        // Placed, never announced: the attempt "crashed" after commit.
+        assert_eq!(steering.pending().await.len(), 1);
+
+        backfill_applied_steers(&context, "chat").await.unwrap();
+        let announced: Vec<_> = store
+            .events("run", None, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|record| record.event["type"] == "run.input.applied")
+            .collect();
+        assert_eq!(announced.len(), 1, "exactly one reconciled event");
+        assert_eq!(announced[0].event["data"]["inputId"], "st-2");
+        assert_eq!(announced[0].event["data"]["reconciled"], true);
+        assert_eq!(announced[0].event["data"]["step"], 0, "honest sentinel");
+
+        // Idempotent: a second reconciliation adds nothing.
+        backfill_applied_steers(&context, "chat").await.unwrap();
+        assert_eq!(
+            store
+                .events("run", None, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|record| record.event["type"] == "run.input.applied")
+                .count(),
+            1
+        );
+
+        // And the source now agrees with the reconciled log.
+        assert!(steering.pending().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unplaced_pending_steers_are_offered_once_and_cancelled_never() {
+        let (store, context) = harness().await;
+        store.create_input(steer("st-3"), 2000).await.unwrap();
+        store.create_input(steer("st-4"), 2001).await.unwrap();
+        // st-4 is cancelled before any poll sees it.
+        store
+            .transition_input(
+                "st-4".into(),
+                vec![AgentInputStatus::Pending],
+                AgentInputStatus::Cancelled,
+                AgentInputPatch::default(),
+                2050,
+            )
+            .await
+            .unwrap();
+        let steering = SessionSteering::new(context.clone(), "chat");
+        let items = steering.pending().await;
+        assert_eq!(items.len(), 1, "only the live steer is offered");
+        assert_eq!(items[0].input_id, "st-3");
+
+        // st-3's placement went unannounced (same source, still open) —
+        // it re-offers; st-4's cancellation is terminal and never offers.
+        let items = steering.pending().await;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].input_id, "st-3");
+        assert!(
+            !store
+                .messages("chat", false)
+                .await
+                .unwrap()
+                .iter()
+                .any(|message| message.id == "steer:st-4"),
+            "a cancelled steer has no projected record"
+        );
+    }
 }

@@ -8,14 +8,17 @@ use agentkit_core::{
     ToolDefinition, ToolRegistry, ToolResult,
 };
 use agentkit_host::*;
-use agentkit_store::{AgentInputKind, AgentInputQuery, AgentInputStatus, SqliteStore, TaskStatus};
+use agentkit_store::{
+    AgentInputKind, AgentInputPatch, AgentInputQuery, AgentInputStatus, AppendProjectedInputs,
+    AppliedSteer, ClaimInput, MessageInput, RecoveryMode, SqliteStore, TaskStatus,
+};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use tokio_util::sync::CancellationToken;
@@ -1029,6 +1032,301 @@ async fn a_steer_cancelled_before_projection_leaves_no_applied_message() {
     );
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+/// The crash window between the placement transaction (Applied CAS + the
+/// single projected record — the unit of record) and the event sink's
+/// `run.input.applied` announcement must not strand the log behind the
+/// history: the next attempt reconciles the announcement from the durable
+/// pair. The residue below is exactly what a death between those two
+/// store transactions leaves: an Applied input with its `steer:` record,
+/// and no event.
+#[tokio::test]
+async fn a_crash_between_placement_and_announcement_backfills_the_event() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("steer-backfill.db");
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let f = fixture_gated(&path, entered.clone(), release.clone()).await;
+    let sent = f
+        .service
+        .send("s1", &send_input(json!("work"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    let turn_id = match sent {
+        AgentSendResult::Turn { turn_id, .. } => turn_id,
+        AgentSendResult::Queued { .. } => panic!("an idle session starts the turn"),
+    };
+    // Attempt 1 runs for real, then dies mid-tool-body: the boundary poll
+    // that would place the steer never happens, and no announcement can
+    // exist yet.
+    let host = f.host.clone();
+    let running = tokio::spawn(async move { host.run_once().await });
+    let seen = entered.clone();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async move {
+        while !seen.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the tool body started");
+    running.abort();
+    f.store
+        .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
+        .await
+        .unwrap();
+    f.service.resume("s1", &turn_id).await.unwrap();
+
+    // The residue owner takes the claim and commits ONE placement exactly
+    // as `SessionSteering::pending` does (Applied CAS + the single user
+    // record in one fenced transaction) — then dies before the
+    // announcement transaction ever ran.
+    let claimed = f
+        .store
+        .claim(ClaimInput {
+            owner_id: "crash".into(),
+            now: now_ms(),
+            ttl_ms: 600_000,
+            kinds: vec![CHAT_TURN_TASK_KIND.into()],
+            busy_scopes: vec![],
+            max_attempts: 10,
+        })
+        .await
+        .unwrap()
+        .expect("the turn is queued");
+    assert_eq!(claimed.task.task_id, turn_id);
+    f.service
+        .steer(
+            "s1",
+            &SteerInput {
+                content: json!("left!"),
+                input_id: Some("st-1".into()),
+                turn_id: Some(turn_id.clone()),
+                on_settled: None,
+            },
+        )
+        .await
+        .unwrap();
+    f.store
+        .append_projected_inputs(AppendProjectedInputs {
+            fence: claimed.lease.fence(),
+            events: vec![],
+            messages: vec![],
+            creates: vec![],
+            applies: vec![AppliedSteer {
+                input_id: "st-1".into(),
+                message: MessageInput {
+                    id: Some("steer:st-1".into()),
+                    chat_id: "s1".into(),
+                    run_id: Some(turn_id.clone()),
+                    role: "user".into(),
+                    content: json!("left!"),
+                    metadata: json!({"steering": true, "inputId": "st-1"}),
+                    ..MessageInput::default()
+                },
+            }],
+            task_id: turn_id.clone(),
+            now: now_ms(),
+        })
+        .await
+        .unwrap();
+
+    // The crash sweep reclaims the abandoned attempt; the resume replays
+    // the turn — and reconciles the log on the way in.
+    f.store
+        .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
+        .await
+        .unwrap();
+    f.service.resume("s1", &turn_id).await.unwrap();
+    f.host.run_once().await.unwrap();
+    wait_settled(&f.store, &turn_id).await;
+    let task = f.store.get_task(&turn_id).await.unwrap().unwrap();
+    assert_eq!(task.status, TaskStatus::Completed, "{:?}", task.error);
+    let input = f.store.get_input("st-1".into()).await.unwrap().unwrap();
+    assert_eq!(input.status, AgentInputStatus::Applied);
+    assert_eq!(input.applied_message_id.as_deref(), Some("steer:st-1"));
+    let placed = f
+        .store
+        .messages("s1", false)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|message| message.metadata.get("steering").and_then(Value::as_bool) == Some(true))
+        .count();
+    assert_eq!(
+        placed, 1,
+        "the crash leaves exactly one durable steer record"
+    );
+
+    let log = f
+        .store
+        .events_after_number(&turn_id, None, 10_000)
+        .await
+        .unwrap();
+    let announced: Vec<_> = log
+        .iter()
+        .filter(|record| record.event["type"] == "run.input.applied")
+        .map(|record| record.event.clone())
+        .collect();
+    assert_eq!(
+        announced.len(),
+        1,
+        "reconciliation gives the applied steer exactly one announcement, log: {log:?}"
+    );
+    assert_eq!(announced[0]["data"]["inputId"], "st-1");
+    assert_eq!(announced[0]["data"]["kind"], "steer");
+    // The dead attempt's provider step is unrecoverable; the reconciled
+    // announcement says so honestly (0 + marker), never a 1-based lie.
+    assert_eq!(announced[0]["data"]["reconciled"], true);
+    assert_eq!(announced[0]["data"]["step"], 0);
+    // The backfill sits ahead of everything the resumed attempt emitted:
+    // the run settling proves its own sequence was never rejected by the
+    // store's strictly-increasing gate.
+    let applied_seq = announced[0]["seq"].as_f64().unwrap();
+    let last_seq = log.last().unwrap().event["seq"].as_f64().unwrap();
+    assert!(
+        applied_seq < last_seq,
+        "the resumed attempt continues the log after the backfill; log: {:?}",
+        log.iter()
+            .map(|record| (record.seq, record.event["type"].clone()))
+            .collect::<Vec<_>>()
+    );
+    // And the replayed attempt saw the steer exactly once.
+    assert_eq!(
+        steer_sightings(&f.requests.lock().unwrap(), "left!"),
+        1,
+        "the resumed turn sees the placed steer exactly once"
+    );
+}
+
+/// Reconciliation is an idempotent projection pass, not a re-emitter: a
+/// placement whose announcement already stands in the log gets no second
+/// one on the next attempt (eventId/seq would double-announce the input
+/// to every observer replaying the cursor).
+#[tokio::test]
+async fn reconciliation_never_announces_a_placed_steer_twice() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("steer-nodup.db");
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let f = fixture_gated(&path, entered.clone(), release.clone()).await;
+    let sent = f
+        .service
+        .send("s1", &send_input(json!("work"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    let turn_id = match sent {
+        AgentSendResult::Turn { turn_id, .. } => turn_id,
+        AgentSendResult::Queued { .. } => panic!("an idle session starts the turn"),
+    };
+    let host = f.host.clone();
+    let running = tokio::spawn(async move { host.run_once().await });
+    let seen = entered.clone();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async move {
+        while !seen.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the tool body started");
+    running.abort();
+    f.store
+        .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
+        .await
+        .unwrap();
+    f.service.resume("s1", &turn_id).await.unwrap();
+    let claimed = f
+        .store
+        .claim(ClaimInput {
+            owner_id: "crash".into(),
+            now: now_ms(),
+            ttl_ms: 600_000,
+            kinds: vec![CHAT_TURN_TASK_KIND.into()],
+            busy_scopes: vec![],
+            max_attempts: 10,
+        })
+        .await
+        .unwrap()
+        .expect("the turn is queued");
+    assert_eq!(claimed.task.task_id, turn_id);
+    f.service
+        .steer(
+            "s1",
+            &SteerInput {
+                content: json!("left!"),
+                input_id: Some("st-1".into()),
+                turn_id: Some(turn_id.clone()),
+                on_settled: None,
+            },
+        )
+        .await
+        .unwrap();
+    // Placement AND its announcement: the full pair, as the live path
+    // commits it (placement transaction + the sink's event).
+    let seq = f.store.next_sequence(&turn_id).await.unwrap();
+    f.store
+        .append_projected_inputs(AppendProjectedInputs {
+            fence: claimed.lease.fence(),
+            events: vec![json!({
+                "type": "run.input.applied",
+                "runId": turn_id,
+                "timestamp": "2026-01-01T00:00:00.000Z",
+                "contractVersion": "1",
+                "eventId": "evt-seeded",
+                "seq": seq,
+                "data": {"inputId": "st-1", "kind": "steer", "step": 1},
+            })],
+            messages: vec![],
+            creates: vec![],
+            applies: vec![AppliedSteer {
+                input_id: "st-1".into(),
+                message: MessageInput {
+                    id: Some("steer:st-1".into()),
+                    chat_id: "s1".into(),
+                    run_id: Some(turn_id.clone()),
+                    role: "user".into(),
+                    content: json!("left!"),
+                    metadata: json!({"steering": true, "inputId": "st-1"}),
+                    ..MessageInput::default()
+                },
+            }],
+            task_id: turn_id.clone(),
+            now: now_ms(),
+        })
+        .await
+        .unwrap();
+
+    f.store
+        .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
+        .await
+        .unwrap();
+    f.service.resume("s1", &turn_id).await.unwrap();
+    f.host.run_once().await.unwrap();
+    wait_settled(&f.store, &turn_id).await;
+
+    let announced: Vec<_> = f
+        .store
+        .events_after_number(&turn_id, None, 10_000)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|record| record.event["type"] == "run.input.applied")
+        .map(|record| record.event)
+        .collect();
+    assert_eq!(
+        announced.len(),
+        1,
+        "the existing announcement stands; reconciliation adds nothing"
+    );
+    assert_eq!(announced[0]["eventId"], "evt-seeded");
+    assert_eq!(announced[0]["data"]["inputId"], "st-1");
+}
+
 // -- C5: queue conversion and settlement are one transaction -----------------
 
 async fn queued_turns(store: &SqliteStore, scope: &str) -> Vec<String> {
@@ -1384,4 +1682,246 @@ async fn a_poison_queued_input_never_wedges_the_settle_or_the_flush() {
             .iter()
             .all(|message| !(message.role == "user" && message.content == json!("")))
     );
+}
+
+/// Which settlement race to land: a follow-up that arrives after the
+/// service snapshotted the queue, or the first of two supplied candidates
+/// being cancelled after it.
+enum Race {
+    Arriving,
+    CancelFirst,
+}
+
+/// Delegates to the real planner and then, in the window the reviewer
+/// reproduced — after the snapshot is taken and before the settlement
+/// transaction commits — lands the racing write. Nothing is mocked: the
+/// same service, store and runner the field uses.
+struct Racy {
+    inner: AgentSessionService,
+    store: SqliteStore,
+    mode: Race,
+    armed: AtomicBool,
+}
+
+#[async_trait]
+impl SessionFlushPlanner for Racy {
+    async fn settle_candidates(
+        &self,
+        settling: &agentkit_store::TaskRecord,
+        completed: bool,
+    ) -> HostResult<Vec<agentkit_store::StagedCandidate>> {
+        let snapshot = self.inner.settle_candidates(settling, completed).await?;
+        if completed && self.armed.swap(false, Ordering::SeqCst) {
+            match self.mode {
+                Race::Arriving => {
+                    let sent = self
+                        .inner
+                        .follow_up(
+                            "s1",
+                            &FollowUpInput {
+                                content: json!("and summarize"),
+                                input_id: Some("late".into()),
+                            },
+                        )
+                        .await
+                        .expect("the follow-up queues behind the live turn");
+                    assert!(
+                        matches!(sent, AgentSendResult::Queued { .. }),
+                        "the turn is still running when the input lands"
+                    );
+                }
+                Race::CancelFirst => {
+                    self.store
+                        .transition_input(
+                            "first".into(),
+                            vec![AgentInputStatus::Pending],
+                            AgentInputStatus::Cancelled,
+                            AgentInputPatch::default(),
+                            1_700_000_000_000,
+                        )
+                        .await
+                        .expect("the queued candidate is cancelled");
+                }
+            }
+        }
+        Ok(snapshot)
+    }
+}
+
+/// Interleaving A: the follow-up arrives after the settlement snapshot but
+/// before the running task settles. The settlement still owns the promotion
+/// — the queue advances, it does not go quiet with a durable input no worker
+/// will ever run.
+#[tokio::test]
+async fn a_follow_up_landing_after_the_settlement_snapshot_still_gets_its_turn() {
+    let f = fixture_with(false).await;
+    let sent = f
+        .service
+        .send("s1", &send_input(json!("write it"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    let turn_id = match sent {
+        AgentSendResult::Turn { turn_id, .. } => turn_id,
+        AgentSendResult::Queued { .. } => panic!("an idle session starts the turn"),
+    };
+    f.host
+        .set_session_flush_planner(Arc::new(Racy {
+            inner: f.service.clone(),
+            store: f.store.clone(),
+            mode: Race::Arriving,
+            armed: AtomicBool::new(true),
+        }))
+        .await;
+
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    let late = f.store.get_input("late".into()).await.unwrap().unwrap();
+    assert_eq!(
+        late.status,
+        AgentInputStatus::Converted,
+        "an input that arrived mid-settlement is not left pending"
+    );
+    assert_eq!(
+        queued_turns(&f.store, "s1").await,
+        vec!["turn:late".to_owned()],
+        "the settlement enqueues the next turn"
+    );
+    let promoted = f.store.get_task("turn:late").await.unwrap().unwrap();
+    let user_message_id = promoted.payload["userMessageId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let assistant_message_id = promoted.payload["assistantMessageId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let messages = f.store.messages("s1", false).await.unwrap();
+    assert!(
+        messages.iter().any(|message| message.id == user_message_id
+            && message.role == "user"
+            && message.content == json!("and summarize")),
+        "the promoted turn carries its user message"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.id == assistant_message_id
+                && message.role == "assistant"
+                && message.run_id.as_deref() == Some("turn:late")),
+        "and its assistant placeholder"
+    );
+    assert_eq!(
+        f.store
+            .get_input("late".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .applied_task_id
+            .as_deref(),
+        Some("turn:late"),
+        "the receipt names the promoted turn"
+    );
+
+    // And it really runs: the queue drains to nothing.
+    assert!(f.host.run_once().await.unwrap(), "the promoted turn runs");
+    assert_eq!(
+        f.store.get_task("turn:late").await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    let state = f.service.get_state("s1").await.unwrap();
+    assert!(state.pending.is_empty());
+    assert!(state.active_turn.is_none());
+}
+
+/// Interleaving B: the first of two supplied candidates is cancelled after
+/// the snapshot. The settlement promotes the input behind it instead of
+/// committing a terminal turn with a still-pending queue.
+#[tokio::test]
+async fn a_candidate_cancelled_after_the_snapshot_still_promotes_the_next() {
+    let f = fixture_with(false).await;
+    let sent = f
+        .service
+        .send("s1", &send_input(json!("write it"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    let turn_id = match sent {
+        AgentSendResult::Turn { turn_id, .. } => turn_id,
+        AgentSendResult::Queued { .. } => panic!("an idle session starts the turn"),
+    };
+    for (id, text) in [("first", "and summarize"), ("second", "and count")] {
+        assert!(
+            matches!(
+                f.service
+                    .follow_up(
+                        "s1",
+                        &FollowUpInput {
+                            content: json!(text),
+                            input_id: Some(id.into()),
+                        },
+                    )
+                    .await
+                    .unwrap(),
+                AgentSendResult::Queued { .. }
+            ),
+            "{id} queues behind the live turn"
+        );
+    }
+    f.host
+        .set_session_flush_planner(Arc::new(Racy {
+            inner: f.service.clone(),
+            store: f.store.clone(),
+            mode: Race::CancelFirst,
+            armed: AtomicBool::new(true),
+        }))
+        .await;
+
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    assert_eq!(
+        f.store
+            .get_input("first".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Cancelled
+    );
+    assert_eq!(
+        f.store
+            .get_input("second".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Converted,
+        "the valid input behind a cancelled candidate still promotes"
+    );
+    assert!(
+        f.store.get_task("turn:first").await.unwrap().is_none(),
+        "a cancelled input never becomes a turn"
+    );
+    assert_eq!(
+        queued_turns(&f.store, "s1").await,
+        vec!["turn:second".to_owned()]
+    );
+
+    assert!(f.host.run_once().await.unwrap(), "the promoted turn runs");
+    assert_eq!(
+        f.store
+            .get_task("turn:second")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        TaskStatus::Completed
+    );
+    let state = f.service.get_state("s1").await.unwrap();
+    assert!(state.pending.is_empty());
+    assert!(state.active_turn.is_none());
 }

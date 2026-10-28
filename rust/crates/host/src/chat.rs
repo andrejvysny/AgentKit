@@ -151,6 +151,14 @@ impl TaskExecutor for ChatExecutor {
         // its answered approvals authorized (ADR 0016 §3, ADR 0019 §2).
         let session = session_run::is_session_turn(&context, chat_id).await?;
         let (approvals, resume_calls) = if session {
+            // Steer-event reconciliation (ADR 0016 §3): the placement
+            // transaction is the unit of record and the
+            // `run.input.applied` event is its projection, so a crash
+            // between the two is healed here — BEFORE the loop's own
+            // `first_seq` is derived below, keeping the backfilled
+            // announcements strictly ahead of this attempt's sequence in
+            // the log. See `session_run::backfill_applied_steers`.
+            session_run::backfill_applied_steers(&context, chat_id).await?;
             session_run::resolve_approved_calls(&context, chat_id, &anchor).await?
         } else {
             (std::collections::HashMap::new(), vec![])
