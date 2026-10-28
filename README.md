@@ -51,6 +51,7 @@ workflows and the release ritual.
 | [`packages/mcp-client`](packages/mcp-client) — `@agentkit/mcp-client` | Optional adapter: bridges MCP servers' tools into a run as a `ToolSetContributor`, on the official `@modelcontextprotocol/sdk`. | 0.1.0-dev |
 | [`packages/transport-http`](packages/transport-http) — `@agentkit/transport-http` | Optional adapter: fetch-standard REST v1 + SSE handler serving `packages/contracts/src/rest.ts`, zero framework dependencies. | 0.1.0-dev |
 | [`packages/mcp-server`](packages/mcp-server) — `@agentkit/mcp-server` | Optional adapter: exposes the host's `ToolCatalog` **as** an MCP server over streamable HTTP — constant-time bearer auth, DNS-rebinding guard, per-session scope, write-tool filtering. | 0.1.0-dev |
+| [`packages/cassette`](packages/cassette) — `@agentkit/cassette` | Optional adapter: deterministic record & replay of provider and tool effects for regression testing (ADR 0021). `off` / `record` / `replay`; strict matching never falls through to live; fixtures carry no secrets by default. | 0.1.0-dev |
 
 ## Layers
 

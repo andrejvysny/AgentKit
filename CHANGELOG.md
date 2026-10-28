@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased — Phase A stabilization & Phase B provider quality (2026-10-28)
+
+**Qualification partitioning (ADR 0020).** TypeScript CI no longer builds native code and no longer conflates
+platforms. Native fixtures resolve dependencies in an explicit setup phase, build once, and run interop against the
+built fixture — `--offline` only after availability is established, and preparation failure reports an infrastructure
+diagnosis. The coding-agent acceptance suite is deterministic cross-platform; tests requiring the real macOS sandbox
+run on a macOS runner (Linux skips are no longer evidence), production sandbox defaults stay fail-closed, and stalled
+acceptance children now surface stderr and process state. The SIGKILL recovery acceptance asserts durable store
+state, not timing.
+
+**Adversarial hardening of standing approvals and workspace coordination.** A standing approval is bound to session,
+tool, canonical workspace root, workspace/environment identity, canonical working directory, exact command and grant
+revision — remembering `bun test` grants no other command. Role ceilings, plan restrictions, high-risk denials and
+revoked grants stay authoritative, including revocation racing execution preparation. Workspace coordination gained
+regression coverage for conflicting edits, external modification mid-flight, symlink swap during execution, create
+races, validation-to-write drift, cancelled lock holders, stale and reused pids, malformed lock files, lease timeouts
+and command teardown; conflicting writes never silently overwrite, and uncertain states fail explicitly.
+
+**`@agentkit/cassette` — deterministic effect record & replay (ADR 0021).** An optional package wrapping the
+`AiProviderClient` / `AiTool` boundary: `off` (default) / `record` / `replay`. Strict replay — order-preserving,
+fingerprint-matched, never falls through to live. Fixtures are validated, secrets are absent by default (prompts,
+content, continuation state and reasoning are never recorded under metadata capture; credential-shaped keys are
+scrubbed even in content mode), and replay never grants authorization or replaces receipt verification. The provider
+regression matrix (openai-compatible streaming, fragmented tool-argument assembly, missing terminal markers, empty
+bodies, usage fragments, provider retry with its warning, cancellation during backoff, foreign-connection continuation
+rejection, routed model switch with the tool body proven not to re-execute) runs offline against throwing transports.
+
+**Source-attributed model metadata, optional routing, deterministic accounting (ADR 0022).** `AiProviderModel`
+gained optional capability facts and a versioned pricing block with `metadataSource` provenance
+(`host > provider > preset`, field by field — unknown stays unknown). `runAgentLoop` accepts an optional
+`modelRouter`: consulted before every provider request, host authorization mandatory, cross-provider switches need
+`resolveClient` (no silent fallback), continuation is never forwarded across a switch without an explicit `reset`,
+and routed requests consume the same `ExecutionBudget`. `summarizeRunUsage` folds billed calls by `callId` (final
+wins over drafts), counts retries from `provider_retry` warnings and derives tool/approval/TTFT durations from event
+timestamps; `estimateRunCost` prices only from recorded metadata — unknown prices are never zero. Telemetry is an
+opt-in OTel-shaped sink emitting identity, counts and durations only; a dead telemetry backend cannot fail a run.
+All additive: `CONTRACT_VERSION` unchanged; rust fixtures, mirror and schema bundle regenerated.
+
+**Performance.** Loop shapes (a)–(c) at `a8629bd` vs Phase B tip are within run-to-run noise
+(`docs/baseline/phase-b-2026-10-28.md`); cassette-OFF and sticky-router seams cost ≈ +0.005–0.006 ms per 10-call run.
+Live provider qualification (`scripts/live/provider-qualification.ts`) is optional — it probes and skips when no
+endpoint exists, and never runs in standard CI.
+
 ## Unreleased — Unified agent runtime M0–M7
 
 **Coding tool pack refuses lost updates.** `@agentkit/toolpacks-coding`:
