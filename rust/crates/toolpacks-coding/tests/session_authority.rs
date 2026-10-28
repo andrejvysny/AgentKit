@@ -15,7 +15,7 @@ use agentkit_store::{
     TaskStatus,
 };
 use agentkit_toolpacks_coding::guard::{CodingPermissionGuard, CodingPermissionGuardOptions};
-use agentkit_toolpacks_coding::types::CodingMode;
+use agentkit_toolpacks_coding::types::{CodingMode, CodingPermissionAuthority};
 use agentkit_toolpacks_coding::{
     CodingToolPackOptions, CodingWorkspace, SandboxMode, SessionExecutionAuthority,
     create_coding_tool_pack,
@@ -107,6 +107,21 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
+    let requests = Arc::new(Mutex::new(vec![]));
+    let provider = Arc::new(Scripted {
+        requests: requests.clone(),
+        count: AtomicUsize::new(0),
+    });
+    fixture_opts(Some("plan"), CodingMode::Plan, false, requests, provider).await
+}
+
+async fn fixture_opts(
+    execution_mode: Option<&str>,
+    guard_mode: CodingMode,
+    pack_authorized: bool,
+    requests: Arc<Mutex<Vec<agentkit_core::ChatRequest>>>,
+    provider: Arc<dyn ChatProvider>,
+) -> Fixture {
     let workspace = std::env::temp_dir().join(format!(
         "agentkit-session-authority-{}-{}",
         std::process::id(),
@@ -118,7 +133,6 @@ async fn fixture() -> Fixture {
     fs::create_dir_all(&workspace).unwrap();
     let store = SqliteStore::memory(64).unwrap();
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
-    let requests = Arc::new(Mutex::new(vec![]));
     // The service exists BEFORE the host so the guard can read the session's
     // execution state; queue wake-up is driven by `run_once` in tests.
     let service = AgentSessionService::new(AgentSessionServiceDeps {
@@ -142,31 +156,29 @@ async fn fixture() -> Fixture {
         sandbox_exec_path: None,
         coordinator: None,
         coordination_wait_ms: None,
-        permission: None,
+        permission: pack_authorized.then(|| {
+            Arc::new(SessionExecutionAuthority::new(service.clone()))
+                as Arc<dyn agentkit_toolpacks_coding::types::CodingPermissionAuthority>
+        }),
     })
     .await
     .unwrap();
     let guard = CodingPermissionGuard::new(CodingPermissionGuardOptions {
         // No session state yet: the configured mode is the fallback. Plan is
         // the safest floor — the session must EARN write access.
-        mode: CodingMode::Plan,
+        mode: guard_mode,
         role: None,
         authority: Some(Arc::new(SessionExecutionAuthority::new(service.clone()))),
         plan_tool_names: None,
     });
     let executor: Arc<dyn TaskExecutor> = Arc::new(
-        ChatExecutor::new(
-            Arc::new(Scripted {
-                requests: requests.clone(),
-                count: AtomicUsize::new(0),
-            }),
-            Arc::new(ToolRegistry::new()),
-        )
-        .with_options(ChatExecutorOptions {
-            tool_contributors: vec![pack],
-            tool_guards: vec![Arc::new(guard)],
-            ..Default::default()
-        }),
+        ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
+            ChatExecutorOptions {
+                tool_contributors: vec![pack],
+                tool_guards: vec![Arc::new(guard)],
+                ..Default::default()
+            },
+        ),
     );
     let host = AgentHost::new(
         store.clone(),
@@ -189,7 +201,7 @@ async fn fixture() -> Fixture {
             context: None,
             skills: None,
             turn_kind: None,
-            execution_mode: Some("plan".into()),
+            execution_mode: execution_mode.map(str::to_owned),
             metadata: None,
         })
         .await
@@ -310,5 +322,282 @@ async fn plan_mode_escalates_by_grant_and_the_approved_write_reaches_the_workspa
         refusal.contains("propose the change with submit_plan"),
         "{refusal}"
     );
+    fs::remove_dir_all(&f.workspace).ok();
+}
+
+/// Steps through fixed tool-call scripts, then answers `done`.
+struct Steps {
+    requests: Arc<Mutex<Vec<agentkit_core::ChatRequest>>>,
+    steps: Vec<Vec<(&'static str, &'static str, serde_json::Value)>>,
+    count: AtomicUsize,
+}
+
+#[async_trait]
+impl ChatProvider for Steps {
+    fn id(&self) -> &str {
+        "test"
+    }
+    fn stream_chat(
+        &self,
+        input: agentkit_core::ChatRequest,
+        _: CancellationToken,
+    ) -> ProviderStream {
+        self.requests.lock().unwrap().push(input);
+        let n = self.count.fetch_add(1, Ordering::SeqCst);
+        let calls: Vec<agentkit_core::ToolCall> = self
+            .steps
+            .get(n)
+            .map(|step| {
+                step.iter()
+                    .map(|(id, name, args)| agentkit_core::ToolCall {
+                        id: (*id).into(),
+                        name: (*name).into(),
+                        arguments_json: args.to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Box::pin(futures::stream::iter(vec![Ok(ProviderEvent::Completed {
+            content: if calls.is_empty() { "done" } else { "" }.into(),
+            finish_reason: if calls.is_empty() {
+                "stop"
+            } else {
+                "tool_calls"
+            }
+            .into(),
+            tool_calls: calls,
+        })]))
+    }
+}
+
+async fn start_turn(f: &Fixture, text: &str) -> String {
+    let sent = f
+        .service
+        .send(
+            "s1",
+            &agentkit_host::SendInput {
+                content: json!(text),
+                input_id: None,
+                when_busy: WhenBusy::Reject,
+                turn_id: None,
+                on_settled: None,
+            },
+        )
+        .await
+        .unwrap();
+    match sent {
+        agentkit_host::AgentSendResult::Turn { turn_id, .. } => turn_id,
+        agentkit_host::AgentSendResult::Queued { .. } => panic!("an idle session starts the turn"),
+    }
+}
+
+#[tokio::test]
+async fn a_plan_without_a_mode_omits_absent_optionals_and_plan_approved_judges_by_digest() {
+    // A LEGAL submit_plan with no optional `mode`: the grant must persist
+    // without the absent keys (never `"requestedMode": null`), the state
+    // must stay readable, and `plan_approved` must judge THIS digest.
+    let requests = Arc::new(Mutex::new(vec![]));
+    let provider = Arc::new(Steps {
+        requests: requests.clone(),
+        steps: vec![
+            vec![(
+                "call-plan",
+                "submit_plan",
+                json!({"plan": "write a.txt with first"}),
+            )],
+            vec![],
+        ],
+        count: AtomicUsize::new(0),
+    });
+    let f = fixture_opts(Some("plan"), CodingMode::Plan, true, requests, provider).await;
+    let turn = start_turn(&f, "plan it").await;
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn).await.unwrap().unwrap().status,
+        TaskStatus::WaitingApproval
+    );
+    let request = pending_request(&f.store, &turn).await;
+    assert_eq!(request.content["toolName"], "submit_plan");
+    assert!(
+        request.content.get("requestedMode").is_none(),
+        "no mode was requested: no key, not a null"
+    );
+
+    f.service
+        .approve(&request.input_id, "ans-plan", None, None)
+        .await
+        .unwrap();
+    let state = f
+        .service
+        .get_execution("s1")
+        .await
+        .unwrap()
+        .expect("state survives");
+    assert_eq!(state["mode"], "ask");
+    let grant = state["grantedPlan"].as_object().expect("a plan grant");
+    assert!(grant.contains_key("planDigest"));
+    assert!(
+        !grant.contains_key("requestedMode"),
+        "the absent optional was omitted, not nulled: {grant:?}"
+    );
+
+    // The resumed submit_plan executes under the pack's session authority
+    // and reports the grant — `granted:true`, not the recorded-only default.
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    let seen = f.requests.lock().unwrap().last().unwrap().clone();
+    let tool = seen
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "tool")
+        .expect("the executed plan answers the call");
+    let envelope: serde_json::Value =
+        serde_json::from_str(tool.content.as_str().expect("model envelope")).unwrap();
+    assert_eq!(envelope["ok"], true, "{envelope}");
+    assert_eq!(envelope["summary"], "plan approved", "{envelope}");
+    assert!(
+        envelope["data"]
+            .as_str()
+            .is_some_and(|text| text.contains("Execution mode is now ask")),
+        "the model is told the granted mode: {envelope}"
+    );
+    // No synthetic "missing result" survives beside the real answer.
+    assert!(
+        !seen.messages.iter().any(|m| m.is_synthetic_missing()),
+        "the answered call keeps only real evidence"
+    );
+
+    // Digest-specific judgement: the approved digest is Some(true), any
+    // other digest is Some(false) (never the inherited `None`), and a chat
+    // that is not a session is never judged.
+    let authority = SessionExecutionAuthority::new(f.service.clone());
+    let digest = grant["planDigest"].as_str().unwrap();
+    assert_eq!(
+        authority.plan_approved(Some("s1"), digest).await.unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        authority
+            .plan_approved(Some("s1"), &"f".repeat(64))
+            .await
+            .unwrap(),
+        Some(false),
+        "a different plan is not this plan's grant"
+    );
+    assert_eq!(authority.plan_approved(None, digest).await.unwrap(), None);
+
+    // A malformed grant is an error, never an absence the plan tool could
+    // read as "no authority wired".
+    let mut metadata = f.store.get_chat("s1").await.unwrap().unwrap().metadata;
+    {
+        let object = metadata.as_object_mut().unwrap();
+        object.insert(
+            "agentkit.session.execution".into(),
+            json!({
+                "version": 1,
+                "mode": "ask",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "history": [],
+                "grantedPlan": {"planDigest": null, "mode": "ask", "requestId": "r", "turnId": "t", "approvedAt": "a"},
+            }),
+        );
+    }
+    f.store
+        .update_chat("s1", None, Some(metadata.clone()), None, 9_999_999_999_999)
+        .await
+        .unwrap();
+    assert!(
+        authority.plan_approved(Some("s1"), digest).await.is_err(),
+        "a corrupt grant fails closed"
+    );
+    // ... and the legacy explicit-null optionals repair to absent.
+    {
+        let object = metadata.as_object_mut().unwrap();
+        object.insert(
+            "agentkit.session.execution".into(),
+            json!({
+                "version": 1,
+                "mode": "ask",
+                "updatedAt": "2026-01-01T00:00:00.000Z",
+                "history": [],
+                "grantedPlan": {"planDigest": digest, "mode": "ask", "requestId": "r", "turnId": "t", "approvedAt": "a", "requestedMode": null, "plan": null},
+            }),
+        );
+    }
+    f.store
+        .update_chat("s1", None, Some(metadata), None, 9_999_999_999_999)
+        .await
+        .unwrap();
+    let repaired = f
+        .service
+        .get_execution("s1")
+        .await
+        .unwrap()
+        .expect("legacy nulls repair");
+    assert_eq!(repaired["grantedPlan"]["planDigest"], digest);
+    assert!(repaired["grantedPlan"].get("requestedMode").is_none());
+    assert_eq!(
+        authority.plan_approved(Some("s1"), digest).await.unwrap(),
+        Some(true)
+    );
+    fs::remove_dir_all(&f.workspace).ok();
+}
+
+#[tokio::test]
+async fn malformed_execution_state_fails_closed_under_a_permissive_fallback() {
+    // The configured mode is AutoEdit — the DANGEROUS fallback. A corrupt
+    // session state must error, never be read as "absent" and quietly run
+    // the write under the configured permissive mode.
+    let requests = Arc::new(Mutex::new(vec![]));
+    let provider = Arc::new(Steps {
+        requests: requests.clone(),
+        steps: vec![
+            vec![(
+                "call-write",
+                "write_file",
+                json!({"path": "a.txt", "content": "sneaky"}),
+            )],
+            vec![],
+        ],
+        count: AtomicUsize::new(0),
+    });
+    let f = fixture_opts(None, CodingMode::AutoEdit, false, requests, provider).await;
+    let mut metadata = f.store.get_chat("s1").await.unwrap().unwrap().metadata;
+    let object = metadata.as_object_mut().unwrap();
+    object.insert(
+        "agentkit.session.execution".into(),
+        json!({"version": 1, "mode": null, "updatedAt": "2026-01-01T00:00:00.000Z", "history": []}),
+    );
+    f.store
+        .update_chat("s1", None, Some(metadata), None, 9_999_999_999_999)
+        .await
+        .unwrap();
+    assert!(
+        f.service.get_execution("s1").await.is_err(),
+        "corrupt permission state is an error, not an absence"
+    );
+
+    let _turn = start_turn(&f, "write it").await;
+    f.host.run_once().await.unwrap();
+    assert!(
+        !f.workspace.join("a.txt").exists(),
+        "the AutoEdit fallback never ran the write under corrupt state"
+    );
+    let seen = f.requests.lock().unwrap();
+    let tool_text: String = seen
+        .iter()
+        .flat_map(|r| r.messages.iter())
+        .filter(|m| m.role == "tool")
+        .map(|m| m.content.to_string())
+        .collect();
+    assert!(
+        tool_text.contains("tool_guard_refused"),
+        "the call is refused by the guard chain, not run: {tool_text}"
+    );
+    drop(seen);
     fs::remove_dir_all(&f.workspace).ok();
 }

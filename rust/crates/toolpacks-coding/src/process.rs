@@ -13,10 +13,12 @@
 //!
 //! Ported from `packages/toolpacks-coding/src/process.ts`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
-use std::process::id as process_id;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -24,9 +26,11 @@ use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStderr, ChildStdout};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use crate::coordination::{LeaseHolder, QuarantineEvidence, WorkspaceCoordinator, WorkspaceLease};
+use crate::errors::CodingError;
 use crate::limits::CodingLimits;
 use crate::process_tree::{
     EXEC_ID_ENV, TreeTracker, crate_platform, find_marked_processes, scan_marked,
@@ -54,6 +58,16 @@ pub struct RunSpec {
     pub scratch: String,
     pub log_name: String,
     pub limits: CodingLimits,
+    /// Stable execution identity `{owner_pid}:{uuid}`. It names BOTH the
+    /// `AGENTKIT_EXEC_ID` marker inherited by the whole process tree and
+    /// the durable lease/quarantine record, so cleanup evidence names the
+    /// exact execution, not a pid that can be recycled (ADR 0020). The
+    /// caller mints it before acquiring the workspace lease.
+    pub execution_id: String,
+    /// Set by [`spawn_owned_execution`]; holds the process-group id once
+    /// the child has spawned so a concurrent host shutdown can signal the
+    /// group. Construct as `None`.
+    pub pgid_slot: Option<Arc<AtomicI64>>,
 }
 
 /// The outcome of one bounded command run.
@@ -115,6 +129,65 @@ fn pid_alive(pid: i32) -> bool {
 /// probe for workspace quarantine survivor pids.
 pub(crate) fn owner_alive(pid: i64) -> bool {
     pid <= i32::MAX as i64 && pid_alive(pid as i32)
+}
+
+/// Is the process group led by `pgid` still populated? `kill(-pgid, 0)`
+/// answers ESRCH only once every member is gone; EPERM means the group
+/// exists but belongs to someone else — conservatively alive.
+pub(crate) fn group_alive(pgid: i32) -> bool {
+    if pgid <= 0 {
+        return false;
+    }
+    // SAFETY: kill(-pgid, 0) performs error checking only, sends no signal.
+    unsafe {
+        if libc::kill(-pgid, 0) == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+}
+
+/// SAFE positive-exit proof for a command quarantine (B5). A bare pid probe
+/// is NEVER sufficient (pids get recycled). Positive cleanup requires ALL
+/// of: (a) the marker scan succeeds and no live process still carries the
+/// execution nonce; (b) the recorded process group is provably empty. A
+/// scan the platform cannot perform (`None`) is unknown, not empty, and
+/// never establishes cleanup; neither does a missing pgid (spawn was never
+/// confirmed). Recorded survivor pids are corroboration only: the marker
+/// scan and the group probe decide.
+pub(crate) async fn cleanup_positively_established(
+    identity: &crate::coordination::CommandCleanupIdentity,
+    _pids: &[i32],
+) -> bool {
+    let Some(marked) = find_marked_processes(&identity.execution_id).await else {
+        return false;
+    };
+    if !marked.is_empty() {
+        return false;
+    }
+    match identity.pgid {
+        Some(pgid) => !group_alive(pgid),
+        None => false,
+    }
+}
+
+/// Reconcile a crashed run's declared execution (owner pid dead): `Some`
+/// lists the processes that still carry the execution nonce (empty =
+/// positively gone, retire the intent); `None` means the survivor set is
+/// UNKNOWN — the platform cannot scan, or the recorded process group is
+/// still populated without a visible marker — and the root must stay
+/// blocked.
+pub(crate) async fn crashed_execution_survivors(
+    intent: &crate::coordination::ExecutionIntent,
+) -> Option<Vec<i32>> {
+    let marked = find_marked_processes(&intent.identity.execution_id).await?;
+    if !marked.is_empty() {
+        return Some(marked);
+    }
+    match intent.identity.pgid {
+        Some(pgid) if group_alive(pgid) => None,
+        _ => Some(vec![]),
+    }
 }
 
 async fn sleep(ms: u64) {
@@ -228,9 +301,12 @@ pub async fn sweep_orphans(grace_ms: Option<u64>) -> usize {
         })
     });
     let grace = grace_ms.unwrap_or(2000).min(KILL_GRACE_CAP_MS);
-    match tokio::spawn(terminate(None, find, grace)).await {
+    // A panicking teardown task must not read as "nothing found": run the
+    // sweep inline (awaited, not spawned-and-forgotten) so the startup
+    // recovery really completes before modifying work is admitted.
+    match tokio::spawn(terminate(None, find.clone(), grace)).await {
         Ok((_, seen)) => seen,
-        Err(_) => 0,
+        Err(_) => terminate(None, find, grace).await.1,
     }
 }
 
@@ -467,8 +543,9 @@ pub async fn run_bounded(spec: RunSpec) -> RunResult {
         spec.log_name.clone(),
     )));
     // Inherited by every descendant, which is how teardown and the crash sweep
-    // find the ones that left the process group.
-    let exec_id = format!("{}:{}", process_id(), uuid::Uuid::new_v4());
+    // find the ones that left the process group. The caller mints the id so
+    // the marker and the durable ownership record name the same execution.
+    let exec_id = spec.execution_id.clone();
     let mut command = tokio::process::Command::new(&spec.file);
     command
         .args(&spec.args)
@@ -486,6 +563,11 @@ pub async fn run_bounded(spec: RunSpec) -> RunResult {
         Err(error) => return failed_spawn(&error.to_string()),
     };
     let pid: Option<i32> = child.id().map(|p| p as i32);
+    // process_group(0): the child leads its own group, so its pid is the pgid
+    // a concurrent host shutdown must signal.
+    if let (Some(slot), Some(pid)) = (&spec.pgid_slot, pid) {
+        slot.store(pid as i64, Ordering::SeqCst);
+    }
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
 
@@ -709,10 +791,409 @@ pub async fn run_bounded(spec: RunSpec) -> RunResult {
     }
 }
 
+/// How long cleanup waits for the teardown report's survivors to exit
+/// before it must treat cleanup as not positively established.
+pub(crate) const SURVIVOR_RECHECK_MS: u64 = 2000;
+
+/// `process.kill(pid, 0)`: alive AND ours. ESRCH (gone) or EPERM (not ours):
+/// not ours to wait on.
+pub(crate) fn is_alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Pids from `pids` still alive after waiting up to `ms` for them to exit.
+pub(crate) async fn wait_for_exit(pids: &[i32], ms: u64) -> Vec<i32> {
+    let mut alive: Vec<i32> = pids.to_vec();
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    loop {
+        alive.retain(|pid| is_alive(*pid));
+        if alive.is_empty() || Instant::now() >= deadline {
+            break;
+        }
+        sleep(50).await;
+    }
+    alive
+}
+
+/// The once-per-process crash sweep, awaitable (ADR 0020): a crashed agent
+/// never ran its teardown, so no modifying work may start new effects before
+/// the marked orphans are swept. Process-once semantics live in the `OnceCell`
+/// (every caller awaits the same single initialization); infallible and
+/// best-effort like the sweep itself, which never throws.
+static RECOVERY: LazyLock<tokio::sync::OnceCell<usize>> = LazyLock::new(tokio::sync::OnceCell::new);
+
+/// Await the completion of the one-time startup orphan sweep; returns how many
+/// marked orphans it found. Call this from every path that admits new
+/// modifying effects (see `run_shell`).
+pub async fn startup_recovery() -> usize {
+    *RECOVERY
+        .get_or_init(|| async { sweep_orphans(None).await })
+        .await
+}
+
+/// One live driver execution, visible to host shutdown and tests.
+#[derive(Clone, Debug)]
+pub struct LiveExecution {
+    pub execution_id: String,
+    /// `None` until the child has actually spawned.
+    pub pgid: Option<i32>,
+    pub started_at_ms: u64,
+    /// The lease holder's label (the command, truncated), for logs.
+    pub holder: String,
+    /// The canonical workspace root whose lease this execution owns.
+    pub root: String,
+}
+
+struct LiveRecord {
+    pgid_slot: Arc<AtomicI64>,
+    started_at_ms: u64,
+    holder: String,
+    root: String,
+}
+
+// Driver executions that have not finished their teardown + lease-release
+// chain yet. Process-local, like the marker registry and the in-process
+// gates themselves; host shutdown consults it so no child outlives the
+// runtime (and tests can prove the driver, not a dropped future's `Drop`,
+// performed the release).
+static LIVE: LazyLock<StdMutex<HashMap<String, LiveRecord>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn live_snapshot() -> Vec<(String, LiveRecord)> {
+    LIVE.lock()
+        .map(|live| {
+            live.iter()
+                .map(|(id, record)| (id.clone(), record.clone_live()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+impl LiveRecord {
+    fn clone_live(&self) -> Self {
+        LiveRecord {
+            pgid_slot: Arc::clone(&self.pgid_slot),
+            started_at_ms: self.started_at_ms,
+            holder: self.holder.clone(),
+            root: self.root.clone(),
+        }
+    }
+}
+
+/// Driver executions still live: spawned, not yet done with teardown and the
+/// lease release.
+pub fn live_executions() -> Vec<LiveExecution> {
+    live_snapshot()
+        .into_iter()
+        .map(|(execution_id, record)| LiveExecution {
+            pgid: match record.pgid_slot.load(Ordering::SeqCst) {
+                0 => None,
+                pgid => Some(pgid as i32),
+            },
+            execution_id,
+            started_at_ms: record.started_at_ms,
+            holder: record.holder,
+            root: record.root,
+        })
+        .collect()
+}
+
+/// Removes the registry entry when the driver finishes (also on unwind), so
+/// `drain_executions` and tests can observe cleanup completion.
+struct LiveGuard {
+    execution_id: String,
+}
+
+impl Drop for LiveGuard {
+    fn drop(&mut self) {
+        if let Ok(mut live) = LIVE.lock() {
+            live.remove(&self.execution_id);
+        }
+    }
+}
+
+/// Drain every live driver execution: SIGTERM-then-SIGKILL the process groups
+/// of still-running commands through the same `terminate` path the driver
+/// itself uses, then await driver completion within a bounded window. Host
+/// shutdown uses this so a runtime never exits with marked children alive.
+pub async fn drain_executions() {
+    drain_live(None).await;
+}
+
+/// Drain only the live driver executions of one workspace root. A pack's
+/// `shutdown`/`dispose` must drain its own workspace without touching
+/// commands another workspace (another pack, another session) is running.
+pub async fn drain_workspace(root: &str) {
+    let root = crate::paths::canonical_root(root)
+        .await
+        .unwrap_or_else(|_| root.to_owned());
+    drain_live(Some(&root)).await;
+}
+
+async fn drain_live(root: Option<&str>) {
+    const DRAIN_BUDGET_MS: u64 = 30_000;
+    const TERMINATE_GRACE_MS: u64 = 2_000;
+    let deadline = Instant::now() + Duration::from_millis(DRAIN_BUDGET_MS);
+    let mut terminating: HashSet<String> = HashSet::new();
+    let mut handles = Vec::new();
+    loop {
+        let live: Vec<(String, Arc<AtomicI64>)> = live_snapshot()
+            .into_iter()
+            .filter(|(_, record)| root.is_none_or(|root| record.root == root))
+            .map(|(execution_id, record)| (execution_id, record.pgid_slot))
+            .collect();
+        if live.is_empty() {
+            break;
+        }
+        for (execution_id, pgid_slot) in live {
+            let pgid = pgid_slot.load(Ordering::SeqCst);
+            // Not spawned yet: the driver will signal it through its own
+            // pump; waiting for the registry entry to disappear covers it.
+            if pgid <= 0 || terminating.contains(&execution_id) {
+                continue;
+            }
+            terminating.insert(execution_id.clone());
+            let find: FindFn = {
+                let exec_id = execution_id.clone();
+                Arc::new(move || {
+                    let exec_id = exec_id.clone();
+                    Box::pin(async move { find_marked_processes(&exec_id).await })
+                })
+            };
+            handles.push(tokio::spawn(async move {
+                terminate(Some(pgid as i32), find, TERMINATE_GRACE_MS).await;
+            }));
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        sleep(POLL_MS).await;
+    }
+    for handle in handles {
+        let _ = handle.await;
+    }
+}
+
+/// What an owned execution's driver established about its cleanup.
+#[derive(Debug)]
+pub struct OwnedRunOutcome {
+    /// The bounded run's result (output, exit status, teardown report).
+    pub run: RunResult,
+    /// Pids still alive when cleanup was judged: the workspace stays
+    /// quarantined for these.
+    pub stragglers: Vec<i32>,
+    /// The quarantine publication failed, so the lease was left blocking the
+    /// gate instead of being released.
+    pub quarantine_error: Option<CodingError>,
+}
+
+/// Handle on one owned driver execution. Dropping it does NOT stop the
+/// driver — that is the whole point; it only stops this caller from
+/// observing the result.
+pub struct OwnedExecution {
+    execution_id: String,
+    completion: oneshot::Receiver<OwnedRunOutcome>,
+}
+
+impl OwnedExecution {
+    pub fn execution_id(&self) -> &str {
+        &self.execution_id
+    }
+
+    /// Await the driver's outcome. A caller that never gets here (a tool
+    /// future dropped by the core harness on budget expiry) leaves the
+    /// driver to finish teardown, the survivor recheck, quarantine and the
+    /// lease release on its own.
+    pub async fn await_result(self) -> OwnedRunOutcome {
+        match self.completion.await {
+            Ok(outcome) => outcome,
+            Err(_) => OwnedRunOutcome {
+                // The driver died before reporting (panic / runtime teardown):
+                // honestly unqualified cleanup, and shutdown/sweep own the
+                // remaining recovery.
+                run: RunResult {
+                    output: String::new(),
+                    truncated: false,
+                    notice: String::new(),
+                    log_path: None,
+                    exit_code: None,
+                    signal: None,
+                    timed_out: false,
+                    aborted: false,
+                    spawn_error: Some("the execution driver died before reporting".to_owned()),
+                    teardown: Teardown {
+                        escalated: false,
+                        survivors: vec![],
+                        scan: TeardownScan::Unsupported,
+                    },
+                },
+                stragglers: vec![],
+                quarantine_error: None,
+            },
+        }
+    }
+}
+
+/// Run `spec` on a detached driver task that OWNS the workspace lease until
+/// cleanup is positively established.
+///
+/// The whole spawn -> pump -> teardown -> reap -> survivor-recheck ->
+/// quarantine -> lease-release chain lives inside one `tokio::spawn`; the
+/// `JoinHandle` is deliberately dropped (dropping a handle detaches a task,
+/// it never cancels it), and the lease is moved into the task, never held by
+/// the awaitable tool future. This is the B1 fix: the core harness completes
+/// its timeout `select!` by DROPPING the tool future, and a lease held by
+/// that future would hit `WorkspaceLease::drop`'s deferred release the very
+/// same instant — releasing the gate while the child still ran and skipping
+/// the survivor recheck and the quarantine entirely. With the driver, a
+/// dropped caller can neither release the gate ahead of cleanup nor suppress
+/// quarantine; it only stops listening.
+pub fn spawn_owned_execution(
+    mut spec: RunSpec,
+    lease: WorkspaceLease,
+    coordinator: Arc<dyn WorkspaceCoordinator>,
+    root: String,
+    holder: LeaseHolder,
+) -> OwnedExecution {
+    let execution_id = spec.execution_id.clone();
+    let pgid_slot = Arc::new(AtomicI64::new(0));
+    spec.pgid_slot = Some(Arc::clone(&pgid_slot));
+    let driver_slot = Arc::clone(&pgid_slot);
+    if let Ok(mut live) = LIVE.lock() {
+        live.insert(
+            execution_id.clone(),
+            LiveRecord {
+                pgid_slot,
+                started_at_ms: now_ms(),
+                holder: holder.label.clone(),
+                root: root.clone(),
+            },
+        );
+    }
+    let (sender, completion) = oneshot::channel();
+    let driver_id = execution_id.clone();
+    let driver_exec = execution_id.clone();
+    let watcher_coordinator = Arc::clone(&coordinator);
+    let watcher_root = root.clone();
+    let watcher_holder = holder.clone();
+    let watcher_id = execution_id.clone();
+    let spawned_at_ms = now_ms();
+    let watcher_slot = Arc::clone(&driver_slot);
+    tokio::spawn(async move {
+        // Upgrade the pre-spawn intent once the child exists: same nonce,
+        // now with the confirmed process group and spawn time. Best effort
+        // by design — the pre-spawn intent already blocks reconciliation;
+        // a failed upgrade only delays the pgid annotation.
+        for _ in 0..200 {
+            let pgid = watcher_slot.load(Ordering::SeqCst);
+            if pgid > 0 {
+                let _ = watcher_coordinator
+                    .record_execution_intent(&crate::coordination::ExecutionIntent {
+                        root: watcher_root,
+                        identity: crate::coordination::CommandCleanupIdentity {
+                            execution_id: watcher_id,
+                            owner_pid: i64::from(std::process::id()),
+                            pgid: Some(pgid as i32),
+                            spawned_at_ms,
+                        },
+                        holder: watcher_holder,
+                        spawned: true,
+                    })
+                    .await;
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
+        }
+    });
+    tokio::spawn(async move {
+        // Unregisters on completion (or unwind): the drain loop and tests
+        // read this as "the driver is done with cleanup".
+        let _live = LiveGuard {
+            execution_id: driver_id,
+        };
+        let run = run_bounded(spec).await;
+        let stragglers = wait_for_exit(&run.teardown.survivors, SURVIVOR_RECHECK_MS).await;
+        let pgid = match driver_slot.load(Ordering::SeqCst) {
+            0 => None,
+            pgid => Some(pgid as i32),
+        };
+        let mut lease = Some(lease);
+        let mut quarantine_error = None;
+        // B5: an unsupported teardown scan means the survivor set is
+        // UNKNOWN — cleanup was not positively established. Unknown
+        // cleanup is blocking evidence, never a success: quarantine with
+        // an empty (unknown) pid list and the safe identity so recovery —
+        // not a swallowed warning — decides when the workspace reopens.
+        let unknown_cleanup = run.teardown.scan == TeardownScan::Unsupported;
+        if !stragglers.is_empty() || unknown_cleanup {
+            // Cleanup is not positively established (ADR 0020): the lease may
+            // be released (a wedge with no recovery path helps nobody), but
+            // the workspace stays quarantined — every later acquisition
+            // blocks until these processes exit or recovery is recorded. If
+            // the blocking evidence itself cannot be published, the lease
+            // stays held: live processes must never be handed a blind
+            // workspace. `forget` skips `WorkspaceLease::drop`, whose
+            // deferred release would otherwise undo exactly that.
+            let identity = crate::coordination::CommandCleanupIdentity {
+                execution_id: driver_exec.clone(),
+                owner_pid: i64::from(std::process::id()),
+                pgid,
+                spawned_at_ms,
+            };
+            if let Err(error) = coordinator
+                .quarantine_execution(
+                    &root,
+                    &QuarantineEvidence {
+                        pids: stragglers.clone(),
+                        holder,
+                    },
+                    &identity,
+                )
+                .await
+            {
+                quarantine_error = Some(error);
+                if let Some(lease) = lease.take() {
+                    std::mem::forget(lease);
+                }
+            }
+        }
+        // The durable intent is retired only once its replacement (a clean
+        // finish, or a published quarantine) exists. A failed publication
+        // keeps the intent — and the lease — in place.
+        if quarantine_error.is_none() {
+            let _ = coordinator
+                .clear_execution_intent(&root, &driver_exec)
+                .await;
+        }
+        if let Some(mut lease) = lease {
+            lease.release().await;
+        }
+        // A dropped receiver (caller gone) must not skip anything above: the
+        // send is the driver's last act, never a precondition of it.
+        let _ = sender.send(OwnedRunOutcome {
+            run,
+            stragglers,
+            quarantine_error,
+        });
+    });
+    OwnedExecution {
+        execution_id,
+        completion,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::limits::CodingLimits;
+    use std::process::id as process_id;
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -738,6 +1219,8 @@ mod tests {
             scratch: scratch.to_owned(),
             log_name: log_name.to_owned(),
             limits: CodingLimits::default(),
+            execution_id: format!("{}:{}", process_id(), uuid::Uuid::new_v4()),
+            pgid_slot: None,
         }
     }
 

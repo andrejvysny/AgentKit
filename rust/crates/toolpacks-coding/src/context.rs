@@ -217,12 +217,21 @@ type BoxBody = Arc<dyn Fn(ToolContext, Value) -> BoxFuture<'static, Outcome> + S
 struct WrappedTool {
     definition: ToolDefinition,
     body: BoxBody,
+    /// The tool's real execution environment (workspace root, sandbox and
+    /// network policy, runner selection): the durable receipt binds to it
+    /// so a recorded result replays only for the SAME environment. `None`
+    /// keeps the historical empty-object binding.
+    effect_context: Option<Value>,
 }
 
 #[async_trait]
 impl Tool for WrappedTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
+    }
+
+    fn effect_context(&self) -> Option<Value> {
+        self.effect_context.clone()
     }
 
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
@@ -273,5 +282,49 @@ where
             }
         })
     });
-    Arc::new(WrappedTool { definition, body })
+    Arc::new(WrappedTool {
+        definition,
+        body,
+        effect_context: None,
+    })
+}
+
+/// As `define_tool`, but the tool declares the real environment its effect
+/// happens in (workspace root, sandbox/network policy, runner selection).
+/// The durable execution fingerprint binds to it, so a completed result is
+/// replayed only under an identical environment and an environment change
+/// is evidence, not a silent miss.
+pub fn define_tool_with_effect_context<F, Fut>(
+    spec: ToolSpec,
+    effect_context: Value,
+    run: F,
+) -> Arc<dyn Tool>
+where
+    F: Fn(ToolContext, Value) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Outcome, CodingError>> + Send + 'static,
+{
+    let definition = ToolDefinition {
+        name: spec.name.to_owned(),
+        version: "1".to_owned(),
+        effect: spec.effect.as_str().to_owned(),
+        capability: spec.capability.to_owned(),
+        description: spec.description,
+        input_schema: spec.input_schema,
+        output_schema: None,
+        timeout_ms: Some(spec.timeout_ms),
+    };
+    let body: BoxBody = Arc::new(move |context: ToolContext, input: Value| {
+        let pending = run(context, input);
+        Box::pin(async move {
+            match pending.await {
+                Ok(outcome) => outcome,
+                Err(error) => failure(&error),
+            }
+        })
+    });
+    Arc::new(WrappedTool {
+        definition,
+        body,
+        effect_context: Some(effect_context),
+    })
 }

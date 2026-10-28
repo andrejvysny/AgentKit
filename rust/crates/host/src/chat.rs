@@ -99,6 +99,23 @@ impl TaskExecutor for ChatExecutor {
         if chat_id != context.task.scope_id {
             return Err(HostError::Execution("chat scope mismatch".into()));
         }
+        // Native execution resolves neither selected content (Skills) nor
+        // provider reasoning effort, so a turn carrying them is refused
+        // rather than dispatched as a prompt-only request that silently
+        // omits the selection — the executor-level mirror of the HTTP
+        // boundary's 501 and of the session service's submit gate.
+        for field in ["contentSelection", "reasoningEffort"] {
+            if context
+                .task
+                .payload
+                .get(field)
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err(HostError::Execution(format!(
+                    "{field}_unsupported: native prompt templates, skills, and provider reasoning effort are not configured."
+                )));
+            }
+        }
         let loaded = context.store.messages(chat_id, true).await?;
         // The active chain is what the continuation and the anchor see.
         let records: Vec<_> = loaded

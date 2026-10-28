@@ -651,6 +651,15 @@ impl State {
                     budget_error = Some(error);
                 }
             }
+            // The seeded history may have reconciled this call with a
+            // synthesized "missing result" failure (the crash-residue rule).
+            // The moment this run produces the real result, the fabricated
+            // failure is superseded: the model must not see both.
+            self.messages.retain(|message| {
+                !(message.role == "tool"
+                    && message.tool_call_id.as_deref() == Some(call.id.as_str())
+                    && message.is_synthetic_missing())
+            });
             let mut message = ChatMessage::text("tool", &outcome.model_json);
             message.tool_call_id = Some(call.id.clone());
             message.name = Some(call.name.clone());

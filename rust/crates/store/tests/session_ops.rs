@@ -274,7 +274,7 @@ async fn the_same_answer_replays_and_a_different_one_conflicts() {
 }
 
 #[tokio::test]
-async fn a_half_committed_answer_is_repaired_not_conflicted() {
+async fn a_lost_answer_record_is_missing_evidence_never_a_fresh_replay() {
     let store = store();
     let lease = running_turn(&store, "run").await;
     park(
@@ -290,8 +290,10 @@ async fn a_half_committed_answer_is_repaired_not_conflicted() {
         2000,
     )
     .await;
-    // Simulate the half-committed crash state: the receipt names a tool
-    // record that never landed.
+    // A receipt naming a tool record that never landed. The record and the
+    // receipt commit in one transaction, so this state is corrupt evidence,
+    // not a retryable half commit: the answer must refuse, never rewrite
+    // itself as a fresh (duplicate:false) commit.
     store
         .transition_input(
             "req".into(),
@@ -306,20 +308,20 @@ async fn a_half_committed_answer_is_repaired_not_conflicted() {
         )
         .await
         .unwrap();
-    let outcome = store
+    let error = store
         .answer_human_request(answer("req", "ans", json!({"answer":"left"})))
         .await
-        .unwrap();
-    // Same answer id, same hash: the record it was owed is written.
-    assert!(!outcome.receipt.duplicate);
-    assert_eq!(outcome.receipt.message_id, "missing-msg");
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Duplicate(_)), "{error}");
+    assert!(error.to_string().contains("answer_conflict"), "{error}");
     assert!(
-        store
+        !store
             .messages("chat", false)
             .await
             .unwrap()
             .iter()
-            .any(|message| message.id == "missing-msg")
+            .any(|message| message.id == "missing-msg"),
+        "the missing record was not rewritten"
     );
 }
 
@@ -446,7 +448,7 @@ async fn settle_converts_the_first_follow_up_and_cancels_cancel_steers() {
                 input_id: "s-cancel".into(),
                 session_id: "chat".into(),
                 kind: AgentInputKind::Steer,
-                content: json!({"text":"stop","onSettled":"cancel"}),
+                content: json!({"text":"stop"}),
                 content_hash: "hash-sc".into(),
                 target_task_id: Some("run".into()),
                 on_settled: Some(AgentInputSettlePolicy::Cancel),
@@ -464,7 +466,7 @@ async fn settle_converts_the_first_follow_up_and_cancels_cancel_steers() {
                 input_id: "s-keep".into(),
                 session_id: "chat".into(),
                 kind: AgentInputKind::Steer,
-                content: json!({"text":"also","onSettled":"follow_up"}),
+                content: json!({"text":"also"}),
                 content_hash: "hash-sk".into(),
                 target_task_id: Some("run".into()),
                 on_settled: Some(AgentInputSettlePolicy::FollowUp),
@@ -556,8 +558,246 @@ async fn settle_converts_the_first_follow_up_and_cancels_cancel_steers() {
     );
 }
 
+/// `content.onSettled` is user data, not policy: only the top-level record
+/// field the service writes governs what a settle does with a steer.
 #[tokio::test]
-async fn conversion_refuses_a_busy_scope_and_failure_cancels_everything() {
+async fn only_the_top_level_settle_policy_governs_content_markers_are_inert() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    for (input_id, content, top) in [
+        (
+            "top-cancel",
+            json!({"text":"x","onSettled":"follow_up"}),
+            Some(AgentInputSettlePolicy::Cancel),
+        ),
+        (
+            "content-only",
+            json!({"text":"y","onSettled":"cancel"}),
+            None,
+        ),
+    ] {
+        store
+            .create_input(
+                CreateAgentInput {
+                    input_id: input_id.into(),
+                    session_id: "chat".into(),
+                    kind: AgentInputKind::Steer,
+                    content,
+                    content_hash: format!("hash-{input_id}"),
+                    target_task_id: Some("run".into()),
+                    on_settled: top,
+                    attempt_id: None,
+                    tool_call_id: None,
+                    expires_at: None,
+                },
+                1602,
+            )
+            .await
+            .unwrap();
+    }
+
+    store
+        .settle_session(
+            SettleTask {
+                fence: lease.fence(),
+                now: 2000,
+                status: TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            },
+            SessionSettle { convert: vec![] },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .get_input("top-cancel".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Cancelled,
+        "the top-level field cancels even when content claims otherwise"
+    );
+    assert_eq!(
+        store
+            .get_input("content-only".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending,
+        "a content marker alone never cancels anything"
+    );
+}
+
+/// A refused conversion writes NOTHING: no task without its messages, no
+/// receipt without its task, and — inside a settle — no terminal state
+/// either. The whole promotion is one transaction or none.
+#[tokio::test]
+async fn a_refused_conversion_writes_nothing() {
+    let store = store();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store
+        .create_input(
+            CreateAgentInput {
+                input_id: "bad".into(),
+                session_id: "chat".into(),
+                kind: AgentInputKind::FollowUp,
+                content: json!({"content": ""}),
+                content_hash: "hash-bad".into(),
+                target_task_id: None,
+                on_settled: None,
+                attempt_id: None,
+                tool_call_id: None,
+                expires_at: None,
+            },
+            1600,
+        )
+        .await
+        .unwrap();
+
+    // (a) The explicit flush path: unusable user content is refused and
+    // the input keeps waiting, unclaimed.
+    let error = store
+        .stage_queued_turn(StageQueuedTurn {
+            session_id: "chat".into(),
+            task_kind: "test".into(),
+            exclude_task_id: None,
+            input_id: "bad".into(),
+            expected_kind: AgentInputKind::FollowUp,
+            task: task("bad-turn", "chat"),
+            messages: vec![MessageInput {
+                id: Some("bad-user".into()),
+                chat_id: "chat".into(),
+                run_id: Some("bad-turn".into()),
+                role: "user".into(),
+                content: json!(""),
+                ..MessageInput::default()
+            }],
+            now: 2100,
+        })
+        .await;
+    assert!(
+        matches!(error, Err(StoreError::InvalidInput(_))),
+        "unusable content must be refused: {error:?}"
+    );
+    assert!(store.get_task("bad-turn").await.unwrap().is_none());
+    assert_eq!(
+        store.get_input("bad".into()).await.unwrap().unwrap().status,
+        AgentInputStatus::Pending,
+        "the CAS rolled back with the refusal"
+    );
+    assert!(
+        store
+            .messages("chat", false)
+            .await
+            .unwrap()
+            .iter()
+            .all(|message| message.id != "bad-user")
+    );
+}
+
+/// The settle half of the zero-residue guarantee: a poisoned candidate
+/// rejects the ENTIRE commit — the turn stays Running with its lease
+/// intact, ready to settle cleanly on the next attempt.
+#[tokio::test]
+async fn a_refused_settle_conversion_leaves_the_turn_running() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    store
+        .create_input(
+            CreateAgentInput {
+                input_id: "bad2".into(),
+                session_id: "chat".into(),
+                kind: AgentInputKind::FollowUp,
+                content: json!({"content": ""}),
+                content_hash: "hash-bad2".into(),
+                target_task_id: None,
+                on_settled: None,
+                attempt_id: None,
+                tool_call_id: None,
+                expires_at: None,
+            },
+            1600,
+        )
+        .await
+        .unwrap();
+    let poisoned = StagedCandidate {
+        input_id: "bad2".into(),
+        task: task("bad2-turn", "chat"),
+        messages: vec![MessageInput {
+            id: Some("bad2-user".into()),
+            chat_id: "chat".into(),
+            run_id: Some("bad2-turn".into()),
+            role: "user".into(),
+            content: json!(""),
+            ..MessageInput::default()
+        }],
+    };
+    let error = store
+        .settle_session(
+            SettleTask {
+                fence: lease.fence(),
+                now: 2000,
+                status: TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            },
+            SessionSettle {
+                convert: vec![poisoned],
+            },
+        )
+        .await;
+    assert!(
+        matches!(error, Err(StoreError::InvalidInput(_))),
+        "the poisoned candidate must reject the whole settle: {error:?}"
+    );
+    assert_eq!(
+        store.get_task("run").await.unwrap().unwrap().status,
+        TaskStatus::Running,
+        "nothing settled — no half-promoted terminal turn"
+    );
+    assert_eq!(
+        store
+            .get_input("bad2".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending
+    );
+    assert!(store.get_task("bad2-turn").await.unwrap().is_none());
+    // The lease fence is untouched: the retry settles cleanly once the
+    // candidate list is right.
+    store
+        .settle_session(
+            SettleTask {
+                fence: lease.fence(),
+                now: 2100,
+                status: TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            },
+            SessionSettle { convert: vec![] },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_task("run").await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+}
+
+#[tokio::test]
+async fn conversion_refuses_a_busy_scope_and_failure_keeps_the_queue_pending() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("busy.db");
     let store = SqliteStore::open(&path, 8).unwrap();
@@ -623,8 +863,10 @@ async fn conversion_refuses_a_busy_scope_and_failure_cancels_everything() {
         TaskStatus::Queued
     );
 
-    // A failed turn settles nothing: all pending inputs die with it.
-    // The retry sibling is claimable; failing it cancels every pending input.
+    // A failed turn promotes nothing (ADR 0016 §4): queued inputs stay
+    // pending and visible, and even a passed conversion candidate must not
+    // be taken — a user who cancelled (or a provider that failed) did not
+    // ask for the queued turn to start on its own.
     let failed_lease = store
         .claim_with_concurrency(
             ClaimInput {
@@ -652,13 +894,168 @@ async fn conversion_refuses_a_busy_scope_and_failure_cancels_everything() {
                 events: vec![],
                 messages: vec![],
             },
-            SessionSettle { convert: vec![] },
+            SessionSettle {
+                convert: vec![StagedCandidate {
+                    input_id: "fu1".into(),
+                    task: SubmitTask {
+                        task_id: "fu1-late".into(),
+                        ..task("fu1-late", "chat")
+                    },
+                    messages: vec![],
+                }],
+            },
         )
         .await
         .unwrap();
     assert_eq!(
         store.get_input("fu1".into()).await.unwrap().unwrap().status,
-        AgentInputStatus::Cancelled
+        AgentInputStatus::Pending,
+        "a failed turn leaves the queue pending for an explicit flush"
+    );
+    assert!(store.get_task("fu1-late").await.unwrap().is_none());
+
+    // The explicit release is what advances the queue after a failure.
+    store
+        .stage_queued_turn(StageQueuedTurn {
+            session_id: "chat".into(),
+            task_kind: "test".into(),
+            exclude_task_id: None,
+            input_id: "fu1".into(),
+            expected_kind: AgentInputKind::FollowUp,
+            task: SubmitTask {
+                task_id: "fu1-flushed".into(),
+                ..task("fu1-flushed", "chat")
+            },
+            messages: vec![MessageInput {
+                id: Some("fu1-flushed-message".into()),
+                chat_id: "chat".into(),
+                run_id: Some("fu1-flushed".into()),
+                role: "user".into(),
+                content: json!("fu1"),
+                ..MessageInput::default()
+            }],
+            now: 2300,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store.get_input("fu1".into()).await.unwrap().unwrap().status,
+        AgentInputStatus::Converted
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_conversion_writes_neither_task_nor_receipt() {
+    // Reproduction: invalid queued user content returned an error but left
+    // a Queued task, a Pending input and no messages. The conversion is
+    // CAS-first and transactional: a refused candidate writes NOTHING.
+    let store = store();
+    store
+        .create_input(
+            CreateAgentInput {
+                input_id: "fu-bad".into(),
+                session_id: "chat".into(),
+                kind: AgentInputKind::FollowUp,
+                content: json!({"text": "fine"}),
+                content_hash: "hash-bad".into(),
+                target_task_id: None,
+                on_settled: None,
+                attempt_id: None,
+                tool_call_id: None,
+                expires_at: None,
+            },
+            1600,
+        )
+        .await
+        .unwrap();
+    // The chat must exist for the conversion's scope checks.
+    if store.get_chat("chat").await.unwrap().is_none() {
+        store
+            .create_chat("chat", None, json!({}), 1000)
+            .await
+            .unwrap();
+    }
+    let error = store
+        .stage_queued_turn(StageQueuedTurn {
+            session_id: "chat".into(),
+            task_kind: "test".into(),
+            exclude_task_id: None,
+            input_id: "fu-bad".into(),
+            expected_kind: AgentInputKind::FollowUp,
+            task: SubmitTask {
+                task_id: "fu-bad-turn".into(),
+                ..task("fu-bad-turn", "chat")
+            },
+            messages: vec![MessageInput {
+                id: Some("fu-bad-message".into()),
+                chat_id: "chat".into(),
+                run_id: Some("fu-bad-turn".into()),
+                role: "user".into(),
+                content: json!(42), // not a string, not content blocks
+                ..MessageInput::default()
+            }],
+            now: 1700,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::InvalidInput(_)), "{error}");
+    assert!(
+        store.get_task("fu-bad-turn").await.unwrap().is_none(),
+        "no half-committed queued task survives the refusal"
+    );
+    assert_eq!(
+        store
+            .get_input("fu-bad".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending,
+        "the input keeps its Pending evidence — no CAS was burned"
+    );
+    assert!(
+        !store
+            .messages("chat", false)
+            .await
+            .unwrap()
+            .iter()
+            .any(|message| message.id == "fu-bad-message")
+    );
+
+    // The same input converts cleanly once the content is usable.
+    store
+        .stage_queued_turn(StageQueuedTurn {
+            session_id: "chat".into(),
+            task_kind: "test".into(),
+            exclude_task_id: None,
+            input_id: "fu-bad".into(),
+            expected_kind: AgentInputKind::FollowUp,
+            task: SubmitTask {
+                task_id: "fu-bad-turn".into(),
+                ..task("fu-bad-turn", "chat")
+            },
+            messages: vec![MessageInput {
+                id: Some("fu-bad-message".into()),
+                chat_id: "chat".into(),
+                run_id: Some("fu-bad-turn".into()),
+                role: "user".into(),
+                content: json!("usable"),
+                ..MessageInput::default()
+            }],
+            now: 1800,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        store
+            .get_input("fu-bad".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Converted
     );
 }
 
@@ -817,7 +1214,7 @@ async fn remember_requires_eligibility_and_malformed_grant_data_refuses_writes()
 }
 
 #[tokio::test]
-async fn a_plan_approval_writes_the_grant_and_replay_repairs_it() {
+async fn a_plan_approval_writes_the_grant_and_replay_never_restores_it() {
     let store = store();
     let lease = running_turn(&store, "run").await;
     let content = json!({
@@ -844,8 +1241,10 @@ async fn a_plan_approval_writes_the_grant_and_replay_repairs_it() {
     assert_eq!(state["grantedPlan"]["planDigest"], PLAN);
     assert_eq!(state["grantedPlan"]["turnId"], "run");
 
-    // The half-committed crash state: the marker committed, the grant did
-    // not. The exact replay repairs it.
+    // The grant commits with the marker in ONE transaction, so an answered
+    // request is never owed a grant. Wipe the execution state (a later
+    // revocation) and replay the exact answer: it is observation only —
+    // duplicate:true, and it must NOT resurrect the revoked grant.
     store
         .update_chat("chat", None, Some(json!({})), None, 3500)
         .await
@@ -853,8 +1252,11 @@ async fn a_plan_approval_writes_the_grant_and_replay_repairs_it() {
     let replay = store.answer_human_request(input).await.unwrap();
     assert!(replay.receipt.duplicate);
     let chat = store.get_chat("chat").await.unwrap().unwrap();
-    let state = read_execution_state(&chat.metadata).unwrap();
-    assert_eq!(state["grantedPlan"]["planDigest"], PLAN);
+    assert!(
+        read_execution_state(&chat.metadata).is_none(),
+        "the replay did not re-apply the grant: {:?}",
+        chat.metadata
+    );
 
     // Plan mode is never grantable: the answer fails whole.
     let lease2 = running_turn(&store, "run2").await;
@@ -902,6 +1304,228 @@ async fn a_plan_approval_writes_the_grant_and_replay_repairs_it() {
 }
 
 #[tokio::test]
+async fn a_replayed_answer_never_undoes_a_later_mode_change() {
+    // Handoff reproduction: approve a plan to auto_edit, explicitly set the
+    // session back to plan, replay the old answer. The replay must not
+    // silently re-grant auto_edit.
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    let content = json!({
+        "kind": "approval",
+        "toolName": "plan",
+        "argsSha256": PLAN,
+        "prompt": "the plan",
+    });
+    park(
+        &store,
+        &lease,
+        human_request("req", "run", content, Some("call-1"), None),
+        2000,
+    )
+    .await;
+    let mut input = answer("req", "ans", json!({"decision":"approve"}));
+    input.plan_tool_names = vec!["plan".into()];
+    input.granted_mode = Some("auto_edit".into());
+    store.answer_human_request(input.clone()).await.unwrap();
+    assert_eq!(
+        read_execution_state(&store.get_chat("chat").await.unwrap().unwrap().metadata).unwrap()["mode"],
+        "auto_edit"
+    );
+
+    // An explicit mode switch by the host/user: plan, grant dropped.
+    store
+        .update_chat(
+            "chat",
+            None,
+            Some(json!({ EXECUTION_METADATA_KEY: {
+                "version": 1,
+                "mode": "plan",
+                "updatedAt": ConversationTimestamp::from_epoch_millis(3500)
+                    .unwrap()
+                    .wire_text()
+                    .unwrap()
+                    .as_ref(),
+            } })),
+            None,
+            3500,
+        )
+        .await
+        .unwrap();
+
+    let replay = store.answer_human_request(input).await.unwrap();
+    assert!(
+        replay.receipt.duplicate,
+        "the replay is observed, not re-applied"
+    );
+    let state =
+        read_execution_state(&store.get_chat("chat").await.unwrap().unwrap().metadata).unwrap();
+    assert_eq!(
+        state["mode"], "plan",
+        "the later restriction stands: {state}"
+    );
+    assert!(
+        state.get("grantedPlan").is_none_or(Value::is_null),
+        "no grant resurrected: {state}"
+    );
+}
+
+#[tokio::test]
+async fn a_replayed_remembered_answer_never_resurrects_a_revoked_grant() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    let content = approval_content(Some(json!({
+        "standing": {"digest": DIGEST, "label": "write src/x"},
+    })));
+    park(
+        &store,
+        &lease,
+        human_request("req", "run", content, Some("call-1"), None),
+        2000,
+    )
+    .await;
+    let input = answer("req", "ans", json!({"decision":"approve","remember":true}));
+    store.answer_human_request(input.clone()).await.unwrap();
+    assert!(
+        find_active_standing_grant(
+            &store.get_chat("chat").await.unwrap().unwrap().metadata,
+            DIGEST
+        )
+        .is_some()
+    );
+    store
+        .revoke_standing_approval("chat".into(), "grant:req".into(), 4000)
+        .await
+        .unwrap();
+
+    let replay = store.answer_human_request(input).await.unwrap();
+    assert!(replay.receipt.duplicate);
+    assert!(
+        find_active_standing_grant(
+            &store.get_chat("chat").await.unwrap().unwrap().metadata,
+            DIGEST
+        )
+        .is_none(),
+        "the replay did not re-write the revoked standing grant"
+    );
+}
+
+#[tokio::test]
+async fn replaying_the_first_plan_approval_keeps_the_newer_grant() {
+    let store = store();
+    let plan_request = |input_id: &str, turn: &str, digest: &str| {
+        human_request(
+            input_id,
+            turn,
+            json!({
+                "kind": "approval",
+                "toolName": "plan",
+                "argsSha256": digest,
+                "prompt": "the plan",
+            }),
+            Some("call-1"),
+            None,
+        )
+    };
+    let lease = running_turn(&store, "run").await;
+    park(&store, &lease, plan_request("req-a", "run", PLAN), 2000).await;
+    let mut first = answer("req-a", "ans-a", json!({"decision":"approve"}));
+    first.plan_tool_names = vec!["plan".into()];
+    first.granted_mode = Some("act".into());
+    store.answer_human_request(first.clone()).await.unwrap();
+
+    let lease2 = running_turn(&store, "run2").await;
+    park(&store, &lease2, plan_request("req-b", "run2", DIGEST), 2100).await;
+    let mut second = answer("req-b", "ans-b", json!({"decision":"approve"}));
+    second.plan_tool_names = vec!["plan".into()];
+    second.granted_mode = Some("auto_edit".into());
+    store.answer_human_request(second).await.unwrap();
+    let state =
+        read_execution_state(&store.get_chat("chat").await.unwrap().unwrap().metadata).unwrap();
+    assert_eq!(state["grantedPlan"]["planDigest"], DIGEST);
+
+    // Replaying the OLDER approval must leave the newer grant alone.
+    let replay = store.answer_human_request(first).await.unwrap();
+    assert!(replay.receipt.duplicate);
+    let state =
+        read_execution_state(&store.get_chat("chat").await.unwrap().unwrap().metadata).unwrap();
+    assert_eq!(
+        state["grantedPlan"]["planDigest"], DIGEST,
+        "the newer grant stands: {state}"
+    );
+    assert_eq!(state["mode"], "auto_edit");
+}
+
+#[tokio::test]
+async fn racing_identical_answers_commit_once() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    park(
+        &store,
+        &lease,
+        human_request("req", "run", approval_content(None), Some("call-1"), None),
+        2000,
+    )
+    .await;
+    let answer_a = answer("req", "ans", json!({"decision":"approve"}));
+    let answer_b = answer_a.clone();
+    let (a, b) = tokio::join!(
+        store.answer_human_request(answer_a),
+        store.answer_human_request(answer_b)
+    );
+    let (a, b) = (a.unwrap(), b.unwrap());
+    let fresh = [a.receipt.duplicate, b.receipt.duplicate]
+        .iter()
+        .filter(|d| !**d)
+        .count();
+    assert_eq!(fresh, 1, "exactly one commit, one observation");
+    assert_eq!(
+        store.get_task("run").await.unwrap().unwrap().status,
+        TaskStatus::Queued
+    );
+}
+
+#[tokio::test]
+async fn a_replayed_answer_stays_duplicate_after_reopening_the_database() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("reopen.db");
+    let input = answer("req", "ans", json!({"answer":"left"}));
+    {
+        let store = SqliteStore::open(&path, 8).unwrap();
+        let lease = running_turn(&store, "run").await;
+        park(
+            &store,
+            &lease,
+            human_request(
+                "req",
+                "run",
+                json!({"kind":"question","prompt":"which?"}),
+                Some("call-1"),
+                None,
+            ),
+            2000,
+        )
+        .await;
+        let outcome = store.answer_human_request(input.clone()).await.unwrap();
+        assert!(!outcome.receipt.duplicate);
+    }
+    // Process death and reopen: the replay is still an observation, and it
+    // must not append a second answer record.
+    let store = SqliteStore::open(&path, 8).unwrap();
+    let replay = store.answer_human_request(input).await.unwrap();
+    assert!(replay.receipt.duplicate);
+    let answers = store
+        .messages("chat", false)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|message| {
+            message.metadata.get("humanAnswer").and_then(Value::as_bool) == Some(true)
+        })
+        .count();
+    assert_eq!(answers, 1, "exactly one durable answer record");
+}
+
+#[tokio::test]
 async fn projection_replays_commit_nothing_twice() {
     let store = store();
     let lease = running_turn(&store, "run").await;
@@ -938,7 +1562,8 @@ async fn projection_replays_commit_nothing_twice() {
         })
         .await
         .unwrap();
-    assert_eq!(created, vec!["steer-1".to_owned()]);
+    assert_eq!(created.created, vec!["steer-1".to_owned()]);
+    assert!(created.applied.is_empty());
     let record = store.get_input("steer-1".into()).await.unwrap().unwrap();
     assert_eq!(record.status, AgentInputStatus::Applied);
     assert_eq!(record.applied_task_id.as_deref(), Some("run"));
@@ -957,7 +1582,8 @@ async fn projection_replays_commit_nothing_twice() {
         })
         .await
         .unwrap();
-    assert!(replay.is_empty());
+    assert!(replay.created.is_empty());
+    assert!(replay.applied.is_empty());
 
     // A conflicting replay of the same id is refused.
     let error = store
@@ -976,6 +1602,136 @@ async fn projection_replays_commit_nothing_twice() {
         .await
         .unwrap_err();
     assert!(matches!(error, StoreError::Duplicate(_)), "{error}");
+}
+
+fn steer_cas_input() -> CreateAgentInput {
+    CreateAgentInput {
+        input_id: "steer-cas".into(),
+        session_id: "chat".into(),
+        kind: AgentInputKind::Steer,
+        content: json!({"content": "place this"}),
+        content_hash: "hash-cas".into(),
+        target_task_id: Some("run".into()),
+        on_settled: None,
+        attempt_id: None,
+        tool_call_id: None,
+        expires_at: None,
+    }
+}
+
+fn steer_placement() -> AppliedSteer {
+    AppliedSteer {
+        input_id: "steer-cas".into(),
+        message: MessageInput {
+            id: Some("steer:steer-cas".into()),
+            chat_id: "chat".into(),
+            run_id: Some("run".into()),
+            role: "user".into(),
+            content: json!("place this"),
+            metadata: json!({"steering": true, "inputId": "steer-cas"}),
+            ..MessageInput::default()
+        },
+    }
+}
+
+fn projection_for(lease: &Lease) -> AppendProjectedInputs {
+    AppendProjectedInputs {
+        fence: lease.fence(),
+        events: vec![],
+        messages: vec![],
+        creates: vec![],
+        applies: vec![],
+        task_id: "run".into(),
+        now: 2100,
+    }
+}
+
+#[tokio::test]
+async fn a_steer_placement_writes_message_and_receipt_together() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    store.create_input(steer_cas_input(), 2000).await.unwrap();
+    let commit = store
+        .append_projected_inputs(AppendProjectedInputs {
+            applies: vec![steer_placement()],
+            ..projection_for(&lease)
+        })
+        .await
+        .unwrap();
+    assert_eq!(commit.applied, vec!["steer-cas".to_owned()]);
+    let record = store.get_input("steer-cas".into()).await.unwrap().unwrap();
+    assert_eq!(record.status, AgentInputStatus::Applied);
+    assert_eq!(
+        record.applied_message_id.as_deref(),
+        Some("steer:steer-cas")
+    );
+    assert!(
+        store
+            .messages("chat", false)
+            .await
+            .unwrap()
+            .iter()
+            .any(|message| message.id == "steer:steer-cas")
+    );
+
+    // An identical replay of the same receipt is idempotent: applied stays
+    // reported, and the record is not written twice.
+    let replay = store
+        .append_projected_inputs(AppendProjectedInputs {
+            applies: vec![steer_placement()],
+            ..projection_for(&lease)
+        })
+        .await
+        .unwrap();
+    assert_eq!(replay.applied, vec!["steer-cas".to_owned()]);
+    assert_eq!(
+        store
+            .messages("chat", false)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|message| message.id == "steer:steer-cas")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_steer_placement_writes_no_message_and_no_receipt() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    store.create_input(steer_cas_input(), 2000).await.unwrap();
+    // The cancellation wins the race before the projection even starts.
+    store
+        .transition_input(
+            "steer-cas".into(),
+            vec![AgentInputStatus::Pending],
+            AgentInputStatus::Cancelled,
+            AgentInputPatch::default(),
+            2050,
+        )
+        .await
+        .unwrap();
+    let commit = store
+        .append_projected_inputs(AppendProjectedInputs {
+            applies: vec![steer_placement()],
+            ..projection_for(&lease)
+        })
+        .await
+        .unwrap();
+    assert!(commit.applied.is_empty(), "the winner was the cancellation");
+    let record = store.get_input("steer-cas".into()).await.unwrap().unwrap();
+    assert_eq!(record.status, AgentInputStatus::Cancelled);
+    assert!(record.applied_message_id.is_none());
+    assert!(
+        !store
+            .messages("chat", false)
+            .await
+            .unwrap()
+            .iter()
+            .any(|message| message.id == "steer:steer-cas"),
+        "the cancelled steer left no applied message behind"
+    );
 }
 
 fn create_warmup() -> CreateAgentInput {

@@ -28,3 +28,5 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 agentkit-store = { path = "../store" }
 futures = { workspace = true }
+rusqlite = { version = "0.38", features = ["bundled"] }
+tempfile = "3"

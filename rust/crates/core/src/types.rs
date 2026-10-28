@@ -40,7 +40,33 @@ impl ChatMessage {
             metadata: None,
         }
     }
+
+    /// True for the synthesized `tool_result_missing` failure the host's
+    /// history reconciliation injects when a persisted declaration has no
+    /// result. Once the run itself answers the call (approved resume,
+    /// replay), this fabricated failure is superseded evidence and must
+    /// not sit beside the real result.
+    pub fn is_synthetic_missing(&self) -> bool {
+        let code = |value: &Value| {
+            value
+                .get("data")
+                .and_then(|data| data.get("errorCode"))
+                .and_then(Value::as_str)
+                == Some(TOOL_RESULT_MISSING_CODE)
+        };
+        self.role == "tool"
+            && match &self.content {
+                Value::String(text) => serde_json::from_str::<Value>(text)
+                    .ok()
+                    .is_some_and(|value| code(&value)),
+                value => code(value),
+            }
+    }
 }
+
+/// Marker code carried by the synthesized "missing tool result" record
+/// (see [`ChatMessage::is_synthetic_missing`]).
+pub const TOOL_RESULT_MISSING_CODE: &str = "tool_result_missing";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +206,15 @@ impl CoreError {
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn definition(&self) -> &ToolDefinition;
+    /// Effect-relevant context this tool executes inside (workspace root,
+    /// sandbox/network policy, runner selection, …). Durable execution
+    /// binds it into the execution-context fingerprint so a recorded
+    /// result can only be replayed for the SAME execution environment.
+    /// `None` contributes an empty object; tools with no ambient effect
+    /// context keep the default.
+    fn effect_context(&self) -> Option<Value> {
+        None
+    }
     /// Numeric inputs follow JavaScript binary64 semantics. Overflow remains a
     /// numeric node; `agentkit_contracts::javascript_number` reads its infinity.
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError>;

@@ -82,30 +82,32 @@ impl SteeringSource for SessionSteering {
                 .append_projected_inputs(AppendProjectedInputs {
                     fence: self.context.fence.clone(),
                     events: vec![],
-                    messages: vec![MessageInput {
-                        id: Some(message_id.clone()),
-                        chat_id: self.chat_id.clone(),
-                        run_id: Some(self.context.task.task_id.clone()),
-                        role: "user".into(),
-                        content: content.clone(),
-                        metadata: serde_json::json!({
-                            "steering": true,
-                            "inputId": record.input_id,
-                        }),
-                        ..MessageInput::default()
-                    }],
+                    messages: vec![],
                     creates: vec![],
                     applies: vec![agentkit_store::AppliedSteer {
                         input_id: record.input_id.clone(),
-                        message_id,
+                        message: MessageInput {
+                            id: Some(message_id),
+                            chat_id: self.chat_id.clone(),
+                            run_id: Some(self.context.task.task_id.clone()),
+                            role: "user".into(),
+                            content: content.clone(),
+                            metadata: serde_json::json!({
+                                "steering": true,
+                                "inputId": record.input_id,
+                            }),
+                            ..MessageInput::default()
+                        },
                     }],
                     task_id: self.context.task.task_id.clone(),
                     now: self.context.runtime.now_ms(),
                 })
                 .await;
-            if placed.is_err() {
-                // The fence is gone or a racing projection won; the input
-                // stays pending and the queue flush owns it from here.
+            // Deliver only what THIS transaction's CAS actually placed: a
+            // cancellation that won, or another owner's placement, leaves no
+            // message and no delivered item. An identical replay of the same
+            // receipt counts as placed.
+            if !placed.is_ok_and(|commit| commit.applied.contains(&record.input_id)) {
                 continue;
             }
             items.push(SteeringItem {
@@ -235,7 +237,12 @@ pub(crate) async fn resolve_approved_calls(
             .as_str()
             .unwrap_or_default()
             .to_owned();
-        let hash = serde_json::from_str::<serde_json::Value>(&call.arguments_json)
+        // One JavaScript-semantic parser at every digest site: the initial
+        // dispatch hashed these arguments through `parse_javascript_json`,
+        // so the resume comparison must use it too. Plain Serde would
+        // re-spell `1.0` differently from the canonical `1` and refuse a
+        // call the human actually approved.
+        let hash = agentkit_contracts::parse_javascript_json(&call.arguments_json)
             .ok()
             .map(|arguments| crate::governance::args_sha256(&arguments));
         if hash.as_deref() != Some(approved_hash.as_str()) {
@@ -249,6 +256,13 @@ pub(crate) async fn resolve_approved_calls(
             crate::governance::ApprovalGrant {
                 request_id: request.input_id.clone(),
                 args_sha256: approved_hash,
+                // An answer to an uncertain re-issue names the exact
+                // unresolved execution it authorizes; the durable gate
+                // admits only that generation. An ordinary approval
+                // carries none.
+                uncertainty_generation: request.content["uncertaintyGeneration"]
+                    .as_str()
+                    .map(str::to_owned),
             },
         );
         resume.push(call.clone());

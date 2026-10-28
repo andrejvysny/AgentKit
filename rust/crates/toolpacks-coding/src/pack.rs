@@ -4,8 +4,7 @@
 //! It offers every tool on every run; whether a call may proceed is the
 //! `CodingPermissionGuard`'s decision, not the contributor's.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use agentkit_core::CancellationToken;
 use agentkit_host::{ContributedTool, ToolContributionContext, ToolContributor};
@@ -20,7 +19,7 @@ use crate::git_tool::git_inspect_tool;
 use crate::guard::CODING_NAMESPACE;
 use crate::limits::CodingLimits;
 use crate::plan_tool::submit_plan_tool;
-use crate::process::sweep_orphans;
+use crate::process::startup_recovery;
 use crate::sandbox::SANDBOX_EXEC;
 use crate::search_tools::{code_search_tool, find_files_tool, repo_map_tool};
 use crate::types::{CodingPermissionAuthority, CodingToolPackOptions};
@@ -38,8 +37,6 @@ pub const CODING_TOOL_NAMES: &[&str] = &[
     "run_tests",
     "submit_plan",
 ];
-
-static SWEPT: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(false));
 
 fn invalid_configuration(message: impl Into<String>) -> CodingError {
     CodingError::new("invalid_configuration", message)
@@ -144,11 +141,15 @@ impl CodingToolPack {
                 "workspace.root must be an absolute path",
             ));
         }
-        if !SWEPT.swap(true, Ordering::SeqCst) && tokio::runtime::Handle::try_current().is_ok() {
+        if tokio::runtime::Handle::try_current().is_ok() {
             // A crashed agent never ran its teardown; clear what it left,
-            // once.
+            // once per process. Kicked off here and awaited by the
+            // modifying path (`run_command`) through `startup_recovery`,
+            // so a crashed agent's orphans are swept before any new
+            // effect starts (ADR 0020). The `OnceCell` keeps the
+            // process-once semantics; this spawn only warms it.
             tokio::spawn(async {
-                sweep_orphans(None).await;
+                startup_recovery().await;
             });
         }
         let limits = resolve_limits(&options.limits)?;
@@ -205,8 +206,25 @@ impl CodingToolPack {
         &self.env
     }
 
-    /// Deletes the private scratch directory (TS `dispose`).
+    /// Drain in-flight command executions of THIS workspace: terminate every
+    /// still-running process group through the same teardown path the
+    /// execution driver uses, then await the drivers' completion (bounded).
+    /// Host and test shutdown call this so a runtime never exits with marked
+    /// children alive (ADR 0020: effects without a settled cleanup are never
+    /// left to the crash sweep of the next boot if this process can still
+    /// help). Commands of other workspaces are left to their own pack.
+    pub async fn shutdown(&self) {
+        if let Ok(root) = self.env.root().await {
+            crate::process::drain_workspace(&root).await;
+        }
+    }
+
+    /// Deletes the private scratch directory (TS `dispose`). Drains live
+    /// executions first: `dispose` must not leave live children behind.
     pub async fn dispose(&self) {
+        if let Ok(root) = self.env.root().await {
+            crate::process::drain_workspace(&root).await;
+        }
         self.env.dispose().await;
     }
 }
