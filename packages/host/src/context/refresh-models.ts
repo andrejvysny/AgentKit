@@ -1,5 +1,5 @@
 import type { AiProviderConfig, AiProviderModel } from "@agentkit/contracts";
-import type { AiProviderClient } from "@agentkit/core";
+import { type AiProviderClient, applyHostModelMetadata } from "@agentkit/core";
 import { RecordNotFoundError } from "../errors.js";
 import type { ProviderStore } from "../ports/provider-store.js";
 import type { SecretStore } from "../ports/secret-store.js";
@@ -9,6 +9,13 @@ export interface RefreshProviderModelsDeps {
   store: { providers: ProviderStore };
   providerFactory(config: AiProviderConfig): AiProviderClient;
   secrets?: SecretStore;
+  /**
+   * Explicit host-declared model metadata. Merged over the provider-
+   * advertised catalogue field by field with host precedence (see
+   * `mergeModelMetadata`): a host override wins for the fields it declares;
+   * everything else the provider advertised is kept; unknown stays unknown.
+   */
+  modelMetadata?: AiProviderModel[];
 }
 
 /**
@@ -40,7 +47,10 @@ export async function refreshProviderModels(
   const client = deps.providerFactory(
     apiKey === null ? provider : { ...provider, apiKey },
   );
-  const models = await client.listModels(signal);
+  const models = applyHostModelMetadata(
+    await client.listModels(signal),
+    deps.modelMetadata,
+  );
   await deps.store.providers.replaceModels(providerId, models);
   return models;
 }

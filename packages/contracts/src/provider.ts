@@ -58,12 +58,65 @@ export type AiProviderCapabilities = Static<
   typeof AiProviderCapabilitiesSchema
 >;
 
+/**
+ * Versioned pricing metadata for one model. Every field is optional and
+ * source-attributed: AgentKit never infers a price, and an absent price is
+ * *unknown* — not zero. `cachedInputPerMillionTokens` is tracked separately
+ * because cached input is billed differently from uncached input.
+ */
+export const AiModelPricingSchema = Type.Object({
+  /** ISO-4217 currency code (e.g. "USD"). Prices without a currency are meaningless. */
+  currency: Type.String({ minLength: 3, maxLength: 3 }),
+  inputPerMillionTokens: Type.Optional(Type.Number({ minimum: 0 })),
+  outputPerMillionTokens: Type.Optional(Type.Number({ minimum: 0 })),
+  cachedInputPerMillionTokens: Type.Optional(Type.Number({ minimum: 0 })),
+  /** Some providers bill reasoning tokens at the output rate; record it. */
+  reasoningTokensBilledAsOutput: Type.Optional(Type.Boolean()),
+  /** Where the price came from — never fabricated. */
+  priceSource: Type.Union([
+    Type.Literal("host"),
+    Type.Literal("provider"),
+    Type.Literal("preset"),
+  ]),
+  /** Date the price takes effect (the price's own clock, not the fetch's). */
+  effectiveDate: Type.Optional(
+    Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }),
+  ),
+});
+export type AiModelPricing = Static<typeof AiModelPricingSchema>;
+
+/**
+ * Provenance of a model's metadata fields. `provider` means the provider's
+ * own catalogue advertised it; `host` means a trusted host declared it;
+ * `preset` means a host-registered preset supplied it. The merge policy
+ * (`mergeModelMetadata` in @agentkit/core) is host > provider > preset,
+ * field by field. Absent means unknown — never defaulted to a guess.
+ */
+export const AiModelMetadataSourceSchema = Type.Union([
+  Type.Literal("host"),
+  Type.Literal("provider"),
+  Type.Literal("preset"),
+]);
+export type AiModelMetadataSource = Static<typeof AiModelMetadataSourceSchema>;
+
 export const AiProviderModelSchema = Type.Object({
   providerId: Type.String(),
   modelId: Type.String(),
   displayName: Type.Union([Type.String(), Type.Null()]),
   contextWindowTokens: Type.Optional(Type.Number()),
   supportsToolCalling: Type.Optional(Type.Boolean()),
+  /** Optional capability facts, source-attributed; absent = unknown. */
+  supportsStreaming: Type.Optional(Type.Boolean()),
+  supportsJsonMode: Type.Optional(Type.Boolean()),
+  supportsVision: Type.Optional(Type.Boolean()),
+  supportsAudio: Type.Optional(Type.Boolean()),
+  supportsReasoning: Type.Optional(Type.Boolean()),
+  /** Supported reasoning efforts, where known (e.g. ["low","medium","high"]). */
+  reasoningEfforts: Type.Optional(Type.Array(Type.String())),
+  maxOutputTokens: Type.Optional(Type.Number()),
+  pricing: Type.Optional(AiModelPricingSchema),
+  metadataSource: Type.Optional(AiModelMetadataSourceSchema),
+  metadataFetchedAt: Type.Optional(Type.String()),
   fetchedAt: Type.String(),
 });
 export type AiProviderModel = Static<typeof AiProviderModelSchema>;

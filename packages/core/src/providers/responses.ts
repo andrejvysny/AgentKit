@@ -109,6 +109,8 @@ export class ResponsesClient implements AiProviderClient {
         providerId: this.id,
         modelId: id,
         displayName: typeof label === "string" ? label : null,
+        metadataSource: "provider" as const,
+        metadataFetchedAt: fetchedAt,
         fetchedAt,
       });
     }

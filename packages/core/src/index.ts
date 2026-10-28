@@ -32,6 +32,7 @@ export * from "./runs/session-seams.js";
 
 // Providers
 export * from "./providers/client.js";
+export * from "./providers/model-metadata.js";
 export { redactDiagnostic } from "./providers/diagnostics.js";
 export * from "./providers/presets.js";
 export * from "./providers/sse.js";

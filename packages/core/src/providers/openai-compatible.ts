@@ -155,6 +155,8 @@ export class OpenAiCompatibleClient implements AiProviderClient {
           modelId: m.id,
           displayName: m.name ?? null,
           ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+          metadataSource: "provider" as const,
+          metadataFetchedAt: fetchedAt,
           fetchedAt,
         };
       });
