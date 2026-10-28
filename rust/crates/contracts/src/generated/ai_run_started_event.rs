@@ -18,6 +18,12 @@ pub struct AiRunStartedEventData {
     pub model: AiProviderKind,
     #[serde(rename = "toolCount", serialize_with = "crate::serialize_number")]
     pub tool_count: f64,
+    #[serde(
+        rename = "providerId",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub provider_id: Optional<AiProviderKind>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -26,6 +32,7 @@ crate::impl_json_deserialize!(AiRunStartedEventData, |value: Value| {
     let output = Self {
         model: crate::required_field(&mut object, "model")?,
         tool_count: crate::required_field(&mut object, "toolCount")?,
+        provider_id: crate::optional_field(&mut object, "providerId")?,
         extra: object.into_iter().collect(),
     };
     Ok(output)

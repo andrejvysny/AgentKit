@@ -2,7 +2,7 @@
 
 ## Unreleased — Phase A stabilization & Phase B provider quality (2026-10-28)
 
-**Qualification partitioning (ADR 0020).** TypeScript CI no longer builds native code and no longer conflates
+**Qualification partitioning (ADR 0023).** TypeScript CI no longer builds native code and no longer conflates
 platforms. Native fixtures resolve dependencies in an explicit setup phase, build once, and run interop against the
 built fixture — `--offline` only after availability is established, and preparation failure reports an infrastructure
 diagnosis. The coding-agent acceptance suite is deterministic cross-platform; tests requiring the real macOS sandbox

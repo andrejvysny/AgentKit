@@ -28,6 +28,9 @@ const STREAM_CHAT_SITES: Record<string, string> = {
   "cassette/src/cassette.ts":
     "cassette wrapper delegating to the wrapped client (record/verify/off); " +
     "replay never reaches it — pinned by packages/cassette/tests/security.test.ts",
+  "host/src/context/bounded-context-client.ts":
+    "admitted-context wrapper delegating to the wrapped client (session " +
+    "context injection before the loop's single model-step request)",
 };
 
 /** Allowed `.execute(` call sites → why. */
@@ -36,8 +39,8 @@ const EXECUTE_SITES: Record<string, string> = {
     "executeToolSafely: the loop's single tool invocation (2 branches)",
   "core/src/runs/bounded-run.ts":
     "budget wrapper delegating to the wrapped tool",
-  "host/src/turn/registry-staging.ts":
-    "ToolGuard wrapper delegating to the guarded tool",
+  "host/src/turn/guarded-tool.ts":
+    "ToolGuard + durable-receipt wrapper delegating to the guarded tool",
   "host/src/tasks/executor-registry.ts":
     "task dispatch to a TaskExecutor (not a tool)",
   "runner-local/src/single-process-task-runner.ts":

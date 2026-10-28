@@ -1,4 +1,4 @@
-# ADR 0020 — Qualification partitioning: TypeScript runtime, native, and platform gates
+# ADR 0023 — Qualification partitioning: TypeScript runtime, native, and platform gates
 
 **Status:** accepted, implemented (2026-10-28; Phase A of the stabilization tranche).
 **Contract impact:** none. CI topology and test-fixture preparation only.

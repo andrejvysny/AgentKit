@@ -140,6 +140,21 @@ it("Full auto uncertain mutation still requires fresh authorization", async () =
   const runId = (await f.store.tasks.listByScope("chat"))[0]!.taskId;
   f.store.close();
   f = await open(path, state);
+  // The admitted-without-result call is never re-executed on recovery; the
+  // model is told it is uncertain. A fresh authorization is what an IDENTICAL
+  // re-issue costs — even under full auto (the uncertain side-effect guard).
+  f.mock.setScript([
+    {
+      steps: [
+        {
+          kind: "tool_call",
+          toolCallId: "reissue",
+          name: "write",
+          argumentsJson: "{}",
+        },
+      ],
+    },
+  ]);
   await resume(f, runId);
   expect((await pending(f)).content).toMatchObject({ kind: "approval" });
   expect(state.effects).toBe(1);
@@ -241,6 +256,21 @@ it("two uncertain runs preserve the current new-call approval generation across 
   )[0]!;
   f.store.close();
   f = await open(path, state);
+  // Recovery replays the uncertain call to the MODEL as unknown, never
+  // re-executes it; the human gate comes when the model re-issues the
+  // identical write. Its approval generation is the admitted execution's id.
+  f.mock.setScript([
+    {
+      steps: [
+        {
+          kind: "tool_call",
+          toolCallId: "reissue-after-crash",
+          name: "write",
+          argumentsJson: "{}",
+        },
+      ],
+    },
+  ]);
   await resume(f, sent.turnId);
   const fresh = await pending(f);
   expect(

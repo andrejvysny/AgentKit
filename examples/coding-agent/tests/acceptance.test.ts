@@ -600,9 +600,21 @@ describe("coding agent — the acceptance run", () => {
     expect(status).toBe("completed");
     expect(asked.map((a) => a.toolName)).toEqual(["run_command"]);
     expect(asked[0]!.prompt).toContain("uncertain");
-    // Twice in total: the killed attempt, and the one a human approved. A
-    // third line would mean the runtime re-ran an uncertain call on its own.
-    expect(readFileSync(marker, "utf8")).toBe("ran\nran\n");
+    // ADR 0020: approval authorizes the OPERATION; it is not cleanup proof for
+    // the killed attempt's process tree, so it does not clear the workspace
+    // quarantine. The approved re-issue is refused explicitly — the runtime
+    // neither re-runs an uncertain mutation nor slips past the block silently.
+    const refusal = revived.requests
+      .flat()
+      .filter(
+        (m) => m.role === "tool" && typeof m.content === "string"
+          ? m.content.includes("workspace_busy")
+          : false,
+      );
+    expect(refusal.length).toBe(1);
+    // Exactly once overall: the killed attempt's run. The approval parked the
+    // re-issue and the quarantine refused it; nothing ran a second time.
+    expect(readFileSync(marker, "utf8")).toBe("ran\n");
     await revived.app.close();
   }, 180_000);
 });

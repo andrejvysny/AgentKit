@@ -58,18 +58,23 @@ function backdate(path: string, ms: number): void {
 }
 
 describe("lock-dir coordinator under hostile files", () => {
-  test("a corrupt lock older than the grace period is reclaimed", async () => {
+  test("a corrupt ownership record stays blocked past any grace period (ADR 0020)", async () => {
+    // A half-written record may conceal live execution ownership; age is not
+    // cleanup proof. The coordinator fails closed and only an operator who
+    // has verified no live process may clear the directory.
     const dir = tempDir("locks-");
     const root = tempDir();
     const lock = await plantLock(dir, root, "not json {{{ half a write");
     backdate(lock, 10_000);
     const c = createLockDirWorkspaceCoordinator({ dir, pollMs: 20 });
-    const lease = await Promise.race([
-      c.acquireWorkspace({ root, holder: holder("cmd") }),
-      sleep(3000).then(() => undefined),
-    ]);
-    expect(lease).toBeDefined();
-    await lease?.release();
+    await expect(
+      c.acquireWorkspace({ root, holder: holder("cmd"), maxWaitMs: 300 }),
+    ).rejects.toMatchObject({ code: "workspace_busy" });
+    // Still blocked after another grace period would have passed.
+    backdate(lock, 60_000);
+    await expect(
+      c.acquireWorkspace({ root, holder: holder("cmd"), maxWaitMs: 300 }),
+    ).rejects.toMatchObject({ code: "workspace_busy" });
   });
 
   test("a corrupt lock inside the grace period is treated as held, not ignored", async () => {
