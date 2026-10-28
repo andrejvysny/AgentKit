@@ -85,6 +85,11 @@ fn pid_alive(pid: i64) -> bool {
     let Ok(pid) = i32::try_from(pid) else {
         return true; // not a signalable pid: never declared dead
     };
+    pid_probe_alive(pid)
+}
+
+#[cfg(unix)]
+fn pid_probe_alive(pid: i32) -> bool {
     // SAFETY: kill(pid, 0) performs error checking only, sends no signal.
     unsafe {
         if libc::kill(pid, 0) == 0 {
@@ -92,6 +97,14 @@ fn pid_alive(pid: i64) -> bool {
         }
         std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
+}
+
+/// No `kill` probe on Windows: a lock owner is never declared dead, so a
+/// crashed holder's lock stays quarantined for explicit recovery rather
+/// than being silently broken. Fail-closed.
+#[cfg(not(unix))]
+fn pid_probe_alive(_pid: i32) -> bool {
+    true
 }
 
 type StartCache = Mutex<HashMap<i64, (Option<String>, Instant)>>;
@@ -746,6 +759,59 @@ async fn read_quarantine(dir: &str, key: &str) -> Result<Option<WorkspaceQuarant
     }))
 }
 
+/// Every durable intent record for one workspace directory. An unparseable
+/// intent is NOT dropped: it classifies as an unknown survivor set
+/// (absurd owner pid) so recovery blocks the root (fail closed).
+async fn read_intent_records(key: &str, ws_dir: &str) -> Result<Vec<ExecutionIntent>, CodingError> {
+    let mut entries = match tokio::fs::read_dir(ws_dir).await {
+        Ok(entries) => entries,
+        Err(error) if errno_is(&error, libc::ENOENT) => return Ok(vec![]),
+        Err(error) => return Err(io_error(&error)),
+    };
+    let mut intents: Vec<ExecutionIntent> = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|error| io_error(&error))?
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("intent-") || !name.ends_with(".json") {
+            continue;
+        }
+        let text = match tokio::fs::read_to_string(entry.path()).await {
+            Ok(text) => text,
+            Err(error) if errno_is(&error, libc::ENOENT) => continue,
+            Err(error) => return Err(io_error(&error)),
+        };
+        intents.push(
+            serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|value| intent_from_json(&value))
+                .unwrap_or_else(|| ExecutionIntent {
+                    root: key.to_owned(),
+                    identity: CommandCleanupIdentity {
+                        execution_id: name
+                            .trim_end_matches(".json")
+                            .trim_start_matches("intent-")
+                            .to_owned(),
+                        owner_pid: -1,
+                        pgid: None,
+                        spawned_at_ms: 0,
+                    },
+                    holder: LeaseHolder {
+                        chat_id: None,
+                        run_id: "unknown".to_owned(),
+                        tool_call_id: None,
+                        tool: "unknown".to_owned(),
+                        label: "unreadable execution intent".to_owned(),
+                    },
+                    spawned: false,
+                }),
+        );
+    }
+    Ok(intents)
+}
+
 /// The durable quarantine payload. `identity` carries the SAFE command
 /// cleanup identity (B5): stable execution nonce, owner pid, process group
 /// and spawn time — a reader after a crash can reconcile the exact
@@ -1141,52 +1207,7 @@ impl WorkspaceCoordinator for LockDirCoordinator {
     async fn reconcile_execution_intents(&self, root: &str) -> Result<(), CodingError> {
         let key = canonical_root_key(root).await;
         let ws_dir = format!("{}/{}", self.dir, sha256(key.as_bytes()));
-        let mut entries = match tokio::fs::read_dir(&ws_dir).await {
-            Ok(entries) => entries,
-            Err(error) if errno_is(&error, libc::ENOENT) => return Ok(()),
-            Err(error) => return Err(io_error(&error)),
-        };
-        let mut intents: Vec<ExecutionIntent> = Vec::new();
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|error| io_error(&error))?
-        {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.starts_with("intent-") || !name.ends_with(".json") {
-                continue;
-            }
-            let text = match tokio::fs::read_to_string(entry.path()).await {
-                Ok(text) => text,
-                Err(error) if errno_is(&error, libc::ENOENT) => continue,
-                Err(error) => return Err(io_error(&error)),
-            };
-            intents.push(
-                serde_json::from_str::<serde_json::Value>(&text)
-                    .ok()
-                    .and_then(|value| intent_from_json(&value))
-                    .unwrap_or_else(|| ExecutionIntent {
-                        root: key.clone(),
-                        identity: CommandCleanupIdentity {
-                            execution_id: name
-                                .trim_end_matches(".json")
-                                .trim_start_matches("intent-")
-                                .to_owned(),
-                            owner_pid: -1,
-                            pgid: None,
-                            spawned_at_ms: 0,
-                        },
-                        holder: LeaseHolder {
-                            chat_id: None,
-                            run_id: "unknown".to_owned(),
-                            tool_call_id: None,
-                            tool: "unknown".to_owned(),
-                            label: "unreadable execution intent".to_owned(),
-                        },
-                        spawned: false,
-                    }),
-            );
-        }
+        let intents = read_intent_records(&key, &ws_dir).await?;
         let own_pid = i64::from(std::process::id());
         for intent in intents {
             let owner_alive = intent.identity.owner_pid > 0
@@ -1206,16 +1227,35 @@ impl WorkspaceCoordinator for LockDirCoordinator {
             } else {
                 crate::process::crashed_execution_survivors(&intent).await
             };
-            let _ = self
-                .clear_execution_intent(&key, &intent.identity.execution_id)
-                .await;
             let pids = survivors.clone().unwrap_or_default();
             if pids.is_empty() && survivors.is_some() {
+                // Positive evidence the process group is gone: retire the
+                // intent, no replacement needed. A failed retirement is an
+                // `Err`, never a swallowed success.
+                self.clear_execution_intent(&key, &intent.identity.execution_id)
+                    .await?;
                 continue;
             }
+            // Blocking path. The retirement order is the durability rule
+            // (same as the driver's in `spawn_owned_execution`): FIRST
+            // establish the replacement evidence, THEN persist it
+            // successfully, ONLY THEN retire the original intent. Reading
+            // or publishing the quarantine before clearing means every
+            // failure path (`?` below) leaves the original intent on disk:
+            // recovery can never leave the root with neither the intent nor
+            // durable quarantine evidence while unresolved executions
+            // remain (a failed read/publish that lost the intent would let
+            // the next coordinator admit modifying work).
             if let Some(existing) = read_quarantine(&self.dir, &key).await?
                 && !quarantine_positively_exited(&existing).await
             {
+                // Another live record already blocks the root — but each
+                // record carries ONE execution's identity, so it does not
+                // represent this intent. Keep the intent: an existing
+                // quarantine must never cause a later unresolved execution's
+                // identity to be discarded. It retires once this record is
+                // gone (positive exit or explicit recovery) and this intent
+                // can publish its own replacement.
                 continue;
             }
             let record = quarantine_record_json(
@@ -1226,6 +1266,8 @@ impl WorkspaceCoordinator for LockDirCoordinator {
                 (!corrupt).then_some(&intent.identity),
             );
             self.publish_quarantine(&key, &record.to_string()).await?;
+            self.clear_execution_intent(&key, &intent.identity.execution_id)
+                .await?;
         }
         Ok(())
     }
@@ -1248,10 +1290,40 @@ impl WorkspaceCoordinator for LockDirCoordinator {
     async fn clear_workspace_quarantine(&self, root: &str) -> Result<bool, CodingError> {
         let key = canonical_root_key(root).await;
         let path = quarantine_path(&self.dir, &key);
-        match tokio::fs::remove_file(&path).await {
-            Ok(()) => Ok(true),
-            Err(error) if errno_is(&error, libc::ENOENT) => Ok(false),
-            Err(error) => Err(io_error(&error)),
+        let removed = match tokio::fs::remove_file(&path).await {
+            Ok(()) => true,
+            Err(error) if errno_is(&error, libc::ENOENT) => false,
+            Err(error) => return Err(io_error(&error)),
+        };
+        // Explicit recovery retires the DURABLE unresolved-execution
+        // evidence too. Reconciliation intentionally KEEPS an intent whose
+        // replacement never got published (another live record already
+        // blocked the root), and leaving those intents behind would have
+        // the next acquisition re-quarantine the root this recovery was
+        // asked to release. Retire every DEAD-owner intent for the root —
+        // a live owner's intent belongs to an in-flight execution, not to
+        // this recovery. A failed retirement is returned: the root then
+        // stays blocked (fail closed) rather than half-recovered.
+        let ws_dir = format!("{}/{}", self.dir, sha256(key.as_bytes()));
+        let own_pid = i64::from(std::process::id());
+        let mut failure: Option<CodingError> = None;
+        for intent in read_intent_records(&key, &ws_dir).await? {
+            let owner_alive = intent.identity.owner_pid > 0
+                && (intent.identity.owner_pid == own_pid
+                    || crate::process::owner_alive(intent.identity.owner_pid));
+            if owner_alive {
+                continue;
+            }
+            if let Err(error) = self
+                .clear_execution_intent(&key, &intent.identity.execution_id)
+                .await
+            {
+                failure.get_or_insert(error);
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(removed),
         }
     }
 }
