@@ -878,7 +878,17 @@ impl AgentSessionService {
         let mut granted_mode = None;
         if let Some(policy) = &self.deps.plan_approval {
             plan_tool_names = policy.tool_names();
-            if let Some(plan) = plan_request_of(&request.content, &plan_tool_names) {
+            // The human's decision is read BEFORE the grant policy: only an
+            // approval escalates, so a denial never touches `granted_mode`
+            // or `authorize`. A denial is the human's final word — the
+            // request must persist (note included) even when the grant
+            // service is unreachable, or the answer would fail, the request
+            // stay pending and the parked turn wait forever. A response the
+            // store will reject (no/other `decision`) also lands here: the
+            // store validates the shape as its first write-free act.
+            let approves =
+                input.response.get("decision").and_then(Value::as_str) == Some("approve");
+            if approves && let Some(plan) = plan_request_of(&request.content, &plan_tool_names) {
                 let session_id = request.session_id.clone();
                 let turn_id = request.target_task_id.clone().unwrap_or_default();
                 let mode = policy
@@ -1726,8 +1736,11 @@ impl crate::SessionFlushPlanner for AgentSessionService {
         }
         // At settling time the settling turn itself counts as terminal: a
         // steer aimed at it that was never placed is a promotion candidate
-        // (after the follow-ups). One candidate per settlement; the store
-        // CAS-validates and converts it inside the settle commit.
+        // (after the follow-ups). The whole eligible queue goes to the store
+        // in arrival order; the settlement transaction CAS-validates each
+        // against the state it commits and converts the first winner, so a
+        // candidate cancelled after this snapshot cannot strand the ones
+        // behind it.
         let candidates = self
             .queue_candidates(
                 &settling.scope_id,
@@ -1739,7 +1752,6 @@ impl crate::SessionFlushPlanner for AgentSessionService {
             .unwrap_or_default();
         Ok(candidates
             .into_iter()
-            .take(1)
             .map(|candidate| agentkit_store::StagedCandidate {
                 input_id: candidate.input_id,
                 task: candidate.task,

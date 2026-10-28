@@ -558,6 +558,131 @@ async fn settle_converts_the_first_follow_up_and_cancels_cancel_steers() {
     );
 }
 
+/// Eligibility is the settlement's own decision: an input the host's
+/// snapshot could not have named — it arrived after the service read the
+/// queue — is promoted by THIS commit, staged from the settling turn,
+/// instead of staying Pending with no next task and an idle worker. Unusable
+/// content and `cancel` steers keep their existing treatment.
+#[tokio::test]
+async fn a_settlement_promotes_an_input_the_snapshot_missed() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    let queued = |id: &str, kind: AgentInputKind, content: Value, on_settled| CreateAgentInput {
+        input_id: id.into(),
+        session_id: "chat".into(),
+        kind,
+        content,
+        content_hash: format!("hash-{id}"),
+        target_task_id: (kind == AgentInputKind::Steer).then(|| "run".into()),
+        on_settled,
+        attempt_id: None,
+        tool_call_id: None,
+        expires_at: None,
+    };
+    store
+        .create_input(
+            queued(
+                "late",
+                AgentInputKind::FollowUp,
+                json!({"content":"and summarize"}),
+                None,
+            ),
+            1700,
+        )
+        .await
+        .unwrap();
+    store
+        .create_input(
+            queued(
+                "poison",
+                AgentInputKind::FollowUp,
+                json!({"content":""}),
+                None,
+            ),
+            1701,
+        )
+        .await
+        .unwrap();
+    store
+        .create_input(
+            queued(
+                "s-cancel",
+                AgentInputKind::Steer,
+                json!({"content":"stop"}),
+                Some(AgentInputSettlePolicy::Cancel),
+            ),
+            1702,
+        )
+        .await
+        .unwrap();
+
+    let settled = store
+        .settle_session(
+            SettleTask {
+                fence: lease.fence(),
+                now: 2000,
+                status: TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            },
+            SessionSettle { convert: vec![] },
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.status, TaskStatus::Completed);
+
+    let late = store.get_input("late".into()).await.unwrap().unwrap();
+    assert_eq!(
+        late.status,
+        AgentInputStatus::Converted,
+        "the settlement promotes what its snapshot missed"
+    );
+    assert_eq!(late.applied_task_id.as_deref(), Some("turn:late"));
+    let promoted = store.get_task("turn:late").await.unwrap().unwrap();
+    assert_eq!(promoted.kind, "test");
+    assert_eq!(promoted.scope_id, "chat");
+    assert_eq!(
+        promoted.payload,
+        json!({"chatId":"chat","userMessageId":"msg_q:late","assistantMessageId":"msg_a:late"}),
+        "the promoted turn carries the settling turn's descriptor snapshot"
+    );
+    let messages = store.messages("chat", false).await.unwrap();
+    assert!(
+        messages.iter().any(|message| message.id == "msg_q:late"
+            && message.role == "user"
+            && message.content == json!("and summarize")),
+        "the user record commits with the task"
+    );
+    assert!(
+        messages.iter().any(|message| message.id == "msg_a:late"
+            && message.role == "assistant"
+            && message.run_id.as_deref() == Some("turn:late")),
+        "and so does the assistant placeholder"
+    );
+    assert_eq!(
+        store
+            .get_input("poison".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending,
+        "unusable content is never staged, and never aborts the settle"
+    );
+    assert!(store.get_task("turn:poison").await.unwrap().is_none());
+    assert_eq!(
+        store
+            .get_input("s-cancel".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Cancelled,
+        "a cancel-policy steer is cancelled, never converted"
+    );
+}
+
 /// `content.onSettled` is user data, not policy: only the top-level record
 /// field the service writes governs what a settle does with a steer.
 #[tokio::test]
