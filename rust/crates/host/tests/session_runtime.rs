@@ -193,6 +193,22 @@ async fn fixture_at(
     options: HostOptions,
 ) -> Fixture {
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
+    fixture_with_runtime(store, runtime.clone(), runtime, tool_first, fail, options).await
+}
+
+/// The same fixture with each half's clock supplied separately. The session
+/// service's clock is the seam a test parks an admission in: the admission's
+/// last clock read is the one immediately before its store write, so holding
+/// it there lets a settlement commit in between — the interleaving that used
+/// to strand a follow-up.
+async fn fixture_with_runtime(
+    store: SqliteStore,
+    host_runtime: SharedRuntime,
+    service_runtime: SharedRuntime,
+    tool_first: bool,
+    fail: bool,
+    options: HostOptions,
+) -> Fixture {
     let calls = Arc::new(Mutex::new(vec![]));
     let requests = Arc::new(Mutex::new(vec![]));
     let executor: Arc<dyn TaskExecutor> = Arc::new(
@@ -216,13 +232,13 @@ async fn fixture_at(
     let host = AgentHost::new(
         store.clone(),
         HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), executor)]),
-        runtime.clone(),
+        host_runtime,
         options,
     )
     .unwrap();
     let service = AgentSessionService::new(AgentSessionServiceDeps {
         store: store.clone(),
-        runtime,
+        runtime: service_runtime,
         plan_approval: None,
         wake: Some(host.wake_handle()),
     });
@@ -1705,12 +1721,12 @@ struct Racy {
 
 #[async_trait]
 impl SessionFlushPlanner for Racy {
-    async fn settle_candidates(
+    async fn settle_plan(
         &self,
         settling: &agentkit_store::TaskRecord,
         completed: bool,
-    ) -> HostResult<Vec<agentkit_store::StagedCandidate>> {
-        let snapshot = self.inner.settle_candidates(settling, completed).await?;
+    ) -> HostResult<agentkit_host::SettlePlan> {
+        let plan = self.inner.settle_plan(settling, completed).await?;
         if completed && self.armed.swap(false, Ordering::SeqCst) {
             match self.mode {
                 Race::Arriving => {
@@ -1744,7 +1760,7 @@ impl SessionFlushPlanner for Racy {
                 }
             }
         }
-        Ok(snapshot)
+        Ok(plan)
     }
 }
 
@@ -1924,4 +1940,273 @@ async fn a_candidate_cancelled_after_the_snapshot_still_promotes_the_next() {
     let state = f.service.get_state("s1").await.unwrap();
     assert!(state.pending.is_empty());
     assert!(state.active_turn.is_none());
+}
+
+/// The service's clock as a one-shot park. `arm(n)` blocks the n-th clock read
+/// of the next operation until `release()`. The clock a queued admission reads
+/// last is the one immediately before its store write, so parking there holds
+/// the whole of the old check-then-write gap — after the store refused a
+/// second turn, before the input is durable. The count is calibrated by
+/// running one identical admission first, which keeps the park on the
+/// operation's LAST read instead of an incidental one.
+struct Barriered {
+    fired: AtomicUsize,
+    limit: AtomicUsize,
+    armed: AtomicBool,
+    entered: AtomicBool,
+    release: AtomicBool,
+}
+
+impl Barriered {
+    fn new() -> Self {
+        Self {
+            fired: AtomicUsize::new(0),
+            limit: AtomicUsize::new(usize::MAX),
+            armed: AtomicBool::new(false),
+            entered: AtomicBool::new(false),
+            release: AtomicBool::new(false),
+        }
+    }
+
+    fn arm(&self, limit: usize) {
+        self.fired.store(0, Ordering::SeqCst);
+        self.limit.store(limit, Ordering::SeqCst);
+        self.entered.store(false, Ordering::SeqCst);
+        self.release.store(false, Ordering::SeqCst);
+        self.armed.store(true, Ordering::SeqCst);
+    }
+
+    fn release(&self) {
+        self.release.store(true, Ordering::SeqCst);
+    }
+
+    /// Stop counting and report how many reads the operation made.
+    fn count(&self) -> usize {
+        self.armed.store(false, Ordering::SeqCst);
+        self.fired.swap(0, Ordering::SeqCst)
+    }
+}
+
+impl Runtime for Barriered {
+    fn now_ms(&self) -> i64 {
+        if self.armed.load(Ordering::SeqCst) {
+            let seen = self.fired.fetch_add(1, Ordering::SeqCst) + 1;
+            if seen >= self.limit.load(Ordering::SeqCst) {
+                self.armed.store(false, Ordering::SeqCst);
+                self.entered.store(true, Ordering::SeqCst);
+                while !self.release.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+        }
+        SystemRuntime.now_ms()
+    }
+
+    fn id(&self) -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
+    fn random(&self) -> f64 {
+        0.5
+    }
+}
+
+async fn wait_flag(flag: &AtomicBool, what: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !flag.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{what}"));
+}
+
+/// The assessor's stranded follow-up, with no process tricks: the admission
+/// parks on the clock read immediately before its store write, the settlement
+/// commits across that park (re-reading a queue this input is not in yet), and
+/// the admission then lands. It must NOT end as `first=Completed`,
+/// `late=Pending`, no next task, idle worker: the write that inserts the input
+/// is the write that decides whether it also becomes the next turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follow_up_whose_admission_straddles_the_settlement_is_never_stranded() {
+    let barrier = Arc::new(Barriered::new());
+    let f = fixture_with_runtime(
+        SqliteStore::memory(64).unwrap(),
+        Arc::new(SystemRuntime),
+        barrier.clone(),
+        false,
+        false,
+        HostOptions::default(),
+    )
+    .await;
+    let sent = f
+        .service
+        .send("s1", &send_input(json!("work"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    let turn_id = match sent {
+        AgentSendResult::Turn { turn_id, .. } => turn_id,
+        _ => panic!("an idle session starts the turn"),
+    };
+
+    // Calibrate on an identical, unblocked admission.
+    barrier.arm(usize::MAX);
+    let probe = f
+        .service
+        .follow_up(
+            "s1",
+            &FollowUpInput {
+                content: json!("probe"),
+                input_id: Some("probe".into()),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(probe, AgentSendResult::Queued { .. }),
+        "a busy session queues"
+    );
+    let reads = barrier.count();
+    assert!(reads > 0, "an admission reads the clock");
+    assert!(f.service.cancel_queued_input("s1", "probe").await.unwrap());
+    assert!(f.service.get_state("s1").await.unwrap().pending.is_empty());
+
+    // Park the real admission, then settle across the park.
+    barrier.arm(reads);
+    let service = f.service.clone();
+    let late = tokio::spawn(async move {
+        service
+            .follow_up(
+                "s1",
+                &FollowUpInput {
+                    content: json!("and summarize"),
+                    input_id: Some("late".into()),
+                },
+            )
+            .await
+    });
+    wait_flag(
+        &barrier.entered,
+        "the admission reached its parked clock read",
+    )
+    .await;
+
+    assert!(
+        f.host.run_once().await.unwrap(),
+        "turn 1 executes while the admission is parked"
+    );
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    assert!(
+        f.store.get_input("late".into()).await.unwrap().is_none(),
+        "the settlement re-read a queue that did not yet contain this input"
+    );
+
+    barrier.release();
+    let result = late.await.unwrap().unwrap();
+    assert!(
+        matches!(result, AgentSendResult::Turn { .. }),
+        "an input that lands behind a terminal turn stages itself: {result:?}"
+    );
+    let input = f
+        .store
+        .get_input("late".into())
+        .await
+        .unwrap()
+        .expect("the input is durable");
+    assert_eq!(
+        input.status,
+        AgentInputStatus::Converted,
+        "never Pending behind an already-terminal turn"
+    );
+    assert_eq!(input.applied_task_id.as_deref(), Some("turn:late"));
+    assert_eq!(
+        queued_turns(&f.store, "s1").await,
+        vec!["turn:late".to_owned()],
+        "a next task exists the moment the admission commits"
+    );
+
+    assert!(
+        f.host.run_once().await.unwrap(),
+        "the worker is not idle: it claims what the admission staged"
+    );
+    assert_eq!(
+        f.store.get_task("turn:late").await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    let state = f.service.get_state("s1").await.unwrap();
+    assert!(state.pending.is_empty());
+    assert!(state.active_turn.is_none());
+}
+
+/// The staging contract in the field. A model change that lands while a turn
+/// runs must reach the turn ITS settlement promotes — including the input the
+/// host's snapshot could not name, which the store stages. Templating that
+/// turn off the settling task's payload made the next provider request ask for
+/// the model the session had already replaced (`[old, old]`).
+#[tokio::test]
+async fn a_promotion_the_snapshot_missed_asks_the_provider_with_the_current_model() {
+    let f = fixture_with(false).await;
+    let sent = f
+        .service
+        .send("s1", &send_input(json!("write it"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    let turn_id = match sent {
+        AgentSendResult::Turn { turn_id, .. } => turn_id,
+        _ => panic!("an idle session starts the turn"),
+    };
+    // `Arriving` lands the follow-up AFTER the settlement snapshot, so the
+    // store — not the host — stages this promotion.
+    f.host
+        .set_session_flush_planner(Arc::new(Racy {
+            inner: f.service.clone(),
+            store: f.store.clone(),
+            mode: Race::Arriving,
+            armed: AtomicBool::new(true),
+        }))
+        .await;
+    f.service
+        .set_model("s1", None, "new-model", None)
+        .await
+        .unwrap();
+
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    let promoted = f
+        .store
+        .get_task("turn:late")
+        .await
+        .unwrap()
+        .expect("the missed input was promoted");
+    assert_eq!(
+        promoted.payload["model"],
+        json!("new-model"),
+        "the promoted turn is stamped with the CURRENT descriptor"
+    );
+    assert_eq!(promoted.payload["chatId"], json!("s1"));
+
+    assert!(f.host.run_once().await.unwrap(), "the promoted turn runs");
+    let models: Vec<String> = f
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.model.clone())
+        .collect();
+    assert_eq!(
+        models,
+        vec!["model".to_owned(), "new-model".to_owned()],
+        "the settling turn keeps the model it was submitted with and the \
+         promoted turn asks the model the session uses now"
+    );
+    assert_eq!(
+        f.store.get_task("turn:late").await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
 }

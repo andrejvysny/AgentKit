@@ -33,6 +33,19 @@ impl Default for HostOptions {
     }
 }
 
+/// What a settling session turn hands the settlement transaction: the
+/// candidates its snapshot named, and the authoritative config for the ones
+/// it could not have named.
+pub struct SettlePlan {
+    /// The session descriptor snapshot every NEWLY STAGED turn must carry
+    /// (the staging contract). `None` means the host cannot supply a current
+    /// config, so the settlement promotes nothing it did not pre-stage — the
+    /// inputs stay Pending and visible rather than being stamped with another
+    /// turn's creation-time model.
+    pub staging: Option<agentkit_store::TurnStaging>,
+    pub convert: Vec<agentkit_store::StagedCandidate>,
+}
+
 /// The host asks a planner for the queued work behind a settled session
 /// turn and stages the first eligible candidate, in the runner's own path.
 /// This is how a durable session keeps its queue moving without the runner
@@ -46,13 +59,16 @@ pub trait SessionFlushPlanner: Send + Sync {
     /// `flushQueue`. Converting inside the settle commit leaves no window
     /// where the follow-up is converted but the turn is not terminal, or a
     /// crash strands the follow-up between two commits.
-    async fn settle_candidates(
-        &self,
-        settling: &TaskRecord,
-        completed: bool,
-    ) -> HostResult<Vec<agentkit_store::StagedCandidate>> {
+    ///
+    /// The plan also carries the session's CURRENT descriptor config
+    /// ([`SettlePlan::staging`]) so anything the snapshot missed is staged
+    /// the way a submission made now would stage it.
+    async fn settle_plan(&self, settling: &TaskRecord, completed: bool) -> HostResult<SettlePlan> {
         let _ = (settling, completed);
-        Ok(vec![])
+        Ok(SettlePlan {
+            staging: None,
+            convert: vec![],
+        })
     }
 }
 
@@ -489,11 +505,17 @@ impl AgentHost {
             // or cancelled turn must leave the queue pending until an
             // explicit flushQueue.
             Some(planner) => {
-                let convert = planner
-                    .settle_candidates(&context.task, status == TaskStatus::Completed)
+                let plan = planner
+                    .settle_plan(&context.task, status == TaskStatus::Completed)
                     .await?;
                 self.store
-                    .settle_session(settle, agentkit_store::SessionSettle { convert })
+                    .settle_session(
+                        settle,
+                        agentkit_store::SessionSettle {
+                            convert: plan.convert,
+                            staging: plan.staging,
+                        },
+                    )
                     .await?;
             }
             None => {

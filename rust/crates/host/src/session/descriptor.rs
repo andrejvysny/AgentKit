@@ -267,6 +267,25 @@ pub fn session_turn_kind(descriptor: &Value) -> String {
         .to_owned()
 }
 
+/// The config keys a turn payload carries from the session descriptor. One
+/// place spells this list: submission, queue flush, settlement promotion and
+/// recovery all stamp the same keys, and nothing else a turn may inherit.
+pub const TURN_CONFIG_KEYS: [&str; 3] = ["model", "reasoningEffort", "providerId"];
+
+/// The descriptor half of the staging contract ([`agentkit_store::TurnStaging`]):
+/// the config a turn created NOW carries. Absent keys stay absent — a session
+/// with no `providerId` submits exactly what it always did.
+pub fn turn_config(descriptor: &Value) -> serde_json::Map<String, Value> {
+    TURN_CONFIG_KEYS
+        .iter()
+        .filter_map(|key| {
+            descriptor
+                .get(*key)
+                .map(|value| ((*key).to_owned(), value.clone()))
+        })
+        .collect()
+}
+
 /// The run-content selection a session's turns carry: its carried-over
 /// Skills. `None` when there are none, so a session without Skills submits
 /// exactly the payload it did before.

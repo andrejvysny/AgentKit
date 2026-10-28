@@ -50,6 +50,13 @@ fn human_request(
 }
 
 async fn running_turn(store: &SqliteStore, turn: &str) -> Lease {
+    running_turn_payload(store, turn, json!({"chatId":"chat"})).await
+}
+
+/// A claimed turn whose payload is whatever a submission made at some earlier
+/// moment carried — the fixture for "this turn was staged before the session
+/// changed", which the settlement must never template off.
+async fn running_turn_payload(store: &SqliteStore, turn: &str, payload: Value) -> Lease {
     if store.get_chat("chat").await.unwrap().is_none() {
         store
             .create_chat("chat", None, json!({}), 1000)
@@ -73,7 +80,13 @@ async fn running_turn(store: &SqliteStore, turn: &str) -> Lease {
         ..MessageInput::default()
     };
     store
-        .submit_turn(task(turn, "chat"), vec![message, assistant])
+        .submit_turn(
+            SubmitTask {
+                payload,
+                ..task(turn, "chat")
+            },
+            vec![message, assistant],
+        )
         .await
         .unwrap();
     let claimed = store
@@ -130,6 +143,106 @@ fn answer(request_id: &str, answer_id: &str, response: Value) -> AnswerHumanRequ
         plan_tool_names: vec![],
         policy_denial: None,
         granted_mode: None,
+    }
+}
+
+/// What the host hands a settlement as the authoritative staging config:
+/// the payload keys a turn created NOW carries, for this fixture's `"test"`
+/// task kind. `None` (the other tests) means "promote nothing the snapshot
+/// missed" — the fail-closed half of the contract.
+fn staging(config: Value) -> TurnStaging {
+    TurnStaging {
+        kind: "test".into(),
+        config,
+    }
+}
+
+fn follow_up(id: &str, content: Value) -> CreateAgentInput {
+    CreateAgentInput {
+        input_id: id.into(),
+        session_id: "chat".into(),
+        kind: AgentInputKind::FollowUp,
+        content,
+        content_hash: format!("hash-{id}"),
+        target_task_id: None,
+        on_settled: None,
+        attempt_id: None,
+        tool_call_id: None,
+        expires_at: None,
+    }
+}
+
+/// The admission write the service issues: the input record and the turn it
+/// becomes, in the shapes the staging contract defines (`turn:<inputId>`,
+/// `msg_q:`/`msg_a:`, `steer:<inputId>`).
+fn admission(
+    id: &str,
+    kind: AgentInputKind,
+    on_settled: Option<AgentInputSettlePolicy>,
+    target_the_live_turn: bool,
+) -> QueueOrStage {
+    let user_message_id = if kind == AgentInputKind::Steer {
+        format!("steer:{id}")
+    } else {
+        format!("msg_q:{id}")
+    };
+    let assistant_message_id = format!("msg_a:{id}");
+    let task_id = format!("turn:{id}");
+    let parent = user_message_id.clone();
+    QueueOrStage {
+        session_id: "chat".into(),
+        input: CreateAgentInput {
+            input_id: id.into(),
+            session_id: "chat".into(),
+            kind,
+            content: json!({"content":"and summarize"}),
+            content_hash: format!("hash-{id}"),
+            target_task_id: None,
+            on_settled,
+            attempt_id: None,
+            tool_call_id: None,
+            expires_at: None,
+        },
+        target_the_live_turn,
+        candidate: Some(StagedCandidate {
+            input_id: id.into(),
+            task: SubmitTask {
+                task_id: task_id.clone(),
+                kind: "test".into(),
+                scope_id: "chat".into(),
+                payload: json!({"chatId":"chat","model":"new-model",
+                                "userMessageId": user_message_id,
+                                "assistantMessageId": assistant_message_id}),
+                priority: 0,
+                now: 2100,
+                available_at: None,
+                depends_on: vec![],
+                parent_task_id: None,
+                exclusive_scope: true,
+            },
+            messages: vec![
+                MessageInput {
+                    id: Some(user_message_id),
+                    chat_id: "chat".into(),
+                    run_id: None,
+                    role: "user".into(),
+                    content: json!("and summarize"),
+                    parent_message_id: None,
+                    ..Default::default()
+                },
+                MessageInput {
+                    id: Some(assistant_message_id),
+                    chat_id: "chat".into(),
+                    run_id: Some(task_id),
+                    role: "assistant".into(),
+                    content: Value::String(String::new()),
+                    parent_message_id: Some(parent),
+                    metadata: json!({"placeholder": true}),
+                    ..Default::default()
+                },
+            ],
+        }),
+        now: 2100,
     }
 }
 
@@ -514,6 +627,7 @@ async fn settle_converts_the_first_follow_up_and_cancels_cancel_steers() {
             },
             SessionSettle {
                 convert: vec![candidate("fu1"), candidate("fu2")],
+                staging: Some(staging(json!({"chatId":"chat"}))),
             },
         )
         .await
@@ -626,7 +740,10 @@ async fn a_settlement_promotes_an_input_the_snapshot_missed() {
                 events: vec![],
                 messages: vec![],
             },
-            SessionSettle { convert: vec![] },
+            SessionSettle {
+                convert: vec![],
+                staging: Some(staging(json!({"chatId":"chat"}))),
+            },
         )
         .await
         .unwrap();
@@ -645,7 +762,8 @@ async fn a_settlement_promotes_an_input_the_snapshot_missed() {
     assert_eq!(
         promoted.payload,
         json!({"chatId":"chat","userMessageId":"msg_q:late","assistantMessageId":"msg_a:late"}),
-        "the promoted turn carries the settling turn's descriptor snapshot"
+        "the promoted turn carries the session's staging contract, not the \
+         settling turn's payload"
     );
     let messages = store.messages("chat", false).await.unwrap();
     assert!(
@@ -681,6 +799,259 @@ async fn a_settlement_promotes_an_input_the_snapshot_missed() {
         AgentInputStatus::Cancelled,
         "a cancel-policy steer is cancelled, never converted"
     );
+}
+
+/// The settling turn is NOT the staging template. A model change that lands
+/// while a turn runs must reach the turn ITS settlement promotes: the
+/// promotion stamps the config the host read from the descriptor at settle
+/// time, so the next provider request carries the new model instead of the
+/// model the settling turn was created with.
+#[tokio::test]
+async fn a_promoted_turn_carries_the_current_config_not_the_settling_turns() {
+    let store = store();
+    // The settling turn was staged while the session still used `old-model`.
+    let lease =
+        running_turn_payload(&store, "run", json!({"chatId":"chat","model":"old-model"})).await;
+    store
+        .create_input(follow_up("late", json!({"content":"and summarize"})), 1700)
+        .await
+        .unwrap();
+
+    let settled = store
+        .settle_session(
+            SettleTask {
+                fence: lease.fence(),
+                now: 2000,
+                status: TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            },
+            SessionSettle {
+                convert: vec![],
+                staging: Some(staging(
+                    json!({"chatId":"chat","model":"new-model","providerId":"p2"}),
+                )),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.status, TaskStatus::Completed);
+    let promoted = store.get_task("turn:late").await.unwrap().unwrap();
+    assert_eq!(
+        promoted.payload,
+        json!({"chatId":"chat","model":"new-model","providerId":"p2",
+               "userMessageId":"msg_q:late","assistantMessageId":"msg_a:late"}),
+        "the promoted turn is what a submission made AFTER the model change stages"
+    );
+    assert_eq!(
+        promoted.kind, "test",
+        "the kind comes from the contract too"
+    );
+    let messages = store.messages("chat", false).await.unwrap();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.id == "msg_q:late" && message.content == json!("and summarize")),
+        "the user record commits with the current-config task"
+    );
+}
+
+/// No current config, no promotion. Stamping a new turn from another turn's
+/// payload is what handed a session a model it had already replaced, so
+/// without the host's snapshot the settlement leaves the input Pending and
+/// visible for an explicit flush instead of guessing.
+#[tokio::test]
+async fn a_missed_input_stays_pending_without_the_current_config() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    store
+        .create_input(follow_up("late", json!({"content":"and summarize"})), 1700)
+        .await
+        .unwrap();
+    store
+        .settle_session(
+            SettleTask {
+                fence: lease.fence(),
+                now: 2000,
+                status: TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            },
+            SessionSettle {
+                convert: vec![],
+                staging: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .get_input("late".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending,
+        "un-stammable input stays visible rather than running a stale config"
+    );
+    assert!(store.get_task("turn:late").await.unwrap().is_none());
+}
+
+/// The follow-up that used to strand: the settlement had already committed
+/// (re-reading a queue that did not yet contain the input) when the input's
+/// admission ran. Because admission IS the busy check, the same write that
+/// inserts it also stages the next turn — no Pending-forever residue, and no
+/// second settlement needed to wake the worker.
+#[tokio::test]
+async fn an_input_admitted_after_the_settlement_committed_still_becomes_a_turn() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    // The settlement commits with an empty queue: nothing to promote, and no
+    // later settlement exists — the old code's dead end.
+    store
+        .settle_session(
+            SettleTask {
+                fence: lease.fence(),
+                now: 2000,
+                status: TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            },
+            SessionSettle {
+                convert: vec![],
+                staging: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let admission = store
+        .queue_or_stage_turn(admission("late", AgentInputKind::FollowUp, None, false))
+        .await
+        .unwrap();
+    let QueueAdmission::Staged(task) = admission else {
+        panic!("a free scope admits the input as the next turn");
+    };
+    assert_eq!(task.task_id, "turn:late");
+    assert_eq!(
+        task.status,
+        TaskStatus::Queued,
+        "the worker has something to claim the moment admission commits"
+    );
+    let input = store.get_input("late".into()).await.unwrap().unwrap();
+    assert_eq!(input.status, AgentInputStatus::Converted);
+    assert_eq!(input.applied_task_id.as_deref(), Some("turn:late"));
+    let messages = store.messages("chat", false).await.unwrap();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.id == "msg_q:late" && message.content == json!("and summarize")),
+        "the task, its user record and its receipt are one commit"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.id == "msg_a:late"
+                && message.run_id.as_deref() == Some("turn:late")),
+        "and so is the assistant placeholder"
+    );
+}
+
+/// The other half of the same write: while a turn holds the scope, admission
+/// only stores the input, and the live turn's settlement — which re-reads the
+/// pending set against its own commit — owns the promotion.
+#[tokio::test]
+async fn admission_queues_behind_a_live_turn_for_its_settlement_to_promote() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    let admission = store
+        .queue_or_stage_turn(admission("fu1", AgentInputKind::FollowUp, None, false))
+        .await
+        .unwrap();
+    assert!(
+        matches!(admission, QueueAdmission::Queued(_)),
+        "a live scope is never staged over"
+    );
+    assert_eq!(
+        store.get_input("fu1".into()).await.unwrap().unwrap().status,
+        AgentInputStatus::Pending
+    );
+    assert!(store.get_task("turn:fu1").await.unwrap().is_none());
+
+    store
+        .settle_session(
+            SettleTask {
+                fence: lease.fence(),
+                now: 2000,
+                status: TaskStatus::Completed,
+                error: None,
+                events: vec![],
+                messages: vec![],
+            },
+            SessionSettle {
+                convert: vec![],
+                staging: Some(staging(json!({"chatId":"chat"}))),
+            },
+        )
+        .await
+        .unwrap();
+    let input = store.get_input("fu1".into()).await.unwrap().unwrap();
+    assert_eq!(
+        input.status,
+        AgentInputStatus::Converted,
+        "the input admitted behind a live turn is promoted by its settlement"
+    );
+    assert_eq!(input.applied_task_id.as_deref(), Some("turn:fu1"));
+}
+
+/// Admission never invents work the human did not ask for: a `cancel`-policy
+/// steer and unusable content are stored Pending and visible, never started
+/// as a turn, and never an error that would refuse the caller's send.
+#[tokio::test]
+async fn admission_never_starts_a_cancel_policy_steer_or_unusable_content_as_a_turn() {
+    let store = store();
+    if store.get_chat("chat").await.unwrap().is_none() {
+        store
+            .create_chat("chat", None, json!({}), 1000)
+            .await
+            .unwrap();
+    }
+    let steer = store
+        .queue_or_stage_turn(admission(
+            "s-cancel",
+            AgentInputKind::Steer,
+            Some(AgentInputSettlePolicy::Cancel),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert!(
+        matches!(steer, QueueAdmission::Queued(_)),
+        "a steer the human marked `cancel` is dropped, never run"
+    );
+    assert!(store.get_task("turn:s-cancel").await.unwrap().is_none());
+
+    let mut poison = admission("poison", AgentInputKind::FollowUp, None, false);
+    poison.input.content = json!({"content":""});
+    poison.candidate = None;
+    let poison = store.queue_or_stage_turn(poison).await.unwrap();
+    assert!(
+        matches!(poison, QueueAdmission::Queued(_)),
+        "a poison record stays Pending and visible"
+    );
+    assert_eq!(
+        store
+            .get_input("poison".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending
+    );
+    assert!(store.get_task("turn:poison").await.unwrap().is_none());
 }
 
 /// `content.onSettled` is user data, not policy: only the top-level record
@@ -731,7 +1102,10 @@ async fn only_the_top_level_settle_policy_governs_content_markers_are_inert() {
                 events: vec![],
                 messages: vec![],
             },
-            SessionSettle { convert: vec![] },
+            SessionSettle {
+                convert: vec![],
+                staging: None,
+            },
         )
         .await
         .unwrap();
@@ -877,6 +1251,7 @@ async fn a_refused_settle_conversion_leaves_the_turn_running() {
             },
             SessionSettle {
                 convert: vec![poisoned],
+                staging: None,
             },
         )
         .await;
@@ -911,7 +1286,10 @@ async fn a_refused_settle_conversion_leaves_the_turn_running() {
                 events: vec![],
                 messages: vec![],
             },
-            SessionSettle { convert: vec![] },
+            SessionSettle {
+                convert: vec![],
+                staging: None,
+            },
         )
         .await
         .unwrap();
@@ -971,6 +1349,7 @@ async fn conversion_refuses_a_busy_scope_and_failure_keeps_the_queue_pending() {
                     },
                     messages: vec![],
                 }],
+                staging: None,
             },
         )
         .await
@@ -1028,6 +1407,7 @@ async fn conversion_refuses_a_busy_scope_and_failure_keeps_the_queue_pending() {
                     },
                     messages: vec![],
                 }],
+                staging: None,
             },
         )
         .await

@@ -947,6 +947,192 @@ async fn a_second_uncertainty_in_the_same_run_needs_its_own_answer() {
     );
 }
 
+/// The tool records of one run that answer a given call.
+async fn tool_records(store: &SqliteStore, turn: &str, call_id: &str) -> Vec<String> {
+    store
+        .messages("s1", true)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|message| {
+            message.role == "tool"
+                && message.tool_call_id.as_deref() == Some(call_id)
+                && message.run_id.as_deref() == Some(turn)
+        })
+        .map(|message| message.id)
+        .collect()
+}
+
+/// One tool-call identity can hold TWO answered asks: the approval for
+/// generation N, and a fresh one for generation N+1 after the approved
+/// execution died mid-body. Resolving per ANSWERED REQUEST dispatched the call
+/// once per answer — the durable receipt replayed the single effect, but the
+/// run still wrote one tool record and one outcome event PER ANSWER, and the
+/// next provider request carried the same result twice. One declaration now
+/// resolves to exactly one resumed call, authorized by the newest eligible
+/// grant.
+#[tokio::test]
+async fn two_answered_asks_for_one_call_resume_it_exactly_once() {
+    let f = fixture_with_options(
+        "write_file",
+        ARGS_A,
+        "other",
+        false,
+        None,
+        HostOptions {
+            max_attempts: 10,
+            ..Default::default()
+        },
+    )
+    .await;
+    f.set_ask(true);
+    let turn = f.send("mutate it", "t1").await;
+
+    // -- generation N: admitted, pulled down mid-body. Admitted-without-result
+    // residue, and no tool record answers the call.
+    f.gate.arm();
+    let host = f.host.clone();
+    let running = tokio::spawn(async move { host.run_once().await });
+    let gate = f.gate.clone();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async move {
+        while !gate.entered.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the first execution started");
+    running.abort();
+    let first = agentkit_host::execution_id(&turn, "call-1", None);
+    f.store
+        .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
+        .await
+        .unwrap();
+    f.service.resume("s1", &turn).await.unwrap();
+    f.host.run_once().await.unwrap();
+    let request_one = f.pending(&turn).await.into_iter().next().unwrap();
+    assert_eq!(request_one.content["uncertaintyGeneration"], first);
+    f.service
+        .approve(&request_one.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+
+    // -- generation N+1: the approved execution is admitted and dies the same
+    // way, so its own ask gets its own answer.
+    f.gate.arm();
+    let host = f.host.clone();
+    let running = tokio::spawn(async move { host.run_once().await });
+    let gate = f.gate.clone();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async move {
+        while !gate.entered.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the approved execution started");
+    running.abort();
+    let second = agentkit_host::execution_id(&turn, "call-1", Some(&request_one.input_id));
+    f.store
+        .recover(now_ms() + 601_000, 10, 0, RecoveryMode::Manual)
+        .await
+        .unwrap();
+    f.service.resume("s1", &turn).await.unwrap();
+    f.host.run_once().await.unwrap();
+    let request_two = f.pending(&turn).await.into_iter().next().unwrap();
+    assert_eq!(request_two.content["uncertaintyGeneration"], second);
+    f.service
+        .approve(&request_two.input_id, "ans-2", None, None)
+        .await
+        .unwrap();
+
+    // The state the resume must resolve: TWO answered asks naming ONE declared
+    // call, with nothing answering it yet.
+    let answered = f
+        .store
+        .list_inputs(AgentInputQuery {
+            session_id: "s1".into(),
+            kinds: Some(vec![AgentInputKind::HumanRequest]),
+            statuses: Some(vec![AgentInputStatus::Answered]),
+            target_task_id: Some(turn.clone()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(answered.len(), 2, "the run holds two answered asks");
+    assert!(
+        answered
+            .iter()
+            .all(|record| record.tool_call_id.as_deref() == Some("call-1")),
+        "both asks name the same call identity"
+    );
+    assert_eq!(
+        tool_records(&f.store, &turn, "call-1").await.len(),
+        0,
+        "crash residue leaves the call unanswered"
+    );
+
+    // The newer answer opens exactly one execution.
+    let before = f.hits.load(Ordering::SeqCst);
+    f.gate.release();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::Completed);
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        before + 1,
+        "one execution ran, never one per answer"
+    );
+
+    let records = tool_records(&f.store, &turn, "call-1").await;
+    assert_eq!(
+        records.len(),
+        1,
+        "one declaration, one tool record: {records:?}"
+    );
+    let log = f
+        .store
+        .events_after_number(&turn, None, 10_000)
+        .await
+        .unwrap();
+    let outcomes = log
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.event["type"].as_str(),
+                Some("run.tool.succeeded") | Some("run.tool.failed")
+            ) && record.event["data"]["toolCallId"] == "call-1"
+        })
+        .count();
+    assert_eq!(outcomes, 1, "exactly one outcome event for the call");
+    // The provider request after the resume carries the RESULT once. The
+    // crashed generations' declarations also appear, reconciled as `uncertain
+    // side effect` notices (ADR 0020) — those are not results, and a second
+    // RESULT would mean the call had been dispatched twice.
+    let results = f
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| {
+            request
+                .messages
+                .iter()
+                .filter(|message| {
+                    message.role == "tool"
+                        && message.tool_call_id.as_deref() == Some("call-1")
+                        && !message
+                            .content
+                            .to_string()
+                            .contains("tool_effect_uncertain")
+                })
+                .count()
+        })
+        .max()
+        .unwrap_or_default();
+    assert_eq!(
+        results, 1,
+        "the provider request after the resume carries the result once"
+    );
+}
+
 #[tokio::test]
 async fn approvals_survive_every_javascript_number_spelling() {
     // One JavaScript-semantic parser at every digest site: what the

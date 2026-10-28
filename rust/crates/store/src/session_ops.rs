@@ -1297,6 +1297,26 @@ pub struct StagedCandidate {
     pub messages: Vec<MessageInput>,
 }
 
+/// The config every NEWLY STAGED turn of a session carries, captured from
+/// the session descriptor at the moment the task is created.
+///
+/// This is THE staging contract: normal submission, an explicit queue flush,
+/// settlement promotion, and the recovery of a half-admitted input all stamp
+/// a turn from this snapshot, so a promoted turn is what a submission made
+/// NOW would have staged. It exists because a settlement used to template
+/// its missed staging off the SETTLING task's payload — a turn created
+/// before a mid-flight `set_model` — and so handed the next turn a stale
+/// model. Nothing may clone a live task's payload to stage a new turn.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurnStaging {
+    /// The task kind this session's turns run under.
+    pub kind: String,
+    /// The payload keys the descriptor carries at task creation (`chatId`,
+    /// `model`, `providerId`, `reasoningEffort`). Message ids are added per
+    /// promotion by [`stage_missed`].
+    pub config: Value,
+}
+
 /// The host-supplied conversion candidates, in queue order (follow-ups
 /// first, then steers not marked `cancel`). They are the settlement's
 /// preferred staging, not its whole decision: the settle transaction re-reads
@@ -1305,6 +1325,11 @@ pub struct StagedCandidate {
 /// input pending behind a terminal turn.
 pub struct SessionSettle {
     pub convert: Vec<StagedCandidate>,
+    /// The authoritative config for inputs the snapshot missed. `None`
+    /// promotes nothing missed — fail-closed, the inputs stay Pending and
+    /// visible for an explicit flush — because promoting without a current
+    /// descriptor is how a stale model gets stamped onto the next turn.
+    pub staging: Option<TurnStaging>,
 }
 
 pub(crate) fn settle_session_inputs(
@@ -1390,8 +1415,17 @@ pub(crate) fn settle_session_inputs(
     if promoted {
         return Ok(());
     }
+    // Without the session's CURRENT descriptor snapshot there is no honest
+    // config to stamp a new turn with: the settling task's own payload is
+    // the config some EARLIER submission was made with, and reusing it is
+    // exactly how a mid-flight model change gets stamped onto a turn that
+    // was created after the change. Promote nothing missed then — the input
+    // stays Pending and visible, and an explicit flush stages it properly.
+    let Some(staging) = &extra.staging else {
+        return Ok(());
+    };
     for record in promotable_pending(db, task, &extra.convert)? {
-        let Promotion::Stage(candidate) = stage_missed(task, &record, now)? else {
+        let Promotion::Stage(candidate) = stage_missed(staging, &record, now)? else {
             continue;
         };
         if convert_candidate(db, &task.scope_id, &candidate, now)? {
@@ -1466,16 +1500,21 @@ fn promotable(record: &AgentInputRecord, task: &TaskRecord) -> bool {
     queue_content(&record.content).is_some()
 }
 
-/// Stage the turn a snapshot missed. The settling turn is the template: it
-/// carries the same session descriptor snapshot every promoted turn of this
-/// session carries (`model`, `providerId`, `chatId`), so the promoted task
-/// is what the service would have staged — with ids derived from the input
-/// itself, which keeps the promotion idempotent (`turn:<inputId>`, and for
-/// a steer the same `steer:<inputId>` receipt the in-run projection uses).
-fn stage_missed(task: &TaskRecord, record: &AgentInputRecord, now: i64) -> Result<Promotion> {
+/// Stage the turn a snapshot missed, under the session's [`TurnStaging`]
+/// contract: the SAME payload a submission made right now would carry (the
+/// current descriptor's config, the session's turn kind), with ids derived
+/// from the input itself, which keeps the promotion idempotent
+/// (`turn:<inputId>`, and for a steer the same `steer:<inputId>` receipt the
+/// in-run projection uses). The settling turn is NOT the template: its
+/// payload is another turn's creation-time snapshot.
+fn stage_missed(staging: &TurnStaging, record: &AgentInputRecord, now: i64) -> Result<Promotion> {
     let Some(content) = queue_content(&record.content) else {
         return Ok(Promotion::Skip);
     };
+    let config = staging
+        .config
+        .as_object()
+        .ok_or_else(|| StoreError::InvalidInput("turn staging config must be an object".into()))?;
     let steer = record.kind == crate::agent_inputs::AgentInputKind::Steer;
     let user_message_id = if steer {
         format!("steer:{}", record.input_id)
@@ -1484,9 +1523,10 @@ fn stage_missed(task: &TaskRecord, record: &AgentInputRecord, now: i64) -> Resul
     };
     let assistant_message_id = format!("msg_a:{}", record.input_id);
     let task_id = format!("turn:{}", record.input_id);
-    let mut payload = task.payload.as_object().cloned().unwrap_or_default();
-    // A promoted queued turn is a root turn, exactly like the service's
-    // staging: the settling turn's parent is nobody's parent.
+    // The contract's config keys, then the two ids this promotion mints. A
+    // promoted queued turn is a root turn, exactly like the service's
+    // staging: no parent, whoever promoted it last is nobody's parent.
+    let mut payload = config.clone();
     payload.remove("parentMessageId");
     payload.insert(
         "assistantMessageId".into(),
@@ -1497,8 +1537,8 @@ fn stage_missed(task: &TaskRecord, record: &AgentInputRecord, now: i64) -> Resul
         input_id: record.input_id.clone(),
         task: SubmitTask {
             task_id: task_id.clone(),
-            kind: task.kind.clone(),
-            scope_id: task.scope_id.clone(),
+            kind: staging.kind.clone(),
+            scope_id: record.session_id.clone(),
             payload: Value::Object(payload),
             priority: 0,
             now,
@@ -1510,7 +1550,7 @@ fn stage_missed(task: &TaskRecord, record: &AgentInputRecord, now: i64) -> Resul
         messages: vec![
             MessageInput {
                 id: Some(user_message_id.clone()),
-                chat_id: task.scope_id.clone(),
+                chat_id: record.session_id.clone(),
                 role: "user".into(),
                 content,
                 parent_message_id: None,
@@ -1518,7 +1558,7 @@ fn stage_missed(task: &TaskRecord, record: &AgentInputRecord, now: i64) -> Resul
             },
             MessageInput {
                 id: Some(assistant_message_id),
-                chat_id: task.scope_id.clone(),
+                chat_id: record.session_id.clone(),
                 run_id: Some(task_id),
                 role: "assistant".into(),
                 content: Value::String(String::new()),
@@ -1714,6 +1754,102 @@ impl SqliteStore {
         })
         .await
     }
+}
+
+impl SqliteStore {
+    /// The ONE write that admits a queued input: the active-turn check and
+    /// the insertion commit together, so there is no window for a settlement
+    /// to slip between them.
+    ///
+    /// Two outcomes, both durable:
+    /// * [`QueueAdmission::Queued`] — the scope holds a live turn, so the
+    ///   input is stored Pending and THAT turn's settlement transaction (which
+    ///   re-reads the pending set against its own commit) owns the promotion.
+    /// * [`QueueAdmission::Staged`] — no active turn can claim the input, so
+    ///   this same write converts it into the next turn through
+    ///   [`convert_candidate`], the same CAS every promotion path shares.
+    ///
+    /// A check-then-write across two calls is exactly what stranded a
+    /// follow-up: the host read "busy", the turn settled (re-reading an empty
+    /// queue), and the insert then landed behind a terminal turn with no
+    /// settlement left to run.
+    pub async fn queue_or_stage_turn(&self, input: QueueOrStage) -> Result<QueueAdmission> {
+        self.call(move |db| {
+            let transaction = db.transaction()?;
+            let active: Option<String> = transaction
+                .query_row(
+                    "SELECT id FROM tasks WHERE scope=?1 \
+                     AND status IN ('queued','running','interrupted','waiting_approval') \
+                     LIMIT 1",
+                    params![input.session_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let mut create = input.input;
+            if let Some(active) = &active
+                && input.target_the_live_turn
+            {
+                // A steer with no explicit target belongs to the turn that
+                // actually holds the scope: that run reads its steers by
+                // target, and its settlement arbitrates them.
+                create.target_task_id = Some(active.clone());
+            }
+            let now_text = ConversationTimestamp::from_epoch_millis(input.now)?
+                .wire_text()?
+                .into_owned();
+            let (record, _) = insert_input(&transaction, create, &now_text)?;
+            if active.is_some()
+                || record.status != AgentInputStatus::Pending
+                || record.on_settled == Some(crate::agent_inputs::AgentInputSettlePolicy::Cancel)
+            {
+                // Busy (or already settled/cancelled): queue only. A
+                // `cancel`-policy steer is never started as a turn — the
+                // human asked for it to be dropped, not run.
+                transaction.commit()?;
+                return Ok(QueueAdmission::Queued(record));
+            }
+            let Some(candidate) = input.candidate else {
+                // Nothing to stage this into (unusable content): the input
+                // stays Pending and visible, never a turn, never an error.
+                transaction.commit()?;
+                return Ok(QueueAdmission::Queued(record));
+            };
+            if convert_candidate(&transaction, &input.session_id, &candidate, input.now)? {
+                let task: TaskRecord =
+                    required(&transaction, "tasks", "id", &candidate.task.task_id)?;
+                transaction.commit()?;
+                return Ok(QueueAdmission::Staged(task));
+            }
+            // The CAS lost (the input stopped being Pending mid-write): leave
+            // it exactly as the insert made it and report the queue.
+            let record = get_input(&transaction, &record.input_id)?.unwrap_or(record);
+            transaction.commit()?;
+            Ok(QueueAdmission::Queued(record))
+        })
+        .await
+    }
+}
+
+/// The input the unified admission writes, and the turn it becomes when the
+/// scope turns out to be free. See [`SqliteStore::queue_or_stage_turn`].
+pub struct QueueOrStage {
+    pub session_id: String,
+    pub input: CreateAgentInput,
+    /// Fill a queued steer's target with the live turn the check finds.
+    pub target_the_live_turn: bool,
+    /// The fully staged turn, built by the host under [`TurnStaging`];
+    /// `None` when the content can never become a turn (the input then only
+    /// ever queues, and stays visible).
+    pub candidate: Option<StagedCandidate>,
+    pub now: i64,
+}
+
+/// What [`SqliteStore::queue_or_stage_turn`] committed.
+pub enum QueueAdmission {
+    /// Stored Pending behind a live turn (or already settled).
+    Queued(AgentInputRecord),
+    /// No active turn could claim it, so this write staged it.
+    Staged(TaskRecord),
 }
 
 impl SqliteStore {
