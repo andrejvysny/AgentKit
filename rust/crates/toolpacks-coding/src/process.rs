@@ -33,11 +33,34 @@ use crate::coordination::{LeaseHolder, QuarantineEvidence, WorkspaceCoordinator,
 use crate::errors::CodingError;
 use crate::limits::CodingLimits;
 use crate::process_tree::{
-    EXEC_ID_ENV, TreeTracker, crate_platform, find_marked_processes, scan_marked,
+    EXEC_ID_ENV, TreeTracker, crate_platform, find_marked_processes, find_marked_processes_outcome,
+    scan_marked,
 };
 use crate::truncate::{TruncationLimits, format_size, truncate_tail};
 
+/// POSIX signal numbers the teardown sequence speaks. On Windows there are
+/// no POSIX signals: the constants are distinct sentinels and every send
+/// resolves to a no-op, so teardown discovers "cannot kill", reports the
+/// group as still alive, and the workspace quarantines instead of pretending
+/// cleanup happened. Fail-closed, never fake-success.
+#[cfg(unix)]
+mod sig {
+    pub(super) const SIGSTOP: i32 = libc::SIGSTOP;
+    pub(super) const SIGTERM: i32 = libc::SIGTERM;
+    pub(super) const SIGCONT: i32 = libc::SIGCONT;
+    pub(super) const SIGKILL: i32 = libc::SIGKILL;
+}
+
+#[cfg(not(unix))]
+mod sig {
+    pub(super) const SIGSTOP: i32 = 0;
+    pub(super) const SIGTERM: i32 = 1;
+    pub(super) const SIGCONT: i32 = 2;
+    pub(super) const SIGKILL: i32 = 9;
+}
+
 /// Kill `pid` and every process in its group.
+#[cfg(unix)]
 pub fn kill_process_tree(pid: i32) {
     // group may be gone, or never was one
     unsafe { libc::kill(-pid, libc::SIGSTOP) };
@@ -46,6 +69,12 @@ pub fn kill_process_tree(pid: i32) {
         unsafe { libc::kill(pid, libc::SIGKILL) };
     }
 }
+
+/// Windows has no process groups and no `kill`: nothing can be signalled
+/// here. Callers observe survivors/UNKNOWN through the liveness probes
+/// (which answer "alive" on this platform) and quarantine accordingly.
+#[cfg(not(unix))]
+pub fn kill_process_tree(_pid: i32) {}
 
 /// One bounded command run.
 pub struct RunSpec {
@@ -110,17 +139,30 @@ const KILL_GRACE_CAP_MS: u64 = 10_000;
 const SURVIVOR_WAIT_MS: u64 = 500;
 const POLL_MS: u64 = 25;
 
+#[cfg(unix)]
 fn signal_pid(pid: i32, sig: i32) {
     // already gone
     unsafe { libc::kill(pid, sig) };
 }
 
+#[cfg(not(unix))]
+fn signal_pid(_pid: i32, _sig: i32) {}
+
+#[cfg(unix)]
 fn pid_alive(pid: i32) -> bool {
     let rc = unsafe { libc::kill(pid, 0) };
     if rc == 0 {
         return true;
     }
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// No portable liveness probe exists; claiming "dead" would retire leases
+/// and lift quarantines on live work, so Windows answers "alive" and every
+/// cleanup decision stays blocked until positively established.
+#[cfg(not(unix))]
+fn pid_alive(_pid: i32) -> bool {
+    true
 }
 
 /// Owner liveness for markers whose `owner_pid` may exceed a real `pid_t`
@@ -138,6 +180,14 @@ pub(crate) fn group_alive(pgid: i32) -> bool {
     if pgid <= 0 {
         return false;
     }
+    group_populated(pgid)
+}
+
+/// Is the process group led by `pgid` still populated? `kill(-pgid, 0)`
+/// answers ESRCH only once every member is gone; EPERM means the group
+/// exists but belongs to someone else — conservatively alive.
+#[cfg(unix)]
+fn group_populated(pgid: i32) -> bool {
     // SAFETY: kill(-pgid, 0) performs error checking only, sends no signal.
     unsafe {
         if libc::kill(-pgid, 0) == 0 {
@@ -145,6 +195,12 @@ pub(crate) fn group_alive(pgid: i32) -> bool {
         }
         std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
+}
+
+/// No group probe exists; assume populated (fail-closed, see `pid_alive`).
+#[cfg(not(unix))]
+fn group_populated(_pgid: i32) -> bool {
+    true
 }
 
 /// SAFE positive-exit proof for a command quarantine (B5). A bare pid probe
@@ -160,10 +216,17 @@ pub(crate) fn group_alive(pgid: i32) -> bool {
 /// before the caller may treat the survivor set as UNKNOWN. A genuinely
 /// unsupported platform returns `None` without any I/O (the platform gate),
 /// so the retries cost only the inter-attempt delay there.
-async fn marked_processes_reliably(exec_id: &str) -> Option<Vec<i32>> {
+async fn marked_processes_reliably(exec_id: &str, spawned_at_ms: u64) -> Option<Vec<i32>> {
     for attempt in 0..3u32 {
-        if let Some(pids) = find_marked_processes(exec_id).await {
-            return Some(pids);
+        if let Some((pids, suspects)) =
+            find_marked_processes_outcome(exec_id, Some(spawned_at_ms)).await
+        {
+            // A live process whose environ could not be read may be hiding
+            // the execution nonce: an empty marks list alongside unresolved
+            // suspects is unknown, not positively gone.
+            if suspects.is_empty() {
+                return Some(pids);
+            }
         }
         if attempt + 1 < 3 {
             sleep(50).await;
@@ -176,7 +239,9 @@ pub(crate) async fn cleanup_positively_established(
     identity: &crate::coordination::CommandCleanupIdentity,
     _pids: &[i32],
 ) -> bool {
-    let Some(marked) = marked_processes_reliably(&identity.execution_id).await else {
+    let Some(marked) =
+        marked_processes_reliably(&identity.execution_id, identity.spawned_at_ms).await
+    else {
         return false;
     };
     if !marked.is_empty() {
@@ -197,9 +262,18 @@ pub(crate) async fn cleanup_positively_established(
 pub(crate) async fn crashed_execution_survivors(
     intent: &crate::coordination::ExecutionIntent,
 ) -> Option<Vec<i32>> {
-    let marked = find_marked_processes(&intent.identity.execution_id).await?;
+    let (marked, suspects) = find_marked_processes_outcome(
+        &intent.identity.execution_id,
+        Some(intent.identity.spawned_at_ms),
+    )
+    .await?;
     if !marked.is_empty() {
         return Some(marked);
+    }
+    if !suspects.is_empty() {
+        // A same-user live process with an unreadable environ could carry
+        // the nonce: the survivor set is unknown, the root stays blocked.
+        return None;
     }
     match intent.identity.pgid {
         Some(pgid) if group_alive(pgid) => None,
@@ -257,15 +331,15 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
     // until the set stops growing. A stopped process only sees SIGTERM once
     // continued, hence the SIGCONT.
     for _ in 0..3 {
-        signal_all(libc::SIGSTOP, &known);
+        signal_all(sig::SIGSTOP, &known);
         let before = known.len();
         absorb(&mut known, &mut scan, find().await);
         if known.len() == before {
             break;
         }
     }
-    signal_all(libc::SIGTERM, &known);
-    signal_all(libc::SIGCONT, &known);
+    signal_all(sig::SIGTERM, &known);
+    signal_all(sig::SIGCONT, &known);
     let deadline = Instant::now() + Duration::from_millis(grace_ms);
     while remaining(&known) && Instant::now() < deadline {
         sleep(POLL_MS).await;
@@ -273,7 +347,7 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
     let escalated = remaining(&known);
     if escalated {
         absorb(&mut known, &mut scan, find().await);
-        signal_all(libc::SIGKILL, &known);
+        signal_all(sig::SIGKILL, &known);
         let end = Instant::now() + Duration::from_millis(SURVIVOR_WAIT_MS);
         while remaining(&known) && Instant::now() < end {
             sleep(POLL_MS).await;
@@ -504,6 +578,13 @@ fn signal_name(sig: i32) -> String {
         _ => return format!("SIG{sig}"),
     };
     name.to_string()
+}
+
+/// Windows terminates children by handle, not signal; a synthetic name
+/// keeps the run result shape identical without inventing a POSIX table.
+#[cfg(not(unix))]
+fn signal_name(sig: i32) -> String {
+    format!("SIG{sig}")
 }
 
 async fn read_out(
@@ -814,8 +895,16 @@ pub(crate) const SURVIVOR_RECHECK_MS: u64 = 2000;
 
 /// `process.kill(pid, 0)`: alive AND ours. ESRCH (gone) or EPERM (not ours):
 /// not ours to wait on.
+#[cfg(unix)]
 pub(crate) fn is_alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Assume alive: a false "gone" would stop a wait early and declare
+/// survivors clean without evidence (fail-closed, see `pid_alive`).
+#[cfg(not(unix))]
+pub(crate) fn is_alive(_pid: i32) -> bool {
+    true
 }
 
 /// Pids from `pids` still alive after waiting up to `ms` for them to exit.

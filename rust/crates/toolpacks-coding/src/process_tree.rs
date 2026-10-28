@@ -111,8 +111,87 @@ async fn run(file: &str, args: &[&str]) -> Result<String, std::io::Error> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-async fn scan_proc() -> Result<Vec<MarkedProcess>, std::io::Error> {
+async fn read_status_euid(pid: &str) -> Option<u32> {
+    let status = tokio::fs::read_to_string(format!("/proc/{pid}/status"))
+        .await
+        .ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("Uid:") {
+            // `Uid:\treal\teffective\tsaved\tfs` — the effective uid decides
+            // who the kernel lets read a process's environ.
+            return rest.split_whitespace().nth(1)?.parse().ok();
+        }
+    }
+    None
+}
+
+/// Process age in ms, measured purely against the monotonic boot clock:
+/// `uptime - starttime`. Returns None when either side is unreadable.
+async fn process_age_ms(pid: &str) -> Option<u64> {
+    let stat = tokio::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .await
+        .ok()?;
+    // `pid (comm) state ...` — comm may contain spaces and parens; count
+    // fields from after the LAST `)`. `starttime` is field 22 overall, i.e.
+    // the 20th token after comm (fields 3..=22 → 20 tokens).
+    let tail = stat.rfind(')')?;
+    let fields: Vec<&str> = stat[tail + 1..].split_whitespace().collect();
+    let ticks: u64 = fields.get(19)?.parse().ok()?;
+    let uptime = tokio::fs::read_to_string("/proc/uptime").await.ok()?;
+    let uptime_ms = uptime.split_whitespace().next()?.parse::<f64>().ok()? * 1000.0;
+    let started_ms = ticks * 10; // USER_HZ = 100; misestimates fail closed.
+    u64::try_from(uptime_ms as i64 - started_ms as i64).ok()
+}
+
+/// Can a process whose environ returned a permission error still be ours?
+/// Three filters, all conservative (any doubt counts as ours):
+/// 1. same effective user — a different-user process cannot be a child we
+///    spawned without privileges we do not have;
+/// 2. young enough to have been spawned by the execution in question —
+///    long-lived same-user daemons that set `dumpable=0` (gpg-agent class)
+///    are permanently unreadable and must not block every workspace
+///    forever, but they also predate any execution we are reconciling;
+/// 3. an unmeasurable start time stays suspect.
+///
+/// Treating a live marked child as "unmarked" is the dangerous direction
+/// (a false "positively gone" admits modifying work onto a live effect),
+/// so anything the filters cannot exclude — including a start time that
+/// appears just before the spawn floor (clock-step skew) beyond slack —
+/// counts as plausibly ours.
+fn denied_environ_plausibly_ours(
+    mine: Option<u32>,
+    peer: Option<u32>,
+    age_ms: Option<u64>,
+    spawn_floor_ms_ago: Option<u64>,
+) -> bool {
+    match (mine, peer) {
+        (Some(mine), Some(peer)) if mine != peer => return false,
+        _ => {}
+    }
+    match (age_ms, spawn_floor_ms_ago) {
+        // A process older than the spawn (beyond skew slack) predates the
+        // execution and cannot carry its nonce.
+        (Some(age), Some(floor)) => age <= floor.saturating_add(SUSPECT_SPAWN_SLACK_MS),
+        _ => true,
+    }
+}
+
+/// Slack (ms) absorbing clock skew between the recorded spawn wall time
+/// and the monotonic process age before a suspect is excluded as too old.
+const SUSPECT_SPAWN_SLACK_MS: u64 = 60_000;
+
+struct ProcScan {
+    marks: Vec<MarkedProcess>,
+    /// Live pids whose environ was unreadable and which the ownership and
+    /// age checks could not exclude as foreign: marked survivors may hide
+    /// in there.
+    suspects: Vec<i32>,
+}
+
+async fn scan_proc(spawn_floor_ms_ago: Option<u64>) -> Result<ProcScan, std::io::Error> {
+    let my_euid = read_status_euid("self").await;
     let mut found = Vec::new();
+    let mut suspects = Vec::new();
     let mut dir = tokio::fs::read_dir("/proc").await?;
     loop {
         // A transient iteration error (a pid vanishing under the cursor,
@@ -143,69 +222,156 @@ async fn scan_proc() -> Result<Vec<MarkedProcess>, std::io::Error> {
         let Ok(pid) = name.parse::<i32>() else {
             continue;
         };
-        // TS parity: an unreadable environ (kernel threads, processes of
-        // other users on a shared machine — EPERM there is permanent, so
-        // retrying would stall the whole scan) simply carries no marker.
-        let raw = tokio::fs::read(format!("/proc/{name}/environ"))
-            .await
-            .unwrap_or_default();
-        // latin1 in TS: every byte is one char; NUL splitting and the ASCII
-        // prefix check are byte-faithful under a lossy decode.
-        let raw = String::from_utf8_lossy(&raw);
-        if let Some(mark) = parse_environ(&raw, pid) {
-            found.push(mark);
+        match tokio::fs::read(format!("/proc/{name}/environ")).await {
+            Ok(raw) => {
+                // latin1 in TS: every byte is one char; NUL splitting and the ASCII
+                // prefix check are byte-faithful under a lossy decode.
+                let raw = String::from_utf8_lossy(&raw);
+                if let Some(mark) = parse_environ(&raw, pid) {
+                    found.push(mark);
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                // Vanished mid-scan: genuinely absent.
+            }
+            Err(_) => {
+                // EPERM on another user's daemon is permanent, so it must not
+                // stall or block every workspace; but an unreadable environ on
+                // a same-user process young enough to be our spawn keeps a
+                // marked survivor possible, and that uncertainty must survive
+                // to the cleanup decision.
+                if denied_environ_plausibly_ours(
+                    my_euid,
+                    read_status_euid(&name).await,
+                    process_age_ms(&name).await,
+                    spawn_floor_ms_ago,
+                ) {
+                    suspects.push(pid);
+                }
+            }
         }
     }
-    Ok(found)
+    Ok(ProcScan {
+        marks: found,
+        suspects,
+    })
 }
 
-/// Every marked process except this one; None when the platform cannot be
-/// scanned or the scan failed. Never throws.
-pub async fn scan_marked(platform: &str) -> Option<Vec<MarkedProcess>> {
-    let all: Vec<MarkedProcess> = match platform {
-        "darwin" => run("/bin/ps", &["-axwwE", "-o", "pid=,command="])
-            .await
-            .ok()
-            .map(|text| parse_ps_output(&text))?,
+/// The marked-scan result with its completeness evidence: `marks` are the
+/// processes positively carrying a marker, `suspect_pids` are live processes
+/// whose environ could not be read and which the ownership and age checks
+/// could not exclude as belonging to the execution being reconciled. A
+/// cleanup decision may only treat the survivor set as settled when the
+/// scan produced `Some` AND `suspect_pids` is empty — otherwise a live
+/// marked child hiding behind an unreadable environ could be retired as
+/// "positively gone". `spawned_at_ms` (the execution's recorded spawn time)
+/// bounds which unreadable same-user processes can plausibly carry the
+/// nonce; `None` (no spawn anchor) keeps every same-user unreadable process
+/// suspect — maximum caution.
+pub struct MarkedScan {
+    pub marks: Vec<MarkedProcess>,
+    pub suspect_pids: Vec<i32>,
+}
+
+/// Every marked process except this one, with uncertainty evidence; None
+/// when the platform cannot be scanned or the scan failed. Never throws.
+///
+/// Darwin note: `ps -axwwE` only exposes the environment of same-user
+/// processes and says nothing about the rest; the darwin suspect set is
+/// therefore always empty, and the darwin scan keeps its pre-existing
+/// completeness caveat (recorded in the binding/qualification docs).
+pub async fn scan_marked_outcome(platform: &str, spawned_at_ms: Option<u64>) -> Option<MarkedScan> {
+    let spawn_floor_ms_ago = spawned_at_ms.map(|spawned| {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_millis() as u64)
+            .unwrap_or(u64::MAX);
+        now_ms.saturating_sub(spawned)
+    });
+    let (all, suspects): (Vec<MarkedProcess>, Vec<i32>) = match platform {
+        "darwin" => {
+            let all = run("/bin/ps", &["-axwwE", "-o", "pid=,command="])
+                .await
+                .ok()
+                .map(|text| parse_ps_output(&text))?;
+            (all, Vec::new())
+        }
         "linux" => {
             // /proc readdir is hash-ordered and unstable under churn: an
-            // entry inserted after iteration passed its bucket can be
-            // missed by a single pass. Missing a survivor is the dangerous
-            // direction (a false "positively gone" retires an intent and
-            // admits modifying work onto a live effect), so take the UNION
-            // of two passes. Any one successful pass is enough to scan;
-            // only when every pass fails is the platform unscannable.
-            let first = scan_proc().await;
-            let second = scan_proc().await;
+            // entry inserted after iteration passed its bucket can be missed
+            // by a single pass. Missing a survivor is the dangerous direction
+            // (a false "positively gone" retires an intent and admits
+            // modifying work onto a live effect), so take the UNION of two
+            // passes. Any one successful pass is enough to scan; only when
+            // every pass fails is the platform unscannable. Suspects are
+            // INTERSECTED: a pid whose environ one pass read cleanly is
+            // positively classified, no matter what the other pass hit.
+            let first = scan_proc(spawn_floor_ms_ago).await;
+            let second = scan_proc(spawn_floor_ms_ago).await;
             match (first, second) {
                 (Ok(a), Ok(b)) => {
-                    let mut a = a;
-                    for mark in b {
-                        if !a.iter().any(|seen| seen.pid == mark.pid) {
-                            a.push(mark);
+                    let mut marks = a.marks;
+                    for mark in b.marks {
+                        if !marks.iter().any(|seen| seen.pid == mark.pid) {
+                            marks.push(mark);
                         }
                     }
-                    a
+                    let suspects = a
+                        .suspects
+                        .into_iter()
+                        .filter(|pid| {
+                            b.suspects.contains(pid) && !marks.iter().any(|mark| mark.pid == *pid)
+                        })
+                        .collect();
+                    (marks, suspects)
                 }
-                (Ok(a), Err(_)) | (Err(_), Ok(a)) => a,
+                (Ok(a), Err(_)) | (Err(_), Ok(a)) => (a.marks, a.suspects),
                 (Err(_), Err(_)) => return None,
             }
         }
         _ => return None,
     };
     let me = process_id() as i32;
-    Some(all.into_iter().filter(|mark| mark.pid != me).collect())
+    Some(MarkedScan {
+        marks: all.into_iter().filter(|mark| mark.pid != me).collect(),
+        suspect_pids: suspects.into_iter().filter(|pid| *pid != me).collect(),
+    })
+}
+
+/// Every marked process except this one; None when the platform cannot be
+/// scanned or the scan failed. Never throws. Consumers deciding cleanup or
+/// survivor-set emptiness must use `scan_marked_outcome` instead — this
+/// view cannot see the uncertainty of unreadable-but-plausibly-ours envars.
+pub async fn scan_marked(platform: &str) -> Option<Vec<MarkedProcess>> {
+    scan_marked_outcome(platform, None)
+        .await
+        .map(|scan| scan.marks)
+}
+
+/// Pids carrying exactly this exec id plus the unresolved-uncertainty pids;
+/// None when unsupported. Pass the execution's `spawned_at_ms` so
+/// long-lived unreadable daemons are excluded from the suspect set while
+/// processes young enough to be the execution's own children are not.
+pub async fn find_marked_processes_outcome(
+    exec_id: &str,
+    spawned_at_ms: Option<u64>,
+) -> Option<(Vec<i32>, Vec<i32>)> {
+    let scan = scan_marked_outcome(crate_platform(), spawned_at_ms).await?;
+    Some((
+        scan.marks
+            .into_iter()
+            .filter(|m| m.exec_id == exec_id)
+            .map(|m| m.pid)
+            .collect(),
+        scan.suspect_pids,
+    ))
 }
 
 /// Pids carrying exactly this exec id; None when unsupported.
 pub async fn find_marked_processes(exec_id: &str) -> Option<Vec<i32>> {
-    let all = scan_marked(crate_platform()).await;
-    all.map(|all| {
-        all.into_iter()
-            .filter(|m| m.exec_id == exec_id)
-            .map(|m| m.pid)
-            .collect()
-    })
+    find_marked_processes_outcome(exec_id, None)
+        .await
+        .map(|(pids, _)| pids)
 }
 
 /// The running OS, spelled like Node's `process.platform`.
@@ -479,5 +645,99 @@ mod tests {
             steps.push(delay);
         }
         assert_eq!(steps, vec![100, 125, 157, 197, 247]);
+    }
+
+    #[test]
+    fn denied_environ_uncertainty_is_ownership_aware() {
+        // Same effective user and young enough: the denial cannot exclude
+        // our own marked child, so the scan must stay uncertain.
+        assert!(denied_environ_plausibly_ours(
+            Some(1000),
+            Some(1000),
+            Some(0),
+            Some(10_000)
+        ));
+        // A different effective user cannot be a process we spawned.
+        assert!(!denied_environ_plausibly_ours(
+            Some(1000),
+            Some(0),
+            Some(0),
+            Some(10_000)
+        ));
+        // A same-user process older than the execution's spawn (beyond the
+        // skew slack) predates it — a long-lived dumpable=0 daemon (the
+        // gpg-agent class) must not block unrelated workspaces.
+        assert!(!denied_environ_plausibly_ours(
+            Some(1000),
+            Some(1000),
+            Some(500_000),
+            Some(10_000)
+        ));
+        // Right at the slack boundary it still counts as plausibly ours.
+        assert!(denied_environ_plausibly_ours(
+            Some(1000),
+            Some(1000),
+            Some(10_000 + SUSPECT_SPAWN_SLACK_MS),
+            Some(10_000)
+        ));
+        // An unmeasurable age cannot exclude the process.
+        assert!(denied_environ_plausibly_ours(
+            Some(1000),
+            Some(1000),
+            None,
+            Some(10_000)
+        ));
+        // Without a recorded spawn time there is no window: stay uncertain.
+        assert!(denied_environ_plausibly_ours(
+            Some(1000),
+            Some(1000),
+            Some(500_000),
+            None
+        ));
+        // Anything the comparison cannot rule out counts as ours.
+        assert!(denied_environ_plausibly_ours(
+            Some(1000),
+            None,
+            Some(0),
+            Some(10_000)
+        ));
+        assert!(denied_environ_plausibly_ours(
+            None,
+            Some(0),
+            Some(0),
+            Some(10_000)
+        ));
+        assert!(denied_environ_plausibly_ours(None, None, None, None));
+    }
+
+    #[tokio::test]
+    async fn own_effective_uid_is_readable_from_proc() {
+        let euid = read_status_euid("self").await.expect("own status");
+        assert_eq!(
+            euid,
+            read_status_euid(&std::process::id().to_string())
+                .await
+                .expect("own status by pid")
+        );
+    }
+
+    #[tokio::test]
+    async fn live_system_scan_stays_complete_without_foreign_suspects() {
+        // A real machine runs other users' (and kernel) processes whose
+        // environ is EPERM to us; none of them may turn into suspects —
+        // unrelated unreadability must not block every workspace. Our own
+        // processes must not be suspects either (same-user EPERM would be
+        // a genuine uncertainty worth blocking on, and never arises for
+        // ordinary own processes).
+        let scan = scan_marked_outcome("linux", None)
+            .await
+            .expect("linux scans");
+        let mine = read_status_euid("self").await.expect("own euid");
+        for pid in scan.suspect_pids {
+            let peer = read_status_euid(&pid.to_string())
+                .await
+                .unwrap_or_else(|| panic!("suspect {pid} lost mid-test"));
+            assert_eq!(peer, mine, "foreign process {pid} became a suspect");
+        }
     }
 }
