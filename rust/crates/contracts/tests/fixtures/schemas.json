@@ -1100,13 +1100,105 @@
       "fetchedAt": {
         "type": "string"
       },
+      "maxOutputTokens": {
+        "type": "number"
+      },
+      "metadataFetchedAt": {
+        "type": "string"
+      },
+      "metadataSource": {
+        "anyOf": [
+          {
+            "const": "host",
+            "type": "string"
+          },
+          {
+            "const": "provider",
+            "type": "string"
+          },
+          {
+            "const": "preset",
+            "type": "string"
+          }
+        ]
+      },
       "modelId": {
         "type": "string"
+      },
+      "pricing": {
+        "properties": {
+          "cachedInputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "type": "string"
+          },
+          "effectiveDate": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "inputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "outputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "priceSource": {
+            "anyOf": [
+              {
+                "const": "host",
+                "type": "string"
+              },
+              {
+                "const": "provider",
+                "type": "string"
+              },
+              {
+                "const": "preset",
+                "type": "string"
+              }
+            ]
+          },
+          "reasoningTokensBilledAsOutput": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "currency",
+          "priceSource"
+        ],
+        "type": "object"
       },
       "providerId": {
         "type": "string"
       },
+      "reasoningEfforts": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "supportsAudio": {
+        "type": "boolean"
+      },
+      "supportsJsonMode": {
+        "type": "boolean"
+      },
+      "supportsReasoning": {
+        "type": "boolean"
+      },
+      "supportsStreaming": {
+        "type": "boolean"
+      },
       "supportsToolCalling": {
+        "type": "boolean"
+      },
+      "supportsVision": {
         "type": "boolean"
       }
     },
@@ -5861,13 +5953,105 @@
       "fetchedAt": {
         "type": "string"
       },
+      "maxOutputTokens": {
+        "type": "number"
+      },
+      "metadataFetchedAt": {
+        "type": "string"
+      },
+      "metadataSource": {
+        "anyOf": [
+          {
+            "const": "host",
+            "type": "string"
+          },
+          {
+            "const": "provider",
+            "type": "string"
+          },
+          {
+            "const": "preset",
+            "type": "string"
+          }
+        ]
+      },
       "modelId": {
         "type": "string"
+      },
+      "pricing": {
+        "properties": {
+          "cachedInputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "currency": {
+            "maxLength": 3,
+            "minLength": 3,
+            "type": "string"
+          },
+          "effectiveDate": {
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "type": "string"
+          },
+          "inputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "outputPerMillionTokens": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "priceSource": {
+            "anyOf": [
+              {
+                "const": "host",
+                "type": "string"
+              },
+              {
+                "const": "provider",
+                "type": "string"
+              },
+              {
+                "const": "preset",
+                "type": "string"
+              }
+            ]
+          },
+          "reasoningTokensBilledAsOutput": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "currency",
+          "priceSource"
+        ],
+        "type": "object"
       },
       "providerId": {
         "type": "string"
       },
+      "reasoningEfforts": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "supportsAudio": {
+        "type": "boolean"
+      },
+      "supportsJsonMode": {
+        "type": "boolean"
+      },
+      "supportsReasoning": {
+        "type": "boolean"
+      },
+      "supportsStreaming": {
+        "type": "boolean"
+      },
       "supportsToolCalling": {
+        "type": "boolean"
+      },
+      "supportsVision": {
         "type": "boolean"
       }
     },
