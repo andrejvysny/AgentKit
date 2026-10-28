@@ -70,24 +70,48 @@ function run(file: string, args: string[]): Promise<string> {
   });
 }
 
-async function scanProc(): Promise<MarkedProcess[]> {
+/** The /proc reads a scan performs; injectable so the failure policy is testable. */
+export interface ProcFs {
+  readdir(dir: string): Promise<string[]>;
+  stat(path: string): Promise<{ uid: number }>;
+  readFile(path: string, encoding: string): Promise<string>;
+}
+
+const realProcFs: ProcFs = {
+  readdir: (dir) => readdir(dir),
+  stat: (path) => stat(path),
+  readFile: (path, encoding) => readFile(path, encoding as BufferEncoding),
+};
+
+async function scanProc(fs: ProcFs): Promise<MarkedProcess[]> {
   const found: MarkedProcess[] = [];
-  for (const name of await readdir("/proc")) {
+  for (const name of await fs.readdir("/proc")) {
     if (!/^\d+$/.test(name)) continue;
-    const info = await stat(`/proc/${name}`).catch(
-      (error: NodeJS.ErrnoException) => {
+    const info = await fs
+      .stat(`/proc/${name}`)
+      .catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT" || error.code === "ESRCH") return undefined;
         throw error;
-      },
-    );
+      });
     if (!info || (process.getuid && info.uid !== process.getuid())) continue;
-    const raw = await readFile(`/proc/${name}/environ`, "latin1").catch(
-      (error: NodeJS.ErrnoException) => {
+    const raw = await fs
+      .readFile(`/proc/${name}/environ`, "latin1")
+      .catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT" || error.code === "ESRCH") return "";
-        // An unreadable process might carry our marker. Absence is unproven.
+        // A same-uid process that answers EACCES on its own environ has
+        // cleared its dumpable flag — a kernel-enforced opt-out of
+        // inspection (hardened systemd units, NoNewPrivileges services:
+        // GitHub runners have several under the job's own uid). Our
+        // command children are spawned dumpable and stay so, so such a
+        // process is not an orphan of ours; and the scan was never a
+        // defense against a hostile same-uid process, which is free to
+        // carry no marker at all (the same standing the workspace lock
+        // has against external editors). Skip it and keep the scan ok.
+        // Any other failure means absence is unproven — fail closed.
+        if (error.code === "EACCES") return undefined;
         throw error;
-      },
-    );
+      });
+    if (raw === undefined) continue;
     const mark = parseEnviron(raw, Number(name));
     if (mark) found.push(mark);
   }
@@ -100,6 +124,7 @@ async function scanProc(): Promise<MarkedProcess[]> {
  */
 export async function scanMarked(
   platform: NodeJS.Platform = process.platform,
+  fs: ProcFs = realProcFs,
 ): Promise<MarkedProcess[] | null> {
   try {
     let all: MarkedProcess[];
@@ -107,7 +132,7 @@ export async function scanMarked(
       all = parsePsOutput(
         await run("/bin/ps", ["-axwwE", "-o", "pid=,command="]),
       );
-    else if (platform === "linux") all = await scanProc();
+    else if (platform === "linux") all = await scanProc(fs);
     else return null;
     return all.filter((mark) => mark.pid !== process.pid);
   } catch {
