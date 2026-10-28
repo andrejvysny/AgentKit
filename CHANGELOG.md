@@ -107,13 +107,21 @@ passes (the compaction summarizer is unchanged). Absent: behaviour and events ar
   `sha256`/`totalLines` and reads up to 8 `paths`. `list_dir` honours ignore files, and `code_search` pages with
   `offset`.
 
+**One portable tool-permission authority.** The coding pack's effect/classifier decision — command-execution and
+file-effect capabilities outrank the mode a tool declares for itself — moved to `agentkit-core`
+(`agentkit_core::permission`) and both the coding `ToolGuard` and the native binding's `JsToolGuard` now delegate to
+it, so a JS-contributed tool can no longer self-downgrade into plan or `auto_edit` mode: `run_command` (or an
+unknown capability that declares `effect: "execute"`) requires approval even under `auto_edit`, and a tool that
+declares `effect: "plan"` is decided by the plan-mode policy before the read/write effect rules — matching the
+coding pack's `submit_plan` exactly. The shared decision is dependency-free (no Unix-only crates), so the binding
+no longer pulls the Unix-only coding pack and compiles on Windows.
+
 **Session queue and resume consistency.** Follow-up admission is one store write transaction
 (`SqliteStore::queue_or_stage_turn`): the active-task check, durable input insert, and next-turn staging cannot
 interleave, so two concurrent `followUp` calls can no longer both stage into the same next turn, and a steer whose
 settlement cancels it is never staged (`on_settled: cancel` inputs stay Pending and visible). Fallback promotion at
 turn settle reads the session's own persisted descriptor — never the calling turn's stale cached mode — and
 `resume` deduplicates a restart whose completion already landed, instead of re-running effects.
-
 
 **Coding tool pack cleanup uncertainty and quarantine durability** (ADR 0020 corrective). Teardown now carries an
 explicit cleanup outcome (`Clean` / `Uncertain` with marked-survivor, environ-denied-suspect, stuck-group and
@@ -125,7 +133,6 @@ recovery and the startup sweep — must consume; the discovery view no longer dr
 not deleted — until recovery resolves the uncertainty, so a reopened coordinator over the same store denies the next
 modifying lease (`workspace_quarantined`). Zombie processes no longer masquerade as suspects, and group-liveness
 verdicts are confirmed across sustained probes.
-
 
 **Sessions, context, profiles** ([ADR 0016](docs/adr/0016-durable-agent-sessions.md) §6a–6b,
 [0017](docs/adr/0017-context-assembly-and-compaction.md), [0015](docs/adr/0015-unified-agent-runtime.md) §3).

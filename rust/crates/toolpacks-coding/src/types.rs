@@ -2,8 +2,6 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-
 use crate::coordination::WorkspaceCoordinator;
 use crate::limits::{CodingLimits, CodingLimitsOverride};
 
@@ -13,116 +11,13 @@ pub struct CodingWorkspace {
     pub root: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CodingMode {
-    ReadOnly,
-    Ask,
-    AutoEdit,
-    FullAuto,
-    /// Reads only. Writes and commands are refused FINAL (no per-call
-    /// approval): the only escalation is a `submit_plan` the human approves,
-    /// which the host records as a durable grant before anything may change.
-    Plan,
-}
-
-impl CodingMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::ReadOnly => "read_only",
-            Self::Ask => "ask",
-            Self::AutoEdit => "auto_edit",
-            Self::FullAuto => "full_auto",
-            Self::Plan => "plan",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        Some(match value {
-            "read_only" => Self::ReadOnly,
-            "ask" => Self::Ask,
-            "auto_edit" => Self::AutoEdit,
-            "full_auto" => Self::FullAuto,
-            "plan" => Self::Plan,
-            _ => return None,
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CodingRole {
-    Implementer,
-    Reviewer,
-    Supervisor,
-}
-
-impl CodingRole {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Implementer => "implementer",
-            Self::Reviewer => "reviewer",
-            Self::Supervisor => "supervisor",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        Some(match value {
-            "implementer" => Self::Implementer,
-            "reviewer" => Self::Reviewer,
-            "supervisor" => Self::Supervisor,
-            _ => return None,
-        })
-    }
-}
-
-/// Context passed to the permission authority; mirrors `{chatId?, runId?}`.
-#[derive(Clone, Debug, Default)]
-pub struct PermissionContext {
-    pub chat_id: Option<String>,
-    pub run_id: Option<String>,
-}
-
-/// The host's answer to "what is this session allowed to do RIGHT NOW".
-/// Optional: without one the guard uses the mode it was constructed with,
-/// which is what a single-mode CLI does.
-///
-/// The host owns it deliberately — a permission mode the model could set is
-/// not a permission mode.
-/// Host-supplied session policy source. The TypeScript port lets these
-/// hooks reject (`roleOf`/`modeOf`/`planApproved` throw), and the host
-/// staging then FAILS CLOSED: a guard that could not answer has not allowed
-/// anything. The Rust port keeps that contract — an implementation that
-/// cannot answer returns `Err`, the guard propagates it, and host staging
-/// turns the failed guard call into a `guard error` refusal. Silently
-/// returning `None` means "no opinion" (use the configured mode/role),
-/// never "the lookup failed".
-#[async_trait]
-pub trait CodingPermissionAuthority: Send + Sync {
-    /// The session's effective mode; `None` means "use the configured mode".
-    async fn mode_of(
-        &self,
-        _ctx: &PermissionContext,
-    ) -> agentkit_host::HostResult<Option<CodingMode>> {
-        Ok(None)
-    }
-    /// The role a session runs under; `None` means "the configured role".
-    async fn role_of(
-        &self,
-        _ctx: &PermissionContext,
-    ) -> agentkit_host::HostResult<Option<CodingRole>> {
-        Ok(None)
-    }
-    /// True when THIS plan was approved by a human for this session.
-    /// `None` means the host never wired a plan authority at all — the TS
-    /// `authority?.planApproved === undefined` check; the plan is then only
-    /// recorded, never judged.
-    async fn plan_approved(
-        &self,
-        _chat_id: Option<&str>,
-        _plan_digest: &str,
-    ) -> agentkit_host::HostResult<Option<bool>> {
-        Ok(None)
-    }
-}
+/// The mode/role/authority surface is the PORTABLE shared authority —
+/// `agentkit-core::permission` holds the single decision matrix, and the
+/// host owns the session-policy trait. This crate consumes them; it must
+/// never re-define or re-branch on the matrix (a JS tool and a native tool
+/// that diverge in verdict is a bug, not per-surface policy).
+pub use agentkit_core::permission::{CodingMode, CodingRole};
+pub use agentkit_host::{CodingPermissionAuthority, PermissionContext};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SandboxMode {

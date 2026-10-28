@@ -4,12 +4,13 @@
 
 use std::sync::Arc;
 
+use agentkit_core::permission::CodingMode;
 use agentkit_core::{CancellationToken, ToolDefinition, ToolLimits};
+use agentkit_host::{CodingPermissionAuthority, PermissionContext};
 use agentkit_host::{
     PlanApprovalPolicy, PlanGrantIntent, ToolContributionContext, ToolGuard, ToolGuardContext,
     ToolGuardVerdict,
 };
-use agentkit_toolpacks_coding::types::{CodingMode, CodingPermissionAuthority, PermissionContext};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -197,6 +198,95 @@ async fn the_plan_policy_grants_a_leaving_mode_only() {
         policy.authorize(&intent).await.unwrap(),
         agentkit_host::PlanAuthorization::Allowed
     ));
+}
+
+#[tokio::test]
+async fn auto_edit_asks_for_command_execution_not_just_writes() {
+    // The assessment's P1: a JS tool declaring capability `process.exec`
+    // used to run in `auto_edit` because the guard branched on the declared
+    // effect. The coding pack asks for commands; so must the binding.
+    let verdict = guard(Some(CodingMode::AutoEdit), CodingMode::Plan)
+        .can_execute(&with_capability("write", "process.exec", "run_cmd"))
+        .await
+        .unwrap();
+    match verdict {
+        ToolGuardVerdict::AwaitingHuman(ask) => {
+            assert_eq!(ask.reason, "approval_required: run_cmd");
+        }
+        other => panic!(
+            "a command in auto_edit must ask, got {}",
+            verdict_kind(&other)
+        ),
+    }
+    // full_auto covers commands; ask covers nothing unapproved.
+    let verdict = guard(Some(CodingMode::FullAuto), CodingMode::Plan)
+        .can_execute(&with_capability("write", "process.exec", "run_cmd"))
+        .await
+        .unwrap();
+    assert!(matches!(verdict, ToolGuardVerdict::Allowed));
+    let verdict = guard(Some(CodingMode::Ask), CodingMode::Plan)
+        .can_execute(&with_capability("read", "fs.read", "cat"))
+        .await
+        .unwrap();
+    assert!(matches!(verdict, ToolGuardVerdict::Allowed));
+    // Capability classifies FIRST: a read-declared tool that claims the
+    // write capability is a write tool.
+    let verdict = guard(Some(CodingMode::ReadOnly), CodingMode::FullAuto)
+        .can_execute(&with_capability("read", "fs.write", "sneaky"))
+        .await
+        .unwrap();
+    assert!(matches!(verdict, ToolGuardVerdict::Refused(_)));
+}
+
+#[tokio::test]
+async fn plan_named_tool_asks_even_when_it_declares_read() {
+    // The assessment's related P2: `submit_plan` declaring a READ effect
+    // used to return Allowed before the plan-tool check. Its whole effect
+    // is the human decision — the human must see the plan text either way.
+    let verdict = guard(Some(CodingMode::Plan), CodingMode::Plan)
+        .can_execute(&with_capability_caps(
+            "read",
+            "plan",
+            "submit_plan",
+            Some(json!({"plan": "touch a", "mode": "auto_edit"})),
+        ))
+        .await
+        .unwrap();
+    match verdict {
+        ToolGuardVerdict::AwaitingHuman(ask) => {
+            assert_eq!(ask.reason, "plan_approval_required: submit_plan");
+            assert_eq!(ask.requested_mode.as_deref(), Some("auto_edit"));
+            assert_eq!(
+                ask.preview.as_deref(),
+                Some("touch a\n\n(requested mode: auto_edit)")
+            );
+        }
+        other => panic!(
+            "a plan submission must reach the human, got {}",
+            verdict_kind(&other)
+        ),
+    }
+    // A read tool NAMED like a plan tool but in a non-plan mode runs free.
+    let verdict = guard(Some(CodingMode::AutoEdit), CodingMode::Plan)
+        .can_execute(&with_capability_caps("read", "plan", "submit_plan", None))
+        .await
+        .unwrap();
+    assert!(matches!(verdict, ToolGuardVerdict::Allowed));
+}
+
+fn with_capability(effect: &str, capability: &str, name: &str) -> ToolGuardContext {
+    with_capability_caps(effect, capability, name, None)
+}
+
+fn with_capability_caps(
+    effect: &str,
+    capability: &str,
+    name: &str,
+    arguments: Option<Value>,
+) -> ToolGuardContext {
+    let mut ctx = context(effect, name, arguments);
+    ctx.tool.capability = capability.into();
+    ctx
 }
 
 fn verdict_kind(verdict: &ToolGuardVerdict) -> &'static str {

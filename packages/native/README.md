@@ -93,9 +93,17 @@ Approvals surface through the same calls: the run parks (`run.waiting`,
 visible in `getState().pendingHumanRequests`), `approve(requestId,
 answerId)` or `deny(requestId, answerId, note)` answer it, and structured
 human input goes through `answer({ ... })`. Reusing an `answerId` with
-different content rejects `answer_conflict`. `closeUncertain` records
-whether the last `close()` could not prove the worker drained — durable
-state stays authoritative either way.
+different content rejects `answer_conflict`. The ask record carries the
+argument identity (`content.argsSha256`, canonical-JSON sha-256) so the
+human approves exactly what the model sent. Permission decisions are the
+coding pack's own matrix (`agentkit_core::permission`), not a binding
+copy: a capability-classified `process.exec` tool asks even in
+`auto_edit`, and a plan-named tool reaches the human in plan mode
+whatever effect it declares. `closeUncertain` records whether the last
+`close()` could not prove the WORKER drained — it never claims external
+JS effects stopped; `pendingCallbacks` counts dispatched, unsettled
+callbacks, including after close. Durable state stays authoritative
+either way.
 
 ## Rules the binding enforces
 

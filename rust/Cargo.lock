@@ -166,7 +166,6 @@ dependencies = [
  "agentkit-core",
  "agentkit-host",
  "agentkit-store",
- "agentkit-toolpacks-coding",
  "async-trait",
  "futures",
  "napi",

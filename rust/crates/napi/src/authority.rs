@@ -1,21 +1,26 @@
 //! Rust-owned authority for JS-contributed tools.
 //!
 //! The binding never implements a second policy engine: the JS tool guard
-//! reads the session's durable execution mode through the coding pack's own
-//! `SessionExecutionAuthority` and reproduces the coding pack's verdict
-//! words byte-for-byte, escalating only through the host's
-//! `PlanApprovalPolicy`. A JS write tool therefore cannot act in plan mode
-//! without a human approval, and the escalation grant is the host's
-//! durable record, not binding memory.
+//! runs the ONE shared decision matrix (`agentkit_core::permission::decide`
+//! — the same code path the coding pack's guard takes) against the
+//! session's durable execution mode read through the host's
+//! `SessionExecutionAuthority`, and reproduces the pack's verdict words
+//! byte-for-byte, escalating only through the host's `PlanApprovalPolicy`.
+//! A JS write tool therefore cannot act in plan mode without a human
+//! approval, a command cannot act in `auto_edit` without one, and the
+//! escalation grant is the host's durable record, not binding memory.
 
 use std::sync::OnceLock;
 
-use agentkit_host::{
-    AgentSessionService, ApprovalAsk, HostResult, PlanApprovalPolicy, PlanAuthorization,
-    PlanGrantIntent, ToolGuard, ToolGuardContext, ToolGuardVerdict,
+use agentkit_core::permission::{
+    BlockedFinal, CodingMode, PLAN_MODE_BLOCKED_HINT, PermissionDecision, ToolClass,
+    classify_capability, decide,
 };
-use agentkit_toolpacks_coding::types::{CodingMode, CodingPermissionAuthority, PermissionContext};
-use agentkit_toolpacks_coding::{PLAN_MODE_BLOCKED_HINT, SessionExecutionAuthority};
+use agentkit_host::{
+    AgentSessionService, ApprovalAsk, CodingPermissionAuthority, HostResult, PermissionContext,
+    PlanApprovalPolicy, PlanAuthorization, PlanGrantIntent, SessionExecutionAuthority, ToolGuard,
+    ToolGuardContext, ToolGuardVerdict,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -114,12 +119,18 @@ impl ToolGuard for JsToolGuard {
         if context.namespace != JS_NAMESPACE {
             return Ok(ToolGuardVerdict::Allowed);
         }
-        // Read tools run free in every mode; effect is declared, validated,
-        // and part of the replay identity (a redefinition invalidates
-        // receipts), so this is the same axis the host classifies on.
-        if context.tool.effect == "read" {
-            return Ok(ToolGuardVerdict::Allowed);
-        }
+        // The SAME matrix the coding pack's guard runs (`decide`), with the
+        // JS metadata adapted into its axes: capability classifies first —
+        // a tool declaring `process.exec` is an Exec tool even if it
+        // declares effect `write`; only unknown capabilities fall back to
+        // the validated declared effect ("read"/"write").
+        let tool_class = classify_capability(&context.tool.capability).unwrap_or_else(|| {
+            if context.tool.effect == "read" {
+                ToolClass::Read
+            } else {
+                ToolClass::Write
+            }
+        });
         let name = context.tool.name.clone();
         let chat = PermissionContext {
             chat_id: context.contribution.chat_id.clone(),
@@ -130,33 +141,34 @@ impl ToolGuard for JsToolGuard {
             .mode_of(&chat)
             .await?
             .unwrap_or(self.configured_mode);
-        if mode == CodingMode::Plan {
-            if self.is_plan_tool(&name) {
-                return Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
+        match decide(mode, tool_class, self.is_plan_tool(&name)) {
+            PermissionDecision::Allowed => Ok(ToolGuardVerdict::Allowed),
+            PermissionDecision::PlanApprovalRequired => {
+                Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
                     reason: format!("plan_approval_required: {name}"),
                     preview: plan_preview(context.arguments.as_ref()),
                     requested_mode: plan_requested_mode(context.arguments.as_ref()),
                     uncertainty_generation: None,
-                }));
+                }))
             }
-            return Ok(ToolGuardVerdict::Refused(format!(
-                "{PLAN_MODE_BLOCKED_HINT} ({name} is a write tool)"
-            )));
+            PermissionDecision::BlockedFinal(BlockedFinal::PlanMode { tool_class }) => {
+                Ok(ToolGuardVerdict::Refused(format!(
+                    "{PLAN_MODE_BLOCKED_HINT} ({name} is a {} tool)",
+                    tool_class.as_str()
+                )))
+            }
+            PermissionDecision::BlockedFinal(BlockedFinal::ReadOnly) => Ok(
+                ToolGuardVerdict::Refused(format!("read_only: {name} is not allowed")),
+            ),
+            PermissionDecision::ApprovalRequired => {
+                Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
+                    reason: format!("approval_required: {name}"),
+                    preview: None,
+                    requested_mode: None,
+                    uncertainty_generation: None,
+                }))
+            }
         }
-        if mode == CodingMode::ReadOnly {
-            return Ok(ToolGuardVerdict::Refused(format!(
-                "read_only: {name} is not allowed"
-            )));
-        }
-        if mode == CodingMode::Ask {
-            return Ok(ToolGuardVerdict::AwaitingHuman(ApprovalAsk {
-                reason: format!("approval_required: {name}"),
-                preview: None,
-                requested_mode: None,
-                uncertainty_generation: None,
-            }));
-        }
-        Ok(ToolGuardVerdict::Allowed)
     }
 }
 
