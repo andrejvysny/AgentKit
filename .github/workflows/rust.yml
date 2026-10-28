@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +53,33 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - name: Verify packaged consumers
-        run: node rust/scripts/check-packages.mjs --offline
+      - run: node rust/scripts/check-packages.mjs --offline
+  # Windows qualifies the portable scope only: contracts, core execution, the
+  # durable store, host services, transport, client and MCP. The coding pack
+  # (`agentkit-toolpacks-coding`) and the facade re-exporting it (`agentkit-rust`)
+  # are excluded because sandboxed command execution is built on Unix process
+  # APIs (`libc::kill`, process groups, signals) with no Windows backend yet —
+  # a named roadmap-M4 gap, not a silent skip. Node/Bun steps stay out of this
+  # job deliberately: the `better-sqlite3` install failure used to mask every
+  # Rust result on Windows, and TS distribution gets qualified when the native
+  # binding ships.
+  native-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: cargo fmt --all --check
+        working-directory: rust
+      - run: cargo clippy --workspace --exclude agentkit-rust --exclude agentkit-toolpacks-coding --all-targets --all-features --locked -- -D warnings
+        working-directory: rust
+      - run: cargo test --workspace --exclude agentkit-rust --exclude agentkit-toolpacks-coding --all-features --locked
+        working-directory: rust
   contracts:
     runs-on: ubuntu-latest
     steps:

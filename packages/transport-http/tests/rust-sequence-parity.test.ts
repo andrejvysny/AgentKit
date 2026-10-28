@@ -4,7 +4,10 @@ import { createAgentKitClient } from "@agentkit/client";
 import { CONTRACT_VERSION, type AiRunEvent } from "@agentkit/contracts";
 import { DEFAULT_STREAM_OPTIONS } from "../src/deps.js";
 import { createRunEventStream, resolveStartSeq } from "../src/sse.js";
-import { startNativeServer } from "../../../rust/tests/support/http-server.js";
+import {
+  nativeBackendAvailable,
+  startNativeServer,
+} from "../../../rust/tests/support/http-server.js";
 
 function events(sequences: number[], runId = "numeric"): AiRunEvent[] {
   return sequences.map((seq, index) => ({
@@ -153,7 +156,9 @@ test("TypeScript client dedupes finite numeric high water without requiring inte
   }
 });
 
-test("native SQLite SSE preserves numeric sequences and resumes exclusively at the last event", async () => {
+test.skipIf(!nativeBackendAvailable)(
+  "native SQLite SSE preserves numeric sequences and resumes exclusively at the last event",
+  async () => {
   let native = await startNativeServer();
   const source = events([-0.5, 0.25, 0.5, 4.75, 2 ** 53, 2 ** 53 + 2, 1e308]);
   source[0]!.eventId = "";

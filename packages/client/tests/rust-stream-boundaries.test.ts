@@ -1,8 +1,13 @@
 import { expect, test } from "bun:test";
-import { startNativeServer } from "../../../rust/tests/support/http-server.js";
+import {
+  nativeBackendAvailable,
+  startNativeServer,
+} from "../../../rust/tests/support/http-server.js";
 import { createAgentKitClient } from "../src/index.js";
 
-test("TypeScript client resumes Rust SSE at every byte boundary", async () => {
+test.skipIf(!nativeBackendAvailable)(
+  "TypeScript client resumes Rust SSE at every byte boundary",
+  async () => {
   const server = await startNativeServer();
   try {
     const chat = await server.client.createChat({});

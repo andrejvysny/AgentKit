@@ -100,6 +100,11 @@ export interface CodingAgentOptions {
   mode?: CodingMode;
   /** Commands `run_tests` may run. Default ["bun test"]. */
   testCommands?: readonly string[];
+  /** Execution backend for shell/test commands. Default "required": commands
+   * only run inside the platform sandbox, and hosts without one (Linux has no
+   * `sandbox-exec`) refuse. "off" runs unsandboxed — an explicit opt-in for
+   * trusted hosts and CI, never the default. */
+  sandbox?: "required" | "off";
   /** Injected by the acceptance test; production uses the real client. */
   providerFactory?: (config: {
     baseUrl: string;
@@ -210,6 +215,7 @@ export class CodingAgentApp {
       createCodingToolPack({
         workspace: { root: resolve(options.repo) },
         testCommands: options.testCommands ?? ["bun test"],
+        sandbox: options.sandbox ?? "required",
         permission: authority,
       }),
       ...(options.extraContributors ?? []),

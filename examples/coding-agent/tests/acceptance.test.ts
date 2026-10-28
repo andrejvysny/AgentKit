@@ -100,6 +100,13 @@ interface OpenOptions {
   reasoningEffort?: "minimal" | "low" | "medium" | "high";
   /** Provider call number (1-based) that parks until its signal aborts. */
   hangOnCall?: number;
+  /** Execution backend for shell/test commands. The suite deliberately
+   * defaults to "off": this acceptance run qualifies the session workflow
+   * (persistence, approvals, recovery), not sandbox isolation — that is
+   * covered by the tool pack's own tests. Linux CI has no `sandbox-exec`, so
+   * the production default "required" would refuse every shell command here.
+   * Individual tests may pin "required" to assert the refusal itself. */
+  sandbox?: "required" | "off";
 }
 
 interface Harness {
@@ -167,6 +174,7 @@ async function open(options: OpenOptions): Promise<Harness> {
     model: "mock-model",
     baseUrl: "http://127.0.0.1:1",
     testCommands: ["bun test"],
+    sandbox: options.sandbox ?? "off",
     providerFactory: () => recorder as unknown as AiProviderClient,
     ...(options.mode === undefined ? {} : { mode: options.mode }),
     ...(options.reasoningEffort === undefined
