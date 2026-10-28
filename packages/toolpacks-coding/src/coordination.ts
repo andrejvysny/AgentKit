@@ -16,6 +16,13 @@
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { CodingError } from "./errors.js";
+import type { ProcessIdentity } from "./process-identity.js";
+import type { WorkspaceRecoveryReport } from "./coordination-recovery-types.js";
+export type {
+  WorkspaceRecoveryReason,
+  WorkspaceRecoveryRecord,
+  WorkspaceRecoveryReport,
+} from "./coordination-recovery-types.js";
 import {
   createLockDirWorkspaceCoordinator,
   defaultWorkspaceCoordinationDir,
@@ -60,7 +67,18 @@ export interface ExecutionCleanup {
 /** Durable command ownership lives in the exclusive marker itself. */
 export interface ExecutionLease extends WorkspaceLease {
   beginExecution(intent: ExecutionIntent): Promise<void>;
-  spawned(identity: { pid: number; processStart?: string }): Promise<void>;
+  spawned(identity: {
+    pid: number;
+    startIdentity?: string;
+    processStart?: string;
+    guardianProtocol?: "agentkit-command-guardian-v1";
+  }): Promise<void>;
+  observed?(
+    identities: ProcessIdentity[],
+    complete: boolean,
+    closed?: boolean,
+    sealed?: boolean,
+  ): Promise<void>;
   finishExecution(cleanup: ExecutionCleanup): Promise<void>;
 }
 
@@ -77,6 +95,8 @@ export function isExecutionLease(
 export interface WorkspaceCoordinator {
   /** Inspect durable ownership before a pack admits mutations. Never clears unknown state. */
   reconcileWorkspace?(root: string): Promise<ExecutionCleanup[]>;
+  /** Explicit inspection-only recovery. Incomplete ownership evidence remains blocked. */
+  recoverWorkspace?(root: string): Promise<WorkspaceRecoveryReport>;
   /** Persist a blocker before an uncertain startup cleanup can admit mutations. */
   quarantineWorkspace?(root: string, cleanup: ExecutionCleanup): Promise<void>;
   /** Shared workspace lease + exclusive lock on one canonical file. Waits while a workspace-exclusive lease is held or requested. */

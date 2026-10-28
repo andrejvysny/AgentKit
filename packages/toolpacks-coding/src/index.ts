@@ -37,6 +37,9 @@ export {
   type ExecutionIntent,
   type ExecutionCleanup,
   type ExecutionLease,
+  type WorkspaceRecoveryReason,
+  type WorkspaceRecoveryRecord,
+  type WorkspaceRecoveryReport,
   isExecutionLease,
 } from "./coordination.js";
 export {

@@ -9,6 +9,15 @@ export async function persistRecord(
   record: LockRecord,
   exclusive = false,
 ): Promise<void> {
+  await persistJsonRecord(path, record, exclusive);
+}
+
+/** Publish durable recovery evidence without reopening the mutable ownership marker. */
+export async function persistJsonRecord(
+  path: string,
+  record: unknown,
+  exclusive = false,
+): Promise<void> {
   const temp = `${path}.update-${randomUUID()}`;
   const file = await open(temp, "wx", 0o600);
   try {

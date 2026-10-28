@@ -127,6 +127,9 @@ export function guarded(
       }
       let approvedRequest: string | undefined;
       let approvalGeneration: string | undefined;
+      let revalidateExecutionAuthorization:
+        | (() => Promise<boolean>)
+        | undefined;
       const approvable: ApprovableRefusal[] = [];
       if (durable !== undefined) {
         const records =
@@ -207,8 +210,14 @@ export function guarded(
           key !== null &&
           (await hasActiveGrant(standing.store, callCtx.chatId, key.digest))
         ) {
-          // A remembered approval of this exact call: run it, as the one-use
-          // branch does.
+          // Cooperating tools recheck after acquiring exclusive execution access.
+          revalidateExecutionAuthorization = async () => {
+            const current = await standingKeyOf(standing, callCtx, approvable);
+            return (
+              current?.digest === key.digest &&
+              (await hasActiveGrant(standing.store, callCtx.chatId, key.digest))
+            );
+          };
         } else if (ctx.suspend) {
           ctx.suspend({
             prompt:
@@ -284,11 +293,20 @@ export function guarded(
         );
       ctx.signal?.throwIfAborted();
       const executionCtx =
-        executionId === undefined
+        executionId === undefined &&
+        revalidateExecutionAuthorization === undefined
           ? ctx
           : {
               ...ctx,
-              metadata: { ...ctx.metadata, executionAttemptId: executionId },
+              metadata: {
+                ...ctx.metadata,
+                ...(executionId === undefined
+                  ? {}
+                  : { executionAttemptId: executionId }),
+                ...(revalidateExecutionAuthorization === undefined
+                  ? {}
+                  : { revalidateExecutionAuthorization }),
+              },
             };
       const result = await tool.execute(executionCtx, snapshot);
       if (executionId !== undefined)

@@ -141,6 +141,12 @@ export const AiRunToolRunningEventSchema = Type.Object({
   data: Type.Object({
     toolCallId: Type.String(),
     toolName: Type.String(),
+    admissionProtocol: Type.Optional(
+      Type.Literal("fenced-v1", {
+        description:
+          "Trusted host marker: this invocation cannot enter its mutating body without a durable fenced execution receipt.",
+      }),
+    ),
   }),
 });
 export type AiRunToolRunningEvent = Static<typeof AiRunToolRunningEventSchema>;
@@ -442,6 +448,8 @@ export const AiRunContextAdmittedEventSchema = Type.Object({
     extraTokens: Type.Number(),
     estimatedInputTokens: Type.Number(),
     budgetTokens: Type.Number(),
+    /** Effective ceiling forwarded to the provider; absent on older admission events. */
+    maxOutputTokens: Type.Optional(Type.Integer({ minimum: 1 })),
   }),
 });
 export type AiRunContextAdmittedEvent = Static<

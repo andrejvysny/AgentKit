@@ -12,9 +12,9 @@
  * `label` is only a 12-char hash of the holder's label: command text never
  * reaches the lock directory.
  *
- * Plain abandoned leases are reclaimed only by one elected reclaimer per
- * record generation; a hard-link receipt prevents stale readers from touching
- * newer ownership. Execution intent is fsynced into the existing exclusive
+ * Plain abandoned leases use immutable versioned claimant chains per record.
+ * Positive claimant death admits a successor; no claim names are reused.
+ * Exact record/inode checks fence replacement generations. Execution intent is fsynced into the existing exclusive
  * marker before spawn. Unknown/surviving executions and damaged records remain
  * blocked regardless of owner death. They are never released then quarantined.
  *
@@ -22,12 +22,14 @@
  * which is always acquired first, so packs using either kind of coordinator
  * in one process exclude each other.
  *
- * Limits: same host, OS user and pid namespace only. Reclaim receipts remain
+ * Limits: same host, OS user and pid namespace only. Reclaim claim slots remain
  * as small safety records. Unknown inspection never proves cleanup. Historical
  * commands whose old leases were already released and whose marker/ancestry is
  * hidden cannot be reconstructed. An uncoordinated external editor
  * takes none of these locks; the tools' content checks detect its changes
  * instead.
+ * All concurrent participants must use this protocol. Legacy receipts cannot
+ * prove that an old-version reclaimer is inactive; mixed running versions are unsupported.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { link, mkdir, readdir, writeFile } from "node:fs/promises";
@@ -46,6 +48,11 @@ import {
 import { executionLease } from "./coordination-execution.js";
 import { importLegacyOwnership } from "./coordination-migration.js";
 import { persistRecord } from "./coordination-storage.js";
+import { captureProcessIdentity } from "./process-identity.js";
+import {
+  recoverWorkspaceMarker,
+  type MarkerRecovery,
+} from "./coordination-recovery.js";
 import {
   type CoordinatorObserver,
   type ExecutionCleanup,
@@ -53,6 +60,7 @@ import {
   WaitTracker,
   type WorkspaceCoordinator,
   type WorkspaceLease,
+  type WorkspaceRecoveryReport,
   abortError,
   canonicalFileKey,
   canonicalRootKey,
@@ -87,10 +95,12 @@ async function tryCreate(
   onError: OnError,
 ): Promise<boolean> {
   const start = await processStart(process.pid);
+  const identity = await captureProcessIdentity(process.pid);
   const record: LockRecord = {
     lockId: randomUUID(),
     pid: process.pid,
     ...(start !== undefined ? { processStart: start } : {}),
+    ...(identity ? { startIdentity: identity.startIdentity } : {}),
     tool: holder.tool,
     label: sha(holder.label).slice(0, 12),
     createdAt: Date.now(),
@@ -175,6 +185,31 @@ class LockDir {
         reason: "execution owner died before cleanup proof was persisted",
       },
     ];
+  }
+
+  async recover(): Promise<WorkspaceRecoveryReport> {
+    const results: MarkerRecovery[] = [];
+    for (const marker of ["quarantine", "exclusive"] as const)
+      results.push(
+        await recoverWorkspaceMarker(
+          join(this.wsDir, `${marker}.lock`),
+          marker,
+        ),
+      );
+    const records = results.flatMap((result) =>
+      result.record ? [result.record] : [],
+    );
+    return {
+      state: records.some((record) => record.status === "blocked")
+        ? "blocked"
+        : records.length
+          ? "recovered"
+          : "clear",
+      records,
+      cleanup: results.flatMap((result) =>
+        result.cleanup ? [result.cleanup] : [],
+      ),
+    };
   }
 
   async acquireShared(
@@ -343,6 +378,9 @@ export function createLockDirWorkspaceCoordinator(options: {
     },
     async reconcileWorkspace(root) {
       return (await open(root)).dir.reconcile();
+    },
+    async recoverWorkspace(root) {
+      return (await open(root)).dir.recover();
     },
     async acquireFile(input) {
       const tracker = new WaitTracker(options.observer);

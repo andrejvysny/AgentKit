@@ -1,4 +1,7 @@
-import type { AiRunEvent } from "@agentkit/contracts";
+import type {
+  AiRunContextAdmittedEvent,
+  AiRunEvent,
+} from "@agentkit/contracts";
 import {
   createEventStamper,
   defaultTokenEstimator,
@@ -38,6 +41,7 @@ interface RequestBudget {
   stamp: EventStamper;
   clock: Clock;
   ids: IdGenerator;
+  clientMaxOutputTokens?: number;
 }
 
 /** Gate actual dispatches, including tool loops, steers, retries and correction passes. */
@@ -66,6 +70,9 @@ export async function boundedContextClient(
   return {
     id: client.id,
     kind: client.kind,
+    ...(client.maxOutputTokens === undefined
+      ? {}
+      : { maxOutputTokens: client.maxOutputTokens }),
     ...(client.protocol === undefined ? {} : { protocol: client.protocol }),
     ...(client.connectionIdentity === undefined
       ? {}
@@ -83,6 +90,9 @@ export async function boundedContextClient(
         stamp,
         clock: deps.clock,
         ids: deps.ids,
+        ...(client.maxOutputTokens === undefined
+          ? {}
+          : { clientMaxOutputTokens: client.maxOutputTokens }),
       }),
   };
 }
@@ -92,7 +102,39 @@ async function* guardedStream(
   request: AiChatRequest,
   deps: RequestBudget,
 ): AsyncIterable<AiRunEvent> {
-  const { window, reserveTokens, estimator, stamp } = deps;
+  const admission = requestAdmission(request, deps);
+  const base = { runId: request.runId, timestamp: deps.clock.nowIso() };
+  if ("errorCode" in admission) {
+    yield deps.stamp({ type: "run.failed", ...base, data: admission });
+    return;
+  }
+  // The loop re-stamps these events into its authoritative sequence and attempt.
+  yield deps.stamp({ type: "run.context.admitted", ...base, data: admission });
+  yield* client.streamChat({
+    ...request,
+    maxOutputTokens: admission.maxOutputTokens,
+  });
+}
+
+type RequestAdmission = AiRunContextAdmittedEvent["data"] & {
+  maxOutputTokens: number;
+};
+
+function requestAdmission(
+  request: AiChatRequest,
+  deps: RequestBudget,
+): RequestAdmission | { errorCode: string; errorMessage: string } {
+  const { window, reserveTokens, estimator } = deps;
+  if (
+    [request.maxOutputTokens, deps.clientMaxOutputTokens].some(
+      (value) =>
+        value !== undefined && (!Number.isSafeInteger(value) || value < 1),
+    )
+  )
+    return {
+      errorCode: "invalid_max_output_tokens",
+      errorMessage: "maxOutputTokens must be a positive safe integer.",
+    };
   const toolTokens = estimateTools(request.tools ?? []);
   const extraTokens = (request.runContent?.messages ?? []).reduce(
     (sum, message) => sum + estimator.estimateMessage(message),
@@ -104,32 +146,28 @@ async function* guardedStream(
   );
   const budgetTokens =
     window.windowTokens - reserveTokens - toolTokens - extraTokens;
-  const base = { runId: request.runId, timestamp: deps.clock.nowIso() };
-  if (messageTokens > budgetTokens) {
-    yield stamp({
-      type: "run.failed",
-      ...base,
-      data: {
-        errorCode: "context_overflow",
-        errorMessage: `The current request needs about ${messageTokens} message tokens but only ${budgetTokens} fit in the ${window.windowTokens}-token window after the reply reserve, tool definitions and run content. Shorten the request or compact the session.`,
-      },
-    });
-    return;
+  const estimatedInputTokens = messageTokens + toolTokens + extraTokens;
+  const maxOutputTokens = Math.min(
+    request.maxOutputTokens ?? reserveTokens,
+    deps.clientMaxOutputTokens ?? reserveTokens,
+    Math.floor(reserveTokens),
+    Math.floor(window.windowTokens - estimatedInputTokens),
+  );
+  if (messageTokens > budgetTokens || maxOutputTokens < 1) {
+    return {
+      errorCode: "context_overflow",
+      errorMessage: `The current request needs about ${messageTokens} message tokens but only ${budgetTokens} fit in the ${window.windowTokens}-token window after the reply reserve, tool definitions and run content. Shorten the request or compact the session.`,
+    };
   }
-  // The loop re-stamps these events into its authoritative sequence and attempt.
-  yield stamp({
-    type: "run.context.admitted",
-    ...base,
-    data: {
-      requestId: deps.ids.eventId(),
-      windowTokens: window.windowTokens,
-      windowSource: window.source,
-      reserveTokens,
-      toolTokens,
-      extraTokens,
-      estimatedInputTokens: messageTokens + toolTokens + extraTokens,
-      budgetTokens,
-    },
-  });
-  yield* client.streamChat(request);
+  return {
+    requestId: deps.ids.eventId(),
+    windowTokens: window.windowTokens,
+    windowSource: window.source,
+    reserveTokens,
+    toolTokens,
+    extraTokens,
+    estimatedInputTokens,
+    budgetTokens,
+    maxOutputTokens,
+  };
 }

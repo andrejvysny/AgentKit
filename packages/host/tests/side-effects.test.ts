@@ -70,6 +70,29 @@ function assistant(toolCallId: string, name: string): AiChatMessage {
 }
 
 describe("findUncertainCalls", () => {
+  it("legacy failures and replay running markers preserve the first unmatched generation", async () => {
+    const log = events([
+      ["run.tool.requested", "c1", "run_command"],
+      ["run.tool.running", "c1", "run_command"],
+      ["run.tool.failed", "c1", "run_command"],
+      ["run.tool.running", "c1", "run_command"],
+      ["run.tool.failed", "c1", "run_command"],
+    ]);
+    const uncertain = await findUncertainCalls(
+      storeWith({ t1: log }),
+      ["t1"],
+      isMutating,
+    );
+    expect(uncertain.get("c1")?.approvalGeneration).toBe(
+      await argsSha256Of({
+        runId: "t1",
+        toolCallId: "c1",
+        attemptId: undefined,
+        eventId: log[1]!.eventId,
+      }),
+    );
+  });
+
   it("an older completed receipt cannot erase a current run with the same call ID", async () => {
     const digest = await argsSha256Of({ command: "make deploy" });
     const common = {
@@ -347,8 +370,8 @@ describe("the mutating-tool classifier", () => {
     expect(isMutating("read_file")).toBe(false);
     // The tool declared nothing; the host knows better.
     expect(isMutating("mcp.deploy")).toBe(true);
-    // Not staged at all: this run cannot call it, so it is not our business.
-    expect(isMutating("run_command")).toBe(false);
+    // Unavailable tools may still have changed state before the current turn.
+    expect(isMutating("run_command")).toBe(true);
   });
 
   it("an exemption beats an explicit inclusion", () => {
@@ -359,5 +382,15 @@ describe("the mutating-tool classifier", () => {
       effectOf: () => "write",
     });
     expect(isMutating("deploy")).toBe(false);
+  });
+
+  it("keeps unknown effects conservative while recognizing known read tools", () => {
+    const isMutating = createMutatingToolClassifier({
+      stagedNames: ["unknown"],
+      effectOf: (name) => (name === "read" ? "read" : undefined),
+    });
+    expect(isMutating("unknown")).toBe(true);
+    expect(isMutating("unavailable")).toBe(true);
+    expect(isMutating("read")).toBe(false);
   });
 });

@@ -35,6 +35,15 @@ export const COVERED_HIGH_RISK = [
   "'/usr/bin/git' push",
   "/usr/bin/find . -delete",
   '"npm" publish',
+  "node -",
+  "node --input-type=module -",
+  "node --input-type module",
+  "printf inert | node",
+  "node < ./input.js",
+  "node --import=data:text/javascript,console.log(1)",
+  "node --import 'data:text/javascript,console.log(1)'",
+  "node --loader=data:text/javascript,console.log(1) script.js",
+  "bun --preload=data:text/javascript,console.log(1) test",
 ];
 
 describe("literal and indirect high-risk command forms", () => {

@@ -50,10 +50,25 @@ function assertDurableExecutionPreserved(directory: string): void {
     "packages/host/src/turn/durable-execution.ts",
     "packages/host/src/turn/registry-staging.ts",
     "packages/host/src/turn/guarded-tool.ts",
+    "packages/host/src/turn/admission-protocol.ts",
+    "packages/host/src/turn/side-effects.ts",
+    "packages/host/src/sessions/approval-denial.ts",
+    "packages/host/src/sessions/human-answer.ts",
+    "packages/contracts/src/run-events.ts",
     "packages/host/src/turn/approval-resume.ts",
     "packages/adapters-memory/src/memory-tool-execution-store.ts",
     "packages/adapters-sqlite/src/sqlite/tool-execution-store.ts",
     "packages/adapters-sqlite/src/sqlite/migrations.ts",
+    "packages/core/src/runs/bounded-provider.ts",
+    "packages/host/src/context/compactor.ts",
+    "packages/toolpacks-coding/src/command-fingerprint.ts",
+    "packages/toolpacks-coding/src/command-risk.ts",
+    "packages/toolpacks-coding/src/command-script-inputs.ts",
+    "packages/toolpacks-coding/src/context.ts",
+    "packages/toolpacks-coding/src/coordination-claim.ts",
+    "packages/toolpacks-coding/src/process-identity.ts",
+    "packages/toolpacks-coding/src/process-teardown.ts",
+    "packages/toolpacks-coding/src/process-owned.ts",
   ])
     expect(read(directory, path)).toBe(read(fixtureRoot, path));
   expect(
@@ -82,12 +97,37 @@ function assertDurableExecutionPreserved(directory: string): void {
   expect(read(directory, "packages/host/src/turn/turn-runner.ts")).toContain(
     "durable:",
   );
+  expect(
+    read(directory, "packages/host/src/turn/admission-protocol.ts"),
+  ).toContain("new WeakSet<AiTool>()");
+  expect(read(directory, "packages/contracts/src/run-events.ts")).toContain(
+    "admissionProtocol: Type.Optional(",
+  );
+  expect(read(directory, "packages/host/src/turn/turn-runner.ts")).toContain(
+    "event = stampAdmissionProtocol(",
+  );
+  expect(read(directory, "packages/host/src/turn/side-effects.ts")).toContain(
+    'event.data.admissionProtocol === "fenced-v1"',
+  );
+  expect(
+    read(directory, "packages/host/src/turn/history-assembly.ts"),
+  ).toContain("content: await providerHumanAnswerContent(deps.store, record)");
+  expect(
+    read(directory, "packages/host/src/sessions/approval-denial.ts"),
+  ).toContain('priorExecutionOutcome: "unknown"');
+  expect(
+    read(directory, "packages/host/src/sessions/human-answer.ts"),
+  ).toContain("approvalDenialEnvelope(request, approval.note)");
   const context = read(
     directory,
     "packages/host/src/context/bounded-context-client.ts",
   );
   expect(context).toContain("messageTokens > budgetTokens");
   expect(context).toContain('type: "run.context.admitted"');
+  expect(context).toContain("maxOutputTokens: admission.maxOutputTokens");
+  expect(read(directory, "packages/core/src/providers/client.ts")).toContain(
+    "readonly maxOutputTokens?: number",
+  );
   expect(read(directory, "packages/host/src/turn/turn-runner.ts")).toContain(
     "const client = await boundedContextClient(input.client",
   );
@@ -109,6 +149,14 @@ describe.skipIf(!integrated)("current-source foundation projection", () => {
       read(second, "snapshot-provenance.json"),
     );
     assertDurableExecutionPreserved(first);
+    const reasoning = read(
+      first,
+      "packages/core/tests/reasoning-effort.test.ts",
+    );
+    expect(reasoning).toContain('describe("chat completions reasoning_effort"');
+    expect(reasoning).toContain("drops it once on a 400 naming it and warns");
+    expect(reasoning).not.toContain("responses-helpers");
+    expect(reasoning).not.toContain('describe("Responses reasoning effort');
     expect(
       read(first, "packages/host/src/context/bounded-context-client.ts"),
     ).not.toContain("client.protocol");

@@ -1,5 +1,5 @@
 import { expect } from "bun:test";
-import type { AiTool } from "@agentkit/core";
+import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
 import { MockProviderClient } from "@agentkit/testing";
 import { SqliteAssistantStore } from "../../../adapters-sqlite/src/index.js";
 import {
@@ -9,6 +9,7 @@ import {
   defaultClock,
   defaultIds,
   type AgentInputRecord,
+  type Clock,
 } from "../../src/index.js";
 import { FakeTaskRunner } from "../fakes.js";
 
@@ -18,28 +19,52 @@ export interface State {
   fullAuto?: boolean;
   failOnce?: boolean;
   timeoutOnce?: boolean;
+  toolAvailable?: boolean;
+  guardDenied?: boolean;
 }
 
-export async function open(path: string, state: State, legacyRoot?: string) {
+export interface FixtureOptions {
+  clock?: Clock;
+  afterRunning?: (eventId: string) => Promise<void>;
+  afterAdmission?: (executionId: string) => Promise<void>;
+  afterEffect?: (ctx: AiToolExecutionContext) => Promise<void>;
+  afterResult?: (executionId: string) => Promise<void>;
+}
+
+export async function open(
+  path: string,
+  state: State,
+  legacyRoot?: string,
+  options: FixtureOptions = {},
+) {
+  const runtimeRoot = legacyRoot ?? process.env.AGENTKIT_TEST_PACKAGE_ROOT;
+  const clock = options.clock ?? defaultClock;
   const host =
-    legacyRoot === undefined
+    runtimeRoot === undefined
       ? { TurnRunner, TaskService, AgentSessionService }
       : ((await import(
-          `${legacyRoot}/dist/host/index.js`
+          `${runtimeRoot}/dist/host/index.js`
         )) as typeof import("../../src/index.js"));
   const adapter =
-    legacyRoot === undefined
+    runtimeRoot === undefined
       ? { SqliteAssistantStore }
       : ((await import(
-          `${legacyRoot}/dist/adapters-sqlite/index.js`
+          `${runtimeRoot}/dist/adapters-sqlite/index.js`
         )) as typeof import("../../../adapters-sqlite/src/index.js"));
   const testing =
-    legacyRoot === undefined
+    runtimeRoot === undefined
       ? { MockProviderClient }
       : ((await import(
-          `${legacyRoot}/dist/testing/index.js`
+          `${runtimeRoot}/dist/testing/index.js`
         )) as typeof import("@agentkit/testing"));
-  const store = new adapter.SqliteAssistantStore(path);
+  const store = new adapter.SqliteAssistantStore(path, { clock });
+  const originalAppendEvents = store.tasks.appendEvents.bind(store.tasks);
+  store.tasks.appendEvents = async (taskId, events, fence) => {
+    await originalAppendEvents(taskId, events, fence);
+    for (const event of events)
+      if (event.type === "run.tool.running")
+        await options.afterRunning?.(event.eventId);
+  };
   const taskRunner = new FakeTaskRunner();
   const mock = new testing.MockProviderClient();
   mock.setScript([{ steps: [{ kind: "text", content: "done" }] }]);
@@ -59,6 +84,7 @@ export async function open(path: string, state: State, legacyRoot?: string) {
     },
     async execute(ctx) {
       state.effects += 1;
+      await options.afterEffect?.(ctx);
       if (state.failOnce) {
         state.failOnce = false;
         throw new Error("failure after effect");
@@ -91,6 +117,8 @@ export async function open(path: string, state: State, legacyRoot?: string) {
   const originalTransaction = store.transaction.bind(store);
   store.transaction = async (operation) => {
     const result = await originalTransaction(operation);
+    if (typeof result === "string" && /^[a-f0-9]{64}$/.test(result))
+      await options.afterAdmission?.(result);
     if (
       state.crash === "before_body" &&
       typeof result === "string" &&
@@ -110,6 +138,7 @@ export async function open(path: string, state: State, legacyRoot?: string) {
   if (originalComplete)
     store.toolExecutions.complete = async (id, result, fence) => {
       await originalComplete(id, result, fence);
+      await options.afterResult?.(id);
       if (state.crash === "after_result") {
         state.crash = undefined;
         await interrupt(fence.taskId);
@@ -119,22 +148,29 @@ export async function open(path: string, state: State, legacyRoot?: string) {
     store,
     taskRunner,
     providerFactory: () => mock,
-    contributors: [{ namespace: "test", contribute: async () => [tool] }],
+    contributors: [
+      {
+        namespace: "test",
+        contribute: async () => (state.toolAvailable === false ? [] : [tool]),
+      },
+    ],
     toolGuards: [
       {
         canExecute: () =>
-          state.fullAuto
-            ? { allowed: true }
-            : { allowed: false, reason: "approval required", approval: {} },
+          state.guardDenied
+            ? { allowed: false, reason: "policy changed: mutation disabled" }
+            : state.fullAuto
+              ? { allowed: true }
+              : { allowed: false, reason: "approval required", approval: {} },
       },
     ],
-    clock: defaultClock,
+    clock,
     ids: defaultIds,
   });
   const tasks = new host.TaskService({
     store,
     taskRunner,
-    clock: defaultClock,
+    clock,
     ids: defaultIds,
   });
   const service = new host.AgentSessionService({
@@ -142,7 +178,7 @@ export async function open(path: string, state: State, legacyRoot?: string) {
     taskRunner,
     turns: runner,
     tasks,
-    clock: defaultClock,
+    clock,
     ids: defaultIds,
   });
   if (!(await store.providers.getProvider("provider"))) {
@@ -162,7 +198,7 @@ export async function open(path: string, state: State, legacyRoot?: string) {
       model: "model",
     });
   }
-  return { store, mock, runner, service };
+  return { store, mock, runner, service, clock };
 }
 
 type Fixture = Awaited<ReturnType<typeof open>>;
@@ -170,7 +206,7 @@ export async function drive(f: Fixture): Promise<boolean> {
   const claim = await f.store.tasks.claimNext({
     ownerId: "worker",
     scopesBusy: [],
-    now: new Date(),
+    now: f.clock.now(),
   });
   if (!claim) return false;
   await f.runner.execute({
