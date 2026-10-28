@@ -1,7 +1,8 @@
 # Rust native SDK acceptance audit
 
 Audit date: 2026-10-23; execution-ownership rows and the 2026-10-28 validation
-record added on 2026-10-28. Authority: TypeScript contract `0.7.0`, REST `v1`, frozen
+record added on 2026-10-28, with the M2.1 hardening validation record (same
+date) at the end of this document. Authority: TypeScript contract `0.7.0`, REST `v1`, frozen
 at `36577829cfbfd78e5b0492d826f46ba6131835b6`. This document audits the Rust
 implementation in the current working tree. The baseline specification remains
 [parity.md](parity.md); passing baseline defect characterizations does not clear
@@ -215,6 +216,61 @@ The following observations belong to this work session, not to a released commit
   No publication or crates.io registry-resolution qualification was performed.
 - No live-provider or successful real-keychain qualification, remote three-OS CI
   result, arbitrary cross-language failure-schedule coverage, or benchmark result is available.
+
+### M2.1 hardening validation record (2026-10-28, Linux x86_64, Rust 1.97.0, Bun 1.4.4)
+
+All gates below were rerun on the m2.1-hardening tree after the M2.1 fixes.
+The run host initially lacked `node` (the main CI runners provide it); the
+release-projection and MCP stdio-peer suites were passing before compaction and
+were re-qualified locally with Node v22.20.0 installed.
+
+- `.github/workflows/rust.yml` name-only step defect: fixed (consolidated into
+  one step), and every step of all five workflows (`ci`, `nightly`, `publish`,
+  `release`, `rust`) is now structurally gated by
+  [workflows.test.ts](../../scripts/tests/workflows.test.ts) — exactly one of
+  `run`/`uses` per step, non-empty. 10 tests / 379 assertions pass across the
+  workflow and CI-workflow gate suites.
+- Both aggregate qualification gates (routine CI and native) now evaluate
+  `needs` results with `jq` instead of `node`, so the gate that audits runtimes
+  depends on no runtime; missing, skipped, cancelled or failed jobs exit 1.
+- `cargo fmt --all --check` passes. Workspace all-target/all-feature clippy
+  with `-D warnings` passes (fixed one `clone_on_copy` in `session_runtime`).
+- `cargo test --workspace --all-features --all-targets --locked` passes every
+  target. Coding pack: 218 lib tests (2 ignored) plus 21 integration tests in
+  `contributor`, `execution_ownership` (caller-drop/cancellation/shutdown/
+  detached-descendant leases), `execution_recovery` (real process-kill/reopen
+  across admit → effect → completion), `legacy_upgrade` (immutable v1/v2
+  fixtures keep old unanswered mutations uncertain), `quarantine_race` and
+  `session_authority`. Store: 24 `session_ops` tests including crash/reopen
+  around settlement and conversion. Host session and durable-execution suites
+  pass. The client interop targets (all 48 routes against the actual TS host,
+  `typescript_boundaries`) pass.
+- Executing the full suite exposed and fixed a real defect:
+  `InProcessCoordinator::clear_execution_intent` held the std `intents`
+  `MutexGuard` from a `get_mut` while re-locking the same mutex, self-deadlocking
+  the driver on every clean command completion. The guard is now dropped before
+  the second lock; the previously hanging suites pass.
+- `cargo check -p agentkit-contracts --target wasm32-unknown-unknown --locked`
+  passes (the `wasm32-unknown-unknown` rustup target must be installed; the CI
+  job adds it explicitly).
+- `bun run lint` reports 0 errors (five pre-existing lint infos unchanged);
+  `bun run typecheck` and `bun scripts/export-rust-fixtures.ts --check` pass.
+- Main suite `AGENTKIT_SKIP_NATIVE=1 bun test`: 2,888 passed, 22 skipped,
+  0 failed (18,668 assertions, 229 files).
+- Native-backed suites `AGENTKIT_TEST_BACKEND=rust bun test packages/client/tests
+  packages/react/tests packages/transport-http/tests packages/toolpacks-coding/tests`:
+  824 passed, 9 skipped, 0 failed (5,812 assertions).
+- Shared conformance harnesses with both environment switches enabled: 17
+  tests, 0 failed, 559 assertions.
+- Platform scope: everything above is Linux x86_64 evidence. The remote
+  macOS/Windows matrix jobs have not been observed passing; the Windows job is
+  scoped pure-native with `AGENTKIT_SKIP_TS_INTEROP=1`, and the coding pack
+  remains Unix-only-qualified. No claim is made about remote CI status at any
+  SHA; the first push of this branch must record those job results before the
+  matrix rows may move from **Not run**.
+- The first native binding milestone (M3) design and ordered backlog live in
+  [native-binding-milestone.md](native-binding-milestone.md); no binding code
+  exists yet.
 
 ## Remaining release gates
 
