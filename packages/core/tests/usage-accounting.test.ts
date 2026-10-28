@@ -97,6 +97,75 @@ describe("summarizeRunUsage (B4)", () => {
     expect(summary.models[0]?.inputTokens).toBe(200);
   });
 
+  it("same callId, different attempts: each attempt is billed (C3)", () => {
+    // model-step re-stamps one provider step's attempts under a shared
+    // callId with attempt 1..n; (callId, attempt) dedup must NOT collapse
+    // them — every attempt was a real, billed provider request.
+    const summary = summarizeRunUsage([
+      usage("c1", "m", { attempt: 1 }),
+      usage("c1", "m", { attempt: 2 }),
+    ]);
+    expect(summary.providerRequests).toBe(2);
+    expect(summary.models[0]?.requests).toBe(2);
+    expect(summary.models[0]?.inputTokens).toBe(200);
+    expect(summary.models[0]?.outputTokens).toBe(40);
+  });
+
+  it("draft/final pairs dedup per (callId, attempt), never across attempts", () => {
+    const summary = summarizeRunUsage([
+      // attempt 1: draft then final — only the final bills.
+      usage("c1", "m", {
+        attempt: 1,
+        promptTokens: 30,
+        completionTokens: 5,
+        source: "stream",
+        finalForCall: false,
+      }),
+      usage("c1", "m", {
+        attempt: 1,
+        promptTokens: 100,
+        completionTokens: 20,
+        source: "response",
+        finalForCall: true,
+      }),
+      // attempt 2: cut-short draft — stands in for its own key, billed once.
+      usage("c1", "m", {
+        attempt: 2,
+        promptTokens: 70,
+        completionTokens: 10,
+        source: "stream",
+        finalForCall: false,
+      }),
+    ]);
+    expect(summary.providerRequests).toBe(2);
+    expect(summary.models[0]?.requests).toBe(2);
+    // attempt 1 bills its final (100/20), attempt 2 its draft (70/10)
+    expect(summary.models[0]?.inputTokens).toBe(170);
+    expect(summary.models[0]?.outputTokens).toBe(30);
+    expect(summary.providerCallsCutShort).toBe(1);
+  });
+
+  it("usage events without a callId never collapse into one bucket", () => {
+    // A missing (or empty) callId is not a shared identity: each such event
+    // is its own provider request, never one merged singleton.
+    const summary = summarizeRunUsage([
+      usage("", "m", { callId: "" }),
+      ev("run.usage", {
+        attempt: 1,
+        step: 1,
+        model: "m",
+        promptTokens: 100,
+        completionTokens: 20,
+        source: "response",
+        finalForCall: true,
+      }),
+    ]);
+    expect(summary.providerRequests).toBe(2);
+    expect(summary.models[0]?.requests).toBe(2);
+    expect(summary.models[0]?.inputTokens).toBe(200);
+    expect(summary.models[0]?.outputTokens).toBe(40);
+  });
+
   it("attributes usage per provider and model", () => {
     const summary = summarizeRunUsage([
       usage("c1", "m1", { providerId: "pB" }),
@@ -253,6 +322,64 @@ describe("estimateRunCost (B4)", () => {
     expect(cost.status).toBe("partial");
     expect(cost.entries[0]?.amount).toBeDefined();
     expect(cost.entries[1]?.amount).toBeUndefined();
+  });
+
+  it("a future effectiveDate is not priced relative to `at` (C3)", () => {
+    // pricedA takes effect 2026-10-01; on 2026-09-15 that price is
+    // published-but-not-live: the entry stays unpriced and says why.
+    const summary = summarizeRunUsage([
+      usage("c1", "m-fast", { providerId: "pA" }),
+    ]);
+    const cost = estimateRunCost(summary, [pricedA], "2026-09-15");
+    expect(cost.status).toBe("unknown");
+    expect(cost.entries[0]?.amount).toBeUndefined();
+    expect(cost.entries[0]?.inputCost).toBeUndefined();
+    expect(cost.entries[0]?.outputCost).toBeUndefined();
+    expect(cost.entries[0]?.unknownReasons).toContain(
+      "pricing not yet effective",
+    );
+    expect(cost.totals).toEqual({});
+  });
+
+  it("a past or exactly-current effectiveDate prices normally at `at` (C3)", () => {
+    const summary = summarizeRunUsage([
+      usage("c1", "m-fast", {
+        providerId: "pA",
+        promptTokens: 1_000_000,
+        completionTokens: 0,
+      }),
+    ]);
+    // the effectiveDate itself counts as effective (not strictly future)
+    const onDay = estimateRunCost(summary, [pricedA], "2026-10-01");
+    expect(onDay.status).toBe("priced");
+    expect(onDay.entries[0]?.amount).toBeCloseTo(2);
+    // a Date instance after the effectiveDate prices as before
+    const later = estimateRunCost(summary, [pricedA], new Date("2026-12-01"));
+    expect(later.status).toBe("priced");
+    expect(later.entries[0]?.amount).toBeCloseTo(2);
+  });
+
+  it("absent effectiveDate prices at any `at`, even in the past (C3)", () => {
+    const undated: AiProviderModel = {
+      ...pricedA,
+      pricing: {
+        currency: "USD",
+        inputPerMillionTokens: 2,
+        outputPerMillionTokens: 8,
+        priceSource: "host",
+      },
+    };
+    const summary = summarizeRunUsage([
+      usage("c1", "m-fast", {
+        providerId: "pA",
+        promptTokens: 1_000_000,
+        completionTokens: 0,
+      }),
+    ]);
+    const cost = estimateRunCost(summary, [undated], "2020-01-01");
+    expect(cost.status).toBe("priced");
+    expect(cost.entries[0]?.amount).toBeCloseTo(2);
+    expect(cost.entries[0]?.unknownReasons).toEqual([]);
   });
 
   it("missing cached rate bills cached as input and says so", () => {

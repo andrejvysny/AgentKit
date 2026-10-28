@@ -608,6 +608,9 @@ describe("provider regression: routed model switch (B5)", () => {
                 : { providerId: "oaB", modelId: "m2" },
           },
           resolveClient,
+          // C3: any switch requires host authorization; this fixture host
+          // authorizes the fixed two-step script.
+          authorizeModelSelection: () => undefined,
         } as never),
       );
 

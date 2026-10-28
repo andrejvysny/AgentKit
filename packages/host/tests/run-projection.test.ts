@@ -646,6 +646,155 @@ describe("RunProjector — a host executor on its own kind", () => {
       "completed",
     );
   });
+
+  /** One provider call's worth of events, carrying the usage report under test. */
+  function usageDrafts(
+    runId: string,
+    data: Extract<AiRunEvent, { type: "run.usage" }>["data"],
+  ): AiRunEventDraft[] {
+    const timestamp = "2026-01-01T00:00:00.000Z";
+    return [
+      {
+        type: "run.started",
+        runId,
+        timestamp,
+        data: { model: "remote-1", toolCount: 0 },
+      },
+      {
+        type: "run.message.completed",
+        runId,
+        timestamp,
+        data: { content: "ok", toolCallCount: 0 },
+      },
+      { type: "run.usage", runId, timestamp, data },
+      { type: "run.completed", runId, timestamp, data: { iterations: 1 } },
+    ];
+  }
+
+  it("bills a run.usage event to the provider that produced it, not the one the turn started on", async () => {
+    const f = await setup();
+    const usage = new RecordingUsage();
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hi",
+      kind: CUSTOM_TURN_KIND,
+    });
+    await dispatch(
+      f,
+      registryFor(
+        new ProjectingExecutor({
+          harness: f,
+          // The projector bills against `cloud-1` — what the turn resolved on —
+          // while the event says `cloud-2` produced the numbers. That is a run
+          // whose model was routed mid-flight, and billing it to `cloud-1`
+          // charges the budget of a provider that was never called.
+          drafts: usageDrafts(submitted.runId, {
+            callId: "call-routed-1",
+            attempt: 1,
+            step: 2,
+            model: "cheap-1",
+            providerId: "cloud-2",
+            promptTokens: 40,
+            completionTokens: 8,
+            totalTokens: 48,
+            cachedPromptTokens: 32,
+            reasoningTokens: 5,
+            source: "response",
+            finalForCall: true,
+          }),
+          usage,
+          providerId: "cloud-1",
+        }),
+      ),
+      submitted.runId,
+    );
+
+    expect(usage.recorded.length).toBe(1);
+    expect(usage.recorded[0]).toEqual({
+      runId: submitted.runId,
+      callId: "call-routed-1",
+      attempt: 1,
+      providerId: "cloud-2",
+      model: "cheap-1",
+      finalForCall: true,
+      source: "response",
+      step: 2,
+      promptTokens: 40,
+      completionTokens: 8,
+      totalTokens: 48,
+      // The two a cost estimate gets wrong in opposite directions when the
+      // meter drops them: cached prompt tokens are discounted, reasoning tokens
+      // are often billed at the output rate.
+      cachedPromptTokens: 32,
+      reasoningTokens: 5,
+      at: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("reports every attempt of one call separately, keys intact", async () => {
+    const f = await setup();
+    const usage = new RecordingUsage();
+    const submitted = await f.runner.submitMessage({
+      chatId: f.chatId,
+      content: "hi",
+      kind: CUSTOM_TURN_KIND,
+    });
+    // One provider step, two attempts, one `callId` — the shape core's retry
+    // accounting produces. Deciding which of them counts is the recorder's
+    // (and core's reducer's) job, so the meter must not merge them on the way
+    // out, and must not rewrite the keys it is being told.
+    const drafts = [
+      ...usageDrafts(submitted.runId, {
+        callId: "call-shared",
+        attempt: 1,
+        step: 1,
+        model: "remote-1",
+        promptTokens: 10,
+        completionTokens: 2,
+        totalTokens: 12,
+        source: "stream",
+        finalForCall: false,
+      }).slice(0, 3),
+      ...usageDrafts(submitted.runId, {
+        callId: "call-shared",
+        attempt: 2,
+        step: 1,
+        model: "remote-1",
+        promptTokens: 10,
+        completionTokens: 7,
+        totalTokens: 17,
+        source: "response",
+        finalForCall: true,
+      }),
+    ];
+    await dispatch(
+      f,
+      registryFor(
+        new ProjectingExecutor({
+          harness: f,
+          drafts,
+          usage,
+          providerId: "cloud-1",
+        }),
+      ),
+      submitted.runId,
+    );
+
+    expect(
+      usage.recorded.map((record) => [record.callId, record.attempt]),
+    ).toEqual([
+      ["call-shared", 1],
+      ["call-shared", 2],
+    ]);
+    expect(usage.recorded.map((record) => record.finalForCall)).toEqual([
+      false,
+      true,
+    ]);
+    expect(usage.recorded.map((record) => record.providerId)).toEqual([
+      "cloud-1",
+      "cloud-1",
+    ]);
+  });
 });
 
 /**

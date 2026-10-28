@@ -184,6 +184,7 @@ describe("model routing (B3)", () => {
         limits,
         requiredCapabilities: ["toolCalling"],
         modelRouter: router,
+        authorizeModelSelection: () => {},
         resolveClient: async (providerId) => {
           if (providerId === "pB") return pB;
           if (providerId === "pC") return pC;
@@ -243,6 +244,10 @@ describe("model routing (B3)", () => {
         modelRouter: {
           selectModel: () => ({ providerId: "pB", modelId: "m2" }),
         },
+        // Permissive authorization: the refusal under test is the missing
+        // resolveClient, not the missing consent (C3 makes that a separate
+        // fail-closed rule with its own tests below).
+        authorizeModelSelection: () => {},
       }),
     );
     expect(terminal).toBe("failed");
@@ -290,6 +295,7 @@ describe("model routing (B3)", () => {
         modelRouter: {
           selectModel: () => ({ providerId: "pB", modelId: "m2" }),
         },
+        authorizeModelSelection: () => {},
         resolveClient: async () => pB,
       }),
     );
@@ -322,6 +328,81 @@ describe("model routing (B3)", () => {
       data: { errorCode: "authorization_denied" },
     });
     expect(pB.calls.length).toBe(0);
+  });
+
+  it("a cross-provider switch without any host authorization fails closed (C3)", async () => {
+    const pA = new Scripted("pA", [textTurn("m1", "never")]);
+    const pB = new Untouched("pB");
+    let resolves = 0;
+    const { events, terminal } = await run(
+      runAgentLoop({
+        client: pA,
+        model: "m1",
+        registry: registryWith([]),
+        messages,
+        limits,
+        modelRouter: {
+          selectModel: () => ({ providerId: "pB", modelId: "m2" }),
+        },
+        // resolveClient IS available — absence of the authorization hook is
+        // the refusal under test, not the inability to reach pB.
+        resolveClient: async () => {
+          resolves += 1;
+          return pB;
+        },
+      }),
+    );
+    expect(terminal).toBe("failed");
+    expect(events.at(-1)).toMatchObject({
+      type: "run.failed",
+      data: { errorCode: "authorization_denied" },
+    });
+    expect(pA.calls.length).toBe(0);
+    expect(resolves).toBe(0);
+    expect(pB.touched).toBe(false);
+  });
+
+  it("a same-provider model switch without any host authorization fails closed (C3)", async () => {
+    const pA = new Scripted("pA", [textTurn("m1", "never")]);
+    const { events, terminal } = await run(
+      runAgentLoop({
+        client: pA,
+        model: "m1",
+        registry: registryWith([]),
+        messages,
+        limits,
+        modelRouter: {
+          // Same provider, different model: still a switch, still needs
+          // consent — a different modelId is a different price and
+          // capability surface.
+          selectModel: () => ({ providerId: "pA", modelId: "m2" }),
+        },
+      }),
+    );
+    expect(terminal).toBe("failed");
+    expect(events.at(-1)).toMatchObject({
+      type: "run.failed",
+      data: { errorCode: "authorization_denied" },
+    });
+    expect(pA.calls.length).toBe(0);
+  });
+
+  it("the same-selection no-op proceeds without an authorization hook", async () => {
+    const pA = new Scripted("pA", [textTurn("m1", "done")]);
+    const { terminal } = await run(
+      runAgentLoop({
+        client: pA,
+        model: "m1",
+        registry: registryWith([]),
+        messages,
+        limits,
+        modelRouter: {
+          selectModel: (ctx) => ctx.previousModel!,
+        },
+      }),
+    );
+    expect(terminal).toBe("completed");
+    expect(pA.calls.length).toBe(1);
   });
 
   it("malformed router selections fail closed", async () => {
@@ -367,6 +448,7 @@ describe("model routing (B3)", () => {
                 : { providerId: "pB", modelId: "m2" },
           } satisfies ModelRouter;
         })(),
+        authorizeModelSelection: () => {},
         resolveClient: async () => pB,
       }),
     );

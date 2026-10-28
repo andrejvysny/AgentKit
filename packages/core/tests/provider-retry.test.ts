@@ -7,6 +7,7 @@ import type {
 } from "../src/providers/client.js";
 import type { ProviderRetryPolicy } from "../src/runs/provider-retry.js";
 import { runChat } from "../src/runs/run-loop.js";
+import { summarizeRunUsage } from "../src/runs/usage-accounting.js";
 import { resolveToolLimits } from "../src/tools/limits.js";
 import { AiToolRegistry } from "../src/tools/registry.js";
 import { collectRun } from "./helpers.js";
@@ -268,5 +269,38 @@ describe("providerRetry", () => {
     const { events } = await run(client);
     expect(client.calls).toBe(1);
     expect(types(events)).toEqual(["run.started", "run.usage", "run.failed"]);
+  });
+
+  it("retried attempts share one callId with per-attempt numbering and bill once each (C3)", async () => {
+    // The scripted provider stamps its own callId per HTTP request (c1, c2)
+    // and attempt: 1 for both. model-step is the authority: all usage events
+    // of this ONE provider step carry the first attempt's callId and the
+    // 1-based attempt number.
+    const client = new ScriptedClient([
+      { kind: "fail", code: "503", usage: true },
+      { kind: "ok" },
+    ]);
+    const { events } = await run(client, policy());
+    const usage = events.filter((e) => e.type === "run.usage");
+    expect(usage).toHaveLength(2);
+    const data = usage.map(
+      (u) => u.data as { callId: string; attempt: number; step: number },
+    );
+    expect([...new Set(data.map((d) => d.callId))]).toEqual(["c1"]);
+    expect(data.map((d) => d.attempt)).toEqual([1, 2]);
+    // one provider step, not two: both attempts belong to iteration 1
+    expect(data.map((d) => d.step)).toEqual([1, 1]);
+    const summary = summarizeRunUsage(events);
+    expect(summary.providerRetries).toBe(1);
+    // The reducer counts the step once PER BILLED CALL: each (callId,
+    // attempt) bucket contributes exactly one request — the retried step
+    // contributes its real dispatch count (both attempts were billed), and
+    // no draft/final duplication can inflate it.
+    expect(summary.providerRequests).toBe(2);
+    expect(summary.models).toHaveLength(1);
+    expect(summary.models[0]?.requests).toBe(2);
+    // attempt 1 billed 1 prompt token, attempt 2 billed 2 prompt / 1 completion
+    expect(summary.models[0]?.inputTokens).toBe(3);
+    expect(summary.models[0]?.outputTokens).toBe(1);
   });
 });

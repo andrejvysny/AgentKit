@@ -72,3 +72,46 @@ Three layers, each optional, each refusing to fabricate.
   `continuation_conflict`, `authorization_denied`, `no_capable_model`).
 - Usage/cost/latency answers are reproducible from persisted events — the
   same evidence base the cassette replays against (ADR 0021).
+
+## Hardening (C3)
+
+Five tightening rules close gaps B3/B4 left open — the first three in core,
+the last two in the host:
+
+1. **Authorize required for any switch** (`selectStepModel`): a selection
+   differing from the previous model in `providerId` or `modelId` is a
+   switch, and a switch without the host `authorize` hook fails closed with
+   `ModelRoutingError("authorization_denied")` — absence of the hook is not
+   consent. An explicit refusal throws the same code. Only the
+   same-selection no-op may proceed unauthorized.
+2. **`(callId, attempt)` dedup** (`streamModelStep` + `summarizeRunUsage`):
+   the loop is the usage-identity authority. Every `run.usage` event from
+   all attempts of one provider step is re-stamped with the step's callId
+   (the first attempt's) and its 1-based `attempt` number, and the reducer
+   dedups per `(callId, attempt)` key: drafts of one attempt collapse to a
+   single billed record (final wins), retry attempts of the step stay
+   separately billed, and a `callId`-less event never merges — each counts
+   as its own request.
+3. **Future-effective prices are not applied** (`estimateRunCost`): the
+   estimate takes an optional as-of instant (`at?: string | Date`, default
+   today); a matched price whose `effectiveDate` lies in the future
+   relative to it is not applied — the entry stays unpriced with unknown
+   reason `"pricing not yet effective"`. Past or absent `effectiveDate`
+   prices as before.
+4. **Host routing wiring** (`TurnRunnerDeps.routing`): a host turns routing on
+   once, for every pass of every turn, with
+   `{ router, resolveClient, requiredCapabilities?, continuationModelSwitch? }`.
+   The pass reaches the loop as `modelRouter` / `resolveClient` /
+   `requiredCapabilities` / `continuationModelSwitch`, plus an
+   `authorizeModelSelection` hook that puts the ROUTED `(providerId, modelId)`
+   to the same `UsageAuthorizer.authorize` the per-pass spend gate uses — so a
+   switch is authorized by a budget that has never seen that model, and a
+   refusal lands as `run.failed` / `errorCode: "authorization_denied"` with
+   nothing dispatched and no client resolved. The per-pass gate is not
+   duplicated: only a change of model pays for a second ask.
+5. **Usage attribution follows the provider that ran** (`recordRunUsage`): a
+   `run.usage` event is billed against the `providerId` the emitting client put
+   on it, falling back to the id the projector was told to bill against, and
+   `cachedPromptTokens` / `reasoningTokens` reach the `UsageAuthorizer.record`
+   port when reported. A routed turn is therefore billed to the provider it
+   switched to, at the rate its cached and reasoning tokens actually cost.

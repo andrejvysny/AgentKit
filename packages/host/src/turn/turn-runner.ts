@@ -27,12 +27,15 @@ import {
   createEventStamper,
   defaultTokenEstimator,
   estimateTools,
+  ModelRoutingError,
   type TokenEstimator,
   resolveToolLimits,
   runAgentLoop,
   type AgentLoopHooks,
   type AiProviderClient,
   type AiRunEventDraft,
+  type ModelRef,
+  type ModelRouter,
   type ProviderRetryPolicy,
 } from "@agentkit/core";
 import {
@@ -164,6 +167,49 @@ export type {
 
 /** Provider metadata key holding the {@link SecretStore} ref for the API key. */
 export const PROVIDER_SECRET_REF_KEY = "apiKeySecretRef";
+
+/**
+ * Optional capability-aware model routing for every pass this runner drives
+ * (Phase B/B3): a host-supplied selector consulted once per provider request,
+ * plus what the loop needs to HONOUR a switch the selector asks for.
+ *
+ * Routing is a host-wide decision, the same way {@link TurnRunnerDeps.providerRetry}
+ * is: the router owns model policy (capabilities, cost ceilings, roles), and
+ * every pass of every turn runs under it. Absent — the default — nothing is
+ * consulted and every pass dispatches on the turn's own resolved
+ * provider/model, exactly as before routing existed.
+ *
+ * Authorization is NOT the router's job, and this is the part a host must not
+ * get wrong: every selection that DIFFERS from the model in force is put to
+ * {@link TurnRunnerDeps.usage} before a single byte is dispatched on it (see
+ * {@link TurnRunner.authorizeModelSelection}), and a refusal ends the run with
+ * `run.failed` / `errorCode: "authorization_denied"`. With no {@link TurnRunnerDeps.usage}
+ * port wired there is no one to ask, and the selection is approved — the same
+ * no-enforcement default as the per-pass spend gate.
+ */
+export interface TurnRoutingOptions {
+  /** The host's model policy, consulted before each provider request. */
+  router: ModelRouter;
+  /**
+   * Resolve an authorized client for a routed provider. REQUIRED: a
+   * cross-provider selection has no silent fallback to the turn's own provider,
+   * and refusing to dispatch on an unresolved one is the point.
+   */
+  resolveClient: (
+    providerId: string,
+  ) => AiProviderClient | Promise<AiProviderClient>;
+  /**
+   * Capabilities every routed model must declare. Absent or empty means "any
+   * model", and is what a host that routes on preference rather than need sets.
+   */
+  requiredCapabilities?: readonly string[];
+  /**
+   * What a switch does to live opaque provider continuation state. `"reject"`
+   * (the default) refuses the switch outright; `"reset"` is the host saying it
+   * authorizes discarding state a model that is about to be replaced created.
+   */
+  continuationModelSwitch?: "reject" | "reset";
+}
 
 /**
  * Everything the worker needs, injected.
@@ -336,6 +382,12 @@ export interface TurnRunnerDeps {
    * provider failure with no visible output. Unset: no retry, events unchanged.
    */
   providerRetry?: ProviderRetryPolicy;
+  /**
+   * Opt-in capability-aware model routing for every pass (Phase B/B3). Unset:
+   * every pass dispatches on the turn's own resolved provider/model, exactly as
+   * before routing existed. See {@link TurnRoutingOptions}.
+   */
+  routing?: TurnRoutingOptions;
 }
 
 /**
@@ -1418,6 +1470,30 @@ export class TurnRunner implements TaskWorker {
       ...(this.deps.providerRetry === undefined
         ? {}
         : { providerRetry: this.deps.providerRetry }),
+      // Routing is host-wide, so a router that switches mid-run is a decision
+      // every pass lives under — including the retry and correction passes this
+      // method also fronts. `authorizeModelSelection` is what makes a switch
+      // cost the same authorization a fresh turn would: the loop asks before it
+      // dispatches, and a refusal ends the run on a durable `run.failed`.
+      ...(this.deps.routing === undefined
+        ? {}
+        : {
+            modelRouter: this.deps.routing.router,
+            resolveClient: this.deps.routing.resolveClient,
+            ...(this.deps.routing.requiredCapabilities === undefined
+              ? {}
+              : {
+                  requiredCapabilities: this.deps.routing.requiredCapabilities,
+                }),
+            ...(this.deps.routing.continuationModelSwitch === undefined
+              ? {}
+              : {
+                  continuationModelSwitch:
+                    this.deps.routing.continuationModelSwitch,
+                }),
+            authorizeModelSelection: (selection: ModelRef) =>
+              this.authorizeModelSelection(input, selection),
+          }),
       ...(input.steering === undefined ? {} : { steering: input.steering }),
       ...(input.suspendable === undefined
         ? {}
@@ -1536,6 +1612,55 @@ export class TurnRunner implements TaskWorker {
       data: { errorMessage: error.message, errorCode: "usage_denied" },
     });
     throw error;
+  }
+
+  /**
+   * Ask the {@link UsageAuthorizer} about ONE routed model selection, before the
+   * loop dispatches on it.
+   *
+   * The per-pass gate in {@link authorizeUsage} cannot cover this: it asks about
+   * the model the turn was RESOLVED on, and a router is entitled to answer a
+   * later step with a different provider or model — one the budget has never
+   * been asked about. Core only puts a selection to this hook when it actually
+   * CHANGES the model in force, so a run whose router keeps its pin never pays
+   * for an extra authorize, and there is deliberately no second copy of the
+   * pass gate here.
+   *
+   * A refusal throws rather than appending its own event: the loop turns a throw
+   * out of this hook into the pass's terminal `run.failed` with
+   * `errorCode: "authorization_denied"`, which lands in the durable log through
+   * the same projection every other pass event goes through — one place decides
+   * what a failed pass looks like, and it is not this method.
+   *
+   * With no usage port wired there is no one to ask, and the selection is
+   * approved: the same opt-in-without-enforcement default as every other port
+   * on this class. A host that wires routing for cost reasons and no authorizer
+   * has routed itself onto a model nobody priced.
+   */
+  private async authorizeModelSelection(
+    input: PassInput,
+    selection: ModelRef,
+  ): Promise<void> {
+    const usage = this.deps.usage;
+    if (usage === undefined) return;
+
+    const decision = await usage.authorize({
+      runId: input.task.taskId,
+      chatId: input.chatId,
+      providerId: selection.providerId,
+      model: selection.modelId,
+      estimatedPromptTokens: estimatePromptTokens([
+        ...input.messages,
+        ...(input.runContent?.messages ?? []),
+      ]),
+    });
+    if (decision.allowed) return;
+
+    const reason = decision.reason ?? "no reason given";
+    throw new ModelRoutingError(
+      "authorization_denied",
+      `Usage authorizer refused the routed model ${selection.providerId}/${selection.modelId} for task ${input.task.taskId}: ${reason}`,
+    );
   }
 
   /**

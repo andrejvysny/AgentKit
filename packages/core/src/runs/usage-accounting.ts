@@ -10,9 +10,16 @@ import type { AiProviderModel, AiRunEvent } from "@agentkit/contracts";
  * from being double-counted.
  *
  * Counting rules:
- * - usage events are grouped by `callId`: the `finalForCall` event is the
- *   billed record; drafts (stream partials) and cut-short drafts never add on
- *   top of it — they stand in only when no final arrived for that call;
+ * - usage events are grouped by `(callId, attempt)`: `streamModelStep`
+ *   re-stamps every attempt of one provider step with the step's callId and
+ *   its 1-based attempt number, so drafts (stream partials) of one attempt
+ *   collapse to one billed record while retry attempts of the step stay
+ *   separately counted; within a `(callId, attempt)` key the `finalForCall`
+ *   event is the billed record — drafts and cut-short drafts never add on
+ *   top of it, they stand in only when no final arrived for that key;
+ * - a usage event with no `callId` is its own billed call: each such event
+ *   gets a unique synthetic key and counts as one request — they never
+ *   collapse into one shared bucket;
  * - provider retries are the `run.warning { code: "provider_retry" }` events
  *   (each retry re-dispatches the model request; the attempts are separate
  *   provider requests, but the retry itself is accounted separately);
@@ -95,8 +102,11 @@ export function summarizeRunUsage(
   let compactions = 0;
   let compactionTokensSaved = 0;
 
-  // callId -> billed usage record (final wins; last draft stands in otherwise)
+  // (callId, attempt) -> billed usage record (final wins; last draft stands
+  // in otherwise). Events without a callId never share a key: each is its
+  // own billed call.
   const calls = new Map<string, UsageRecord>();
+  let callIdLessEvents = 0;
   // toolCallId -> running-start timestamp
   const toolStarts = new Map<string, number>();
   // toolCallId -> waiting-start timestamp (kind recorded per wait)
@@ -119,8 +129,19 @@ export function summarizeRunUsage(
         if (data.code === "provider_retry") providerRetries += 1;
         break;
       case "run.usage": {
-        const callId = String(data.callId ?? "");
-        const existing = calls.get(callId);
+        // (callId, attempt) is the billed-call key: retry attempts of one
+        // call are separate provider requests, while an attempt's drafts
+        // dedup against each other. A missing/empty callId can never share
+        // a bucket — every such event is billed as its own request.
+        const callId =
+          typeof data.callId === "string" && data.callId.length > 0
+            ? data.callId
+            : undefined;
+        const key =
+          callId === undefined
+            ? `\u0000unattributed\u0000${callIdLessEvents++}`
+            : `${callId}\u0000${typeof data.attempt === "number" ? data.attempt : 1}`;
+        const existing = calls.get(key);
         const record: UsageRecord = {
           providerId:
             typeof data.providerId === "string" && data.providerId
@@ -131,7 +152,7 @@ export function summarizeRunUsage(
         };
         // A final replaces any draft; a draft only stands in when nothing
         // better exists — never summed on top of a final.
-        if (!existing || data.finalForCall === true) calls.set(callId, record);
+        if (!existing || data.finalForCall === true) calls.set(key, record);
         break;
       }
       case "run.tool.running": {
@@ -295,14 +316,43 @@ export interface RunCostEstimate {
 const PER_MILLION = 1_000_000;
 
 /**
+ * True when a pricing entry's `effectiveDate` lies strictly in the future
+ * relative to `at` (default: now). An absent or unparseable `effectiveDate`
+ * prices as before — there is no date fact to contradict. An unparseable
+ * `at` falls back to now rather than silently unpricing live rates.
+ */
+function isFuturePricing(
+  effectiveDate: string | undefined,
+  at: string | Date | undefined,
+): boolean {
+  if (effectiveDate === undefined) return false;
+  const effective = Date.parse(effectiveDate);
+  if (!Number.isFinite(effective)) return false;
+  const asOf =
+    at === undefined
+      ? Date.now()
+      : at instanceof Date
+        ? at.getTime()
+        : Date.parse(at);
+  return effective > (Number.isFinite(asOf) ? asOf : Date.now());
+}
+
+/**
  * Estimate run cost from a usage summary plus source-attributed model
  * metadata. Prices come ONLY from `AiProviderModel.pricing` (B2); nothing is
  * guessed. Unknown prices stay unknown: no zero-fill, and totals cover only
  * the priced models, with the status flag making the gap explicit.
+ *
+ * `at` (C3) is the instant the estimate is made "as of" — a date string or
+ * `Date`; the default is today. A matched price whose `effectiveDate` is in
+ * the FUTURE relative to `at` is published-but-not-live: it is not applied
+ * (the entry stays unpriced with unknownReason "pricing not yet effective").
+ * A past or absent `effectiveDate` prices exactly as before.
  */
 export function estimateRunCost(
   summary: RunUsageSummary,
   catalog: readonly AiProviderModel[],
+  at?: string | Date,
 ): RunCostEstimate {
   const entries: RunCostEntry[] = [];
   const totals: Record<string, number> = {};
@@ -327,6 +377,11 @@ export function estimateRunCost(
     };
     if (!pricing) {
       entry.unknownReasons.push("no pricing for this model");
+    } else if (isFuturePricing(pricing.effectiveDate, at)) {
+      // Published-but-not-live price: applying it would invent spend the
+      // provider does not (yet) bill at that rate. The entry stays unpriced
+      // and says why — unknown is never yesterday's price either.
+      entry.unknownReasons.push("pricing not yet effective");
     } else {
       const uncachedInput = Math.max(
         0,

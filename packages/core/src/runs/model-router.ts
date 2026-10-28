@@ -9,8 +9,11 @@ import type { AiProviderClient } from "../providers/client.js";
  *
  * Hard rules enforced here, not left to router implementations:
  * - a selection must be a well-formed `{providerId, modelId}`;
- * - the host must authorize every selection (policy ceilings, capability
- *   validation, credential scope) before the request is dispatched;
+ * - ANY switch away from the previous model — provider change or model change
+ *   — REQUIRES the host `authorize` hook (C3). Absence of the hook is not
+ *   consent: a switch with no `authorize` fails closed with
+ *   `authorization_denied`, exactly like an explicit refusal. Only the
+ *   same-selection no-op may run unauthorized;
  * - a cross-provider switch needs an explicit `resolveClient` — there is no
  *   silent remote fallback to the run's original provider;
  * - provider continuation state is never carried across a model switch
@@ -71,6 +74,10 @@ export interface StepModelSelectionParams {
   /**
    * Host authorization: MUST throw to veto a selection (role ceiling, high-risk
    * model guard, credential-scope check, capability-metadata validation).
+   * REQUIRED for any switch: a selection that differs from `current` in
+   * providerId or modelId without this hook fails closed with
+   * `authorization_denied` (C3 — absence of the hook is not consent). The
+   * same-selection no-op is the only path that may omit it.
    */
   authorize?: (
     selection: ModelRef,
@@ -83,6 +90,11 @@ export interface StepModelSelectionParams {
  * the selection, or `undefined` when the router explicitly kept the current
  * model and no check fires (the common no-op case, which the loop uses to
  * skip making a step-scoped copy of the input).
+ *
+ * A selection that differs from `current` in providerId or modelId is a
+ * SWITCH and requires `authorize` (C3): without the hook — or when the hook
+ * throws — this fails closed with `ModelRoutingError("authorization_denied")`.
+ * Only the same-selection no-op proceeds without authorization.
  */
 export async function selectStepModel(
   params: StepModelSelectionParams,
@@ -118,6 +130,16 @@ export async function selectStepModel(
         `model router switched ${params.current.providerId}/${params.current.modelId} -> ${selection.providerId}/${selection.modelId} while provider continuation state exists; use continuationModelSwitch: "reset" to authorize discarding it`,
       );
     }
+  }
+  if (switched && !params.authorize) {
+    // C3: a switch moves the run to a model the host never approved — a
+    // different price, credential scope and capability surface. A run that
+    // wired no authorization hook gets no free switches: absence of the hook
+    // is the absence of consent, not permission to proceed.
+    throw new ModelRoutingError(
+      "authorization_denied",
+      `model router switched ${params.current.providerId}/${params.current.modelId} -> ${selection.providerId}/${selection.modelId} but the run supplied no authorize hook; every model switch requires host authorization`,
+    );
   }
   try {
     await params.authorize?.(selection, context);

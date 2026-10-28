@@ -60,9 +60,23 @@ export async function* streamModelStep(
 ): AsyncGenerator<AiRunEvent, ModelStepOutcome, unknown> {
   const policy = ctx.input.providerRetry;
   const maxAttempts = effectiveMaxAttempts(policy);
+  // C3: all attempts of ONE provider step are the same logical model call.
+  // Providers stamp their own callId per HTTP request (always attempt 1);
+  // only the loop knows which attempts belong to one step, so it is the
+  // authority: every forwarded usage event carries the FIRST attempt's
+  // callId plus its own 1-based attempt number. The reducer dedups on
+  // (callId, attempt) — drafts of one attempt collapse, retries of one step
+  // stay separately billed.
+  const usageIdentity: { callId?: string } = {};
   for (let attempt = 1; ; attempt++) {
     const canRetry = policy !== undefined && attempt < maxAttempts;
-    const outcome = yield* streamModelAttempt(ctx, canRetry, attempt > 1);
+    const outcome = yield* streamModelAttempt(
+      ctx,
+      canRetry,
+      attempt > 1,
+      attempt,
+      usageIdentity,
+    );
     if (outcome.kind !== "retry" || policy === undefined) {
       return outcome as ModelStepOutcome;
     }
@@ -101,6 +115,8 @@ async function* streamModelAttempt(
   ctx: ModelStepContext,
   canRetry: boolean,
   isRetryAttempt: boolean,
+  attempt: number,
+  usageIdentity: { callId?: string },
 ): AsyncGenerator<AiRunEvent, AttemptOutcome, unknown> {
   const {
     input,
@@ -138,6 +154,35 @@ async function* streamModelAttempt(
     !input.signal?.aborted &&
     isRetryableProviderCode(code);
 
+  // C3: usage identity belongs to the loop, not the provider. Every usage
+  // event forwarded from ANY attempt of this step — live or discarded — is
+  // re-stamped with the first observed callId and THIS attempt's 1-based
+  // number, so (callId, attempt) dedup in the reducer collapses an
+  // attempt's drafts without ever collapsing its retries. A provider that
+  // omits the callId leaves the event unattributed; the reducer then bills
+  // it as its own request rather than merging it into a shared bucket.
+  const stampUsage = (stamped: AiRunEvent): AiRunEvent => {
+    const data = stamped.data as Record<string, unknown>;
+    if (
+      usageIdentity.callId === undefined &&
+      typeof data.callId === "string" &&
+      data.callId.length > 0
+    ) {
+      usageIdentity.callId = data.callId;
+    }
+    return stamp({
+      ...stamped,
+      data: {
+        ...data,
+        step: iteration,
+        attempt,
+        ...(usageIdentity.callId === undefined
+          ? {}
+          : { callId: usageIdentity.callId }),
+      },
+    } as AiRunEvent);
+  };
+
   // A provider client is expected to normalize its own transport failures into
   // run.failed, but a THROW still escapes — a bad JSON body, a socket reset, a
   // bug in a third-party client. Unwrapped it would blow past every consumer
@@ -165,12 +210,10 @@ async function* streamModelAttempt(
       // Re-yield provider events with the canonical runId.
       const stamped = { ...event, runId } as AiRunEvent;
       if (retryCode !== undefined) {
-        // Failed attempt being discarded: keep only its token accounting.
+        // Failed attempt being discarded: keep only its token accounting,
+        // re-stamped under the step's shared callId with this attempt number.
         if (stamped.type === "run.usage") {
-          yield stamp({
-            ...stamped,
-            data: { ...stamped.data, step: iteration },
-          });
+          yield stampUsage(stamped);
         }
         continue;
       }
@@ -236,12 +279,11 @@ async function* streamModelAttempt(
           break;
         case "run.usage":
           // The client counts tokens but has no idea which round-trip it is;
-          // only the loop knows. Stamp the iteration so a consumer can
-          // attribute spend to a step without tracking call order itself.
-          yield stamp({
-            ...stamped,
-            data: { ...stamped.data, step: iteration },
-          });
+          // only the loop knows. Stamp the iteration, the step's shared
+          // callId and this attempt's number so a consumer can attribute
+          // spend to a step — and dedup its drafts without losing its
+          // retries — without tracking call order itself.
+          yield stampUsage(stamped);
           break;
         default:
           yield stamp(stamped);

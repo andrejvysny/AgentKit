@@ -42,7 +42,15 @@ const DEFAULT_MAX_EFFECTS = 50_000;
 export function eventStep(event: AiRunEvent): string {
   const recorded = recordRunEvent(event, "metadata");
   if (recorded === undefined) return `${event.type}|r`;
-  return `${event.type}|${sha256(canonicalJson(recorded.data)).slice(0, 12)}`;
+  let data = recorded.data;
+  if (event.type === "run.usage" && data && typeof data === "object") {
+    // callId is generated locally per transport attempt, so it differs
+    // between recording and any later verify run; the usage SEMANTICS
+    // (tokens, flags, source) are what verify must pin.
+    const { callId: _callId, ...stable } = data as Record<string, unknown>;
+    data = stable;
+  }
+  return `${event.type}|${sha256(canonicalJson(data)).slice(0, 12)}`;
 }
 
 /**
