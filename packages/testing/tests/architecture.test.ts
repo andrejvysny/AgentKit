@@ -25,6 +25,9 @@ const STREAM_CHAT_SITES: Record<string, string> = {
   "core/src/runs/model-step.ts": "the loop's single provider request",
   "core/src/runs/bounded-provider.ts":
     "budget wrapper delegating to the wrapped client",
+  "cassette/src/cassette.ts":
+    "cassette wrapper delegating to the wrapped client (record/verify/off); " +
+    "replay never reaches it — pinned by packages/cassette/tests/security.test.ts",
 };
 
 /** Allowed `.execute(` call sites → why. */
@@ -43,6 +46,10 @@ const EXECUTE_SITES: Record<string, string> = {
     "inbound MCP serving surface (no model loop)",
   "mcp-server/src/server.ts":
     "MCP tools/call routed to the tool source (no model loop)",
+  "cassette/src/cassette.ts":
+    "cassette wrapper delegating to the wrapped tool (record/verify only; " +
+    "replay never executes the body — pinned by packages/cassette/tests) and " +
+    "runWithCassette's execute callback",
 };
 
 /** Allowed `runChat(` / `runAgentLoop(` call sites outside their definitions. */

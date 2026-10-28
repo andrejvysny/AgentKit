@@ -80,6 +80,7 @@ const SUBPATHS = [
   "core",
   "host",
   "testing",
+  "cassette",
   "mcp-client",
   "transport-http",
   "mcp-server",

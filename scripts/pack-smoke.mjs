@@ -87,6 +87,7 @@ const PACKAGES = [
   "adapters-sqlite",
   "runner-local",
   "testing",
+  "cassette",
   "transport-http",
   "mcp-server",
 ];
