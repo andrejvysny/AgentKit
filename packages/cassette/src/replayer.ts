@@ -21,12 +21,10 @@ export class Replayer {
   private readonly effects: RecordedEffect[];
   readonly capture: CassetteCapture;
   private cursor = 0;
-  readonly strict: boolean;
 
-  constructor(fixture: CassetteFixture, strict: boolean) {
+  constructor(fixture: CassetteFixture) {
     this.effects = [...fixture.effects].sort((a, b) => a.sequence - b.sequence);
     this.capture = fixture.capture;
-    this.strict = strict;
   }
 
   get unconsumed(): number {
@@ -147,5 +145,24 @@ export class Replayer {
   /** For `verify`: the expected trace of the effect at `index`. */
   traceAt(index: number): RecordedEffect["trace"] | undefined {
     return this.effects[index]?.trace;
+  }
+
+  /**
+   * Recorded arguments of the tool effects queued after the cursor, keyed by
+   * argsSha256, for the cassette to restore into stream events. Metadata
+   * capture hashes `argumentsJson` out of events; the replayed loop still
+   * needs the tool calls, so they come back from these effects. Identical
+   * arguments collapse to one entry, which is exactly right — same hash,
+   * same arguments.
+   */
+  pendingToolArgsByHash(): Map<string, unknown> {
+    const out = new Map<string, unknown>();
+    for (let index = this.cursor; index < this.effects.length; index += 1) {
+      const effect = this.effects[index];
+      if (effect?.kind !== "tool") break;
+      if (effect.arguments !== undefined)
+        out.set(effect.argsSha256, effect.arguments);
+    }
+    return out;
   }
 }

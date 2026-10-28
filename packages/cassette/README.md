@@ -25,7 +25,11 @@ import { createCassette, runWithCassette } from "@agentkit/cassette";
 const cassette = createCassette({
   mode: "replay", // or "record"
   fixture: "./fixtures/coding-session.json",
-  strict: true, // default: any deviation fails the test
+  // Optional: application redaction hook applied on top of the built-in
+  // key denylist + credential-shape scrub during recording.
+  // redactPolicy: (key, value) => (key === "path" ? "<redacted>" : undefined),
+  // onUnconsumed: "fail", // default: replay must consume every effect
+  // maxEffects: 50_000, // recording cap; exceeding it fails the run
 });
 
 const result = await runWithCassette({
@@ -105,5 +109,9 @@ still drives the same interactions.
   write; a malformed fixture fails with `cassette_schema`.
 - Timestamps/seqs are volatile and re-stamped deterministically on replay
   (`seq` ordering within a stream is preserved).
-- `strict: false` relaxes identity deviation into observation; the offline
-  guarantee never relaxes.
+- Replay must consume every recorded effect; leftovers fail `close()` with
+  `cassette_extra` (set `onUnconsumed: "ignore"` only for exploratory use —
+  the offline guarantee never relaxes).
+- Recordings never overwrite an existing fixture and are written atomically
+  under `0600`; a fixture above the size cap or with more than `maxEffects`
+  effects fails with `cassette_limit`.

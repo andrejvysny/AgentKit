@@ -27,7 +27,13 @@ export {
   sha256,
   structuralFingerprint,
 } from "./fingerprint.js";
-export { recordRunEvent, recordToolResult, scrubDeep } from "./redaction.js";
+export {
+  containsSecretShape,
+  recordRunEvent,
+  recordToolResult,
+  scrubDeep,
+  type RedactPolicy,
+} from "./redaction.js";
 export type {
   CassetteCapture,
   CassetteFixture,

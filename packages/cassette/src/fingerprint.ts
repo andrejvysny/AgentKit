@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import type { RedactPolicy } from "./redaction.js";
+import { scrubDeep } from "./redaction.js";
 import type { AiChatMessage } from "@agentkit/contracts";
 import type { AiChatRequest, AiToolDefinition } from "@agentkit/core";
 import type { RecordedMessageShape, RecordedProviderRequest } from "./types.js";
@@ -73,6 +75,7 @@ export function fingerprintToolCall(
 export function messageShape(
   message: AiChatMessage,
   capture: "metadata" | "content",
+  policy?: RedactPolicy,
 ): RecordedMessageShape {
   const shape: RecordedMessageShape = { role: message.role };
   const structureOnly =
@@ -83,8 +86,18 @@ export function messageShape(
     message.content !== undefined &&
     message.content !== null
   ) {
-    shape.contentSha256 = sha256(String(message.content));
-    if (capture === "content") shape.contentText = String(message.content);
+    // NEVER `String(content)`: a multimodal part array would collapse to
+    // "[object Object]" and two different images would fingerprint equal.
+    // Parts are canonicalized with binary payloads replaced by their own
+    // hash, so image/audio bytes distinguish the message without persisting
+    // them.
+    const canonical = canonicalContent(message.content);
+    shape.contentSha256 = sha256(canonicalJson(canonical));
+    if (capture === "content")
+      shape.contentText =
+        typeof message.content === "string"
+          ? String(scrubDeep(message.content, 0, policy))
+          : canonicalJson(scrubDeep(canonical, 0, policy));
   }
   if (message.toolCalls && message.toolCalls.length > 0)
     shape.toolCalls = message.toolCalls.map((call) => ({
@@ -95,6 +108,21 @@ export function messageShape(
   if (message.toolCallId !== undefined) shape.toolCallId = message.toolCallId;
   if (message.name !== undefined) shape.name = message.name;
   return shape;
+}
+
+/** Canonical, privacy-preserving serialization of string or part-array content. */
+function canonicalContent(content: unknown): unknown {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return content ?? null;
+  return content.map((part) => {
+    if (typeof part !== "object" || part === null) return part;
+    const entry = part as Record<string, unknown>;
+    const out: Record<string, unknown> = { ...entry };
+    for (const field of ["data", "audio", "bytes"])
+      if (typeof out[field] === "string")
+        out[field] = sha256(out[field] as string);
+    return out;
+  });
 }
 
 /**
@@ -108,6 +136,7 @@ export function providerRequestView(
   providerKind: string,
   request: AiChatRequest,
   capture: "metadata" | "content",
+  policy?: RedactPolicy,
 ): RecordedProviderRequest {
   const continuation = request.continuation;
   const scope = request.continuationScope;
@@ -125,7 +154,7 @@ export function providerRequestView(
       ? { reasoningEffort: request.reasoningEffort }
       : {}),
     toolsFingerprint: fingerprintToolDefinitions(request.tools),
-    messageShape: request.messages.map((m) => messageShape(m, capture)),
+    messageShape: request.messages.map((m) => messageShape(m, capture, policy)),
     continuation: {
       present: (continuation?.inputItems?.length ?? 0) > 0,
       ...(scope?.chatId !== undefined ? { scopeChatId: scope.chatId } : {}),
@@ -147,7 +176,13 @@ export function structuralFingerprint(view: RecordedProviderRequest): string {
     maxOutputTokens: view.maxOutputTokens,
     reasoningEffort: view.reasoningEffort,
     toolsFingerprint: view.toolsFingerprint,
-    continuation: { present: view.continuation.present },
+    // Scope identity is part of the structural match: continuing the same
+    // request on a different branch or chat is a DIFFERENT call.
+    continuation: {
+      present: view.continuation.present,
+      scopeChatId: view.continuation.scopeChatId,
+      scopeBranchId: view.continuation.scopeBranchId,
+    },
     shape: view.messageShape.map((m) => ({
       role: m.role,
       contentSha256: m.contentSha256,

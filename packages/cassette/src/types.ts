@@ -1,4 +1,5 @@
 import type { AiToolResult } from "@agentkit/contracts";
+import type { RedactPolicy } from "./redaction.js";
 
 /**
  * Cassette modes (ADR 0021).
@@ -33,11 +34,17 @@ export interface CassetteOptions {
   mode?: CassetteMode;
   /** Fixture path. Required for record (written on close) and replay/verify. */
   fixture?: string;
-  /** Strict matching (default true): any deviation from the fixture throws. */
-  strict?: boolean;
   capture?: CassetteCapture;
   /** Fail (default) or warn when recorded effects were never consumed. */
   onUnconsumed?: "fail" | "ignore";
+  /**
+   * Application-specific redaction, applied on top of the built-in key
+   * denylist and credential-shape detection (both captures, always). Return a
+   * replacement to redact a value; undefined keeps the scrub's own verdict.
+   */
+  redactPolicy?: RedactPolicy;
+  /** Recording-memory cap (default 50 000 effects); exceeding it fails the run. */
+  maxEffects?: number;
 }
 
 /** A recorded provider stream: the client's events with volatile stamps removed. */
@@ -127,6 +134,12 @@ export interface RecordedToolEffect extends EffectBase {
   argsSha256: string;
   /** Only under `content`. */
   arguments?: unknown;
+  /**
+   * sha256 of the result's METADATA-normalized form, recorded under both
+   * captures so `verify` can compare result content without the fixture
+   * holding it. Absent in fixtures recorded before this field existed.
+   */
+  resultSha256?: string;
   outcome:
     | { type: "result"; result: unknown }
     | { type: "suspended"; prompt: string }

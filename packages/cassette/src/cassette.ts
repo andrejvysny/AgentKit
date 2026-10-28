@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { link, mkdir, open, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import type {
   AiProviderCapabilities,
@@ -21,17 +22,22 @@ import {
   parseFixtureJson,
 } from "./fixture.js";
 import {
+  canonicalJson,
   fingerprintToolCall,
   fingerprintToolDefinitions,
   providerRequestView,
+  sha256,
 } from "./fingerprint.js";
-import { Recorder } from "./recorder.js";
+import { Recorder, eventStep } from "./recorder.js";
 import { Replayer } from "./replayer.js";
+import type { RedactPolicy } from "./redaction.js";
+import { recordToolResult, scrubDeep } from "./redaction.js";
 import type {
   CassetteCapture,
   CassetteFixture,
   CassetteMode,
   CassetteOptions,
+  RecordedRunEvent,
   RecordedToolEffect,
 } from "./types.js";
 import { asToolResult } from "./types.js";
@@ -45,6 +51,9 @@ export interface CassetteSummary {
 }
 
 const REPLAY_EPOCH = "1970-01-01T00:00:00.000Z";
+
+/** Hard ceiling on a persisted fixture; runaway recordings must fail, not balloon. */
+const MAX_FIXTURE_BYTES = 64 * 1024 * 1024;
 
 function abortError(message?: string): Error {
   return Object.assign(new Error(message ?? "cassette: recorded abort"), {
@@ -99,20 +108,20 @@ function neutralToolResult(): AiToolResult {
 class Cassette {
   readonly mode: CassetteMode;
   readonly capture: CassetteCapture;
-  private readonly strict: boolean;
   private readonly onUnconsumed: "fail" | "ignore";
   private readonly fixturePath?: string;
   private readonly recorder: Recorder | undefined;
   private replayer: Replayer | undefined;
   private readonly fixturePromise: Promise<void> | undefined;
+  private readonly policy: RedactPolicy | undefined;
   private closed = false;
 
   constructor(options: CassetteOptions) {
     this.mode = options.mode ?? "off";
     this.capture = options.capture ?? "metadata";
-    this.strict = options.strict ?? true;
     this.onUnconsumed = options.onUnconsumed ?? "fail";
     this.fixturePath = options.fixture;
+    this.policy = options.redactPolicy;
     if (this.mode === "record") {
       if (!this.fixturePath)
         throw new CassetteError(
@@ -120,7 +129,10 @@ class Cassette {
           "record mode requires a fixture path to write",
         );
       assertFreshRecordTarget(this.fixturePath);
-      this.recorder = new Recorder(this.capture);
+      this.recorder = new Recorder(this.capture, {
+        policy: this.policy,
+        maxEffects: options.maxEffects,
+      });
     }
     if (this.mode === "replay" || this.mode === "verify") {
       if (!this.fixturePath)
@@ -129,7 +141,7 @@ class Cassette {
           `${this.mode} mode requires a fixture path`,
         );
       this.fixturePromise = loadFixture(this.fixturePath).then((fixture) => {
-        this.replayer = new Replayer(fixture, this.strict);
+        this.replayer = new Replayer(fixture);
       });
     }
   }
@@ -161,6 +173,13 @@ class Cassette {
       ...(inner.protocol !== undefined ? { protocol: inner.protocol } : {}),
       ...(inner.tracksTransportRequests !== undefined
         ? { tracksTransportRequests: inner.tracksTransportRequests }
+        : {}),
+      // The Responses continuation system authenticates the CLIENT object by
+      // this trusted identity; a wrapper that dropped it would turn every
+      // recording of a responses provider into `invalid_provider_connection`.
+      // It carries no credentials — only provider/protocol/connection/generation.
+      ...(inner.connectionIdentity !== undefined
+        ? { connectionIdentity: inner.connectionIdentity }
         : {}),
       capabilities: (signal, model) => this.capabilities(inner, signal, model),
       listModels: (signal) => this.listModels(inner, signal),
@@ -209,6 +228,7 @@ class Cassette {
           inner.kind,
           request,
           cassette.capture,
+          cassette.policy,
         );
         if (cassette.mode === "record") {
           const recorder = cassette.recorder;
@@ -231,7 +251,11 @@ class Cassette {
                       type: "abort",
                       events: recorder.sanitized(seen),
                       ...(classified.message !== undefined
-                        ? { message: classified.message }
+                        ? {
+                            message: String(
+                              scrubDeep(classified.message, 0, cassette.policy),
+                            ),
+                          }
                         : {}),
                     }
                   : {
@@ -239,7 +263,11 @@ class Cassette {
                       errorCode: classified.errorCode ?? "provider_error",
                       events: recorder.sanitized(seen),
                       ...(classified.message !== undefined
-                        ? { message: classified.message }
+                        ? {
+                            message: String(
+                              scrubDeep(classified.message, 0, cassette.policy),
+                            ),
+                          }
                         : {}),
                     },
             });
@@ -255,28 +283,70 @@ class Cassette {
         const replayer = await cassette.ready();
         const { effect } = replayer.expectProvider(view);
         if (cassette.mode === "verify") {
-          const seenTypes: string[] = [];
+          const seen: AiRunEvent[] = [];
           try {
             for await (const event of inner.streamChat(request)) {
-              seenTypes.push(event.type);
+              seen.push(event);
               yield event;
             }
           } catch (cause) {
             const classified = classifyError(cause);
             cassette.assertProviderTrace(
               effect,
-              seenTypes.concat(classified.type),
+              seen,
+              classified.type,
               replayer,
             );
             throw cause;
           }
-          cassette.assertProviderTrace(effect, seenTypes, replayer);
+          cassette.assertProviderTrace(effect, seen, undefined, replayer);
           return;
         }
+        // Metadata capture hashes argumentsJson out of stream events; the
+        // loop assembles tool calls from those events (both
+        // run.tool.requested and run.message.completed.toolCalls), so
+        // restore them by args hash from the tool effects queued behind
+        // this provider effect.
+        const pendingArgs = replayer.pendingToolArgsByHash();
+        const restoreArgs = (recorded: RecordedRunEvent): RecordedRunEvent => {
+          if (pendingArgs.size === 0) return recorded;
+          const data = recorded.data as Record<string, unknown> | undefined;
+          if (data === undefined || typeof data !== "object") return recorded;
+          const withArgs = (
+            entry: Record<string, unknown>,
+          ): Record<string, unknown> => {
+            if (typeof entry.argumentsJson === "string") return entry;
+            const hash = entry.argsSha256 ?? data.argsSha256;
+            if (typeof hash !== "string") return entry;
+            const args = pendingArgs.get(hash);
+            return args === undefined
+              ? entry
+              : { ...entry, argumentsJson: JSON.stringify(args) };
+          };
+          if (recorded.type === "run.tool.requested") {
+            const patched = withArgs(data);
+            return patched === data ? recorded : { ...recorded, data: patched };
+          }
+          if (recorded.type === "run.message.completed") {
+            const calls = data.toolCalls;
+            if (!Array.isArray(calls) || calls.length === 0) return recorded;
+            let changed = false;
+            const restored = calls.map((call) => {
+              if (typeof call !== "object" || call === null) return call;
+              const patched = withArgs(call as Record<string, unknown>);
+              if (patched !== call) changed = true;
+              return patched;
+            });
+            return changed
+              ? { ...recorded, data: { ...data, toolCalls: restored } }
+              : recorded;
+          }
+          return recorded;
+        };
         if (effect.outcome.type === "error") {
           let pre = 0;
           for (const recorded of effect.outcome.events ?? [])
-            yield replayEvent(request.runId, pre++, recorded);
+            yield replayEvent(request.runId, pre++, restoreArgs(recorded));
           throw Object.assign(
             new Error(effect.outcome.message ?? effect.outcome.errorCode),
             { name: effect.outcome.errorCode },
@@ -285,23 +355,29 @@ class Cassette {
         if (effect.outcome.type === "abort") {
           let pre = 0;
           for (const recorded of effect.outcome.events ?? [])
-            yield replayEvent(request.runId, pre++, recorded);
+            yield replayEvent(request.runId, pre++, restoreArgs(recorded));
           throw abortError(effect.outcome.message);
         }
         let seq = 0;
         for (const recorded of effect.outcome.events)
-          yield replayEvent(request.runId, seq++, recorded);
+          yield replayEvent(request.runId, seq++, restoreArgs(recorded));
       },
     };
   }
 
   private assertProviderTrace(
     effect: { effectId: string; trace: { steps: string[] } },
-    liveTypes: string[],
+    liveEvents: AiRunEvent[],
+    terminalStep: string | undefined,
     replayer: Replayer,
   ): void {
     const expected = replayer.traceAt(replayer.consumed - 1);
     if (!expected) return;
+    const legacyTypeOnly = expected.steps.every((step) => !step.includes("|"));
+    const liveTypes = liveEvents.map((event) =>
+      legacyTypeOnly ? event.type : eventStep(event),
+    );
+    if (terminalStep !== undefined) liveTypes.push(terminalStep);
     if (JSON.stringify(expected.steps) !== JSON.stringify(liveTypes))
       throw new CassetteError(
         "cassette_mismatch",
@@ -309,6 +385,27 @@ class Cassette {
           `live=[${liveTypes.join(",")}] recorded=[${expected.steps.join(",")}]`,
         { effectId: effect.effectId },
       );
+    // Usage: the recorded trace pins token counts; the live stream must agree.
+    if (expected.usage !== undefined) {
+      const liveUsage = liveEvents.find((e) => e.type === "run.usage")?.data as
+        | Record<string, unknown>
+        | undefined;
+      for (const key of [
+        "promptTokens",
+        "completionTokens",
+        "cachedPromptTokens",
+        "reasoningTokens",
+      ] as const) {
+        const want = expected.usage[key];
+        if (want === undefined) continue;
+        if (liveUsage?.[key] !== want)
+          throw new CassetteError(
+            "cassette_mismatch",
+            `live usage ${key}=${String(liveUsage?.[key])} differs from recorded ${want}`,
+            { effectId: effect.effectId },
+          );
+      }
+    }
   }
 
   /**
@@ -338,6 +435,9 @@ class Cassette {
               definition: tool.definition,
               args,
               argsSha256: call.argsSha256,
+              ...(suspended
+                ? {}
+                : { resultSha256: recorder.resultHash(result) }),
               outcome: suspended
                 ? {
                     type: "suspended",
@@ -358,14 +458,22 @@ class Cassette {
                   ? {
                       type: "abort",
                       ...(classified.message !== undefined
-                        ? { message: classified.message }
+                        ? {
+                            message: String(
+                              scrubDeep(classified.message, 0, this.policy),
+                            ),
+                          }
                         : {}),
                     }
                   : {
                       type: "error",
                       errorCode: classified.errorCode ?? "tool_error",
                       ...(classified.message !== undefined
-                        ? { message: classified.message }
+                        ? {
+                            message: String(
+                              scrubDeep(classified.message, 0, this.policy),
+                            ),
+                          }
                         : {}),
                     },
             });
@@ -380,7 +488,12 @@ class Cassette {
         if (this.mode === "verify") {
           try {
             const result = await tool.execute(context, args);
-            this.assertToolOutcome(effect, "result", definitionFingerprint);
+            this.assertToolOutcome(
+              effect,
+              "result",
+              definitionFingerprint,
+              result,
+            );
             return result;
           } catch (cause) {
             const classified = classifyError(cause);
@@ -431,6 +544,7 @@ class Cassette {
     effect: RecordedToolEffect,
     liveKind: string,
     definitionFingerprint: string,
+    liveResult?: AiToolResult,
   ): void {
     if (effect.tool.definitionFingerprint !== definitionFingerprint)
       throw new CassetteError(
@@ -446,6 +560,19 @@ class Cassette {
           `live=${liveKind} recorded=${String(expected)}`,
         { effectId: effect.effectId },
       );
+    // Result-content check under BOTH captures: the fixture never needs to
+    // hold the payload, only its metadata-normalized hash.
+    if (effect.resultSha256 !== undefined && liveResult !== undefined) {
+      const liveHash = sha256(
+        canonicalJson(recordToolResult(liveResult, "metadata")),
+      );
+      if (liveHash !== effect.resultSha256)
+        throw new CassetteError(
+          "cassette_mismatch",
+          `tool ${effect.tool.name} result differs from the recording (hash)`,
+          { effectId: effect.effectId },
+        );
+    }
   }
 
   tools(tools: AiTool[]): AiTool[] {
@@ -485,22 +612,48 @@ class Cassette {
         effects: this.recorder.snapshot(),
       };
       // Self-validate before writing: a broken recorder fails the recording
-      // run, not every future replay.
+      // run, not every future replay. Errors name only the path — never the
+      // fixture's contents.
       const text = `${JSON.stringify(fixture, null, 2)}\n`;
       parseFixtureJson(text, this.fixturePath);
+      if (text.length > MAX_FIXTURE_BYTES)
+        throw new CassetteError(
+          "cassette_limit",
+          `fixture for ${this.fixturePath} exceeds the ${MAX_FIXTURE_BYTES}-byte cap; lower maxEffects or use metadata capture`,
+        );
       await mkdir(dirname(this.fixturePath), { recursive: true });
-      await writeFile(this.fixturePath, text, "utf8");
+      // Atomic, exclusive publication: a temp file written under 0600 (fixtures
+      // can be sensitive even scrubbed), fsynced, then HARD-LINKED — link(2)
+      // fails EEXIST instead of overwriting, and there is no check-then-write
+      // window for another file to appear at the target.
+      const temp = `${this.fixturePath}.tmp-${process.pid}-${randomUUID()}`;
+      const handle = await open(temp, "wx", 0o600);
+      try {
+        await handle.writeFile(text, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      try {
+        await link(temp, this.fixturePath);
+      } catch (cause) {
+        const code = (cause as { code?: string }).code;
+        throw new CassetteError(
+          "cassette_schema",
+          code === "EEXIST"
+            ? `record target ${this.fixturePath} already exists; recordings never overwrite a fixture — remove it explicitly to re-record`
+            : `cannot publish fixture ${this.fixturePath}: ${(cause as Error).message}`,
+        );
+      } finally {
+        await unlink(temp).catch(() => undefined);
+      }
       return;
     }
     if (this.mode === "replay" || this.mode === "verify") {
-      // Await the fixture: strictness must apply even when no effect was
-      // ever requested (the load itself may also fail).
+      // Await the fixture: the unconsumed gate must apply even when no
+      // effect was ever requested (the load itself may also fail).
       const replayer = await this.ready();
-      if (
-        this.strict &&
-        this.onUnconsumed === "fail" &&
-        replayer.unconsumed > 0
-      )
+      if (this.onUnconsumed === "fail" && replayer.unconsumed > 0)
         throw new CassetteError(
           "cassette_extra",
           `${replayer.unconsumed} recorded effect(s) were never consumed; ` +

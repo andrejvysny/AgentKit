@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { statSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -318,5 +319,144 @@ describe("runWithCassette finalization", () => {
     }).catch((cause) => cause);
     expect(error).toBeInstanceOf(CassetteError);
     expect((error as CassetteError).code).toBe("cassette_extra");
+  });
+});
+
+describe("security: recording hardening (C2)", () => {
+  test("credential SHAPES inside free-form text are scrubbed under content capture", async () => {
+    const path = await fixturePath();
+    const record = createCassette({
+      mode: "record",
+      fixture: path,
+      capture: "content",
+    });
+    const live = new ScriptedClient([
+      {
+        events: textTurn("contact me at ghp_abcdefghijklmnopqrstuvwxyz123456"),
+      },
+    ]);
+    await collect(
+      record
+        .provider(live)
+        .streamChat(request("m", "api_key=supersecretvalue12345678") as never),
+    );
+    await record.close();
+    const text = await readFile(path, "utf8");
+    expect(text).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz123456");
+    expect(text).not.toContain("supersecretvalue12345678");
+    expect(text).toContain("[redacted-secret]");
+  });
+
+  test("redactPolicy replaces application-known sensitive values", async () => {
+    const path = await fixturePath();
+    const record = createCassette({
+      mode: "record",
+      fixture: path,
+      capture: "content",
+      redactPolicy: (key, _value) =>
+        key === "customerEmail" ? "<redacted>" : undefined,
+    });
+    const tool = makeTool(
+      "send",
+      async () =>
+        okResult({ customerEmail: "user@example.com", body: "hello" }) as never,
+    );
+    const wrapped = record.instrumentRegistry({
+      list: () => [tool],
+      listDefinitions: () => [tool.definition],
+      get: (name: string) => (name === tool.definition.name ? tool : undefined),
+      register: () => undefined,
+      has: (name: string) => name === tool.definition.name,
+    } as never);
+    await wrapped
+      .get("send")!
+      .execute(CTX, { customerEmail: "user@example.com" });
+    await collect(
+      record
+        .provider(new ScriptedClient([{ events: textTurn("ok") }]))
+        .streamChat(request() as never),
+    );
+    await record.close();
+    const text = await readFile(path, "utf8");
+    expect(text).not.toContain("user@example.com");
+    expect(text).toContain("<redacted>");
+  });
+
+  test("recording cap fails the run instead of growing unbounded", async () => {
+    const path = await fixturePath();
+    const record = createCassette({
+      mode: "record",
+      fixture: path,
+      maxEffects: 1,
+    });
+    const live = new ScriptedClient([
+      { events: textTurn("a") },
+      { events: textTurn("b") },
+    ]);
+    const client = record.provider(live);
+    await collect(client.streamChat(request() as never));
+    const error = await collect(client.streamChat(request() as never)).catch(
+      (cause) => cause,
+    );
+    expect(error).toBeInstanceOf(CassetteError);
+    expect((error as CassetteError).code).toBe("cassette_limit");
+  });
+
+  test("recordings never overwrite an existing fixture", async () => {
+    const path = await fixturePath();
+    await writeFile(path, "precious", "utf8");
+    const record = createCassette({ mode: "record", fixture: path });
+    const live = new ScriptedClient([{ events: textTurn("hi") }]);
+    await collect(record.provider(live).streamChat(request() as never));
+    const error = await record.close().catch((cause) => cause);
+    expect(error).toBeInstanceOf(CassetteError);
+    expect((error as CassetteError).message).toContain("already exists");
+    expect(await readFile(path, "utf8")).toBe("precious");
+  });
+
+  test("fixtures are written owner-only", async () => {
+    const path = await fixturePath();
+    const record = createCassette({ mode: "record", fixture: path });
+    const live = new ScriptedClient([{ events: textTurn("hi") }]);
+    await collect(record.provider(live).streamChat(request() as never));
+    await record.close();
+    // eslint-disable-next-line no-bitwise
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  test("error outcomes are part of the recorded trace and pinned by verify", async () => {
+    const path = await fixturePath();
+    const boom = new Error("provider exploded");
+    const record = createCassette({ mode: "record", fixture: path });
+    const recorder = record.provider(
+      new ScriptedClient([{ events: textTurn("partial"), error: boom }]),
+    );
+    await collect(recorder.streamChat(request() as never)).catch(
+      () => undefined,
+    );
+    await record.close();
+
+    // Identical live behavior passes verify (terminal error step matches).
+    const okVerify = createCassette({ mode: "verify", fixture: path });
+    await collect(
+      okVerify
+        .provider(
+          new ScriptedClient([{ events: textTurn("partial"), error: boom }]),
+        )
+        .streamChat(request() as never),
+    ).catch(() => undefined);
+    await okVerify.close();
+
+    // A run that no longer fails at that point diverges from the fixture.
+    const badVerify = createCassette({ mode: "verify", fixture: path });
+    const error = await collect(
+      badVerify
+        .provider(new ScriptedClient([{ events: textTurn("partial") }]))
+        .streamChat(request() as never),
+    )
+      .then(() => badVerify.close())
+      .catch((cause) => cause);
+    expect(error).toBeInstanceOf(CassetteError);
+    expect((error as CassetteError).code).toBe("cassette_mismatch");
   });
 });

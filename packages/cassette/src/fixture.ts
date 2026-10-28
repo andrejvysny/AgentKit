@@ -1,5 +1,5 @@
 import { type Stats, statSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { type Static, Type } from "@sinclair/typebox";
 import { Ajv } from "ajv";
 import { CassetteError } from "./errors.js";
@@ -94,6 +94,7 @@ const ToolEffect = Type.Object({
   }),
   argsSha256: Type.String(),
   arguments: Type.Optional(Type.Unknown()),
+  resultSha256: Type.Optional(Type.String()),
   outcome: Type.Union([
     Type.Object({ type: Type.Literal("result"), result: Type.Unknown() }),
     Type.Object({
@@ -197,11 +198,21 @@ export function parseFixtureJson(
   return fixture as CassetteFixture;
 }
 
+/** A fixture larger than this is treated as hostile or corrupt, never parsed. */
+export const MAX_FIXTURE_READ_BYTES = 64 * 1024 * 1024;
+
 export async function loadFixture(path: string): Promise<CassetteFixture> {
   let text: string;
   try {
+    const stats = await stat(path);
+    if (stats.size > MAX_FIXTURE_READ_BYTES)
+      throw new CassetteError(
+        "cassette_schema",
+        `fixture ${path} is ${stats.size} bytes, over the ${MAX_FIXTURE_READ_BYTES}-byte ceiling`,
+      );
     text = await readFile(path, "utf8");
   } catch (cause) {
+    if (cause instanceof CassetteError) throw cause;
     throw new CassetteError(
       "cassette_schema",
       `cannot read fixture ${path}: ${(cause as Error).message}`,

@@ -6,12 +6,14 @@ export type CassetteErrorCode =
   | "cassette_miss"
   /** Effect matched identity but not the recorded request/result fingerprint. */
   | "cassette_mismatch"
-  /** Strict mode: recorded effects remained unconsumed at close. */
+  /** Recorded effects remained unconsumed at close (`onUnconsumed: "fail"`). */
   | "cassette_extra"
   /** A recording/verification was finalized twice or used after close. */
   | "cassette_closed"
   /** Replay attempted a live provider/tool call — always a test failure. */
   | "cassette_live_call"
+  /** Recording exceeded an enforced cap (effect count or fixture size). */
+  | "cassette_limit"
   /** Replay needs catalog data (models/capabilities) the fixture lacks. */
   | "cassette_no_catalog";
 
