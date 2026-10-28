@@ -12,5 +12,9 @@ package.json.publishconfig-backup
 graphify-out/
 prompt.md
 
+# Native binding: the loader and d.ts are committed so typecheck runs
+# without a Rust build; the compiled platform binary never is.
+packages/native/generated/*.node
+
 # Claude session-local artifacts (worktrees, agent memory)
 .claude/

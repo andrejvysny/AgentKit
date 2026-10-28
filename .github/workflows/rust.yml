@@ -51,7 +51,18 @@ jobs:
         env:
           AGENTKIT_TEST_BACKEND: rust
       - run: bun run typecheck
+      # The binding binary is a build artifact; the qualification run must
+      # produce it and then never let a suite silently skip (see the
+      # AGENTKIT_REQUIRE_NATIVE fail-closed check in packages/native/tests).
+      - name: Build native binding
+        run: bun run --cwd packages/native build:native
+      - name: Generated loader and d.ts are up to date
+        # If the committed loader/d.ts drifted from what the Rust source
+        # exports, the freshly built files differ from the checkout.
+        run: git diff --exit-code -- packages/native/generated
       - run: bun test
+        env:
+          AGENTKIT_REQUIRE_NATIVE: "1"
       - name: Verify packaged consumers
         run: node rust/scripts/check-packages.mjs --offline
       - name: Mixed Rust/TypeScript client interop (required, never skipped here)

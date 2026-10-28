@@ -1,12 +1,72 @@
 # M3 — First Native TypeScript Binding: Design and Backlog
 
-Status: DESIGN (follows M2.1 hardening; no binding code in this milestone).
-Audience: the implementer of the first thin Node-API package.
-Baseline: `rust-migration` after the M2.1 gates; frozen TS wire authority is
-`36577829cfbfd78e5b0492d826f46ba6131835b6` (contract `0.7.0`, REST `v1`).
+Status: FIRST SLICE IMPLEMENTED (crate `agentkit-napi` + package
+`@agentkit/native`, validated on x86_64-linux / Bun 1.4.4 / Node-API 9).
+The supported matrix beyond that cell, prebuilt-binary packaging, and the
+npm export cutover remain open; see "First slice: what shipped" and the
+backlog below. The TS wire authority is unchanged: contract `0.7.0`, REST
+`v1`, frozen at `36577829cfbfd78e5b0492d826f46ba6131835b6`.
 The separate TypeScript schema-9 database is a different identity and is NOT
 migrated by the native store; an explicit migration policy is a later
 milestone.
+
+## First slice: what shipped
+
+Crate `rust/crates/napi` (napi-rs 3.x, async tokio runtime, no blocking
+call_worker) and workspace package `packages/native` (`@agentkit/native`,
+private until the npm-publish story is separate work). Committed: the
+crate, the TS wrapper (`src/index.ts`), the generated loader and
+`index.d.ts` (`generated/` — text, so `bun run typecheck` needs no Rust
+build; the `.node` binary is a build artifact and is gitignored), the
+contract code list (`src/codes.ts`, embedded into the Rust crate with
+`include_str!` and compared in a test), and the test suite
+(`tests/smoke.test.ts`, `tests/contract.test.ts`,
+`tests/helpers/binding.ts`).
+
+Implemented surface (JSON mirrors of the Rust serde shapes — the
+generator's `ToTs`/TS codegen is deliberately NOT used for wire types):
+
+- `NativeStore.open/memory` — one store actor thread per instance; a busy
+  file rejects `already_owned` and a recovery-unreadable file rejects
+  `recovery_unreadable`; drop never joins the thread.
+- `NativeHost` (`bindingSmoke` proves the async tokio boundary) plus
+  `NativeRegistry` with the **real contributed coding pack**
+  (`contributed_coding_pack()`).
+- `SessionService`: create/send/steer/followUp/answer/cancel/interrupt/
+  resume/flushQueue/getState, 1:1 with `AgentSessionService` request/
+  response JSON; `getState` is the only sync method (store actor query).
+- `subscribe(afterSeq)` durable-event iterator: one `tokio::spawn` reader
+  per subscription, bounded queue (64), terminate `subscription_overflow`,
+  resubscribe from the cursor; an unresolved queue slot holds the callback
+  — no drops.
+- `registerTool(definition, fn)` and `setProvider(fn)`: per-invocation
+  references, reject maps to the normal tool/provider failure path
+  (`tool_execution_failed`, `provider: <reason>`), no panic, and the full
+  admission/receipt/guard/gate layers run around contributed callbacks.
+- `close()` awaited shutdown (worker handle + store actor) + handle
+  release; registry keys are generation-tagged `(id, generation)` so
+  stale-handle use errors `internal_error` rather than aliasing.
+- Provider functions deliver the final chat result as one chunk —
+  provider streaming deltas stay backlog item 1, and this boundary is
+  labeled, not hidden.
+
+Validation for this slice (x86_64-linux, Bun 1.4.4): the vertical slice
+(accept → tool → approval park → answer → resume → terminal + receipt →
+close → reopen → replay) plus store lock, dropped-iterator, provider
+rejection, tool rejection, unknown-code redaction, and the code-list
+parity tests — `bun test` in `packages/native`; the binding suites are
+skipped without the built binary and **hard-fail** under
+`AGENTKIT_REQUIRE_NATIVE=1` (M2.1 A4 rule); the native CI job builds the
+binary and sets that flag, and `git diff --exit-code` gates freshness of
+the committed loader/d.ts.
+
+Open gaps versus the design above, all named, none silent: streaming
+deltas and the provider-completion vs durable-settled lane (backlog 1);
+`AbortSignal` mapping on promise APIs; the cross-runtime matrix (Node
+20/22/24 — CI builds+tests the binding on the same matrix, not yet
+established for this slice); the crash-kill child test; conformance
+harness reuse through the public API; prebuilt per-triple packages and
+the install-never-cargo story.
 
 ## Goal
 

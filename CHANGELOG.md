@@ -2,6 +2,20 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**Native TS binding, first slice.** `rust/crates/napi` (`agentkit-napi`, napi-rs 3.x) and the workspace
+package `@agentkit/native` expose the Rust runtime to Node/Bun over JSON mirrors of the serde wire shapes:
+`NativeStore` (actor-per-instance, `already_owned`/`recovery_unreadable` fail closed), `SessionService`
+(create/send/steer/followUp/answer/cancel/interrupt/resume/flushQueue/getState), a bounded durable-event
+`subscribe(afterSeq)` iterator that terminates `subscription_overflow` instead of blocking the runtime,
+`registerTool`/`setProvider` JS callbacks wrapped by the real admission/receipt/guard/quarantine layers, and
+an awaited `close()` that releases the store actor and the file lock. Dropping a JS wrapper or iterator never
+cancels durable execution; only `close()`/`cancel()` do. The generated loader and `index.d.ts` are committed
+(typecheck needs no Rust build); the platform `.node` is a build artifact. The binding suites skip without
+the binary and hard-fail under `AGENTKIT_REQUIRE_NATIVE=1`; the native CI job builds it, sets that flag, and
+gates loader freshness with `git diff --exit-code`. Provider functions deliver the final result as one chunk
+— streaming deltas, `AbortSignal` mapping, the Node matrix, and prebuilt per-triple packages remain open
+(`docs/rust/native-binding-milestone.md`).
+
 **Coding tool pack ported to Rust.** `rust/crates/toolpacks-coding` is the native port of
 `@agentkit/toolpacks-coding`; the TypeScript package is unchanged and remains the contract of record. Eleven
 `coding`-namespace tools (`read_file`, `list_dir`, `find_files`, `code_search`, `repo_map`, `git_inspect`,
