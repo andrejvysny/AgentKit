@@ -125,6 +125,27 @@ async fn read_status_euid(pid: &str) -> Option<u32> {
     None
 }
 
+/// Is this pid a zombie (`Z` in `/proc/<pid>/stat`)? Reading a zombie's
+/// environ answers EPERM, so without this check an exited process still
+/// waiting for its reaper would be classified as an unreadable-environ
+/// SUSPECT — phantom uncertainty over a process that is provably dead and
+/// can neither write nor hide a marker. An unreadable stat is NOT a zombie
+/// (keep the suspect; fail closed).
+async fn is_zombie(pid: &str) -> bool {
+    let Ok(stat) = tokio::fs::read_to_string(format!("/proc/{pid}/stat")).await else {
+        return false;
+    };
+    // `pid (comm) state ...` — comm may contain spaces and parens; the
+    // state is the first token after the LAST `)`.
+    match stat.rfind(')') {
+        Some(tail) => stat[tail + 1..]
+            .split_whitespace()
+            .next()
+            .is_some_and(|state| state == "Z"),
+        None => false,
+    }
+}
+
 /// Process age in ms, measured purely against the monotonic boot clock:
 /// `uptime - starttime`. Returns None when either side is unreadable.
 async fn process_age_ms(pid: &str) -> Option<u64> {
@@ -239,13 +260,16 @@ async fn scan_proc(spawn_floor_ms_ago: Option<u64>) -> Result<ProcScan, std::io:
                 // stall or block every workspace; but an unreadable environ on
                 // a same-user process young enough to be our spawn keeps a
                 // marked survivor possible, and that uncertainty must survive
-                // to the cleanup decision.
-                if denied_environ_plausibly_ours(
-                    my_euid,
-                    read_status_euid(&name).await,
-                    process_age_ms(&name).await,
-                    spawn_floor_ms_ago,
-                ) {
+                // to the cleanup decision. A zombie (whose environ also
+                // answers EPERM) is provably dead — never a suspect.
+                if !is_zombie(&name).await
+                    && denied_environ_plausibly_ours(
+                        my_euid,
+                        read_status_euid(&name).await,
+                        process_age_ms(&name).await,
+                        spawn_floor_ms_ago,
+                    )
+                {
                     suspects.push(pid);
                 }
             }
@@ -338,16 +362,6 @@ pub async fn scan_marked_outcome(platform: &str, spawned_at_ms: Option<u64>) -> 
     })
 }
 
-/// Every marked process except this one; None when the platform cannot be
-/// scanned or the scan failed. Never throws. Consumers deciding cleanup or
-/// survivor-set emptiness must use `scan_marked_outcome` instead — this
-/// view cannot see the uncertainty of unreadable-but-plausibly-ours envars.
-pub async fn scan_marked(platform: &str) -> Option<Vec<MarkedProcess>> {
-    scan_marked_outcome(platform, None)
-        .await
-        .map(|scan| scan.marks)
-}
-
 /// Pids carrying exactly this exec id plus the unresolved-uncertainty pids;
 /// None when unsupported. Pass the execution's `spawned_at_ms` so
 /// long-lived unreadable daemons are excluded from the suspect set while
@@ -367,7 +381,13 @@ pub async fn find_marked_processes_outcome(
     ))
 }
 
-/// Pids carrying exactly this exec id; None when unsupported.
+/// Pids carrying exactly this exec id; None when unsupported. LOSSY:
+/// drops the suspect set, so it must NEVER decide cleanup or
+/// survivor-set emptiness (use `find_marked_processes_outcome`); no
+/// production caller — tests only, where it merely POLLS for a marked
+/// pid's presence (existence assertions cannot fabricate a "clean"
+/// verdict). Kill policy: classifying a pid here says nothing about
+/// killing it; suspects are never killed, only reported.
 pub async fn find_marked_processes(exec_id: &str) -> Option<Vec<i32>> {
     find_marked_processes_outcome(exec_id, None)
         .await
@@ -710,6 +730,8 @@ mod tests {
         assert!(denied_environ_plausibly_ours(None, None, None, None));
     }
 
+    /// Reads `/proc` directly: Linux-only.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn own_effective_uid_is_readable_from_proc() {
         let euid = read_status_euid("self").await.expect("own status");
@@ -721,6 +743,8 @@ mod tests {
         );
     }
 
+    /// Reads `/proc` directly: Linux-only.
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn live_system_scan_stays_complete_without_foreign_suspects() {
         // A real machine runs other users' (and kernel) processes whose

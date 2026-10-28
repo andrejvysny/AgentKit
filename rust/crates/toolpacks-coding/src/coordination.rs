@@ -1046,7 +1046,9 @@ pub(crate) async fn read_intent_files(root_key: &str) -> Result<Vec<ExecutionInt
         .map_err(|error| CodingError::new("io_error", format!("{error}")))?
     {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".json") || name.starts_with(".tmp-") {
+        if !name.ends_with(".json") || name.starts_with(".tmp-") || name == QUARANTINE_FILE_NAME {
+            // The root's quarantine record lives in the same journal dir;
+            // it is not an intent and must never reconcile as one.
             continue;
         }
         let text = tokio::fs::read_to_string(entry.path())
@@ -1077,6 +1079,167 @@ pub(crate) async fn read_intent_files(root_key: &str) -> Result<Vec<ExecutionInt
     Ok(intents)
 }
 
+/// Name of the durable quarantine record inside the root's journal
+/// directory. Mirrors the lock-dir coordinator's `quarantine.json`: a
+/// driver-created quarantine MUST have durable evidence, so a coordinator
+/// drop (or process restart) cannot resurrect admission over an
+/// unresolved cleanup. The intent journal directory is the in-process
+/// coordinator's durable store — the quarantine uses the same atomic
+/// temp-file + rename publication as intents, not a parallel mechanism.
+pub(crate) const QUARANTINE_FILE_NAME: &str = "quarantine.json";
+
+pub(crate) fn quarantine_json(quarantine: &WorkspaceQuarantine) -> serde_json::Value {
+    serde_json::json!({
+        "root": quarantine.root,
+        "pids": quarantine.pids,
+        "quarantinedAtMs": quarantine.quarantined_at_ms,
+        "runId": quarantine.holder.run_id,
+        "chatId": quarantine.holder.chat_id,
+        "toolCallId": quarantine.holder.tool_call_id,
+        "tool": quarantine.holder.tool,
+        "label": quarantine.holder.label,
+        "identity": quarantine.identity.as_ref().map(|identity| serde_json::json!({
+            "executionId": identity.execution_id,
+            "ownerPid": identity.owner_pid,
+            "pgid": identity.pgid,
+            "spawnedAtMs": identity.spawned_at_ms,
+        })),
+    })
+}
+
+pub(crate) fn quarantine_from_json(
+    root: &str,
+    value: &serde_json::Value,
+) -> Option<WorkspaceQuarantine> {
+    let pids = value
+        .get("pids")?
+        .as_array()?
+        .iter()
+        .filter_map(|pid| pid.as_i64().map(|pid| pid as i32))
+        .collect();
+    let text = |name: &str| {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned()
+    };
+    let identity = value.get("identity").and_then(|identity| {
+        Some(CommandCleanupIdentity {
+            execution_id: identity.get("executionId")?.as_str()?.to_owned(),
+            owner_pid: identity.get("ownerPid")?.as_i64()?,
+            pgid: identity
+                .get("pgid")
+                .and_then(serde_json::Value::as_i64)
+                .map(|pgid| pgid as i32),
+            spawned_at_ms: identity
+                .get("spawnedAtMs")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default(),
+        })
+    });
+    Some(WorkspaceQuarantine {
+        root: root.to_owned(),
+        pids,
+        holder: LeaseHolder {
+            chat_id: value
+                .get("chatId")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            run_id: text("runId"),
+            tool_call_id: value
+                .get("toolCallId")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            tool: text("tool"),
+            label: text("label"),
+        },
+        quarantined_at_ms: value
+            .get("quarantinedAtMs")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default(),
+        identity,
+    })
+}
+
+/// Durably publish the root's quarantine record: temp file + rename, so a
+/// reader (the next coordinator over the same store) sees either the whole
+/// record or none of it. Failure is returned: an unpublished quarantine
+/// must never look like success (the caller keeps the lease and the intent).
+pub(crate) async fn write_quarantine_file(
+    root_key: &str,
+    quarantine: &WorkspaceQuarantine,
+) -> Result<(), CodingError> {
+    let dir = intent_dir_for(root_key);
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+    let path = dir.join(QUARANTINE_FILE_NAME);
+    let temp = dir.join(format!(".tmp-quarantine-{}", uuid::Uuid::new_v4().simple()));
+    let written: Result<(), CodingError> = async {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(&temp)
+            .await
+            .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+        let text = serde_json::to_string(&quarantine_json(quarantine))
+            .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+        file.write_all(text.as_bytes())
+            .await
+            .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+        file.flush()
+            .await
+            .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+        tokio::fs::rename(&temp, &path)
+            .await
+            .map_err(|error| CodingError::new("io_error", format!("{error}")))
+    }
+    .await;
+    if written.is_err() {
+        let _ = tokio::fs::remove_file(&temp).await;
+    }
+    written
+}
+
+pub(crate) async fn remove_quarantine_file(root_key: &str) -> Result<(), CodingError> {
+    let path = intent_dir_for(root_key).join(QUARANTINE_FILE_NAME);
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(CodingError::new("io_error", format!("{error}"))),
+    }
+}
+
+/// Read the root's durable quarantine record. An unparseable record is NOT
+/// dropped: it reconciles as an unknown-survivor quarantine (empty pids
+/// never "positively exit"), fail closed until explicit recovery.
+pub(crate) async fn read_quarantine_file(
+    root_key: &str,
+) -> Result<Option<WorkspaceQuarantine>, CodingError> {
+    let path = intent_dir_for(root_key).join(QUARANTINE_FILE_NAME);
+    let text = match tokio::fs::read_to_string(&path).await {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(CodingError::new("io_error", format!("{error}"))),
+    };
+    let quarantine = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|value| quarantine_from_json(root_key, &value))
+        .unwrap_or_else(|| WorkspaceQuarantine {
+            root: root_key.to_owned(),
+            pids: vec![],
+            holder: LeaseHolder {
+                chat_id: None,
+                run_id: "unknown".to_owned(),
+                tool_call_id: None,
+                tool: "unknown".to_owned(),
+                label: "unreadable quarantine record".to_owned(),
+            },
+            quarantined_at_ms: 0,
+            identity: None,
+        });
+    Ok(Some(quarantine))
+}
+
 impl InProcessCoordinator {
     pub fn new(observer: Option<Arc<dyn CoordinatorObserver>>) -> Self {
         Self {
@@ -1088,13 +1251,33 @@ impl InProcessCoordinator {
         }
     }
 
-    async fn live_quarantine(&self, root: &str) -> Option<WorkspaceQuarantine> {
+    /// The live quarantine for the root: the in-memory record first, then
+    /// the DURABLE journal record (a driver-created quarantine must survive
+    /// a coordinator drop / process restart — memory alone was the B-durability
+    /// defect: the next coordinator over the same store admitted modifying
+    /// work). A journal read error is returned, never swallowed into
+    /// "nothing quarantined": fail closed.
+    async fn live_quarantine(
+        &self,
+        root: &str,
+    ) -> Result<Option<WorkspaceQuarantine>, CodingError> {
         let candidate = {
             let quarantines = self.quarantines.lock().expect("quarantine lock");
             quarantines.get(root).cloned()
-        }?;
+        };
+        let candidate = match candidate {
+            Some(candidate) => candidate,
+            None => match read_quarantine_file(root).await? {
+                Some(candidate) => candidate,
+                None => return Ok(None),
+            },
+        };
         if quarantine_positively_exited(&candidate).await {
             // Positive cleanup evidence: every recorded process exited.
+            // Retire BOTH halves of the record. A failed durable removal is
+            // an `Err` (the root stays blocked) — half-retiring would let a
+            // reopen resurrect the same uncertain evidence anyway.
+            remove_quarantine_file(root).await?;
             let mut quarantines = self.quarantines.lock().expect("quarantine lock");
             if let Some(current) = quarantines.get(root)
                 && current.pids == candidate.pids
@@ -1102,9 +1285,16 @@ impl InProcessCoordinator {
             {
                 quarantines.remove(root);
             }
-            return None;
+            return Ok(None);
         }
-        Some(candidate)
+        // Hydrate the in-memory mirror so the wait loop does not re-read the
+        // journal on every poll.
+        self.quarantines
+            .lock()
+            .expect("quarantine lock")
+            .entry(root.to_owned())
+            .or_insert_with(|| candidate.clone());
+        Ok(Some(candidate))
     }
 
     /// Block until the root carries no live quarantine, the caller cancels,
@@ -1120,7 +1310,7 @@ impl InProcessCoordinator {
         let deadline =
             max_wait_ms.map(|at| std::time::Instant::now() + std::time::Duration::from_millis(at));
         loop {
-            let Some(quarantine) = self.live_quarantine(root).await else {
+            let Some(quarantine) = self.live_quarantine(root).await? else {
                 return Ok(());
             };
             if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
@@ -1135,7 +1325,7 @@ impl InProcessCoordinator {
                     // The wait budget (or the caller) ended while an
                     // unresolved cleanup still blocks the root: surface the
                     // quarantine, not a generic abort/busy.
-                    return Err(match self.live_quarantine(root).await {
+                    return Err(match self.live_quarantine(root).await? {
                         Some(quarantine) => quarantine_error(&quarantine),
                         None => abort_error(),
                     });
@@ -1155,11 +1345,12 @@ impl InProcessCoordinator {
     /// holds its own lease until publication returns `Ok`, so the record is
     /// already visible while the gate is still held by somebody, and no new
     /// grant can complete between this check and the lease being returned.
-    async fn quarantine_refusal(&self, root: &str) -> Option<CodingError> {
-        self.live_quarantine(root)
-            .await
+    async fn quarantine_refusal(&self, root: &str) -> Result<Option<CodingError>, CodingError> {
+        Ok(self
+            .live_quarantine(root)
+            .await?
             .as_ref()
-            .map(quarantine_error)
+            .map(quarantine_error))
     }
 
     #[allow(clippy::too_many_arguments)] // one acquisition, all inputs explicit
@@ -1246,7 +1437,7 @@ impl InProcessCoordinator {
                 // which an evidence record that landed while we queued can
                 // still stop us. Never return an executable lease over live
                 // unresolved-cleanup evidence.
-                if let Some(error) = self.quarantine_refusal(&root).await {
+                if let Some(error) = self.quarantine_refusal(&root).await? {
                     lease.release().await;
                     return Err(error);
                 }
@@ -1289,7 +1480,7 @@ impl InProcessCoordinator {
         // B2: see the file-lease path — the exclusive gate is ours now, so a
         // quarantine that landed while we queued still stops us here rather
         // than after we have written to the workspace.
-        if let Some(error) = self.quarantine_refusal(&root).await {
+        if let Some(error) = self.quarantine_refusal(&root).await? {
             lease.release().await;
             return Err(error);
         }
@@ -1389,17 +1580,23 @@ impl WorkspaceCoordinator for InProcessCoordinator {
         evidence: &QuarantineEvidence,
     ) -> Result<(), CodingError> {
         let root = canonical_root_key(root).await;
-        self.quarantines.lock().expect("quarantine lock").insert(
-            root.clone(),
-            WorkspaceQuarantine {
-                root,
-                pids: evidence.pids.clone(),
-                holder: evidence.holder.clone(),
-                quarantined_at_ms: now_ms_u64(),
-                identity: None,
-            },
-        );
-        Ok(())
+        let record = WorkspaceQuarantine {
+            root: root.clone(),
+            pids: evidence.pids.clone(),
+            holder: evidence.holder.clone(),
+            quarantined_at_ms: now_ms_u64(),
+            identity: None,
+        };
+        self.quarantines
+            .lock()
+            .expect("quarantine lock")
+            .insert(root.clone(), record.clone());
+        // Durability rule: the in-memory record alone dies with the
+        // coordinator, so the durable journal publication IS the blocking
+        // evidence across a reopen. Its failure is returned (the in-memory
+        // block is kept too — fail closed): the caller must retain the
+        // modifying lease and treat the root as blocked.
+        write_quarantine_file(&root, &record).await
     }
 
     async fn workspace_quarantine(
@@ -1407,17 +1604,27 @@ impl WorkspaceCoordinator for InProcessCoordinator {
         root: &str,
     ) -> Result<Option<WorkspaceQuarantine>, CodingError> {
         let root = canonical_root_key(root).await;
-        Ok(self.live_quarantine(&root).await)
+        self.live_quarantine(&root).await
     }
 
     async fn clear_workspace_quarantine(&self, root: &str) -> Result<bool, CodingError> {
         let root = canonical_root_key(root).await;
-        let removed = self
+        // Explicit recovery retires BOTH halves of the record, durable
+        // first: if the journal removal fails the whole recovery returns
+        // `Err` with everything still in place — a half-cleared root
+        // (memory gone, durable record intact) would just re-block on the
+        // next acquisition and lie about the recovery having happened.
+        let had_durable = read_quarantine_file(&root).await?.is_some();
+        remove_quarantine_file(&root).await?;
+        // Evaluate BOTH halves unconditionally (`||` would short-circuit
+        // the memory removal whenever a durable record existed).
+        let removed_memory = self
             .quarantines
             .lock()
             .expect("quarantine lock")
             .remove(&root)
             .is_some();
+        let removed = had_durable || removed_memory;
         // Explicit recovery retires the DURABLE unresolved-execution
         // evidence too. While a quarantine blocks, reconciliation keeps the
         // intent record (the in-memory quarantine alone does not survive a
@@ -1464,17 +1671,23 @@ impl WorkspaceCoordinator for InProcessCoordinator {
         identity: &CommandCleanupIdentity,
     ) -> Result<(), CodingError> {
         let root = canonical_root_key(root).await;
-        self.quarantines.lock().expect("quarantine lock").insert(
-            root.clone(),
-            WorkspaceQuarantine {
-                root,
-                pids: evidence.pids.clone(),
-                holder: evidence.holder.clone(),
-                quarantined_at_ms: now_ms_u64(),
-                identity: Some(identity.clone()),
-            },
-        );
-        Ok(())
+        let record = WorkspaceQuarantine {
+            root: root.clone(),
+            pids: evidence.pids.clone(),
+            holder: evidence.holder.clone(),
+            quarantined_at_ms: now_ms_u64(),
+            identity: Some(identity.clone()),
+        };
+        self.quarantines
+            .lock()
+            .expect("quarantine lock")
+            .insert(root.clone(), record.clone());
+        // Driver-created quarantine must be DURABLE (the assessor defect:
+        // a memory-only Ok here let the driver delete the durable intent,
+        // so a coordinator reopen admitted modifying work over a live
+        // marked child). Publication failure is `Err`: the driver keeps
+        // the lease AND the intent — the root never ends up with neither.
+        write_quarantine_file(&root, &record).await
     }
 
     async fn record_execution_intent(&self, intent: &ExecutionIntent) -> Result<(), CodingError> {
@@ -1576,7 +1789,7 @@ impl WorkspaceCoordinator for InProcessCoordinator {
             // durable quarantine evidence while the unresolved execution
             // remains — the next coordinator would admit modifying work.
             let pids = survivors.unwrap_or_default();
-            if self.live_quarantine(&root).await.is_none() {
+            if self.live_quarantine(&root).await?.is_none() {
                 self.quarantines.lock().expect("quarantine lock").insert(
                     root.clone(),
                     WorkspaceQuarantine {

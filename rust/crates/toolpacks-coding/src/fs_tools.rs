@@ -1576,38 +1576,29 @@ mod tests {
     async fn write_create_race_reports_created_elsewhere() {
         // A raw writer slips in between `read_existing` seeing no file and
         // `create_if_absent` linking the temp file: the link fails EEXIST.
+        // DETERMINISTIC via the fs_util create/link seam: the tool is
+        // PAUSED exactly between the temp write and `link()`, the rival
+        // file is planted inside that window, and only then is the link
+        // released. No polling, no retry loop, no runner-load dependence.
         let h = Harness::new(CodingLimits::default());
-        for attempt in 0..8u32 {
-            let name = format!("race{attempt}.txt");
-            let target = h.root.join(&name);
-            let seed_target = target.clone();
-            let temp_parent = h.root.clone();
-            let temp_prefix = format!(".{name}.");
-            let tool = Arc::clone(&h.write_file);
-            let chat = h.chat.clone();
-            let content = json!({ "path": &name, "content": "A\n" });
-            let seeder = tokio::spawn(async move {
-                for _ in 0..4000 {
-                    let Ok(mut dir) = tokio::fs::read_dir(&temp_parent).await else {
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                        continue;
-                    };
-                    let mut saw_temp = false;
-                    while let Ok(Some(entry)) = dir.next_entry().await {
-                        let name = entry.file_name().to_string_lossy().into_owned();
-                        if name.starts_with(&temp_prefix) && name.ends_with(".tmp") {
-                            saw_temp = true;
-                        }
-                    }
-                    if saw_temp {
-                        // The temp is on disk; race the link with a plain create.
-                        let _ = tokio::fs::write(&seed_target, b"B\n").await;
-                        return true;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                }
-                false
-            });
+        let name = "race.txt";
+        let target = h.root.join(name);
+        crate::fs_util::clear_temp_hooks();
+        let (temp_seen_tx, temp_seen_rx) = std::sync::mpsc::channel::<()>();
+        let (proceed_tx, proceed_rx) = std::sync::mpsc::channel::<()>();
+        // `Receiver` is Send but not Sync; the hook trait demands Sync, so
+        // the recv side is parked behind a mutex the test never contends.
+        let proceed_rx = std::sync::Arc::new(std::sync::Mutex::new(proceed_rx));
+        let proceed_gate = std::sync::Arc::clone(&proceed_rx);
+        crate::fs_util::on_temp_written(".race.txt.", move |_temp| {
+            let _ = temp_seen_tx.send(());
+            // Hold the link until the rival file exists on disk.
+            let _ = proceed_gate.lock().unwrap().recv();
+        });
+        let tool = Arc::clone(&h.write_file);
+        let chat = h.chat.clone();
+        let content = json!({ "path": name, "content": "A\n" });
+        let execution = tokio::spawn(async move {
             let context = ToolContext {
                 suspension: None,
                 run_id: "run-race".to_owned(),
@@ -1622,27 +1613,28 @@ mod tests {
                 dispatch_guard: None,
                 metadata: Default::default(),
             };
-            let result = tool.execute(context, content).await.unwrap();
-            let saw_temp = seeder.await.unwrap();
-            if saw_temp && !result.ok {
-                let text = Harness::text(&result);
-                // `failure()` renders exactly `code: message`.
-                let expected = format!(
-                    "file_changed: {name} was created by someone else while writing it. \
-                     Read it, then edit or overwrite it."
-                );
-                if text == expected {
-                    assert_eq!(h.contents(&name), b"B\n");
-                    h.remove();
-                    return;
-                }
-                // The seed won the earlier window (file_not_read); retry.
-            }
-            // Lost the race window; retry with a fresh file name.
-            let _ = std::fs::remove_file(&target);
-        }
+            tool.execute(context, content).await.unwrap()
+        });
+        temp_seen_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("create_if_absent reached the link seam");
+        // The rival write is sequenced INTO the window, not raced against it.
+        tokio::fs::write(&target, b"B\n").await.unwrap();
+        proceed_tx.send(()).unwrap();
+        let result = execution.await.unwrap();
+        crate::fs_util::clear_temp_hooks();
+        assert!(!result.ok);
+        let text = Harness::text(&result);
+        // `failure()` renders exactly `code: message`.
+        let expected = format!(
+            "file_changed: {name} was created by someone else while writing it. \
+             Read it, then edit or overwrite it."
+        );
+        assert_eq!(text, expected);
+        // The rival's bytes survive; the failed attempt leaves only its
+        // (removed) temp behind.
+        assert_eq!(h.contents(name), b"B\n");
         h.remove();
-        panic!("could not force the create_if_absent race");
     }
 
     #[tokio::test]

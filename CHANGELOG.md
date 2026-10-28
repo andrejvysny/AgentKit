@@ -115,6 +115,18 @@ turn settle reads the session's own persisted descriptor — never the calling t
 `resume` deduplicates a restart whose completion already landed, instead of re-running effects.
 
 
+**Coding tool pack cleanup uncertainty and quarantine durability** (ADR 0020 corrective). Teardown now carries an
+explicit cleanup outcome (`Clean` / `Uncertain` with marked-survivor, environ-denied-suspect, stuck-group and
+unsupported-scan reasons) that every cleanup decision — normal completion, timeout, cancellation, drain, crash
+recovery and the startup sweep — must consume; the discovery view no longer drops the `/proc` scan's suspect set, so
+`survivors = []` beside a live suspect is unknown, never proof of cleanup. Suspects are reported and never killed
+(they may be unrelated). A driver-created quarantine is durable for the in-process coordinator too (a
+`quarantine.json` in the intent journal, fail closed on publication loss), and the durable intent is retained —
+not deleted — until recovery resolves the uncertainty, so a reopened coordinator over the same store denies the next
+modifying lease (`workspace_quarantined`). Zombie processes no longer masquerade as suspects, and group-liveness
+verdicts are confirmed across sustained probes.
+
+
 **Sessions, context, profiles** ([ADR 0016](docs/adr/0016-durable-agent-sessions.md) §6a–6b,
 [0017](docs/adr/0017-context-assembly-and-compaction.md), [0015](docs/adr/0015-unified-agent-runtime.md) §3).
 

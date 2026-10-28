@@ -33,8 +33,7 @@ use crate::coordination::{LeaseHolder, QuarantineEvidence, WorkspaceCoordinator,
 use crate::errors::CodingError;
 use crate::limits::CodingLimits;
 use crate::process_tree::{
-    EXEC_ID_ENV, TreeTracker, crate_platform, find_marked_processes, find_marked_processes_outcome,
-    scan_marked,
+    EXEC_ID_ENV, TreeTracker, crate_platform, find_marked_processes_outcome, scan_marked_outcome,
 };
 use crate::truncate::{TruncationLimits, format_size, truncate_tail};
 
@@ -118,14 +117,162 @@ pub struct RunResult {
 }
 
 /// What the teardown of one command found and had to do.
+///
+/// KILL POLICY: teardown only ever signals processes that POSITIVELY carry
+/// the execution marker (plus the recorded process group). `suspects` —
+/// live same-user processes whose `/proc/<pid>/environ` denied reads and
+/// which the ownership/age checks could not exclude as foreign — are
+/// REPORTED, never killed: they may be entirely unrelated (a gpg-agent
+/// class daemon), and killing them would be collateral damage for evidence
+/// that only says "might be ours".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Teardown {
     /// True when SIGTERM was not enough and SIGKILL was sent.
     pub escalated: bool,
-    /// Marked pids still alive after SIGKILL.
+    /// Marked pids still alive after SIGKILL (kill failures).
     pub survivors: Vec<i32>,
     /// `Unsupported`: descendants outside the group could not be looked for.
     pub scan: TeardownScan,
+    /// Suspect pids (environ-denied, plausibly ours) still alive when
+    /// teardown reported. Never signalled — see the kill policy above.
+    #[serde(default)]
+    pub suspects: Vec<i32>,
+    /// The recorded process group still had members when teardown reported,
+    /// even though no marked pid could be named inside it (an `env -i`
+    /// scrubber, for instance). A group that stays populated after the kill
+    /// is a kill failure of the group as a whole.
+    #[serde(default)]
+    pub group_stuck: bool,
+}
+
+impl Teardown {
+    /// Cleanup positively established: nothing alive was found.
+    pub const fn clean() -> Self {
+        Self {
+            escalated: false,
+            survivors: Vec::new(),
+            scan: TeardownScan::Ok,
+            suspects: Vec::new(),
+            group_stuck: false,
+        }
+    }
+
+    /// Cleanup not even attemptable: the platform cannot scan and signals
+    /// cannot be sent, so nothing about the survivor set was established.
+    pub const fn unknown() -> Self {
+        Self {
+            escalated: false,
+            survivors: Vec::new(),
+            scan: TeardownScan::Unsupported,
+            suspects: Vec::new(),
+            group_stuck: false,
+        }
+    }
+
+    /// The cleanup decision every call site must consume: `Clean` only when
+    /// the scan completed and NOTHING was found alive — no marked survivor,
+    /// no unresolved environ-denial suspect, no populated recorded group.
+    /// Anything else is `Uncertain` with its complete reason set; an empty
+    /// survivor list alongside suspects or an unsupported scan is UNKNOWN,
+    /// never proof that cleanup completed.
+    pub fn outcome(&self) -> CleanupOutcome {
+        let uncertainty = Uncertainty {
+            survivors: self.survivors.clone(),
+            suspects: self.suspects.clone(),
+            group_stuck: self.group_stuck,
+            scan_unsupported: self.scan == TeardownScan::Unsupported,
+        };
+        if uncertainty.is_empty() {
+            CleanupOutcome::Clean
+        } else {
+            CleanupOutcome::Uncertain(uncertainty)
+        }
+    }
+}
+
+/// Everything teardown could NOT positively settle about an execution's
+/// process tree. Each field is one independent uncertainty class; a
+/// cleanup decision may only treat the survivor set as settled when every
+/// one of them is empty/false.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Uncertainty {
+    /// Marked pids that were signalled and stayed alive (kill failures).
+    pub survivors: Vec<i32>,
+    /// Live same-user processes whose environ denied reads (EPERM — e.g.
+    /// `PR_SET_DUMPABLE=0` children detached into their own session) and
+    /// which may be hiding the execution nonce. Reported, NEVER killed.
+    pub suspects: Vec<i32>,
+    /// The recorded process group stayed populated with no nameable member.
+    pub group_stuck: bool,
+    /// The platform scan could not run at all: the survivor set is unknown.
+    pub scan_unsupported: bool,
+}
+
+impl Uncertainty {
+    pub fn is_empty(&self) -> bool {
+        self.survivors.is_empty()
+            && self.suspects.is_empty()
+            && !self.group_stuck
+            && !self.scan_unsupported
+    }
+
+    /// Human-readable reason list for notices/warnings.
+    pub fn describe(&self) -> String {
+        let mut reasons: Vec<String> = Vec::new();
+        if !self.survivors.is_empty() {
+            reasons.push(format!(
+                "marked survivors {}",
+                self.survivors
+                    .iter()
+                    .map(i32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+        if !self.suspects.is_empty() {
+            reasons.push(format!(
+                "environ-denied suspects {}",
+                self.suspects
+                    .iter()
+                    .map(i32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+        if self.group_stuck {
+            reasons.push("recorded process group still populated".to_owned());
+        }
+        if self.scan_unsupported {
+            reasons.push("teardown scan unsupported on this platform".to_owned());
+        }
+        reasons.join("; ")
+    }
+}
+
+/// The cleanup verdict every cleanup decision site must consume: normal
+/// completion, timeout, cancellation, workspace/host drain, crash recovery
+/// and the startup sweep. `Clean` is positive evidence only; any surviving
+/// uncertainty keeps the workspace blocked — it is never read as success.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CleanupOutcome {
+    /// Cleanup positively established: scan completed, nothing alive found.
+    Clean,
+    /// Cleanup not established; the reasons name what stays unknown.
+    Uncertain(Uncertainty),
+}
+
+impl CleanupOutcome {
+    pub fn is_clean(&self) -> bool {
+        matches!(self, CleanupOutcome::Clean)
+    }
+
+    /// The uncertainty carried here (empty when `Clean`).
+    pub fn uncertainty(&self) -> Uncertainty {
+        match self {
+            CleanupOutcome::Clean => Uncertainty::default(),
+            CleanupOutcome::Uncertain(uncertainty) => uncertainty.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,14 +350,6 @@ fn group_populated(_pgid: i32) -> bool {
     true
 }
 
-/// SAFE positive-exit proof for a command quarantine (B5). A bare pid probe
-/// is NEVER sufficient (pids get recycled). Positive cleanup requires ALL
-/// of: (a) the marker scan succeeds and no live process still carries the
-/// execution nonce; (b) the recorded process group is provably empty. A
-/// scan the platform cannot perform (`None`) is unknown, not empty, and
-/// never establishes cleanup; neither does a missing pgid (spawn was never
-/// confirmed). Recorded survivor pids are corroboration only: the marker
-/// scan and the group probe decide.
 /// Marker scan that distinguishes "the platform cannot be scanned" from a
 /// transient I/O failure under process churn: a single failed pass retries
 /// before the caller may treat the survivor set as UNKNOWN. A genuinely
@@ -235,10 +374,28 @@ async fn marked_processes_reliably(exec_id: &str, spawned_at_ms: u64) -> Option<
     None
 }
 
+/// SAFE positive-exit proof for a command quarantine (B5). A bare pid probe
+/// is NEVER sufficient (pids get recycled). Positive cleanup requires ALL
+/// of: (a) every pid the record NAMES is dead (named survivors/suspects
+/// are blocking evidence, not decoration); (b) the marker scan succeeds,
+/// no live process still carries the execution nonce, and no suspect
+/// survives; (c) the recorded process group is provably empty. A scan the
+/// platform cannot perform (`None`) is unknown, not empty, and never
+/// establishes cleanup; neither does a missing pgid (spawn was never
+/// confirmed).
 pub(crate) async fn cleanup_positively_established(
     identity: &crate::coordination::CommandCleanupIdentity,
-    _pids: &[i32],
+    pids: &[i32],
 ) -> bool {
+    // A pid the quarantine NAMED as its evidence must itself be positively
+    // gone: a survivor or suspect listed in the record keeps the record
+    // blocked regardless of what the marker scan alone says.
+    if pids
+        .iter()
+        .any(|pid| !pid.is_negative() && crate::process::owner_alive(i64::from(*pid)))
+    {
+        return false;
+    }
     let Some(marked) =
         marked_processes_reliably(&identity.execution_id, identity.spawned_at_ms).await
     else {
@@ -285,25 +442,146 @@ async fn sleep(ms: u64) {
     tokio::time::sleep(Duration::from_millis(ms)).await;
 }
 
-type FindFn = Arc<dyn Fn() -> BoxFuture<'static, Option<Vec<i32>>> + Send + Sync>;
+/// Is the recorded group STILL genuinely populated? A zombie whose parent
+/// died counts as a group member (`kill(-pgid, 0)` answers 0) for the
+/// moment until its reaper gets it; confirming across several polls tells
+/// a transient reap delay under load (cleanup fine) from a member that
+/// truly cannot be removed (kill failure: e.g. a zombie whose live parent
+/// never reaps it, which must read as uncertainty).
+async fn group_populated_sustained(pgid: Option<i32>) -> bool {
+    let Some(pgid) = pgid else {
+        return false;
+    };
+    if !pid_alive(-pgid) {
+        return false;
+    }
+    for _ in 0..12 {
+        sleep(POLL_MS).await;
+        if !pid_alive(-pgid) {
+            return false;
+        }
+    }
+    true
+}
 
-fn absorb(known: &mut Vec<i32>, scan: &mut TeardownScan, pids: Option<Vec<i32>>) {
-    match pids {
+/// Anything still alive after a wait: a live MARKED pid is conclusive;
+/// a merely "populated" group needs the sustained confirmation.
+async fn settled(known: &[i32], pgid: Option<i32>) -> bool {
+    known.iter().any(|pid| pid_alive(*pid)) || group_populated_sustained(pgid).await
+}
+
+/// The suspect set to REPORT: alive now AND still classified as a suspect
+/// by repeat scans. A same-user child caught mid-`execve` answers EPERM on
+/// environ for a moment (the creds transition) and must not pin a phantom
+/// uncertainty onto a clean command; a genuine `PR_SET_DUMPABLE=0` detach
+/// stays unreadable across every pass. An unscannable re-check keeps what
+/// was seen — unknown stays unknown, never silently dropped.
+async fn report_suspects(find: &FindFn, suspects: &[i32]) -> Vec<i32> {
+    let alive =
+        |pids: &[i32]| -> Vec<i32> { pids.iter().copied().filter(|pid| pid_alive(*pid)).collect() };
+    let mut live = alive(suspects);
+    for _ in 0..2 {
+        if live.is_empty() {
+            break;
+        }
+        sleep(50).await;
+        match find().await {
+            Some(scan) => live.retain(|pid| scan.suspects.contains(pid)),
+            None => break,
+        }
+    }
+    alive(&live)
+}
+
+/// What one discovery pass reports for a cleanup decision.
+///
+/// `marked` are processes POSITIVELY carrying the execution nonce — these
+/// are the ones teardown may signal. `suspects` are live same-user
+/// processes whose environ denied reads and which the ownership/age checks
+/// could not exclude as foreign: they carry UNRESOLVED UNCERTAINTY and are
+/// reported, never killed (they may be unrelated). A discovery closure
+/// returning `None` means the platform scan could not run at all — the
+/// survivor set is unknown, not empty.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Discovery {
+    pub marked: Vec<i32>,
+    pub suspects: Vec<i32>,
+}
+
+/// Injectable process-discovery view for teardown. Production builds it
+/// from the marker scan (two-pass union, `agentkit_process_tree`
+/// classification is authoritative); tests inject deterministic outcomes.
+pub type FindFn = Arc<dyn Fn() -> BoxFuture<'static, Option<Discovery>> + Send + Sync>;
+
+/// The production discovery closure for one execution: the marker scan
+/// with its suspect set — suspects are NEVER dropped here, they flow into
+/// the cleanup outcome (dropping them is what let a live marked child
+/// hiding behind an unreadable environ read as "cleanup completed").
+/// `spawned_at_ms` bounds which unreadable same-user processes can
+/// plausibly carry the nonce; the darwin tree tracker adds extra marked
+/// pids to the union.
+fn production_find(
+    exec_id: String,
+    tracker: Option<Arc<TreeTracker>>,
+    spawned_at_ms: u64,
+) -> FindFn {
+    Arc::new(move || {
+        let exec_id = exec_id.clone();
+        let tracker = tracker.clone();
+        Box::pin(async move {
+            let marked = find_marked_processes_outcome(&exec_id, Some(spawned_at_ms)).await;
+            let tracked = match &tracker {
+                Some(tracker) => tracker.sample().await,
+                None => Some(Vec::new()),
+            };
+            if marked.is_none() && tracked.is_none() {
+                return None;
+            }
+            let mut discovery = Discovery::default();
+            if let Some((pids, suspects)) = marked {
+                discovery.marked = pids;
+                discovery.suspects = suspects;
+            }
+            for pid in tracked.into_iter().flatten() {
+                if !discovery.marked.contains(&pid) {
+                    discovery.marked.push(pid);
+                }
+            }
+            Some(discovery)
+        })
+    })
+}
+
+fn absorb(
+    known: &mut Vec<i32>,
+    suspects: &mut Vec<i32>,
+    scan: &mut TeardownScan,
+    found: Option<Discovery>,
+) {
+    match found {
         None => *scan = TeardownScan::Unsupported,
-        Some(pids) => {
-            for pid in pids {
+        Some(found) => {
+            for pid in found.marked {
                 if !known.contains(&pid) {
                     known.push(pid);
+                }
+            }
+            for pid in found.suspects {
+                if !suspects.contains(&pid) {
+                    suspects.push(pid);
                 }
             }
         }
     }
 }
 
-/// SIGTERM the group and every marked pid, wait `grace_ms`, SIGKILL what is
-/// left, then report what still lives. `seen` counts distinct marked pids.
+/// SIGTERM the group and every MARKED pid, wait `grace_ms`, SIGKILL what is
+/// left, then report what still lives — including what could not be looked
+/// at. `seen` counts distinct marked pids. Suspects are absorbed into the
+/// report but NEVER signalled (see the kill policy on [`Teardown`]).
 async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown, usize) {
     let mut known: Vec<i32> = Vec::new();
+    let mut suspects: Vec<i32> = Vec::new();
     let mut scan = TeardownScan::Ok;
     let signal_all = |sig: i32, known: &[i32]| {
         if let Some(pgid) = pgid {
@@ -316,13 +594,19 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
     let remaining = |known: &[i32]| -> bool {
         (pgid.is_some_and(|pgid| pid_alive(-pgid))) || known.iter().any(|pid| pid_alive(*pid))
     };
-    absorb(&mut known, &mut scan, find().await);
+    absorb(&mut known, &mut suspects, &mut scan, find().await);
     if known.is_empty() && !remaining(&known) {
+        // Nothing killable was found; cleanup is only Clean when the scan
+        // completed AND no suspect stayed alive. An empty survivor list
+        // alongside suspects or an unsupported scan is UNKNOWN.
+        let live_suspects = report_suspects(&find, &suspects).await;
         return (
             Teardown {
                 escalated: false,
                 survivors: vec![],
                 scan,
+                suspects: live_suspects,
+                group_stuck: false,
             },
             0,
         );
@@ -333,7 +617,7 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
     for _ in 0..3 {
         signal_all(sig::SIGSTOP, &known);
         let before = known.len();
-        absorb(&mut known, &mut scan, find().await);
+        absorb(&mut known, &mut suspects, &mut scan, find().await);
         if known.len() == before {
             break;
         }
@@ -344,9 +628,9 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
     while remaining(&known) && Instant::now() < deadline {
         sleep(POLL_MS).await;
     }
-    let escalated = remaining(&known);
+    let escalated = settled(&known, pgid).await;
     if escalated {
-        absorb(&mut known, &mut scan, find().await);
+        absorb(&mut known, &mut suspects, &mut scan, find().await);
         signal_all(sig::SIGKILL, &known);
         let end = Instant::now() + Duration::from_millis(SURVIVOR_WAIT_MS);
         while remaining(&known) && Instant::now() < end {
@@ -362,15 +646,23 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
         // A zombie nobody reaped still answers kill(pid, 0) but has no
         // environment to find; only a process the scan still sees is a survivor.
         if let Some(live) = find().await {
-            survivors.retain(|pid| live.contains(pid));
+            survivors.retain(|pid| live.marked.contains(pid));
         }
     }
+    // A group that stays populated after the full kill sequence is a kill
+    // failure even when no marked pid names itself inside it. The probe is
+    // sustained so a zombie awaiting its reaper under load does not fake a
+    // kill failure (and a witness nobody reaps cannot hide).
+    let group_stuck = group_populated_sustained(pgid).await;
+    let live_suspects = report_suspects(&find, &suspects).await;
     let seen = known.len();
     (
         Teardown {
             escalated,
             survivors,
             scan,
+            suspects: live_suspects,
+            group_stuck,
         },
         seen,
     )
@@ -383,12 +675,23 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
 pub async fn sweep_orphans(grace_ms: Option<u64>) -> usize {
     let find: FindFn = Arc::new(|| {
         Box::pin(async {
-            scan_marked(crate_platform()).await.map(|all| {
-                all.into_iter()
-                    .filter(|m| !owner_alive(m.owner_pid))
-                    .map(|m| m.pid)
-                    .collect()
-            })
+            // Outcome-aware: an unscannable platform returns `None` (the
+            // teardown records `Unsupported`), never an empty list that
+            // reads as "no orphans". Suspects have no attributable owner
+            // here (their environ is unreadable, so no marker/owner is
+            // visible) and must NOT be killed — the per-execution
+            // reconcile pass is what decides their uncertainty.
+            scan_marked_outcome(crate_platform(), None)
+                .await
+                .map(|scan| Discovery {
+                    marked: scan
+                        .marks
+                        .into_iter()
+                        .filter(|m| !owner_alive(m.owner_pid))
+                        .map(|m| m.pid)
+                        .collect(),
+                    suspects: vec![],
+                })
         })
     });
     let grace = grace_ms.unwrap_or(2000).min(KILL_GRACE_CAP_MS);
@@ -625,16 +928,22 @@ fn failed_spawn(message: &str) -> RunResult {
         timed_out: false,
         aborted: false,
         spawn_error: Some(message.to_string()),
-        teardown: Teardown {
-            escalated: false,
-            survivors: vec![],
-            scan: TeardownScan::Ok,
-        },
+        // Nothing ever spawned: there is no process tree left to clean.
+        teardown: Teardown::clean(),
     }
 }
 
-/// Run one process group to completion, timeout or abort.
+/// Run one process group to completion, timeout or abort, with the
+/// production marker-scan discovery view.
 pub async fn run_bounded(spec: RunSpec) -> RunResult {
+    run_bounded_with_discovery(spec, None).await
+}
+
+/// As [`run_bounded`], with an injectable discovery closure. `None` uses
+/// the production marker scan; tests inject deterministic outcomes so the
+/// uncertainty path (live suspect, environ PermissionDenied, unsupported
+/// scan) can be regressed without prctl or racing the real scheduler.
+pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>) -> RunResult {
     let tail = Arc::new(Mutex::new(Tail::new(
         spec.limits.clone(),
         spec.scratch.clone(),
@@ -660,6 +969,7 @@ pub async fn run_bounded(spec: RunSpec) -> RunResult {
         Ok(child) => child,
         Err(error) => return failed_spawn(&error.to_string()),
     };
+    let spawned_at_ms = now_ms();
     let pid: Option<i32> = child.id().map(|p| p as i32);
     // process_group(0): the child leads its own group, so its pid is the pgid
     // a concurrent host shutdown must signal.
@@ -678,35 +988,12 @@ pub async fn run_bounded(spec: RunSpec) -> RunResult {
     if let Some(tracker) = &tracker {
         tracker.start();
     }
-    let find: FindFn = {
-        let exec_id = exec_id.clone();
-        let tracker = tracker.clone();
-        Arc::new(move || {
-            let exec_id = exec_id.clone();
-            let tracker = tracker.clone();
-            Box::pin(async move {
-                let marked = find_marked_processes(&exec_id).await;
-                let tracked = match &tracker {
-                    Some(tracker) => tracker.sample().await,
-                    None => Some(Vec::new()),
-                };
-                if marked.is_none() && tracked.is_none() {
-                    return None;
-                }
-                let mut set: Vec<i32> = Vec::new();
-                for pid in marked
-                    .into_iter()
-                    .flatten()
-                    .chain(tracked.into_iter().flatten())
-                {
-                    if !set.contains(&pid) {
-                        set.push(pid);
-                    }
-                }
-                Some(set)
-            })
-        })
-    };
+    // The discovery view must preserve the scan's FULL outcome: marked
+    // pids, environ-denial suspects, and "unscannable" (None). Dropping
+    // suspects here is what let a live marked child that detached with
+    // `PR_SET_DUMPABLE=0` (unreadable environ) read as successful cleanup.
+    let find: FindFn = discovery
+        .unwrap_or_else(|| production_find(exec_id.clone(), tracker.clone(), spawned_at_ms));
 
     let mut timed_out = false;
     let mut aborted = false;
@@ -833,11 +1120,9 @@ pub async fn run_bounded(spec: RunSpec) -> RunResult {
     let teardown = match teardown_run.take() {
         Some(handle) => match handle.await {
             Ok(teardown) => teardown,
-            Err(_) => Teardown {
-                escalated: false,
-                survivors: vec![],
-                scan: TeardownScan::Unsupported,
-            },
+            // A panicking teardown observed NOTHING: honestly unknown,
+            // never an empty survivor list that reads as success.
+            Err(_) => Teardown::unknown(),
         },
         None => {
             let find = Arc::clone(&find);
@@ -1050,15 +1335,15 @@ async fn drain_live(root: Option<&str>) {
     let mut terminating: HashSet<String> = HashSet::new();
     let mut handles = Vec::new();
     loop {
-        let live: Vec<(String, Arc<AtomicI64>)> = live_snapshot()
+        let live: Vec<(String, Arc<AtomicI64>, u64)> = live_snapshot()
             .into_iter()
-            .filter(|(_, record)| root.is_none_or(|root| record.root == root))
-            .map(|(execution_id, record)| (execution_id, record.pgid_slot))
+            .filter(|(_, record)| root.is_none_or(|r| record.root == r))
+            .map(|(execution_id, record)| (execution_id, record.pgid_slot, record.started_at_ms))
             .collect();
         if live.is_empty() {
             break;
         }
-        for (execution_id, pgid_slot) in live {
+        for (execution_id, pgid_slot, started_at_ms) in live {
             let pgid = pgid_slot.load(Ordering::SeqCst);
             // Not spawned yet: the driver will signal it through its own
             // pump; waiting for the registry entry to disappear covers it.
@@ -1066,13 +1351,10 @@ async fn drain_live(root: Option<&str>) {
                 continue;
             }
             terminating.insert(execution_id.clone());
-            let find: FindFn = {
-                let exec_id = execution_id.clone();
-                Arc::new(move || {
-                    let exec_id = exec_id.clone();
-                    Box::pin(async move { find_marked_processes(&exec_id).await })
-                })
-            };
+            // Same outcome-preserving discovery as the driver: the drain
+            // must see suspects and scan-unsupported too, never a lossy
+            // marked-only list that makes cleanup look settled.
+            let find: FindFn = production_find(execution_id.clone(), None, started_at_ms);
             handles.push(tokio::spawn(async move {
                 terminate(Some(pgid as i32), find, TERMINATE_GRACE_MS).await;
             }));
@@ -1095,8 +1377,12 @@ pub struct OwnedRunOutcome {
     /// Pids still alive when cleanup was judged: the workspace stays
     /// quarantined for these.
     pub stragglers: Vec<i32>,
+    /// The driver's explicit cleanup verdict — the value EVERY cleanup
+    /// decision site must consume. `Clean` is positive evidence only;
+    /// `Uncertain` keeps the workspace quarantined with durable intent.
+    pub cleanup: CleanupOutcome,
     /// The quarantine publication failed, so the lease was left blocking the
-    /// gate instead of being released.
+    /// gate instead of being released (and the durable intent was kept).
     pub quarantine_error: Option<CodingError>,
 }
 
@@ -1134,13 +1420,10 @@ impl OwnedExecution {
                     timed_out: false,
                     aborted: false,
                     spawn_error: Some("the execution driver died before reporting".to_owned()),
-                    teardown: Teardown {
-                        escalated: false,
-                        survivors: vec![],
-                        scan: TeardownScan::Unsupported,
-                    },
+                    teardown: Teardown::unknown(),
                 },
                 stragglers: vec![],
+                cleanup: Teardown::unknown().outcome(),
                 quarantine_error: None,
             },
         }
@@ -1162,11 +1445,27 @@ impl OwnedExecution {
 /// dropped caller can neither release the gate ahead of cleanup nor suppress
 /// quarantine; it only stops listening.
 pub fn spawn_owned_execution(
+    spec: RunSpec,
+    lease: WorkspaceLease,
+    coordinator: Arc<dyn WorkspaceCoordinator>,
+    root: String,
+    holder: LeaseHolder,
+) -> OwnedExecution {
+    spawn_owned_execution_with_discovery(spec, lease, coordinator, root, holder, None)
+}
+
+/// As [`spawn_owned_execution`], with an injectable discovery closure for
+/// the driver's teardown (`None` = the production marker scan). Tests use
+/// this to regress the assessor scenario deterministically: no survivors,
+/// a live environ-denied suspect, and the cleanup decision that must
+/// follow — quarantine + retained durable intent, never a "clean" retire.
+pub fn spawn_owned_execution_with_discovery(
     mut spec: RunSpec,
     lease: WorkspaceLease,
     coordinator: Arc<dyn WorkspaceCoordinator>,
     root: String,
     holder: LeaseHolder,
+    discovery: Option<FindFn>,
 ) -> OwnedExecution {
     let execution_id = spec.execution_id.clone();
     let pgid_slot = Arc::new(AtomicI64::new(0));
@@ -1224,29 +1523,46 @@ pub fn spawn_owned_execution(
         let _live = LiveGuard {
             execution_id: driver_id,
         };
-        let run = run_bounded(spec).await;
+        let run = run_bounded_with_discovery(spec, discovery).await;
         let stragglers = wait_for_exit(&run.teardown.survivors, SURVIVOR_RECHECK_MS).await;
         let pgid = match driver_slot.load(Ordering::SeqCst) {
             0 => None,
             pgid => Some(pgid as i32),
         };
+        // Fold the survivor recheck into the teardown verdict: survivors
+        // that positively exited are resolved; survivors that stayed alive
+        // are kill failures, and SUSPECTS resolve only through their own
+        // liveness probe — an empty survivor list NEVER cancels a live
+        // suspect or an unsupported scan (that collapse was the assessor
+        // defect: `survivors=[]` beside a live suspect read as success).
+        let mut uncertainty = run.teardown.outcome().uncertainty();
+        uncertainty.survivors = stragglers.clone();
+        uncertainty.suspects.retain(|pid| pid_alive(*pid));
+        let cleanup = if uncertainty.is_empty() {
+            CleanupOutcome::Clean
+        } else {
+            CleanupOutcome::Uncertain(uncertainty)
+        };
         let mut lease = Some(lease);
         let mut quarantine_error = None;
-        // B5: an unsupported teardown scan means the survivor set is
-        // UNKNOWN — cleanup was not positively established. Unknown
-        // cleanup is blocking evidence, never a success: quarantine with
-        // an empty (unknown) pid list and the safe identity so recovery —
-        // not a swallowed warning — decides when the workspace reopens.
-        let unknown_cleanup = run.teardown.scan == TeardownScan::Unsupported;
-        if !stragglers.is_empty() || unknown_cleanup {
+        if let CleanupOutcome::Uncertain(uncertainty) = &cleanup {
             // Cleanup is not positively established (ADR 0020): the lease may
             // be released (a wedge with no recovery path helps nobody), but
             // the workspace stays quarantined — every later acquisition
-            // blocks until these processes exit or recovery is recorded. If
-            // the blocking evidence itself cannot be published, the lease
-            // stays held: live processes must never be handed a blind
-            // workspace. `forget` skips `WorkspaceLease::drop`, whose
-            // deferred release would otherwise undo exactly that.
+            // blocks until the evidence resolves or recovery is recorded.
+            // Name every piddable reason (kill failures + suspects) in the
+            // evidence; an empty list means the uncertainty is unnameable
+            // (unsupported scan), which stays blocked just the same. If the
+            // blocking evidence itself cannot be published, the lease stays
+            // held: live processes must never be handed a blind workspace.
+            // `forget` skips `WorkspaceLease::drop`, whose deferred release
+            // would otherwise undo exactly that.
+            let mut pids = uncertainty.survivors.clone();
+            for pid in &uncertainty.suspects {
+                if !pids.contains(pid) {
+                    pids.push(*pid);
+                }
+            }
             let identity = crate::coordination::CommandCleanupIdentity {
                 execution_id: driver_exec.clone(),
                 owner_pid: i64::from(std::process::id()),
@@ -1254,14 +1570,7 @@ pub fn spawn_owned_execution(
                 spawned_at_ms,
             };
             if let Err(error) = coordinator
-                .quarantine_execution(
-                    &root,
-                    &QuarantineEvidence {
-                        pids: stragglers.clone(),
-                        holder,
-                    },
-                    &identity,
-                )
+                .quarantine_execution(&root, &QuarantineEvidence { pids, holder }, &identity)
                 .await
             {
                 quarantine_error = Some(error);
@@ -1270,10 +1579,13 @@ pub fn spawn_owned_execution(
                 }
             }
         }
-        // The durable intent is retired only once its replacement (a clean
-        // finish, or a published quarantine) exists. A failed publication
-        // keeps the intent — and the lease — in place.
-        if quarantine_error.is_none() {
+        // The durable intent is retired ONLY on a positively clean cleanup.
+        // Uncertain cleanup keeps the intent alongside the quarantine —
+        // quarantine alone must be durable too (the in-process coordinator
+        // persists it through the intent journal), and neither half may be
+        // dropped while recovery has not resolved the uncertainty. A failed
+        // quarantine publication likewise keeps the intent — and the lease.
+        if cleanup.is_clean() && quarantine_error.is_none() {
             let _ = coordinator
                 .clear_execution_intent(&root, &driver_exec)
                 .await;
@@ -1286,6 +1598,7 @@ pub fn spawn_owned_execution(
         let _ = sender.send(OwnedRunOutcome {
             run,
             stragglers,
+            cleanup,
             quarantine_error,
         });
     });
@@ -1463,14 +1776,7 @@ mod tests {
         assert!(!result.truncated);
         assert!(result.spawn_error.is_some());
         assert_eq!(result.exit_code, None);
-        assert_eq!(
-            result.teardown,
-            Teardown {
-                escalated: false,
-                survivors: vec![],
-                scan: TeardownScan::Ok
-            }
-        );
+        assert_eq!(result.teardown, Teardown::clean());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1663,14 +1969,10 @@ mod tests {
         spec.limits.command_kill_grace_ms = 1000;
         let result = run_bounded(spec).await;
         assert!(result.timed_out);
-        assert_eq!(
-            result.teardown,
-            Teardown {
-                escalated: false,
-                survivors: vec![],
-                scan: TeardownScan::Ok
-            }
-        );
+        // SIGTERM sufficed: no escalation, nothing survived, and the
+        // outcome is positively Clean (no suspects, group drained).
+        assert_eq!(result.teardown, Teardown::clean());
+        assert!(result.teardown.outcome().is_clean());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1686,14 +1988,65 @@ mod tests {
         spec.limits.command_kill_grace_ms = 300;
         let result = run_bounded(spec).await;
         assert!(result.timed_out);
-        assert_eq!(
-            result.teardown,
-            Teardown {
-                escalated: true,
-                survivors: vec![],
-                scan: TeardownScan::Ok
-            }
-        );
+        let mut expected = Teardown::clean();
+        expected.escalated = true;
+        assert_eq!(result.teardown, expected);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn terminate_reports_injected_suspects_and_never_kills_them() {
+        // The kill policy, pinned: a suspect (environ-denied, plausibly
+        // ours) is REPORTED as uncertainty and NEVER signalled — it may be
+        // an unrelated daemon. The discovery closure here is the same
+        // injection seam the assessor scenario regression uses.
+        let mut child = tokio::process::Command::new("/bin/sleep")
+            .arg("300")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap() as i32;
+        let suspect = pid;
+        let find: FindFn = Arc::new(move || {
+            Box::pin(async move {
+                Some(Discovery {
+                    marked: vec![],
+                    suspects: vec![suspect],
+                })
+            })
+        });
+        let (teardown, seen) = terminate(None, find, 100).await;
+        assert_eq!(seen, 0, "suspects are not killable discoveries");
+        assert_eq!(teardown.suspects, vec![pid]);
+        assert!(teardown.survivors.is_empty());
+        let outcome = teardown.outcome();
+        assert!(
+            matches!(&outcome, crate::process::CleanupOutcome::Uncertain(u) if u.suspects == vec![pid]),
+            "a live suspect must read as Uncertain, not Clean: {outcome:?}"
+        );
+        assert!(!outcome.is_clean());
+        // Not killed, not even signalled: still alive after teardown.
+        assert!(pid_alive(pid));
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        let _ = child.wait().await;
+    }
+
+    #[tokio::test]
+    async fn terminate_unknown_scan_is_uncertain_not_clean() {
+        // A scan the platform cannot run returns `None`: an empty survivor
+        // list must never be read as successful cleanup.
+        let find: FindFn = Arc::new(|| Box::pin(async { None }));
+        let (teardown, seen) = terminate(Some(2_000_000_000), find, 50).await;
+        assert_eq!(seen, 0);
+        assert_eq!(teardown.scan, TeardownScan::Unsupported);
+        assert!(teardown.survivors.is_empty());
+        let outcome = teardown.outcome();
+        assert!(
+            matches!(&outcome, crate::process::CleanupOutcome::Uncertain(u) if u.scan_unsupported),
+            "an unsupported scan is UNKNOWN, never Clean: {outcome:?}"
+        );
     }
 }

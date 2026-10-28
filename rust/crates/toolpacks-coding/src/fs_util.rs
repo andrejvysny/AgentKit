@@ -221,6 +221,8 @@ pub async fn create_if_absent(path: &str, data: &[u8], label: &str) -> Result<()
     let temp = temp_name(path);
     let result: Result<(), CodingError> = async {
         write_durable(&temp, data).await?;
+        #[cfg(test)]
+        notify_temp_written(&temp);
         tokio::fs::hard_link(&temp, path).await.map_err(|error| {
             if errno(&error) == Some(libc::EEXIST) {
                 file_created_elsewhere_error(label)
@@ -233,6 +235,59 @@ pub async fn create_if_absent(path: &str, data: &[u8], label: &str) -> Result<()
     .await;
     let _ = tokio::fs::remove_file(&temp).await;
     result
+}
+
+/// Test seam at the exact create/link boundary: tests register a hook keyed
+/// by temp-file prefix, so a concurrent write that must win the `link()`
+/// race can be sequenced DETERMINISTICALLY instead of polling for a window
+/// that a loaded runner may never open. Production code never sees this
+/// (`#[cfg(test)]`, zero cost); matched hooks block until the test releases
+/// them, so the interposition is guaranteed to land between temp write and
+/// link, never before or after.
+#[cfg(test)]
+pub(crate) fn on_temp_written<F>(prefix: &str, hook: F)
+where
+    F: Fn(&str) + Send + Sync + 'static,
+{
+    temp_hooks()
+        .lock()
+        .unwrap()
+        .push((prefix.to_owned(), std::sync::Arc::new(hook)));
+}
+
+#[cfg(test)]
+pub(crate) fn clear_temp_hooks() {
+    temp_hooks().lock().unwrap().clear();
+}
+
+#[cfg(test)]
+type TempHook = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+#[cfg(test)]
+fn temp_hooks() -> &'static std::sync::Mutex<Vec<(String, TempHook)>> {
+    use std::sync::OnceLock;
+    static HOOKS: OnceLock<std::sync::Mutex<Vec<(String, TempHook)>>> = OnceLock::new();
+    HOOKS.get_or_init(Default::default)
+}
+
+#[cfg(test)]
+fn notify_temp_written(temp: &str) {
+    // Snapshot under the lock, run outside it: hooks block on test channels.
+    let matched: Vec<TempHook> = {
+        let hooks = temp_hooks().lock().unwrap();
+        hooks
+            .iter()
+            .filter(|(prefix, _)| {
+                std::path::Path::new(temp)
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with(prefix))
+            })
+            .map(|(_, hook)| std::sync::Arc::clone(hook))
+            .collect()
+    };
+    for hook in matched {
+        hook(temp);
+    }
 }
 
 #[cfg(test)]
