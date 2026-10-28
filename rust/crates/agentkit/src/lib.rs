@@ -16,5 +16,8 @@ pub use agentkit_host as host;
 pub use agentkit_mcp as mcp;
 #[cfg(feature = "durable")]
 pub use agentkit_store as store;
+/// The confined coding tool pack (`coding` namespace contributor and guard).
+#[cfg(feature = "coding")]
+pub use agentkit_toolpacks_coding as toolpacks_coding;
 #[cfg(feature = "http")]
 pub use agentkit_transport_http as http;

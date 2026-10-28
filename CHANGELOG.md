@@ -2,6 +2,18 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**Coding tool pack ported to Rust.** `rust/crates/toolpacks-coding` is the native port of
+`@agentkit/toolpacks-coding`; the TypeScript package is unchanged and remains the contract of record. Eleven
+`coding`-namespace tools (`read_file`, `list_dir`, `find_files`, `code_search`, `repo_map`, `git_inspect`,
+`edit_file`, `write_file`, `run_command`, `run_tests`, `submit_plan`), the permission guard (role ceilings,
+mode matrix, plan-mode finals), the in-process and lock-dir coordinators, the version ledger, the mutation
+queue, bounded process execution with marked-tree teardown, `sandbox-exec` profile generation, the shell
+command policy with standing-approval keys, and `createCodingToolPack` as a host `ToolContributor`. The host
+`ToolGuardContext` gained the TypeScript port's per-call `arguments`, so the high-risk command guard judges
+the live command; a staging regression test pins that guards see each call's own arguments. 209 tests
+(206 unit + contributor matrix) mirror the TypeScript suite's exact codes, messages, limits and schemas.
+Live macOS `sandbox-exec` execution remains unqualified (Linux CI asserts profiles as text).
+
 **Coding tool pack refuses lost updates.** `@agentkit/toolpacks-coding`:
 
 - `edit_file` and an overwriting `write_file` are checked against the version the session last read (`read_file`

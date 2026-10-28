@@ -149,6 +149,10 @@ pub struct ToolGuardContext {
     pub contribution: ToolContributionContext,
     pub namespace: String,
     pub tool: ToolDefinition,
+    /// The live call's arguments, present on `canExecute` only (TS
+    /// `ToolGuardContext.arguments?`; visibility never sees them). Guards
+    /// that classify command text depend on this field.
+    pub arguments: Option<Value>,
 }
 
 pub enum ToolGuardVerdict {
@@ -266,6 +270,7 @@ async fn register_tools(
             contribution: context.clone(),
             namespace: namespace.clone(),
             tool: tool.definition().clone(),
+            arguments: None,
         };
         if !visible(guards, &snapshot).await {
             continue;
@@ -324,10 +329,17 @@ impl Tool for GuardedTool {
                 "Tool invocation does not match staged run",
             ));
         }
+        // TS registry-staging rebuilds the guard context per call with the
+        // live arguments (`arguments: snapshot`); guards that classify the
+        // command text must see them, never a stale value.
+        let call = ToolGuardContext {
+            arguments: Some(input.clone()),
+            ..self.snapshot.clone()
+        };
         for guard in &self.guards {
             let verdict = tokio::select! { biased;
                 _ = context.cancellation.cancelled() => return Err(CoreError::new("cancelled", "aborted")),
-                result = tokio::time::timeout(deadline(staged), guard.can_execute(&self.snapshot)) => result,
+                result = tokio::time::timeout(deadline(staged), guard.can_execute(&call)) => result,
             };
             match verdict {
                 Ok(Ok(ToolGuardVerdict::Allowed)) => {}
