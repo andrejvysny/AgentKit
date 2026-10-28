@@ -4,7 +4,11 @@
 // decides which of them a run may use. Node APIs only; macOS-first (the
 // sandbox is `sandbox-exec`). See docs/adr/0018-coding-tool-pack.md.
 
-export { createCodingToolPack, CODING_TOOL_NAMES } from "./pack.js";
+export {
+  createCodingToolPack,
+  CODING_TOOL_NAMES,
+  type CodingToolPack,
+} from "./pack.js";
 export {
   createCodingPermissionGuard,
   CODING_NAMESPACE,
@@ -30,9 +34,17 @@ export {
   type LeaseHolder,
   type WorkspaceCoordinator,
   type WorkspaceLease,
+  type ExecutionIntent,
+  type ExecutionCleanup,
+  type ExecutionLease,
+  isExecutionLease,
 } from "./coordination.js";
-export { createLockDirWorkspaceCoordinator } from "./coordination-lockdir.js";
-export { sweepOrphans } from "./process.js";
+export {
+  createLockDirWorkspaceCoordinator,
+  defaultWorkspaceCoordinationDir,
+} from "./coordination-lockdir.js";
+export { sweepOrphans, sweepOrphansDetailed } from "./process.js";
+export { CodingCleanupError } from "./errors.js";
 export { DEFAULT_CODING_LIMITS, type CodingLimits } from "./limits.js";
 export type {
   CodingMode,

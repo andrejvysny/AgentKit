@@ -7,6 +7,7 @@ import type { ProviderStore } from "./provider-store.js";
 import type { SettingsStore } from "./settings-store.js";
 import type { TaskStore } from "./task-store.js";
 import type { ProviderContinuationStore } from "./provider-continuation-store.js";
+import type { ToolExecutionStore } from "./tool-execution-store.js";
 
 /**
  * The host's persistence, as one aggregate.
@@ -31,6 +32,8 @@ export interface AssistantStore {
   outbox: OutboxStore;
   /** Trusted provider state; optional so existing host stores remain compatible. */
   continuations?: ProviderContinuationStore;
+  /** Durable mutation admission and approval consumption; required for mutating turns. */
+  toolExecutions?: ToolExecutionStore;
 
   /**
    * Run `fn` in a transaction, handing it a store view scoped to that

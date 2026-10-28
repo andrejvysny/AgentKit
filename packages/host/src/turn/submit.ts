@@ -18,8 +18,11 @@ import {
 import type { AssistantStore } from "../ports/assistant-store.js";
 import { CHAT_TURN_TASK_KIND } from "../tasks/kinds.js";
 import type { TurnRunnerDeps } from "./turn-runner.js";
+import type { SessionContextOptions } from "../sessions/descriptor.js";
 
 export interface SubmitMessageInput {
+  /** Admitted context overrides; null pins the absence of any override. */
+  sessionContext?: SessionContextOptions | null;
   /** Immutable template revisions and skill content hashes persisted in the task. */
   contentSelection?: RunContentSelection;
   chatId: string;
@@ -155,6 +158,8 @@ export interface RegenerateMessageInput {
  * a shared document instead still needs the chat spelled out here.
  */
 export interface TurnRequest {
+  /** Absent only for legacy turns and ordinary non-session chats. */
+  sessionContext?: SessionContextOptions | null;
   /** Immutable template revisions and skill content hashes persisted in the task. */
   contentSelection?: RunContentSelection;
   chatId: string;
@@ -187,6 +192,9 @@ export async function submitMessage(
   const assistantMessageId = deps.ids.messageId();
   const payload: TurnRequest = {
     chatId: input.chatId,
+    ...(input.sessionContext === undefined
+      ? {}
+      : { sessionContext: structuredClone(input.sessionContext) }),
     ...(input.parentMessageId === undefined
       ? {}
       : { parentMessageId: input.parentMessageId }),
