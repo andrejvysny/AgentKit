@@ -47,6 +47,9 @@ pub fn example(schema: &Value) -> Value {
         Some("string") => match schema["pattern"].as_str() {
             Some("^https?://") => json!("https://example.com/image.png"),
             Some("^[a-f0-9]{64}$") => json!("a".repeat(64)),
+            // Pricing `effectiveDate` (ADR 0022): the generator must speak
+            // the pattern, not the fallback - a literal "x" is not a date.
+            Some("^\\d{4}-\\d{2}-\\d{2}$") => json!("2026-01-01"),
             Some(MEDIA_TYPE_PATTERN) => json!("image/png"),
             _ => json!("x".repeat(schema["minLength"].as_u64().unwrap_or(1) as usize)),
         },

@@ -1,9 +1,13 @@
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+// The workspace pins the SDK under the repo-wide `mcp-sdk-v1` alias (see
+// packages/mcp-client/package.json); `@modelcontextprotocol/sdk` is not
+// installed unaliased, so importing it here would fail resolution and the
+// Rust client's connect would surface as `Connect`.
+import { Server } from "mcp-sdk-v1/server/index.js";
+import { StdioServerTransport } from "mcp-sdk-v1/server/stdio.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "mcp-sdk-v1/types.js";
 
 const payload = {
   n: { "$serde_json::private::Number": "123" },
