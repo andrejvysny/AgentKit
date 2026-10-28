@@ -8,19 +8,19 @@
 //! than silently running unsandboxed.
 
 use std::collections::{HashMap, HashSet};
+use std::process::id as process_id;
 use std::sync::Arc;
-use std::time::Duration;
 
 use agentkit_core::{Tool, ToolContext};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use crate::args::{as_record, opt_int, opt_string, req_string};
-use crate::context::{Outcome, PackEnv, ToolEffect, ToolSpec, define_tool};
-use crate::coordination::{AcquireWorkspaceInput, LeaseHolder, QuarantineEvidence};
+use crate::context::{Outcome, PackEnv, ToolEffect, ToolSpec, define_tool_with_effect_context};
+use crate::coordination::{AcquireWorkspaceInput, LeaseHolder};
 use crate::errors::CodingError;
 use crate::paths::{ConfineOptions, PathAccess, confine};
-use crate::process::{RunSpec, run_bounded};
+use crate::process::{RunSpec, spawn_owned_execution, startup_recovery};
 use crate::sandbox::{
     SandboxEnvironment, SandboxPolicy, sandbox_available, sandbox_profile, toolchain_paths,
 };
@@ -116,32 +116,10 @@ fn process_env() -> HashMap<String, String> {
         .collect()
 }
 
-const SURVIVOR_RECHECK_MS: u64 = 2000;
-
 /// JS `String.prototype.slice(0, n)` counts UTF-16 code units.
 fn slice_utf16(value: &str, max_units: usize) -> String {
     let units: Vec<u16> = value.encode_utf16().take(max_units).collect();
     String::from_utf16_lossy(&units)
-}
-
-/// `process.kill(pid, 0)`: alive AND ours. ESRCH (gone) or EPERM (not ours):
-/// not ours to wait on.
-fn is_alive(pid: i32) -> bool {
-    unsafe { libc::kill(pid, 0) == 0 }
-}
-
-/// Pids from `pids` still alive after waiting up to `ms` for them to exit.
-async fn wait_for_exit(pids: &[i32], ms: u64) -> Vec<i32> {
-    let mut alive: Vec<i32> = pids.to_vec();
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(ms);
-    loop {
-        alive.retain(|pid| is_alive(*pid));
-        if alive.is_empty() || tokio::time::Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    alive
 }
 
 struct ShellRequest {
@@ -217,22 +195,53 @@ async fn run_shell(
     // Every command may write, so every command takes the exclusive lease; it
     // is held from before spawn until the process tree has been torn down
     // (and, if survivors remain, until they are gone or a short re-check
-    // gives up).
-    let mut lease = env
+    // gives up). The execution identity is minted BEFORE the lease: the same
+    // id names the `AGENTKIT_EXEC_ID` marker inherited by the whole process
+    // tree and the durable ownership record, so cleanup evidence names the
+    // exact execution, not a pid that can be recycled (ADR 0020).
+    let execution_id = format!("{}:{}", process_id(), uuid::Uuid::new_v4());
+    // A crashed agent never ran its teardown: no modifying effect starts
+    // before the once-per-process startup sweep has completed (ADR 0020).
+    startup_recovery().await;
+    let holder = LeaseHolder {
+        chat_id: ctx.chat_id.clone(),
+        run_id: ctx.run_id.clone(),
+        // The host supplies the model call's stable identity; the
+        // durable intent binds run + tool call + attempt (ADR 0020).
+        tool_call_id: ctx.tool_call_id.clone(),
+        tool: request.tool.to_owned(),
+        label: slice_utf16(&request.command, 200),
+    };
+    // B5: durable PRE-SPAWN / PRE-ADMISSION intent, written before the
+    // lease is admitted and long before the child spawns. A crash at any
+    // point of admit → spawn → effect → completion therefore leaves an
+    // identifiable ownership record — stable execution nonce, owner pid,
+    // and (once the driver confirms the spawn) the process group and
+    // spawn time — so the next boot can reconcile the crashed run's
+    // process group instead of guessing from a bare pid. No durable
+    // intent, no spawn: the failure is returned and the workspace stays
+    // unmodified.
+    env.coordinator
+        .record_execution_intent(&crate::coordination::ExecutionIntent {
+            root: root.clone(),
+            identity: crate::coordination::CommandCleanupIdentity {
+                execution_id: execution_id.clone(),
+                owner_pid: i64::from(process_id()),
+                pgid: None,
+                spawned_at_ms: 0,
+            },
+            holder: holder.clone(),
+            spawned: false,
+        })
+        .await?;
+    let lease = env
         .coordinator
         .acquire_workspace(AcquireWorkspaceInput {
             root: root.clone(),
-            holder: LeaseHolder {
-                chat_id: ctx.chat_id.clone(),
-                run_id: ctx.run_id.clone(),
-                // The host supplies the model call's stable identity; the
-                // durable intent binds run + tool call + attempt (ADR 0020).
-                tool_call_id: ctx.tool_call_id.clone(),
-                tool: request.tool.to_owned(),
-                label: slice_utf16(&request.command, 200),
-            },
+            holder: holder.clone(),
             cancellation: Some(ctx.cancellation.clone()),
             max_wait_ms: Some(env.coordination_wait_ms),
+            execution_id: Some(execution_id.clone()),
         })
         .await?;
     let log_name = format!(
@@ -240,41 +249,38 @@ async fn run_shell(
         (env.clock)(),
         &uuid::Uuid::new_v4().simple().to_string()[..8]
     );
-    let run = run_bounded(RunSpec {
-        file,
-        args,
-        cwd: cwd.path.clone(),
-        env: sanitized_env(&base, &scratch),
-        timeout_ms: request.timeout_sec * 1000,
-        cancellation: Some(ctx.cancellation.clone()),
-        scratch: scratch.clone(),
-        log_name,
-        limits: env.limits.clone(),
-    })
-    .await;
-    let stragglers = wait_for_exit(&run.teardown.survivors, SURVIVOR_RECHECK_MS).await;
-    if !stragglers.is_empty() {
-        // Cleanup is not positively established (ADR 0020): the lease may
-        // be released (a wedge with no recovery path helps nobody), but the
-        // workspace stays quarantined — every later acquisition blocks
-        // until these processes exit or recovery is recorded.
-        env.coordinator
-            .quarantine_workspace(
-                &root,
-                &QuarantineEvidence {
-                    pids: stragglers.clone(),
-                    holder: LeaseHolder {
-                        chat_id: ctx.chat_id.clone(),
-                        run_id: ctx.run_id.clone(),
-                        tool_call_id: ctx.tool_call_id.clone(),
-                        tool: request.tool.to_owned(),
-                        label: slice_utf16(&request.command, 200),
-                    },
-                },
-            )
-            .await;
+    // The lease and every cleanup step (teardown, survivor recheck,
+    // quarantine, release) are owned by the detached driver task, never by
+    // this awaitable future: the core harness drops a tool future outright
+    // when its budget `select!` completes, and a lease dropped here would
+    // release the gate through `WorkspaceLease::drop` while the command was
+    // still running, skipping quarantine (B1). Awaiting the driver is the
+    // normal path; being dropped here only stops us from listening.
+    let execution = spawn_owned_execution(
+        RunSpec {
+            file,
+            args,
+            cwd: cwd.path.clone(),
+            env: sanitized_env(&base, &scratch),
+            timeout_ms: request.timeout_sec * 1000,
+            cancellation: Some(ctx.cancellation.clone()),
+            scratch: scratch.clone(),
+            log_name,
+            limits: env.limits.clone(),
+            execution_id,
+            pgid_slot: None,
+        },
+        lease,
+        Arc::clone(&env.coordinator),
+        root.clone(),
+        holder,
+    );
+    let outcome = execution.await_result().await;
+    let run = outcome.run;
+    let stragglers = outcome.stragglers;
+    if let Some(error) = outcome.quarantine_error {
+        return Err(error);
     }
-    lease.release().await;
     if let Some(spawn_error) = &run.spawn_error {
         return Err(CodingError::new(
             "spawn_failed",
@@ -359,34 +365,69 @@ async fn run_shell(
                         .join(",")
                 )]
             },
-            if stragglers.is_empty() {
+            if stragglers.is_empty() && run.teardown.scan != crate::process::TeardownScan::Unsupported {
                 vec![]
             } else {
-                vec![format!(
-                    "lease released while processes were still running: {}",
+                let who = if stragglers.is_empty() {
+                    "unknown survivors (teardown scan unsupported on this platform)".to_owned()
+                } else {
                     stragglers
                         .iter()
                         .map(|pid| pid.to_string())
                         .collect::<Vec<_>>()
                         .join(",")
+                };
+                vec![format!(
+                    "lease released while cleanup was not positively established: {who}"
                 )]
             },
-            if stragglers.is_empty() {
+            if stragglers.is_empty() && run.teardown.scan != crate::process::TeardownScan::Unsupported {
                 vec![]
             } else {
-                vec![format!(
-                    "workspace quarantined until these processes exit or recovery is recorded: {}",
+                let who = if stragglers.is_empty() {
+                    "unknown survivors (teardown scan unsupported on this platform)".to_owned()
+                } else {
                     stragglers
                         .iter()
                         .map(|pid| pid.to_string())
                         .collect::<Vec<_>>()
                         .join(",")
+                };
+                vec![format!(
+                    "workspace quarantined until these processes exit or recovery is recorded: {who}"
                 )]
             },
         ]
         .concat(),
         details: Some(Value::Object(details)),
     })
+}
+
+fn shell_effect_context(
+    env: &PackEnv,
+    sandboxed: bool,
+    network: bool,
+    test_commands: Option<&[String]>,
+) -> Value {
+    let mut context = Map::new();
+    context.insert("workspace".into(), env.workspace_root.clone().into());
+    context.insert("platform".into(), env.platform.clone().into());
+    context.insert(
+        "sandbox".into(),
+        if sandboxed { "required" } else { "off" }.into(),
+    );
+    context.insert("network".into(), network.into());
+    if sandboxed {
+        context.insert(
+            "sandboxExecPath".into(),
+            env.sandbox_exec_path.clone().into(),
+        );
+    }
+    context.insert("runner".into(), "bash".into());
+    if let Some(commands) = test_commands {
+        context.insert("testCommands".into(), json!(commands));
+    }
+    Value::Object(context)
 }
 
 pub fn run_command_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
@@ -425,7 +466,8 @@ pub fn run_command_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
         "additionalProperties": false
     });
     let env = Arc::clone(env);
-    define_tool(
+    let effect = shell_effect_context(&env, sandboxed, network, None);
+    define_tool_with_effect_context(
         ToolSpec {
             name: "run_command",
             effect: ToolEffect::Write,
@@ -434,6 +476,7 @@ pub fn run_command_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             input_schema,
             timeout_ms: (l.command_max_timeout_sec + 30) * 1000,
         },
+        effect,
         move |ctx: ToolContext, raw: Value| {
             let env = Arc::clone(&env);
             let l = l.clone();
@@ -489,7 +532,13 @@ pub fn run_tests_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
         "additionalProperties": false
     });
     let env = Arc::clone(env);
-    define_tool(
+    let effect = shell_effect_context(
+        &env,
+        env.sandbox == SandboxMode::Required,
+        env.network,
+        Some(&test_commands),
+    );
+    define_tool_with_effect_context(
         ToolSpec {
             name: "run_tests",
             effect: ToolEffect::Write,
@@ -498,6 +547,7 @@ pub fn run_tests_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
             input_schema,
             timeout_ms: (l.command_max_timeout_sec + 30) * 1000,
         },
+        effect,
         move |ctx: ToolContext, raw: Value| {
             let env = Arc::clone(&env);
             let l = l.clone();
@@ -538,6 +588,7 @@ mod tests {
     use crate::types::system_clock;
     use agentkit_core::{ToolLimits, ToolResult};
     use std::path::PathBuf;
+    use std::time::Duration;
     use tokio_util::sync::CancellationToken;
 
     struct TempRoot {

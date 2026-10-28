@@ -34,3 +34,4 @@ regex = "=1.13.1"
 
 [dev-dependencies]
 rusqlite = { version = "0.38", features = ["bundled"] }
+tempfile = "3"

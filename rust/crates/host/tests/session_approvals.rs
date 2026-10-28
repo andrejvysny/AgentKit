@@ -9,7 +9,8 @@ use agentkit_core::{
 };
 use agentkit_host::*;
 use agentkit_store::{
-    AgentInputKind, AgentInputQuery, AgentInputStatus, CreateAgentInput, SqliteStore, TaskStatus,
+    AgentInputKind, AgentInputQuery, AgentInputStatus, ClaimInput, CreateAgentInput,
+    ExecutionReceiptAdmission, ExecutionReceiptStatus, SettleTask, SqliteStore, TaskStatus,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -29,6 +30,9 @@ struct Scripted {
     requests: Arc<Mutex<Vec<ChatRequest>>>,
     ask: Arc<AtomicBool>,
     tool: &'static str,
+    /// The verbatim JSON the provider declares; the numeric-spelling tests
+    /// use it to keep the model-visible text outside any host re-parse.
+    arguments_json: &'static str,
 }
 
 #[async_trait]
@@ -42,7 +46,7 @@ impl ChatProvider for Scripted {
             vec![agentkit_core::ToolCall {
                 id: "call-1".into(),
                 name: self.tool.into(),
-                arguments_json: ARGS_A.into(),
+                arguments_json: self.arguments_json.into(),
             }]
         } else {
             vec![]
@@ -115,6 +119,7 @@ impl ToolGuard for AskGuard {
             reason: format!("approval_required: {}", self.tool),
             preview: None,
             requested_mode: self.requested_mode.map(str::to_owned),
+            uncertainty_generation: None,
         }))
     }
 }
@@ -178,6 +183,19 @@ async fn fixture(
     standing: bool,
     plan: Option<Arc<dyn PlanApprovalPolicy>>,
 ) -> Fixture {
+    fixture_with(tool, ARGS_A, tool, standing, plan).await
+}
+
+/// `guarded` is the tool name the ask-everything guard intercepts; pass a
+/// non-matching name (e.g. `"other"`) to let the call through the guard
+/// chain so only the durable gate's own ask remains.
+async fn fixture_with(
+    tool: &'static str,
+    arguments_json: &'static str,
+    guarded: &'static str,
+    standing: bool,
+    plan: Option<Arc<dyn PlanApprovalPolicy>>,
+) -> Fixture {
     let store = SqliteStore::memory(64).unwrap();
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let hits = Arc::new(AtomicUsize::new(0));
@@ -196,6 +214,7 @@ async fn fixture(
                 requests: requests.clone(),
                 ask: ask.clone(),
                 tool,
+                arguments_json,
             }),
             Arc::new(ToolRegistry::new()),
         )
@@ -207,7 +226,7 @@ async fn fixture(
                 }),
             })],
             tool_guards: vec![Arc::new(AskGuard {
-                tool,
+                tool: guarded,
                 requested_mode: if plan.is_some() {
                     Some("default")
                 } else {
@@ -302,6 +321,97 @@ impl Fixture {
             .await
             .unwrap()
     }
+
+    /// Crash residue: a run submitted, claimed and settled `failed`, leaving
+    /// an admitted-without-result receipt for `call-1` of `tool` under
+    /// `arguments_json`. Returns the execution id — the uncertainty
+    /// generation an answer must name.
+    async fn seed_uncertain(&self, run_id: &str, tool: &str, arguments_json: &str) -> String {
+        self.host
+            .submit_chat(SubmitChat {
+                task_id: run_id.into(),
+                chat_id: "s1".into(),
+                model: "model".into(),
+                content: json!("work"),
+                parent_message_id: None,
+            })
+            .await
+            .unwrap();
+        let claimed = self
+            .store
+            .claim(ClaimInput {
+                owner_id: "crash".into(),
+                now: now_ms(),
+                ttl_ms: 600_000,
+                kinds: vec![CHAT_TURN_TASK_KIND.into()],
+                busy_scopes: vec![],
+                max_attempts: 5,
+            })
+            .await
+            .unwrap()
+            .expect("the seeded run is queued");
+        assert_eq!(claimed.task.task_id, run_id);
+        let fence = claimed.lease.fence();
+        let execution = agentkit_host::execution_id(run_id, "call-1", None);
+        self.store
+            .admit_execution(
+                fence.clone(),
+                ExecutionReceiptAdmission {
+                    execution_id: execution.clone(),
+                    run_id: run_id.into(),
+                    chat_id: "s1".into(),
+                    tool_call_id: "call-1".into(),
+                    tool_name: tool.into(),
+                    args_sha256: args_sha256(
+                        &serde_json::from_str::<Value>(arguments_json).unwrap(),
+                    ),
+                    context_sha256: "0".repeat(64),
+                    attempt_id: "1".into(),
+                    approval_request_id: None,
+                    approval_generation: None,
+                    now: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+        self.store
+            .bind_run(
+                run_id,
+                "s1",
+                json!({
+                    "providerId": "test",
+                    "protocol": "responses",
+                    "connectionId": "c1",
+                    "generation": 1,
+                    "chatId": "s1",
+                    "branchId": "b1",
+                    "model": "model",
+                }),
+                fence.clone(),
+                now_ms(),
+            )
+            .await
+            .unwrap();
+        self.store
+            .settle(SettleTask {
+                fence,
+                now: now_ms(),
+                status: TaskStatus::Failed,
+                error: Some("simulated process death".into()),
+                events: vec![],
+                messages: vec![],
+            })
+            .await
+            .unwrap();
+        execution
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
 }
 
 #[tokio::test]
@@ -512,4 +622,149 @@ async fn changed_arguments_are_refused_on_the_record_not_run() {
 
     // The real ask is untouched: its answer is still owed.
     assert_eq!(f.pending(&turn).await.len(), 1);
+}
+
+#[tokio::test]
+async fn an_uncertain_effect_parks_until_a_generation_bound_approval() {
+    // Crash residue leaves `call-1` admitted without a result. The next run
+    // of the SAME operation is uncertain: it never re-executes unasked, it
+    // parks with a request that names the exact unresolved generation, and
+    // only that answer opens the store's pending-execution gate.
+    let f = fixture_with("write_file", ARGS_A, "other", false, None).await;
+    let generation = f.seed_uncertain("run-old", "write_file", ARGS_A).await;
+
+    f.set_ask(true);
+    let turn = f.send("mutate it", "t1").await;
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        0,
+        "an uncertain effect is never re-executed without an answer"
+    );
+    let request = f.pending(&turn).await.into_iter().next().unwrap();
+    assert_eq!(request.content["kind"], "approval");
+    assert_eq!(request.content["toolName"], "write_file");
+    assert_eq!(request.content["uncertaintyGeneration"], generation);
+    assert_eq!(
+        request.content["argsSha256"],
+        args_sha256(&json!({"path": "a.txt"}))
+    );
+
+    f.service
+        .approve(&request.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn).await, TaskStatus::Completed);
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        1,
+        "the approved re-run executed"
+    );
+
+    // The re-run's receipt completes; the crashed generation stays on the
+    // record as admitted evidence — completion is earned, not overwritten.
+    let receipts = f.store.list_executions_by_chat("s1".into()).await.unwrap();
+    assert!(
+        receipts
+            .iter()
+            .any(|record| record.execution_id == generation
+                && record.status == ExecutionReceiptStatus::Admitted),
+        "the uncertain generation remains admitted evidence"
+    );
+    assert!(
+        receipts
+            .iter()
+            .any(|record| record.run_id == turn
+                && record.status == ExecutionReceiptStatus::Completed),
+        "the approved re-run completed on the record"
+    );
+}
+
+#[tokio::test]
+async fn a_later_uncertainty_requires_a_new_answer() {
+    let f = fixture_with("write_file", ARGS_A, "other", false, None).await;
+    let first = f.seed_uncertain("run-old", "write_file", ARGS_A).await;
+    f.set_ask(true);
+    let turn = f.send("mutate it", "t1").await;
+    f.host.run_once().await.unwrap();
+    let request = f.pending(&turn).await.into_iter().next().unwrap();
+    f.service
+        .approve(&request.input_id, "ans-1", None, None)
+        .await
+        .unwrap();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.hits.load(Ordering::SeqCst), 1);
+
+    // A second crash leaves the same operation uncertain again, under a NEW
+    // generation. The answer that authorized the first re-run is spent and
+    // names a different execution: it must not silently open this one.
+    let second = f.seed_uncertain("run-old-2", "write_file", ARGS_A).await;
+    assert_ne!(first, second);
+    f.set_ask(true);
+    let turn2 = f.send("mutate again", "t2").await;
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.status(&turn2).await,
+        TaskStatus::WaitingApproval,
+        "an answered generation cannot authorize a newer uncertainty"
+    );
+    assert_eq!(f.hits.load(Ordering::SeqCst), 1, "still not executed");
+    let request = f.pending(&turn2).await.into_iter().next().unwrap();
+    assert_eq!(request.content["uncertaintyGeneration"], second);
+
+    f.service
+        .approve(&request.input_id, "ans-2", None, None)
+        .await
+        .unwrap();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.status(&turn2).await, TaskStatus::Completed);
+    assert_eq!(
+        f.hits.load(Ordering::SeqCst),
+        2,
+        "the new answer opened the new generation"
+    );
+}
+
+#[tokio::test]
+async fn approvals_survive_every_javascript_number_spelling() {
+    // One JavaScript-semantic parser at every digest site: what the
+    // dispatch hashed must be what the resume re-derives, or an unchanged
+    // call is refused as `approval_mismatch` — the `1.0` defect.
+    for arguments_json in [
+        "{\"timeoutSec\":1.0}",
+        "{\"z\":-0}",
+        "{\"e\":1e2}",
+        "{\"big\":1e400}",
+        "{\"tiny\":5e-324}",
+        "{\"2\":\"b\",\"1\":\"a\",\"x\":{}}",
+        "{\"😀key\":true,\"e\u{0301}\":1.0}",
+    ] {
+        let f = fixture_with("write_file", arguments_json, "write_file", false, None).await;
+        f.set_ask(true);
+        let turn = f.send("numeric", "t1").await;
+        f.host.run_once().await.unwrap();
+        assert_eq!(f.status(&turn).await, TaskStatus::WaitingApproval);
+        let request = f.pending(&turn).await.into_iter().next().unwrap();
+        f.service
+            .approve(&request.input_id, "ans-1", None, None)
+            .await
+            .unwrap();
+        f.set_ask(false);
+        f.host.run_once().await.unwrap();
+        assert_eq!(
+            f.status(&turn).await,
+            TaskStatus::Completed,
+            "{arguments_json}"
+        );
+        assert_eq!(
+            f.hits.load(Ordering::SeqCst),
+            1,
+            "{arguments_json} is the operation the human approved, unchanged"
+        );
+    }
 }

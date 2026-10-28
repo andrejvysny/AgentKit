@@ -177,8 +177,175 @@ fn migrate_events(connection: &mut Connection) -> Result<()> {
 fn migrate_receipts(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(RECEIPTS_SCHEMA)?;
+    backfill_legacy_uncertain(&transaction)?;
     transaction.pragma_update(None, "user_version", 3)?;
     transaction.commit()?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// B5: legacy unanswered mutations become CONSERVATIVE uncertain evidence.
+//
+// A v1/v2 database predates `tool_executions` entirely. With an EMPTY
+// receipt table, ordinary history assembly treats every persisted assistant
+// tool call whose result never landed as plain `tool_result_missing` — a
+// fabricated verdict about an effect nobody can prove, and a resumed run
+// could even re-admit the mutation. Instead the upgrade records each such
+// call as an `admitted`-status receipt: admitted-without-result is the
+// store's honest representation of an UNCERTAIN effect (ADR 0020). The host
+// reconciles it as `tool_effect_uncertain` (never a synthetic
+// missing-result success/failure), the durable-execution guard refuses to
+// re-admit the same (run, tool call) — no automatic replay — and explicit
+// recovery is the only path that writes a real result over it.
+//
+// Identity fields are computed with the SAME canonicalization the admission
+// path uses (JS-semantics parse of the persisted `argumentsJson`, object
+// keys sorted, `serde_json::to_string`, sha-256 hex), so the backfilled
+// record is recognized as this call's evidence instead of a conflicting one.
+// `contextSha256` of a legacy effect is genuinely unknown: it is the
+// canonical hash of the empty object, a documented constant that matches no
+// future context binding (uncertainty probes match on tool name + argument
+// hash, so the unknown context still blocks reissue).
+
+/// The documented legacy context hash: canonical sha-256 of `{}`.
+const LEGACY_CONTEXT_SHA256: &str =
+    "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
+
+fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(text.as_bytes());
+    digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+/// Canonical JSON: object keys sorted (JavaScript-semantic number
+/// spellings preserved from `parse_javascript_json`), exactly the shape the
+// host's `args_sha256`/`execution_id` hashing feeds to sha-256.
+fn canonical_sha256(value: &serde_json::Value) -> String {
+    let sorted = sort_keys(value);
+    let text = serde_json::to_string(&sorted).unwrap_or_else(|_| "null".into());
+    sha256_hex(&text)
+}
+
+fn sort_keys(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(&String, &serde_json::Value)> = map.iter().collect();
+            entries.sort_by_key(|entry| entry.0.clone());
+            let sorted: serde_json::Map<String, serde_json::Value> = entries
+                .into_iter()
+                .map(|(key, value)| (key.clone(), sort_keys(value)))
+                .collect();
+            serde_json::Value::Object(sorted)
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(sort_keys).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+fn backfill_legacy_uncertain(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+    use std::collections::HashSet;
+    // (chat, run, tool-call-id) pairs already answered by a persisted tool
+    // record of the same run — the exact key history reconciliation uses.
+    let mut answered: HashSet<(String, String, String)> = HashSet::new();
+    let mut declared: Vec<(String, String, String, String, String)> = Vec::new();
+    {
+        let mut statement =
+            transaction.prepare("SELECT chat_id, record FROM messages ORDER BY rowid")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (chat_id, record_text) = row?;
+            let Ok(record) = agentkit_contracts::parse_javascript_json(&record_text) else {
+                continue; // an unreadable message declares nothing
+            };
+            let role = record.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            let run_id = record.get("runId").and_then(|v| v.as_str());
+            match role {
+                "tool" => {
+                    if let (Some(run_id), Some(tool_call_id)) =
+                        (run_id, record.get("toolCallId").and_then(|v| v.as_str()))
+                    {
+                        answered.insert((chat_id, run_id.to_owned(), tool_call_id.to_owned()));
+                    }
+                }
+                "assistant" => {
+                    let Some(run_id) = run_id else {
+                        continue; // a record without a run cannot own evidence
+                    };
+                    let Some(calls) = record.get("toolCalls").and_then(|v| v.as_array()) else {
+                        continue;
+                    };
+                    for call in calls {
+                        let (Some(id), Some(name)) = (
+                            call.get("id").and_then(|v| v.as_str()),
+                            call.get("name").and_then(|v| v.as_str()),
+                        ) else {
+                            continue;
+                        };
+                        let arguments_json = call
+                            .get("argumentsJson")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("null");
+                        declared.push((
+                            chat_id.clone(),
+                            run_id.to_owned(),
+                            id.to_owned(),
+                            name.to_owned(),
+                            arguments_json.to_owned(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for (chat_id, run_id, tool_call_id, tool_name, arguments_json) in declared {
+        if answered.contains(&(chat_id.clone(), run_id.clone(), tool_call_id.clone())) {
+            continue;
+        }
+        // Receipts belong to runs that still exist (FK onto `tasks`); a run
+        // whose task row was deleted can never own durable evidence — the
+        // admission path could not have recorded it either.
+        let task_exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE id = ?)",
+            rusqlite::params![&run_id],
+            |row| row.get(0),
+        )?;
+        if !task_exists {
+            continue;
+        }
+        let arguments = agentkit_contracts::parse_javascript_json(&arguments_json)
+            .unwrap_or(serde_json::Value::Null);
+        let record = serde_json::json!({
+            "executionId": canonical_sha256(&serde_json::json!({
+                "runId": run_id,
+                "toolCallId": tool_call_id,
+                "approvalRequestId": "initial",
+            })),
+            "runId": run_id,
+            "chatId": chat_id,
+            "toolCallId": tool_call_id,
+            "toolName": tool_name,
+            "argsSha256": canonical_sha256(&arguments),
+            "contextSha256": LEGACY_CONTEXT_SHA256,
+            "attemptId": "legacy-upgrade",
+            "status": "admitted",
+        });
+        let execution_id = record["executionId"]
+            .as_str()
+            .expect("executionId just written")
+            .to_owned();
+        transaction.execute(
+            "INSERT INTO tool_executions(execution_id,run_id,approval_request_id,record) VALUES(?,?,NULL,?) ON CONFLICT(execution_id) DO NOTHING",
+            rusqlite::params![execution_id, run_id, record.to_string()],
+        )?;
+    }
     Ok(())
 }
 

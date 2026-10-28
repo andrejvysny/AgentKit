@@ -162,6 +162,7 @@ impl ToolGuard for CodingPermissionGuard {
                         reason: format!("plan_approval_required: {name}"),
                         preview: plan_preview(context.arguments.as_ref()),
                         requested_mode: plan_requested_mode(context.arguments.as_ref()),
+                        uncertainty_generation: None,
                     }));
                 }
                 return Ok(ToolGuardVerdict::Allowed);
@@ -183,6 +184,7 @@ impl ToolGuard for CodingPermissionGuard {
             reason: format!("approval_required: {name}"),
             preview: None,
             requested_mode: None,
+            uncertainty_generation: None,
         }))
     }
 }

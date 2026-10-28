@@ -173,11 +173,15 @@ pub enum ToolGuardVerdict {
 /// The approvable refusal a guard offers: the model-facing reason, the text
 /// the human approves on, and the mode a plan REQUESTS (recorded for the
 /// human, never obeyed — the model may not author its own permissions).
+/// The durable wrapper adds `uncertainty_generation` (the execution id of
+/// the unresolved admitted receipt) so an approval is bound to the exact
+/// uncertain effect it authorizes; a later uncertainty needs a new answer.
 #[derive(Clone, Debug, Default)]
 pub struct ApprovalAsk {
     pub reason: String,
     pub preview: Option<String>,
     pub requested_mode: Option<String>,
+    pub uncertainty_generation: Option<String>,
 }
 
 #[async_trait]
@@ -362,13 +366,32 @@ impl Tool for GuardedTool {
         // ExecutionContext), so every host-served mutation is receipt-gated.
         let definition = self.tool.definition();
         let durable = staged.durable.clone();
+        let effect_context = self.tool.effect_context();
+        let mut uncertainty: Option<(ToolResult, String)> = None;
         if let Some(durable) = &durable {
             match durable
-                .before_guards(&context, &self.snapshot, definition, &input)
+                .before_guards(
+                    &context,
+                    &self.snapshot,
+                    definition,
+                    effect_context.as_ref(),
+                    &input,
+                )
                 .await?
             {
                 crate::governance::PreGuard::Replay(result) => return Ok(result),
-                crate::governance::PreGuard::Refused(result) => return Ok(result),
+                // The operation is uncertain and no answer names this
+                // generation. Do NOT refuse yet: fold it into the approval
+                // flow below so the human can authorize the exact
+                // unresolved execution — a denial from any guard still
+                // wins, and a host that cannot park gets the honest
+                // uncertain refusal as before.
+                crate::governance::PreGuard::Uncertain {
+                    refusal,
+                    generation,
+                } => {
+                    uncertainty = Some((refusal, generation));
+                }
                 crate::governance::PreGuard::Proceed => {}
             }
         }
@@ -396,9 +419,28 @@ impl Tool for GuardedTool {
                 _ => return Ok(guard_refusal(&context, "guard error")),
             }
         }
+        if let Some((_, generation)) = &uncertainty {
+            // The wrapper — not any guard — raises this ask: it is the
+            // only party that knows the exact unresolved generation.
+            approvable.push(ApprovalAsk {
+                reason: format!("uncertain:{generation}"),
+                preview: Some(format!(
+                    "The previous run of {} was admitted without a recorded result; its effect is unknown. Approve running it again?",
+                    definition.name
+                )),
+                requested_mode: None,
+                uncertainty_generation: Some(generation.clone()),
+            });
+        }
         if !approvable.is_empty()
             && let Some(result) = self
-                .resolve_approval(&context, definition, &input, &approvable)
+                .resolve_approval(
+                    &context,
+                    definition,
+                    &input,
+                    &approvable,
+                    uncertainty.as_ref(),
+                )
                 .await?
         {
             return Ok(result);
@@ -412,7 +454,13 @@ impl Tool for GuardedTool {
         let mut execution_id = None;
         if let Some(durable) = &durable {
             match durable
-                .admit(&context, &self.snapshot, definition, &input)
+                .admit(
+                    &context,
+                    &self.snapshot,
+                    definition,
+                    effect_context.as_ref(),
+                    &input,
+                )
                 .await?
             {
                 crate::governance::Admission::Skipped => {}
@@ -451,10 +499,14 @@ impl GuardedTool {
         definition: &agentkit_core::ToolDefinition,
         input: &Value,
         approvable: &[ApprovalAsk],
+        uncertainty: Option<&(ToolResult, String)>,
     ) -> Result<Option<ToolResult>, CoreError> {
         let durable = self.snapshot.contribution.durable.clone();
         let args = crate::governance::args_sha256(input);
-        // 1. One-use answered approval (exact call, exact arguments).
+        // 1. One-use answered approval (exact call, exact arguments). For
+        //    an uncertain reissue the grant must also name the exact
+        //    unresolved generation; any other grant stays unspendable and
+        //    the call asks afresh.
         let spendable = context
             .tool_call_id
             .as_deref()
@@ -464,6 +516,12 @@ impl GuardedTool {
                     .approvals
                     .get(call_id)
                     .filter(|grant| grant.args_sha256 == args)
+                    .filter(|grant| match &uncertainty {
+                        Some((_, generation)) => {
+                            grant.uncertainty_generation.as_deref() == Some(generation.as_str())
+                        }
+                        None => true,
+                    })
                     .map(|grant| (call_id.to_owned(), grant.clone()))
             })
             .filter(|(call_id, _)| {
@@ -485,9 +543,22 @@ impl GuardedTool {
         // 2. A remembered approval of this exact call runs it like a spent
         //    grant. The policy refuses to key uncoverable calls (high-risk,
         //    plan, uncertain), so a remembered yes never erases a special
-        //    refusal.
+        //    refusal — and a reissue of an UNCERTAIN effect never runs on
+        //    standing authority at all: only an explicit fresh answer that
+        //    names the unresolved generation can open it. A call that
+        //    already carries its grant (an exact duplicate, even after the
+        //    grant was consumed) never consults the policy: denials and
+        //    duplicates cannot depend on the grant-policy provider being
+        //    available.
         let mut standing_key = None;
-        if let Some(durable) = &durable
+        let is_duplicate = context.tool_call_id.as_deref().is_some_and(|call_id| {
+            durable
+                .as_ref()
+                .is_some_and(|durable| durable.approvals.contains_key(call_id))
+        });
+        if uncertainty.is_none()
+            && !is_duplicate
+            && let Some(durable) = &durable
             && let Some(policy) = &durable.standing
         {
             let reasons: Vec<String> = approvable.iter().map(|ask| ask.reason.clone()).collect();
@@ -503,15 +574,21 @@ impl GuardedTool {
                 return Ok(None);
             }
         }
-        // 3. Ask — unless this host cannot ask, where the approvable refusal
-        //    simply stands as the final refusal, exactly as the TS wrapper
-        //    returns its reason when `ctx.suspend` is absent.
+        // 3. Ask — unless this host cannot ask. Without a park slot the
+        //    approvable refusal simply stands as the final refusal, exactly
+        //    as the TS wrapper returns its reason when `ctx.suspend` is
+        //    absent; for an uncertain call that final answer is the honest
+        //    uncertainty refusal (which names the generation), never a
+        //    generic guard message.
         let spec = approval_spec(context, definition, approvable, args, standing_key);
         if context.request_human(spec) {
             // Inert: the loop takes the slot right after this returns,
             // records `run.waiting`, and parks the turn before admission —
             // no effect started, so no receipt can be uncertain.
             return Ok(Some(guard_refusal(context, "awaiting human approval")));
+        }
+        if let Some((refusal, _)) = uncertainty {
+            return Ok(Some(refusal.clone()));
         }
         Ok(Some(guard_refusal(context, &approvable[0].reason)))
     }
@@ -544,11 +621,21 @@ fn approval_spec(
         .find_map(|ask| ask.preview.clone())
         .unwrap_or_else(|| format!("Approve {}?", definition.name));
     let requested_mode = approvable.iter().find_map(|ask| ask.requested_mode.clone());
+    // The exact unresolved execution an uncertain reissue asks about; an
+    // answer is bound to this generation (it is part of the hashed
+    // envelope), so answering an older uncertainty can never authorize a
+    // newer one.
+    let uncertainty = approvable
+        .iter()
+        .find_map(|ask| ask.uncertainty_generation.clone());
     let mut content = serde_json::Map::new();
     content.insert("prompt".into(), prompt.clone().into());
     content.insert("toolName".into(), definition.name.clone().into());
     content.insert("kind".into(), "approval".into());
     content.insert("argsSha256".into(), args_sha256.clone().into());
+    if let Some(generation) = &uncertainty {
+        content.insert("uncertaintyGeneration".into(), generation.clone().into());
+    }
     if let Some(mode) = &requested_mode {
         content.insert("requestedMode".into(), mode.clone().into());
     }
@@ -569,6 +656,9 @@ fn approval_spec(
     // may carry one).
     envelope.insert("kind".into(), "approval".into());
     envelope.insert("argsSha256".into(), args_sha256.into());
+    if let Some(generation) = &uncertainty {
+        envelope.insert("uncertaintyGeneration".into(), generation.clone().into());
+    }
     if let Some(mode) = &requested_mode {
         envelope.insert("requestedMode".into(), mode.clone().into());
     }

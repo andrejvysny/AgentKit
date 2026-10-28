@@ -48,6 +48,20 @@ fn holder_of(ctx: &ToolContext, tool: &str, label: &str) -> LeaseHolder {
     }
 }
 
+/// Stable identity of one mutating file operation: the same
+/// `{owner_pid}:{token}` grammar as the command's `AGENTKIT_EXEC_ID` marker,
+/// preferring the tool call's stable identity so every attempt of one logical
+/// call names one effect (ADR 0020); a missing or whitespace-bearing id falls
+/// back to a minted uuid. Lock-dir records carry it instead of degrading to
+/// `pid-{pid}` for native writes.
+fn file_execution_id(ctx: &ToolContext) -> String {
+    let token = match ctx.tool_call_id.as_deref() {
+        Some(id) if !id.is_empty() && !id.chars().any(char::is_whitespace) => id.to_owned(),
+        _ => uuid::Uuid::new_v4().simple().to_string(),
+    };
+    format!("{}:{}", std::process::id(), token)
+}
+
 /// JS `ctx.signal?.throwIfAborted()` as shaped by `toCodingError`.
 fn throw_if_aborted(ctx: &ToolContext) -> Result<(), CodingError> {
     if ctx.cancellation.is_cancelled() {
@@ -660,6 +674,7 @@ pub fn write_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         holder: holder_of(&ctx, "write_file", &first.relative_path),
                         cancellation: Some(ctx.cancellation.clone()),
                         max_wait_ms: Some(env.coordination_wait_ms),
+                        execution_id: Some(file_execution_id(&ctx)),
                     })
                     .await?;
                 let result =
@@ -910,6 +925,7 @@ pub fn edit_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         holder: holder_of(&ctx, "edit_file", &target.relative_path),
                         cancellation: Some(ctx.cancellation.clone()),
                         max_wait_ms: Some(env.coordination_wait_ms),
+                        execution_id: Some(file_execution_id(&ctx)),
                     })
                     .await?;
                 let result = edit_file_body(

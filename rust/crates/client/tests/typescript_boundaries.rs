@@ -18,6 +18,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+mod support;
+
 struct Service(Child);
 impl Drop for Service {
     fn drop(&mut self) {
@@ -149,6 +151,9 @@ async fn proxy(
 
 #[tokio::test]
 async fn native_client_resumes_typescript_sse_at_every_byte_boundary() {
+    if support::ts_interop_skipped() {
+        return;
+    }
     let (_service, base) = service().await;
     let (run, expected) = completed_turn(&base).await;
     let (address, count, server) = proxy(&base, &run).await;

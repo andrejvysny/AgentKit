@@ -39,12 +39,21 @@ impl Default for HostOptions {
 /// knowing anything about sessions, inputs, or descriptors.
 #[async_trait::async_trait]
 pub trait SessionFlushPlanner: Send + Sync {
-    /// Inputs queued behind this settled turn, in arrival order, fully
-    /// staged; empty when the turn was not a session turn.
-    async fn flush_candidates(
+    /// Conversion candidates for the SETTLEMENT transaction itself
+    /// (ADR 0016 §4): on a `completed` turn, the oldest queued input
+    /// (follow-ups first, then steers), fully staged; EMPTY on a failed or
+    /// cancelled turn — those inputs stay pending until an explicit
+    /// `flushQueue`. Converting inside the settle commit leaves no window
+    /// where the follow-up is converted but the turn is not terminal, or a
+    /// crash strands the follow-up between two commits.
+    async fn settle_candidates(
         &self,
-        settled: &TaskRecord,
-    ) -> HostResult<Vec<agentkit_store::StageQueuedTurn>>;
+        settling: &TaskRecord,
+        completed: bool,
+    ) -> HostResult<Vec<agentkit_store::StagedCandidate>> {
+        let _ = (settling, completed);
+        Ok(vec![])
+    }
 }
 
 #[derive(Clone)]
@@ -462,36 +471,38 @@ impl AgentHost {
             };
             format!("{reason}: {error}")
         });
-        self.store
-            .settle(SettleTask {
-                fence: context.fence.clone(),
-                now: self.runtime.now_ms(),
-                status,
-                error,
-                events: vec![],
-                messages: vec![],
-            })
-            .await?;
-        self.flush_after_settle(&context.task).await?;
+        let settle = SettleTask {
+            fence: context.fence.clone(),
+            now: self.runtime.now_ms(),
+            status,
+            error,
+            events: vec![],
+            messages: vec![],
+        };
+        let planner = self.flush_planner.lock().await.clone();
+        match planner {
+            // Session turns convert their queued follow-up INSIDE the settle
+            // commit (ADR 0016 §4): one transaction owns terminal state,
+            // the next task, its messages and the converted receipt. There
+            // is deliberately NO separate post-settle flush — a crash
+            // between two commits could strand the follow-up, and a failed
+            // or cancelled turn must leave the queue pending until an
+            // explicit flushQueue.
+            Some(planner) => {
+                let convert = planner
+                    .settle_candidates(&context.task, status == TaskStatus::Completed)
+                    .await?;
+                self.store
+                    .settle_session(settle, agentkit_store::SessionSettle { convert })
+                    .await?;
+            }
+            None => {
+                self.store.settle(settle).await?;
+            }
+        }
         // A settled turn can have promoted queued work (the session settle
         // path enqueues the next turn); rouse a worker for it immediately.
         self.wake.notify_one();
-        Ok(())
-    }
-
-    /// Promote the first queued input waiting behind a settled turn. The
-    /// store's staging transaction carries its own busy check, so racing
-    /// submitters and concurrent flushes cannot double-start the scope.
-    async fn flush_after_settle(&self, settled: &TaskRecord) -> HostResult<()> {
-        let planner = self.flush_planner.lock().await.clone();
-        let Some(planner) = planner else {
-            return Ok(());
-        };
-        for candidate in planner.flush_candidates(settled).await? {
-            if self.store.stage_queued_turn(candidate).await?.is_some() {
-                break; // one turn at a time; the next flush follows its settle
-            }
-        }
         Ok(())
     }
 

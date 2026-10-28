@@ -5,8 +5,12 @@
 //! The store is the only authority: every busy check and every queue
 //! conversion is a single actor job, so there is no check-then-write window
 //! for a concurrent submit to lose a race in. The service holds no provider
-//! client; `compact` is deliberately DEFERRED (it records the request; the
-//! session's next turn performs it).
+//! client. Descriptor settings the native dispatch path cannot honor —
+//! selected Skills (content selection), provider reasoning effort, context
+//! assembly overrides — are REFUSED before any turn effect with
+//! `not_implemented` (never silently omitted), mirroring the HTTP boundary's
+//! 501 for `contentSelection`; `compact` is likewise refused because no
+//! native compaction runner consumes the request.
 
 mod descriptor;
 mod report;
@@ -53,6 +57,13 @@ impl SessionError {
         Self::new("chat_busy", format!("Chat {session_id} is busy."))
     }
 }
+
+/// The detail the HTTP boundary returns for a `contentSelection`
+/// (`crates/host/src/http/turns.rs`: `501 not_implemented`), shared verbatim
+/// with the session submit refusal so both boundaries carry one
+/// code/message pair while native content resolution is unimplemented.
+pub const CONTENT_UNSUPPORTED_MESSAGE: &str =
+    "Native prompt templates and skills are not configured.";
 
 impl std::fmt::Display for SessionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -288,9 +299,19 @@ fn turn_id_for(input_id: &str) -> String {
     format!("turn:{input_id}")
 }
 
+/// Staging filter for queued inputs. Accepts exactly what the store's
+/// converter can write (`convert_candidate`: a non-empty string or a
+/// non-empty content-block array); anything else is skipped like malformed
+/// content — a poison queued record must stay Pending and visible, never
+/// abort a healthy turn's settle or a flush with an error.
 fn read_input_content(content: &Value) -> Option<Value> {
     let value = content.get("content")?;
-    (value.is_string() || value.is_array()).then(|| value.clone())
+    let usable = match value {
+        Value::String(text) => !text.is_empty(),
+        Value::Array(blocks) => !blocks.is_empty(),
+        _ => false,
+    };
+    usable.then(|| value.clone())
 }
 
 impl AgentSessionService {
@@ -381,8 +402,13 @@ impl AgentSessionService {
         }
         metadata.insert(SESSION_METADATA_KEY.into(), Value::Object(raw));
         if read_session_descriptor(&Value::Object(metadata.clone())).is_none() {
+            // Malformed-present values (a scalar workspace, a string
+            // windowTokens, a Skills entry without revision, an illegal
+            // turnKind, …) invalidate the descriptor exactly like a bad
+            // `profile.id` — they are never silently dropped.
             return Err(SessionError::invalid_input(
-                "profile.id must be a non-empty string.",
+                "profile.id must be a non-empty string and workspace/context/skills/turnKind \
+                 must match the session descriptor grammar.",
             ));
         }
         let state = match &input.execution_mode {
@@ -462,9 +488,19 @@ impl AgentSessionService {
     }
 
     /// The session's durable permission state, when one was ever set.
+    /// Corrupt state is an ERROR, never absence: a caller falling back to
+    /// its configured permissions would silently replace the human's
+    /// recorded authority with whatever the process happens to allow.
     pub async fn get_execution(&self, session_id: &str) -> SessionResult<Option<Value>> {
         let (chat, _) = self.require_session(session_id).await?;
-        Ok(read_execution_state(&chat.metadata))
+        match agentkit_store::inspect_execution_state(&chat.metadata) {
+            agentkit_store::ExecutionStateRead::Absent => Ok(None),
+            agentkit_store::ExecutionStateRead::Valid(state) => Ok(Some(state)),
+            agentkit_store::ExecutionStateRead::Malformed => Err(SessionError::invalid_input(
+                "The session's persisted execution state is malformed; refusing to fall back \
+                 to configured permissions. Repair the record before granting access.",
+            )),
+        }
     }
 
     /// An explicit, persisted mode switch by the HOST or the user — never by
@@ -612,7 +648,7 @@ impl AgentSessionService {
             return Err(SessionError::chat_busy(session_id));
         }
         for candidate in self
-            .queue_candidates(session_id, &descriptor, &turn_kind)
+            .queue_candidates(session_id, &descriptor, &turn_kind, None)
             .await?
         {
             let input_id = candidate.input_id.clone();
@@ -634,12 +670,15 @@ impl AgentSessionService {
 
     /// Every queued input that may take the scope, in arrival order, with
     /// its task and messages fully staged. `on_settled: cancel` steers whose
-    /// target has settled are cancelled here, never converted.
+    /// target has settled are cancelled here, never converted. `settling`
+    /// names a turn that is about to become terminal (the settle path):
+    /// steers aimed at it are treated as target-terminal.
     async fn queue_candidates(
         &self,
         session_id: &str,
         descriptor: &Value,
         turn_kind: &str,
+        settling: Option<&str>,
     ) -> SessionResult<Vec<StageQueuedTurn>> {
         let pending = self
             .store()
@@ -653,7 +692,9 @@ impl AgentSessionService {
         let mut out = Vec::new();
         for record in &pending {
             if record.kind == AgentInputKind::Steer {
-                if let Some(target) = &record.target_task_id {
+                if let Some(target) = &record.target_task_id
+                    && Some(target.as_str()) != settling
+                {
                     let target = self.store().get_task(target).await?;
                     if target
                         .as_ref()
@@ -679,7 +720,14 @@ impl AgentSessionService {
             let Some(content) = read_input_content(&record.content) else {
                 continue; // malformed content is skipped, like the TS logger path
             };
-            let user_message_id = self.mint("msg_");
+            // A steer converts under the SAME deterministic record id the
+            // in-run projection uses, so every placement path for one input
+            // is the same receipt — never two records for one steering.
+            let user_message_id = if record.kind == AgentInputKind::Steer {
+                format!("steer:{}", record.input_id)
+            } else {
+                self.mint("msg_")
+            };
             let assistant_message_id = self.mint("msg_");
             let task = self.stage_task(
                 session_id,
@@ -687,7 +735,7 @@ impl AgentSessionService {
                 &record.input_id,
                 &user_message_id,
                 &assistant_message_id,
-            );
+            )?;
             out.push(StageQueuedTurn {
                 session_id: session_id.to_owned(),
                 task_kind: turn_kind.to_owned(),
@@ -801,6 +849,30 @@ impl AgentSessionService {
             &serde_json::to_string(&input.response)
                 .map_err(|error| SessionError::invalid_input(error.to_string()))?,
         );
+        // An already-answered request is an observation replay (or a
+        // conflict the store refuses). It must not consult the plan-approval
+        // policy: a one-shot decision would be spent twice, and a replay
+        // must not depend on the grant provider still being reachable.
+        if request.status == AgentInputStatus::Answered {
+            let outcome = self
+                .store()
+                .answer_human_request(AnswerHumanRequest {
+                    request_id: input.request_id.clone(),
+                    answer_id: input.answer_id.clone(),
+                    response: input.response.clone(),
+                    response_hash,
+                    now: self.now_ms(),
+                    message_id: self.mint("msg_"),
+                    plan_tool_names: vec![],
+                    policy_denial: None,
+                    granted_mode: None,
+                })
+                .await?;
+            if outcome.enqueue.is_some() {
+                self.wake();
+            }
+            return Ok(outcome.receipt);
+        }
         let mut plan_tool_names = vec![];
         let mut policy_denial = None;
         let mut granted_mode = None;
@@ -929,18 +1001,18 @@ impl AgentSessionService {
     // -- deferred compaction, queue maintenance, configuration -------------------
 
     /// Ask for the session's context to be compacted (ADR 0017 part 2).
-    /// DEFERRED: records `compactRequestedAt`; the session's NEXT turn
-    /// performs it. Refused with `chat_busy` while a turn is live.
+    /// REFUSED: nothing in the native executor consumes
+    /// `compactRequestedAt` — the session's next turn performs no
+    /// compaction and never clears the request — so recording it would be
+    /// accept-but-ignore. Rejected with `not_implemented`, the same code the
+    /// HTTP boundary uses for unconfigured optional services, until a
+    /// compaction runner exists.
     pub async fn compact(&self, session_id: &str) -> SessionResult<()> {
-        let (_, descriptor) = self.require_session(session_id).await?;
-        self.store()
-            .request_compact(
-                session_id.to_owned(),
-                session_turn_kind(&descriptor),
-                self.now_ms(),
-            )
-            .await?;
-        Ok(())
+        self.require_session(session_id).await?;
+        Err(SessionError::new(
+            "not_implemented",
+            "Deferred session compaction is not configured on the native executor; the next turn performs no compaction.",
+        ))
     }
 
     /// Pending inputs and the provider continuation are NOT copied.
@@ -992,7 +1064,9 @@ impl AgentSessionService {
         self.get_state(&forked_id).await
     }
 
-    /// Future turns only; an active task keeps the model it was submitted with.
+    /// Future turns only; an active task keeps the snapshot (model,
+    /// provider) it was submitted with, and a patch never touches turns
+    /// already queued.
     pub async fn set_model(
         &self,
         session_id: &str,
@@ -1026,14 +1100,18 @@ impl AgentSessionService {
                             chat.id
                         ))
                     })?;
-                let mut next: Map<String, Value> = descriptor
-                    .into_iter()
-                    .filter(|(key, _)| key != "reasoningEffort")
-                    .collect();
+                let mut next: Map<String, Value> = descriptor;
                 next.insert("model".into(), model.into());
+                // Three-state patch, matching TS setModel ("Omit to keep
+                // the current effort; `null` falls back to the profile's."):
+                // omitted preserves, explicit null clears, a value replaces.
+                // `providerId` has no wire-level clear — TS replaces only —
+                // so `Option<&str>` carries its full patch contract.
                 match &effort {
                     None => {}
-                    Some(None) => {}
+                    Some(None) => {
+                        next.remove("reasoningEffort");
+                    }
                     Some(Some(effort)) => {
                         next.insert("reasoningEffort".into(), effort.clone().into());
                     }
@@ -1273,8 +1351,8 @@ impl AgentSessionService {
         input_id: &str,
         user_message_id: &str,
         assistant_message_id: &str,
-    ) -> SubmitTask {
-        SubmitTask {
+    ) -> SessionResult<SubmitTask> {
+        Ok(SubmitTask {
             task_id: turn_id_for(input_id),
             kind: session_turn_kind(descriptor),
             scope_id: session_id.to_owned(),
@@ -1284,16 +1362,29 @@ impl AgentSessionService {
                 user_message_id,
                 assistant_message_id,
                 None,
-            ),
+            )?,
             priority: 0,
             now: self.now_ms(),
             available_at: None,
             depends_on: vec![],
             parent_task_id: None,
             exclusive_scope: true,
-        }
+        })
     }
 
+    /// The task kind this session's turns run under, plus the immutable
+    /// snapshot every turn carries.
+    ///
+    /// REFUSES, before any turn effect, descriptor settings the native
+    /// dispatch path cannot honor: selected Skills (content selection — the
+    /// executor never resolves it, so dispatching would silently omit the
+    /// selected instructions), provider reasoning effort (the provider
+    /// request carries no effort field; it would vanish), and context
+    /// assembly overrides (policy, token budgets, tool-result elision — the
+    /// executor assembles history from its own options). This mirrors the
+    /// HTTP boundary's refusal of `contentSelection` (`http/turns.rs`:
+    /// `501 not_implemented`, "Native prompt templates and skills are not
+    /// configured.") in code and message shape.
     fn turn_payload(
         &self,
         session_id: &str,
@@ -1301,14 +1392,29 @@ impl AgentSessionService {
         user_message_id: &str,
         assistant_message_id: &str,
         parent_message_id: Option<&str>,
-    ) -> Value {
+    ) -> SessionResult<Value> {
+        if session_content_selection(descriptor).is_some() {
+            return Err(SessionError::new(
+                "not_implemented",
+                CONTENT_UNSUPPORTED_MESSAGE,
+            ));
+        }
+        if descriptor.get("reasoningEffort").is_some() {
+            return Err(SessionError::new(
+                "not_implemented",
+                "Provider reasoning effort is not configured on the native executor.",
+            ));
+        }
+        if descriptor.get("context").is_some() {
+            return Err(SessionError::new(
+                "not_implemented",
+                "Session context assembly overrides are not configured on the native executor.",
+            ));
+        }
         let mut payload = Map::new();
         payload.insert("chatId".into(), session_id.into());
         if let Some(parent) = parent_message_id {
             payload.insert("parentMessageId".into(), parent.into());
-        }
-        if let Some(selection) = session_content_selection(descriptor) {
-            payload.insert("contentSelection".into(), selection);
         }
         for key in ["model", "reasoningEffort", "providerId"] {
             if let Some(value) = descriptor.get(key) {
@@ -1317,7 +1423,7 @@ impl AgentSessionService {
         }
         payload.insert("assistantMessageId".into(), assistant_message_id.into());
         payload.insert("userMessageId".into(), user_message_id.into());
-        Value::Object(payload)
+        Ok(Value::Object(payload))
     }
 
     fn stage_messages(
@@ -1518,7 +1624,7 @@ impl AgentSessionService {
             &user_message_id,
             &assistant_message_id,
             None,
-        );
+        )?;
         let task = SubmitTask {
             task_id: task_id.clone(),
             kind: session_turn_kind(descriptor),
@@ -1588,8 +1694,9 @@ fn approval_of(record: &AgentInputRecord) -> Option<Value> {
     }))
 }
 
-/// The metadata key the next session turn compacts below the threshold and
-/// clears (ADR 0017 part 2). Re-exported so host wiring can read it.
+/// The metadata key a compaction request would record (ADR 0017 part 2).
+/// Re-exported so host wiring can read it; the native service currently
+/// REFUSES `compact` because no native turn consumes or clears this marker.
 pub const COMPACT_REQUESTED_KEY: &str = COMPACT_REQUESTED_METADATA_KEY;
 
 /// The approve marker `answer_human_request` leaves in `appliedMessageId`.
@@ -1597,22 +1704,47 @@ pub const APPROVAL_MARKER: &str = agentkit_store::APPROVE_MARKER;
 
 #[async_trait]
 impl crate::SessionFlushPlanner for AgentSessionService {
-    async fn flush_candidates(
+    async fn settle_candidates(
         &self,
-        settled: &TaskRecord,
-    ) -> crate::HostResult<Vec<StageQueuedTurn>> {
+        settling: &TaskRecord,
+        completed: bool,
+    ) -> crate::HostResult<Vec<agentkit_store::StagedCandidate>> {
+        // A failed or cancelled turn promotes nothing: its queued inputs
+        // stay pending and visible until an explicit flushQueue
+        // (ADR 0016 §4).
+        if !completed {
+            return Ok(vec![]);
+        }
         // Only the session's own turn kind drives its queue; anything else
         // sharing the scope (or a non-session chat) is nobody's queue.
-        let Ok((_, descriptor)) = self.require_session(&settled.scope_id).await else {
+        let Ok((_, descriptor)) = self.require_session(&settling.scope_id).await else {
             return Ok(vec![]);
         };
         let turn_kind = session_turn_kind(&descriptor);
-        if turn_kind != settled.kind {
+        if turn_kind != settling.kind {
             return Ok(vec![]);
         }
-        Ok(self
-            .queue_candidates(&settled.scope_id, &descriptor, &turn_kind)
+        // At settling time the settling turn itself counts as terminal: a
+        // steer aimed at it that was never placed is a promotion candidate
+        // (after the follow-ups). One candidate per settlement; the store
+        // CAS-validates and converts it inside the settle commit.
+        let candidates = self
+            .queue_candidates(
+                &settling.scope_id,
+                &descriptor,
+                &turn_kind,
+                Some(&settling.task_id),
+            )
             .await
-            .unwrap_or_default())
+            .unwrap_or_default();
+        Ok(candidates
+            .into_iter()
+            .take(1)
+            .map(|candidate| agentkit_store::StagedCandidate {
+                input_id: candidate.input_id,
+                task: candidate.task,
+                messages: candidate.messages,
+            })
+            .collect())
     }
 }

@@ -77,6 +77,43 @@ pub fn execution_state_for_mode(
 
 /// The session's execution state, or `None` when absent or malformed.
 pub fn read_execution_state(metadata: &Value) -> Option<Value> {
+    inspect_execution_state(metadata).ok()
+}
+
+/// Three-state read of the execution state. `Malformed` must be handled as
+/// blocking evidence — corrupt permission state is never "no decision yet",
+/// because a permissive configured fallback would then silently replace a
+/// human's recorded authority.
+#[derive(Debug)]
+pub enum ExecutionStateRead {
+    Absent,
+    Malformed,
+    Valid(Value),
+}
+
+impl ExecutionStateRead {
+    fn ok(self) -> Option<Value> {
+        match self {
+            Self::Valid(state) => Some(state),
+            Self::Absent | Self::Malformed => None,
+        }
+    }
+}
+
+pub fn inspect_execution_state(metadata: &Value) -> ExecutionStateRead {
+    if metadata
+        .get(EXECUTION_METADATA_KEY)
+        .is_none_or(Value::is_null)
+    {
+        return ExecutionStateRead::Absent;
+    }
+    match read_execution_state_inner(metadata) {
+        Some(state) => ExecutionStateRead::Valid(state),
+        None => ExecutionStateRead::Malformed,
+    }
+}
+
+fn read_execution_state_inner(metadata: &Value) -> Option<Value> {
     let raw = metadata.get(EXECUTION_METADATA_KEY)?.as_object()?;
     if raw.get("version")?.as_i64()? != 1 {
         return None;
@@ -122,13 +159,27 @@ fn read_grant(raw: &Value) -> Option<Value> {
         }
     }
     for key in ["requestedMode", "plan"] {
-        if let Some(value) = grant.get(key)
-            && value.as_str().is_none()
+        // Compatibility note: early M2 could persist an absent optional as
+        // an explicit `null`. Neither field is ever authority (the mode a
+        // plan REQUESTED is recorded for the human, never obeyed; the plan
+        // text is a display copy), so reading a legacy null as "absent"
+        // repairs those records without widening any permission. A null
+        // on a REQUIRED field stays malformed.
+        if grant.get(key).is_some_and(|value| !value.is_null())
+            && grant.get(key).and_then(Value::as_str).is_none()
         {
             return None;
         }
     }
-    Some(Value::Object(grant.clone()))
+    let mut grant = Value::Object(grant.clone());
+    if let Value::Object(object) = &mut grant {
+        for key in ["requestedMode", "plan"] {
+            if object.get(key).is_some_and(Value::is_null) {
+                object.remove(key);
+            }
+        }
+    }
+    Some(grant)
 }
 
 /// The metadata with its execution state replaced (`None` clears it).
@@ -613,57 +664,10 @@ impl SqliteStore {
                         input.request_id
                     )));
                 }
-                // REPAIR: a store without rollback can have committed the
-                // marker and lost the grant, which would leave an approved
-                // plan that authorizes nothing.
-                if request.tool_call_id.is_some()
-                    && let Some(plan) = plan_request_of(&request.content, &input.plan_tool_names)
-                {
-                    let chat: Option<ChatRecord> =
-                        crate::util::get(&transaction, "chats", "id", &request.session_id)?;
-                    let granted = chat
-                        .as_ref()
-                        .and_then(|chat| read_execution_state(&chat.metadata))
-                        .and_then(|state| state.get("grantedPlan").cloned());
-                    let missing = granted
-                        .as_ref()
-                        .and_then(|grant| grant.get("planDigest").and_then(Value::as_str))
-                        != plan.get("planDigest").and_then(Value::as_str);
-                    if missing {
-                        let granted_mode = input.granted_mode.clone().ok_or_else(|| {
-                            StoreError::InvalidInput(
-                                "a plan approval answer requires the host-resolved granted mode"
-                                    .into(),
-                            )
-                        })?;
-                        apply_plan_grant(
-                            &transaction,
-                            &request.session_id,
-                            &PlanGrant {
-                                request_id: &input.request_id,
-                                turn_id: &task_id,
-                                plan: &plan,
-                                granted_mode: &granted_mode,
-                            },
-                            &now_text,
-                            input.now,
-                        )?;
-                    }
-                }
-                // The same repair for a remembered approval: the hash
-                // matched, so this replay carries the same `remember`.
-                if approval0
-                    .as_ref()
-                    .is_some_and(|decision| decision.remember == Some(true))
-                {
-                    write_request_grant(
-                        &transaction,
-                        &request,
-                        &input.answer_id,
-                        &now_text,
-                        input.now,
-                    )?;
-                }
+                // Observation only. The marker and every grant it authorizes
+                // commit in one SQLite transaction, so a replayed answer can
+                // never be owed a grant; re-applying one here would undo a
+                // later revocation, mode restriction or newer grant.
                 transaction.commit()?;
                 return Ok(AnswerOutcome {
                     receipt: AnswerReceipt {
@@ -684,43 +688,10 @@ impl SqliteStore {
                     .map(|id| crate::util::get::<MessageRecord>(&transaction, "messages", "id", id))
                     .transpose()?
                     .flatten();
-                // REPAIR, not conflict: the receipt names a tool record that
-                // is not there (a half-committed answer on a store without
-                // rollback). The same answerId is the caller retrying that
-                // very answer, so write the record it was owed.
-                if recorded.is_none()
-                    && request.applied_message_id.is_some()
-                    && request.answer_id.as_deref() == Some(input.answer_id.as_str())
-                {
-                    let last = last_message_of_run(&transaction, &request.session_id, &task_id)?
-                        .ok_or_else(|| {
-                            StoreError::NotFound(format!("Turn {task_id} has no run records."))
-                        })?;
-                    append_answer(
-                        &transaction,
-                        &AppendAnswer {
-                            id: request.applied_message_id.clone().unwrap_or_default(),
-                            request: request.clone(),
-                            task_id: task_id.clone(),
-                            parent_message_id: last.id,
-                            envelope_json: envelope_json.clone(),
-                            answer_id: input.answer_id.clone(),
-                            response_hash: input.response_hash.clone(),
-                        },
-                        input.now,
-                    )?;
-                    transaction.commit()?;
-                    return Ok(AnswerOutcome {
-                        receipt: AnswerReceipt {
-                            request_id: input.request_id,
-                            answer_id: input.answer_id,
-                            turn_id: task_id,
-                            message_id: request.applied_message_id.unwrap_or_default(),
-                            duplicate: false,
-                        },
-                        enqueue: enqueue_if_queued(&task),
-                    });
-                }
+                // Observation only. The answer record and its receipt commit
+                // in one SQLite transaction; a receipt naming a record that
+                // is not there is missing evidence, not a retryable half
+                // commit, and must never be rewritten as a fresh answer.
                 if request.answer_id.as_deref() != Some(input.answer_id.as_str())
                     || recorded
                         .as_ref()
@@ -963,16 +934,30 @@ fn apply_plan_grant(
     let mut chat: ChatRecord = required(db, "chats", "id", session_id)
         .map_err(|_| StoreError::NotFound(format!("Session {session_id} has no chat to grant.")))?;
     let prior = read_execution_state(&chat.metadata);
-    let grant = json!({
-        "grantId": format!("grant:{request_id}"),
-        "planDigest": plan.get("planDigest").and_then(Value::as_str).unwrap_or(""),
-        "plan": plan.get("plan"),
-        "mode": granted_mode,
-        "requestedMode": plan.get("requestedMode"),
-        "requestId": request_id,
-        "turnId": turn_id,
-        "approvedAt": now_text,
-    });
+    // Absent optional keys are OMITTED, never written as null: a legal
+    // submit_plan without a mode must not persist `"requestedMode": null`,
+    // which the strict reader below (correctly) calls malformed and which
+    // would then erase the whole execution state from `get_execution`.
+    let mut grant_record = serde_json::Map::new();
+    grant_record.insert("grantId".into(), format!("grant:{request_id}").into());
+    grant_record.insert(
+        "planDigest".into(),
+        plan.get("planDigest")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .into(),
+    );
+    if let Some(text) = plan.get("plan").and_then(Value::as_str) {
+        grant_record.insert("plan".into(), text.into());
+    }
+    grant_record.insert("mode".into(), granted_mode.into());
+    if let Some(mode) = plan.get("requestedMode").and_then(Value::as_str) {
+        grant_record.insert("requestedMode".into(), mode.into());
+    }
+    grant_record.insert("requestId".into(), request_id.into());
+    grant_record.insert("turnId".into(), turn_id.into());
+    grant_record.insert("approvedAt".into(), now_text.into());
+    let grant = Value::Object(grant_record);
     let state = execution_state_for_grant(&grant, now_text, prior).ok_or_else(|| {
         StoreError::InvalidInput(format!(
             "Plan approval grant is invalid: mode \"plan\" is never grantable and planDigest is required. ({request_id})"
@@ -1112,28 +1097,41 @@ pub struct AppendProjectedInputs {
     /// Tool/assistant records to append (validated by the projection rules).
     pub messages: Vec<MessageInput>,
     pub creates: Vec<CreateAgentInput>,
-    /// Inputs receipted in this transaction: PENDING -> APPLIED.
+    /// Inputs receipted in this transaction: PENDING -> APPLIED. Each entry
+    /// OWNS the single user record its placement writes — the transition,
+    /// the record and the receipt commit together or not at all.
     pub applies: Vec<AppliedSteer>,
     /// Fills `appliedTaskId` of the created inputs.
     pub task_id: String,
     pub now: i64,
 }
 
-/// A placed steer: the durable input and the message the projection wrote.
+/// A steer placement: the durable input and the one message it projects.
 pub struct AppliedSteer {
     pub input_id: String,
-    pub message_id: String,
+    pub message: MessageInput,
+}
+
+/// What a projection actually committed. A cancelled or differently-placed
+/// input appears in NEITHER list: its message and receipt were skipped.
+#[derive(Debug, Default)]
+pub struct ProjectionCommit {
+    pub created: Vec<String>,
+    pub applied: Vec<String>,
 }
 
 impl SqliteStore {
     /// Fenced projection: events, messages, and input creation/application
     /// in ONE transaction. Creation is idempotent by input id (a replay of
-    /// the same record commits nothing new), so a retry of the same
-    /// projection commits nothing twice.
+    /// the same record commits nothing new), and a steer apply is a real
+    /// CAS: only PENDING inputs gain their message here, and a replay of
+    /// the IDENTICAL placement (same message id) is an idempotent no-op
+    /// that still reports the input as applied. A cancelled steer or one
+    /// placed by another owner writes nothing.
     pub async fn append_projected_inputs(
         &self,
         input: AppendProjectedInputs,
-    ) -> Result<Vec<String>> {
+    ) -> Result<ProjectionCommit> {
         self.call(move |db| {
             let transaction = db.transaction()?;
             crate::tasks::fence(&transaction, &input.fence, input.now)?;
@@ -1147,6 +1145,14 @@ impl SqliteStore {
                 validate_projection(&task, message)?;
                 crate::conversations::append(&transaction, message.clone(), now)?;
             }
+            for apply in &input.applies {
+                if apply.message.id.is_none() {
+                    return Err(StoreError::InvalidInput(
+                        "a steer placement must carry its message id".into(),
+                    ));
+                }
+                validate_projection(&task, &apply.message)?;
+            }
             let mut created = vec![];
             for create in input.creates {
                 let (record, was_created) = insert_input(&transaction, create, &now_text)?;
@@ -1155,8 +1161,9 @@ impl SqliteStore {
                 }
             }
             for id in &created {
-                // Ignore: the only way it is not pending is a racing apply,
-                // which already set the same fields.
+                // The row was inserted Pending in THIS transaction; the only
+                // way it is not pending now is a racing apply, which already
+                // set the same fields.
                 let _ = transition_input(
                     &transaction,
                     id,
@@ -1169,24 +1176,44 @@ impl SqliteStore {
                     &now_text,
                 );
             }
+            let mut applied = vec![];
             for apply in &input.applies {
-                // Ignore: only a racing apply or cancel leaves it not pending,
-                // and both leave a correct receipt of their own.
-                let _ = transition_input(
+                let patch = AgentInputPatch {
+                    applied_task_id: Some(input.task_id.clone()),
+                    applied_message_id: apply.message.id.clone(),
+                    ..Default::default()
+                };
+                match transition_input(
                     &transaction,
                     &apply.input_id,
                     &[AgentInputStatus::Pending],
                     AgentInputStatus::Applied,
-                    &AgentInputPatch {
-                        applied_task_id: Some(input.task_id.clone()),
-                        applied_message_id: Some(apply.message_id.clone()),
-                        ..Default::default()
-                    },
+                    &patch,
                     &now_text,
-                );
+                ) {
+                    Ok(_) => {
+                        crate::conversations::append(&transaction, apply.message.clone(), now)?;
+                        applied.push(apply.input_id.clone());
+                    }
+                    Err(StoreError::InvalidTransition(_)) => {
+                        // Meaningful CAS: only the identical earlier
+                        // placement counts as an idempotent replay. A won
+                        // cancellation (or another owner's placement) leaves
+                        // no message and no receipt from this attempt.
+                        let replay =
+                            get_input(&transaction, &apply.input_id)?.is_some_and(|record| {
+                                record.status == AgentInputStatus::Applied
+                                    && record.applied_message_id == apply.message.id
+                            });
+                        if replay {
+                            applied.push(apply.input_id.clone());
+                        }
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             transaction.commit()?;
-            Ok(created)
+            Ok(ProjectionCommit { created, applied })
         })
         .await
     }
@@ -1301,7 +1328,9 @@ pub(crate) fn settle_session_inputs(
             .as_deref()
             .is_none_or(|id| id == task.task_id)
     }) {
-        let cancel = steer.content.get("onSettled").and_then(Value::as_str) == Some("cancel");
+        // The AUTHORITATIVE policy is the top-level record field the
+        // service writes; `content.onSettled` is not a second source.
+        let cancel = steer.on_settled == Some(crate::agent_inputs::AgentInputSettlePolicy::Cancel);
         if cancel {
             let _ = transition_input(
                 db,
@@ -1314,9 +1343,13 @@ pub(crate) fn settle_session_inputs(
         }
     }
     if !completed {
-        // Failed and cancelled turns settle nothing: every queued input of
-        // the session is cancelled with them.
-        return cancel_remaining_inputs(db, &task.scope_id, now);
+        // Failed and cancelled turns promote nothing (ADR 0016 §4): queued
+        // follow-ups and steers stay PENDING and visible, and an explicit
+        // flushQueue releases the oldest. A user who cancelled a turn did
+        // not ask for the queued one to start on its own — and a failed
+        // turn must not swallow the queue with it. Only the cancel-policy
+        // steers above were removed; everything else is untouched.
+        return Ok(());
     }
     // Staging a second turn into a scope that already runs one is exactly
     // what the claim guard exists to prevent; the conversion must respect
@@ -1359,6 +1392,31 @@ pub(crate) fn convert_candidate(
     if record.status != AgentInputStatus::Pending || record.session_id != scope_id {
         return Ok(false);
     }
+    // Claim the input BEFORE staging anything: the Pending -> Converted
+    // transition is the CAS. A lost race returns false having written
+    // nothing; the task and its messages land only behind the receipt.
+    let user_message_id = (record.kind == crate::agent_inputs::AgentInputKind::Steer)
+        .then(|| {
+            candidate
+                .messages
+                .iter()
+                .find(|message| message.role == "user")
+                .and_then(|message| message.id.clone())
+        })
+        .flatten();
+    let applied_task_id = candidate.task.task_id.clone();
+    transition_input(
+        db,
+        &candidate.input_id,
+        &[AgentInputStatus::Pending],
+        AgentInputStatus::Converted,
+        &AgentInputPatch {
+            applied_task_id: Some(applied_task_id),
+            applied_message_id: user_message_id,
+            ..Default::default()
+        },
+        &now_text,
+    )?;
     let mut submit = candidate.task.clone();
     submit.now = now;
     let task = crate::tasks::insert(db, submit)?;
@@ -1386,49 +1444,7 @@ pub(crate) fn convert_candidate(
         }
         crate::conversations::append(db, message.clone(), now)?;
     }
-    let _ = transition_input(
-        db,
-        &candidate.input_id,
-        &[AgentInputStatus::Pending],
-        AgentInputStatus::Converted,
-        &AgentInputPatch {
-            applied_task_id: Some(candidate.task.task_id.clone()),
-            ..Default::default()
-        },
-        &now_text,
-    );
     Ok(true)
-}
-
-fn cancel_remaining_inputs(db: &Connection, session_id: &str, now: i64) -> Result<()> {
-    let now_text = ConversationTimestamp::from_epoch_millis(now)?
-        .wire_text()?
-        .into_owned();
-    for kind in [
-        crate::agent_inputs::AgentInputKind::Steer,
-        crate::agent_inputs::AgentInputKind::FollowUp,
-    ] {
-        let records = list_inputs(
-            db,
-            &AgentInputQuery {
-                session_id: session_id.to_owned(),
-                kinds: Some(vec![kind]),
-                statuses: Some(vec![AgentInputStatus::Pending]),
-                target_task_id: None,
-            },
-        )?;
-        for record in records {
-            let _ = transition_input(
-                db,
-                &record.input_id,
-                &[AgentInputStatus::Pending],
-                AgentInputStatus::Cancelled,
-                &AgentInputPatch::default(),
-                &now_text,
-            );
-        }
-    }
-    Ok(())
 }
 
 /// Cancel every pending human request that names this turn (a cancelled
@@ -1486,9 +1502,13 @@ pub struct StageQueuedTurn {
 impl SqliteStore {
     /// Convert the given queued input into a turn, or return `None` when
     /// the scope is busy or the input is no longer pending in this session.
+    /// The busy check, the CAS, the task insert and the message append are
+    /// ONE transaction: a refusal mid-way (invalid content, a lost race)
+    /// writes NOTHING — never a queued task without its messages or receipt.
     pub async fn stage_queued_turn(&self, input: StageQueuedTurn) -> Result<Option<String>> {
         self.call(move |db| {
-            let busy: Option<String> = db
+            let transaction = db.transaction()?;
+            let busy: Option<String> = transaction
                 .query_row(
                     "SELECT id FROM tasks WHERE scope=?1 AND json_extract(record,'$.kind')=?2 \
                      AND (?3 IS NULL OR id<>?3) AND (status IN ('running','waiting_approval','interrupted') \
@@ -1500,7 +1520,7 @@ impl SqliteStore {
             if busy.is_some() {
                 return Ok(None);
             }
-            let Some(record) = get_input(db, &input.input_id)? else {
+            let Some(record) = get_input(&transaction, &input.input_id)? else {
                 return Ok(None);
             };
             if record.status != AgentInputStatus::Pending
@@ -1515,7 +1535,8 @@ impl SqliteStore {
                 task: input.task,
                 messages: input.messages,
             };
-            if convert_candidate(db, &input.session_id, &candidate, input.now)? {
+            if convert_candidate(&transaction, &input.session_id, &candidate, input.now)? {
+                transaction.commit()?;
                 Ok(Some(task_id))
             } else {
                 Ok(None)

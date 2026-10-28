@@ -39,11 +39,15 @@ pub struct DurableExecution {
 /// An answered approval bound to one exact call: the answered request id
 /// (spent at admission, single-use via the store's UNIQUE index) and the
 /// canonical arguments hash it was granted for (a changed call is not this
-/// grant's to spend).
+/// grant's to spend). `uncertainty_generation` is the execution id of the
+/// unresolved admitted receipt an answer explicitly reauthorized: the
+/// store's pending-generation gate only opens for exactly that value, so
+/// the grant cannot spend itself on a different (later) uncertainty.
 #[derive(Clone, Debug)]
 pub struct ApprovalGrant {
     pub request_id: String,
     pub args_sha256: String,
+    pub uncertainty_generation: Option<String>,
 }
 
 /// Which approvable refusals may be remembered, and under what digest. The
@@ -112,10 +116,14 @@ pub fn args_sha256(input: &Value) -> String {
 
 /// The host execution-context binding: everything that must stay identical
 /// for a recorded result to be a faithful replay of the same operation.
+/// `effect_context` carries the tool's real execution environment
+/// (workspace, sandbox/network policy, runner selection); an absent value
+/// is the empty object, never a stand-in for an unbound environment.
 pub fn execution_context_sha256(
     durable: &DurableExecution,
     contribution: &ToolContributionContext,
     tool: &ToolDefinition,
+    effect_context: Option<&Value>,
 ) -> String {
     canonical_sha256(&json!({
         "chatId": durable.chat_id,
@@ -123,7 +131,7 @@ pub fn execution_context_sha256(
         "bindings": contribution.bindings,
         "toolName": tool.name,
         "toolVersion": tool.version,
-        "context": {},
+        "context": effect_context.unwrap_or(&Value::Object(Default::default())),
     }))
 }
 
@@ -169,7 +177,15 @@ fn uncertain_message() -> String {
 pub(super) enum PreGuard {
     Proceed,
     Replay(ToolResult),
-    Refused(ToolResult),
+    /// The operation is uncertain (admitted without a durable result) and
+    /// no answer covers this generation. The wrapper folds it into the
+    /// approval flow: the human is asked, the ask carries the exact
+    /// unresolved generation, and a refusal is the fallback when this host
+    /// cannot park.
+    Uncertain {
+        refusal: ToolResult,
+        generation: String,
+    },
 }
 
 #[allow(clippy::large_enum_variant)] // refusals carry the full model-facing envelope
@@ -200,6 +216,7 @@ impl DurableExecution {
         context: &ToolContext,
         contribution: &ToolGuardContext,
         tool: &ToolDefinition,
+        effect_context: Option<&Value>,
         input: &Value,
     ) -> Result<PreGuard, CoreError> {
         if !self.needs_receipt(tool) {
@@ -217,6 +234,15 @@ impl DurableExecution {
             .list_executions(self.context.task.task_id.clone())
             .await
             .map_err(receipt_unreadable)?;
+        // An answer only reauthorizes the exact unresolved generation it
+        // named: grant.uncertainty_generation must equal the pending
+        // receipt's execution id. An unrelated (or stale) grant never
+        // opens an uncertain effect.
+        let covers = |previous: &agentkit_store::ExecutionReceiptRecord| {
+            self.approvals.get(&tool_call_id).is_some_and(|grant| {
+                grant.uncertainty_generation.as_deref() == Some(previous.execution_id.as_str())
+            })
+        };
         // 1. Replay barrier: the last receipt for this exact tool call.
         //    (Only the newest receipt counts: a newest-admitted call must
         //    read as uncertain even if an older attempt completed.)
@@ -227,7 +253,8 @@ impl DurableExecution {
             && last.status == agentkit_store::ExecutionReceiptStatus::Completed
         {
             let args = args_sha256(input);
-            let context_sha = execution_context_sha256(self, &contribution.contribution, tool);
+            let context_sha =
+                execution_context_sha256(self, &contribution.contribution, tool, effect_context);
             if last.tool_name != tool.name
                 || last.args_sha256 != args
                 || last.context_sha256 != context_sha
@@ -251,48 +278,50 @@ impl DurableExecution {
             })?;
             return Ok(PreGuard::Replay(stored));
         }
-        // 2. Uncertainty probe within this run.
+        // 2. Uncertainty probe within this run: the human must explicitly
+        //    reauthorize the unresolved generation (or the call proceeds
+        //    when an answered grant already covers it).
         let args = args_sha256(input);
         if let Some(previous) = receipts
             .iter()
             .rev()
             .find(|r| r.tool_name == tool.name && r.args_sha256 == args)
             .filter(|r| r.status == agentkit_store::ExecutionReceiptStatus::Admitted)
+            && !covers(previous)
         {
-            return Ok(PreGuard::Refused(receipt_refusal(
-                context,
-                "tool_result_uncertain",
-                &uncertain_message(),
-                Some(json!({"approvalGeneration": previous.execution_id})),
-            )));
+            return Ok(PreGuard::Uncertain {
+                refusal: receipt_refusal(
+                    context,
+                    "tool_result_uncertain",
+                    &uncertain_message(),
+                    Some(json!({"approvalGeneration": previous.execution_id})),
+                ),
+                generation: previous.execution_id.clone(),
+            });
         }
         // 3. Cross-run uncertainty guard (same chat): an uncertain mutation
         // under any run of this chat blocks an identical reissue even under a
         // fresh tool-call id. An identical completed operation is not blocked;
-        // neither is an approved reissue — the human answered for exactly
-        // this call.
-        let approved = context
-            .tool_call_id
-            .as_deref()
-            .is_some_and(|call_id| self.approvals.contains_key(call_id));
-        if !approved {
-            let chat_receipts = self
-                .context
-                .store
-                .list_executions_by_chat(self.chat_id.clone())
-                .await
-                .map_err(receipt_unreadable)?;
-            if let Some(previous) = chat_receipts
-                .iter()
-                .rev()
-                .filter(|r| r.run_id != self.context.task.task_id)
-                .find(|r| {
-                    r.tool_name == tool.name
-                        && r.args_sha256 == args
-                        && r.status == agentkit_store::ExecutionReceiptStatus::Admitted
-                })
-            {
-                return Ok(PreGuard::Refused(receipt_refusal(
+        // neither is a reissue whose answer names exactly this pending
+        // generation.
+        if let Some(previous) = self
+            .context
+            .store
+            .list_executions_by_chat(self.chat_id.clone())
+            .await
+            .map_err(receipt_unreadable)?
+            .iter()
+            .rev()
+            .filter(|r| r.run_id != self.context.task.task_id)
+            .find(|r| {
+                r.tool_name == tool.name
+                    && r.args_sha256 == args
+                    && r.status == agentkit_store::ExecutionReceiptStatus::Admitted
+            })
+            && !covers(previous)
+        {
+            return Ok(PreGuard::Uncertain {
+                refusal: receipt_refusal(
                     context,
                     "tool_result_uncertain",
                     &format!(
@@ -303,8 +332,9 @@ impl DurableExecution {
                     Some(
                         json!({"approvalGeneration": previous.execution_id, "pendingRunId": previous.run_id}),
                     ),
-                )));
-            }
+                ),
+                generation: previous.execution_id.clone(),
+            });
         }
         Ok(PreGuard::Proceed)
     }
@@ -316,6 +346,7 @@ impl DurableExecution {
         context: &ToolContext,
         contribution: &ToolGuardContext,
         tool: &ToolDefinition,
+        effect_context: Option<&Value>,
         input: &Value,
     ) -> Result<Admission, CoreError> {
         if !self.needs_receipt(tool) {
@@ -330,10 +361,10 @@ impl DurableExecution {
         // A resumed approved call binds to its answered request: the
         // execution identity differs from the initial attempt, and the
         // store's UNIQUE approval index makes the approval single-use.
-        let approval_request_id = self
-            .approvals
-            .get(&tool_call_id)
-            .map(|grant| grant.request_id.clone());
+        // The pending-generation gate opens only for the generation the
+        // human actually named — never for the request id.
+        let grant = self.approvals.get(&tool_call_id);
+        let approval_request_id = grant.map(|grant| grant.request_id.clone());
         let execution = execution_id(
             &self.context.task.task_id,
             &tool_call_id,
@@ -346,10 +377,15 @@ impl DurableExecution {
             tool_call_id,
             tool_name: tool.name.clone(),
             args_sha256: args_sha256(input),
-            context_sha256: execution_context_sha256(self, &contribution.contribution, tool),
+            context_sha256: execution_context_sha256(
+                self,
+                &contribution.contribution,
+                tool,
+                effect_context,
+            ),
             attempt_id: self.context.attempt_id.clone(),
             approval_request_id: approval_request_id.clone(),
-            approval_generation: approval_request_id,
+            approval_generation: grant.and_then(|grant| grant.uncertainty_generation.clone()),
             now: self.context.runtime.now_ms(),
         };
         let admitted = self
@@ -427,6 +463,7 @@ impl agentkit_core::Tool for ReceiptedTool {
     }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
         let definition = self.tool.definition();
+        let effect_context = self.tool.effect_context();
         let snapshot = ToolGuardContext {
             contribution: self.contribution.clone(),
             namespace: "static".into(),
@@ -435,11 +472,20 @@ impl agentkit_core::Tool for ReceiptedTool {
         };
         match self
             .durable
-            .before_guards(&context, &snapshot, definition, &input)
+            .before_guards(
+                &context,
+                &snapshot,
+                definition,
+                effect_context.as_ref(),
+                &input,
+            )
             .await?
         {
             PreGuard::Replay(result) => return Ok(result),
-            PreGuard::Refused(result) => return Ok(result),
+            // The static fast path has no guard chain and no park slot:
+            // the uncertain refusal stands as the final answer, exactly as
+            // before — only the session wrapper can ask a human.
+            PreGuard::Uncertain { refusal, .. } => return Ok(refusal),
             PreGuard::Proceed => {}
         }
         if let Some(guard) = &context.dispatch_guard {
@@ -447,7 +493,13 @@ impl agentkit_core::Tool for ReceiptedTool {
         }
         let execution_id = match self
             .durable
-            .admit(&context, &snapshot, definition, &input)
+            .admit(
+                &context,
+                &snapshot,
+                definition,
+                effect_context.as_ref(),
+                &input,
+            )
             .await?
         {
             Admission::Skipped => None,

@@ -390,6 +390,7 @@ impl agentkit_host::ToolGuard for HighRiskCommandGuard {
                 reason: high_risk_refusal(&name),
                 preview: None,
                 requested_mode: None,
+                uncertainty_generation: None,
             },
         ))
     }

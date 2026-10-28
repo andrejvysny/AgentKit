@@ -5,11 +5,15 @@
 //!   exclusive.lock           workspace-exclusive marker (command running)
 //!   shared-<pid>-<uuid>.lock one per in-flight file lease
 //!   file-<sha256(path)>.lock one per locked canonical file
-//! Every lock file holds JSON `{pid, processStart, tool, label, createdAt}`
+//! Every lock file holds JSON
+//! `{pid, processStart, tool, label, createdAt, chatId?, runId?, toolCallId?, executionId?}`
 //! and is created atomically (written to a temp name, then `hard_link`ed into
 //! place, which fails with EEXIST like O_EXCL but never exposes a half-written
 //! file). `label` is only a 12-char hash of the holder's label: command text
-//! never reaches the lock directory.
+//! never reaches the lock directory. The identity fields name the run/tool
+//! call (and, for a command, the execution marker) that owns the lock, so a
+//! record read back after a crash still says who held it; staleness stays
+//! keyed on `pid` + `processStart`.
 //!
 //! A lock is stale when its pid is gone (`kill(pid, 0)` -> ESRCH) or the pid
 //! now has a different start time (`ps -o lstart=`; pid reuse). A stale lock
@@ -39,11 +43,12 @@ use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
 use crate::coordination::{
-    AcquireFileInput, AcquireWorkspaceInput, CoordinationWait, CoordinatorObserver,
-    InProcessCoordinator, LeaseHolder, QuarantineEvidence, ReleaseFn, WaitKind, WaitTracker,
-    WorkspaceCoordinator, WorkspaceLease, WorkspaceQuarantine, abort_error, all_quarantined_exited,
-    canonical_file_key, canonical_root_key, default_in_process_coordinator, quarantine_error,
-    spawn_release, with_wait_cap,
+    AcquireFileInput, AcquireWorkspaceInput, CommandCleanupIdentity, CoordinationWait,
+    CoordinatorObserver, ExecutionIntent, InProcessCoordinator, LeaseHolder, QuarantineEvidence,
+    ReleaseFn, WaitKind, WaitTracker, WorkspaceCoordinator, WorkspaceLease, WorkspaceQuarantine,
+    abort_error, canonical_file_key, canonical_root_key, default_in_process_coordinator,
+    intent_file_name, intent_from_json, intent_json, quarantine_error,
+    quarantine_positively_exited, spawn_release, with_wait_cap,
 };
 use crate::errors::CodingError;
 use crate::fs_util::sha256;
@@ -125,6 +130,12 @@ struct LockRecord {
     tool: String,
     /// sha256(label).slice(0, 12).
     label: String,
+    /// Identity of the effect that owns the lock, absent in records written
+    /// before these fields existed.
+    chat_id: Option<String>,
+    run_id: Option<String>,
+    tool_call_id: Option<String>,
+    execution_id: Option<String>,
 }
 
 fn unknown_record() -> LockRecord {
@@ -133,6 +144,10 @@ fn unknown_record() -> LockRecord {
         process_start: None,
         tool: "unknown".to_owned(),
         label: "unreadable lock file".to_owned(),
+        chat_id: None,
+        run_id: None,
+        tool_call_id: None,
+        execution_id: None,
     }
 }
 
@@ -149,22 +164,40 @@ async fn is_stale(record: &LockRecord) -> bool {
     }
 }
 
+/// The holder a lock file claims. Current records carry the owning run / tool
+/// call, so a busy message or a reclaim names the real effect instead of a
+/// bare pid; a record written by an older build has none of those fields and
+/// keeps the `pid-{pid}` spelling. Staleness never depends on this — it stays
+/// keyed on pid + process start time.
 fn holder_of(record: &LockRecord) -> LeaseHolder {
     LeaseHolder {
-        chat_id: None,
-        run_id: format!("pid-{}", record.pid),
-        tool_call_id: None,
+        chat_id: record.chat_id.clone(),
+        run_id: record
+            .run_id
+            .clone()
+            .unwrap_or_else(|| format!("pid-{}", record.pid)),
+        tool_call_id: record.tool_call_id.clone(),
         tool: record.tool.clone(),
         label: record.label.clone(),
     }
 }
 
+/// Is this still the same holder's lock? Two leases taken by one process share
+/// pid and process start, so the recorded identity has to agree as well —
+/// otherwise `reclaim` would accept a file that was replaced by a *different*
+/// effect of the same process and delete a live lock. Records written before
+/// the identity fields existed compare on pid + process start alone, the same
+/// key staleness uses.
 fn same_owner(a: &LockRecord, b: &LockRecord) -> bool {
-    a.pid == b.pid && a.process_start == b.process_start
+    a.pid == b.pid
+        && a.process_start == b.process_start
+        && a.run_id == b.run_id
+        && a.tool_call_id == b.tool_call_id
+        && a.execution_id == b.execution_id
 }
 
 enum Read {
-    Record(LockRecord),
+    Record(Box<LockRecord>),
     Gone,
     Corrupt,
 }
@@ -194,7 +227,7 @@ async fn read_record(path: &str) -> Result<Read, CodingError> {
     ) else {
         return Ok(Read::Corrupt);
     };
-    Ok(Read::Record(LockRecord {
+    Ok(Read::Record(Box::new(LockRecord {
         pid,
         process_start: object
             .get("processStart")
@@ -206,11 +239,33 @@ async fn read_record(path: &str) -> Result<Read, CodingError> {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_owned(),
-    }))
+        chat_id: text_field(object, "chatId"),
+        run_id: text_field(object, "runId"),
+        tool_call_id: text_field(object, "toolCallId"),
+        execution_id: text_field(object, "executionId"),
+    })))
+}
+
+/// An optional identity field: absent, null or empty all mean "not recorded",
+/// so a legacy lock keeps its `pid-{pid}` identity rather than an empty name.
+fn text_field(object: &serde_json::Map<String, Value>, name: &str) -> Option<String> {
+    object
+        .get(name)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+/// The writing counterpart of [`text_field`]: an unset identity stays out of
+/// the record entirely instead of becoming `null`.
+fn insert_text(record: &mut serde_json::Map<String, Value>, name: &str, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        record.insert(name.to_owned(), Value::String(value.to_owned()));
+    }
 }
 
 enum Judged {
-    Record(LockRecord),
+    Record(Box<LockRecord>),
     Corrupt,
 }
 
@@ -251,7 +306,7 @@ async fn reclaim(
         report(on_error, &error);
     }
     Ok(Some(match moved {
-        Read::Record(record) => record,
+        Read::Record(record) => *record,
         Read::Corrupt | Read::Gone => unknown_record(),
     }))
 }
@@ -276,7 +331,7 @@ async fn live_owner(path: &str, on_error: &OnError) -> Result<Option<LockRecord>
         }
         Read::Record(record) => {
             if !is_stale(&record).await {
-                return Ok(Some(record));
+                return Ok(Some(*record));
             }
             reclaim(path, &Judged::Record(record), on_error).await
         }
@@ -303,6 +358,7 @@ async fn try_create(
     dir: &str,
     path: &str,
     holder: &LeaseHolder,
+    execution_id: Option<&str>,
     on_error: &OnError,
 ) -> Result<bool, CodingError> {
     let pid = i64::from(std::process::id());
@@ -323,6 +379,14 @@ async fn try_create(
         "label".to_owned(),
         serde_json::Value::String(sha256(holder.label.as_bytes()).chars().take(12).collect()),
     );
+    // Identity, not just a pid: whoever reads this lock after a crash — the
+    // reclaim path, an operator recovering a wedged workspace — gets the run
+    // and tool call that owned it, and a command lock names the exact
+    // execution marker its descendants inherited.
+    insert_text(&mut record, "chatId", holder.chat_id.as_deref());
+    insert_text(&mut record, "runId", Some(holder.run_id.as_str()));
+    insert_text(&mut record, "toolCallId", holder.tool_call_id.as_deref());
+    insert_text(&mut record, "executionId", execution_id);
     record.insert("createdAt".to_owned(), serde_json::Value::from(now_ms()));
     let temp = format!("{dir}/.tmp-{}", uuid::Uuid::new_v4());
     let written: Result<(), CodingError> = async {
@@ -369,6 +433,7 @@ impl LockDir {
     async fn acquire_shared(
         &self,
         holder: &LeaseHolder,
+        execution_id: Option<&str>,
         cancellation: &Option<CancellationToken>,
         block: Block<'_>,
     ) -> Result<String, CodingError> {
@@ -384,7 +449,7 @@ impl LockDir {
             if let Some(first) = first {
                 block(WaitKind::Workspace, &[holder_of(&first)]);
             } else {
-                try_create(&self.ws_dir, &entry, holder, &self.on_error).await?;
+                try_create(&self.ws_dir, &entry, holder, execution_id, &self.on_error).await?;
                 // A marker may have appeared between the check and our entry.
                 let second = match live_owner(&marker, &self.on_error).await {
                     Ok(second) => second,
@@ -408,11 +473,12 @@ impl LockDir {
     async fn acquire_exclusive(
         &self,
         holder: &LeaseHolder,
+        execution_id: Option<&str>,
         cancellation: &Option<CancellationToken>,
         block: Block<'_>,
     ) -> Result<String, CodingError> {
         let marker = self.marker();
-        while !try_create(&self.ws_dir, &marker, holder, &self.on_error).await? {
+        while !try_create(&self.ws_dir, &marker, holder, execution_id, &self.on_error).await? {
             let owner = live_owner(&marker, &self.on_error).await?;
             let Some(owner) = owner else { continue };
             block(WaitKind::Workspace, &[holder_of(&owner)]);
@@ -446,11 +512,12 @@ impl LockDir {
         &self,
         key: &str,
         holder: &LeaseHolder,
+        execution_id: Option<&str>,
         cancellation: &Option<CancellationToken>,
         block: Block<'_>,
     ) -> Result<String, CodingError> {
         let path = format!("{}/file-{}.lock", self.ws_dir, sha256(key.as_bytes()));
-        while !try_create(&self.ws_dir, &path, holder, &self.on_error).await? {
+        while !try_create(&self.ws_dir, &path, holder, execution_id, &self.on_error).await? {
             let owner = live_owner(&path, &self.on_error).await?;
             let Some(owner) = owner else { continue };
             block(WaitKind::File, &[holder_of(&owner)]);
@@ -585,80 +652,162 @@ struct LockDirCoordinator {
     inner: Arc<InProcessCoordinator>,
 }
 
-impl LockDirCoordinator {
-    fn quarantine_path(&self, key: &str) -> String {
-        format!("{}/{}/quarantine.json", self.dir, sha256(key.as_bytes()))
-    }
+/// The durable unresolved-cleanup record of one root, stored beside its lock
+/// files so a process restart still sees it.
+fn quarantine_path(dir: &str, key: &str) -> String {
+    format!("{}/{}/quarantine.json", dir, sha256(key.as_bytes()))
+}
 
-    /// Read the durable quarantine for the root. An unparseable record is an
-    /// *unknown* survivor set: cleanup was not positively established, so it
-    /// keeps blocking until explicit recovery (empty pids never auto-clear).
-    async fn read_quarantine(&self, key: &str) -> Result<Option<WorkspaceQuarantine>, CodingError> {
-        let path = self.quarantine_path(key);
-        let text = match tokio::fs::read_to_string(&path).await {
-            Err(error) if errno_is(&error, libc::ENOENT) => return Ok(None),
-            Err(error) => return Err(io_error(&error)),
-            Ok(text) => text,
-        };
-        let unknown = || WorkspaceQuarantine {
-            root: key.to_owned(),
-            pids: Vec::new(),
-            holder: LeaseHolder {
-                chat_id: None,
-                run_id: "unknown".to_owned(),
-                tool_call_id: None,
-                tool: "unknown".to_owned(),
-                label: "unreadable quarantine record".to_owned(),
-            },
-            quarantined_at_ms: 0,
-        };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            return Ok(Some(unknown()));
-        };
-        let field = |name: &str| {
-            value
-                .get(name)
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_owned()
-        };
-        Ok(Some(WorkspaceQuarantine {
-            root: key.to_owned(),
-            pids: value
-                .get("pids")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_i64)
-                        .map(|pid| pid as i32)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            holder: LeaseHolder {
-                chat_id: value
-                    .get("chatId")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                run_id: field("runId"),
-                tool_call_id: value
-                    .get("toolCallId")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                tool: field("tool"),
-                label: field("label"),
-            },
-            quarantined_at_ms: value
-                .get("quarantinedAtMs")
+/// Read the durable quarantine for the root. An unparseable record is an
+/// *unknown* survivor set: cleanup was not positively established, so it
+/// keeps blocking until explicit recovery (empty pids never auto-clear).
+async fn read_quarantine(dir: &str, key: &str) -> Result<Option<WorkspaceQuarantine>, CodingError> {
+    let path = quarantine_path(dir, key);
+    let text = match tokio::fs::read_to_string(&path).await {
+        Err(error) if errno_is(&error, libc::ENOENT) => return Ok(None),
+        Err(error) => return Err(io_error(&error)),
+        Ok(text) => text,
+    };
+    let unknown = || WorkspaceQuarantine {
+        root: key.to_owned(),
+        pids: Vec::new(),
+        holder: LeaseHolder {
+            chat_id: None,
+            run_id: "unknown".to_owned(),
+            tool_call_id: None,
+            tool: "unknown".to_owned(),
+            label: "unreadable quarantine record".to_owned(),
+        },
+        quarantined_at_ms: 0,
+        identity: None,
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Ok(Some(unknown()));
+    };
+    let field = |name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned()
+    };
+    // B5: SAFE cleanup identity. A record written by an older build (or by
+    // the generic `quarantine_workspace` path) has no `identity` object and
+    // keeps the pid-only positive-exit rule; a command record carries the
+    // stable nonce, owner pid, process group and spawn time so liveness is
+    // never decided by a bare — recyclable — pid.
+    let identity = value.get("identity").and_then(|identity| {
+        let execution_id = identity.get("executionId")?.as_str()?.to_owned();
+        let owner_pid = identity.get("ownerPid")?.as_i64()?;
+        Some(CommandCleanupIdentity {
+            execution_id,
+            owner_pid,
+            pgid: identity
+                .get("pgid")
+                .and_then(Value::as_i64)
+                .map(|pgid| pgid as i32),
+            spawned_at_ms: identity
+                .get("spawnedAtMs")
                 .and_then(Value::as_u64)
                 .unwrap_or_default(),
-        }))
-    }
+        })
+    });
+    Ok(Some(WorkspaceQuarantine {
+        root: key.to_owned(),
+        pids: value
+            .get("pids")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_i64)
+                    .map(|pid| pid as i32)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        holder: LeaseHolder {
+            chat_id: value
+                .get("chatId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            run_id: field("runId"),
+            tool_call_id: value
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            tool: field("tool"),
+            label: field("label"),
+        },
+        quarantined_at_ms: value
+            .get("quarantinedAtMs")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        identity,
+    }))
+}
 
+/// The durable quarantine payload. `identity` carries the SAFE command
+/// cleanup identity (B5): stable execution nonce, owner pid, process group
+/// and spawn time — a reader after a crash can reconcile the exact
+/// execution without trusting a bare (recyclable) pid.
+fn quarantine_record_json(
+    evidence: &QuarantineEvidence,
+    identity: Option<&CommandCleanupIdentity>,
+) -> serde_json::Value {
+    let mut record = serde_json::json!({
+        "pids": evidence.pids,
+        "quarantinedAtMs": now_ms() as u64,
+        "runId": evidence.holder.run_id,
+        "chatId": evidence.holder.chat_id,
+        "toolCallId": evidence.holder.tool_call_id,
+        "tool": evidence.holder.tool,
+        "label": evidence.holder.label,
+    });
+    if let Some(identity) = identity {
+        record["identity"] = serde_json::json!({
+            "executionId": identity.execution_id,
+            "ownerPid": identity.owner_pid,
+            "pgid": identity.pgid,
+            "spawnedAtMs": identity.spawned_at_ms,
+        });
+    }
+    record
+}
+
+/// The durable record that still blocks the root: `Some` while it names a
+/// process whose exit we cannot prove — including a record that names none,
+/// which is *unknown* evidence and blocks just as hard.
+///
+/// A free function rather than a `&self` method because the acquisition
+/// closures cannot borrow the coordinator across a `'static` future: they
+/// must be able to re-read this evidence under the locks they just took
+/// (defect B2, see [`LockDirCoordinator::acquire_workspace`]).
+async fn blocking_quarantine(
+    dir: &str,
+    key: &str,
+) -> Result<Option<WorkspaceQuarantine>, CodingError> {
+    let Some(quarantine) = read_quarantine(dir, key).await? else {
+        return Ok(None);
+    };
+    if quarantine_positively_exited(&quarantine).await {
+        // Positive cleanup evidence: every recorded process exited (for a
+        // command record: marker scan clean and process group empty —
+        // never a bare pid probe).
+        return Ok(None);
+    }
+    Ok(Some(quarantine))
+}
+
+impl LockDirCoordinator {
     /// Durable counterpart of the in-process quarantine wait: blocks every
     /// acquisition of the root while a quarantine record still names live
     /// processes; exits when they are gone (record deleted as positively
     /// established) or the wait budget/cancellation fires.
+    ///
+    /// This can only prove the root clear BEFORE the locks are taken; every
+    /// acquisition therefore re-reads [`blocking_quarantine`] under the locks
+    /// it just won, so a writer that queued here cannot be handed an
+    /// executable lease over evidence that appeared in the meantime.
     async fn await_clear(
         &self,
         root: &str,
@@ -668,12 +817,12 @@ impl LockDirCoordinator {
         let key = canonical_root_key(root).await;
         let deadline = max_wait_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
         loop {
-            let Some(quarantine) = self.read_quarantine(&key).await? else {
+            let Some(quarantine) = read_quarantine(&self.dir, &key).await? else {
                 return Ok(());
             };
-            if all_quarantined_exited(&quarantine.pids) {
+            if quarantine_positively_exited(&quarantine).await {
                 // Positive cleanup evidence: retire the record, then re-check.
-                remove(&self.quarantine_path(&key)).await?;
+                remove(&quarantine_path(&self.dir, &key)).await?;
                 continue;
             }
             if deadline.is_some_and(|at| Instant::now() >= at) {
@@ -682,11 +831,50 @@ impl LockDirCoordinator {
             sleep(self.poll_ms, cancellation).await?;
         }
     }
+
+    /// Atomic durable publication of a quarantine record: temp file +
+    /// rename. A failure is reported AND returned — losing the blocking
+    /// evidence while processes may still write must never read as success.
+    async fn publish_quarantine(&self, key: &str, text: &str) -> Result<(), CodingError> {
+        let path = quarantine_path(&self.dir, key);
+        if let Some(parent) = std::path::Path::new(&path).parent()
+            && let Err(error) = tokio::fs::create_dir_all(parent).await
+        {
+            let error = io_error(&error);
+            report(&self.on_error, &error.message);
+            return Err(error);
+        }
+        let temp = format!("{path}.tmp-{}", uuid::Uuid::new_v4().simple());
+        let written: Result<(), CodingError> = async {
+            let mut file = tokio::fs::File::create(&temp)
+                .await
+                .map_err(|error| io_error(&error))?;
+            file.write_all(text.as_bytes())
+                .await
+                .map_err(|error| io_error(&error))?;
+            file.flush().await.map_err(|error| io_error(&error))?;
+            match tokio::fs::rename(&temp, &path).await {
+                Err(error) => Err(io_error(&error)),
+                Ok(()) => Ok(()),
+            }
+        }
+        .await;
+        written.inspect_err(|error| {
+            let _ = std::fs::remove_file(&temp);
+            report(&self.on_error, &error.message);
+        })
+    }
 }
 
 #[async_trait]
 impl WorkspaceCoordinator for LockDirCoordinator {
     async fn acquire_file(&self, input: AcquireFileInput) -> Result<WorkspaceLease, CodingError> {
+        // B5: startup recovery is awaited before any modifying lease is
+        // admitted (never spawned and forgotten), and crashed-run intents
+        // recorded in this workspace's lock directory are reconciled — an
+        // unreconciled live process group keeps the root quarantined.
+        crate::process::startup_recovery().await;
+        self.reconcile_execution_intents(&input.root).await?;
         self.await_clear(&input.root, &input.cancellation, input.max_wait_ms)
             .await?;
         let tracker = WaitTracker::default();
@@ -698,6 +886,7 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         let holder = input.holder.clone();
         let root = input.root.clone();
         let path = input.path.clone();
+        let execution_id = input.execution_id.clone();
         let tracked = tracker.clone();
         let tracked_observer = observer.clone();
         let lease = with_wait_cap(
@@ -705,8 +894,8 @@ impl WorkspaceCoordinator for LockDirCoordinator {
             input.max_wait_ms,
             &tracker,
             move |cancellation| {
-                let (inner, dir, on_error, holder, root, path) =
-                    (inner, dir, on_error, holder, root, path);
+                let (inner, dir, on_error, holder, root, path, execution_id) =
+                    (inner, dir, on_error, holder, root, path, execution_id);
                 let (tracker, observer) = (tracked, tracked_observer);
                 Box::pin(async move {
                     let held = inner
@@ -728,16 +917,32 @@ impl WorkspaceCoordinator for LockDirCoordinator {
                                 observer.as_ref(),
                             );
                         };
+                        let execution = execution_id.as_deref();
                         locks.push(
                             lock_dir
-                                .acquire_shared(&holder, &cancellation, &block)
+                                .acquire_shared(&holder, execution, &cancellation, &block)
                                 .await?,
                         );
                         locks.push(
                             lock_dir
-                                .acquire_file_lock(&file_key, &holder, &cancellation, &block)
+                                .acquire_file_lock(
+                                    &file_key,
+                                    &holder,
+                                    execution,
+                                    &cancellation,
+                                    &block,
+                                )
                                 .await?,
                         );
+                        // B2: `await_clear` proved the root clear before the
+                        // in-process gate and the on-disk locks were taken.
+                        // Re-read the durable evidence now that they are ours
+                        // — a quarantine published while we queued must make
+                        // this a refusal, and the shared/file locks we just
+                        // created go back with the error.
+                        if let Some(quarantine) = blocking_quarantine(&dir, &key).await? {
+                            return Err(quarantine_error(&quarantine));
+                        }
                         Ok(())
                     }
                     .await;
@@ -758,6 +963,12 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         &self,
         input: AcquireWorkspaceInput,
     ) -> Result<WorkspaceLease, CodingError> {
+        // B5: startup recovery is awaited before any modifying lease is
+        // admitted (never spawned and forgotten), and crashed-run intents
+        // recorded in this workspace's lock directory are reconciled — an
+        // unreconciled live process group keeps the root quarantined.
+        crate::process::startup_recovery().await;
+        self.reconcile_execution_intents(&input.root).await?;
         self.await_clear(&input.root, &input.cancellation, input.max_wait_ms)
             .await?;
         let tracker = WaitTracker::default();
@@ -768,6 +979,7 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         let on_error = Arc::clone(&self.on_error);
         let holder = input.holder.clone();
         let root = input.root.clone();
+        let execution_id = input.execution_id.clone();
         let tracked = tracker.clone();
         let tracked_observer = observer.clone();
         let lease = with_wait_cap(
@@ -775,7 +987,8 @@ impl WorkspaceCoordinator for LockDirCoordinator {
             input.max_wait_ms,
             &tracker,
             move |cancellation| {
-                let (inner, dir, on_error, holder, root) = (inner, dir, on_error, holder, root);
+                let (inner, dir, on_error, holder, root, execution_id) =
+                    (inner, dir, on_error, holder, root, execution_id);
                 let (tracker, observer) = (tracked, tracked_observer);
                 Box::pin(async move {
                     let held = inner
@@ -798,9 +1011,22 @@ impl WorkspaceCoordinator for LockDirCoordinator {
                         };
                         locks.push(
                             lock_dir
-                                .acquire_exclusive(&holder, &cancellation, &block)
+                                .acquire_exclusive(
+                                    &holder,
+                                    execution_id.as_deref(),
+                                    &cancellation,
+                                    &block,
+                                )
                                 .await?,
                         );
+                        // B2: the exclusive marker is ours, so this is the
+                        // last point before an executable lease where a
+                        // quarantine that landed while we queued can still
+                        // stop us. Fail closed: an unreadable record is an
+                        // error here too, never a granted lease.
+                        if let Some(quarantine) = blocking_quarantine(&dir, &key).await? {
+                            return Err(quarantine_error(&quarantine));
+                        }
                         Ok(())
                     }
                     .await;
@@ -817,45 +1043,191 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         Ok(lease)
     }
 
-    async fn quarantine_workspace(&self, root: &str, evidence: &QuarantineEvidence) {
+    /// Publish unresolved-cleanup evidence for a root.
+    ///
+    /// Holds-quarantine-while-publishing: the caller MUST still own the
+    /// modifying lease for the whole call and only release it after this
+    /// returns `Ok` (`exec_tools`' command path does exactly that), and must
+    /// keep the lease when this returns `Err`. Publication is atomic — temp
+    /// file plus `rename` — so a concurrent acquisition sees either the whole
+    /// record or none of it, and because the record becomes visible while the
+    /// caller's lock is still held, there is never a moment in which live
+    /// processes may write to a workspace nobody has quarantined. Together
+    /// with the post-grant re-read in `acquire_file`/`acquire_workspace` (see
+    /// `blocking_quarantine`) that also covers a writer that had already
+    /// passed the pre-gate `await_clear`: it may complete its locks, but it
+    /// cannot leave them holding an executable lease.
+    async fn quarantine_workspace(
+        &self,
+        root: &str,
+        evidence: &QuarantineEvidence,
+    ) -> Result<(), CodingError> {
         let key = canonical_root_key(root).await;
-        let path = self.quarantine_path(&key);
-        if let Some(parent) = std::path::Path::new(&path).parent()
-            && let Err(error) = tokio::fs::create_dir_all(parent).await
-        {
-            report(&self.on_error, &io_error(&error).message);
-            return;
-        }
-        let record = serde_json::json!({
-            "pids": evidence.pids,
-            "quarantinedAtMs": now_ms() as u64,
-            "runId": evidence.holder.run_id,
-            "chatId": evidence.holder.chat_id,
-            "toolCallId": evidence.holder.tool_call_id,
-            "tool": evidence.holder.tool,
-            "label": evidence.holder.label,
-        });
+        let record = quarantine_record_json(evidence, None);
         // Written whole via the atomic create helper's sibling: quarantine
-        // must never be observable half-written.
-        let temp = format!("{path}.tmp-{}", uuid::Uuid::new_v4().simple());
+        // must never be observable half-written. A failed publication is
+        // returned to the caller, which must keep the lease blocked: live
+        // processes without a durable quarantine record are exactly the
+        // evidence that must not be lost.
+        self.publish_quarantine(&key, &record.to_string()).await
+    }
+
+    async fn quarantine_execution(
+        &self,
+        root: &str,
+        evidence: &QuarantineEvidence,
+        identity: &CommandCleanupIdentity,
+    ) -> Result<(), CodingError> {
+        let key = canonical_root_key(root).await;
+        let record = quarantine_record_json(evidence, Some(identity));
+        self.publish_quarantine(&key, &record.to_string()).await
+    }
+
+    async fn record_execution_intent(&self, intent: &ExecutionIntent) -> Result<(), CodingError> {
+        let key = canonical_root_key(&intent.root).await;
+        let ws_dir = format!("{}/{}", self.dir, sha256(key.as_bytes()));
+        tokio::fs::create_dir_all(&ws_dir)
+            .await
+            .map_err(|error| io_error(&error))?;
+        let stored = ExecutionIntent {
+            root: key.clone(),
+            ..intent.clone()
+        };
+        let path = format!(
+            "{ws_dir}/intent-{}.json",
+            intent_file_name(&stored.identity.execution_id)
+        );
+        let temp = format!("{ws_dir}/.intent-tmp-{}", uuid::Uuid::new_v4().simple());
         let written: Result<(), CodingError> = async {
             let mut file = tokio::fs::File::create(&temp)
                 .await
                 .map_err(|error| io_error(&error))?;
-            file.write_all(record.to_string().as_bytes())
+            let text = serde_json::to_string(&intent_json(&stored))
+                .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+            file.write_all(text.as_bytes())
                 .await
                 .map_err(|error| io_error(&error))?;
             file.flush().await.map_err(|error| io_error(&error))?;
-            match tokio::fs::rename(&temp, &path).await {
-                Err(error) => Err(io_error(&error)),
-                Ok(()) => Ok(()),
-            }
+            tokio::fs::rename(&temp, &path)
+                .await
+                .map_err(|error| io_error(&error))
         }
         .await;
-        if let Err(error) = written {
-            let _ = tokio::fs::remove_file(&temp).await;
-            report(&self.on_error, &error.message);
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temp);
         }
+        written
+    }
+
+    async fn clear_execution_intent(
+        &self,
+        root: &str,
+        execution_id: &str,
+    ) -> Result<(), CodingError> {
+        let key = canonical_root_key(root).await;
+        let path = format!(
+            "{}/{}/intent-{}.json",
+            self.dir,
+            sha256(key.as_bytes()),
+            intent_file_name(execution_id)
+        );
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => Ok(()),
+            Err(error) if errno_is(&error, libc::ENOENT) => Ok(()),
+            Err(error) => Err(io_error(&error)),
+        }
+    }
+
+    async fn reconcile_execution_intents(&self, root: &str) -> Result<(), CodingError> {
+        let key = canonical_root_key(root).await;
+        let ws_dir = format!("{}/{}", self.dir, sha256(key.as_bytes()));
+        let mut entries = match tokio::fs::read_dir(&ws_dir).await {
+            Ok(entries) => entries,
+            Err(error) if errno_is(&error, libc::ENOENT) => return Ok(()),
+            Err(error) => return Err(io_error(&error)),
+        };
+        let mut intents: Vec<ExecutionIntent> = Vec::new();
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|error| io_error(&error))?
+        {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("intent-") || !name.ends_with(".json") {
+                continue;
+            }
+            let text = match tokio::fs::read_to_string(entry.path()).await {
+                Ok(text) => text,
+                Err(error) if errno_is(&error, libc::ENOENT) => continue,
+                Err(error) => return Err(io_error(&error)),
+            };
+            intents.push(
+                serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|value| intent_from_json(&value))
+                    .unwrap_or_else(|| ExecutionIntent {
+                        root: key.clone(),
+                        identity: CommandCleanupIdentity {
+                            execution_id: name
+                                .trim_end_matches(".json")
+                                .trim_start_matches("intent-")
+                                .to_owned(),
+                            owner_pid: -1,
+                            pgid: None,
+                            spawned_at_ms: 0,
+                        },
+                        holder: LeaseHolder {
+                            chat_id: None,
+                            run_id: "unknown".to_owned(),
+                            tool_call_id: None,
+                            tool: "unknown".to_owned(),
+                            label: "unreadable execution intent".to_owned(),
+                        },
+                        spawned: false,
+                    }),
+            );
+        }
+        let own_pid = i64::from(std::process::id());
+        for intent in intents {
+            let owner_alive = intent.identity.owner_pid > 0
+                && (intent.identity.owner_pid == own_pid
+                    || crate::process::owner_alive(intent.identity.owner_pid));
+            if owner_alive {
+                continue;
+            }
+            // A corrupt/unreadable intent (absurd owner pid) proves nothing
+            // about cleanup: classify it as UNKNOWN survivors so the root
+            // blocks until explicit recovery — never retire it as if the
+            // process group had positively exited. Its quarantine is the
+            // generic unknown-survivor kind (no trustworthy identity).
+            let corrupt = intent.identity.owner_pid <= 0;
+            let survivors = if corrupt {
+                None
+            } else {
+                crate::process::crashed_execution_survivors(&intent).await
+            };
+            let _ = self
+                .clear_execution_intent(&key, &intent.identity.execution_id)
+                .await;
+            let pids = survivors.clone().unwrap_or_default();
+            if pids.is_empty() && survivors.is_some() {
+                continue;
+            }
+            if let Some(existing) = read_quarantine(&self.dir, &key).await?
+                && !quarantine_positively_exited(&existing).await
+            {
+                continue;
+            }
+            let record = quarantine_record_json(
+                &QuarantineEvidence {
+                    pids,
+                    holder: intent.holder.clone(),
+                },
+                (!corrupt).then_some(&intent.identity),
+            );
+            self.publish_quarantine(&key, &record.to_string()).await?;
+        }
+        Ok(())
     }
 
     async fn workspace_quarantine(
@@ -863,11 +1235,11 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         root: &str,
     ) -> Result<Option<WorkspaceQuarantine>, CodingError> {
         let key = canonical_root_key(root).await;
-        let Some(quarantine) = self.read_quarantine(&key).await? else {
+        let Some(quarantine) = read_quarantine(&self.dir, &key).await? else {
             return Ok(None);
         };
-        if all_quarantined_exited(&quarantine.pids) {
-            remove(&self.quarantine_path(&key)).await?;
+        if quarantine_positively_exited(&quarantine).await {
+            remove(&quarantine_path(&self.dir, &key)).await?;
             return Ok(None);
         }
         Ok(Some(quarantine))
@@ -875,7 +1247,7 @@ impl WorkspaceCoordinator for LockDirCoordinator {
 
     async fn clear_workspace_quarantine(&self, root: &str) -> Result<bool, CodingError> {
         let key = canonical_root_key(root).await;
-        let path = self.quarantine_path(&key);
+        let path = quarantine_path(&self.dir, &key);
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(true),
             Err(error) if errno_is(&error, libc::ENOENT) => Ok(false),
@@ -909,6 +1281,7 @@ pub fn create_lockdir_workspace_coordinator(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coordination::ChildGuard;
     use serde_json::Value;
 
     fn temp_dir(name: &str) -> String {
@@ -1018,7 +1391,8 @@ mod tests {
                     holder: holder("r1", "command", "long build"),
                 },
             )
-            .await;
+            .await
+            .expect("blocking evidence publishes");
         assert!(errors.lock().expect("errors").is_empty());
         // A fresh coordinator over the same directory — the restart analogue
         // — must see the on-disk record.
@@ -1029,6 +1403,7 @@ mod tests {
                 holder: holder("r2", "command", "next"),
                 cancellation: None,
                 max_wait_ms: Some(120),
+                execution_id: None,
             })
             .await
             .expect_err("durable quarantine blocks commands");
@@ -1049,6 +1424,7 @@ mod tests {
                 holder: holder("r3", "command", "next"),
                 cancellation: None,
                 max_wait_ms: Some(1_000),
+                execution_id: None,
             })
             .await
             .expect("clean after recovery");
@@ -1070,7 +1446,8 @@ mod tests {
                     holder: holder("r1", "command", "done"),
                 },
             )
-            .await;
+            .await
+            .expect("positive evidence publishes");
         // All recorded processes are gone: positively established cleanup.
         assert!(first.workspace_quarantine(&root).await.unwrap().is_none());
         let file = format!("{root}/f.txt");
@@ -1082,6 +1459,7 @@ mod tests {
                 holder: holder("r2", "edit_file", "edit f"),
                 cancellation: None,
                 max_wait_ms: Some(1_000),
+                execution_id: None,
             })
             .await
             .expect("clean after survivors exited");
@@ -1096,6 +1474,7 @@ mod tests {
                 holder: holder("r3", "command", "next"),
                 cancellation: None,
                 max_wait_ms: Some(80),
+                execution_id: None,
             })
             .await
             .expect_err("unknown survivors keep blocking");
@@ -1132,6 +1511,17 @@ mod tests {
         }
     }
 
+    /// Barrier on a shared flag: the observer's own record decides when the
+    /// test may proceed, the deadline only turns a regression into a failure
+    /// instead of a hang. No sleep orders two actors here.
+    async fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn two_coordinators_in_one_process_exclude_each_other() {
         let dir = temp_dir("pair-dir");
@@ -1148,6 +1538,7 @@ mod tests {
                 holder: holder("e1", "edit_file", "edit f"),
                 cancellation: None,
                 max_wait_ms: None,
+                execution_id: None,
             })
             .await
             .expect("first acquires");
@@ -1180,6 +1571,7 @@ mod tests {
                 holder: holder("e2", "edit_file", "edit f"),
                 cancellation: None,
                 max_wait_ms: Some(100),
+                execution_id: None,
             })
             .await
             .expect_err("blocked by the first lease");
@@ -1198,6 +1590,7 @@ mod tests {
                 holder: holder("e2", "edit_file", "edit f"),
                 cancellation: None,
                 max_wait_ms: Some(2000),
+                execution_id: None,
             })
             .await
             .expect("runs after the release");
@@ -1226,6 +1619,7 @@ mod tests {
                 holder: holder("cmd", "run_command", "run"),
                 cancellation: None,
                 max_wait_ms: None,
+                execution_id: None,
             }),
         )
         .await
@@ -1254,6 +1648,7 @@ mod tests {
                 holder: holder("cmd", "run_command", "run again"),
                 cancellation: None,
                 max_wait_ms: None,
+                execution_id: None,
             }),
         )
         .await
@@ -1287,6 +1682,7 @@ mod tests {
                 holder: holder("cmd", "run_command", "run"),
                 cancellation: None,
                 max_wait_ms: Some(50),
+                execution_id: None,
             })
             .await
             .expect_err("a live exclusive lock blocks");
@@ -1319,6 +1715,7 @@ mod tests {
             holder: holder("e", "edit_file", "edit f"),
             cancellation: None,
             max_wait_ms: None,
+            execution_id: None,
         };
         let mut lease = created.acquire_file(input.clone()).await.expect("acquires");
         lease.release().await;
@@ -1362,6 +1759,7 @@ mod tests {
                         holder: holder("cmd", "run_command", "run"),
                         cancellation: Some(token),
                         max_wait_ms: None,
+                        execution_id: None,
                     })
                     .await
             })
@@ -1385,6 +1783,7 @@ mod tests {
                 holder: holder("again", "run_command", "again"),
                 cancellation: None,
                 max_wait_ms: None,
+                execution_id: None,
             }),
         )
         .await
@@ -1407,6 +1806,7 @@ mod tests {
                 holder: holder("cmd", "run_command", "run"),
                 cancellation: None,
                 max_wait_ms: Some(50),
+                execution_id: None,
             })
             .await
             .expect_err("corrupt lock blocks");
@@ -1425,6 +1825,7 @@ mod tests {
                 holder: holder("cmd", "run_command", "run"),
                 cancellation: None,
                 max_wait_ms: None,
+                execution_id: None,
             }),
         )
         .await
@@ -1433,5 +1834,480 @@ mod tests {
         assert_eq!(entries(&ws), vec!["exclusive.lock".to_owned()]);
         lease.release().await;
         assert!(errors.lock().expect("errors").is_empty());
+    }
+
+    /// B5: a lock record names the effect that owns it, not merely the pid,
+    /// so reclaim and recovery evidence survive the loss of the holder. A
+    /// record from an older build (no identity fields) still reads back as
+    /// `pid-{pid}`, and staleness keeps keying on pid + process start.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_lock_record_names_the_run_tool_call_and_execution() {
+        let dir = temp_dir("identity-dir");
+        let root = temp_dir("identity-root");
+        let file = format!("{root}/f.txt");
+        std::fs::write(&file, "x").expect("write file");
+        let (created, errors) = coordinator(&dir, None);
+        let mut lease = created
+            .acquire_file(AcquireFileInput {
+                root: root.clone(),
+                path: file,
+                holder: LeaseHolder {
+                    chat_id: Some("chat-9".to_owned()),
+                    run_id: "run-9".to_owned(),
+                    tool_call_id: Some("call-9".to_owned()),
+                    tool: "edit_file".to_owned(),
+                    label: "edit f".to_owned(),
+                },
+                cancellation: None,
+                max_wait_ms: None,
+                execution_id: Some("4242:cafe".to_owned()),
+            })
+            .await
+            .expect("acquires");
+        let ws = ws_dir(&dir, &root).await;
+        let names = entries(&ws);
+        assert_eq!(names.len(), 2, "{names:?}: shared entry + file lock");
+        for name in &names {
+            let body: Value = serde_json::from_str(
+                &std::fs::read_to_string(format!("{ws}/{name}")).expect("read"),
+            )
+            .expect("parse");
+            assert_eq!(body["runId"], Value::from("run-9"), "{name}");
+            assert_eq!(body["chatId"], Value::from("chat-9"), "{name}");
+            assert_eq!(body["toolCallId"], Value::from("call-9"), "{name}");
+            assert_eq!(body["executionId"], Value::from("4242:cafe"), "{name}");
+        }
+        lease.release().await;
+
+        // Legacy record: nothing recorded, so the pid stays the only name.
+        let dead = dead_pid().await;
+        let legacy = write_lock(
+            &dir,
+            &root,
+            "legacy.lock",
+            &Value::Object(record(dead, "run_command", "legacy12345678")),
+        )
+        .await;
+        let Read::Record(legacy_record) = read_record(&legacy).await.expect("read") else {
+            panic!("a legacy record parses");
+        };
+        assert_eq!(legacy_record.run_id, None);
+        let holder = holder_of(&legacy_record);
+        assert_eq!(holder.run_id, format!("pid-{dead}"));
+        assert_eq!(holder.chat_id, None);
+        assert_eq!(holder.tool_call_id, None);
+        // Ownership/staleness keys are untouched by the identity fields.
+        assert!(same_owner(&legacy_record, &legacy_record));
+
+        // A null or empty identity is "not recorded", never an empty name.
+        let mut modern = record(dead, "run_command", "modern12345678");
+        modern.insert("runId".to_owned(), Value::from("run-7"));
+        modern.insert("executionId".to_owned(), Value::from("9:7"));
+        modern.insert("toolCallId".to_owned(), Value::Null);
+        modern.insert("chatId".to_owned(), Value::from(""));
+        let modern = write_lock(&dir, &root, "modern.lock", &Value::Object(modern)).await;
+        let Read::Record(modern_record) = read_record(&modern).await.expect("read") else {
+            panic!("a modern record parses");
+        };
+        assert_eq!(modern_record.run_id.as_deref(), Some("run-7"));
+        assert_eq!(modern_record.execution_id.as_deref(), Some("9:7"));
+        assert_eq!(modern_record.tool_call_id, None, "null reads as absent");
+        assert_eq!(modern_record.chat_id, None, "empty reads as absent");
+        assert_eq!(holder_of(&modern_record).run_id, "run-7");
+
+        // Two locks taken by ONE process share pid and process start; the
+        // recorded identity is what tells them apart, so a lock file that was
+        // replaced under `reclaim` is put back rather than deleted as "the
+        // same holder's stale lock".
+        let ours = i64::from(std::process::id());
+        let mut first = record(ours, "run_command", "one123456789");
+        first.insert("runId".to_owned(), Value::from("run-1"));
+        first.insert("executionId".to_owned(), Value::from("1:a"));
+        let mut second = record(ours, "run_command", "two123456789");
+        second.insert("runId".to_owned(), Value::from("run-2"));
+        second.insert("executionId".to_owned(), Value::from("1:b"));
+        let path_a = write_lock(&dir, &root, "a.lock", &Value::Object(first)).await;
+        let Read::Record(a) = read_record(&path_a).await.expect("read a") else {
+            panic!("a.lock parses");
+        };
+        let path_b = write_lock(&dir, &root, "b.lock", &Value::Object(second)).await;
+        let Read::Record(b) = read_record(&path_b).await.expect("read b") else {
+            panic!("b.lock parses");
+        };
+        assert_eq!(a.pid, b.pid, "one process, two effects");
+        assert!(same_owner(&a, &a));
+        assert!(
+            !same_owner(&a, &b),
+            "a different execution is a different holder"
+        );
+        // Records with no identity at all still compare on pid + start alone.
+        let mut other = record(dead, "edit_file", "legacy12345678");
+        other.insert("label".to_owned(), Value::from("other12345678"));
+        let legacy_b = write_lock(&dir, &root, "legacy2.lock", &Value::Object(other)).await;
+        let Read::Record(legacy_b) = read_record(&legacy_b).await.expect("read legacy b") else {
+            panic!("a legacy record parses");
+        };
+        assert!(
+            same_owner(&legacy_record, &legacy_b),
+            "legacy identity-less records compare on pid + start"
+        );
+        assert!(errors.lock().expect("errors").is_empty());
+    }
+
+    /// Defect B2 on the cross-process coordinator: a writer that queued behind
+    /// the on-disk marker must not walk out holding an executable lease once a
+    /// quarantine lands while it waits.
+    ///
+    /// Limitation this test routes around: two coordinators built by
+    /// `create_lockdir_workspace_coordinator` share the process-global
+    /// in-process coordinator, so the second one would be stopped by the first
+    /// one's in-process gate (`workspace_busy`) and never reach the lock
+    /// directory at all. Each side therefore gets its own `LockDirCoordinator`
+    /// with a private inner gate — from the lock directory's point of view
+    /// that is exactly what two real processes look like. Real cross-process
+    /// coverage is `tests/quarantine_race.rs`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_queued_lockdir_writer_is_refused_after_a_quarantine_lands() {
+        let dir = temp_dir("queued-dir");
+        let root = temp_dir("queued-root");
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let observer = Arc::new(RecordingObserver::default());
+        let waits = Arc::clone(&observer.waits);
+        let sink = Arc::clone(&errors);
+        let holder_a = LockDirCoordinator {
+            dir: dir.clone(),
+            observer: None,
+            poll_ms: 20,
+            on_error: Arc::new(move |message| sink.lock().expect("errors").push(message)),
+            inner: Arc::new(InProcessCoordinator::new(None)),
+        };
+        let mut held = holder_a
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("cmd-a", "run_command", "make install"),
+                cancellation: None,
+                max_wait_ms: None,
+                execution_id: Some("exec-a".to_owned()),
+            })
+            .await
+            .expect("A takes the exclusive marker");
+        let queued = {
+            let dir = dir.clone();
+            let root = root.clone();
+            let observer = Arc::clone(&observer) as Arc<dyn CoordinatorObserver>;
+            let sink = Arc::clone(&errors);
+            tokio::spawn(async move {
+                let coordinator = LockDirCoordinator {
+                    dir,
+                    observer: Some(observer),
+                    poll_ms: 20,
+                    on_error: Arc::new(move |message| sink.lock().expect("errors").push(message)),
+                    inner: Arc::new(InProcessCoordinator::new(None)),
+                };
+                coordinator
+                    .acquire_workspace(AcquireWorkspaceInput {
+                        root,
+                        holder: holder("cmd-b", "run_command", "make test"),
+                        cancellation: None,
+                        max_wait_ms: None,
+                        execution_id: Some("exec-b".to_owned()),
+                    })
+                    .await
+            })
+        };
+        // Barrier: B has already passed `await_clear` (it polls the marker,
+        // naming the record A's marker carries) before the evidence exists.
+        wait_until("B queues behind A's marker", || {
+            waits.lock().expect("waits").iter().any(|wait| {
+                wait.kind == WaitKind::Workspace
+                    && wait
+                        .holders
+                        .first()
+                        .is_some_and(|owner| owner.tool == "run_command" && owner.run_id == "cmd-a")
+            })
+        })
+        .await;
+        let (pid, child) = ChildGuard::spawn("sleep", &["60"]);
+        holder_a
+            .quarantine_workspace(
+                &root,
+                &QuarantineEvidence {
+                    pids: vec![pid],
+                    holder: holder("cmd-a", "run_command", "make install"),
+                },
+            )
+            .await
+            .expect("blocking evidence publishes while A still holds");
+        held.release().await;
+        let error = tokio::time::timeout(Duration::from_secs(10), queued)
+            .await
+            .expect("B resolves once the marker frees")
+            .expect("join")
+            .expect_err("a live quarantine must not hand B an executable lease");
+        assert_eq!(error.code, "workspace_quarantined", "{error:?}");
+        assert!(error.message.contains("make install"), "{error}");
+        assert!(error.message.contains(&pid.to_string()), "{error}");
+        // The refused lease gave its marker back: only the record remains.
+        let ws = ws_dir(&dir, &root).await;
+        assert_eq!(
+            entries(&ws),
+            vec!["quarantine.json".to_owned()],
+            "no lock survived the refusal"
+        );
+        // Positive cleanup evidence lifts the block for the next writer.
+        child.reap();
+        let mut reclaim = tokio::time::timeout(
+            Duration::from_secs(10),
+            holder_a.acquire_workspace(AcquireWorkspaceInput {
+                root,
+                holder: holder("cmd-c", "run_command", "make test"),
+                cancellation: None,
+                max_wait_ms: None,
+                execution_id: Some("exec-c".to_owned()),
+            }),
+        )
+        .await
+        .expect("the workspace is reclaimable once the survivor exited")
+        .expect("C acquires");
+        reclaim.release().await;
+        assert!(errors.lock().expect("errors").is_empty());
+    }
+
+    /// Failed quarantine persistence is blocking evidence, never a success:
+    /// `quarantine_workspace` returns `Err` (its caller keeps the lease) and
+    /// every acquisition stays blocked rather than reading as a clear root.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_quarantine_that_cannot_be_published_still_blocks_writers() {
+        let dir = temp_dir("publish-dir");
+        let root = temp_dir("publish-root");
+        let file = format!("{root}/f.txt");
+        std::fs::write(&file, "x").expect("write file");
+        let (created, errors) = coordinator(&dir, None);
+        let ws = ws_dir(&dir, &root).await;
+        std::fs::create_dir_all(&ws).expect("create ws dir");
+        // A directory under the record's name: creating the temp file works,
+        // renaming it over the directory cannot.
+        std::fs::create_dir(format!("{ws}/quarantine.json")).expect("block the record path");
+        let (pid, child) = ChildGuard::spawn("sleep", &["60"]);
+        let error = created
+            .quarantine_workspace(
+                &root,
+                &QuarantineEvidence {
+                    pids: vec![pid],
+                    holder: holder("cmd", "run_command", "make install"),
+                },
+            )
+            .await
+            .expect_err("an unpublished quarantine is not a success");
+        assert_eq!(error.code, "io_error", "{error:?}");
+        assert!(
+            !errors.lock().expect("errors").is_empty(),
+            "the failed publication is reported to on_error"
+        );
+        // Fail closed: the record exists but cannot be read, which is unknown
+        // evidence — neither the command path nor the edit path gets a lease.
+        let blocked = tokio::time::timeout(
+            Duration::from_secs(10),
+            created.acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("next", "run_command", "make test"),
+                cancellation: None,
+                max_wait_ms: Some(80),
+                execution_id: None,
+            }),
+        )
+        .await
+        .expect("refused rather than hanging")
+        .expect_err("no lease over an unreadable quarantine record");
+        assert_eq!(blocked.code, "io_error", "{blocked:?}");
+        let blocked = tokio::time::timeout(
+            Duration::from_secs(10),
+            created.acquire_file(AcquireFileInput {
+                root: root.clone(),
+                path: file,
+                holder: holder("editor", "edit_file", "f.txt"),
+                cancellation: None,
+                max_wait_ms: Some(80),
+                execution_id: None,
+            }),
+        )
+        .await
+        .expect("refused rather than hanging")
+        .expect_err("no file lease either");
+        assert_eq!(blocked.code, "io_error", "{blocked:?}");
+        assert_eq!(
+            entries(&ws),
+            vec!["quarantine.json".to_owned()],
+            "no lock files and no temp litter"
+        );
+        child.reap();
+    }
+
+    /// An unreadable record is an *unknown* survivor set: empty pids do not
+    /// mean "nothing is left running", so the block never lifts by itself.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreadable_quarantine_record_never_clears_itself() {
+        let dir = temp_dir("unknown-dir");
+        let root = temp_dir("unknown-root");
+        let (created, errors) = coordinator(&dir, None);
+        let ws = ws_dir(&dir, &root).await;
+        std::fs::create_dir_all(&ws).expect("create ws dir");
+        let record = format!("{ws}/quarantine.json");
+        std::fs::write(&record, "{ pids: [").expect("write corrupt record");
+        for attempt in 1..=3 {
+            let quarantine = created
+                .workspace_quarantine(&root)
+                .await
+                .expect("readable")
+                .expect("unknown survivors are recorded");
+            assert!(
+                quarantine.pids.is_empty(),
+                "unknown, not proven-empty (attempt {attempt})"
+            );
+            let error = tokio::time::timeout(
+                Duration::from_secs(10),
+                created.acquire_workspace(AcquireWorkspaceInput {
+                    root: root.clone(),
+                    holder: holder("next", "run_command", "make test"),
+                    cancellation: None,
+                    max_wait_ms: Some(60),
+                    execution_id: None,
+                }),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("attempt {attempt}: refused promptly"))
+            .expect_err("unknown survivors keep blocking");
+            assert_eq!(error.code, "workspace_quarantined", "{error:?}");
+            assert!(
+                std::path::Path::new(&record).exists(),
+                "the record is never retired on its own"
+            );
+        }
+        assert!(
+            created
+                .clear_workspace_quarantine(&root)
+                .await
+                .expect("recovery")
+        );
+        let mut lease = tokio::time::timeout(
+            Duration::from_secs(10),
+            created.acquire_workspace(AcquireWorkspaceInput {
+                root,
+                holder: holder("after", "run_command", "make test"),
+                cancellation: None,
+                max_wait_ms: None,
+                execution_id: None,
+            }),
+        )
+        .await
+        .expect("clean after explicit recovery")
+        .expect("acquires");
+        lease.release().await;
+        assert!(errors.lock().expect("errors").is_empty());
+    }
+
+    /// B5 end-to-end on the lock-dir coordinator: a command whose owner
+    /// died mid-run (admit → effect, no completion) keeps the workspace
+    /// blocked for a SECOND coordinator instance over the same durable dir
+    /// while its process group is alive; positive group-exit lifts it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_crashed_command_owner_blocks_the_workspace_until_its_group_dies() {
+        use std::os::unix::process::CommandExt;
+        let dir = temp_dir("crash-dir");
+        let root = temp_dir("crash-root");
+        let execution_id = format!("{}:crash-{}", std::process::id(), uuid::Uuid::new_v4());
+        let survivor_path = std::path::Path::new(&root).join("survivor.pid");
+        let mut owner = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!(
+                "touch written.effect & sleep 60 & echo $! > {}; exec sleep 60",
+                survivor_path.display()
+            ))
+            .env(crate::process_tree::EXEC_ID_ENV, &execution_id)
+            .current_dir(&root)
+            .process_group(0)
+            .spawn()
+            .expect("spawn the command");
+        let owner_pid = owner.id() as i64;
+        let (created, errors) = coordinator(&dir, None);
+        created
+            .record_execution_intent(&ExecutionIntent {
+                root: root.clone(),
+                identity: CommandCleanupIdentity {
+                    execution_id: execution_id.clone(),
+                    owner_pid,
+                    pgid: Some(owner_pid as i32),
+                    spawned_at_ms: crate::coordination::now_ms_u64(),
+                },
+                holder: holder("cmd", "run_command", "crash"),
+                spawned: true,
+            })
+            .await
+            .expect("durable pre-spawn intent");
+        let written = std::path::Path::new(&root).join("written.effect");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !written.exists() || !survivor_path.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the effect landed");
+        let survivor_pid: i32 = std::fs::read_to_string(&survivor_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .expect("survivor pid");
+        unsafe { libc::kill(owner_pid as i32, libc::SIGKILL) };
+        let _ = owner.wait();
+
+        // The reopened process: a separate instance reads the same journal.
+        let (reopened, reopened_errors) = coordinator(&dir, None);
+        let error = reopened
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("cmd2", "run_command", "next"),
+                cancellation: None,
+                max_wait_ms: Some(80),
+                execution_id: None,
+            })
+            .await
+            .expect_err("a live crashed-command group keeps the workspace blocked");
+        assert_eq!(error.code, "workspace_quarantined");
+        let quarantine = reopened.workspace_quarantine(&root).await.unwrap();
+        assert_eq!(
+            quarantine
+                .unwrap()
+                .identity
+                .expect("command identity")
+                .execution_id,
+            execution_id
+        );
+
+        unsafe { libc::kill(survivor_pid, libc::SIGKILL) };
+        let mut lease = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match reopened
+                    .acquire_workspace(AcquireWorkspaceInput {
+                        root: root.clone(),
+                        holder: holder("cmd3", "run_command", "after"),
+                        cancellation: None,
+                        max_wait_ms: Some(80),
+                        execution_id: None,
+                    })
+                    .await
+                {
+                    Ok(lease) => return lease,
+                    Err(error) if error.code == "workspace_quarantined" => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    Err(error) => panic!("unexpected block: {error:?}"),
+                }
+            }
+        })
+        .await
+        .expect("the workspace frees once the group positively exits");
+        lease.release().await;
+        assert!(errors.lock().expect("errors").is_empty());
+        assert!(reopened_errors.lock().expect("errors").is_empty());
     }
 }
