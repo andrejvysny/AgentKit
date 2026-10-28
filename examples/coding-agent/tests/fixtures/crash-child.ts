@@ -42,6 +42,10 @@ const app = await CodingAgentApp.open({
   model: "mock-model",
   baseUrl: "http://127.0.0.1:1",
   mode: "full_auto",
+  // Same platform policy as the acceptance harness: real sandbox where the
+  // OS enforces it, explicitly unsandboxed inside the throwaway fixture repo
+  // elsewhere. Production keeps the fail-closed default.
+  sandbox: process.platform === "darwin" ? "required" : "off",
   leaseTtlMs: Number(leaseTtl ?? 1_500),
   providerFactory: () => mock as never,
 });
@@ -50,5 +54,19 @@ await app.startWorker();
 const started = await app.send("run the long command");
 if (started.kind !== "turn")
   throw new Error("expected a turn, got a queued follow-up");
-await app.waitForTurn(started.turnId, { timeoutMs: 30_000 });
+await app.waitForTurn(started.turnId, {
+  timeoutMs: 30_000,
+  // The parent's only window into this child is stderr: report tool failures
+  // there, or a command that never starts looks like a slow machine.
+  onEvent: (event) => {
+    if (event.type === "run.tool.failed") {
+      const data = event.data;
+      const why =
+        typeof data === "object" && data !== null
+          ? JSON.stringify(data)
+          : String(data);
+      console.error(`[child] tool failed: ${why}`);
+    }
+  },
+});
 await app.close();

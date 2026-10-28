@@ -29,6 +29,17 @@ import { CodingAgentApp, type PendingApproval } from "../src/app.js";
 import { exportTo } from "../src/commands.js";
 import { CRASH_COMMAND } from "./fixtures/crash-command.js";
 
+/**
+ * Where the OS can really enforce the seatbelt profile (the production
+ * default), the acceptance run uses it. Where it cannot — Linux CI — the
+ * tools would refuse to run at all, so the run executes UNSANDBOXED inside a
+ * throwaway `mkdtemp` repository with a fixed `testCommands` allowlist. The
+ * isolation is the fixture itself; production wiring keeps `sandbox:
+ * "required"` and the macOS CI job runs this suite with the real sandbox.
+ */
+const SANDBOX: "required" | "off" =
+  process.platform === "darwin" ? "required" : "off";
+
 const SOURCE_BUG =
   "export function sum(a: number, b: number): number {\n  return a - b;\n}\n";
 const SOURCE_FIX =
@@ -167,6 +178,7 @@ async function open(options: OpenOptions): Promise<Harness> {
     model: "mock-model",
     baseUrl: "http://127.0.0.1:1",
     testCommands: ["bun test"],
+    sandbox: SANDBOX,
     providerFactory: () => recorder as unknown as AiProviderClient,
     ...(options.mode === undefined ? {} : { mode: options.mode }),
     ...(options.reasoningEffort === undefined
@@ -224,6 +236,57 @@ function failures(events: AiRunEvent[], toolName?: string): AiRunEvent[] {
   );
 }
 
+/** Why a tool call did not land, in the words the runtime actually reported. */
+interface ToolFailureInfo {
+  toolName?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+function toolFailureInfo(data: unknown): ToolFailureInfo {
+  const info: ToolFailureInfo = {};
+  if (typeof data !== "object" || data === null) return info;
+  const record: Record<string, unknown> = { ...data };
+  for (const key of ["toolName", "errorCode", "errorMessage"] as const) {
+    const value = record[key];
+    if (typeof value === "string") info[key] = value;
+  }
+  return info;
+}
+
+function failureReport(events: AiRunEvent[]): string {
+  const failed = failures(events).map((e) => {
+    const d = toolFailureInfo(e.data);
+    return `${d.toolName ?? "?"}:${d.errorCode ?? "?"} ${
+      d.errorMessage ?? ""
+    }`.trim();
+  });
+  return failed.length > 0 ? failed.join(" | ") : "(no failure events)";
+}
+
+/** A missing tool is a runtime defect until proven otherwise — say why. */
+function expectSucceededTools(
+  events: AiRunEvent[],
+  expected: readonly string[],
+): void {
+  const actual = succeededTools(events);
+  if (JSON.stringify(actual) !== JSON.stringify(expected))
+    throw new Error(
+      `succeeded tools: expected ${JSON.stringify(expected)}, got ${JSON.stringify(
+        actual,
+      )}; failures: ${failureReport(events)}`,
+    );
+}
+
+function expectToolSucceeded(events: AiRunEvent[], toolName: string): void {
+  if (!succeededTools(events).includes(toolName))
+    throw new Error(
+      `"${toolName}" never succeeded; succeeded: ${JSON.stringify(
+        succeededTools(events),
+      )}; failures: ${failureReport(events)}`,
+    );
+}
+
 describe("coding agent — the acceptance run", () => {
   it("explores, edits and runs the project's tests in one persistent session", async () => {
     const h = await open({
@@ -251,7 +314,7 @@ describe("coding agent — the acceptance run", () => {
     expect(asked).toEqual([]);
 
     // It looked before it touched anything, and it verified afterwards.
-    expect(succeededTools(h.events)).toEqual([
+    expectSucceededTools(h.events, [
       "repo_map",
       "read_file",
       "edit_file",
@@ -374,7 +437,7 @@ describe("coding agent — the acceptance run", () => {
     expect(asked[0]!.plan?.plan).toContain("src/sum.ts");
     expect(asked[0]!.plan?.requestedMode).toBe("full_auto");
     expect(asked[1]!.plan).toBeUndefined();
-    expect(succeededTools(h.events)).toContain("run_tests");
+    expectToolSucceeded(h.events, "run_tests");
     expect(await h.app.executionMode()).toBe("auto_edit");
     expect(readFileSync(join(h.repo, "src", "sum.ts"), "utf8")).toBe(
       SOURCE_FIX,
@@ -439,13 +502,22 @@ describe("coding agent — the acceptance run", () => {
     );
     const deadline = Date.now() + 20_000;
     while (!existsSync(marker)) {
-      if (Date.now() > deadline)
-        throw new Error(
-          "the child never started its command: " +
-            (await new Response(child.stderr).text()),
-        );
-      await new Promise((r) => setTimeout(r, 50));
+      // A child that dies before the marker means the command never started;
+      // say so at once instead of burning the whole deadline on a corpse.
+      // Real wall-clock waiting is deliberate: the awaited condition is a
+      // file created by an OS child process — fake timers cannot drive it.
+      if (child.exitCode !== null) break;
+      if (Date.now() > deadline) break;
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 50);
+      await promise;
     }
+    if (!existsSync(marker))
+      throw new Error(
+        `the child never started its command (exit=${child.exitCode ?? "still running"}): ` +
+          (await new Response(child.stderr).text()) +
+          (await new Response(child.stdout).text()),
+      );
     child.kill(9);
     await child.exited;
     // The side effect is real and recorded nowhere.
