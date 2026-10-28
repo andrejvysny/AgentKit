@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 fn contribution() -> ToolContributionContext {
     ToolContributionContext {
+        durable: None,
         chat_id: Some("chat-1".into()),
         run_id: "run-1".into(),
         scope_id: None,

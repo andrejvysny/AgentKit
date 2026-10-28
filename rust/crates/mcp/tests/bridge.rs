@@ -20,7 +20,10 @@ async fn client(extra: &[(&str, &str)]) -> Arc<McpClient> {
 }
 fn context(max_bytes: usize) -> ToolContext {
     ToolContext {
+        suspension: None,
         run_id: "run-1".into(),
+        tool_call_id: None,
+        attempt_id: None,
         chat_id: Some("chat-1".into()),
         scope_id: None,
         user_id: None,

@@ -27,6 +27,7 @@ pub mod process_tree;
 pub mod sandbox;
 pub mod search;
 pub mod search_tools;
+pub mod session_authority;
 pub mod truncate;
 pub mod types;
 pub mod version_ledger;
@@ -79,6 +80,7 @@ pub use sandbox::{
     SANDBOX_EXEC, SandboxEnvironment, SandboxPolicy, sandbox_available, sandbox_profile,
     toolchain_paths,
 };
+pub use session_authority::SessionExecutionAuthority;
 pub use truncate::{
     TruncatedBy, Truncation, TruncationLimits, format_size, split_lines, truncate_head,
     truncate_tail,

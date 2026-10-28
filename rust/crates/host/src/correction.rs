@@ -44,6 +44,35 @@ impl ChatSession {
     pub async fn execute(mut self) -> HostResult<()> {
         match self.drive().await {
             Ok(pass) => {
+                if self.context.suspension.lock().await.is_some() {
+                    // A parked call is settled by the park itself: the
+                    // anchor stays a placeholder (the answer finalizes it),
+                    // and the attempt and lease already ended. Finalizing
+                    // here would fight the park with a dead fence.
+                    return Ok(());
+                }
+                if self.context.interruption.is_cancelled() {
+                    // The loop stopped at a safe boundary on a durable
+                    // interrupt: no final answer is owed, the anchor stays
+                    // a placeholder, and the runner parks this attempt. If
+                    // the final answer already committed (the interrupt
+                    // raced the finish), keep finalizing instead.
+                    let landed = self
+                        .context
+                        .store
+                        .events(&self.context.task.task_id, None, 1000)
+                        .await
+                        .map_err(|error| HostError::Execution(error.to_string()))?
+                        .iter()
+                        .any(|event| {
+                            event.event["type"] == "run.completed"
+                                && event.event["attemptId"]
+                                    == Value::String(self.context.attempt_id.clone())
+                        });
+                    if !landed {
+                        return Ok(());
+                    }
+                }
                 self.finish(&pass).await?;
                 match pass.terminal {
                     Terminal::Completed => Ok(()),

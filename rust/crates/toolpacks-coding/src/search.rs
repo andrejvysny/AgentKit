@@ -1518,9 +1518,12 @@ mod tests {
         h.put("vendor/v.ts", "needle\n").await;
         h.put("src/a.ts", "needle\n").await;
         let root = h.root();
-        let outcome = search_text(&input(&root, &root, "needle"), &walk_options(CodingLimits::default()))
-            .await
-            .unwrap();
+        let outcome = search_text(
+            &input(&root, &root, "needle"),
+            &walk_options(CodingLimits::default()),
+        )
+        .await
+        .unwrap();
         assert!(outcome.text.contains("src/a.ts"));
         assert!(!outcome.text.contains("vendor/v.ts"));
     }

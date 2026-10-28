@@ -6,7 +6,10 @@ use std::{
 };
 
 const APPLICATION_ID: i64 = 0x414b5253;
-const VERSION: i64 = 2;
+/// The schema version this build creates and accepts; migrations land as
+/// `version < N` steps below.
+pub const SCHEMA_VERSION: i64 = 4;
+const VERSION: i64 = SCHEMA_VERSION;
 
 fn ownership(path: &Path) -> Result<Option<File>> {
     if path == Path::new(":memory:") {
@@ -78,7 +81,7 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<File>)> {
     if !fresh && identity != APPLICATION_ID {
         return Err(StoreError::ForeignDatabase);
     }
-    if !fresh && ![1, VERSION].contains(&version) {
+    if !fresh && ![1, 2, 3, VERSION].contains(&version) {
         return Err(StoreError::UnsupportedVersion(version));
     }
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -93,6 +96,12 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<File>)> {
         validate_schema(&connection, version)?;
         if version == 1 {
             migrate_events(&mut connection)?;
+        }
+        if version < 3 {
+            migrate_receipts(&mut connection)?;
+        }
+        if version < 4 {
+            migrate_sessions(&mut connection)?;
         }
     }
     if path != Path::new(":memory:") {
@@ -129,22 +138,64 @@ fn validate_schema(connection: &Connection, version: i64) -> Result<()> {
 }
 
 fn schema_sql(version: i64) -> String {
-    if version == 1 {
+    let mut sql = if version == 1 {
         SCHEMA.to_owned()
     } else {
         SCHEMA.replace(
             "seq INTEGER NOT NULL CHECK(seq>=0)",
             "seq REAL NOT NULL CHECK(seq>-1)",
         )
+    };
+    if version >= 3 {
+        sql.push_str(RECEIPTS_SCHEMA);
     }
+    if version >= 4 {
+        sql.push_str(SESSIONS_SCHEMA);
+    }
+    sql
 }
+
+/// Durable execution receipts (ADR 0020), additive at schema version 3.
+/// `execution_id` is the deterministic sha-256 of
+/// `{runId, toolCallId, approvalRequestId ?? "initial"}`; the UNIQUE
+/// `approval_request_id` column makes each answered approval single-use.
+const RECEIPTS_SCHEMA: &str = r#"
+CREATE TABLE tool_executions(execution_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, approval_request_id TEXT UNIQUE, record TEXT NOT NULL);
+CREATE INDEX tool_executions_run ON tool_executions(run_id);
+"#;
 
 fn migrate_events(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch("ALTER TABLE events RENAME TO events_v1;")?;
     transaction.execute_batch("CREATE TABLE events(task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, seq REAL NOT NULL CHECK(seq>-1), event_id TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY(task_id,seq), UNIQUE(task_id,event_id));")?;
     transaction.execute_batch("INSERT INTO events SELECT task_id,seq,event_id,record FROM events_v1; DROP TABLE events_v1;")?;
-    transaction.pragma_update(None, "user_version", VERSION)?;
+    transaction.pragma_update(None, "user_version", 2)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn migrate_receipts(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(RECEIPTS_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 3)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Durable agent-session inputs (ADR 0016 §2), additive at schema version 4.
+/// The `record` JSON carries everything else; `order` lives in the shared
+/// counters table so insertion order is strictly increasing per store.
+const SESSIONS_SCHEMA: &str = r#"
+CREATE TABLE agent_inputs(input_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, target_task_id TEXT, record TEXT NOT NULL);
+CREATE INDEX agent_inputs_session ON agent_inputs(session_id,status);
+CREATE INDEX agent_inputs_target ON agent_inputs(target_task_id);
+INSERT INTO counters VALUES('input_order',0);
+"#;
+
+fn migrate_sessions(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(SESSIONS_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 4)?;
     transaction.commit()?;
     Ok(())
 }

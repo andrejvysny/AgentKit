@@ -382,7 +382,16 @@ impl agentkit_host::ToolGuard for HighRiskCommandGuard {
         if classify_shell_command(&args.command) != CommandClass::HighRisk {
             return Ok(ToolGuardVerdict::Allowed);
         }
-        Ok(ToolGuardVerdict::Refused(high_risk_refusal(&name)))
+        // Approvable but uncoverable: the reason does not start with
+        // `approval_required:`, so the standing policy never keys it and a
+        // high-risk command forces a FRESH human approval in every mode.
+        Ok(ToolGuardVerdict::AwaitingHuman(
+            agentkit_host::ApprovalAsk {
+                reason: high_risk_refusal(&name),
+                preview: None,
+                requested_mode: None,
+            },
+        ))
     }
 }
 
@@ -506,6 +515,61 @@ pub async fn coding_standing_approval_key(
         // become U+FFFD exactly as a re-encoded JS string would.
         label: String::from_utf16_lossy(&label.encode_utf16().take(512).collect::<Vec<_>>()),
     })
+}
+
+/// The workspace a chat's commands run in, resolved per chat. `None` means
+/// "no workspace": nothing is keyable, every approvable call asks.
+#[async_trait::async_trait]
+pub trait WorkspaceResolver: Send + Sync {
+    async fn resolve(&self, chat_id: &str) -> Option<StandingApprovalWorkspace>;
+}
+
+/// Standing approvals for the coding pack's shell tools (port of
+/// `createCodingStandingApprovals`). Covers only calls whose EVERY
+/// approvable refusal is the ordinary `approval_required:` — an
+/// uncertain-outcome, a high-risk, or a plan refusal makes the call
+/// uncoverable, because a remembered yes must not erase "this particular
+/// call is special".
+pub struct CodingStandingApproval<R: WorkspaceResolver> {
+    pub resolver: R,
+}
+
+#[async_trait::async_trait]
+impl<R: WorkspaceResolver> agentkit_host::StandingApprovalPolicy for CodingStandingApproval<R> {
+    async fn key_for(
+        &self,
+        context: &agentkit_host::ToolGuardContext,
+        reasons: &[String],
+    ) -> agentkit_host::HostResult<Option<(String, String)>> {
+        if context.namespace != crate::guard::CODING_NAMESPACE
+            || !is_shell_tool(&context.tool.name)
+            || reasons.is_empty()
+            || !reasons
+                .iter()
+                .all(|reason| reason.starts_with("approval_required:"))
+        {
+            return Ok(None);
+        }
+        let args = context.arguments.as_ref().and_then(shell_args_of);
+        let Some(args) = args else {
+            return Ok(None);
+        };
+        let Some(chat_id) = context.contribution.chat_id.as_deref() else {
+            return Ok(None);
+        };
+        let Some(workspace) = self.resolver.resolve(chat_id).await else {
+            return Ok(None);
+        };
+        Ok(coding_standing_approval_key(
+            &context.namespace,
+            Some(chat_id),
+            &context.tool.name,
+            &args,
+            &workspace,
+        )
+        .await
+        .map(|key| (key.digest, key.label)))
+    }
 }
 
 #[cfg(test)]
@@ -963,6 +1027,7 @@ mod tests {
         ToolGuardContext {
             contribution: ToolContributionContext {
                 chat_id: Some("chat-1".into()),
+                durable: None,
                 run_id: "run-1".into(),
                 scope_id: None,
                 actor: Value::Null,
@@ -999,6 +1064,7 @@ mod tests {
         {
             ToolGuardVerdict::Allowed => None,
             ToolGuardVerdict::Refused(reason) => Some(reason),
+            ToolGuardVerdict::AwaitingHuman(ask) => Some(ask.reason),
         }
     }
 

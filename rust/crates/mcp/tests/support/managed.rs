@@ -183,7 +183,10 @@ pub fn manager(
 }
 pub fn context() -> ToolContext {
     ToolContext {
+        suspension: None,
         run_id: "run".into(),
+        tool_call_id: None,
+        attempt_id: None,
         chat_id: Some("chat".into()),
         scope_id: None,
         user_id: None,

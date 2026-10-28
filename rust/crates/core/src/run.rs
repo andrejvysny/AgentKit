@@ -31,6 +31,18 @@ pub struct RunOptions {
     pub runtime: Arc<dyn Runtime>,
     pub event_sink: Option<Arc<dyn crate::RunEventSink>>,
     pub dispatch_guard: Option<Arc<dyn crate::DispatchGuard>>,
+    /// Host park authority for human requests; absent means tools cannot
+    /// ask (they must deny instead of hanging).
+    pub suspender: Option<Arc<dyn crate::SuspendSink>>,
+    /// Cancelled when the host has durably recorded an interrupt request
+    /// for this task; the run stops at the next safe boundary.
+    pub interruption: Option<CancellationToken>,
+    /// Host steering source (ADR 0016 §3); polled only at tool boundaries.
+    pub steering: Option<Arc<dyn crate::SteeringSource>>,
+    /// Approved calls that never ran: executed as the first batch, ahead of
+    /// any model request (ADR 0019 part 1). Their ids are excluded from
+    /// orphan reconciliation by the host.
+    pub resume_calls: Vec<ToolCall>,
 }
 impl Default for RunOptions {
     fn default() -> Self {
@@ -51,6 +63,10 @@ impl Default for RunOptions {
             runtime: Arc::new(SystemRuntime),
             event_sink: None,
             dispatch_guard: None,
+            suspender: None,
+            interruption: None,
+            steering: None,
+            resume_calls: vec![],
         }
     }
 }
@@ -67,6 +83,9 @@ pub struct RunResult {
     pub appended_messages: Vec<ChatMessage>,
     pub iterations: u32,
     pub continuation: Option<Value>,
+    /// True when the run ended because a tool parked on a human request;
+    /// the host must not settle a parked turn.
+    pub suspended: bool,
 }
 pub struct RunHandle {
     pub events: ReceiverStream<AiRunEvent>,
@@ -90,6 +109,7 @@ pub fn run_chat(
             appended_messages: state.messages[state.initial_length..].to_vec(),
             iterations: state.iteration,
             continuation: state.continuation,
+            suspended: state.suspended,
         }
     });
     RunHandle {
@@ -105,8 +125,10 @@ struct State {
     messages: Vec<ChatMessage>,
     initial_length: usize,
     pending_messages: Vec<ChatMessage>,
+    suspended: bool,
     iteration: u32,
     continuation: Option<Value>,
+    applied_steers: HashSet<String>,
 }
 #[derive(Default)]
 struct Turn {
@@ -133,8 +155,10 @@ impl State {
             messages,
             initial_length,
             pending_messages: Vec::new(),
+            suspended: false,
             iteration: 0,
             continuation,
+            applied_steers: HashSet::new(),
             options,
             sender,
         }
@@ -162,6 +186,58 @@ impl State {
         self.emit("run.warning", json!({"code":code,"message":message}))
             .await
     }
+    /// Poll the steering source and place its user messages onto the
+    /// conversation (ADR 0016 §3). Never fails the run: a hanging or
+    /// cancelled source just means no steer this step — the inputs stay
+    /// pending with the host and become follow-ups at settlement. Each
+    /// placement is announced BEFORE the message joins the history, so the
+    /// log never claims an input the model did not see.
+    async fn apply_steering(&mut self, step: u32) -> Result<(), CoreError> {
+        let Some(source) = self.options.steering.clone() else {
+            return Ok(());
+        };
+        const HOOK_TIMEOUT: Duration = Duration::from_millis(5000);
+        let polled = tokio::select! {
+            _ = self.options.cancellation.cancelled() => return Ok(()),
+            result = tokio::time::timeout(HOOK_TIMEOUT, source.pending()) => {
+                match result {
+                    Err(_) => {
+                        self.warning(
+                            "hook_timeout",
+                            "Steering source timed out; no steering applied this step.",
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                    Ok(items) => items,
+                }
+            }
+        };
+        for item in polled {
+            if self.applied_steers.contains(&item.input_id) {
+                continue;
+            }
+            if item.message.role != "user" {
+                self.warning(
+                    "steering_rejected",
+                    &format!(
+                        "Steering input {} rejected: only role \"user\" may steer.",
+                        item.input_id
+                    ),
+                )
+                .await?;
+                continue;
+            }
+            self.applied_steers.insert(item.input_id.clone());
+            self.emit(
+                "run.input.applied",
+                json!({"inputId": item.input_id, "kind": "steer", "step": step}),
+            )
+            .await?;
+            self.messages.push(item.message);
+        }
+        Ok(())
+    }
     async fn end_error(&mut self, error: CoreError) -> Terminal {
         if error.code == "cancelled" {
             let _ = self
@@ -187,15 +263,45 @@ impl State {
         }
         Ok(())
     }
+    /// Durable interrupt observed by the host heartbeat: the run stops at
+    /// the next safe boundary and the host parks the turn.
+    pub(super) fn interrupted(&self) -> bool {
+        self.options
+            .interruption
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+    }
     async fn run(
         &mut self,
         provider: Arc<dyn ChatProvider>,
         registry: Arc<ToolRegistry>,
     ) -> Result<Terminal, CoreError> {
         self.options.request.tools = registry.definitions();
+        if !self.options.resume_calls.is_empty() {
+            // Approved calls that never ran execute first, ahead of any
+            // model request (ADR 0019 part 1); their assistant record is
+            // already in the history the host assembled.
+            self.iteration = 1;
+            let calls = self.options.resume_calls.clone();
+            let cap = calls.len();
+            self.tools(&registry, &HashSet::new(), "", calls, cap, false)
+                .await?;
+            if self.suspended {
+                return Ok(Terminal::Completed);
+            }
+            // The resumed batch is a tool boundary like any other: a steer
+            // sent while the call waited for its approval is read before the
+            // next model call.
+            if self.options.steering.is_some() {
+                self.apply_steering(1).await?;
+            }
+        }
         for iteration in 1..=self.options.max_tool_iterations.max(1) {
             self.iteration = iteration;
             self.check()?;
+            if self.interrupted() {
+                return Ok(Terminal::Completed);
+            }
             let turn = self.provider_turn(provider.clone(), &registry).await?;
             let content = turn.content.clone().unwrap_or(turn.delta.clone());
             let mut calls = if turn.calls.is_empty() {
@@ -215,7 +321,27 @@ impl State {
                 if !duplicates.is_empty() {
                     self.warning("duplicate_tool_call_id",&format!("Provider reused tool call id(s) {} in one turn; the later call(s) were re-keyed so each stays answerable.",duplicates.join(", "))).await?;
                 }
-                self.tools(&registry, &turn, &content, calls).await?;
+                self.tools(
+                    &registry,
+                    &turn.announced,
+                    &content,
+                    calls,
+                    self.options.max_tool_calls_per_iteration,
+                    true,
+                )
+                .await?;
+                if self.suspended {
+                    // The turn is durably parked; this attempt ends quietly.
+                    return Ok(Terminal::Completed);
+                }
+                // Steers are polled ONLY here: after tools ran and another
+                // model call follows. Not before the first request, after a
+                // final answer, or on the last iteration; leftovers stay
+                // pending and the host turns them into follow-ups at
+                // settlement.
+                if self.options.steering.is_some() && iteration < self.options.max_tool_iterations {
+                    self.apply_steering(iteration + 1).await?;
+                }
             } else {
                 self.check()?;
                 if turn.finish == "tool_calls" && !turn.saw_no_tool_warning {
@@ -396,16 +522,17 @@ impl State {
     async fn tools(
         &mut self,
         registry: &ToolRegistry,
-        turn: &Turn,
+        announced: &HashSet<String>,
         content: &str,
         calls: Vec<ToolCall>,
+        cap: usize,
+        push_assistant: bool,
     ) -> Result<(), CoreError> {
         for call in &calls {
-            if !turn.announced.contains(&call.id) {
+            if !announced.contains(&call.id) {
                 self.emit("run.tool.requested",json!({"toolCallId":call.id,"toolName":call.name,"argumentsJson":call.arguments_json})).await?;
             }
         }
-        let cap = self.options.max_tool_calls_per_iteration;
         if calls.len() > cap {
             self.warning(
                 "tool_call_cap",
@@ -416,10 +543,12 @@ impl State {
             )
             .await?;
         }
-        let mut assistant = ChatMessage::text("assistant", content);
-        assistant.tool_calls = calls.clone();
-        self.pending_messages.push(assistant.clone());
-        self.messages.push(assistant);
+        if push_assistant {
+            let mut assistant = ChatMessage::text("assistant", content);
+            assistant.tool_calls = calls.clone();
+            self.pending_messages.push(assistant.clone());
+            self.messages.push(assistant);
+        }
         let mut cancelled = false;
         let mut budget_error = None;
         for (index, call) in calls.iter().enumerate() {
@@ -452,15 +581,58 @@ impl State {
                     json!({"toolCallId":call.id,"toolName":call.name}),
                 )
                 .await?;
-                tool_execution::execute(
+                let slot = Arc::new(crate::SuspendSlot::default());
+                let outcome = tool_execution::execute(
                     registry,
                     call,
-                    self.tool_context(),
+                    self.tool_context(call, Some(slot.clone())),
                     self.options.default_tool_timeout_ms,
                     self.options.request.budget.clone(),
                 )
-                .await
+                .await;
+                if let Some(spec) = slot.take() {
+                    // The suspended call records NO tool result: the human
+                    // answer is what answers it. The pending assistant and
+                    // the results before it persist with the waiting event.
+                    let mut data = json!({
+                        "requestId": spec.request_id,
+                        "toolCallId": call.id,
+                        "toolName": call.name,
+                        "step": self.iteration,
+                        "prompt": spec.content.get("prompt").and_then(Value::as_str).unwrap_or(""),
+                    });
+                    if let Some(kind) = spec.content.get("kind") {
+                        data["kind"] = kind.clone();
+                    }
+                    // Approval fields ride the event too (parity with the
+                    // TypeScript `run.waiting`): the projection records the
+                    // request from these bytes.
+                    for key in ["argsSha256", "requestedMode", "standing"] {
+                        if let Some(value) = spec.content.get(key) {
+                            data[key] = value.clone();
+                        }
+                    }
+                    if let Some(expires) = &spec.expires_at {
+                        data["expiresAt"] = expires.clone().into();
+                    }
+                    self.emit("run.waiting", data).await?;
+                    let Some(sink) = self.options.suspender.clone() else {
+                        return Err(CoreError::new(
+                            "suspension_unavailable",
+                            "This host cannot park runs for human input; the request was refused.",
+                        ));
+                    };
+                    sink.park(&spec, &call.id).await?;
+                    self.suspended = true;
+                    return Ok(());
+                }
+                outcome
             };
+            if self.interrupted() {
+                // Stop without failing the calls that never ran: the resumed
+                // attempt replays the unanswered ones against receipts.
+                return Ok(());
+            }
             if matches!(
                 outcome.data["errorCode"].as_str(),
                 Some("execution_budget_exhausted" | "execution_timeout")

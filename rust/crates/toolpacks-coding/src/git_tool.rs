@@ -701,7 +701,10 @@ mod tests {
 
     fn context() -> ToolContext {
         ToolContext {
+            suspension: None,
             run_id: "test-run".to_owned(),
+            tool_call_id: None,
+            attempt_id: None,
             chat_id: None,
             scope_id: None,
             user_id: None,

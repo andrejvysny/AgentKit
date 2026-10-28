@@ -484,9 +484,7 @@ pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 // JS `<` compares UTF-16 code units, not UTF-8 bytes; the
                 // port mirrors UTF-16 semantics everywhere else, so the
                 // listing (and the cap boundary) must order the same.
-                visible.sort_by(|left, right| {
-                    left.0.encode_utf16().cmp(right.0.encode_utf16())
-                });
+                visible.sort_by(|left, right| left.0.encode_utf16().cmp(right.0.encode_utf16()));
                 let hidden = all.len() - permitted.len();
                 let ignored = permitted.len() - visible.len();
                 let shown = &visible[..std::cmp::min(visible.len(), env.limits.list_max_entries)];
@@ -1104,7 +1102,10 @@ mod tests {
             cancellation: CancellationToken,
         ) -> ToolResult {
             let context = ToolContext {
+                suspension: None,
                 run_id: "run-1".to_owned(),
+                tool_call_id: None,
+                attempt_id: None,
                 chat_id: chat.map(str::to_owned),
                 scope_id: None,
                 user_id: None,
@@ -1592,7 +1593,10 @@ mod tests {
                 false
             });
             let context = ToolContext {
+                suspension: None,
                 run_id: "run-race".to_owned(),
+                tool_call_id: None,
+                attempt_id: None,
                 chat_id: Some(chat),
                 scope_id: None,
                 user_id: None,
