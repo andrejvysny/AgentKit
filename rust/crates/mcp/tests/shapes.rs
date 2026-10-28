@@ -1,3 +1,5 @@
+#[path = "support/interop.rs"]
+mod interop;
 use agentkit_mcp::*;
 use async_trait::async_trait;
 use rmcp::ErrorData;
@@ -181,6 +183,9 @@ async fn native_http_callbacks_and_sdk_results_preserve_reserved_and_prefix_keys
 }
 #[tokio::test]
 async fn sdk_stdio_results_preserve_reserved_and_prefix_keys() {
+    if interop::ts_interop_skipped("mcp shapes stdio fixture") {
+        return;
+    }
     let fixture = format!(
         "{}/tests/fixtures/shapes-stdio.mjs",
         env!("CARGO_MANIFEST_DIR")

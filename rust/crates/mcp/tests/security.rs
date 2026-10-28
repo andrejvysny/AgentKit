@@ -1,3 +1,5 @@
+#[path = "support/interop.rs"]
+mod interop;
 use agentkit_mcp::{
     Authenticator, Backend, CatalogTool, ClientOptions, McpClient, McpClientError, McpServer,
     ServerOptions, SessionScope, TS_PROTOCOL_VERSIONS, model::*,
@@ -180,6 +182,9 @@ async fn rebinding_body_bounds_and_session_eviction_fail_closed() {
 
 #[tokio::test]
 async fn stdio_repeated_cursor_page_bounds_and_precancel_are_bounded() {
+    if interop::ts_interop_skipped("mcp security stdio fixture") {
+        return;
+    }
     let fixture = format!("{}/tests/fixtures/stdio.mjs", env!("CARGO_MANIFEST_DIR"));
     let environment = BTreeMap::from([
         ("PATH".into(), std::env::var("PATH").unwrap()),
@@ -217,10 +222,14 @@ async fn stdio_repeated_cursor_page_bounds_and_precancel_are_bounded() {
 #[test]
 fn protocol_freeze_matches_installed_typescript_sdk_and_excludes_newer_rmcp_revision() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let source = std::fs::read_to_string(
-        root.join("node_modules/@modelcontextprotocol/sdk/dist/esm/types.js"),
-    )
-    .unwrap();
+    // bun.lock installs the SDK only under the alias key `mcp-sdk-v1`
+    // (`"mcp-sdk-v1": "npm:@modelcontextprotocol/sdk@1.30.0"`), so a clean
+    // `bun install --frozen-lockfile` has no `@modelcontextprotocol/sdk`
+    // directory at all — reading it would panic there and only pass off a
+    // stale hoisted leftover locally.
+    let types = root.join("node_modules/mcp-sdk-v1/dist/esm/types.js");
+    let source = std::fs::read_to_string(&types)
+        .unwrap_or_else(|e| panic!("read frozen SDK at {}: {e}", types.display()));
     let latest = source
         .split("LATEST_PROTOCOL_VERSION = '")
         .nth(1)
