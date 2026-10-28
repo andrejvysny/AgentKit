@@ -13,11 +13,15 @@
 //! native compaction runner consumes the request.
 
 mod descriptor;
+mod execution_authority;
 mod report;
 
 pub use descriptor::{
-    CHAT_TURN_TASK_KIND, REASONING_EFFORTS, is_valid_session_turn_kind, read_session_descriptor,
-    session_content_selection, session_turn_kind,
+    CHAT_TURN_TASK_KIND, REASONING_EFFORTS, TURN_CONFIG_KEYS, is_valid_session_turn_kind,
+    read_session_descriptor, session_content_selection, session_turn_kind, turn_config,
+};
+pub use execution_authority::{
+    CodingPermissionAuthority, PermissionContext, SessionExecutionAuthority,
 };
 pub use report::{FALLBACK_CONTEXT_WINDOW_TOKENS, list_turn_tasks, session_usage, summarize_turn};
 
@@ -25,10 +29,10 @@ use crate::{HostResult, SharedRuntime};
 use agentkit_store::{
     AgentInputKind, AgentInputPatch, AgentInputQuery, AgentInputRecord, AgentInputSettlePolicy,
     AgentInputStatus, AnswerHumanRequest, AnswerReceipt, COMPACT_REQUESTED_METADATA_KEY,
-    ChatRecord, CreateAgentInput, MessageInput, SESSION_METADATA_KEY,
-    STANDING_APPROVALS_METADATA_KEY, SqliteStore, StageQueuedTurn, SubmitTask, TaskRecord,
-    TaskStatus, execution_state_for_mode, plan_request_of, read_execution_state, standing_grants,
-    with_execution,
+    ChatRecord, CreateAgentInput, MessageInput, QueueAdmission, QueueOrStage, SESSION_METADATA_KEY,
+    STANDING_APPROVALS_METADATA_KEY, SqliteStore, StageQueuedTurn, StagedCandidate, SubmitTask,
+    TaskRecord, TaskStatus, TurnStaging, execution_state_for_mode, plan_request_of,
+    read_execution_state, standing_grants, with_execution,
 };
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
@@ -253,9 +257,6 @@ impl QueueKind {
         }
     }
 }
-
-/// The re-checks of the idle/busy race before giving up with `chat_busy`.
-const MAX_SUBMIT_ATTEMPTS: u32 = 3;
 
 pub struct AgentSessionServiceDeps {
     pub store: SqliteStore,
@@ -717,40 +718,27 @@ impl AgentSessionService {
                     continue;
                 }
             }
-            let Some(content) = read_input_content(&record.content) else {
-                continue; // malformed content is skipped, like the TS logger path
-            };
             // A steer converts under the SAME deterministic record id the
             // in-run projection uses, so every placement path for one input
             // is the same receipt — never two records for one steering.
-            let user_message_id = if record.kind == AgentInputKind::Steer {
-                format!("steer:{}", record.input_id)
-            } else {
-                self.mint("msg_")
-            };
-            let assistant_message_id = self.mint("msg_");
-            let task = self.stage_task(
+            let Some(candidate) = self.stage_candidate(
                 session_id,
                 descriptor,
                 &record.input_id,
-                &user_message_id,
-                &assistant_message_id,
-            )?;
+                record.kind,
+                &record.content,
+            )?
+            else {
+                continue; // malformed content is skipped, like the TS logger path
+            };
             out.push(StageQueuedTurn {
                 session_id: session_id.to_owned(),
                 task_kind: turn_kind.to_owned(),
                 exclude_task_id: None,
                 input_id: record.input_id.clone(),
                 expected_kind: record.kind,
-                task,
-                messages: self.stage_messages(
-                    session_id,
-                    &turn_id_for(&record.input_id),
-                    &content,
-                    &user_message_id,
-                    &assistant_message_id,
-                    None,
-                ),
+                task: candidate.task,
+                messages: candidate.messages,
                 now: self.now_ms(),
             });
         }
@@ -1350,35 +1338,76 @@ impl AgentSessionService {
         plan_request_of(&record.content, &names)
     }
 
-    /// The queued input's turn task: derived from the input like a directly
-    /// sent turn (`turn:<inputId>`), so a host can bind per-turn state to
-    /// the input before it is converted. The caller mints the message ids so
-    /// payload and records name the same pair.
-    fn stage_task(
+    /// THE staging contract for a queued input: the turn it becomes, built
+    /// exactly as a submission made right now would build it — the CURRENT
+    /// session descriptor's config (`turn_payload_base`), this session's turn
+    /// kind, and ids derived from the input itself (`turn:<inputId>`,
+    /// `steer:<inputId>` for a steer, `msg_q:`/`msg_a:` for a follow-up) so
+    /// every path that promotes one input writes one identical receipt.
+    ///
+    /// Submission, an explicit queue flush, settlement promotion and the
+    /// recovery of a half-admitted input all stage through here; the store's
+    /// [`agentkit_store::TurnStaging`] carries the same config into the one
+    /// promotion the host's snapshot cannot pre-stage. `None` is the staging
+    /// filter: unusable content stays Pending and visible.
+    fn stage_candidate(
         &self,
         session_id: &str,
         descriptor: &Value,
         input_id: &str,
-        user_message_id: &str,
-        assistant_message_id: &str,
-    ) -> SessionResult<SubmitTask> {
-        Ok(SubmitTask {
-            task_id: turn_id_for(input_id),
+        kind: AgentInputKind,
+        content: &Value,
+    ) -> SessionResult<Option<StagedCandidate>> {
+        let Some(content) = read_input_content(content) else {
+            return Ok(None);
+        };
+        let user_message_id = if kind == AgentInputKind::Steer {
+            format!("steer:{input_id}")
+        } else {
+            format!("msg_q:{input_id}")
+        };
+        let assistant_message_id = format!("msg_a:{input_id}");
+        let task_id = turn_id_for(input_id);
+        let mut payload = self.turn_payload_base(session_id, descriptor)?;
+        payload.insert(
+            "assistantMessageId".into(),
+            assistant_message_id.clone().into(),
+        );
+        payload.insert("userMessageId".into(), user_message_id.clone().into());
+        let task = SubmitTask {
+            task_id: task_id.clone(),
             kind: session_turn_kind(descriptor),
             scope_id: session_id.to_owned(),
-            payload: self.turn_payload(
-                session_id,
-                descriptor,
-                user_message_id,
-                assistant_message_id,
-                None,
-            )?,
+            payload: Value::Object(payload),
             priority: 0,
             now: self.now_ms(),
             available_at: None,
             depends_on: vec![],
             parent_task_id: None,
             exclusive_scope: true,
+        };
+        Ok(Some(StagedCandidate {
+            input_id: input_id.to_owned(),
+            task,
+            messages: self.stage_messages(
+                session_id,
+                &task_id,
+                &content,
+                &user_message_id,
+                &assistant_message_id,
+                None,
+            ),
+        }))
+    }
+
+    /// The authoritative config the store needs to stage what a settlement's
+    /// snapshot could not name: the same contract [`Self::stage_candidate`]
+    /// applies, as data the settle transaction can stamp without re-reading
+    /// the descriptor.
+    fn turn_staging(&self, session_id: &str, descriptor: &Value) -> SessionResult<TurnStaging> {
+        Ok(TurnStaging {
+            kind: session_turn_kind(descriptor),
+            config: Value::Object(self.turn_payload_base(session_id, descriptor)?),
         })
     }
 
@@ -1403,6 +1432,26 @@ impl AgentSessionService {
         assistant_message_id: &str,
         parent_message_id: Option<&str>,
     ) -> SessionResult<Value> {
+        let mut payload = self.turn_payload_base(session_id, descriptor)?;
+        if let Some(parent) = parent_message_id {
+            payload.insert("parentMessageId".into(), parent.into());
+        }
+        payload.insert("assistantMessageId".into(), assistant_message_id.into());
+        payload.insert("userMessageId".into(), user_message_id.into());
+        Ok(Value::Object(payload))
+    }
+
+    /// The config half of the staging contract: every turn of this session
+    /// carries these keys, captured from the descriptor AT TASK CREATION,
+    /// whoever stages it — submission, an explicit flush, a settlement's
+    /// promotion, or the recovery of a half-admitted input. The refusal
+    /// checks live here so no path can stage a turn the native dispatch path
+    /// cannot honor.
+    fn turn_payload_base(
+        &self,
+        session_id: &str,
+        descriptor: &Value,
+    ) -> SessionResult<Map<String, Value>> {
         if session_content_selection(descriptor).is_some() {
             return Err(SessionError::new(
                 "not_implemented",
@@ -1423,17 +1472,10 @@ impl AgentSessionService {
         }
         let mut payload = Map::new();
         payload.insert("chatId".into(), session_id.into());
-        if let Some(parent) = parent_message_id {
-            payload.insert("parentMessageId".into(), parent.into());
+        for (key, value) in turn_config(descriptor) {
+            payload.insert(key, value);
         }
-        for key in ["model", "reasoningEffort", "providerId"] {
-            if let Some(value) = descriptor.get(key) {
-                payload.insert(key.into(), value.clone());
-            }
-        }
-        payload.insert("assistantMessageId".into(), assistant_message_id.into());
-        payload.insert("userMessageId".into(), user_message_id.into());
-        Ok(Value::Object(payload))
+        Ok(payload)
     }
 
     fn stage_messages(
@@ -1467,9 +1509,12 @@ impl AgentSessionService {
         ]
     }
 
-    /// Try to start a turn; if the session is busy, store the input instead.
-    /// The attempt IS the idle check (the store refuses a concurrent turn),
-    /// so there is no check-then-write window to lose a race in.
+    /// Try to start a turn; if the session is busy, admit the input instead.
+    /// The submit attempt IS the idle check (the store refuses a concurrent
+    /// turn), and the queueing half is ONE store write that re-checks the
+    /// active turn as it inserts — so there is no check-then-write window
+    /// anywhere for a settlement to slip between. An input can never be left
+    /// Pending behind a turn that settled after a read and before an insert.
     async fn submit_or_queue(
         &self,
         session_id: &str,
@@ -1478,41 +1523,44 @@ impl AgentSessionService {
         content: Value,
         intent: QueueIntent,
     ) -> SessionResult<AgentSendResult> {
-        let turn_kind = session_turn_kind(descriptor);
-        let mut busy: Option<SessionError> = None;
-        for _attempt in 0..MAX_SUBMIT_ATTEMPTS {
-            if let Some(existing) = &intent.input_id
-                && let Some(prior) = self
-                    .prior_receipt(session_id, kind, existing, &content)
-                    .await?
-            {
-                return Ok(prior);
-            }
-            match self
-                .submit_turn(session_id, descriptor, &content, intent.input_id.as_deref())
-                .await
-            {
-                Ok(result) => return Ok(result),
-                Err(error) if error.code == "chat_busy" => busy = Some(error),
-                Err(error) => return Err(error),
-            }
-            let active = self.active_turn(session_id, &turn_kind).await?;
-            // The turn settled between the refusal and now: start over as idle.
-            let Some(active) = active else { continue };
-            return self
-                .queue_input(session_id, kind, content, intent, &active)
-                .await;
+        if let Some(existing) = &intent.input_id
+            && let Some(prior) = self
+                .prior_receipt(session_id, kind, existing, &content)
+                .await?
+        {
+            return Ok(prior);
         }
-        Err(busy.unwrap_or_else(|| SessionError::chat_busy(session_id)))
+        match self
+            .submit_turn(session_id, descriptor, &content, intent.input_id.as_deref())
+            .await
+        {
+            Ok(result) => {
+                self.wake();
+                Ok(result)
+            }
+            Err(error) if error.code == "chat_busy" => {
+                self.enqueue_input(session_id, descriptor, kind, content, intent)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
     }
 
-    async fn queue_input(
+    /// Admit a queued input. `submit_turn`'s `chat_busy` is what routes here,
+    /// so the session WAS busy moments ago; the store's own check inside the
+    /// admission transaction — not a read this call cannot keep true —
+    /// decides whether the input waits behind the live turn or becomes the
+    /// next turn itself, and the answer commits with the insertion. The
+    /// reread-then-insert pair this replaces is exactly how a follow-up that
+    /// landed after a settlement's commit stayed Pending forever with no
+    /// active turn and an idle worker.
+    async fn enqueue_input(
         &self,
         session_id: &str,
+        descriptor: &Value,
         kind: QueueKind,
         content: Value,
         intent: QueueIntent,
-        active: &TaskRecord,
     ) -> SessionResult<AgentSendResult> {
         let QueueIntent {
             input_id,
@@ -1521,31 +1569,48 @@ impl AgentSessionService {
         } = intent;
         let input_id =
             input_id.ok_or_else(|| SessionError::invalid_input("inputId is required to queue."))?;
-        let target_task_id = if kind == QueueKind::Steer {
-            let target = turn_id.clone().unwrap_or_else(|| active.task_id.clone());
-            self.store()
-                .get_task(&target)
-                .await?
-                .filter(|task| task.scope_id == session_id)
-                .ok_or_else(|| {
-                    SessionError::new(
-                        "not_found",
-                        format!("Turn {target} not found in {session_id}."),
-                    )
-                })?;
-            Some(target)
-        } else {
-            None
+        // An explicit target is validated up front (a steer aimed at a turn
+        // that never existed is `not_found`); with none, the store names the
+        // live turn it actually finds, so the running turn sees its steer at
+        // the next boundary instead of promoting it blind.
+        let target_task_id = match (&turn_id, kind) {
+            (Some(target), QueueKind::Steer) => {
+                self.store()
+                    .get_task(target)
+                    .await?
+                    .filter(|task| task.scope_id == session_id)
+                    .ok_or_else(|| {
+                        SessionError::new(
+                            "not_found",
+                            format!("Turn {target} not found in {session_id}."),
+                        )
+                    })?;
+                Some(target.clone())
+            }
+            _ => None,
         };
-        let (record, _) = self
+        // The durable envelope is what the staging filter reads too, so the
+        // turn an admission can start is staged from exactly the bytes the
+        // input stores (`queue_content` / `read_input_content` shape).
+        let envelope = json!({"content": content});
+        let candidate = self.stage_candidate(
+            session_id,
+            descriptor,
+            &input_id,
+            kind.input_kind(),
+            &envelope,
+        )?;
+        let content_hash = self.hash_of(kind, &envelope["content"]);
+        let admission = self
             .store()
-            .create_input(
-                CreateAgentInput {
+            .queue_or_stage_turn(QueueOrStage {
+                session_id: session_id.to_owned(),
+                input: CreateAgentInput {
                     input_id,
                     session_id: session_id.to_owned(),
                     kind: kind.input_kind(),
-                    content: json!({"content": content.clone()}),
-                    content_hash: self.hash_of(kind, &content),
+                    content: envelope,
+                    content_hash,
                     target_task_id,
                     on_settled: on_settled
                         .map(AgentInputSettlePolicy::from)
@@ -1554,10 +1619,23 @@ impl AgentSessionService {
                     tool_call_id: None,
                     expires_at: None,
                 },
-                self.now_ms(),
-            )
+                target_the_live_turn: kind == QueueKind::Steer && turn_id.is_none(),
+                candidate,
+                now: self.now_ms(),
+            })
             .await?;
-        self.receipt_of(record).await
+        match admission {
+            QueueAdmission::Staged(task) => {
+                // This write created the next turn: rouse a worker for it.
+                self.wake();
+                Ok(turn_result(task))
+            }
+            QueueAdmission::Queued(record) => {
+                // Durable behind a live turn whose settlement transaction
+                // re-reads the queue and owns the promotion.
+                self.receipt_of(record).await
+            }
+        }
     }
 
     /// The earlier outcome of this `inputId`, or `None` when it is new.
@@ -1714,26 +1792,38 @@ pub const APPROVAL_MARKER: &str = agentkit_store::APPROVE_MARKER;
 
 #[async_trait]
 impl crate::SessionFlushPlanner for AgentSessionService {
-    async fn settle_candidates(
+    async fn settle_plan(
         &self,
         settling: &TaskRecord,
         completed: bool,
-    ) -> crate::HostResult<Vec<agentkit_store::StagedCandidate>> {
+    ) -> crate::HostResult<crate::SettlePlan> {
+        let none = || crate::SettlePlan {
+            staging: None,
+            convert: vec![],
+        };
         // A failed or cancelled turn promotes nothing: its queued inputs
         // stay pending and visible until an explicit flushQueue
         // (ADR 0016 §4).
         if !completed {
-            return Ok(vec![]);
+            return Ok(none());
         }
         // Only the session's own turn kind drives its queue; anything else
         // sharing the scope (or a non-session chat) is nobody's queue.
         let Ok((_, descriptor)) = self.require_session(&settling.scope_id).await else {
-            return Ok(vec![]);
+            return Ok(none());
         };
         let turn_kind = session_turn_kind(&descriptor);
         if turn_kind != settling.kind {
-            return Ok(vec![]);
+            return Ok(none());
         }
+        // THE authoritative config for anything this snapshot cannot name,
+        // read from the descriptor NOW. A `setModel` that landed while this
+        // turn ran must reach the turn THIS settle promotes; templating the
+        // missed staging off the settling task's payload handed it the model
+        // an earlier submission was made with. A descriptor the native
+        // dispatch path cannot honor stages nothing (fail-closed, exactly
+        // like the candidate filter below) rather than half-stamping a turn.
+        let staging = self.turn_staging(&settling.scope_id, &descriptor).ok();
         // At settling time the settling turn itself counts as terminal: a
         // steer aimed at it that was never placed is a promotion candidate
         // (after the follow-ups). The whole eligible queue goes to the store
@@ -1750,13 +1840,16 @@ impl crate::SessionFlushPlanner for AgentSessionService {
             )
             .await
             .unwrap_or_default();
-        Ok(candidates
-            .into_iter()
-            .map(|candidate| agentkit_store::StagedCandidate {
-                input_id: candidate.input_id,
-                task: candidate.task,
-                messages: candidate.messages,
-            })
-            .collect())
+        Ok(crate::SettlePlan {
+            staging,
+            convert: candidates
+                .into_iter()
+                .map(|candidate| agentkit_store::StagedCandidate {
+                    input_id: candidate.input_id,
+                    task: candidate.task,
+                    messages: candidate.messages,
+                })
+                .collect(),
+        })
     }
 }

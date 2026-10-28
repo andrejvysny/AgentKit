@@ -2,6 +2,7 @@
 mod budget;
 mod dispatch;
 mod envelope;
+pub mod permission;
 pub mod providers;
 mod registry;
 mod run;

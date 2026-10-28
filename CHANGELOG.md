@@ -107,6 +107,14 @@ passes (the compaction summarizer is unchanged). Absent: behaviour and events ar
   `sha256`/`totalLines` and reads up to 8 `paths`. `list_dir` honours ignore files, and `code_search` pages with
   `offset`.
 
+**Session queue and resume consistency.** Follow-up admission is one store write transaction
+(`SqliteStore::queue_or_stage_turn`): the active-task check, durable input insert, and next-turn staging cannot
+interleave, so two concurrent `followUp` calls can no longer both stage into the same next turn, and a steer whose
+settlement cancels it is never staged (`on_settled: cancel` inputs stay Pending and visible). Fallback promotion at
+turn settle reads the session's own persisted descriptor — never the calling turn's stale cached mode — and
+`resume` deduplicates a restart whose completion already landed, instead of re-running effects.
+
+
 **Sessions, context, profiles** ([ADR 0016](docs/adr/0016-durable-agent-sessions.md) §6a–6b,
 [0017](docs/adr/0017-context-assembly-and-compaction.md), [0015](docs/adr/0015-unified-agent-runtime.md) §3).
 

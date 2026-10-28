@@ -362,6 +362,15 @@ pub(crate) async fn backfill_applied_steers(
 /// become resume calls; anything else gets an honest tool record explaining
 /// why it was not run. Returns the approvals map (tool call id -> request
 /// id, consumed at admission) and the calls in declared order.
+///
+/// Resolution is per DECLARATION, not per answered request: one tool call
+/// identity may hold several answered asks (an ordinary approval plus a later
+/// uncertain reissue, or generations N then N+1), and exactly ONE of them —
+/// the newest whose arguments still match the declared call — resumes it. The
+/// older answers are durable history and are never re-spent, and nothing is
+/// killed or replayed here: a resumed call runs once because the durable
+/// execution receipt admits one execution per identity, not because a second
+/// dispatch is suppressed downstream.
 pub(crate) async fn resolve_approved_calls(
     context: &ExecutionContext,
     chat_id: &str,
@@ -450,49 +459,52 @@ pub(crate) async fn resolve_approved_calls(
     // Declared order (assistant records were walked newest-first).
     declared.reverse();
 
+    // One resumed call per DECLARATION, in declaration order. `list_inputs`
+    // returns requests by ascending insertion `order`, so a single call can
+    // carry several answered asks — an ordinary approval and a later
+    // uncertain reissue, or generations N then N+1 of the same ask. The live
+    // grant is the NEWEST answered request whose arguments still match the
+    // call the run declared; the older answers stay as durable history and
+    // stay unspendable: admission compares the grant's
+    // `uncertainty_generation` against the unresolved receipt's execution id
+    // (host `covers` + the store's pending-generation gate), and the
+    // receipt's UNIQUE approval index spends each answer exactly once.
+    //
+    // Resolution is keyed by declaration, NOT by answered request: one push
+    // per request re-dispatched the same call, so a tool whose durable
+    // receipt replayed a single effect still produced one tool record and one
+    // event per answer. A refusal record is written only when NOTHING
+    // resolves the declaration — an answered ask whose arguments differ from
+    // the declared call is not evidence the call went unrun once a newer
+    // (or older) answer authorized exactly it.
     let mut approvals = HashMap::new();
     let mut resume = vec![];
-    for request in requests {
-        let Some(call_id) = request.tool_call_id.clone() else {
-            continue;
-        };
-        if answered.contains(&call_id) {
+    for call in &declared {
+        let call_id = call.id.as_str();
+        if answered.contains(call_id) {
             continue; // already executed and recorded: nothing to resume
         }
-        let Some(position) = declared.iter().position(|call| call.id == call_id) else {
-            continue; // the run never declared this call
-        };
-        let call = &declared[position];
-        let approved_hash = request.content["argsSha256"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
-        // One JavaScript-semantic parser at every digest site: the initial
-        // dispatch hashed these arguments through `parse_javascript_json`,
-        // so the resume comparison must use it too. Plain Serde would
-        // re-spell `1.0` differently from the canonical `1` and refuse a
-        // call the human actually approved.
-        let hash = agentkit_contracts::parse_javascript_json(&call.arguments_json)
-            .ok()
-            .map(|arguments| crate::governance::args_sha256(&arguments));
-        if hash.as_deref() != Some(approved_hash.as_str()) {
-            // Changed (or unparseable) arguments are a refusal, recorded —
-            // never a silent run of something the human did not approve.
-            append_approval_mismatch(context, chat_id, anchor, call).await?;
-            continue;
-        }
-        // `list_inputs` returns requests by ascending insertion `order`, so
-        // when one call carries several answered asks (an ordinary approval
-        // and a later uncertain reissue — or generations N then N+1 of the
-        // same ask) the NEWEST answer is the live grant in this map. The
-        // older answers stay as durable history and stay unspendable:
-        // admission compares the grant's `uncertainty_generation` against
-        // the unresolved receipt's execution id (host `covers` + the
-        // store's pending-generation gate), and the receipt's UNIQUE
-        // approval index spends each answer exactly once.
-        approvals.insert(
-            call_id.clone(),
-            crate::governance::ApprovalGrant {
+        let mut grant = None;
+        for request in requests.iter().rev() {
+            if request.tool_call_id.as_deref() != Some(call_id) {
+                continue;
+            }
+            let approved_hash = request.content["argsSha256"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            // One JavaScript-semantic parser at every digest site: the initial
+            // dispatch hashed these arguments through `parse_javascript_json`,
+            // so the resume comparison must use it too. Plain Serde would
+            // re-spell `1.0` differently from the canonical `1` and refuse a
+            // call the human actually approved.
+            let hash = agentkit_contracts::parse_javascript_json(&call.arguments_json)
+                .ok()
+                .map(|arguments| crate::governance::args_sha256(&arguments));
+            if hash.as_deref() != Some(approved_hash.as_str()) {
+                continue; // this ask was about different arguments
+            }
+            grant = Some(crate::governance::ApprovalGrant {
                 request_id: request.input_id.clone(),
                 args_sha256: approved_hash,
                 // An answer to an uncertain re-issue names the exact
@@ -502,11 +514,23 @@ pub(crate) async fn resolve_approved_calls(
                 uncertainty_generation: request.content["uncertaintyGeneration"]
                     .as_str()
                     .map(str::to_owned),
-            },
-        );
+            });
+            break;
+        }
+        let Some(grant) = grant else {
+            // A call the human never (or no longer) authorized is a refusal,
+            // recorded — never a silent run of something they did not approve.
+            if requests
+                .iter()
+                .any(|request| request.tool_call_id.as_deref() == Some(call_id))
+            {
+                append_approval_mismatch(context, chat_id, anchor, call).await?;
+            }
+            continue;
+        };
+        approvals.insert(call_id.to_owned(), grant);
         resume.push(call.clone());
     }
-    resume.sort_by_key(|call| declared.iter().position(|c| c.id == call.id).unwrap_or(0));
     Ok((approvals, resume))
 }
 
