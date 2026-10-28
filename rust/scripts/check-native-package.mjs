@@ -314,103 +314,15 @@ try {
     )}\n`,
   );
 
-  // One scripted turn: in-memory store → service → session → send → drain →
-  // close, mirroring packages/native/tests/smoke.test.ts. Written into the
-  // isolated consumer directory, importing the INSTALLED package by name.
-  const consumerScript = `import { bindingId, NativeStore } from "@agentkit/native";
-
-function assert(condition, message) {
-  if (!condition) throw new Error("assertion failed: " + message);
-}
-
-async function main() {
-  assert(
-    bindingId === "agentkit-native",
-    "binding identity probe returned " + String(bindingId),
+  // The acceptance scenario lives in a real file —
+  // `rust/scripts/native-package-consumer.mjs` — copied into the isolated
+  // consumer directory and driven there as SEPARATE child processes per
+  // mode, importing the INSTALLED package by name. Fresh child processes
+  // give the reopen phase a true fresh-process replay.
+  cpSync(
+    join(repoRoot, "rust", "scripts", "native-package-consumer.mjs"),
+    join(consumerDirectory, "consumer.mjs"),
   );
-  const runtime = process.versions.bun
-    ? "bun " + process.versions.bun
-    : "node " + process.version;
-  const store = await NativeStore.inMemory();
-  const service = await store.createService();
-  try {
-    service.setProvider(() => ({
-      content: "packed native ok",
-      finishReason: "stop",
-    }));
-    await service.createSession({
-      sessionId: "s1",
-      profileId: "p1",
-      model: "test-model",
-    });
-    const sent = await service.send("s1", { content: "hello" });
-    assert(sent.kind === "turn", "send() returned kind " + String(sent.kind));
-    const subscription = await service.subscribeTurn(sent.turnId, 0);
-    const events = [];
-    let done = false;
-    const started = Date.now();
-    while (Date.now() - started < 20000) {
-      const batch = await subscription.poll(64, 100);
-      events.push(...batch.events);
-      done = batch.done;
-      if (done) break;
-    }
-    subscription.cancel();
-    assert(done, "the scripted turn never settled");
-    assert(events.length > 0, "the drained event stream was empty");
-    assert(
-      events.some(function (update) {
-        return (
-          update &&
-          update.type === "settled" &&
-          update.task &&
-          update.task.status === "completed"
-        );
-      }),
-      "no completed settled update in " + events.length + " events",
-    );
-    const exported = JSON.stringify(await service.exportSession("s1"));
-    assert(
-      exported.includes("packed native ok"),
-      "the provider reply never reached the session export",
-    );
-    console.log(
-      "packed-native-consumer-ok runtime=" + runtime +
-        " events=" + events.length,
-    );
-  } finally {
-    await service.close();
-    await store.close();
-  }
-}
-
-main().catch(function (error) {
-  const code = error && error.code;
-  const message = error && error.message ? error.message : String(error);
-  if (
-    code === "ERR_MODULE_NOT_FOUND" ||
-    code === "MODULE_NOT_FOUND" ||
-    message.includes("Cannot find module")
-  ) {
-    console.error(
-      "packed-native-consumer-FAIL: ERR_MODULE_NOT_FOUND while resolving " +
-        "@agentkit/native or a file it imports: " + message,
-    );
-    console.error(
-      "hint: the packed tarball is missing a file the loader imports " +
-        "(dist/index.js, generated/index.js or generated/*.node) — check " +
-        "the pack file list and the prepack publishConfig swap.",
-    );
-  } else {
-    console.error(
-      "packed-native-consumer-FAIL: " +
-        (error && error.stack ? error.stack : message),
-    );
-  }
-  process.exitCode = 1;
-});
-`;
-  writeFileSync(join(consumerDirectory, "consumer.mjs"), consumerScript);
 
   run(npmBinary, ["install", "--no-audit", "--no-fund", tarball], {
     cwd: consumerDirectory,
@@ -426,10 +338,22 @@ main().catch(function (error) {
     ["bun", bunBinary],
     ["node", nodeBinary],
   ]) {
+    const dbPath = join(consumerDirectory, `acceptance-${label}.db`);
     process.stdout.write(
-      `check-native-package: scripted turn under ${label}…\n`,
+      `check-native-package: acceptance lifecycle (approval round-trip, ` +
+        `cancel, awaited close) under ${label}…\n`,
     );
-    run(runtime, ["consumer.mjs"], {
+    run(runtime, ["consumer.mjs", "run", dbPath], {
+      cwd: consumerDirectory,
+      env: toolchainFreeEnvironment,
+      timeout: 120_000,
+    });
+    // The reopen phase is a SEPARATE child process: fresh-process replay
+    // of the same durable database, with no provider and no tools.
+    process.stdout.write(
+      `check-native-package: fresh-process reopen + durable replay under ${label}…\n`,
+    );
+    run(runtime, ["consumer.mjs", "reopen", dbPath], {
       cwd: consumerDirectory,
       env: toolchainFreeEnvironment,
       timeout: 120_000,
@@ -438,7 +362,10 @@ main().catch(function (error) {
 
   process.stdout.write(
     `check-native-package: packed ${tarballName} installed isolated and ran ` +
-      "one scripted turn under bun and node with no reachable toolchain.\n",
+      "the full acceptance lifecycle (send → committed events → approval " +
+      "wait → answer → resume → terminal receipt → cancel → awaited close) " +
+      "plus a fresh-process reopen with durable replay, under bun and node " +
+      "with no reachable toolchain.\n",
   );
 } finally {
   rmSync(temporary, { recursive: true, force: true });
