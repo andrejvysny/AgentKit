@@ -1,3 +1,5 @@
+#[path = "support/interop.rs"]
+mod interop;
 use agentkit_core::{ToolContext, ToolLimits, ToolRegistry};
 use agentkit_mcp::{BridgeError, ClientOptions, McpClient, McpClientError, McpToolSet};
 use serde_json::{Map, json};
@@ -40,6 +42,9 @@ fn context(max_bytes: usize) -> ToolContext {
 
 #[tokio::test]
 async fn native_tools_register_with_aliases_preserve_content_and_cap_model_text() {
+    if interop::ts_interop_skipped("mcp bridge stdio fixture") {
+        return;
+    }
     let client = client(&[]).await;
     let set = McpToolSet::new(
         "docs",
@@ -94,6 +99,9 @@ async fn native_tools_register_with_aliases_preserve_content_and_cap_model_text(
 
 #[tokio::test]
 async fn canonical_and_registry_collisions_reject_the_whole_batch() {
+    if interop::ts_interop_skipped("mcp bridge stdio fixture") {
+        return;
+    }
     let client = client(&[("COLLISION", "1")]).await;
     let set = McpToolSet::new("docs", BTreeMap::new(), client.clone()).unwrap();
     assert!(matches!(

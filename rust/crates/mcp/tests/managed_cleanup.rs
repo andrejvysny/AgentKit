@@ -2,7 +2,9 @@
 mod support;
 use agentkit_mcp::*;
 use std::{sync::Arc, time::Duration};
-use support::{Secrets, token};
+#[cfg(unix)]
+use support::Secrets;
+use support::token;
 
 #[tokio::test]
 async fn manager_drop_revokes_retained_tools_and_closes_their_transport() {

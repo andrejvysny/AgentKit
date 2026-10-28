@@ -1,3 +1,5 @@
+#[path = "support/interop.rs"]
+mod interop;
 #[path = "support/managed.rs"]
 mod support;
 use agentkit_mcp::*;
@@ -290,6 +292,9 @@ async fn cancelled_or_timed_out_inflight_call_has_one_effect_and_no_reconnect() 
 
 #[tokio::test]
 async fn default_manager_runs_real_stdio_with_curated_inherited_path() {
+    if interop::ts_interop_skipped("mcp manager stdio fixture") {
+        return;
+    }
     let mut declaration = config("docs");
     declaration.transport = TransportConfig::Stdio {
         command: "bun".into(),

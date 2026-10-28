@@ -1,3 +1,5 @@
+#[path = "support/interop.rs"]
+mod interop;
 use agentkit_mcp::{
     Backend, BearerAuth, CatalogTool, ClientOptions, Features, McpClient, McpClientError,
     McpServer, ServerOptions, SessionScope, model::*,
@@ -282,6 +284,9 @@ async fn native_http_extensions_reject_guessed_names_and_bad_prompt_arguments() 
 
 #[tokio::test]
 async fn sdk_stdio_pagination_and_ambiguous_delivery_never_retry_writes() {
+    if interop::ts_interop_skipped("mcp native stdio fixture") {
+        return;
+    }
     let fixture = format!("{}/tests/fixtures/stdio.mjs", env!("CARGO_MANIFEST_DIR"));
     let directory = tempfile::tempdir().unwrap();
     let marker = directory.path().join("writes");
