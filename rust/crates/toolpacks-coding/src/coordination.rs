@@ -415,7 +415,10 @@ pub trait WorkspaceCoordinator: Send + Sync {
     /// process and the recorded process group is empty — otherwise the root
     /// is quarantined with the intent's safe identity (an unreadable
     /// intent, a scan the platform cannot perform, or a live group all keep
-    /// the workspace blocked until recovery is recorded). Called from the
+    /// the workspace blocked until recovery is recorded). A blocking intent
+    /// is retired only once its replacement evidence is durably established
+    /// (a coordinator that quarantines in memory alone keeps the intent;
+    /// explicit `clear_workspace_quarantine` retires both). Called from the
     /// lease-acquisition path before any modifying work is admitted.
     async fn reconcile_execution_intents(&self, root: &str) -> Result<(), CodingError>;
 }
@@ -1409,12 +1412,49 @@ impl WorkspaceCoordinator for InProcessCoordinator {
 
     async fn clear_workspace_quarantine(&self, root: &str) -> Result<bool, CodingError> {
         let root = canonical_root_key(root).await;
-        Ok(self
+        let removed = self
             .quarantines
             .lock()
             .expect("quarantine lock")
             .remove(&root)
-            .is_some())
+            .is_some();
+        // Explicit recovery retires the DURABLE unresolved-execution
+        // evidence too. While a quarantine blocks, reconciliation keeps the
+        // intent record (the in-memory quarantine alone does not survive a
+        // drop); dropping only the in-memory half would have the next
+        // acquisition re-quarantine the root this recovery was asked to
+        // release. Retire every DEAD-owner intent for the root — a live
+        // owner's intent belongs to an in-flight execution, not to this
+        // recovery. A failed retirement is returned: the root then stays
+        // blocked (fail closed) rather than half-recovered.
+        let mut candidates: Vec<ExecutionIntent> = self
+            .intents
+            .lock()
+            .expect("intent lock")
+            .get(&root)
+            .map(|live| live.values().cloned().collect())
+            .unwrap_or_default();
+        candidates.extend(read_intent_files(&root).await?);
+        let own_pid = i64::from(std::process::id());
+        let mut failure: Option<CodingError> = None;
+        for intent in candidates {
+            let owner_alive = intent.identity.owner_pid > 0
+                && (intent.identity.owner_pid == own_pid
+                    || crate::process::owner_alive(intent.identity.owner_pid));
+            if owner_alive {
+                continue;
+            }
+            if let Err(error) = self
+                .clear_execution_intent(&root, &intent.identity.execution_id)
+                .await
+            {
+                failure.get_or_insert(error);
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(removed),
+        }
     }
 
     async fn quarantine_execution(
@@ -1512,24 +1552,31 @@ impl WorkspaceCoordinator for InProcessCoordinator {
             if let Some(survivors) = survivors.as_ref()
                 && survivors.is_empty()
             {
-                // Positive evidence the process group is gone: retire.
-                let _ = self
-                    .clear_execution_intent(&root, &intent.identity.execution_id)
-                    .await;
+                // Positive evidence the process group is gone: retire. A
+                // failed retirement is an `Err`, not a swallowed success:
+                // the next acquisition re-reconciles and retries.
+                self.clear_execution_intent(&root, &intent.identity.execution_id)
+                    .await?;
                 continue;
             }
             // Unknown (None) or live survivors: block the root with the
-            // intent's SAFE identity, then retire the intent — the
-            // quarantine record supersedes it. A corrupt record carries no
+            // intent's SAFE identity. A corrupt record carries no
             // trustworthy identity, so its quarantine is the generic
             // unknown-survivor kind (empty pids stay blocked).
+            //
+            // Durability rule (mirrors the driver's "retire the intent only
+            // once its replacement exists" in `spawn_owned_execution`):
+            // this quarantine lives in MEMORY only, so the durable intent
+            // record is the ONLY evidence that survives a coordinator drop
+            // or process exit. The intent is therefore NEVER retired while
+            // it still blocks: only positive group-exit (above) or explicit
+            // recovery (`clear_workspace_quarantine`, which retires the
+            // dead-owner intents alongside the quarantine) may remove it.
+            // Retiring it here would leave the root with neither intent nor
+            // durable quarantine evidence while the unresolved execution
+            // remains — the next coordinator would admit modifying work.
             let pids = survivors.unwrap_or_default();
-            let existed = self
-                .quarantines
-                .lock()
-                .expect("quarantine lock")
-                .contains_key(&root);
-            if !existed {
+            if self.live_quarantine(&root).await.is_none() {
                 self.quarantines.lock().expect("quarantine lock").insert(
                     root.clone(),
                     WorkspaceQuarantine {
@@ -1541,9 +1588,10 @@ impl WorkspaceCoordinator for InProcessCoordinator {
                     },
                 );
             }
-            let _ = self
-                .clear_execution_intent(&root, &intent.identity.execution_id)
-                .await;
+            // If a live quarantine already blocks the root it was published
+            // for a DIFFERENT execution's identity, so it does not represent
+            // this intent: keep the intent so its identity is never
+            // discarded, and so a later reopen can still see it.
         }
         Ok(())
     }
