@@ -128,6 +128,7 @@ surrogates are the documented, approved UTF-8 compatibility exception.
 From the monorepo root:
 
 ```sh
+bun run lint
 bun scripts/export-rust-fixtures.ts --check
 bun test
 bun run typecheck
@@ -139,6 +140,11 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 cargo check -p agentkit-contracts --target wasm32-unknown-unknown --locked
 ```
+
+Environment: the release-projection and MCP stdio-peer suites spawn a real
+`node` (Node 22 on the CI runners); the workflow qualification gates evaluate
+`needs` results with `jq` and need no runtime. The wasm check requires the
+`wasm32-unknown-unknown` rustup target.
 
 Mocked provider tests, loopback HTTP tests, local native builds, live provider
 qualification, real keychain qualification and remote platform CI are separate
