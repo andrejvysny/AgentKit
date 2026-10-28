@@ -155,11 +155,28 @@ pub(crate) fn group_alive(pgid: i32) -> bool {
 /// never establishes cleanup; neither does a missing pgid (spawn was never
 /// confirmed). Recorded survivor pids are corroboration only: the marker
 /// scan and the group probe decide.
+/// Marker scan that distinguishes "the platform cannot be scanned" from a
+/// transient I/O failure under process churn: a single failed pass retries
+/// before the caller may treat the survivor set as UNKNOWN. A genuinely
+/// unsupported platform returns `None` without any I/O (the platform gate),
+/// so the retries cost only the inter-attempt delay there.
+async fn marked_processes_reliably(exec_id: &str) -> Option<Vec<i32>> {
+    for attempt in 0..3u32 {
+        if let Some(pids) = find_marked_processes(exec_id).await {
+            return Some(pids);
+        }
+        if attempt + 1 < 3 {
+            sleep(50).await;
+        }
+    }
+    None
+}
+
 pub(crate) async fn cleanup_positively_established(
     identity: &crate::coordination::CommandCleanupIdentity,
     _pids: &[i32],
 ) -> bool {
-    let Some(marked) = find_marked_processes(&identity.execution_id).await else {
+    let Some(marked) = marked_processes_reliably(&identity.execution_id).await else {
         return false;
     };
     if !marked.is_empty() {

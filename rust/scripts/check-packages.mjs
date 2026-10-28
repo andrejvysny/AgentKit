@@ -16,7 +16,13 @@ const rustRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const offline = process.argv.includes("--offline") ? ["--offline"] : [];
 const toolchain = process.env.AGENTKIT_RUST_TOOLCHAIN ?? "1.97.0";
 const temporary = mkdtempSync(join(tmpdir(), "agentkit-package-consumer-"));
-const buildDirectory = join(rustRoot, "target", "package-consumer");
+// The target dir lives INSIDE the per-run temporary directory on purpose:
+// test binaries bake CARGO_MANIFEST_DIR at compile time, cargo's fingerprint
+// does not track that macro's value, and `rmSync` wipes the extracted sources
+// below. A persistent shared target dir therefore reuses binaries whose
+// baked paths point at an already-deleted earlier run's tmp directory, and
+// the packaged-contracts fixture reads fail with NotFound on every rerun.
+const buildDirectory = join(temporary, "consumer-build");
 
 function run(command, arguments_, options = {}) {
   const { capture = false, ...spawnOptions } = options;
