@@ -9,13 +9,7 @@
  * turn another process left unfinished.
  */
 import { describe, expect, it } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AiChatMessage, AiRunEvent } from "@agentkit/contracts";
@@ -501,7 +495,19 @@ describe("coding agent — the acceptance run", () => {
       { stdout: "pipe", stderr: "pipe" },
     );
     const deadline = Date.now() + 20_000;
-    while (!existsSync(marker)) {
+    // Poll for the FULL expected content, not mere existence: the shell
+    // creates runs.log at redirect time, before printf's bytes land, so an
+    // existence gate can kill the child between open and write and turn a
+    // deterministic scenario into a torn-file flake. The kill still lands
+    // inside the command's sleep window.
+    const ran = () => {
+      try {
+        return readFileSync(marker, "utf8") === "ran\n";
+      } catch {
+        return false;
+      }
+    };
+    while (!ran()) {
       // A child that dies before the marker means the command never started;
       // say so at once instead of burning the whole deadline on a corpse.
       // Real wall-clock waiting is deliberate: the awaited condition is a
@@ -512,7 +518,7 @@ describe("coding agent — the acceptance run", () => {
       setTimeout(resolve, 50);
       await promise;
     }
-    if (!existsSync(marker))
+    if (!ran())
       throw new Error(
         `the child never started its command (exit=${child.exitCode ?? "still running"}): ` +
           (await new Response(child.stderr).text()) +
