@@ -303,6 +303,62 @@ were re-qualified locally with Node v22.20.0 installed.
   No npm publication or export cutover has occurred; the package is
   `private`.
 
+### M3 qualification round validation record (2026-10-28, Linux x86_64, Rust 1.97.0, Bun 1.4.4 / Node v22.20.0)
+- Coordinator recovery durability: an unresolved execution's evidence is now
+  preserved across every state transition in both coordinators — the
+  replacement quarantine is established and persisted **before** the original
+  intent is retired, and every failure path in between keeps the original
+  (`rust/crates/toolpacks-coding/src/coordination.rs`,
+  `coordination_lockdir.rs`, [coordination_durability tests](../../rust/crates/toolpacks-coding/tests/coordination_durability.rs)).
+  Previously the lock-dir coordinator deleted the durable intent before
+  publishing its replacement, so a failed publication lost the only evidence
+  of an unresolved execution and a new coordinator admitted modifying work.
+- Same-run uncertainty identity: an uncertain approval request is now keyed
+  `hreq:{run}:{tool_call_id}:{uncertainty_generation}`
+  ([staging.rs](../../rust/crates/host/src/governance/staging.rs)).
+  Reproduced defect: with the old `hreq:{run}:{call}` key, a second uncertain
+  ask in one run was a same-id-different-content rewrite the store's
+  idempotency gate rejected (`park_failed`), so generation N+1 could never be
+  asked; grants were already generation-bound (one-use spend + `covers`
+  gates), so the fix is identity only. Regression tests drive two genuine
+  mid-body child deaths and pin the exact request id.
+- Steer-event atomicity: placement (Applied CAS + user record + receipt in
+  one fenced store transaction) is the unit of record; `run.input.applied`
+  is an announcement reconciled by `backfill_applied_steers` at every attempt
+  setup ([session_run.rs](../../rust/crates/host/src/session_run.rs),
+  [chat.rs](../../rust/crates/host/src/chat.rs)). Crash tests assert the
+  residue (Applied input, zero events) before recovery, then exactly one
+  backfilled event after, and that reconciliation never announces a placed
+  steer twice.
+- Process-environment unreadability is uncertainty: a `/proc/{pid}/environ`
+  read failure no longer degrades to an empty environment (which made a live
+  marked child look unmarked — the false positive-gone direction again);
+  ownership-aware scan completeness treats unrelated unreadable system
+  processes as alive-but-unknown rather than evidence of absence
+  ([process.rs](../../rust/crates/toolpacks-coding/src/process.rs),
+  [process_tree.rs](../../rust/crates/toolpacks-coding/src/process_tree.rs)).
+- Binding surface qualified: JS-contributed tools/providers run under the
+  Rust-side `BindingAuthority`/`JsToolGuard`/`BindingPlanPolicy` (plan-mode
+  blocking, per-call approval, approved-plan escalation — none of it
+  consults JS; unsupported configurations reject at construction);
+  `close()` is an `Open → Closing → Closed` lifecycle with shared
+  completion and `closeUncertain`; tool descriptors pass through verbatim
+  (null-as-absent fix). 16 binding tests / 90 assertions plus 10
+  `agentkit-napi` unit tests under `AGENTKIT_REQUIRE_NATIVE=1`.
+- Platform portability fixes for the binding and coding pack: the napi crate
+  emits `cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup` for macOS cdylib
+  targets (the shipped dylib legitimately leaves napi_* symbols to the
+  host) and gates Windows-conditional imports; `libc::kill` call sites in
+  `git_tool.rs`/`process*.rs` are cfg(unix)-gated with fail-closed
+  fallbacks so the workspace compiles for Windows targets. macOS/Windows
+  runner re-validation is recorded as pending; no remote claim is made.
+- New install gate: `node rust/scripts/check-native-package.mjs` performs a
+  real `npm pack` of `@agentkit/native`, extracts the archive outside the
+  workspace, and imports the committed loader + built addon under both Bun
+  and system Node; the package is `private: true` with an explicit `files`
+  list. The MCP fixture suites now import the fixture SDK by alias and
+  surface child-process stderr on startup failure instead of a bare hang.
+
 ## Remaining release gates
 
 1. Preserve the recorded local gates, approved unpaired-surrogate exception and
