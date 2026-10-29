@@ -121,3 +121,65 @@ test("parent control EOF freezes the guardian's current process group", async ()
     guardian.dispose();
   }
 }, 15_000);
+
+test("admission is persisted pending at spawn and released only after onAdmit", async () => {
+  const { createLockDirWorkspaceCoordinator } =
+    await import("../src/coordination-lockdir.js");
+  const { readRecord } = await import("../src/coordination-record.js");
+  const { isExecutionLease } = await import("../src/coordination.js");
+  const { readdirSync } = await import("node:fs");
+  const spec = request("touch effect");
+  const dir = tempDir("coding-locks-");
+  const coordinator = createLockDirWorkspaceCoordinator({ dir });
+  const lease = await coordinator.acquireWorkspace({
+    root: spec.cwd,
+    holder: { runId: "r", tool: "run_command", label: "l" },
+    maxWaitMs: 1000,
+  });
+  if (!isExecutionLease(lease) || !lease.admitted)
+    throw new Error("execution lease expected");
+  const marker = (): string => {
+    const sub = readdirSync(dir)[0]!;
+    return join(dir, sub, "exclusive.lock");
+  };
+  const admission = async (): Promise<string | undefined> => {
+    const record = await readRecord(marker());
+    if (record === "gone" || record === "corrupt") return undefined;
+    return record.execution?.process?.admission;
+  };
+  await lease.beginExecution({
+    runId: "r",
+    executionAttemptId: "a",
+    execId: `${process.pid}:admission-order`,
+  });
+  const effect = join(spec.cwd, "effect");
+  const seen: { spawn?: string; admit?: string; effect?: boolean } = {};
+  const result = await runBounded({
+    ...spec,
+    execId: `${process.pid}:admission-order`,
+    onSpawn: async (pid, identity, protocol) => {
+      await lease.spawned({
+        pid,
+        ...(identity ? { startIdentity: identity.startIdentity } : {}),
+        ...(protocol ? { guardianProtocol: protocol } : {}),
+        admission: "pending",
+      });
+      seen.spawn = await admission();
+    },
+    onAdmit: async () => {
+      seen.admit = await admission();
+      seen.effect = existsSync(effect);
+      await lease.admitted!();
+    },
+  });
+  expect(result.exitCode).toBe(0);
+  expect(seen).toEqual({ spawn: "pending", admit: "pending", effect: false });
+  expect(await admission()).toBe("released");
+  expect(existsSync(effect)).toBe(true);
+  await lease.finishExecution({
+    executionAttemptId: "a",
+    state: "stopped",
+    survivors: [],
+  });
+  await lease.release();
+});

@@ -67,6 +67,8 @@ export interface RunSpec {
     identity?: ProcessIdentity,
     guardianProtocol?: typeof GUARDIAN_PROTOCOL,
   ) => Promise<void>;
+  /** Runs after identity persistence and before admission is released. */
+  onAdmit?: () => Promise<void>;
   onDiscovery?: (
     discovery: ProcessDiscovery & { closed?: boolean },
   ) => Promise<void>;
@@ -388,9 +390,12 @@ export async function runBounded(spec: RunSpec): Promise<RunResult> {
         throw new Error("command identity unavailable; execution refused");
       await spec.onSpawn?.(child.pid, identity, GUARDIAN_PROTOCOL);
       if (!teardownRun && !spec.signal?.aborted && !timedOut) {
-        tracker = new TreeTracker(identity, spec.onDiscovery);
-        tracker.start();
-        launch.release();
+        await spec.onAdmit?.();
+        if (!teardownRun && !spec.signal?.aborted && !timedOut) {
+          tracker = new TreeTracker(identity, spec.onDiscovery);
+          tracker.start();
+          launch.release();
+        } else await tearDown();
       } else await tearDown();
     } catch (error) {
       spawnError = error instanceof Error ? error.message : String(error);

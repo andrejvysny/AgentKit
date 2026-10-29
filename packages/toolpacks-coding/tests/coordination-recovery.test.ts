@@ -390,3 +390,123 @@ test("malformed frozen-census booleans cannot authorize recovery", async () => {
   );
   expect(await readRecord(path)).not.toBe("gone");
 });
+
+function guardianRecord(
+  record: LockRecord,
+  identity: ProcessIdentity,
+  admission: "pending" | "released" | undefined,
+  identities: ProcessIdentity[] = [identity],
+): LockRecord {
+  return {
+    ...record,
+    execution: {
+      ...record.execution!,
+      process: {
+        ...identity,
+        guardianProtocol: "agentkit-command-guardian-v1",
+        ...(admission ? { admission } : {}),
+      },
+      discovery: { identities, complete: true, closed: false },
+      cleanup: undefined,
+    },
+  };
+}
+
+for (const state of ["gone", "reused", "zombie"] as const) {
+  test(`pending admission with ${state} guardian proves the command never started`, async () => {
+    const { path, root, dir, record, identity } = await fixture();
+    await writeFile(
+      path,
+      JSON.stringify(guardianRecord(record, identity, "pending")),
+    );
+    const marker = await recoverWorkspaceMarker(path, "exclusive", {
+      inspect: async () => ({ state }),
+      discover: async () => {
+        throw new Error("census must not run");
+      },
+    });
+    expect(marker.record).toMatchObject({
+      status: "recovered",
+      reason: "verified_stopped",
+    });
+    expect(marker.cleanup?.state).toBe("stopped");
+    expect(await readRecord(path)).toBe("gone");
+    const coordinator = createLockDirWorkspaceCoordinator({ dir });
+    expect((await coordinator.recoverWorkspace!(root)).state).not.toBe(
+      "blocked",
+    );
+  });
+}
+
+test("pending admission with live guardian does not take the shortcut", async () => {
+  const { path, record, identity } = await fixture();
+  await writeFile(
+    path,
+    JSON.stringify(guardianRecord(record, identity, "pending")),
+  );
+  const marker = await recoverWorkspaceMarker(path, "exclusive", {
+    inspect: async () => ({ state: "same-live" }),
+    discover: async () => ({ identities: [identity], complete: false }),
+  });
+  expect(marker.record?.reason).not.toBe("verified_stopped");
+  expect(marker.record?.status).toBe("blocked");
+});
+
+test("pending admission with unknown inspection stays blocked", async () => {
+  const { path, record, identity } = await fixture();
+  await writeFile(
+    path,
+    JSON.stringify(guardianRecord(record, identity, "pending")),
+  );
+  const marker = await recoverWorkspaceMarker(path, "exclusive", {
+    inspect: async () => ({ state: "unknown" }),
+    discover: async () => ({ identities: [identity], complete: false }),
+  });
+  expect(marker.record?.status).toBe("blocked");
+  expect(await readRecord(path)).not.toBe("gone");
+});
+
+for (const admission of ["released", undefined] as const) {
+  test(`${admission ?? "absent"} admission with gone guardian stays discovery_open`, async () => {
+    const { path, record, identity } = await fixture();
+    await writeFile(
+      path,
+      JSON.stringify(guardianRecord(record, identity, admission)),
+    );
+    const marker = await recoverWorkspaceMarker(path, "exclusive", {
+      inspect: async () => ({ state: "gone" }),
+      discover: async () => ({ identities: [identity], complete: false }),
+    });
+    expect(marker.record?.status).toBe("blocked");
+    expect(marker.record?.reason).toBe("discovery_open");
+  });
+}
+
+test("pending admission with non-root discovery identity gets no shortcut", async () => {
+  const { path, record, identity } = await fixture();
+  const other = { pid: identity.pid + 1, startIdentity: "other" };
+  await writeFile(
+    path,
+    JSON.stringify(
+      guardianRecord(record, identity, "pending", [identity, other]),
+    ),
+  );
+  const marker = await recoverWorkspaceMarker(path, "exclusive", {
+    inspect: async () => ({ state: "gone" }),
+    discover: async () => ({ identities: [identity], complete: false }),
+  });
+  expect(marker.record?.status).toBe("blocked");
+});
+
+test("record validation rejects unknown admission values", async () => {
+  const { path, record, identity } = await fixture();
+  const bad = guardianRecord(record, identity, "pending");
+  bad.execution!.process!.admission = "bogus" as "pending";
+  await writeFile(path, JSON.stringify(bad));
+  expect(await readRecord(path)).toBe("corrupt");
+  await writeFile(
+    path,
+    JSON.stringify(guardianRecord(record, identity, "pending")),
+  );
+  expect(await readRecord(path)).not.toBe("corrupt");
+});

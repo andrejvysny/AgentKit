@@ -72,7 +72,10 @@ export interface ExecutionLease extends WorkspaceLease {
     startIdentity?: string;
     processStart?: string;
     guardianProtocol?: "agentkit-command-guardian-v1";
+    admission?: "pending" | "released";
   }): Promise<void>;
+  /** Persists that the guardian is about to receive admission. */
+  admitted?(): Promise<void>;
   observed?(
     identities: ProcessIdentity[],
     complete: boolean,
