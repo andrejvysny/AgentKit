@@ -123,8 +123,9 @@ test("parent control EOF freezes the guardian's current process group", async ()
 }, 15_000);
 
 test("admission is persisted pending at spawn and released only after onAdmit", async () => {
-  const { createLockDirWorkspaceCoordinator } =
-    await import("../src/coordination-lockdir.js");
+  const { createLockDirWorkspaceCoordinator } = await import(
+    "../src/coordination-lockdir.js"
+  );
   const { readRecord } = await import("../src/coordination-record.js");
   const { isExecutionLease } = await import("../src/coordination.js");
   const { readdirSync } = await import("node:fs");

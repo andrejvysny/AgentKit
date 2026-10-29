@@ -1,4 +1,4 @@
-use crate::{AiRunEvent, CONTRACT_VERSION, Optional, validate_schema};
+use crate::{validate_schema, AiRunEvent, Optional, CONTRACT_VERSION};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -56,6 +56,7 @@ impl AiRunEvent {
             Self::Warning(_) => "run.warning",
             Self::Usage(_) => "run.usage",
             Self::ContextCompacted(_) => "run.context.compacted",
+            Self::ContextAdmitted(_) => "run.context.admitted",
             Self::Verification(_) => "run.verification",
             Self::InputApplied(_) => "run.input.applied",
             Self::Waiting(_) => "run.waiting",

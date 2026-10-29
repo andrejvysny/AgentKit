@@ -12,12 +12,25 @@ pub enum AiRunToolRunningEventType {
 }
 crate::impl_json_via_serde!(AiRunToolRunningEventType);
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum AiRunToolRunningEventDataAdmissionProtocol {
+    #[serde(rename = "fenced-v1")]
+    FencedV1,
+}
+crate::impl_json_via_serde!(AiRunToolRunningEventDataAdmissionProtocol);
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AiRunToolRunningEventData {
     #[serde(rename = "toolCallId")]
     pub tool_call_id: AiProviderKind,
     #[serde(rename = "toolName")]
     pub tool_name: AiProviderKind,
+    #[serde(
+        rename = "admissionProtocol",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub admission_protocol: Optional<AiRunToolRunningEventDataAdmissionProtocol>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -26,6 +39,7 @@ crate::impl_json_deserialize!(AiRunToolRunningEventData, |value: Value| {
     let output = Self {
         tool_call_id: crate::required_field(&mut object, "toolCallId")?,
         tool_name: crate::required_field(&mut object, "toolName")?,
+        admission_protocol: crate::optional_field(&mut object, "admissionProtocol")?,
         extra: object.into_iter().collect(),
     };
     Ok(output)
