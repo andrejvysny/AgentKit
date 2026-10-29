@@ -2,11 +2,11 @@
  * Shell command classification and the coding pack's standing-approval policy.
  *
  * A standing approval lets a human say "yes, this exact command, for the rest of
- * this session". That is only safe for commands whose effect is bounded by what
- * they are, so eligibility is a POSITIVE allowlist over a character set with no
+ * this session" within a bounded executable/configuration context. Eligibility
+ * is a POSITIVE allowlist over a character set with no
  * shell syntax in it: a command is `eligible` only when every character is
  * plain and its tokens spell one of a short list of build/test/inspect
- * invocations. Everything else is `unknown` and asks the human each time.
+ * invocations. Everything else is `unknown` and follows the selected mode.
  * `high_risk` is a separate, earlier verdict used by the guard to force a fresh
  * approval even in `full_auto`.
  */
@@ -19,6 +19,8 @@ import type {
   ToolGuard,
   ToolGuardVerdict,
 } from "@agentkit/host";
+import { isHighRisk } from "./command-risk.js";
+import { commandFingerprint } from "./command-fingerprint.js";
 import { CODING_NAMESPACE } from "./guard.js";
 import { canonicalRoot, resolveInsideRoot } from "./paths.js";
 
@@ -26,155 +28,10 @@ export type CommandClass = "eligible" | "high_risk" | "unknown";
 
 const SHELL_TOOLS = new Set(["run_command", "run_tests"]);
 
-const HIGH_RISK_WORDS = new Set([
-  "rm",
-  "rmdir",
-  "unlink",
-  "shred",
-  "sudo",
-  "su",
-  "doas",
-  "dd",
-  "mkfs",
-  "diskutil",
-  "chmod",
-  "chown",
-  "chflags",
-  "curl",
-  "wget",
-  "ssh",
-  "scp",
-  "sftp",
-  "rsync",
-  "ftp",
-  "nc",
-  "ncat",
-  "netcat",
-  "telnet",
-  "kill",
-  "killall",
-  "pkill",
-  "shutdown",
-  "reboot",
-  "launchctl",
-  "docker",
-  "podman",
-  "kubectl",
-  "helm",
-  "terraform",
-  "pulumi",
-  "ansible",
-  "eval",
-  "exec",
-  "xargs",
-  "osascript",
-  "open",
-  "crontab",
-  "security",
-  "defaults",
-  "gh",
-  "twine",
-  "vercel",
-  "netlify",
-  "fly",
-  "flyctl",
-  "heroku",
-  "firebase",
-  "aws",
-  "gcloud",
-  "az",
-]);
-
-const GIT_RISKY_SUBCOMMANDS = new Set([
-  "push",
-  "reset",
-  "clean",
-  "rebase",
-  "checkout",
-  "switch",
-  "restore",
-  "filter-branch",
-  "filter-repo",
-  "stash",
-  "gc",
-  "prune",
-  "update-ref",
-  "reflog",
-  "rm",
-  "mv",
-  "commit",
-  "merge",
-  "cherry-pick",
-  "revert",
-  "am",
-  "apply",
-  "tag",
-  "branch",
-  "worktree",
-  "submodule",
-  "config",
-  "remote",
-  "fetch",
-  "pull",
-  "clone",
-]);
-
-const PACKAGE_MANAGERS = new Set(["npm", "bun", "yarn", "pnpm", "cargo"]);
-const PUBLISH_SUBCOMMANDS = new Set([
-  "publish",
-  "unpublish",
-  "deprecate",
-  "login",
-  "logout",
-  "adduser",
-  "owner",
-  "dist-tag",
-]);
-const FORCE_FLAGS = new Set(["--force", "--hard", "--no-verify"]);
-const DANGEROUS_WORD =
-  /(^|[:_-])(deploy|publish|release|migrate|migration|seed|drop|destroy|purge|wipe|prod|production)([:_-]|$)/i;
-
-/** Whitespace plus every shell metacharacter that separates words or commands. */
-const TOKEN_SPLIT = /[\s;&|()<>`$]+/;
-/** The only characters an eligible command may contain. */
 const PLAIN_CHARS = /^[A-Za-z0-9_./:=@%+, -]+$/;
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const SAFE_SCRIPT =
   /^(test|lint|typecheck|type-check|check|build|format:check|fmt:check|(test|lint|typecheck|check):[A-Za-z0-9_.-]+)$/;
-
-function isHighRisk(raw: string): boolean {
-  const tokens = raw.split(TOKEN_SPLIT).filter((t) => t !== "");
-  // `find` is high risk only with an action flag, so it is judged per command.
-  const hasFind = tokens.includes("find");
-  for (const [index, token] of tokens.entries()) {
-    if (HIGH_RISK_WORDS.has(token)) return true;
-    // A flag names a build option (`--release`), not a target; only its value can.
-    const word = token.startsWith("-") ? (token.split("=")[1] ?? "") : token;
-    if (DANGEROUS_WORD.test(word)) return true;
-    if (FORCE_FLAGS.has(token)) return true;
-    if (token === "git" && tokens.slice(index + 1).some(isRiskyGitWord))
-      return true;
-    if (
-      PACKAGE_MANAGERS.has(token) &&
-      tokens.slice(index + 1).some((t) => PUBLISH_SUBCOMMANDS.has(t))
-    )
-      return true;
-    if (token === "-f" && tokens.slice(0, index).some(isForceHost)) return true;
-  }
-  return (
-    hasFind &&
-    tokens.some((t) => t === "-delete" || t === "-exec" || t === "-execdir")
-  );
-}
-
-function isRiskyGitWord(token: string): boolean {
-  return GIT_RISKY_SUBCOMMANDS.has(token);
-}
-
-/** `-f` is forceful after git or rm (rm is already high risk by itself). */
-function isForceHost(token: string): boolean {
-  return token === "git" || token === "rm";
-}
 
 function startsWith(tokens: string[], prefix: string[]): boolean {
   return prefix.every((word, i) => tokens[i] === word);
@@ -250,11 +107,16 @@ export interface CodingStandingApprovalOptions {
    * The workspace a chat's commands run in. `identity` names the environment the
    * approval is valid for (sandbox settings, host, user): change it and every
    * old grant stops matching. `context` is folded in verbatim for anything else
-   * the host wants a grant bound to. Null: no workspace, no standing approval.
+   * the host wants a grant bound to. `environment` is the source environment
+   * used for execution (default process.env); secret filtering matches the
+   * runner. Null: no workspace, no standing approval.
    */
-  resolve(
-    chatId: string,
-  ): Promise<{ root: string; identity: string; context?: string } | null>;
+  resolve(chatId: string): Promise<{
+    root: string;
+    identity: string;
+    context?: string;
+    environment?: NodeJS.ProcessEnv;
+  } | null>;
 }
 
 interface ShellArgs {
@@ -303,10 +165,18 @@ export function createCodingStandingApprovals(
         if (!(await stat(cwd)).isDirectory()) return null;
         const inside = relative(root, cwd);
         if (inside === ".." || inside.startsWith("../")) return null;
+        const fingerprint = await commandFingerprint(
+          root,
+          cwd,
+          args.command,
+          workspace.environment ?? process.env,
+        );
+        if (fingerprint === null) return null;
         const digest = createHash("sha256")
           .update(
             JSON.stringify({
-              v: 1,
+              v: 2,
+              fingerprint,
               chatId: ctx.chatId,
               tool: ctx.tool.name,
               identity: workspace.identity,

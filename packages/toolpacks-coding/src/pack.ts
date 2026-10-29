@@ -1,6 +1,7 @@
 import type { AiTool } from "@agentkit/core";
 import type { ToolSetContributor } from "@agentkit/host";
 import { defaultWorkspaceCoordinator } from "./coordination.js";
+import type { ExecutionCleanup } from "./coordination.js";
 import { createEnv } from "./context.js";
 import { gitInspectTool } from "./git-tool.js";
 import { runCommandTool, runTestsTool } from "./exec-tools.js";
@@ -13,10 +14,10 @@ import {
 import { CODING_NAMESPACE } from "./guard.js";
 import { type CodingLimits, DEFAULT_CODING_LIMITS } from "./limits.js";
 import { submitPlanTool } from "./plan-tool.js";
-import { sweepOrphans } from "./process.js";
 import { SANDBOX_EXEC } from "./sandbox.js";
 import { codeSearchTool, findFilesTool, repoMapTool } from "./search-tools.js";
 import type { CodingToolPackOptions } from "./types.js";
+import { sweepOrphansDetailed } from "./process.js";
 
 export const CODING_TOOL_NAMES: readonly string[] = Object.freeze([
   "read_file",
@@ -48,19 +49,35 @@ function resolveLimits(
  * It offers every tool on every run; whether a call may proceed is the
  * `CodingPermissionGuard`'s decision, not the contributor's.
  */
-let swept = false;
+export interface CodingToolPack extends ToolSetContributor {
+  /** Close admission and await command teardown independently of turn promises. */
+  drain(): Promise<ExecutionCleanup[]>;
+}
+
+let startupCleanup: Promise<ExecutionCleanup[]> | undefined;
+
+function reconcileOrphans(): Promise<ExecutionCleanup[]> {
+  startupCleanup ??= sweepOrphansDetailed().then((result) =>
+    result.state === "stopped"
+      ? []
+      : [
+          {
+            executionAttemptId: `startup-orphans-${process.pid}`,
+            state: result.state,
+            survivors: result.survivors,
+            reason: "orphan process reconciliation did not verify cleanup",
+          },
+        ],
+  );
+  return startupCleanup;
+}
 
 export function createCodingToolPack(
   options: CodingToolPackOptions,
-): ToolSetContributor {
+): CodingToolPack {
   const root = options.workspace?.root;
   if (typeof root !== "string" || !root.startsWith("/"))
     throw new TypeError("workspace.root must be an absolute path");
-  if (!swept) {
-    // A crashed agent never ran its teardown; clear what it left, once.
-    swept = true;
-    void sweepOrphans();
-  }
   const limits = resolveLimits(options.limits);
   const coordinationWaitMs =
     options.coordinationWaitMs ??
@@ -86,10 +103,12 @@ export function createCodingToolPack(
     sandboxExecPath: options.sandboxExecPath ?? SANDBOX_EXEC,
     coordinator: options.coordinator ?? defaultWorkspaceCoordinator(),
     coordinationWaitMs,
+    startupCleanup: reconcileOrphans(),
   });
   return {
     namespace: CODING_NAMESPACE,
     async contribute(): Promise<AiTool[]> {
+      await env.root();
       return [
         readFileTool(env),
         listDirTool(env),
@@ -107,6 +126,7 @@ export function createCodingToolPack(
         submitPlanTool(env, options.permission),
       ];
     },
+    drain: () => env.drain(),
     async dispose() {
       await env.dispose();
     },

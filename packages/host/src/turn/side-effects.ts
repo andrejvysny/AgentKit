@@ -30,6 +30,8 @@ import type { AiRunEvent } from "@agentkit/contracts";
 import type { ToolGuard, ToolGuardVerdict } from "../ports/tool-guard.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
 import { argsSha256Of } from "../sessions/hash.js";
+import { AgentKitHostError } from "../errors.js";
+import type { ToolExecutionRecord } from "../ports/tool-execution-store.js";
 
 /** Failure code on the synthetic result for a call whose outcome is unknown. */
 export const UNCERTAIN_TOOL_RESULT_CODE = "tool_result_uncertain";
@@ -42,10 +44,15 @@ export const UNCERTAIN_TOOL_RESULT_MESSAGE =
 
 /** A call whose outcome the durable log cannot decide. */
 export interface UncertainCall {
+  runId?: string;
+  attemptId?: string;
   toolCallId: string;
   toolName: string;
   /** Canonical hash of the arguments, when they were recoverable. */
   argsSha256?: string;
+  /** New authorization identity, stable until this uncertain execution is settled. */
+  approvalGeneration?: string;
+  contextSha256?: string;
 }
 
 /** The stable identity of a call: same tool, same arguments. */
@@ -56,11 +63,26 @@ export function uncertainCallKey(
   return `${toolName}\u0000${argsSha256 ?? ""}`;
 }
 
+/** Current-run uncertainty takes precedence over older operations with reused IDs. */
+export function uncertainOperationOf(
+  calls: ReadonlyMap<string, UncertainCall>,
+  toolName: string,
+  argsSha256: string,
+  runId?: string,
+): UncertainCall | undefined {
+  const matches = [...calls.values()].filter(
+    (call) =>
+      call.toolName === toolName &&
+      (call.argsSha256 === argsSha256 || call.argsSha256 === undefined),
+  );
+  return (
+    matches.filter((call) => call.runId === runId).at(-1) ?? matches.at(-1)
+  );
+}
+
 /**
- * Which staged tools count as mutating. `effect: "write"` is the declaration the
- * tool itself made, which is why it is the default and not a name list; the
- * extra names are for a host that knows better than the tool — an MCP bridge
- * whose server does not declare its write tools, for instance.
+ * A known read tool is replay-safe. An unavailable or unclassified tool cannot
+ * prove that an older invocation was read-only, so recovery stays conservative.
  */
 export function createMutatingToolClassifier(input: {
   /** Tool names from the staged registry. */
@@ -69,17 +91,15 @@ export function createMutatingToolClassifier(input: {
   extra?: Iterable<string>;
   /** Names to exempt (a host's own idempotent wrapper, say). */
   exempt?: Iterable<string>;
-  /** Declared effect lookup; defaults to "nothing is mutating". */
+  /** Current declared effect lookup; an unknown effect remains mutating. */
   effectOf?: (name: string) => "read" | "write" | undefined;
 }): (toolName: string) => boolean {
   const extra = new Set(input.extra ?? []);
   const exempt = new Set(input.exempt ?? []);
-  const staged = new Set(input.stagedNames);
   return (toolName: string): boolean => {
     if (exempt.has(toolName)) return false;
     if (extra.has(toolName)) return true;
-    if (!staged.has(toolName)) return false;
-    return input.effectOf?.(toolName) === "write";
+    return input.effectOf?.(toolName) !== "read";
   };
 }
 
@@ -103,55 +123,216 @@ export async function findUncertainCalls(
         runId,
       )) as unknown as readonly AiRunEvent[];
     } catch {
-      // No readable log for that run: nothing can be claimed about it, and
-      // "unknown" must not degrade into "it never ran".
-      continue;
+      throw new AgentKitHostError(
+        "recovery_history_unreadable",
+        "Cannot read execution recovery history; mutations remain blocked.",
+        { runId },
+      );
     }
-    // In log order, last state wins. One call id can start more than once —
-    // parked for approval, then executed on the resumed attempt — and only a
-    // start that nothing after it settled is a hole.
-    const started = new Map<string, string>();
-    const argsJson = new Map<string, string>();
-    for (const event of events) {
-      switch (event.type) {
-        case "run.tool.requested":
-          argsJson.set(event.data.toolCallId, event.data.argumentsJson);
-          break;
-        case "run.tool.running":
-          started.set(event.data.toolCallId, event.data.toolName);
-          break;
-        case "run.tool.succeeded":
-        case "run.tool.failed":
-        // `run.tool.running` is emitted before the guard chain runs, so a call
-        // the guard parked for a human logs "running" without ever executing.
-        // Its park is the settle: it is either resumed (and starts again) or
-        // denied (and never runs).
-        case "run.waiting":
-          started.delete(event.data.toolCallId);
-          break;
-        default:
-          break;
-      }
+    const legacy = new LegacyUncertainty(runId);
+    for (const event of events) await legacy.apply(event);
+    if (legacy.sawMarkedInvocation && store.toolExecutions === undefined)
+      throw new AgentKitHostError(
+        "durable_execution_unavailable",
+        "Cannot recover a fenced mutation without its durable execution receipt store.",
+      );
+    const runUncertain = legacy.calls;
+    // Receipts supersede the legacy pre-guard "running" marker. A later park
+    // cannot settle an admitted execution whose external outcome is unknown.
+    let receipts: ToolExecutionRecord[];
+    try {
+      receipts = (await store.toolExecutions?.listByRun(runId)) ?? [];
+    } catch {
+      throw new AgentKitHostError(
+        "recovery_history_unreadable",
+        "Cannot read durable execution receipts; mutations remain blocked.",
+        { runId },
+      );
     }
-    for (const [toolCallId, toolName] of started) {
-      if (!isMutating(toolName)) continue;
-      const raw = argsJson.get(toolCallId);
-      let argsSha256: string | undefined;
-      if (raw !== undefined) {
-        try {
-          argsSha256 = await argsSha256Of(JSON.parse(raw) as unknown);
-        } catch {
-          argsSha256 = undefined;
-        }
+    for (const receipt of receipts) {
+      if (!isMutating(receipt.toolName)) continue;
+      const call: UncertainCall = {
+        runId,
+        attemptId: receipt.attemptId,
+        toolCallId: receipt.toolCallId,
+        toolName: receipt.toolName,
+        argsSha256: receipt.argsSha256,
+        contextSha256: receipt.contextSha256,
+        approvalGeneration: receipt.executionId,
+      };
+      // A receipt supersedes only the operation it actually binds. Another
+      // operation sharing this model call ID remains independently uncertain.
+      for (const [candidateKey, candidate] of runUncertain) {
+        if (receiptSettles(candidate, receipt))
+          runUncertain.delete(candidateKey);
       }
-      uncertain.set(toolCallId, {
-        toolCallId,
-        toolName,
-        ...(argsSha256 === undefined ? {} : { argsSha256 }),
-      });
+      const key = operationKey(call);
+      if (receipt.status === "completed") runUncertain.delete(key);
+      else runUncertain.set(key, call);
+    }
+    for (const [key, call] of runUncertain) {
+      if (!isMutating(call.toolName)) continue;
+      const id = call.toolCallId;
+      uncertain.set(
+        uncertain.has(id)
+          ? `${runId}\u0000${key}\u0000${call.approvalGeneration ?? ""}`
+          : id,
+        call,
+      );
     }
   }
   return uncertain;
+}
+
+function operationKey(call: UncertainCall): string {
+  return `${call.toolCallId}\u0000${uncertainCallKey(call.toolName, call.argsSha256)}\u0000${call.contextSha256 ?? ""}\u0000${call.attemptId ?? ""}`;
+}
+
+function receiptSettles(
+  call: UncertainCall,
+  receipt: ToolExecutionRecord,
+): boolean {
+  if (
+    call.toolName !== receipt.toolName ||
+    call.argsSha256 !== receipt.argsSha256
+  )
+    return false;
+  if (
+    call.contextSha256 !== undefined &&
+    call.contextSha256 !== receipt.contextSha256
+  )
+    return false;
+  if (
+    receipt.approvalGeneration !== undefined &&
+    receipt.approvalGeneration === call.approvalGeneration
+  )
+    return true;
+  return (
+    call.attemptId !== undefined &&
+    call.attemptId === receipt.attemptId &&
+    call.toolCallId === receipt.toolCallId
+  );
+}
+
+async function hashArguments(
+  raw: string | undefined,
+): Promise<string | undefined> {
+  if (raw === undefined) return undefined;
+  try {
+    return await argsSha256Of(JSON.parse(raw) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Legacy call IDs can be reused; each operation retains its own evidence. */
+class LegacyUncertainty {
+  readonly calls = new Map<string, UncertainCall>();
+  sawMarkedInvocation = false;
+  private readonly arguments = new Map<string, string>();
+  private readonly running = new Map<
+    string,
+    { key: string; created: boolean; marked: boolean }
+  >();
+
+  constructor(private readonly runId: string) {}
+
+  async apply(event: AiRunEvent): Promise<void> {
+    switch (event.type) {
+      case "run.tool.requested":
+        this.arguments.set(event.data.toolCallId, event.data.argumentsJson);
+        break;
+      case "run.tool.running":
+        await this.started(event);
+        break;
+      case "run.tool.succeeded":
+        await this.succeeded(event);
+        break;
+      case "run.waiting":
+        this.waiting(event);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private async started(
+    event: Extract<AiRunEvent, { type: "run.tool.running" }>,
+  ): Promise<void> {
+    const { toolCallId, toolName } = event.data;
+    const call = {
+      runId: this.runId,
+      attemptId: event.attemptId,
+      toolCallId,
+      toolName,
+      argsSha256: await hashArguments(this.arguments.get(toolCallId)),
+    };
+    const key = operationKey(call);
+    if (event.data.admissionProtocol === "fenced-v1") {
+      this.sawMarkedInvocation = true;
+      this.running.set(toolCallId, { key, created: false, marked: true });
+      return;
+    }
+    const created = !this.calls.has(key);
+    if (created)
+      this.calls.set(key, {
+        ...call,
+        approvalGeneration: await argsSha256Of({
+          runId: this.runId,
+          toolCallId,
+          attemptId: event.attemptId,
+          eventId: event.eventId,
+        }),
+      });
+    this.running.set(toolCallId, { key, created, marked: false });
+  }
+
+  private async succeeded(
+    event: Extract<AiRunEvent, { type: "run.tool.succeeded" }>,
+  ): Promise<void> {
+    const { toolCallId, toolName } = event.data;
+    if (this.running.get(toolCallId)?.marked === true) return;
+    const argsSha256 = await hashArguments(this.arguments.get(toolCallId));
+    if (argsSha256 === undefined) return;
+    const key = operationKey({
+      toolCallId,
+      toolName,
+      argsSha256,
+      attemptId: event.attemptId,
+    });
+    if (this.running.get(toolCallId)?.key === key) this.calls.delete(key);
+  }
+
+  private waiting(event: Extract<AiRunEvent, { type: "run.waiting" }>): void {
+    const { toolCallId, toolName, approvalGeneration, argsSha256 } = event.data;
+    const current = this.running.get(toolCallId);
+    if (current?.marked) return;
+    if (approvalGeneration === undefined) {
+      if (current?.created) this.calls.delete(current.key);
+      return;
+    }
+    const original =
+      current === undefined ? undefined : this.calls.get(current.key);
+    if (original !== undefined && !current!.created) return;
+    const known = [...this.calls.values()].some(
+      (call) => call.approvalGeneration === approvalGeneration,
+    );
+    if (original !== undefined && known) {
+      this.calls.delete(current!.key);
+      return;
+    }
+    const call = original ?? {
+      runId: this.runId,
+      attemptId: event.attemptId,
+      toolCallId,
+      toolName,
+      argsSha256,
+    };
+    this.calls.set(current?.key ?? operationKey(call), {
+      ...call,
+      approvalGeneration,
+    });
+  }
 }
 
 /**
@@ -171,28 +352,9 @@ export function createUncertainSideEffectGuard(input: {
    * map there would freeze the whole feature off.
    */
   uncertain: () => ReadonlyMap<string, UncertainCall>;
-  /**
-   * Approvals the host already granted for THIS attempt, keyed by tool-call id.
-   * An approved re-issue executes; the wrapper in `stageRegistry` does the
-   * single-use bookkeeping, so this only checks the human said yes.
-   */
+  /** Legacy caller compatibility. Only durable generation-bound admission spends approval. */
   approvedCalls?: () => ReadonlyMap<string, string> | undefined;
 }): ToolGuard {
-  // Indexed by tool name + argument hash, not by tool-call id: a model that
-  // repeats an interrupted call writes a NEW id for it, and the duplicate that
-  // matters is the one nobody can tell apart from the original.
-  let source: ReadonlyMap<string, UncertainCall> | undefined;
-  let index: Map<string, UncertainCall> | undefined;
-  const indexOf = (): Map<string, UncertainCall> => {
-    const current = input.uncertain();
-    if (current !== source || index === undefined) {
-      source = current;
-      index = new Map();
-      for (const call of current.values())
-        index.set(uncertainCallKey(call.toolName, call.argsSha256), call);
-    }
-    return index;
-  };
   return {
     async canExecute(ctx): Promise<ToolGuardVerdict> {
       if (ctx.arguments === undefined) return { allowed: true };
@@ -200,20 +362,26 @@ export function createUncertainSideEffectGuard(input: {
       try {
         digest = await argsSha256Of(ctx.arguments);
       } catch {
-        return { allowed: true };
+        return {
+          allowed: false,
+          reason: `${UNCERTAIN_TOOL_RESULT_CODE}: execution arguments cannot be bound to a recoverable identity.`,
+        };
       }
-      const hit = indexOf().get(uncertainCallKey(ctx.tool.name, digest));
+      const hit = uncertainOperationOf(
+        input.uncertain(),
+        ctx.tool.name,
+        digest,
+        ctx.runId,
+      );
       if (hit === undefined) return { allowed: true };
-      if (
-        ctx.toolCallId !== undefined &&
-        input.approvedCalls?.()?.get(ctx.toolCallId) === digest
-      )
-        return { allowed: true };
       return {
         allowed: false,
         reason: `${UNCERTAIN_TOOL_RESULT_CODE}: ${ctx.tool.name} with these exact arguments was interrupted before its outcome was recorded, so it may already have run. ${UNCERTAIN_TOOL_RESULT_MESSAGE}`,
         approval: {
           preview: `${ctx.tool.name} (uncertain: previously interrupted, outcome unknown)`,
+          ...(hit.approvalGeneration === undefined
+            ? {}
+            : { approvalGeneration: hit.approvalGeneration }),
         },
       };
     },

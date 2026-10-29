@@ -390,6 +390,7 @@ async function callOnce(options: {
   extraGuards?: ToolGuard[];
   command?: string;
   chatId?: string;
+  beforeExecution?: () => Promise<void>;
 }): Promise<Run> {
   const state = { executed: 0 };
   const tool: AiTool = {
@@ -402,6 +403,20 @@ async function callOnce(options: {
       inputSchema: { type: "object" },
     },
     async execute(ctx) {
+      await options.beforeExecution?.();
+      const revalidate = ctx.metadata?.revalidateExecutionAuthorization as
+        | (() => Promise<boolean>)
+        | undefined;
+      if (revalidate && !(await revalidate())) {
+        return {
+          ok: false,
+          data: {},
+          sources: [],
+          warnings: [],
+          truncated: false,
+          limits: ctx.limits,
+        };
+      }
       state.executed += 1;
       return {
         ok: true,
@@ -482,6 +497,41 @@ function grant(digest: string, revokedAt?: string): StandingApprovalGrant {
 }
 
 describe("standing approval reuse", () => {
+  it("rechecks changed command context after execution access is acquired", async () => {
+    const { store } = await chatWith({ version: 1, grants: [grant(DIGEST)] });
+    let changed = false;
+    const run = await callOnce({
+      store,
+      policy: {
+        keyFor: async () =>
+          changed ? { ...STANDING, digest: OTHER_DIGEST } : STANDING,
+      },
+      beforeExecution: async () => {
+        changed = true;
+      },
+    });
+    expect(run.executed).toBe(0);
+    expect(run.result.ok).toBe(false);
+    expect(run.suspended).toEqual([]);
+  });
+
+  it("rechecks a grant revoked while waiting for execution access", async () => {
+    const { store } = await chatWith({ version: 1, grants: [grant(DIGEST)] });
+    const run = await callOnce({
+      store,
+      policy: byCommand,
+      beforeExecution: async () => {
+        await store.conversations.updateChat("s1", {
+          metadata: {
+            [STANDING_APPROVALS_METADATA_KEY]: { version: 1, grants: [] },
+          },
+        });
+      },
+    });
+    expect(run.executed).toBe(0);
+    expect(run.result.ok).toBe(false);
+  });
+
   it("runs a call whose exact digest has an active grant, and only that one", async () => {
     const { store } = await chatWith({ version: 1, grants: [grant(DIGEST)] });
     const hit = await callOnce({ store, policy: byCommand });

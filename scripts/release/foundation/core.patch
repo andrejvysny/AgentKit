@@ -47,8 +47,10 @@ diff --git a/packages/core/src/providers/client.ts b/packages/core/src/providers
    /** Valid provider stream activity, including non-visible reasoning/tool fragments. */
    onActivity?: () => void;
    runId: string;
-@@ -44,9 +28,6 @@ export interface AiChatRequest {
+@@ -44,11 +28,8 @@ export interface AiChatRequest {
  export interface AiProviderClient {
+   /** Immutable positive integer ceiling applied by this client to every output request. */
+   readonly maxOutputTokens?: number;
    /** Calls beforeRequest for each network attempt, including internal retries. */
    readonly tracksTransportRequests?: boolean;
 -  /** Trusted transport metadata, when the client requires durable provider state. */
@@ -176,3 +178,61 @@ diff --git a/packages/core/src/runs/run-types.ts b/packages/core/src/runs/run-ty
    budgets?: ExecutionBudgets;
    executionBudget?: ExecutionBudget;
    client: AiProviderClient;
+diff --git a/packages/core/tests/reasoning-effort.test.ts b/packages/core/tests/reasoning-effort.test.ts
+--- a/packages/core/tests/reasoning-effort.test.ts
++++ b/packages/core/tests/reasoning-effort.test.ts
+@@ -1,7 +1,6 @@
+ import { describe, expect, it } from "bun:test";
+ import type { AiRunEvent } from "@agentkit/contracts";
+ import { OpenAiCompatibleClient } from "../src/providers/openai-compatible.js";
+-import { collect, harness, message, request } from "./responses-helpers.js";
+-
++
+ function sseResponse(chunks: unknown[]): Response {
+   const enc = new TextEncoder();
+@@ -135,45 +134,3 @@
+     );
+   });
+ });
+-
+-describe("Responses reasoning effort and usage details", () => {
+-  it("sends reasoning.effort alongside encrypted content include", async () => {
+-    const { client, sent } = harness();
+-    await collect(client, { ...request, reasoningEffort: "low" });
+-    const body = sent[0]?.body as Record<string, unknown>;
+-    expect(body.reasoning).toEqual({ effort: "low" });
+-    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+-  });
+-
+-  it("omits reasoning when no effort is requested", async () => {
+-    const { client, sent } = harness();
+-    await collect(client);
+-    expect(sent[0]?.body).not.toHaveProperty("reasoning");
+-  });
+-
+-  it("parses cached and reasoning token details", async () => {
+-    const { client } = harness([
+-      {
+-        type: "response.completed",
+-        response: {
+-          id: "response",
+-          status: "completed",
+-          output: [message("Hi")],
+-          usage: {
+-            input_tokens: 10,
+-            output_tokens: 5,
+-            total_tokens: 15,
+-            input_tokens_details: { cached_tokens: 8 },
+-            output_tokens_details: { reasoning_tokens: 2 },
+-          },
+-        },
+-      },
+-    ]);
+-    const events = await collect(client);
+-    const usage = events.find((e) => e.type === "run.usage");
+-    expect(usage?.type === "run.usage" && usage.data).toMatchObject({
+-      cachedPromptTokens: 8,
+-      reasoningTokens: 2,
+-    });
+-  });
+-});

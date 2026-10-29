@@ -12,6 +12,7 @@ import type { AssistantStore } from "../ports/assistant-store.js";
 import type { Clock, IdGenerator } from "../ports/system.js";
 import type { StandingApprovalGrant } from "../ports/standing-approval.js";
 import { sha256Hex } from "./hash.js";
+import { approvalDenialEnvelope } from "./approval-denial.js";
 import {
   applyPlanGrant,
   resolveGrantedMode,
@@ -122,20 +123,6 @@ export async function answerHumanRequest(
       truncated: false,
       data: { answer: response },
     });
-  const denyEnvelope = (note: string | undefined): string =>
-    JSON.stringify({
-      ok: false,
-      status: "error",
-      summary: "The user denied this tool call.",
-      warnings: [],
-      truncated: false,
-      data: {
-        errorCode: "approval_denied",
-        errorMessage: note ?? "The user denied this tool call.",
-        phase: "guard",
-        retryable: false,
-      },
-    });
 
   // The host's plan veto runs BEFORE the transaction opens: `authorize` is host
   // code, and a policy that blocks on a socket would otherwise hold the store's
@@ -221,7 +208,7 @@ export async function answerHumanRequest(
     const envelopeJson =
       approval === undefined
         ? answerEnvelope(input.response)
-        : denyEnvelope(approval.note);
+        : approvalDenialEnvelope(request, approval.note);
     const taskId = request.targetTaskId;
     const stale = (reason: string): AnswerStaleError =>
       new AnswerStaleError(

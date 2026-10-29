@@ -25,6 +25,8 @@ const STREAM_CHAT_SITES: Record<string, string> = {
   "core/src/runs/model-step.ts": "the loop's single provider request",
   "core/src/runs/bounded-provider.ts":
     "budget wrapper delegating to the wrapped client",
+  "host/src/context/bounded-context-client.ts":
+    "context admission wrapper delegating one request to the wrapped client",
 };
 
 /** Allowed `.execute(` call sites → why. */
@@ -33,8 +35,8 @@ const EXECUTE_SITES: Record<string, string> = {
     "executeToolSafely: the loop's single tool invocation (2 branches)",
   "core/src/runs/bounded-run.ts":
     "budget wrapper delegating to the wrapped tool",
-  "host/src/turn/registry-staging.ts":
-    "ToolGuard wrapper delegating to the guarded tool",
+  "host/src/turn/guarded-tool.ts":
+    "ToolGuard wrapper delegating after durable execution admission",
   "host/src/tasks/executor-registry.ts":
     "task dispatch to a TaskExecutor (not a tool)",
   "runner-local/src/single-process-task-runner.ts":

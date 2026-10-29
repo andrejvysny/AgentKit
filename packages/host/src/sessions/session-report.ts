@@ -5,6 +5,7 @@
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { TaskRecord } from "../ports/task-store.js";
 import { resolveContextWindow } from "../context/budget.js";
+import { sessionWithAdmittedContext } from "./admitted-context.js";
 import { type AgentSessionDescriptor, sessionTurnKind } from "./descriptor.js";
 import { readSessionExecution } from "./plan-mode.js";
 import type {
@@ -80,6 +81,11 @@ async function turnUsage(
     totalTokens: 0,
   };
   for (const event of await store.tasks.listEvents(task.taskId)) {
+    if (event.type === "run.context.admitted") {
+      usage.lastContextAdmission = (
+        event as import("@agentkit/contracts").AiRunContextAdmittedEvent
+      ).data;
+    }
     if (event.type !== "run.usage") continue;
     const data = (event as { data?: Record<string, unknown> }).data;
     // Only settled numbers: a non-final event is superseded by a later one for
@@ -113,17 +119,25 @@ export async function sessionUsage(
     completionTokens: 0,
     totalTokens: 0,
   };
-  let lastPromptTokens: number | undefined;
   for (const turn of turns) {
     totals.requests += turn.requests;
     totals.promptTokens += turn.promptTokens;
     totals.completionTokens += turn.completionTokens;
     totals.totalTokens += turn.totalTokens;
-    if (turn.lastPromptTokens !== undefined)
-      lastPromptTokens = turn.lastPromptTokens;
   }
-  // The newest turn's model wins: `setModel` changes it for future turns only.
-  const latest = tasks[tasks.length - 1];
+  // An executing/parked turn wins over later queued work admitted under future settings.
+  const latest =
+    [...tasks]
+      .reverse()
+      .find((task) =>
+        ["running", "waiting_approval", "interrupted"].includes(task.status),
+      ) ?? tasks[tasks.length - 1];
+  const lastPromptTokens = turns.find(
+    (turn) => turn.turnId === latest?.taskId,
+  )?.lastPromptTokens;
+  const admission = turns.find(
+    (turn) => turn.turnId === latest?.taskId,
+  )?.lastContextAdmission;
   const modelId = str(latest?.payload["model"]) ?? descriptor.model;
   const providerId =
     str(latest?.payload["providerId"]) ?? descriptor.providerId;
@@ -131,17 +145,23 @@ export async function sessionUsage(
     providerId === undefined
       ? []
       : await store.providers.listModels(providerId);
-  const window = resolveContextWindow({
-    descriptor,
-    model: models.find((candidate) => candidate.modelId === modelId),
-    capabilities: null,
-  });
+  const window = admission
+    ? { windowTokens: admission.windowTokens, source: admission.windowSource }
+    : latest && "sessionContext" in latest.payload
+      ? resolveContextWindow({
+          descriptor: sessionWithAdmittedContext(descriptor, latest.payload),
+          model: models.find((candidate) => candidate.modelId === modelId),
+          capabilities: null,
+        })
+      : { windowTokens: null, source: "unknown" as const };
   return {
     sessionId,
     turns,
     totals,
     contextWindowTokens: window.windowTokens,
     contextWindowSource: window.source,
+    ...(latest === undefined ? {} : { contextTurnId: latest.taskId }),
+    ...(admission === undefined ? {} : { contextAdmission: admission }),
     ...(lastPromptTokens === undefined ? {} : { lastPromptTokens }),
   };
 }

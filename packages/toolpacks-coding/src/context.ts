@@ -8,10 +8,11 @@ import type {
   AiToolResult,
 } from "@agentkit/contracts";
 import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
-import type { WorkspaceCoordinator } from "./coordination.js";
-import { CodingError } from "./errors.js";
+import type { ExecutionCleanup, WorkspaceCoordinator } from "./coordination.js";
+import { CodingCleanupError, CodingError } from "./errors.js";
 import type { CodingLimits } from "./limits.js";
 import { canonicalRoot } from "./paths.js";
+import { CommandLifecycle } from "./process-lifecycle.js";
 
 /** What every tool body needs; built once per pack. */
 export interface PackEnv {
@@ -31,6 +32,8 @@ export interface PackEnv {
   root(): Promise<string>;
   /** Private scratch directory outside the workspace (created lazily). */
   scratch(): Promise<string>;
+  commands: CommandLifecycle;
+  drain(): Promise<ExecutionCleanup[]>;
   dispose(): Promise<void>;
 }
 
@@ -47,11 +50,13 @@ export interface EnvInit {
   sandboxExecPath: string;
   coordinator: WorkspaceCoordinator;
   coordinationWaitMs: number;
+  startupCleanup?: Promise<ExecutionCleanup[]>;
 }
 
 export function createEnv(init: EnvInit): PackEnv {
   let root: Promise<string> | undefined;
   let scratch: Promise<string> | undefined;
+  const commands = new CommandLifecycle();
   return {
     limits: init.limits,
     allowSensitive: init.allowSensitive,
@@ -64,15 +69,33 @@ export function createEnv(init: EnvInit): PackEnv {
     sandboxExecPath: init.sandboxExecPath,
     coordinator: init.coordinator,
     coordinationWaitMs: init.coordinationWaitMs,
+    commands,
     root() {
-      root ??= canonicalRoot(init.workspaceRoot);
+      commands.assertOpen();
+      root ??= canonicalRoot(init.workspaceRoot).then(async (path) => {
+        const startup = (await init.startupCleanup) ?? [];
+        for (const result of startup) {
+          commands.record(result);
+          if (!init.coordinator.quarantineWorkspace)
+            throw new CodingCleanupError(startup);
+          await init.coordinator.quarantineWorkspace(path, result);
+        }
+        // Foreign ownership fences workspace leases; it is not this pack's command cleanup responsibility.
+        await init.coordinator.reconcileWorkspace?.(path);
+        return path;
+      });
       return root;
     },
     scratch() {
+      commands.assertOpen();
       scratch ??= mkdtemp(join(realpathSync(tmpdir()), "agentkit-coding-"));
       return scratch;
     },
+    drain: () => commands.drain(),
     async dispose() {
+      const cleanup = await commands.drain();
+      if (cleanup.some((result) => result.state !== "stopped"))
+        throw new CodingCleanupError(cleanup);
       const dir = scratch;
       scratch = undefined;
       if (dir) await rm(await dir, { recursive: true, force: true });
