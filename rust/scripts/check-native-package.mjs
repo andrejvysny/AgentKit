@@ -363,7 +363,7 @@ try {
   process.stdout.write(
     `check-native-package: packed ${tarballName} installed isolated and ran ` +
       "the full acceptance lifecycle (send → committed events → approval " +
-      "wait → answer → resume → terminal receipt → cancel → awaited close) " +
+      "wait → answer → resume → terminal completion → cancel → awaited close) " +
       "plus a fresh-process reopen with durable replay, under bun and node " +
       "with no reachable toolchain.\n",
   );

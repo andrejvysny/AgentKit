@@ -91,9 +91,10 @@ rule). CI: the `native` matrix job (ubuntu + macOS, Node 24 / Bun 1.4.0)
 builds the binary, sets that flag, runs
 `rust/scripts/check-native-package.mjs` (real `npm pack` → the INSTALLED
 package driven through the full acceptance lifecycle — send → committed
-events → approval wait → answer → resume → terminal receipt → cancel →
+events → approval wait → answer → resume → terminal completion → cancel →
 awaited close, then a fresh-process reopen with durable replay — under
-both Bun and Node, cargo-free), and gates freshness of the committed
+both Bun and Node, cargo-free; private receipt rows are asserted in the Rust
+suites), and gates freshness of the committed
 loader/d.ts with `git diff --exit-code`; a separate
 self-contained Windows job compiles the workspace including the binding
 crate — which no longer pulls the Unix-only coding pack at all, since

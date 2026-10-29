@@ -127,6 +127,21 @@ impl SqliteStore {
                     task.status
                 )));
             }
+            if input.status == TaskStatus::Completed
+                && !task.cancel_requested
+                && let Some(expected) = extra
+                    .as_ref()
+                    .and_then(|extra| extra.expected_descriptor.as_ref())
+            {
+                let chat: Option<ChatRecord> = get(&transaction, "chats", "id", &task.scope_id)?;
+                if chat
+                    .as_ref()
+                    .and_then(|chat| chat.metadata.get(crate::SESSION_METADATA_KEY))
+                    != Some(expected)
+                {
+                    return Err(StoreError::SessionDescriptorChanged(task.scope_id));
+                }
+            }
             task.status = if task.cancel_requested {
                 TaskStatus::Cancelled
             } else {

@@ -263,8 +263,9 @@ impl SessionService {
         Ok(Value::Array(turns).to_string())
     }
 
-    /// The full durable projection of one session (turns, messages, inputs,
-    /// receipts) — the reopened-history view.
+    /// The durable projection of one session (turns, messages, inputs,
+    /// descriptor and execution metadata) — the reopened-history view.
+    /// Private tool execution receipt rows are not included.
     #[napi]
     pub async fn export_session(&self, session_id: String) -> Result<String> {
         let core_guard = self.core.lock().await;

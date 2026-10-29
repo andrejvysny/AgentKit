@@ -275,6 +275,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn waiters_run_in_registration_order() {
         let path = temp_file("fifo");
+        let key = queue_key(&path).await.expect("queue key");
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
         let order = Arc::new(Mutex::new(Vec::new()));
         let blocker = {
@@ -282,15 +284,19 @@ mod tests {
             tokio::spawn(async move {
                 with_file_mutation_queue(&path, || async move {
                     order.lock().expect("order").push("first");
+                    let _ = started_tx.send(());
                     let _ = release_rx.await;
                     Ok(())
                 })
                 .await
             })
         };
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .expect("blocker starts promptly")
+            .expect("blocker started");
         let mut waiters = Vec::new();
-        for name in ["second", "third"] {
+        for (index, name) in ["second", "third"].into_iter().enumerate() {
             let (path, order) = (path.clone(), Arc::clone(&order));
             waiters.push(tokio::spawn(async move {
                 let queued = Arc::clone(&order);
@@ -303,8 +309,30 @@ mod tests {
                 })
                 .await
             }));
+            // Spawn order is not registration order on a multithreaded
+            // runtime. Observe this waiter's actual queue link before
+            // spawning the next one; the blocker keeps every link alive.
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let registered = {
+                        let queues = QUEUES.lock().expect("queues");
+                        let mut current = queues.get(&key).map(Arc::as_ref);
+                        let mut depth = 0;
+                        while let Some(tail) = current {
+                            depth += 1;
+                            current = tail.prev.as_deref();
+                        }
+                        depth
+                    };
+                    if registered == index + 2 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("waiter registered behind the blocker");
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
         release_tx.send(()).expect("release");
         blocker.await.expect("join").expect("queue");
         for waiter in waiters {

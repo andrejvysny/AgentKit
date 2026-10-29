@@ -1706,6 +1706,9 @@ async fn a_poison_queued_input_never_wedges_the_settle_or_the_flush() {
 enum Race {
     Arriving,
     CancelFirst,
+    ModelAfterSnapshot,
+    UnsupportedConfigAfterSnapshot,
+    SupportedConfigAfterSnapshot,
 }
 
 /// Delegates to the real planner and then, in the window the reviewer
@@ -1757,6 +1760,48 @@ impl SessionFlushPlanner for Racy {
                         )
                         .await
                         .expect("the queued candidate is cancelled");
+                }
+                Race::ModelAfterSnapshot => {
+                    self.inner
+                        .set_model("s1", None, "new-model", None)
+                        .await
+                        .unwrap();
+                    let sent = self
+                        .inner
+                        .follow_up(
+                            "s1",
+                            &FollowUpInput {
+                                content: json!("after the model change"),
+                                input_id: Some("late-model".into()),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(matches!(sent, AgentSendResult::Queued { .. }));
+                }
+                Race::UnsupportedConfigAfterSnapshot => {
+                    self.inner
+                        .configure("s1", None, Some(json!({"policy": "transcript"})), None)
+                        .await
+                        .unwrap();
+                }
+                Race::SupportedConfigAfterSnapshot => {
+                    self.inner
+                        .set_model("s1", None, "model", Some(None))
+                        .await
+                        .unwrap();
+                    let sent = self
+                        .inner
+                        .follow_up(
+                            "s1",
+                            &FollowUpInput {
+                                content: json!("after removing unsupported config"),
+                                input_id: Some("late-supported".into()),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(matches!(sent, AgentSendResult::Queued { .. }));
                 }
             }
         }
@@ -2207,6 +2252,351 @@ async fn a_promotion_the_snapshot_missed_asks_the_provider_with_the_current_mode
     );
     assert_eq!(
         f.store.get_task("turn:late").await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+}
+
+/// A descriptor snapshot is not a durable task. A model change can finish
+/// AFTER planning and before a newly accepted follow-up is staged, so the
+/// settlement must validate its descriptor in the same transaction as the
+/// promotion and re-plan without replaying the completed executor.
+#[tokio::test]
+async fn a_model_change_after_planning_reaches_the_later_follow_up() {
+    let f = fixture_with(false).await;
+    f.service
+        .send("s1", &send_input(json!("first"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    f.host
+        .set_session_flush_planner(Arc::new(Racy {
+            inner: f.service.clone(),
+            store: f.store.clone(),
+            mode: Race::ModelAfterSnapshot,
+            armed: AtomicBool::new(true),
+        }))
+        .await;
+    assert!(f.host.run_once().await.unwrap());
+    let promoted = f.store.get_task("turn:late-model").await.unwrap().unwrap();
+    assert_eq!(promoted.payload["model"], json!("new-model"));
+    assert_eq!(
+        f.requests.lock().unwrap().len(),
+        1,
+        "re-planning never reruns the executor"
+    );
+    assert!(f.host.run_once().await.unwrap());
+    let models: Vec<String> = f
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.model.clone())
+        .collect();
+    assert_eq!(models, vec!["model".to_owned(), "new-model".to_owned()]);
+}
+
+/// Checking only model/provider keys would still accept an obsolete plan
+/// after the session acquired unsupported context options. A refreshed plan
+/// must use the same host validation as submission and leave the input
+/// visible instead of dispatching a turn that silently ignores those options.
+#[tokio::test]
+async fn a_config_change_after_planning_revalidates_queued_turns() {
+    let f = fixture_with(false).await;
+    let sent = f
+        .service
+        .send("s1", &send_input(json!("first"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = sent else {
+        panic!("turn")
+    };
+    f.service
+        .follow_up(
+            "s1",
+            &FollowUpInput {
+                content: json!("next"),
+                input_id: Some("next".into()),
+            },
+        )
+        .await
+        .unwrap();
+    f.host
+        .set_session_flush_planner(Arc::new(Racy {
+            inner: f.service.clone(),
+            store: f.store.clone(),
+            mode: Race::UnsupportedConfigAfterSnapshot,
+            armed: AtomicBool::new(true),
+        }))
+        .await;
+    assert!(f.host.run_once().await.unwrap());
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    assert!(f.store.get_task("turn:next").await.unwrap().is_none());
+    assert_eq!(
+        f.store
+            .get_input("next".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending
+    );
+    assert_eq!(
+        f.service.flush_queue("s1").await.unwrap_err().code,
+        "not_implemented"
+    );
+    assert_eq!(f.requests.lock().unwrap().len(), 1);
+}
+
+/// Taking (or rejecting) a settlement plan must not cancel an input before
+/// its target becomes terminal. Cancellation belongs to the settle commit.
+#[tokio::test]
+async fn planning_a_settlement_does_not_cancel_its_steers() {
+    let f = fixture_with(false).await;
+    let sent = f
+        .service
+        .send("s1", &send_input(json!("first"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = sent else {
+        panic!("turn")
+    };
+    f.service
+        .steer(
+            "s1",
+            &SteerInput {
+                content: json!("only this turn"),
+                input_id: Some("steer-cancel".into()),
+                turn_id: Some(turn_id.clone()),
+                on_settled: Some(OnSettled::Cancel),
+            },
+        )
+        .await
+        .unwrap();
+    let task = f.store.get_task(&turn_id).await.unwrap().unwrap();
+    let _ = f.service.settle_plan(&task, true).await.unwrap();
+    assert_eq!(
+        f.store
+            .get_input("steer-cancel".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending
+    );
+}
+
+/// A refusal snapshot also needs a descriptor fence. Otherwise a config
+/// repaired before a valid follow-up is accepted leaves that input behind
+/// the terminal turn with no promotion plan and no future settlement.
+#[tokio::test]
+async fn a_repaired_config_after_planning_does_not_strand_a_later_input() {
+    let f = fixture_with(false).await;
+    f.service
+        .send("s1", &send_input(json!("first"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    f.service
+        .set_model("s1", None, "model", Some(Some("high")))
+        .await
+        .unwrap();
+    f.host
+        .set_session_flush_planner(Arc::new(Racy {
+            inner: f.service.clone(),
+            store: f.store.clone(),
+            mode: Race::SupportedConfigAfterSnapshot,
+            armed: AtomicBool::new(true),
+        }))
+        .await;
+    assert!(f.host.run_once().await.unwrap());
+    let task = f
+        .store
+        .get_task("turn:late-supported")
+        .await
+        .unwrap()
+        .expect("the accepted input is staged");
+    assert!(task.payload.get("reasoningEffort").is_none());
+    assert_eq!(
+        f.store
+            .get_input("late-supported".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Converted
+    );
+    assert!(f.host.run_once().await.unwrap());
+    assert_eq!(f.requests.lock().unwrap().len(), 2);
+    assert!(f.service.get_state("s1").await.unwrap().pending.is_empty());
+}
+
+struct ChangingEveryPlan {
+    service: AgentSessionService,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl SessionFlushPlanner for ChangingEveryPlan {
+    async fn settle_plan(
+        &self,
+        settling: &agentkit_store::TaskRecord,
+        completed: bool,
+    ) -> HostResult<SettlePlan> {
+        let plan = self.service.settle_plan(settling, completed).await?;
+        let calls = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        self.service
+            .set_model("s1", None, &format!("changing-{calls}"), None)
+            .await
+            .unwrap();
+        Ok(plan)
+    }
+}
+
+/// Continuous edits produce an explicit bounded conflict. Neither the
+/// completed executor nor any queue transition is replayed during re-planning;
+/// the caller receives the error and can retry settlement/recover the durable
+/// task instead of observing false completion or an indefinitely busy loop.
+#[tokio::test]
+async fn continuous_config_changes_return_a_bounded_conflict_without_partial_settlement() {
+    let f = fixture_with(false).await;
+    let sent = f
+        .service
+        .send("s1", &send_input(json!("first"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = sent else {
+        panic!("turn")
+    };
+    f.service
+        .follow_up(
+            "s1",
+            &FollowUpInput {
+                content: json!("next"),
+                input_id: Some("next".into()),
+            },
+        )
+        .await
+        .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    f.host
+        .set_session_flush_planner(Arc::new(ChangingEveryPlan {
+            service: f.service.clone(),
+            calls: calls.clone(),
+        }))
+        .await;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), f.host.run_once())
+        .await
+        .expect("configuration churn has a bounded outcome");
+    assert!(matches!(
+        result,
+        Err(HostError::Store(
+            agentkit_store::StoreError::SessionDescriptorChanged(_)
+        ))
+    ));
+    assert!(
+        calls.load(Ordering::SeqCst) > 1,
+        "the planner retries a stale snapshot"
+    );
+    assert_eq!(
+        f.requests.lock().unwrap().len(),
+        1,
+        "settlement retries never rerun the executor"
+    );
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Running
+    );
+    assert_eq!(
+        f.store
+            .get_input("next".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending
+    );
+    assert!(f.store.get_task("turn:next").await.unwrap().is_none());
+}
+
+struct Maintenance;
+#[async_trait]
+impl TaskExecutor for Maintenance {
+    async fn execute(&self, _: ExecutionContext) -> HostResult<()> {
+        Ok(())
+    }
+}
+
+/// An unrelated task can hold the same scope, but its settlement does not
+/// drive the session queue. Admission must not promise a follow-up that will
+/// have no future session settlement to promote it.
+#[tokio::test]
+async fn a_different_task_kind_cannot_accept_a_session_follow_up() {
+    let f = fixture_with(false).await;
+    let maintenance = AgentHost::new(
+        f.store.clone(),
+        HashMap::from([(
+            "project.maintenance".to_owned(),
+            Arc::new(Maintenance) as Arc<dyn TaskExecutor>,
+        )]),
+        Arc::new(SystemRuntime),
+        HostOptions::default(),
+    )
+    .unwrap();
+    maintenance
+        .set_session_flush_planner(Arc::new(f.service.clone()))
+        .await;
+    f.store
+        .submit(agentkit_store::SubmitTask {
+            task_id: "maintenance".into(),
+            kind: "project.maintenance".into(),
+            scope_id: "s1".into(),
+            payload: json!({}),
+            priority: 0,
+            now: SystemRuntime.now_ms(),
+            available_at: None,
+            depends_on: vec![],
+            parent_task_id: None,
+            exclusive_scope: true,
+        })
+        .await
+        .unwrap();
+    let input = FollowUpInput {
+        content: json!("next"),
+        input_id: Some("after-maintenance".into()),
+    };
+    let error = f.service.follow_up("s1", &input).await.unwrap_err();
+    assert_eq!(error.code, "chat_busy");
+    assert!(
+        f.store
+            .get_input("after-maintenance".into())
+            .await
+            .unwrap()
+            .is_none(),
+        "refusal writes no stranded input"
+    );
+    assert!(maintenance.run_once().await.unwrap());
+    assert_eq!(
+        f.store
+            .get_task("maintenance")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        TaskStatus::Completed
+    );
+    assert!(matches!(
+        f.service.follow_up("s1", &input).await.unwrap(),
+        AgentSendResult::Turn { .. }
+    ));
+    assert!(f.host.run_once().await.unwrap());
+    assert_eq!(
+        f.store
+            .get_task("turn:after-maintenance")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         TaskStatus::Completed
     );
 }

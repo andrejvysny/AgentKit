@@ -1325,6 +1325,11 @@ pub struct TurnStaging {
 /// input pending behind a terminal turn.
 pub struct SessionSettle {
     pub convert: Vec<StagedCandidate>,
+    /// The exact persisted descriptor used by the session planner. The
+    /// transaction validates both promotion and refusal decisions against
+    /// this snapshot; even an unsupported config may become supported before
+    /// commit. `None` is for callers without a session descriptor.
+    pub expected_descriptor: Option<Value>,
     /// The authoritative config for inputs the snapshot missed. `None`
     /// promotes nothing missed — fail-closed, the inputs stay Pending and
     /// visible for an explicit flush — because promoting without a current
@@ -1776,6 +1781,22 @@ impl SqliteStore {
     pub async fn queue_or_stage_turn(&self, input: QueueOrStage) -> Result<QueueAdmission> {
         self.call(move |db| {
             let transaction = db.transaction()?;
+            // Only this session's turn kind drives its settlement queue.
+            // An unrelated task sharing the scope cannot promise to promote
+            // an accepted input when it finishes; reject before inserting it.
+            let unrelated: Option<String> = transaction
+                .query_row(
+                    "SELECT id FROM tasks WHERE scope=?1 \
+                     AND json_extract(record,'$.kind')<>?2 \
+                     AND status IN ('queued','running','interrupted','waiting_approval') \
+                     LIMIT 1",
+                    params![input.session_id, input.task_kind],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if unrelated.is_some() {
+                return Err(StoreError::ScopeBusy(input.session_id));
+            }
             let active: Option<String> = transaction
                 .query_row(
                     "SELECT id FROM tasks WHERE scope=?1 \
@@ -1834,6 +1855,8 @@ impl SqliteStore {
 /// scope turns out to be free. See [`SqliteStore::queue_or_stage_turn`].
 pub struct QueueOrStage {
     pub session_id: String,
+    /// The session's turn kind, whose settlement owns this input's promotion.
+    pub task_kind: String,
     pub input: CreateAgentInput,
     /// Fill a queued steer's target with the live turn the check finds.
     pub target_the_live_turn: bool,

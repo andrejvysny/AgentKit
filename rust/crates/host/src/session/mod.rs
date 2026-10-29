@@ -671,7 +671,8 @@ impl AgentSessionService {
 
     /// Every queued input that may take the scope, in arrival order, with
     /// its task and messages fully staged. `on_settled: cancel` steers whose
-    /// target has settled are cancelled here, never converted. `settling`
+    /// target has settled are cancelled on an explicit flush, never converted.
+    /// Settlement plans leave that cancellation to their transaction. `settling`
     /// names a turn that is about to become terminal (the settle path):
     /// steers aimed at it are treated as target-terminal.
     async fn queue_candidates(
@@ -705,16 +706,21 @@ impl AgentSessionService {
                     }
                 }
                 if record.on_settled == Some(AgentInputSettlePolicy::Cancel) {
-                    let _ = self
-                        .store()
-                        .transition_input(
-                            record.input_id.clone(),
-                            vec![AgentInputStatus::Pending],
-                            AgentInputStatus::Cancelled,
-                            AgentInputPatch::default(),
-                            self.now_ms(),
-                        )
-                        .await;
+                    // Settlement owns this cancellation in its transaction.
+                    // Planning may be retried or the settlement may fail, so
+                    // taking its snapshot must have no durable side effects.
+                    if settling.is_none() {
+                        let _ = self
+                            .store()
+                            .transition_input(
+                                record.input_id.clone(),
+                                vec![AgentInputStatus::Pending],
+                                AgentInputStatus::Cancelled,
+                                AgentInputPatch::default(),
+                                self.now_ms(),
+                            )
+                            .await;
+                    }
                     continue;
                 }
             }
@@ -1402,8 +1408,8 @@ impl AgentSessionService {
 
     /// The authoritative config the store needs to stage what a settlement's
     /// snapshot could not name: the same contract [`Self::stage_candidate`]
-    /// applies, as data the settle transaction can stamp without re-reading
-    /// the descriptor.
+    /// applies. The transaction checks the persisted descriptor before
+    /// stamping it, so a concurrent patch forces the host to re-plan.
     fn turn_staging(&self, session_id: &str, descriptor: &Value) -> SessionResult<TurnStaging> {
         Ok(TurnStaging {
             kind: session_turn_kind(descriptor),
@@ -1605,6 +1611,7 @@ impl AgentSessionService {
             .store()
             .queue_or_stage_turn(QueueOrStage {
                 session_id: session_id.to_owned(),
+                task_kind: session_turn_kind(descriptor),
                 input: CreateAgentInput {
                     input_id,
                     session_id: session_id.to_owned(),
@@ -1798,6 +1805,7 @@ impl crate::SessionFlushPlanner for AgentSessionService {
         completed: bool,
     ) -> crate::HostResult<crate::SettlePlan> {
         let none = || crate::SettlePlan {
+            expected_descriptor: None,
             staging: None,
             convert: vec![],
         };
@@ -1809,7 +1817,7 @@ impl crate::SessionFlushPlanner for AgentSessionService {
         }
         // Only the session's own turn kind drives its queue; anything else
         // sharing the scope (or a non-session chat) is nobody's queue.
-        let Ok((_, descriptor)) = self.require_session(&settling.scope_id).await else {
+        let Ok((chat, descriptor)) = self.require_session(&settling.scope_id).await else {
             return Ok(none());
         };
         let turn_kind = session_turn_kind(&descriptor);
@@ -1841,6 +1849,7 @@ impl crate::SessionFlushPlanner for AgentSessionService {
             .await
             .unwrap_or_default();
         Ok(crate::SettlePlan {
+            expected_descriptor: Some(chat.metadata[SESSION_METADATA_KEY].clone()),
             staging,
             convert: candidates
                 .into_iter()

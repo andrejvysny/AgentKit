@@ -43,8 +43,9 @@ export declare class SessionService {
   getExecution(sessionId: string): Promise<string | null>
   listTurns(sessionId: string): Promise<string>
   /**
-   * The full durable projection of one session (turns, messages, inputs,
-   * receipts) — the reopened-history view.
+   * The durable projection of one session (turns, messages, inputs,
+   * descriptor and execution metadata) — the reopened-history view.
+   * Private tool execution receipt rows are not included.
    */
   exportSession(sessionId: string): Promise<string>
   getUsage(sessionId: string): Promise<string>

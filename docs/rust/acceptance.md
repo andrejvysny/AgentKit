@@ -403,7 +403,7 @@ were re-qualified locally with Node v22.20.0 installed.
   `AGENTKIT_REQUIRE_NATIVE=1` (19 tests / 127 assertions across 3 files) plus
   12 `agentkit-napi` unit tests, and the packed-consumer gate running the
   full acceptance lifecycle (send → events → approval → answer → resume →
-  terminal receipt → cancel → awaited close) and a fresh-process reopen with
+  terminal completion → cancel → awaited close) and a fresh-process reopen with
   durable replay from an `npm pack`-installed package under Bun 1.4.4 and
   Node v22.20.0 with no reachable toolchain.
 - Limits of this round: no `PR_SET_DUMPABLE=0` reproduction exists (the real

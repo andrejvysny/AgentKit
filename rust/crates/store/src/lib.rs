@@ -45,6 +45,10 @@ pub enum StoreError {
     Duplicate(String),
     #[error("scope busy: {0}")]
     ScopeBusy(String),
+    /// The settlement committed nothing: the caller may rebuild its plan
+    /// against the current descriptor and retry under the same lease.
+    #[error("session descriptor changed while staging settlement: {0}")]
+    SessionDescriptorChanged(String),
     #[error("lease lost for task {0}")]
     LeaseLost(String),
     #[error("invalid transition: {0}")]

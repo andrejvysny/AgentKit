@@ -470,27 +470,51 @@ async fn settled(known: &[i32], pgid: Option<i32>) -> bool {
     known.iter().any(|pid| pid_alive(*pid)) || group_populated_sustained(pgid).await
 }
 
-/// The suspect set to REPORT: alive now AND still classified as a suspect
-/// by repeat scans. A same-user child caught mid-`execve` answers EPERM on
+/// Recheck live suspects, retaining unresolved suspects and promoting any
+/// newly readable execution markers to survivors. A same-user child
+/// caught mid-`execve` answers EPERM on
 /// environ for a moment (the creds transition) and must not pin a phantom
 /// uncertainty onto a clean command; a genuine `PR_SET_DUMPABLE=0` detach
 /// stays unreadable across every pass. An unscannable re-check keeps what
 /// was seen — unknown stays unknown, never silently dropped.
-async fn report_suspects(find: &FindFn, suspects: &[i32]) -> Vec<i32> {
+async fn report_suspects(find: &FindFn, suspects: &[i32], scan: &mut TeardownScan) -> Discovery {
     let alive =
         |pids: &[i32]| -> Vec<i32> { pids.iter().copied().filter(|pid| pid_alive(*pid)).collect() };
     let mut live = alive(suspects);
+    let mut marked = Vec::new();
     for _ in 0..2 {
         if live.is_empty() {
             break;
         }
         sleep(50).await;
         match find().await {
-            Some(scan) => live.retain(|pid| scan.suspects.contains(pid)),
-            None => break,
+            Some(found) => {
+                // Readable now does not mean unrelated: a previously
+                // unreadable process can now positively expose our marker.
+                // It was not part of the signal set, so retain it as a
+                // marked survivor instead of silently declaring cleanup.
+                live.retain(|pid| found.suspects.contains(pid));
+                for pid in found.marked {
+                    if !marked.contains(&pid) {
+                        marked.push(pid);
+                    }
+                }
+                for pid in found.suspects {
+                    if !live.contains(&pid) {
+                        live.push(pid);
+                    }
+                }
+            }
+            None => {
+                *scan = TeardownScan::Unsupported;
+                break;
+            }
         }
     }
-    alive(&live)
+    Discovery {
+        marked: alive(&marked),
+        suspects: alive(&live),
+    }
 }
 
 /// What one discovery pass reports for a cleanup decision.
@@ -534,22 +558,28 @@ fn production_find(
                 Some(tracker) => tracker.sample().await,
                 None => Some(Vec::new()),
             };
-            if marked.is_none() && tracked.is_none() {
-                return None;
-            }
-            let mut discovery = Discovery::default();
-            if let Some((pids, suspects)) = marked {
-                discovery.marked = pids;
-                discovery.suspects = suspects;
-            }
-            for pid in tracked.into_iter().flatten() {
-                if !discovery.marked.contains(&pid) {
-                    discovery.marked.push(pid);
-                }
-            }
-            Some(discovery)
+            discovery_from_scans(marked, tracked)
         })
     })
+}
+
+/// Both required discovery sources must complete. An absent optional tree
+/// tracker is supplied as an empty successful sample; it cannot turn a
+/// failed marker scan into positive evidence that no descendants remain.
+/// A tree sample also cannot prove detached descendants absent on its own.
+fn discovery_from_scans(
+    marked: Option<(Vec<i32>, Vec<i32>)>,
+    tracked: Option<Vec<i32>>,
+) -> Option<Discovery> {
+    let (marked, suspects) = marked?;
+    let tracked = tracked?;
+    let mut discovery = Discovery { marked, suspects };
+    for pid in tracked {
+        if !discovery.marked.contains(&pid) {
+            discovery.marked.push(pid);
+        }
+    }
+    Some(discovery)
 }
 
 fn absorb(
@@ -599,16 +629,17 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
         // Nothing killable was found; cleanup is only Clean when the scan
         // completed AND no suspect stayed alive. An empty survivor list
         // alongside suspects or an unsupported scan is UNKNOWN.
-        let live_suspects = report_suspects(&find, &suspects).await;
+        let rechecked = report_suspects(&find, &suspects, &mut scan).await;
+        let seen = rechecked.marked.len();
         return (
             Teardown {
                 escalated: false,
-                survivors: vec![],
+                survivors: rechecked.marked,
                 scan,
-                suspects: live_suspects,
+                suspects: rechecked.suspects,
                 group_stuck: false,
             },
-            0,
+            seen,
         );
     }
     // Freeze first so nothing can fork between discovery and the signal; rescan
@@ -645,8 +676,19 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
     if !survivors.is_empty() && scan == TeardownScan::Ok {
         // A zombie nobody reaped still answers kill(pid, 0) but has no
         // environment to find; only a process the scan still sees is a survivor.
-        if let Some(live) = find().await {
-            survivors.retain(|pid| live.marked.contains(pid));
+        match find().await {
+            Some(live) => {
+                survivors.retain(|pid| live.marked.contains(pid));
+                // This rescan is a discovery too. Preserve newly observed
+                // marks and suspects instead of using it only as a filter.
+                absorb(&mut known, &mut suspects, &mut scan, Some(live.clone()));
+                for pid in live.marked {
+                    if pid_alive(pid) && !survivors.contains(&pid) {
+                        survivors.push(pid);
+                    }
+                }
+            }
+            None => scan = TeardownScan::Unsupported,
         }
     }
     // A group that stays populated after the full kill sequence is a kill
@@ -654,14 +696,22 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
     // sustained so a zombie awaiting its reaper under load does not fake a
     // kill failure (and a witness nobody reaps cannot hide).
     let group_stuck = group_populated_sustained(pgid).await;
-    let live_suspects = report_suspects(&find, &suspects).await;
+    let rechecked = report_suspects(&find, &suspects, &mut scan).await;
+    for pid in rechecked.marked {
+        if !survivors.contains(&pid) {
+            survivors.push(pid);
+        }
+        if !known.contains(&pid) {
+            known.push(pid);
+        }
+    }
     let seen = known.len();
     (
         Teardown {
             escalated,
             survivors,
             scan,
-            suspects: live_suspects,
+            suspects: rechecked.suspects,
             group_stuck,
         },
         seen,
@@ -1613,6 +1663,17 @@ mod tests {
     use super::*;
     use crate::limits::CodingLimits;
     use std::process::id as process_id;
+
+    #[test]
+    fn incomplete_discovery_cannot_be_completed_by_an_optional_tracker() {
+        assert!(discovery_from_scans(None, Some(vec![])).is_none());
+        assert!(discovery_from_scans(None, Some(vec![123])).is_none());
+        assert!(discovery_from_scans(Some((vec![], vec![])), None).is_none());
+        let complete = discovery_from_scans(Some((vec![123], vec![456])), Some(vec![123, 789]))
+            .expect("both required sources completed");
+        assert_eq!(complete.marked, vec![123, 789]);
+        assert_eq!(complete.suspects, vec![456]);
+    }
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
