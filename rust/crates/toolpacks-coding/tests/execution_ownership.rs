@@ -10,8 +10,11 @@
 //! Every test drives the ACTUAL contributed `run_command` (same wiring as
 //! `contributor.rs`) with a controlled child, and reaps every marked process
 //! through a Drop guard keyed by the child's own `AGENTKIT_EXEC_ID` marker.
+//! The independent observation uses Linux /proc or macOS /bin/ps, never the
+//! production marker-discovery helper. The detached-descendant fixture alone
+//! remains Linux-specific because it invokes the external `setsid` utility.
 
-#![cfg(unix)]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::path::{Path, PathBuf};
 use std::process::id as process_id;
@@ -37,6 +40,7 @@ const POLL_MS: u64 = 20;
 /// Every descendant inherits the marker, including ones that left the
 /// process group (setsid); a zombie's environ reads empty, so killed-but-
 /// unreaped processes do not count as alive here.
+#[cfg(target_os = "linux")]
 fn marked_pids(exec_id: &str) -> Vec<i32> {
     let want = format!("AGENTKIT_EXEC_ID={exec_id}");
     let mut found = Vec::new();
@@ -63,11 +67,33 @@ fn marked_pids(exec_id: &str) -> Vec<i32> {
     found
 }
 
-/// Process-group id from `/proc/<pid>/stat` (None once the pid is gone).
+/// macOS exposes process environments through ps rather than /proc. Match
+/// the entire marker token, and never include the captured environments in
+/// diagnostics. A failed oracle is a test failure, not an empty survivor set.
+#[cfg(target_os = "macos")]
+fn marked_pids(exec_id: &str) -> Vec<i32> {
+    let want = format!("AGENTKIT_EXEC_ID={exec_id}");
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-axwwE", "-o", "pid=,command="])
+        .output()
+        .expect("start macOS ownership oracle");
+    assert!(output.status.success(), "macOS ownership oracle failed");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse::<i32>().ok()?;
+            (pid > 0 && fields.any(|field| field == want)).then_some(pid)
+        })
+        .collect()
+}
+
+/// Process-group id through the OS API (None once the pid is gone).
+/// Only the Linux detached-descendant fixture needs to compare groups.
+#[cfg(target_os = "linux")]
 fn pgrp(pid: i32) -> Option<i32> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let (_, rest) = stat.rsplit_once(") ")?;
-    rest.split_whitespace().nth(2)?.parse().ok()
+    let group = unsafe { libc::getpgid(pid) };
+    (group >= 0).then_some(group)
 }
 
 async fn poll_until(what: &str, budget: Duration, cond: impl Fn() -> bool) {
@@ -162,7 +188,7 @@ impl Harness {
             network: false,
             allow_git_writes: false,
             test_commands: vec![],
-            platform: Some("linux".to_owned()),
+            platform: None,
             sandbox_exec_path: None,
             // Per-pack: the gates are per-root, but isolation also keeps the
             // probes honest about who holds the lease.
@@ -502,6 +528,7 @@ async fn pack_shutdown_drains_a_running_command() {
     harness.pack.dispose().await;
 }
 
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn detached_descendant_is_killed_with_no_survivors_and_no_quarantine() {
     let harness = Harness::new("detached").await;

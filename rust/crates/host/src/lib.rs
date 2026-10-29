@@ -62,7 +62,8 @@ pub struct ExecutionContext {
     /// at its next safe boundary and the host parks the turn.
     pub interruption: CancellationToken,
     /// Filled by the park sink when a tool asked a human; the runner then
-    /// skips settling because the park already ended the attempt.
+    /// skips settling because the park already ended the attempt. The mutex
+    /// also serializes lease renewal with the durable park and publication.
     pub(crate) suspension: Arc<Mutex<Option<agentkit_core::HumanRequestSpec>>>,
     pub(crate) store: SqliteStore,
     pub(crate) fence: LeaseFence,

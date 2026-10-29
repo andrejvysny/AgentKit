@@ -294,6 +294,10 @@ impl agentkit_core::SuspendSink for ParkSink {
         request: &agentkit_core::HumanRequestSpec,
         tool_call_id: &str,
     ) -> Result<(), agentkit_core::CoreError> {
+        // The store releases the lease before this future publishes the
+        // suspension. Keep heartbeat renewal outside that transition so a
+        // successful park cannot look like stolen execution authority.
+        let mut suspension = self.context.suspension.lock().await;
         let now = self.context.runtime.now_ms();
         let parked = self
             .context
@@ -321,7 +325,7 @@ impl agentkit_core::SuspendSink for ParkSink {
         // Idempotent replay: the deterministic request id parks once; a
         // second park of the same call finds the task already parked.
         let _ = parked;
-        *self.context.suspension.lock().await = Some(request.clone());
+        *suspension = Some(request.clone());
         Ok(())
     }
 }
