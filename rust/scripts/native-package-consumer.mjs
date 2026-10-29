@@ -194,7 +194,10 @@ if (mode === "run") {
     // Observe this tool's entry, rather than a provider callback that may
     // still be producing the tool call. The cancellation must land while
     // run_slow is blocked inside its JS body.
-    await waitFor(async () => slowCalls, (count) => count === 1);
+    await waitFor(
+      async () => slowCalls,
+      (count) => count === 1,
+    );
     assert(
       slowCompletions === 0,
       "slow callback completed before cancellation",
