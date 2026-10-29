@@ -22,6 +22,7 @@ import {
 } from "../src/index.js";
 
 class SpyProvider extends MockProviderClient {
+  maxOutputTokens?: number;
   readonly requests: AiChatRequest[] = [];
   throws = false;
   override streamChat(input: AiChatRequest): AsyncIterable<AiRunEvent> {
@@ -96,6 +97,25 @@ function summarizer(text = "## Goal\nfixed"): SpyProvider {
   provider.setScript([{ steps: [{ kind: "text", content: text }] }]);
   return provider;
 }
+
+it("keeps summarizer output within a small reserve and refuses an impossible summary window", async () => {
+  const provider = summarizer();
+  const outcome = await compactSessionContext(
+    baseInput(provider, { windowTokens: 4000, reserveTokens: 100 }),
+  );
+  expect(outcome?.ok).toBe(true);
+  expect(provider.requests[0]?.maxOutputTokens).toBe(80);
+  const tiny = summarizer();
+  const refused = await compactSessionContext(
+    baseInput(tiny, { windowTokens: 2, reserveTokens: 1 }),
+  );
+  expect(refused?.ok).toBe(false);
+  expect(tiny.requests).toHaveLength(0);
+  const capped = summarizer();
+  capped.maxOutputTokens = 32;
+  expect((await compactSessionContext(baseInput(capped)))?.ok).toBe(true);
+  expect(capped.requests[0]?.maxOutputTokens).toBe(32);
+});
 
 describe("findCut", () => {
   it("cuts only at turn starts, so a call and its results stay together", () => {

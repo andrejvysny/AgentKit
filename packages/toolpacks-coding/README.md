@@ -38,9 +38,26 @@ gitignored entries unless `includeIgnored`. `code_search` pages with `offset`.
 `"unknown"`. `eligible` is a positive allowlist (build, test, lint, typecheck and
 read-only git invocations) over a character set with no shell syntax; anything
 with quotes, `$`, redirects, pipes, globs, a leading `VAR=value`, or an unlisted
-command is `unknown`. `high_risk` is checked first, on the raw text (deletes,
-privilege, network, publish/deploy/migrate names, history-rewriting git, force
-flags, ...).
+command is `unknown`. `high_risk` is checked first (deletes, privilege, network,
+publish/deploy/migrate names, history-rewriting git, force flags, ...). Literal
+executable paths, single/double quotes, escaped words and concatenated literal
+quotes are normalized for this risk scan: `/bin/rm`, `"rm"`, `r''m` and `r\m`
+need the same fresh decision as `rm`. Assignments and `env`/`command` wrappers
+cannot hide these literal words. `env -S`/`--split-string`, shell inline execution
+(`sh`/`bash`/`zsh`/`dash`/`ksh`/`fish` `-c`, including bundled flags), and supported
+interpreter evaluation forms require a fresh decision even for benign code.
+These include Python/PyPy `-c`, Node/Bun/Ruby/Perl/Lua `-e`, Node `-p`, PHP `-r`,
+Deno `eval`, PowerShell command/encoded-command, and awk programs. Node stdin
+evaluation and supported Node/Bun data-URL startup imports also require approval.
+
+This is a conservative literal scan, not a complete shell parser or a proof of
+arbitrary code's effects. Variable-generated executable names, aliases, custom
+executables, script files and transitive test/build code can have effects this
+scan cannot identify. An ordinary `unknown` command retains the selected mode's
+behavior: `full_auto` runs it, `ask`/`auto_edit` ask, and final role/mode ceilings
+still win. Sandbox/capability restrictions remain independent. The inert policy
+tests qualify classifier and real host guard composition without spawning any
+process; they do not qualify the blocked native Full-auto GUI acceptance branch.
 
 ```ts
 import {
@@ -65,8 +82,51 @@ const standingApprovals = createCodingStandingApprovals({
 every approvable refusal is the plain `approval_required:` and whose command is
 `eligible`; the key binds chat, tool, identity, canonical root, canonical `cwd`
 (must be a directory inside the root) and the exact command text. Role ceilings,
-plan mode, uncertain-outcome and high-risk refusals can never be covered. A
-grant approves that command string, not what the files it runs contain later.
+plan mode, uncertain-outcome and high-risk refusals can never be covered. Every
+covered high-risk execution needs a fresh allow-once decision, never a remembered
+grant.
+
+The version-2 key also binds a bounded execution fingerprint. Unchanged covered
+context reuses the grant; a changed fingerprint no longer matches and requests
+ordinary approval again because the command's covered execution context changed.
+Existing version-1 grants therefore require approval once under this policy.
+The fingerprint covers:
+
+- Executable resolution through `PATH`, canonical path, device/inode, permissions,
+  size and nanosecond modification/change times. `npx`/`bunx` also resolve the
+  selected local CLI in ancestor `node_modules/.bin`, then `PATH`; unresolved
+  executables cannot receive standing grants. Executable identity uses filesystem
+  metadata, not an unbounded binary-content hash.
+- Recognized runner/dependency metadata from `cwd` through the workspace root:
+  package manifests/lockfiles, Bun/npm/pnpm/Yarn configuration, Python/uv/pytest,
+  Cargo/toolchain configuration, Go modules/workspaces, Makefiles, TypeScript,
+  Vitest/Vite/Jest, ESLint, Prettier and Biome configuration. Missing recognized
+  files are bound too, so adding one invalidates the grant.
+- Literal direct script-entrypoint files named by the selected package script
+  and its pre/post hooks, including extensionless direct executables and supported
+  interpreter entrypoints; explicit `--config`, `--project`, `--manifest-path`,
+  `--modfile`, `--preload`, `--require`, `--import`, `--loader`, supported `-r`,
+  TypeScript `-p` and pytest `-c` files, including repeated and attached values.
+  These direct inputs must resolve to bounded regular files inside the workspace.
+  Ambiguous interpreter options, nested npx/bunx runners other than literal
+  `tsc`, and nested Bun run/build entrypoints decline standing authorization.
+  Source files discovered or
+  imported by those entrypoints are not hashed. Ordinary project source/test
+  edits remain covered unless they change one of these bound inputs.
+- A fixed set of relevant environment variables, after the runner's secret
+  filtering: `PATH`, home/shell/startup paths, locale, Node/Bun/Python options,
+  virtual environment, Cargo/Rust/Go paths and flags, Make flags, dynamic-library
+  resolution and npm configuration paths/registry. Startup/user configuration
+  explicitly named by `BASH_ENV`, `ENV` or `npm_config_userconfig` is also bound.
+  Hosts with different execution environments must supply `environment`; custom
+  behavior-changing context belongs in `identity`/`context`.
+
+Bounds: 16 ancestor directories, 128 present files, 8 MiB per file, 32 MiB total,
+128 KiB of covered environment and 128 `PATH` entries. Unreadable, malformed,
+unresolved or oversized covered context offers no standing grant. This bounded
+fingerprint does not prove transitive behavior, protect the check-to-execution
+interval, or cover every runner's external/global configuration. Sandboxing and
+workspace coordination remain required independent controls.
 
 Every path is confined to the workspace root (symlink-aware); credential-like
 paths are refused unless `allowSensitive` is set; the file tools never write
@@ -102,12 +162,13 @@ Mutations refuse lost updates; reads are never blocked.
   means "unknown".
 - **Serialisation.** Mutations of one canonical file (symlink aliases
   collapse; `realpath` returns on-disk case on macOS) run one at a time across
-  every pack in the process, through one module-global in-process coordinator
+  cooperating processes, through the shared durable workspace coordinator
   (`coordinator` option to override).
 - **Shell.** Every `run_command` / `run_tests` holds an exclusive workspace
-  lease from before spawn until the process tree is torn down; if survivors
-  remain it is held up to 2 s more and a warning is added when they are still
-  running. It waits for in-flight file mutations and blocks new ones (FIFO,
+  lease from before spawn until cleanup is positively verified. Surviving
+  processes or unknown cleanup preserve a durable workspace quarantine across
+  restart; a timeout or fresh approval never releases it. It waits for
+  in-flight file mutations and blocks new ones (FIFO,
   writer preference). No command is exempt: even `git log` can run config-
   defined programs. Waiting honours the call's abort signal.
   `CoordinatorObserver.onWaiting` reports who waits on whom.
@@ -119,8 +180,17 @@ Mutations refuse lost updates; reads are never blocked.
   files under `dir`, on top of the module-global in-process coordinator. A
   lock is stale when its pid is dead or its `ps` start time changed. Lock
   files hold the tool name and a hash of the label, never command text.
-  Limits: same host and pid namespace only; without `ps` only pid liveness is
-  checked.
+  Limits: same host and pid namespace only; missing process-identity evidence
+  blocks reclamation. Darwin start times have second precision, and inspection
+  followed by signaling is not atomic.
+- **Verified recovery.** `coordinator.recoverWorkspace(root)` returns structured
+  `clear`, `recovered`, or `blocked` evidence. Supported guardian commands are
+  frozen, their census is durably sealed before final termination, and cleanup
+  can resume after another crash. Active owners, incomplete historical evidence
+  and missing native shutdown acknowledgments remain blocked. No approval or
+  timeout bypasses these checks. Hidden detached descendants that remove their
+  marker between samples remain outside the supported census. See
+  [ADR 0020](../../docs/adr/0020-execution-ownership-and-recovery.md).
 - **Limitation.** An uncoordinated external editor takes none of these locks;
   the content checks detect its changes but cannot stop a write that lands
   between the last check and the rename.

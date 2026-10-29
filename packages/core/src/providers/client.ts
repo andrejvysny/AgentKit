@@ -42,6 +42,8 @@ export interface AiChatRequest {
 }
 
 export interface AiProviderClient {
+  /** Immutable positive integer ceiling applied by this client to every output request. */
+  readonly maxOutputTokens?: number;
   /** Calls beforeRequest for each network attempt, including internal retries. */
   readonly tracksTransportRequests?: boolean;
   /** Trusted transport metadata, when the client requires durable provider state. */

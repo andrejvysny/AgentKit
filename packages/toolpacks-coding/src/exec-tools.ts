@@ -1,11 +1,12 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
 import { asRecord, optInt, optString, reqString } from "./args.js";
 import { type Outcome, type PackEnv, defineTool } from "./context.js";
 import { CodingError } from "./errors.js";
+import type { ExecutionIntent } from "./coordination.js";
 import { confine } from "./paths.js";
-import { runBounded } from "./process.js";
+import { runOwnedCommand } from "./process-owned.js";
 import { sandboxAvailable, sandboxProfile, toolchainPaths } from "./sandbox.js";
 
 // `AUTH(?!OR)`: GIT_AUTHOR_NAME/EMAIL are commit identity, not credentials.
@@ -40,27 +41,6 @@ export function sanitizedEnv(
   return env;
 }
 
-const SURVIVOR_RECHECK_MS = 2000;
-
-/** Pids from `pids` still alive after waiting up to `ms` for them to exit. */
-async function waitForExit(pids: number[], ms: number): Promise<number[]> {
-  let alive = pids;
-  const deadline = Date.now() + ms;
-  while (alive.length > 0) {
-    alive = alive.filter((pid) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch {
-        return false; // ESRCH (gone) or EPERM (not ours): not ours to wait on
-      }
-    });
-    if (alive.length === 0 || Date.now() >= deadline) break;
-    await new Promise((done) => setTimeout(done, 50));
-  }
-  return alive;
-}
-
 interface ShellRequest {
   tool: string;
   command: string;
@@ -69,6 +49,16 @@ interface ShellRequest {
 }
 
 async function runShell(
+  env: PackEnv,
+  ctx: AiToolExecutionContext,
+  request: ShellRequest,
+): Promise<Outcome> {
+  return env.commands.run(ctx.signal, (signal) =>
+    executeShell(env, { ...ctx, signal }, request),
+  );
+}
+
+async function executeShell(
   env: PackEnv,
   ctx: AiToolExecutionContext,
   request: ShellRequest,
@@ -111,80 +101,80 @@ async function runShell(
         request.command,
       ]
     : ["-c", request.command];
-  // Every command may write, so every command takes the exclusive lease; it is
-  // held from before spawn until the process tree has been torn down (and, if
-  // survivors remain, until they are gone or a short re-check gives up).
-  const lease = await env.coordinator.acquireWorkspace({
-    root,
-    holder: {
-      ...(ctx.chatId !== undefined ? { chatId: ctx.chatId } : {}),
-      runId: ctx.runId,
-      ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
-      tool: request.tool,
-      label: request.command.slice(0, 200),
-    },
+  const admittedId = ctx.metadata?.["executionAttemptId"];
+  const executionAttemptId =
+    typeof admittedId === "string" && admittedId.length > 0
+      ? admittedId
+      : randomUUID();
+  const intent: ExecutionIntent = {
+    runId: ctx.runId,
+    ...(ctx.toolCallId !== undefined ? { toolCallId: ctx.toolCallId } : {}),
+    executionAttemptId,
+    execId: `${process.pid}:${executionAttemptId}`,
+  };
+  const run = await runOwnedCommand(env, ctx, root, request, intent, {
+    file,
+    args,
+    cwd: cwd.path,
+    env: sanitizedEnv(base, scratch),
+    timeoutMs: request.timeoutSec * 1000,
     signal: ctx.signal,
-    maxWaitMs: env.coordinationWaitMs,
+    scratch,
+    logName: `command-${env.clock()}-${randomBytes(4).toString("hex")}.log`,
+    limits: env.limits,
   });
-  let stragglers: number[] = [];
-  let run: Awaited<ReturnType<typeof runBounded>>;
-  try {
-    run = await runBounded({
-      file,
-      args,
-      cwd: cwd.path,
-      env: sanitizedEnv(base, scratch),
-      timeoutMs: request.timeoutSec * 1000,
-      signal: ctx.signal,
-      scratch,
-      logName: `command-${env.clock()}-${randomBytes(4).toString("hex")}.log`,
-      limits: env.limits,
-    });
-    stragglers = await waitForExit(run.teardown.survivors, SURVIVOR_RECHECK_MS);
-  } finally {
-    await lease.release();
-  }
   if (run.spawnError)
-    throw new CodingError("spawn_failed", run.spawnError.slice(0, 500));
-  const footer = run.timedOut
-    ? `[timed out after ${request.timeoutSec}s; process group killed${run.signal ? ` (${run.signal})` : ""}]`
-    : run.aborted
-      ? "[aborted; process group killed]"
-      : run.signal
-        ? `[killed by ${run.signal}]`
-        : `[exit code ${run.exitCode}]`;
+    throw new CodingError(
+      run.aborted ? "aborted" : "spawn_failed",
+      run.spawnError.slice(0, 500),
+    );
+  const footer =
+    run.teardown.state !== "stopped"
+      ? `[cleanup ${run.teardown.state}; workspace quarantined; exit code ${run.exitCode}]`
+      : run.timedOut
+        ? `[timed out after ${request.timeoutSec}s; process group killed${run.signal ? ` (${run.signal})` : ""}]`
+        : run.aborted
+          ? "[aborted; process group killed]"
+          : run.signal
+            ? `[killed by ${run.signal}]`
+            : `[exit code ${run.exitCode}]`;
   const parts = [run.output.replace(/\n+$/, ""), run.notice, footer].filter(
     (p) => p.length > 0,
   );
-  const ok = run.exitCode === 0 && !run.timedOut && !run.aborted;
+  const ok =
+    run.exitCode === 0 &&
+    !run.timedOut &&
+    !run.aborted &&
+    run.teardown.state === "stopped";
   return {
     ok,
     text: parts.join("\n"),
-    summary: run.timedOut
-      ? `timed out after ${request.timeoutSec}s`
-      : run.aborted
-        ? "aborted"
-        : run.signal
-          ? `killed by ${run.signal}`
-          : `exit code ${run.exitCode}`,
+    summary:
+      run.teardown.state !== "stopped"
+        ? `cleanup ${run.teardown.state}; workspace quarantined`
+        : run.timedOut
+          ? `timed out after ${request.timeoutSec}s`
+          : run.aborted
+            ? "aborted"
+            : run.signal
+              ? `killed by ${run.signal}`
+              : `exit code ${run.exitCode}`,
     truncated: run.truncated,
     warnings: [
       ...(sandboxed ? [] : ["sandbox is off: the command ran unconfined"]),
-      ...(run.teardown.survivors.length > 0
-        ? [`process_survivors: ${run.teardown.survivors.join(",")}`]
-        : []),
-      ...(stragglers.length > 0
-        ? [
-            `lease released while processes were still running: ${stragglers.join(",")}`,
-          ]
+      ...(run.teardown.state !== "stopped"
+        ? [`workspace_quarantined: cleanup ${run.teardown.state}`]
         : []),
     ],
     details: {
+      executionAttemptId,
       exitCode: run.exitCode,
       signal: run.signal,
       timedOut: run.timedOut,
       teardown: run.teardown,
-      ...(run.logPath ? { fullLog: run.logPath } : {}),
+      ...(run.logPath
+        ? { fullLog: run.logPath, fullLogTruncated: run.fullLogTruncated }
+        : {}),
     },
   };
 }
@@ -196,7 +186,7 @@ export function runCommandTool(env: PackEnv): AiTool {
       name: "run_command",
       effect: "write",
       capability: "process.exec",
-      description: `Run a shell command (bash -c) in the workspace${env.sandbox === "required" ? ", inside a macOS sandbox: writes only in the workspace, no network" + (env.network ? " restrictions lifted" : "") + ", no access to credentials" : " WITHOUT a sandbox"}. Use it for builds, tests and tooling. Do NOT use it to read or search files, list directories or inspect git: use read_file, list_dir, find_files, code_search, repo_map and git_inspect, which are cheaper and safer. Output keeps the last ${l.commandTailMaxLines} lines / ${l.commandTailMaxBytes / 1024} KB. Default timeout ${l.commandDefaultTimeoutSec}s, max ${l.commandMaxTimeoutSec}s.`,
+      description: `Run a shell command (bash -c) in the workspace${env.sandbox === "required" ? `, inside a macOS sandbox: writes only in the workspace, no network${env.network ? " restrictions lifted" : ""}, no access to credentials` : " WITHOUT a sandbox"}. Use it for builds, tests and tooling. Do NOT use it to read or search files, list directories or inspect git: use read_file, list_dir, find_files, code_search, repo_map and git_inspect, which are cheaper and safer. Output keeps the last ${l.commandTailMaxLines} lines / ${l.commandTailMaxBytes / 1024} KB. Default timeout ${l.commandDefaultTimeoutSec}s, max ${l.commandMaxTimeoutSec}s.`,
       inputSchema: {
         type: "object",
         properties: {

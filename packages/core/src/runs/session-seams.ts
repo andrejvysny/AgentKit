@@ -36,6 +36,10 @@ export interface AgentSuspendRequest {
   kind?: "input" | "approval";
   /** Approval only: sha-256 hex of the call's canonical JSON arguments. */
   argsSha256?: string;
+  /** Stable host-generated authorization generation for an uncertain operation. */
+  approvalGeneration?: string;
+  /** Approval only: host-computed workspace and execution-context binding. */
+  contextSha256?: string;
   /**
    * Approval only: the privilege the call asked for (a plan asking for a
    * permission mode, a command asking for a scope). It is RECORDED so the human
@@ -52,8 +56,14 @@ export interface AgentSuspendRequest {
 }
 
 /** Deterministic, so a restarted attempt derives the same id for the same call. */
-export function humanRequestId(runId: string, toolCallId: string): string {
-  return `hreq:${runId}:${toolCallId}`;
+export function humanRequestId(
+  runId: string,
+  toolCallId: string,
+  generation?: string,
+): string {
+  return generation === undefined
+    ? `hreq:${runId}:${toolCallId}`
+    : `hreq:${runId}:${toolCallId}:generation:${generation}`;
 }
 
 /** Error code for a second suspending call in the same step. */

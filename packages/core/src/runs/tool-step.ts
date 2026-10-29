@@ -179,6 +179,8 @@ export async function* executeToolBatch(
         expiresAt?: string;
         kind?: "input" | "approval";
         argsSha256?: string;
+        approvalGeneration?: string;
+        contextSha256?: string;
         requestedMode?: string;
         standing?: { digest: string; label: string };
       }
@@ -329,6 +331,12 @@ export async function* executeToolBatch(
             ...(request?.expiresAt ? { expiresAt: request.expiresAt } : {}),
             ...(request?.kind ? { kind: request.kind } : {}),
             ...(request?.argsSha256 ? { argsSha256: request.argsSha256 } : {}),
+            ...(request?.approvalGeneration
+              ? { approvalGeneration: request.approvalGeneration }
+              : {}),
+            ...(request?.contextSha256
+              ? { contextSha256: request.contextSha256 }
+              : {}),
             ...(request?.requestedMode
               ? { requestedMode: request.requestedMode }
               : {}),
@@ -357,8 +365,16 @@ export async function* executeToolBatch(
     sealed = true;
 
     if (suspendRequest) {
-      const { prompt, expiresAt, kind, argsSha256, requestedMode, standing } =
-        suspendRequest as AgentSuspendRequest;
+      const {
+        prompt,
+        expiresAt,
+        kind,
+        argsSha256,
+        approvalGeneration,
+        contextSha256,
+        requestedMode,
+        standing,
+      } = suspendRequest as AgentSuspendRequest;
       const fail = (message: string, code: string) =>
         failTool(
           stamp,
@@ -392,6 +408,8 @@ export async function* executeToolBatch(
           ...(expiresAt ? { expiresAt } : {}),
           ...(kind ? { kind } : {}),
           ...(argsSha256 ? { argsSha256 } : {}),
+          ...(approvalGeneration ? { approvalGeneration } : {}),
+          ...(contextSha256 ? { contextSha256 } : {}),
           ...(requestedMode ? { requestedMode } : {}),
           ...(standing ? { standing } : {}),
         };
@@ -563,7 +581,11 @@ export async function* executeToolBatch(
       runId,
       timestamp: nowIso(),
       data: {
-        requestId: humanRequestId(runId, suspension.tc.id),
+        requestId: humanRequestId(
+          runId,
+          suspension.tc.id,
+          suspension.approvalGeneration,
+        ),
         toolCallId: suspension.tc.id,
         toolName: suspension.tc.name,
         step,
@@ -571,6 +593,12 @@ export async function* executeToolBatch(
         ...(suspension.expiresAt ? { expiresAt: suspension.expiresAt } : {}),
         ...(suspension.kind ? { kind: suspension.kind } : {}),
         ...(suspension.argsSha256 ? { argsSha256: suspension.argsSha256 } : {}),
+        ...(suspension.approvalGeneration
+          ? { approvalGeneration: suspension.approvalGeneration }
+          : {}),
+        ...(suspension.contextSha256
+          ? { contextSha256: suspension.contextSha256 }
+          : {}),
         ...(suspension.requestedMode
           ? { requestedMode: suspension.requestedMode }
           : {}),

@@ -11,6 +11,7 @@ import type { MessageRecord } from "../ports/conversation-store.js";
 import { argsSha256Of } from "../sessions/hash.js";
 import type { TaskExecutionContext } from "../tasks/task-executor.js";
 import { fencedConversations } from "./fenced-conversations.js";
+import { uncertainOperationOf, type UncertainCall } from "./side-effects.js";
 
 /** Tool failure code for an approval whose call no longer matches its hash. */
 export const APPROVAL_MISMATCH_CODE = "approval_mismatch";
@@ -20,6 +21,8 @@ export interface ApprovalResume {
   resumeCalls: AiToolCall[];
   /** toolCallId to the approved argsSha256. */
   approvedCalls: Map<string, string>;
+  approvedRequests: Map<string, string>;
+  approvedGenerations: Map<string, string>;
   /** Last run record after any mismatch records were appended. */
   lastMessageId?: string;
 }
@@ -30,11 +33,18 @@ const APPROVE_MARKER = "approval:";
 export async function resolveApprovedCalls(
   store: AssistantStore,
   ctx: TaskExecutionContext,
-  input: { chatId: string; assistantMessageId: string; lastMessageId?: string },
+  input: {
+    chatId: string;
+    assistantMessageId: string;
+    lastMessageId?: string;
+    uncertain?: ReadonlyMap<string, UncertainCall>;
+  },
 ): Promise<ApprovalResume> {
   const none: ApprovalResume = {
     resumeCalls: [],
     approvedCalls: new Map(),
+    approvedRequests: new Map(),
+    approvedGenerations: new Map(),
     ...(input.lastMessageId === undefined
       ? {}
       : { lastMessageId: input.lastMessageId }),
@@ -55,7 +65,8 @@ export async function resolveApprovedCalls(
       record.appliedMessageId?.startsWith(APPROVE_MARKER) === true &&
       record.toolCallId !== undefined,
   );
-  if (approved.length === 0) return none;
+  const receipts = (await store.toolExecutions?.listByRun(taskId)) ?? [];
+  if (approved.length === 0 && receipts.length === 0) return none;
 
   const declared = new Map<string, AiToolCall>();
   const answered = new Set<string>();
@@ -80,6 +91,8 @@ export async function resolveApprovedCalls(
 
   const resumeCalls: AiToolCall[] = [];
   const approvedCalls = new Map<string, string>();
+  const approvedRequests = new Map<string, string>();
+  const approvedGenerations = new Map<string, string>();
   let lastMessageId = input.lastMessageId;
   for (const request of approved) {
     const toolCallId = request.toolCallId as string;
@@ -95,13 +108,46 @@ export async function resolveApprovedCalls(
       });
       continue;
     }
-    approvedCalls.set(toolCallId, expected);
-    resumeCalls.push(call);
+    const generation = (request.content as { approvalGeneration?: string })
+      .approvalGeneration;
+    const uncertainty =
+      input.uncertain === undefined
+        ? undefined
+        : uncertainOperationOf(input.uncertain, call.name, expected, taskId);
+    const consumed = receipts.some(
+      (receipt) => receipt.approvalRequestId === request.inputId,
+    );
+    if (
+      !consumed &&
+      (uncertainty === undefined ||
+        (generation !== undefined &&
+          generation === uncertainty.approvalGeneration))
+    ) {
+      approvedCalls.set(toolCallId, expected);
+      approvedRequests.set(toolCallId, request.inputId);
+      if (generation !== undefined)
+        approvedGenerations.set(toolCallId, generation);
+    }
+    if (!resumeCalls.some((resumed) => resumed.id === call.id))
+      resumeCalls.push(call);
+  }
+  // A committed result that never reached projection is replayed through the
+  // wrapper, which returns the receipt without invoking the tool again.
+  for (const receipt of receipts) {
+    const call = declared.get(receipt.toolCallId);
+    if (
+      call &&
+      !answered.has(call.id) &&
+      !resumeCalls.some((resumed) => resumed.id === call.id)
+    )
+      resumeCalls.push(call);
   }
   resumeCalls.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
   return {
     resumeCalls,
     approvedCalls,
+    approvedRequests,
+    approvedGenerations,
     ...(lastMessageId === undefined ? {} : { lastMessageId }),
   };
 }

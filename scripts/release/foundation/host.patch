@@ -12,20 +12,23 @@ diff --git a/packages/host/src/index.ts b/packages/host/src/index.ts
 diff --git a/packages/host/src/ports/assistant-store.ts b/packages/host/src/ports/assistant-store.ts
 --- a/packages/host/src/ports/assistant-store.ts
 +++ b/packages/host/src/ports/assistant-store.ts
-@@ -6,7 +6,6 @@ import type { ProposalStore } from "./proposal-store.js";
+@@ -6,8 +6,7 @@ import type { ProposalStore } from "./proposal-store.js";
  import type { ProviderStore } from "./provider-store.js";
  import type { SettingsStore } from "./settings-store.js";
  import type { TaskStore } from "./task-store.js";
 -import type { ProviderContinuationStore } from "./provider-continuation-store.js";
+ import type { ToolExecutionStore } from "./tool-execution-store.js";
  
  /**
   * The host's persistence, as one aggregate.
-@@ -29,8 +28,6 @@ export interface AssistantStore {
+@@ -29,10 +28,8 @@ export interface AssistantStore {
    providers: ProviderStore;
    settings: SettingsStore;
    outbox: OutboxStore;
 -  /** Trusted provider state; optional so existing host stores remain compatible. */
 -  continuations?: ProviderContinuationStore;
+   /** Durable mutation admission and approval consumption; required for mutating turns. */
+   toolExecutions?: ToolExecutionStore;
  
    /**
     * Run `fn` in a transaction, handing it a store view scoped to that
@@ -315,13 +318,12 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
          registry: new AiToolRegistry(),
          maxToolIterations: RETRY_MAX_TOOL_ITERATIONS,
        });
-@@ -1341,8 +1292,6 @@ export class TurnRunner implements TaskWorker {
-     input.ctx.signal.throwIfAborted();
+@@ -1380,7 +1331,5 @@ export class TurnRunner implements TaskWorker {
      const firstSeq = await this.deps.store.tasks.nextSeq(input.task.taskId);
      const generator = runAgentLoop({
 -      ...continuationRequest(input.providerContinuation),
 -      runContent: input.runContent,
-       client: input.client,
+       client,
        registry: input.registry,
        model: input.model,
 @@ -1396,11 +1345,6 @@ export class TurnRunner implements TaskWorker {
@@ -362,3 +364,25 @@ diff --git a/packages/host/src/turn/turn-runner.ts b/packages/host/src/turn/turn
          });
          // Cancellation can arrive before coalesced deltas reach the placeholder.
          await this.projector.replay(ctx, state);
+diff --git a/packages/host/src/context/bounded-context-client.ts b/packages/host/src/context/bounded-context-client.ts
+--- a/packages/host/src/context/bounded-context-client.ts
++++ b/packages/host/src/context/bounded-context-client.ts
+@@ -72,8 +72,4 @@ export async function boundedContextClient(
+       : { maxOutputTokens: client.maxOutputTokens }),
+-    ...(client.protocol === undefined ? {} : { protocol: client.protocol }),
+-    ...(client.connectionIdentity === undefined
+-      ? {}
+-      : { connectionIdentity: client.connectionIdentity }),
+     ...(client.tracksTransportRequests === undefined
+       ? {}
+       : { tracksTransportRequests: client.tracksTransportRequests }),
+@@ -133,8 +129,5 @@ function requestAdmission(
+   const toolTokens = estimateTools(request.tools ?? []);
+-  const extraTokens = (request.runContent?.messages ?? []).reduce(
+-    (sum, message) => sum + estimator.estimateMessage(message),
+-    0,
+-  );
++  const extraTokens = 0;
+   const messageTokens = request.messages.reduce(
+     (sum, message) => sum + estimator.estimateMessage(message),
+     0,

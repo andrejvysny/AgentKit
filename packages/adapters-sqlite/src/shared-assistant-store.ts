@@ -59,6 +59,10 @@ import { SqliteProviderStore } from "./sqlite/provider-store.js";
 import { SqliteProviderContinuationStore } from "./sqlite/provider-continuation-store.js";
 import { SqliteSettingsStore } from "./sqlite/settings-store.js";
 import { SqliteTaskStore } from "./sqlite/task-store.js";
+import {
+  ensureToolExecutionTables,
+  SqliteToolExecutionStore,
+} from "./sqlite/tool-execution-store.js";
 
 /**
  * The write queue of one handle: the seam a store over a SHARED connection
@@ -195,6 +199,7 @@ export class SharedSqliteAssistantStore implements AssistantStore {
   readonly conversations: ConversationStore;
   readonly tasks: TaskStore;
   readonly inputs: AgentInputStore;
+  readonly toolExecutions: SqliteToolExecutionStore;
   readonly summaries: ContextSummaryStore;
   readonly proposals: ProposalStore;
   readonly providers: ProviderStore;
@@ -215,6 +220,8 @@ export class SharedSqliteAssistantStore implements AssistantStore {
     // Optional table: created on open, never a schema-version step.
     ensureAgentInputTables(db);
     this.inputs = new SqliteAgentInputStore(this.conn, clock);
+    ensureToolExecutionTables(db);
+    this.toolExecutions = new SqliteToolExecutionStore(this.conn, clock);
     ensureContextSummaryTables(db);
     this.summaries = new SqliteContextSummaryStore(this.conn);
     // SECOND, IDENTICALLY-CONFIGURED INSTANCES rather than a mutable field on
@@ -280,6 +287,11 @@ export class SharedSqliteAssistantStore implements AssistantStore {
     return {
       ...view,
       inputs: new SqliteAgentInputStore(this.conn, this.clock, owner),
+      toolExecutions: new SqliteToolExecutionStore(
+        this.conn,
+        this.clock,
+        owner,
+      ),
       summaries: new SqliteContextSummaryStore(this.conn, owner),
       transaction: <T>(nested: (tx: AssistantStore) => Promise<T>) =>
         this.conn.withAsyncTx((nestedOwner) => {

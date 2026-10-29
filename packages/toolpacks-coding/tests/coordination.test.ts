@@ -286,8 +286,9 @@ describe("in-process coordinator", () => {
 describe("shell lease", () => {
   test("blocks a native edit until the command ends; reads never wait", async () => {
     const waits: CoordinationWait[] = [];
-    const coordinator = createInProcessWorkspaceCoordinator({
-      onWaiting: (w) => waits.push(w),
+    const coordinator = createLockDirWorkspaceCoordinator({
+      dir: tempDir("locks-"),
+      observer: { onWaiting: (w) => waits.push(w) },
     });
     const root = tempDir();
     const shell = await harness({ root, coordinator, chatId: chat("sh") });
@@ -318,7 +319,9 @@ describe("shell lease", () => {
   });
 
   test("every command waits, even plain git inspection", async () => {
-    const coordinator = createInProcessWorkspaceCoordinator();
+    const coordinator = createLockDirWorkspaceCoordinator({
+      dir: tempDir("locks-"),
+    });
     const root = tempDir();
     const h = await harness({ root, coordinator });
     const held = await coordinator.acquireWorkspace({
@@ -332,7 +335,9 @@ describe("shell lease", () => {
   });
 
   test("a busy workspace fails with workspace_busy naming the holder", async () => {
-    const coordinator = createInProcessWorkspaceCoordinator();
+    const coordinator = createLockDirWorkspaceCoordinator({
+      dir: tempDir("locks-"),
+    });
     const root = tempDir();
     const h = await harness({ root, coordinator, coordinationWaitMs: 150 });
     const held = await coordinator.acquireWorkspace({
@@ -359,7 +364,9 @@ describe("shell lease", () => {
   });
 
   test("cancel while waiting for the lease spawns nothing", async () => {
-    const coordinator = createInProcessWorkspaceCoordinator();
+    const coordinator = createLockDirWorkspaceCoordinator({
+      dir: tempDir("locks-"),
+    });
     const root = tempDir();
     const h = await harness({ root, coordinator });
     const held = await coordinator.acquireWorkspace({

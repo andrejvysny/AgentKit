@@ -458,6 +458,8 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
     const { requestId, toolCallId, toolName, prompt, expiresAt, kind } =
       event.data;
     const argsSha256 = event.data.argsSha256;
+    const approvalGeneration = event.data.approvalGeneration;
+    const contextSha256 = event.data.contextSha256;
     const requestedMode = event.data.requestedMode;
     const standing = event.data.standing;
     await store.inputs.createInput({
@@ -469,6 +471,8 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
         toolName,
         ...(kind === undefined ? {} : { kind }),
         ...(argsSha256 === undefined ? {} : { argsSha256 }),
+        ...(approvalGeneration === undefined ? {} : { approvalGeneration }),
+        ...(contextSha256 === undefined ? {} : { contextSha256 }),
         ...(requestedMode === undefined ? {} : { requestedMode }),
         ...(standing === undefined ? {} : { standing }),
       },
@@ -480,6 +484,8 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
           expiresAt,
           ...(kind === undefined ? {} : { kind }),
           ...(argsSha256 === undefined ? {} : { argsSha256 }),
+          ...(approvalGeneration === undefined ? {} : { approvalGeneration }),
+          ...(contextSha256 === undefined ? {} : { contextSha256 }),
           ...(requestedMode === undefined ? {} : { requestedMode }),
           ...(standing === undefined ? {} : { standing }),
         }),
@@ -576,10 +582,17 @@ export function createRunProjector(deps: RunProjectorDeps): RunProjector {
     async replay(ctx, state): Promise<void> {
       let afterSeq = -1;
       for (;;) {
-        const events = await store.tasks.listEvents(ctx.task.taskId, {
-          afterSeq,
-          limit: 256,
-        });
+        const events = await store.tasks
+          .listEvents(ctx.task.taskId, {
+            afterSeq,
+            limit: 256,
+          })
+          .catch(() => {
+            throw new AgentKitHostError(
+              "recovery_history_unreadable",
+              "Cannot read execution recovery history; mutations remain blocked.",
+            );
+          });
         if (events.length === 0) {
           await store.transaction(async (tx) => {
             await tx.tasks.appendEvents(ctx.task.taskId, [], {

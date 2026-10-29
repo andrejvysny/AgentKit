@@ -1,8 +1,3 @@
-import type {
-  AiToolErrorData,
-  AiToolLimits,
-  AiToolResult,
-} from "@agentkit/contracts";
 import { AiToolRegistry, type AiTool } from "@agentkit/core";
 import { AgentKitHostError } from "../errors.js";
 import {
@@ -11,22 +6,17 @@ import {
   type ToolContributionContext,
   type ToolSetContributor,
 } from "../ports/tool-contributor.js";
-import type {
-  ToolGuard,
-  ToolGuardContext,
-  ToolGuardVerdict,
-} from "../ports/tool-guard.js";
+import type { ToolGuard, ToolGuardContext } from "../ports/tool-guard.js";
 import type { AssistantStore } from "../ports/assistant-store.js";
-import type {
-  StandingApprovalKey,
-  StandingApprovalPolicy,
-} from "../ports/standing-approval.js";
-import { argsSha256Of } from "../sessions/hash.js";
-import {
-  MAX_STANDING_APPROVAL_LABEL,
-  findActiveGrant,
-} from "../sessions/standing-approvals.js";
+import type { StandingApprovalPolicy } from "../ports/standing-approval.js";
 import { isHookTimeout, withHookDeadline } from "./hook-deadline.js";
+import type { DurableExecution } from "./durable-execution.js";
+import { guarded } from "./guarded-tool.js";
+import { markDurableMutationWrapper } from "./admission-protocol.js";
+export {
+  TOOL_GUARD_REFUSED_CODE,
+  TOOL_GUARD_ERROR_MESSAGE,
+} from "./guarded-tool.js";
 
 export interface StageRegistryInput {
   contributors: readonly ToolSetContributor[];
@@ -61,6 +51,8 @@ export interface StageRegistryInput {
    * The store is read fresh on every call that reaches it, never cached.
    */
   standing?: { policy: StandingApprovalPolicy; store: AssistantStore };
+  /** Durable admission for turn execution; catalogue-only callers omit it. */
+  durable?: DurableExecution;
 }
 
 /** The staged tool set: the registry the run loop uses, plus who owns what. */
@@ -90,12 +82,6 @@ export interface StagedToolSet {
    */
   namespaces: ReadonlyMap<string, string>;
 }
-
-/** The `errorCode` a guard refusal reports to the model. */
-export const TOOL_GUARD_REFUSED_CODE = "tool_guard_refused";
-
-/** The reason reported when a `canExecute` guard threw instead of answering. */
-export const TOOL_GUARD_ERROR_MESSAGE = "guard error";
 
 /** What {@link StageRegistryInput} reports back about a contributor that failed. */
 export interface FailedContributor {
@@ -225,7 +211,20 @@ export async function stageRegistry(
     };
     if (!(await isVisible(guards, guardCtx, input.ctx))) continue;
     try {
-      registry.register(guarded(tool, guards, guardCtx, input.standing));
+      const wrapped = guarded(
+        tool,
+        guards,
+        guardCtx,
+        input.standing,
+        input.durable,
+      );
+      if (
+        input.durable !== undefined &&
+        (tool.definition.effect === "write" ||
+          input.durable.isMutating?.(tool.definition.name) === true)
+      )
+        markDurableMutationWrapper(wrapped);
+      registry.register(wrapped);
       namespaces.set(tool.definition.name, namespace);
     } catch (err) {
       // A name collision or an uncompilable input schema disqualifies ONE tool;
@@ -333,219 +332,4 @@ async function isVisible(
     }
   }
   return true;
-}
-
-interface ApprovableRefusal {
-  reason: string;
-  preview?: string;
-  requestedMode?: string;
-}
-
-function refusal(
-  ctx: { limits: AiToolLimits },
-  reason: string,
-): AiToolResult<unknown> {
-  const data: AiToolErrorData = {
-    errorCode: TOOL_GUARD_REFUSED_CODE,
-    errorMessage: reason,
-    phase: "guard",
-    // A guard's answer is a decision, not a fault: repeating the same
-    // call gets the same "no". Whatever would change the verdict is not
-    // another attempt.
-    retryable: false,
-  };
-  return {
-    ok: false,
-    summary: reason,
-    data,
-    // The code IS the payload here — same object in both slots so it
-    // survives into the envelope the model reads.
-    modelData: data,
-    sources: [],
-    warnings: [],
-    truncated: false,
-    limits: ctx.limits,
-  };
-}
-
-/**
- * Wrap a tool so every call passes the guard chain first.
- *
- * FAILS CLOSED, per call and per tool: a `canExecute` that throws becomes a
- * refusal carrying {@link TOOL_GUARD_ERROR_MESSAGE}, not an allow and not a run
- * failure. The rest of the turn — and every other tool — carries on.
- *
- * The wrapper returns an `ok: false` RESULT rather than throwing: a refusal is a
- * normal outcome of a call the model was allowed to make, and the run loop's
- * "tool ran and reported failure" path already emits `run.tool.failed`, feeds
- * the model the error envelope, and keeps the tool_call_id balanced. Throwing
- * would land on the `exec_failed` path and report a policy decision as a crash.
- *
- * When no guard implements `canExecute`, the ORIGINAL tool is returned — no
- * wrapper, no extra await on the hot path.
- */
-function guarded(
-  tool: AiTool,
-  guards: readonly ToolGuard[],
-  guardCtx: ToolGuardContext,
-  standing?: StageRegistryInput["standing"],
-): AiTool {
-  const gates = guards.filter((guard) => guard.canExecute !== undefined);
-  if (gates.length === 0) return tool;
-  // Call ids whose approval this wrapper (one per staged registry, so one per
-  // attempt) already spent.
-  const consumed = new Set<string>();
-  return {
-    definition: tool.definition,
-    async execute(ctx, args): Promise<AiToolResult<unknown>> {
-      ctx.signal?.throwIfAborted();
-      const snapshot = structuredClone(args);
-      // The execution-time identity of THIS call, layered over the staging
-      // snapshot. `guardCtx` is what the run was bound to when its tool set was
-      // decided (see `ToolGuardContext`); a guard that answers "may this
-      // session do this" needs the chat the call is actually running for, and
-      // only the tool execution context knows it. Without this a per-session
-      // permission policy would read the staging photograph and judge the wrong
-      // session — or none.
-      const callCtx: ToolGuardContext = {
-        ...guardCtx,
-        ...(ctx.chatId === undefined ? {} : { chatId: ctx.chatId }),
-        ...(ctx.scopeId === undefined
-          ? {}
-          : { scopeId: ctx.scopeId, toolCallId: ctx.toolCallId }),
-        arguments: snapshot,
-        runId: ctx.runId,
-        signal: ctx.signal,
-      };
-      const freeze = (value: unknown): unknown => {
-        if (value && typeof value === "object") {
-          Object.values(value).forEach(freeze);
-          Object.freeze(value);
-        }
-        return value;
-      };
-      freeze(snapshot);
-      const approvable: ApprovableRefusal[] = [];
-      for (const guard of gates) {
-        // A guard that throws REFUSES. Same reading as `isVisible`: a policy
-        // hook that could not answer has not allowed anything. The reason is a
-        // fixed string rather than the thrown message — the reason is fed to
-        // the model verbatim, and a stack trace or a connection string from a
-        // broken guard is not something to hand it.
-        let verdict: ToolGuardVerdict;
-        try {
-          verdict = await guard.canExecute!(callCtx);
-        } catch {
-          verdict = { allowed: false, reason: TOOL_GUARD_ERROR_MESSAGE };
-        }
-        if (verdict.allowed) continue;
-        // Denial wins: a refusal no human may overrule ends the call here,
-        // however many other guards would have accepted an approval.
-        if (verdict.approval === undefined) return refusal(ctx, verdict.reason);
-        approvable.push({ reason: verdict.reason, ...verdict.approval });
-      }
-      if (approvable.length > 0) {
-        const first = approvable[0] as ApprovableRefusal;
-        const toolCallId = ctx.toolCallId;
-        const argsSha256 = await argsSha256Of(snapshot);
-        const granted = ctx.metadata?.["approvedCalls"] as
-          | ReadonlyMap<string, string>
-          | undefined;
-        const spendable =
-          toolCallId !== undefined &&
-          granted?.get(toolCallId) === argsSha256 &&
-          !consumed.has(toolCallId);
-        // Asked only after the one-use approval has failed, and only for calls
-        // that reached here through approvable refusals (denial wins above).
-        const key: StandingApprovalKey | null =
-          !spendable && standing !== undefined
-            ? await standingKeyOf(standing, callCtx, approvable)
-            : null;
-        if (spendable) {
-          // One use: a second execute of the same call id in this attempt
-          // goes back to asking.
-          consumed.add(toolCallId);
-        } else if (
-          standing !== undefined &&
-          key !== null &&
-          (await hasActiveGrant(standing.store, callCtx.chatId, key.digest))
-        ) {
-          // A remembered approval of this exact call: run it, as the one-use
-          // branch does.
-        } else if (ctx.suspend) {
-          ctx.suspend({
-            prompt:
-              approvable.find((r) => r.preview !== undefined)?.preview ??
-              `Approve ${guardCtx.tool.name}?`,
-            kind: "approval",
-            argsSha256,
-            // What the CALL asked for, recorded so the human can see it and the
-            // host can ignore it. A plan may request `full_auto`; obeying that
-            // request would make the model the author of its own permissions.
-            ...(approvable.find((r) => r.requestedMode !== undefined)
-              ?.requestedMode === undefined
-              ? {}
-              : {
-                  requestedMode: approvable.find(
-                    (r) => r.requestedMode !== undefined,
-                  )!.requestedMode,
-                }),
-            ...(key === null
-              ? {}
-              : { standing: { digest: key.digest, label: key.label } }),
-          });
-          // The core discards a suspended call's result.
-          return refusal(ctx, first.reason);
-        } else {
-          return refusal(ctx, first.reason);
-        }
-      }
-      ctx.signal?.throwIfAborted();
-      return tool.execute(ctx, snapshot);
-    },
-  };
-}
-
-/**
- * The standing key for a call, or null. A policy that THROWS, or answers with a
- * malformed key, has not said "remember this": the call asks like any other.
- */
-async function standingKeyOf(
-  standing: NonNullable<StageRegistryInput["standing"]>,
-  callCtx: ToolGuardContext,
-  approvable: readonly ApprovableRefusal[],
-): Promise<StandingApprovalKey | null> {
-  if (callCtx.chatId === undefined) return null;
-  try {
-    const key = await standing.policy.keyFor(
-      callCtx,
-      approvable.map((r) => ({ reason: r.reason })),
-    );
-    if (
-      key === null ||
-      !/^[0-9a-f]{64}$/.test(key.digest) ||
-      key.label === "" ||
-      key.label.length > MAX_STANDING_APPROVAL_LABEL
-    )
-      return null;
-    return key;
-  } catch {
-    return null;
-  }
-}
-
-/** Whether the chat's CURRENT metadata holds an active grant for this digest. */
-async function hasActiveGrant(
-  store: AssistantStore,
-  chatId: string | undefined,
-  digest: string,
-): Promise<boolean> {
-  if (chatId === undefined) return false;
-  try {
-    const chat = await store.conversations.getChat(chatId);
-    return findActiveGrant(chat?.metadata, digest) !== undefined;
-  } catch {
-    // An unreadable store has not allowed anything: ask the human.
-    return false;
-  }
 }

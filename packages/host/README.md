@@ -232,6 +232,24 @@ turns only.
 
 ### Standing approvals
 
+Turn execution requires `AssistantStore.toolExecutions` for mutating tools.
+Both reference adapters provide it. Admission atomically fences the execution
+and consumes its exact approval before the tool body starts; no database
+transaction spans the body. Receipts bind the request, authorization generation,
+tool and argument hash, workspace context, run and attempt. Completed receipts
+restore their stored result without invoking the tool again.
+
+An admitted call without a result requires a fresh uncertainty approval, including
+after restart or an execution timeout. Its pending generation survives repeated
+Resume actions. Old sessions without receipts use their durable running events
+conservatively. Unreadable events or malformed receipts block recovery explicitly.
+Approval never clears workspace process quarantine. Hosts with custom adapters
+must implement the fenced receipt port before admitting mutations; direct
+`stageRegistry` execution outside `TurnRunner` opts in through `durable`.
+
+Contributor disposal awaits every hook and rejects with `AggregateError` if any
+required cleanup fails. Repeated or concurrent callers receive the same verdict.
+
 A human may approve an approvable tool call **and remember it** for the rest of
 the session. Opt in with `TurnRunnerDeps.standingApprovals`, a
 `StandingApprovalPolicy`: its `keyFor(ctx, refusals)` returns a

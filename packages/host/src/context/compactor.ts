@@ -421,15 +421,18 @@ export async function compactSessionContext(
   // The request has to fit the window itself: keep the newest part of an
   // oversized covered range rather than send something the provider refuses.
   const charBudget = Math.max(
-    2000,
+    0,
     (input.windowTokens - input.reserveTokens) * 4 -
       prompt.length -
       previousBlock.length -
-      SUMMARIZATION_SYSTEM_PROMPT.length,
+      SUMMARIZATION_SYSTEM_PROMPT.length -
+      "<conversation>\n\n</conversation>\n\n".length -
+      "[... earlier conversation omitted]\n\n".length -
+      8, // Two message estimates round upward; keep eight characters of slack.
   );
   let conversation = serializeConversation(covered);
   if (conversation.length > charBudget)
-    conversation = `[... earlier conversation omitted]\n\n${conversation.slice(-charBudget)}`;
+    conversation = `[... earlier conversation omitted]\n\n${charBudget > 0 ? conversation.slice(-charBudget) : ""}`;
 
   const messages: AiChatMessage[] = [
     { role: "system", content: SUMMARIZATION_SYSTEM_PROMPT },
@@ -440,6 +443,25 @@ export async function compactSessionContext(
   ];
 
   const usage: UsageEvent[] = [];
+  const estimatedInputTokens = messages.reduce(
+    (total, message) => total + input.estimator.estimateMessage(message),
+    0,
+  );
+  const maxOutputTokens = Math.min(
+    Math.max(1, Math.floor(input.reserveTokens * 0.8)),
+    Math.floor(input.reserveTokens),
+    Math.floor(input.windowTokens - estimatedInputTokens),
+    input.client.maxOutputTokens ?? Infinity,
+  );
+  if (
+    estimatedInputTokens + input.reserveTokens > input.windowTokens ||
+    !Number.isSafeInteger(maxOutputTokens) ||
+    maxOutputTokens < 1
+  )
+    return {
+      ok: false,
+      reason: "summarizer context overflow: no positive output allowance",
+    };
   let finishReason: string | undefined;
   let text = "";
   try {
@@ -450,7 +472,7 @@ export async function compactSessionContext(
       registry: new AiToolRegistry(),
       limits: input.limits,
       maxToolIterations: 1,
-      maxOutputTokens: Math.max(512, Math.floor(input.reserveTokens * 0.8)),
+      maxOutputTokens,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
       runId: `${input.taskId}:compaction:${input.compactionNumber}`,
     });

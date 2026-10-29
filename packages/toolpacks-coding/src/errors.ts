@@ -12,6 +12,19 @@ export class CodingError extends Error {
   }
 }
 
+/** Safety boundary must retain these results rather than treating disposal as clean. */
+export class CodingCleanupError extends CodingError {
+  constructor(
+    readonly cleanup: import("./coordination.js").ExecutionCleanup[],
+  ) {
+    super(
+      "workspace_quarantined",
+      "command cleanup is unresolved; workspace mutations remain blocked",
+    );
+    this.name = "CodingCleanupError";
+  }
+}
+
 /** The session's last-read version no longer matches the file on disk. */
 export function fileChangedError(label: string): CodingError {
   return new CodingError(

@@ -27,7 +27,10 @@ import {
 } from "@agentkit/testing";
 import { CodingAgentApp, type PendingApproval } from "../src/app.js";
 import { exportTo } from "../src/commands.js";
-import { CRASH_COMMAND } from "./fixtures/crash-command.js";
+import {
+  createLockDirWorkspaceCoordinator,
+  defaultWorkspaceCoordinationDir,
+} from "@agentkit/toolpacks-coding";
 
 const SOURCE_BUG =
   "export function sum(a: number, b: number): number {\n  return a - b;\n}\n";
@@ -472,14 +475,9 @@ describe("coding agent — the acceptance run", () => {
     const active = (await revived.app.state()).activeTurn;
     expect(active?.status).toBe("running");
 
-    // The model comes back and asks for the SAME command again — the naive
-    // retry. It must not simply run: an identical mutating call whose
-    // predecessor is uncertain parks for a human, who may be the only one who
-    // knows whether it landed.
-    revived.mock.setScript([
-      call("c2", "run_command", { command: CRASH_COMMAND }),
-      say("re-approved and done"),
-    ]);
+    // Recovery must request fresh authorization for the original call before
+    // asking the provider anything. The provider only summarizes the result.
+    revived.mock.setScript([say("re-approved after verified cleanup")]);
     // Adoption needs the dead lease to expire first, and on a loaded machine a
     // fixed sleep for that is a coin flip — so ask the runner until it agrees.
     // `recover()` is safe to repeat: while the lease is live nothing is adopted,
@@ -505,19 +503,57 @@ describe("coding agent — the acceptance run", () => {
       return false;
     };
     expect(await adopted()).toBe(true);
-    // The reconciled result is not persisted — inventing a record of an
-    // outcome nobody saw would be worse than admitting the gap — so the
-    // witness is what the model was actually told.
-    const told = revived.requests
-      .flat()
-      .filter(
-        (m) =>
-          typeof m.content === "string" &&
-          m.content.includes("tool_result_uncertain"),
+    expect(revived.requests).toHaveLength(0);
+    const pending = await revived.app.pendingApproval();
+    if (!pending) throw new Error("fresh uncertainty approval missing");
+    expect(pending?.toolName).toBe("run_command");
+    expect(pending?.prompt).toContain("uncertain");
+    expect(readFileSync(marker, "utf8")).toBe("ran\n");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await revived.app.recover();
+      await expect(
+        revived.app.resumeTurn(active!.turnId),
+      ).rejects.toMatchObject({ code: "invalid_state" });
+      expect((await revived.app.pendingApproval())?.requestId).toBe(
+        pending?.requestId,
       );
-    expect(told.length).toBe(1);
-    expect(told[0]!.content).toContain("may already have been applied");
-    expect(told[0]!.content).toContain("Do NOT retry");
+      expect(revived.requests).toHaveLength(0);
+      expect(readFileSync(marker, "utf8")).toBe("ran\n");
+    }
+
+    // Authorization and process ownership are independent. Workspace admission
+    // remains blocked until the user explicitly requests verified recovery.
+    const workspace = createLockDirWorkspaceCoordinator({
+      dir: defaultWorkspaceCoordinationDir(),
+      pollMs: 10,
+    });
+    await expect(
+      workspace.acquireWorkspace({
+        root: h.repo,
+        holder: {
+          runId: "competing",
+          tool: "write_file",
+          label: "competing writer",
+        },
+        maxWaitMs: 75,
+      }),
+    ).rejects.toMatchObject({ code: "workspace_busy" });
+    const recovered = await workspace.recoverWorkspace?.(h.repo);
+    expect(recovered?.state).toBe("recovered");
+    expect(recovered?.records).toContainEqual(
+      expect.objectContaining({
+        status: "recovered",
+        reason: "verified_stopped",
+      }),
+    );
+    expect(
+      recovered?.cleanup.every((cleanup) => cleanup.state === "stopped"),
+    ).toBe(true);
+    expect((await revived.app.pendingApproval())?.requestId).toBe(
+      pending?.requestId,
+    );
+    expect(revived.requests).toHaveLength(0);
+    expect(readFileSync(marker, "utf8")).toBe("ran\n");
 
     const asked: PendingApproval[] = [];
     const status = await revived.app.waitForTurn(active!.turnId, {
@@ -529,9 +565,10 @@ describe("coding agent — the acceptance run", () => {
     });
     expect(status).toBe("completed");
     expect(asked.map((a) => a.toolName)).toEqual(["run_command"]);
-    expect(asked[0]!.prompt).toContain("uncertain");
-    // Twice in total: the killed attempt, and the one a human approved. A
-    // third line would mean the runtime re-ran an uncertain call on its own.
+    expect(asked[0]!.requestId).toBe(pending.requestId);
+    expect(revived.requests).toHaveLength(1);
+    // Exactly one new execution follows both verified process recovery and
+    // fresh authorization. The provider never proposes a replacement call.
     expect(readFileSync(marker, "utf8")).toBe("ran\nran\n");
     await revived.app.close();
   }, 180_000);
