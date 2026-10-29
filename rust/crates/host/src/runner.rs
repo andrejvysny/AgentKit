@@ -432,6 +432,18 @@ impl AgentHost {
     }
 
     async fn heartbeat(&self, context: &ExecutionContext) -> HostResult<()> {
+        // The execution future and this heartbeat are polled by one select
+        // loop. Waiting for a parking executor's guard would stop that future
+        // from publishing its suspension and releasing the guard: skip this
+        // tick instead. A completed park intentionally no longer has a lease.
+        let Ok(suspension) = context.suspension.try_lock() else {
+            return Ok(());
+        };
+        if suspension.is_some() {
+            return Ok(());
+        }
+        // Hold the same guard through renewal. ParkSink cannot release this
+        // lease between our suspension check and the store's fence check.
         if let Err(error) = self
             .store
             .renew(
@@ -604,3 +616,7 @@ impl WorkerHandle {
             .map_err(|error| HostError::Execution(error.to_string()))?
     }
 }
+
+#[cfg(test)]
+#[path = "runner_tests.rs"]
+mod tests;
