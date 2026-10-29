@@ -807,7 +807,7 @@ mod tests {
         assert_eq!(details["teardown"]["escalated"], json!(false));
         assert_eq!(details["teardown"]["survivors"], json!([]));
 
-        let bad = run(&tool, json!({ "command": "/bin/false" })).await;
+        let bad = run(&tool, json!({ "command": "false" })).await;
         assert!(!bad.ok);
         assert_eq!(text(&bad), "[exit code 1]");
         assert_eq!(bad.summary.as_deref(), Some("exit code 1"));

@@ -837,18 +837,18 @@ mod tests {
         tokio::fs::create_dir_all(&deep).await.unwrap();
         let deep = deep.join("🎉🎉🎉🎉🎉🎉🎉");
         tokio::fs::create_dir_all(&deep).await.unwrap();
-        let root_str = tokio::fs::canonicalize(&root)
-            .await
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        // macOS's temporary directory may use /var as an alias of
+        // /private/var. Compare canonical paths on both sides.
+        let root = tokio::fs::canonicalize(&root).await.unwrap();
+        let deep = tokio::fs::canonicalize(&deep).await.unwrap();
+        let root_str = root.to_string_lossy().into_owned();
         let workspace = StandingApprovalWorkspace {
             root: root_str,
             identity: "test-env".into(),
             context: None,
         };
         let cwd = deep
-            .strip_prefix(tokio::fs::canonicalize(&root).await.unwrap())
+            .strip_prefix(&root)
             .unwrap()
             .to_string_lossy()
             .into_owned();

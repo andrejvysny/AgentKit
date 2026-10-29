@@ -347,7 +347,12 @@ mod tests {
             ),
         ]);
         let paths = toolchain_paths(&env);
-        let home_s = home.to_string_lossy().into_owned();
+        // toolchain_paths resolves aliases such as macOS's /var before
+        // returning directories, so expected paths use the same identity.
+        let home_s = std::fs::canonicalize(&home)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         assert!(paths.contains(&format!("{home_s}/bin")));
         assert!(paths.contains(&format!("{home_s}/.cargo")));
         // Any real dir under $HOME counts (the code checks existence, not a
