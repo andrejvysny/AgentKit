@@ -1,9 +1,10 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { discoverExecution } from "../src/process-discovery.js";
 import {
   parseDarwinProcessTable,
   parseLinuxProcessStat,
   signalIdentity,
+  startedStrictlyBefore,
   type ProcessIdentity,
   type ProcessInspection,
   type ProcessObservation,
@@ -304,4 +305,66 @@ test("failed sealed checkpoint retains frozen guardian without KILL", async () =
   expect(signals).not.toContain("SIGKILL");
   expect(signals).not.toContain("SIGCONT");
   expect(result).toMatchObject({ state: "survivors", scan: "unsupported" });
+});
+
+test("start ordering is proven only within one boot and strictly earlier ticks", () => {
+  expect(startedStrictlyBefore("proc-start:b:100", "proc-start:b:101")).toBe(
+    true,
+  );
+  expect(startedStrictlyBefore("proc-start:b:101", "proc-start:b:101")).toBe(
+    false,
+  );
+  expect(startedStrictlyBefore("proc-start:b:102", "proc-start:b:101")).toBe(
+    false,
+  );
+  expect(startedStrictlyBefore("proc-start:a:1", "proc-start:b:101")).toBe(
+    false,
+  );
+  expect(startedStrictlyBefore("ps-lstart:x", "ps-lstart:y")).toBe(false);
+});
+
+describe("unreadable same-UID processes (non-dumpable environ)", () => {
+  const root: ProcessIdentity = {
+    pid: 4000,
+    startIdentity: "proc-start:b:500",
+  };
+  const discover = (
+    unreadable: ProcessIdentity[],
+    rootIdentity?: ProcessIdentity,
+  ) =>
+    discoverExecution(
+      { execId: "execution", ...(rootIdentity ? { rootIdentity } : {}) },
+      {
+        marked: async () => ({ processes: [], complete: true, unreadable }),
+        table: async () => ({ processes: [], complete: true }),
+      },
+    );
+
+  test("one that started before the execution root cannot carry its marker", async () => {
+    const daemon = { pid: 90, startIdentity: "proc-start:b:10" };
+    expect((await discover([daemon], root)).complete).toBe(true);
+  });
+
+  test("one that started at or after the root stays unproven", async () => {
+    for (const ticks of [500, 501])
+      expect(
+        (
+          await discover(
+            [{ pid: 4001, startIdentity: `proc-start:b:${ticks}` }],
+            root,
+          )
+        ).complete,
+      ).toBe(false);
+  });
+
+  test("without a root identity nothing can be excluded", async () => {
+    expect(
+      (await discover([{ pid: 90, startIdentity: "proc-start:b:10" }]))
+        .complete,
+    ).toBe(false);
+  });
+
+  test("an already-known identity needs no marker proof", async () => {
+    expect((await discover([root], root)).complete).toBe(true);
+  });
 });

@@ -71,10 +71,22 @@ export interface MarkedIdentity extends MarkedProcess, ProcessIdentity {
 export interface MarkedDiscovery {
   processes: MarkedIdentity[];
   complete: boolean;
+  /**
+   * Same-UID processes whose environment the kernel refuses to show
+   * (non-dumpable: ssh-agent, gpg-agent, CI daemons). Their marker is
+   * unproven either way; each consumer decides against its own reference.
+   */
+  unreadable?: ProcessIdentity[];
+}
+
+function isAccessDenied(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "EACCES" || code === "EPERM";
 }
 
 async function linuxMarked(): Promise<MarkedDiscovery> {
   const processes: MarkedIdentity[] = [];
+  const unreadable: ProcessIdentity[] = [];
   let complete = true;
   for (const name of await readdir("/proc")) {
     if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
@@ -88,7 +100,19 @@ async function linuxMarked(): Promise<MarkedDiscovery> {
         continue;
       }
       if (before.state === "zombie") continue;
-      const raw = await readFile(`/proc/${name}/environ`, "latin1");
+      const raw = await readFile(`/proc/${name}/environ`, "latin1").catch(
+        (error: unknown) => {
+          if (isAccessDenied(error)) return undefined;
+          throw error;
+        },
+      );
+      if (raw === undefined) {
+        unreadable.push({
+          pid: before.pid,
+          startIdentity: before.startIdentity,
+        });
+        continue;
+      }
       const mark = parseEnviron(raw, Number(name));
       if (!mark) continue;
       const command = await readFile(`/proc/${name}/cmdline`, "latin1");
@@ -112,7 +136,7 @@ async function linuxMarked(): Promise<MarkedDiscovery> {
       if (code !== "ENOENT" && code !== "ESRCH") complete = false;
     }
   }
-  return { processes, complete };
+  return { processes, complete, unreadable };
 }
 
 /** Partial discoveries are retained when other processes cannot be inspected. */

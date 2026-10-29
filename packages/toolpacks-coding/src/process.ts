@@ -112,6 +112,9 @@ export async function sweepOrphansDetailed(
     const find = async (): Promise<ProcessDiscovery> => {
       const marked = await scanMarkedIdentities();
       const identities: ProcessIdentity[] = [];
+      // Unreadable processes do not make the sweep unknown: it has no
+      // reference time, and each workspace execution is durably recorded
+      // before spawn and reconciled against its own root identity.
       let complete = marked.complete;
       // Durable workspace reconciliation owns guardian groups; sweeping their
       // leader first would destroy the identity anchor needed for recovery.

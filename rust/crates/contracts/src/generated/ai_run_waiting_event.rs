@@ -67,6 +67,18 @@ pub struct AiRunWaitingEventData {
     )]
     pub args_sha256: Optional<AiProviderKind>,
     #[serde(
+        rename = "approvalGeneration",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub approval_generation: Optional<AiProviderKind>,
+    #[serde(
+        rename = "contextSha256",
+        default,
+        skip_serializing_if = "Optional::is_absent"
+    )]
+    pub context_sha256: Optional<AiProviderKind>,
+    #[serde(
         rename = "requestedMode",
         default,
         skip_serializing_if = "Optional::is_absent"
@@ -92,6 +104,8 @@ crate::impl_json_deserialize!(AiRunWaitingEventData, |value: Value| {
         expires_at: crate::optional_field(&mut object, "expiresAt")?,
         kind: crate::optional_field(&mut object, "kind")?,
         args_sha256: crate::optional_field(&mut object, "argsSha256")?,
+        approval_generation: crate::optional_field(&mut object, "approvalGeneration")?,
+        context_sha256: crate::optional_field(&mut object, "contextSha256")?,
         requested_mode: crate::optional_field(&mut object, "requestedMode")?,
         standing: crate::optional_field(&mut object, "standing")?,
         extra: object.into_iter().collect(),

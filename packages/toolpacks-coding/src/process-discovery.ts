@@ -1,6 +1,7 @@
 import {
   identityKey,
   readProcessTable,
+  startedStrictlyBefore,
   type ProcessDiscovery,
   type ProcessIdentity,
   type ProcessTable,
@@ -68,6 +69,30 @@ export async function discoverExecution(
   return {
     identities: [...identities.values()],
     complete:
-      marked.complete && table.complete && (grouped.length === 0 || anchored),
+      marked.complete &&
+      table.complete &&
+      (grouped.length === 0 || anchored) &&
+      unreadableExcluded(
+        marked.unreadable ?? [],
+        identities,
+        input.rootIdentity,
+      ),
   };
+}
+
+/**
+ * The marker is inherited through the environment, so a process that began
+ * before this execution's root cannot carry it. Anything newer stays unproven.
+ */
+function unreadableExcluded(
+  unreadable: readonly ProcessIdentity[],
+  identities: ReadonlyMap<string, ProcessIdentity>,
+  root: ProcessIdentity | undefined,
+): boolean {
+  return unreadable.every(
+    (identity) =>
+      identities.has(identityKey(identity)) ||
+      (root !== undefined &&
+        startedStrictlyBefore(identity.startIdentity, root.startIdentity)),
+  );
 }

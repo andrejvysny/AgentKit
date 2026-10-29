@@ -209,6 +209,20 @@ export function identityKey(identity: ProcessIdentity): string {
   return `${identity.pid}\0${identity.startIdentity}`;
 }
 
+const PROC_START = /^proc-start:(.+):(\d+)$/;
+
+/**
+ * True only when `a` provably began before `b`: same boot, strictly fewer
+ * start ticks. A shared tick, another boot or the coarse darwin format is
+ * never proof.
+ */
+export function startedStrictlyBefore(a: string, b: string): boolean {
+  const left = PROC_START.exec(a);
+  const right = PROC_START.exec(b);
+  if (!left || !right || left[1] !== right[1]) return false;
+  return BigInt(left[2]!) < BigInt(right[2]!);
+}
+
 /** POSIX inspection followed by kill is not an atomic kernel identity handle. */
 export async function signalIdentity(
   identity: ProcessIdentity,
