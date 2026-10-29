@@ -191,6 +191,7 @@ fn admission(
     let parent = user_message_id.clone();
     QueueOrStage {
         session_id: "chat".into(),
+        task_kind: "test".into(),
         input: CreateAgentInput {
             input_id: id.into(),
             session_id: "chat".into(),
@@ -626,6 +627,7 @@ async fn settle_converts_the_first_follow_up_and_cancels_cancel_steers() {
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![candidate("fu1"), candidate("fu2")],
                 staging: Some(staging(json!({"chatId":"chat"}))),
             },
@@ -741,6 +743,7 @@ async fn a_settlement_promotes_an_input_the_snapshot_missed() {
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![],
                 staging: Some(staging(json!({"chatId":"chat"}))),
             },
@@ -828,6 +831,7 @@ async fn a_promoted_turn_carries_the_current_config_not_the_settling_turns() {
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![],
                 staging: Some(staging(
                     json!({"chatId":"chat","model":"new-model","providerId":"p2"}),
@@ -880,6 +884,7 @@ async fn a_missed_input_stays_pending_without_the_current_config() {
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![],
                 staging: None,
             },
@@ -921,6 +926,7 @@ async fn an_input_admitted_after_the_settlement_committed_still_becomes_a_turn()
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![],
                 staging: None,
             },
@@ -992,6 +998,7 @@ async fn admission_queues_behind_a_live_turn_for_its_settlement_to_promote() {
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![],
                 staging: Some(staging(json!({"chatId":"chat"}))),
             },
@@ -1103,6 +1110,7 @@ async fn only_the_top_level_settle_policy_governs_content_markers_are_inert() {
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![],
                 staging: None,
             },
@@ -1250,6 +1258,7 @@ async fn a_refused_settle_conversion_leaves_the_turn_running() {
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![poisoned],
                 staging: None,
             },
@@ -1287,6 +1296,7 @@ async fn a_refused_settle_conversion_leaves_the_turn_running() {
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![],
                 staging: None,
             },
@@ -1341,6 +1351,7 @@ async fn conversion_refuses_a_busy_scope_and_failure_keeps_the_queue_pending() {
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![StagedCandidate {
                     input_id: "fu1".into(),
                     task: SubmitTask {
@@ -1399,6 +1410,7 @@ async fn conversion_refuses_a_busy_scope_and_failure_keeps_the_queue_pending() {
                 messages: vec![],
             },
             SessionSettle {
+                expected_descriptor: None,
                 convert: vec![StagedCandidate {
                     input_id: "fu1".into(),
                     task: SubmitTask {
@@ -2287,5 +2299,117 @@ async fn a_park_and_its_request_survive_reopening_the_database() {
     assert_eq!(
         store.get_task("run").await.unwrap().unwrap().status,
         TaskStatus::Queued
+    );
+}
+
+/// A stale descriptor must reject the whole commit, before the task becomes
+/// terminal, its lease is released, a steer is cancelled, or a queued input
+/// is converted. Retrying with a refreshed plan can then commit all of them.
+#[tokio::test]
+async fn stale_settlement_descriptor_preserves_the_task_lease_and_queue() {
+    let store = store();
+    let lease = running_turn(&store, "run").await;
+    store
+        .mutate_chat("chat", 1550, |chat| {
+            chat.metadata[SESSION_METADATA_KEY] = json!({"model":"new-model"});
+            Ok(())
+        })
+        .await
+        .unwrap();
+    store
+        .create_input(follow_up("next", json!({"content":"next"})), 1600)
+        .await
+        .unwrap();
+    let mut steer = admission(
+        "s-cancel",
+        AgentInputKind::Steer,
+        Some(AgentInputSettlePolicy::Cancel),
+        true,
+    );
+    steer.now = 1601;
+    store.queue_or_stage_turn(steer).await.unwrap();
+    let settle = SettleTask {
+        fence: lease.fence(),
+        now: 2000,
+        status: TaskStatus::Completed,
+        error: None,
+        events: vec![],
+        messages: vec![],
+    };
+    let stale = staging(json!({"chatId":"chat", "model":"old-model"}));
+    let result = store
+        .settle_session(
+            settle.clone(),
+            SessionSettle {
+                expected_descriptor: Some(json!({"model":"old-model"})),
+                convert: vec![],
+                staging: Some(stale),
+            },
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(StoreError::SessionDescriptorChanged(_))
+    ));
+    assert_eq!(
+        store.get_task("run").await.unwrap().unwrap().status,
+        TaskStatus::Running
+    );
+    assert_eq!(
+        store
+            .get_input("s-cancel".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending
+    );
+    assert_eq!(
+        store
+            .get_input("next".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending
+    );
+    assert!(store.get_task("turn:next").await.unwrap().is_none());
+    let fresh = staging(json!({"chatId":"chat", "model":"new-model"}));
+    store
+        .settle_session(
+            settle,
+            SessionSettle {
+                expected_descriptor: Some(json!({"model":"new-model"})),
+                convert: vec![],
+                staging: Some(fresh),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get_task("run").await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    assert_eq!(
+        store
+            .get_input("s-cancel".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Cancelled
+    );
+    assert_eq!(
+        store
+            .get_input("next".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Converted
+    );
+    assert_eq!(
+        store.get_task("turn:next").await.unwrap().unwrap().payload["model"],
+        json!("new-model")
     );
 }

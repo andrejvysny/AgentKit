@@ -65,7 +65,7 @@ jobs:
         # isolated temp directory OUTSIDE the repo, and drive the FULL
         # acceptance lifecycle through the INSTALLED @agentkit/native — send
         # → committed events → approval wait → answer → resume → terminal
-        # receipt → cancel → awaited close — plus a fresh-process reopen with
+        # completion → cancel → awaited close — plus a fresh-process reopen with
         # durable replay, under both Bun and node, with no Rust toolchain
         # reachable on PATH. Runs on EVERY matrix OS (Linux and macOS): the
         # packed artifact a consumer installs must qualify on the same SHA

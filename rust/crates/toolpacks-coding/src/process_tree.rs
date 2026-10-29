@@ -207,12 +207,17 @@ struct ProcScan {
     /// age checks could not exclude as foreign: marked survivors may hide
     /// in there.
     suspects: Vec<i32>,
+    /// Pids whose environment was actually readable. Absence from a pass
+    /// is not a successful classification: the process may have appeared
+    /// after that pass visited its /proc bucket.
+    classified: HashSet<i32>,
 }
 
 async fn scan_proc(spawn_floor_ms_ago: Option<u64>) -> Result<ProcScan, std::io::Error> {
     let my_euid = read_status_euid("self").await;
     let mut found = Vec::new();
     let mut suspects = Vec::new();
+    let mut classified = HashSet::new();
     let mut dir = tokio::fs::read_dir("/proc").await?;
     loop {
         // A transient iteration error (a pid vanishing under the cursor,
@@ -245,6 +250,7 @@ async fn scan_proc(spawn_floor_ms_ago: Option<u64>) -> Result<ProcScan, std::io:
         };
         match tokio::fs::read(format!("/proc/{name}/environ")).await {
             Ok(raw) => {
+                classified.insert(pid);
                 // latin1 in TS: every byte is one char; NUL splitting and the ASCII
                 // prefix check are byte-faithful under a lossy decode.
                 let raw = String::from_utf8_lossy(&raw);
@@ -278,7 +284,33 @@ async fn scan_proc(spawn_floor_ms_ago: Option<u64>) -> Result<ProcScan, std::io:
     Ok(ProcScan {
         marks: found,
         suspects,
+        classified,
     })
+}
+
+/// Combine two successful scans without treating a missing directory entry
+/// as evidence of a readable environment. Either pass can discover a new
+/// suspect; only an actual successful read by the other pass can resolve it.
+fn merge_proc_scans(a: ProcScan, b: ProcScan) -> (Vec<MarkedProcess>, Vec<i32>) {
+    let mut suspects = Vec::new();
+    for pid in a.suspects {
+        if !b.classified.contains(&pid) && !suspects.contains(&pid) {
+            suspects.push(pid);
+        }
+    }
+    for pid in b.suspects {
+        if !a.classified.contains(&pid) && !suspects.contains(&pid) {
+            suspects.push(pid);
+        }
+    }
+    let mut marks = a.marks;
+    for mark in b.marks {
+        if !marks.iter().any(|seen| seen.pid == mark.pid) {
+            marks.push(mark);
+        }
+    }
+    suspects.retain(|pid| !marks.iter().any(|mark| mark.pid == *pid));
+    (marks, suspects)
 }
 
 /// The marked-scan result with its completeness evidence: `marks` are the
@@ -328,27 +360,12 @@ pub async fn scan_marked_outcome(platform: &str, spawned_at_ms: Option<u64>) -> 
             // modifying work onto a live effect), so take the UNION of two
             // passes. Any one successful pass is enough to scan; only when
             // every pass fails is the platform unscannable. Suspects are
-            // INTERSECTED: a pid whose environ one pass read cleanly is
-            // positively classified, no matter what the other pass hit.
+            // resolved only by an actual readable environment in the other
+            // pass; absence from that pass is not positive classification.
             let first = scan_proc(spawn_floor_ms_ago).await;
             let second = scan_proc(spawn_floor_ms_ago).await;
             match (first, second) {
-                (Ok(a), Ok(b)) => {
-                    let mut marks = a.marks;
-                    for mark in b.marks {
-                        if !marks.iter().any(|seen| seen.pid == mark.pid) {
-                            marks.push(mark);
-                        }
-                    }
-                    let suspects = a
-                        .suspects
-                        .into_iter()
-                        .filter(|pid| {
-                            b.suspects.contains(pid) && !marks.iter().any(|mark| mark.pid == *pid)
-                        })
-                        .collect();
-                    (marks, suspects)
-                }
+                (Ok(a), Ok(b)) => merge_proc_scans(a, b),
                 (Ok(a), Err(_)) | (Err(_), Ok(a)) => (a.marks, a.suspects),
                 (Err(_), Err(_)) => return None,
             }
@@ -558,6 +575,48 @@ async fn sample_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scan_with(suspects: Vec<i32>, classified: &[i32]) -> ProcScan {
+        ProcScan {
+            marks: vec![],
+            suspects,
+            classified: classified.iter().copied().collect(),
+        }
+    }
+
+    #[test]
+    fn scans_retain_a_suspect_absent_from_the_other_pass() {
+        let (_, later) = merge_proc_scans(scan_with(vec![], &[]), scan_with(vec![42], &[]));
+        assert_eq!(later, vec![42], "a newly appeared suspect is unresolved");
+        let (_, earlier) = merge_proc_scans(scan_with(vec![42], &[]), scan_with(vec![], &[]));
+        assert_eq!(
+            earlier,
+            vec![42],
+            "a missing entry is not a readable environ"
+        );
+    }
+
+    #[test]
+    fn scans_resolve_a_suspect_only_after_a_successful_classification() {
+        let (_, later_read) = merge_proc_scans(scan_with(vec![42], &[]), scan_with(vec![], &[42]));
+        assert!(
+            later_read.is_empty(),
+            "a readable unrelated process may clear"
+        );
+        let (_, earlier_read) =
+            merge_proc_scans(scan_with(vec![], &[42]), scan_with(vec![42], &[]));
+        assert!(earlier_read.is_empty());
+
+        let mut marked = scan_with(vec![], &[42]);
+        marked.marks.push(MarkedProcess {
+            pid: 42,
+            exec_id: "123:nonce".into(),
+            owner_pid: 123,
+        });
+        let (marks, suspects) = merge_proc_scans(scan_with(vec![42], &[]), marked);
+        assert_eq!(marks.len(), 1, "positive marker classification is retained");
+        assert!(suspects.is_empty());
+    }
 
     #[test]
     fn parse_exec_id_accepts_only_owner_token() {

@@ -37,6 +37,9 @@ impl Default for HostOptions {
 /// candidates its snapshot named, and the authoritative config for the ones
 /// it could not have named.
 pub struct SettlePlan {
+    /// Persisted descriptor used to decide this plan, including a refusal to
+    /// stage unsupported config. The store checks it atomically at settlement.
+    pub expected_descriptor: Option<Value>,
     /// The session descriptor snapshot every NEWLY STAGED turn must carry
     /// (the staging contract). `None` means the host cannot supply a current
     /// config, so the settlement promotes nothing it did not pre-stage — the
@@ -66,6 +69,7 @@ pub trait SessionFlushPlanner: Send + Sync {
     async fn settle_plan(&self, settling: &TaskRecord, completed: bool) -> HostResult<SettlePlan> {
         let _ = (settling, completed);
         Ok(SettlePlan {
+            expected_descriptor: None,
             staging: None,
             convert: vec![],
         })
@@ -505,18 +509,41 @@ impl AgentHost {
             // or cancelled turn must leave the queue pending until an
             // explicit flushQueue.
             Some(planner) => {
-                let plan = planner
-                    .settle_plan(&context.task, status == TaskStatus::Completed)
-                    .await?;
-                self.store
-                    .settle_session(
-                        settle,
-                        agentkit_store::SessionSettle {
-                            convert: plan.convert,
-                            staging: plan.staging,
-                        },
-                    )
-                    .await?;
+                // A model/config patch can commit after the planner's read
+                // but before the settlement transaction. Re-plan against the
+                // descriptor fence without re-running the completed executor.
+                // Sustained changes must surface a bounded conflict, not spin.
+                // Exhaustion propagates the typed store error through run_once
+                // or WorkerHandle: the task/lease and queue remain unchanged
+                // for the host's recovery policy, including execution receipts.
+                const MAX_SETTLE_PLANS: usize = 8;
+                for attempt in 0..MAX_SETTLE_PLANS {
+                    let plan = planner
+                        .settle_plan(&context.task, status == TaskStatus::Completed)
+                        .await?;
+                    let mut input = settle.clone();
+                    input.now = self.runtime.now_ms();
+                    match self
+                        .store
+                        .settle_session(
+                            input,
+                            agentkit_store::SessionSettle {
+                                convert: plan.convert,
+                                staging: plan.staging,
+                                expected_descriptor: plan.expected_descriptor,
+                            },
+                        )
+                        .await
+                    {
+                        Ok(_) => break,
+                        Err(agentkit_store::StoreError::SessionDescriptorChanged(_))
+                            if attempt + 1 < MAX_SETTLE_PLANS =>
+                        {
+                            self.heartbeat(context).await?;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
             }
             None => {
                 self.store.settle(settle).await?;

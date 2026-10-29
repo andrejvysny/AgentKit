@@ -100,6 +100,19 @@ impl ChildGuard {
         let _ = child.wait();
         assert!(!pid_alive(pid), "child {pid} still alive after kill+wait");
     }
+
+    fn spawn_marked(execution_id: &str) -> (i32, Self) {
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("300")
+            .env("AGENTKIT_EXEC_ID", execution_id)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("spawn marked child");
+        (child.id() as i32, Self(Some(child)))
+    }
 }
 
 impl Drop for ChildGuard {
@@ -186,6 +199,92 @@ async fn wait_until<F: FnMut() -> bool>(mut done: F, seconds: u64, what: &str) {
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
+}
+
+/// A process whose environment becomes readable between discovery passes
+/// is still ours when that read exposes the execution marker. The public
+/// driver must retain it as a survivor and block the next modifying lease.
+#[tokio::test(flavor = "multi_thread")]
+async fn suspect_reclassified_as_marked_stays_blocking() {
+    let _serial = gate().lock().await;
+    let workspace = tempfile::tempdir().expect("workspace");
+    let root = workspace.path().to_string_lossy().into_owned();
+    let execution_id = format!("{}:{}", std::process::id(), uuid::Uuid::new_v4().simple());
+    let (pid, child) = ChildGuard::spawn_marked(&execution_id);
+    let coordinator = create_in_process_workspace_coordinator(None);
+    coordinator
+        .record_execution_intent(&ExecutionIntent {
+            root: root.clone(),
+            identity: CommandCleanupIdentity {
+                execution_id: execution_id.clone(),
+                owner_pid: i64::from(std::process::id()),
+                pgid: None,
+                spawned_at_ms: now_wall_ms(),
+            },
+            holder: holder("reclassified"),
+            spawned: false,
+        })
+        .await
+        .unwrap();
+    let lease = acquire(coordinator.as_ref(), &root, "reclassified", 2_000)
+        .await
+        .unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&calls);
+    let find: FindFn = Arc::new(move || {
+        let first = counter.fetch_add(1, Ordering::SeqCst) == 0;
+        Box::pin(async move {
+            Some(if first {
+                Discovery {
+                    marked: vec![],
+                    suspects: vec![pid],
+                }
+            } else {
+                Discovery {
+                    marked: vec![pid],
+                    suspects: vec![],
+                }
+            })
+        })
+    });
+    let outcome = spawn_owned_execution_with_discovery(
+        RunSpec {
+            file: "/bin/sh".into(),
+            args: vec!["-c".into(), "true".into()],
+            cwd: root.clone(),
+            env: Default::default(),
+            timeout_ms: 15_000,
+            cancellation: None,
+            scratch: root.clone(),
+            log_name: "reclassified.log".into(),
+            limits: CodingLimits::default(),
+            execution_id: execution_id.clone(),
+            pgid_slot: None,
+        },
+        lease,
+        Arc::clone(&coordinator),
+        root.clone(),
+        holder("reclassified"),
+        Some(find),
+    )
+    .await_result()
+    .await;
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+    assert!(pid_alive(pid), "this late discovery has not been signalled");
+    assert!(outcome.cleanup.uncertainty().survivors.contains(&pid));
+    assert!(outcome.quarantine_error.is_none());
+    let journal = journal_dir(&root).await;
+    assert!(journal.join("quarantine.json").exists());
+    assert!(journal.join(intent_file(&execution_id)).exists());
+
+    drop(coordinator);
+    let reopened = create_in_process_workspace_coordinator(None);
+    let error = acquire(reopened.as_ref(), &root, "next-writer", 200)
+        .await
+        .expect_err("the still-live marked process must block the next lease");
+    assert_eq!(error.code, "workspace_quarantined");
+    child.reap();
+    let _ = std::fs::remove_dir_all(journal);
 }
 
 /// Deterministic reproduction of the assessor scenario via the discovery

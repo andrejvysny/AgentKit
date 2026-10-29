@@ -12,13 +12,17 @@
  *                                approval wait (auto_edit command MUST ask —
  *                                shared permission matrix through the
  *                                installed artifact) → answer → resume →
- *                                terminal receipt → cancel a live turn →
+ *                                terminal completion → cancel a live turn →
  *                                awaited close, no fabricated effects.
  *   consumer.mjs reopen <dbPath> FRESH-PROCESS reopen of the same database:
  *                                durable replay with NO tool registered —
  *                                a re-dispatch would strand an unsettled
  *                                callback, and completion text must be
  *                                present from durable state alone.
+ *
+ * The public export contains durable task/message projections and input
+ * records, not private tool receipt rows. This gate verifies those public
+ * outcomes; direct receipt-state assertions remain in the Rust suites.
  */
 import { rmSync } from "node:fs";
 import { bindingId, NativeStore } from "@agentkit/native";
@@ -85,6 +89,8 @@ if (mode === "run") {
   });
   let commandEffects = 0;
   let commandInput = null;
+  let slowCalls = 0;
+  let slowCompletions = 0;
   service.setProvider(async () => {
     providerCalls += 1;
     if (providerCalls === 1) {
@@ -113,11 +119,7 @@ if (mode === "run") {
       };
     }
     // Tripwire: the cancelled turn must never drive a fourth request.
-    return {
-      content: "provider must not be called again",
-      finishReason: "stop",
-      toolCalls: [],
-    };
+    throw new Error("unexpected provider request " + providerCalls);
   });
   await service.registerTool(
     {
@@ -145,7 +147,9 @@ if (mode === "run") {
       inputSchema: { type: "object" },
     },
     async () => {
+      slowCalls += 1;
       await slowGate;
+      slowCompletions += 1;
       return { data: "late" };
     },
   );
@@ -157,7 +161,7 @@ if (mode === "run") {
       executionMode: "auto_edit",
     });
 
-    // Turn 1: approval wait → answer → resume → terminal receipt.
+    // Turn 1: approval wait → answer → resume → terminal completion.
     const sent = await service.send("pack-sess", { content: "list files" });
     assert(sent.kind === "turn", "send() returned kind " + String(sent.kind));
     const waiting = await waitFor(
@@ -187,13 +191,21 @@ if (mode === "run") {
     // Turn 2: cancel a live turn mid-effect.
     const sent2 = await service.send("pack-sess", { content: "sleep please" });
     assert(sent2.kind === "turn", "second send() returned a non-turn");
-    await waitFor(
-      async () => service.pendingCallbacks,
-      (count) => count >= 1,
+    // Observe this tool's entry, rather than a provider callback that may
+    // still be producing the tool call. The cancellation must land while
+    // run_slow is blocked inside its JS body.
+    await waitFor(async () => slowCalls, (count) => count === 1);
+    assert(
+      slowCompletions === 0,
+      "slow callback completed before cancellation",
     );
     await service.cancel("pack-sess", sent2.turnId);
     const turn2 = await pollToDone(service, sent2.turnId);
     assert(turn2.done, "the cancelled turn never settled");
+    assert(
+      turn2.statuses.includes("cancelled"),
+      "cancelled turn did not reach cancelled: " + turn2.statuses.join(","),
+    );
     assert(
       !turn2.statuses.includes("completed"),
       "a cancelled turn settled as completed",
@@ -202,6 +214,19 @@ if (mode === "run") {
     await waitFor(
       async () => service.pendingCallbacks,
       (count) => count === 0,
+    );
+    assert(
+      providerCalls === 3,
+      "unexpected provider call count " + providerCalls,
+    );
+    assert(
+      commandEffects === 1,
+      "approved command acted again after cancellation",
+    );
+    assert(slowCalls === 1, "slow callback was dispatched more than once");
+    assert(
+      slowCompletions === 1,
+      "released slow callback did not finish exactly once",
     );
 
     const exported = JSON.stringify(await service.exportSession("pack-sess"));
