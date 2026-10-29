@@ -27,6 +27,7 @@ export interface LockRecord {
       startIdentity?: string;
       processStart?: string;
       guardianProtocol?: "agentkit-command-guardian-v1";
+      admission?: "pending" | "released";
     };
     discovery?: {
       identities: ProcessIdentity[];
@@ -159,7 +160,11 @@ function isRecord(value: unknown): value is LockRecord {
       (execution.process.startIdentity !== undefined &&
         !validIdentity(execution.process)) ||
       (execution.process.guardianProtocol !== undefined &&
-        execution.process.guardianProtocol !== "agentkit-command-guardian-v1"))
+        execution.process.guardianProtocol !==
+          "agentkit-command-guardian-v1") ||
+      (execution.process.admission !== undefined &&
+        execution.process.admission !== "pending" &&
+        execution.process.admission !== "released"))
   )
     return false;
   const discovery = execution.discovery;

@@ -284,6 +284,20 @@ export async function recoverGuardianExecution(
     pid: execution.process!.pid,
     startIdentity: execution.process!.startIdentity!,
   };
+  const known = execution.discovery?.identities ?? [];
+  if (
+    execution.process!.admission === "pending" &&
+    known.every(
+      (identity) =>
+        identity.pid === root.pid &&
+        identity.startIdentity === root.startIdentity,
+    )
+  ) {
+    // Admission is persisted before release, so "pending" proves the command never started.
+    const state = (await (dependencies.inspect ?? inspectProcess)(root)).state;
+    if (state === "gone" || state === "reused" || state === "zombie")
+      return result([root], "stopped", "verified_stopped");
+  }
   const digest = createHash("sha256")
     .update(JSON.stringify(record))
     .digest("hex");

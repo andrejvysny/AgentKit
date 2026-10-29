@@ -62,6 +62,7 @@ class DurableExecutionLease implements ExecutionLease {
     startIdentity?: string;
     processStart?: string;
     guardianProtocol?: "agentkit-command-guardian-v1";
+    admission?: "pending" | "released";
   }): Promise<void> {
     await this.update((record) => {
       if (!record.execution)
@@ -69,6 +70,20 @@ class DurableExecutionLease implements ExecutionLease {
       return {
         ...record,
         execution: { ...record.execution, process: identity },
+      };
+    });
+  }
+
+  async admitted(): Promise<void> {
+    await this.update((record) => {
+      if (!record.execution?.process)
+        throw new CodingError("cleanup_unknown", "execution process missing");
+      return {
+        ...record,
+        execution: {
+          ...record.execution,
+          process: { ...record.execution.process, admission: "released" },
+        },
       };
     });
   }

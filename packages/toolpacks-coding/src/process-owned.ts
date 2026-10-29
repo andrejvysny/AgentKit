@@ -74,8 +74,14 @@ async function executeCommand(
           pid,
           ...(identity ? { startIdentity: identity.startIdentity } : {}),
           ...(guardianProtocol ? { guardianProtocol } : {}),
+          ...(guardianProtocol && lease.admitted
+            ? { admission: "pending" as const }
+            : {}),
         }),
       ),
+    ...(lease.admitted
+      ? { onAdmit: () => persist(() => lease.admitted!()) }
+      : {}),
     onDiscovery: (discovery: ProcessDiscovery & { closed?: boolean }) =>
       persist(async () => {
         await lease.observed?.(

@@ -14,6 +14,7 @@ import { executableName, shellWords } from "./command-words.js";
 import {
   directScriptFiles,
   leadingExecutable,
+  scriptExecutable,
 } from "./command-script-inputs.js";
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -286,6 +287,8 @@ async function bindScriptEntrypoints(
   root: string,
   dirs: string[],
   tokens: string[],
+  env: NodeJS.ProcessEnv,
+  executables: object[],
   state: FingerprintFiles,
 ) {
   const script =
@@ -304,8 +307,31 @@ async function bindScriptEntrypoints(
       for (const word of directScriptFiles(command))
         await bindDirectFile(root, resolve(dir, word), state);
       await bindExplicitConfigs(root, dir, shellWords(command), {}, state);
+      const bare = scriptExecutable(command);
+      if (bare !== undefined)
+        executables.push({
+          script: bare,
+          ...(await scriptRunner(dir, bare, env)),
+        });
     }
   }
+}
+
+/** Mirrors npm run-script PATH: every ancestor node_modules/.bin, then PATH. */
+async function scriptRunner(dir: string, name: string, env: NodeJS.ProcessEnv) {
+  for (let a = dir; ; a = dirname(a)) {
+    const local = await executable(
+      join(a, "node_modules", ".bin", name),
+      dir,
+      env,
+    );
+    if (local !== null) return local;
+    if (a === dirname(a)) break;
+  }
+  const found = await executable(name, dir, env);
+  if (found === null)
+    throw new Error("package script executable is unresolved");
+  return found;
 }
 
 async function bindExplicitConfigs(
@@ -381,7 +407,7 @@ export async function commandFingerprint(
   const tokens = command.trim().split(/ +/);
   const main = await executable(tokens[0]!, cwd, env);
   if (main === null) return null;
-  const executables = [main];
+  const executables: object[] = [main];
   if (tokens[0] === "npx" || tokens[0] === "bunx") {
     const local = dirs.map((dir) =>
       join(dir, "node_modules", ".bin", tokens[1]!),
@@ -402,7 +428,7 @@ export async function commandFingerprint(
     packages: new Map(),
   };
   await bindMetadata(dirs, state);
-  await bindScriptEntrypoints(root, dirs, tokens, state);
+  await bindScriptEntrypoints(root, dirs, tokens, env, executables, state);
   await bindExplicitConfigs(root, cwd, tokens, env, state);
   return createHash("sha256")
     .update(

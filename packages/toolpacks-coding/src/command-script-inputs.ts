@@ -78,6 +78,21 @@ export function directScriptFiles(command: string): string[] {
   return [...files];
 }
 
+/** Bare leading executable of a script command; path-shaped entries are bound as direct files. */
+export function scriptExecutable(command: string): string | undefined {
+  const words = shellWords(command);
+  while (
+    words[0] !== undefined &&
+    (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) ||
+      /^(env|command|exec)$/.test(words[0]))
+  )
+    words.shift();
+  const entry = words[0];
+  if (entry === undefined || entry.includes("/") || entry.startsWith("-"))
+    return undefined;
+  return entry;
+}
+
 /** Resolve only supported literal wrapper prefixes, never search ordinary arguments. */
 export function leadingExecutable(tokens: string[]): string | undefined {
   for (let index = 0; index < tokens.length; index += 1) {

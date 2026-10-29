@@ -61,3 +61,32 @@ describe("literal and indirect high-risk command forms", () => {
     expect(classifyShellCommand(command)).toBe("unknown");
   });
 });
+
+describe("indirect execution of destructive commands requires fresh approval", () => {
+  test.each([
+    'bash -c "rm -rf x"',
+    'sh -c "rm -rf x"',
+    "env rm -rf x",
+    "command rm -rf x",
+    "xargs rm -rf",
+    "find . -exec rm -rf {} +",
+    'eval "rm -rf x"',
+    "nohup rm -rf x",
+    "time rm -rf x",
+    "sudo rm -rf x",
+    "exec rm -rf x",
+    "git -c core.sshCommand=evil fetch",
+  ])("high risk: %s", (command) => {
+    expect(classifyShellCommand(command)).toBe("high_risk");
+  });
+  // GAP: classified unknown, not high_risk; never eligible, so never remembered
+  test.todo("git -c core.sshCommand=evil status is high_risk", () => {});
+  // GAP: classified unknown, not high_risk; never eligible, so never remembered
+  test.todo("npx rimraf x is high_risk", () => {});
+  test.each(["git -c core.sshCommand=evil status", "npx rimraf x"])(
+    "never eligible for standing approval: %s",
+    (command) => {
+      expect(classifyShellCommand(command)).not.toBe("eligible");
+    },
+  );
+});

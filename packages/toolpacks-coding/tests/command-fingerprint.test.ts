@@ -18,9 +18,10 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "agentkit-command-fingerprint-"));
   mkdirSync(join(root, "bin"));
   mkdirSync(join(root, "scripts"));
-  writeFileSync(join(root, "bin", "bun"), "#!/bin/sh\nexit 0\n", {
-    mode: 0o755,
-  });
+  for (const name of ["bun", "node", "npx", "bunx"])
+    writeFileSync(join(root, "bin", name), "#!/bin/sh\nexit 0\n", {
+      mode: 0o755,
+    });
   writeFileSync(
     join(root, "package.json"),
     JSON.stringify({ scripts: { test: "node scripts/test.js" } }),
@@ -282,6 +283,9 @@ describe("bounded standing approval fingerprint", () => {
   ])(
     "leading TypeScript runner retains directory semantics: %s",
     async (runner) => {
+      writeFileSync(join(root, "bin", "tsc"), "#!/bin/sh\nexit 0\n", {
+        mode: 0o755,
+      });
       writeFileSync(join(root, "scripts", "tsconfig.json"), "{}\n");
       writeFileSync(
         join(root, "package.json"),
@@ -406,5 +410,88 @@ describe("bounded standing approval fingerprint", () => {
       JSON.stringify({ scripts: { test: script } }),
     );
     expect(await key()).toBeNull();
+  });
+});
+
+describe("package script executable binding", () => {
+  function setup(scripts: Record<string, string> = { test: "vitest run" }) {
+    writeFileSync(join(root, "bin", "npm"), "#!/bin/sh\nexit 0\n", {
+      mode: 0o755,
+    });
+    mkdirSync(join(root, "node_modules", "vitest"), { recursive: true });
+    mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
+    const target = join(root, "node_modules", "vitest", "vitest.mjs");
+    writeFileSync(target, "// v1\n", { mode: 0o755 });
+    symlinkSync(target, join(root, "node_modules", ".bin", "vitest"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ scripts }));
+    return target;
+  }
+
+  test.each(["npm run test", "npm test"])(
+    "executable bytes change invalidates: %s",
+    async (command) => {
+      const target = setup();
+      const first = await key(command);
+      expect(first).not.toBeNull();
+      expect(await key(command)).toEqual(first);
+      writeFileSync(target, "// v2 longer\n", { mode: 0o755 });
+      const second = await key(command);
+      expect(second).not.toBeNull();
+      expect(second?.digest).not.toBe(first?.digest);
+    },
+  );
+
+  test("retargeted .bin symlink invalidates", async () => {
+    setup();
+    const first = await key("npm run test");
+    const other = join(root, "node_modules", "vitest", "other.mjs");
+    writeFileSync(other, "// v1\n", { mode: 0o755 });
+    const link = join(root, "node_modules", ".bin", "vitest");
+    rmSync(link);
+    symlinkSync(other, link);
+    const second = await key("npm run test");
+    expect(second).not.toBeNull();
+    expect(second?.digest).not.toBe(first?.digest);
+  });
+
+  test("ancestor .bin is used when package dir has none", async () => {
+    const target = setup({});
+    mkdirSync(join(root, "pkg"));
+    writeFileSync(
+      join(root, "pkg", "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" } }),
+    );
+    const first = await key("npm run test", "pkg");
+    expect(first).not.toBeNull();
+    writeFileSync(target, "// v2 longer\n", { mode: 0o755 });
+    const second = await key("npm run test", "pkg");
+    expect(second).not.toBeNull();
+    expect(second?.digest).not.toBe(first?.digest);
+  });
+
+  test("unresolvable executable declines standing", async () => {
+    setup();
+    rmSync(join(root, "node_modules", ".bin", "vitest"));
+    expect(await key("npm run test")).toBeNull();
+  });
+
+  test("pre and post script executables are bound", async () => {
+    const target = setup({
+      test: "node scripts/test.js",
+      pretest: "vitest run",
+      posttest: "vitest run",
+    });
+    const first = await key("npm run test");
+    expect(first).not.toBeNull();
+    writeFileSync(target, "// v2 longer\n", { mode: 0o755 });
+    expect((await key("npm run test"))?.digest).not.toBe(first?.digest);
+    rmSync(join(root, "node_modules", ".bin", "vitest"));
+    expect(await key("npm run test")).toBeNull();
+  });
+
+  test("non-script commands keep a stable fingerprint", async () => {
+    const first = await key("bun test");
+    expect(first).not.toBeNull();
+    expect(await key("bun test")).toEqual(first);
   });
 });
