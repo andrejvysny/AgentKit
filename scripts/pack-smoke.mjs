@@ -354,12 +354,27 @@ const gen = core.runChat({
   messages: [{ role: "user", content: "hi" }],
   limits: core.resolveToolLimits({ preference: "small" }),
 });
-let result;
-for (;;) {
-  const next = await gen.next();
-  if (next.done) { result = next.value; break; }
+// The Rust runtime is the only backend, and the private native packages are
+// not installable here: runChat must fail HONESTLY about the missing binding,
+// never fall back to a TypeScript engine. Functional packed coverage of the
+// native run lives in rust/scripts/check-native-package.mjs and
+// check-native-umbrella.mjs.
+let runOutcome = "settled without a terminal result";
+try {
+  for (;;) {
+    const next = await gen.next();
+    if (next.done) {
+      runOutcome = \`unexpectedly completed: \${next.value?.terminal}\`;
+      break;
+    }
+  }
+} catch (error) {
+  runOutcome = String(error?.message ?? error);
 }
-check(result?.terminal === "completed", \`runChat terminal is "\${result?.terminal}"\`);
+check(
+  runOutcome.includes("native binding failed to load"),
+  \`runChat without the binding must fail honestly, got: \${runOutcome}\`,
+);
 
 const host = await import("@agentkit/host");
 console.log("@agentkit/host");
