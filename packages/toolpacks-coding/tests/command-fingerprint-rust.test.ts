@@ -19,12 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commandFingerprint } from "../src/command-fingerprint.js";
 
-const root = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "..",
-);
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const differential =
   process.env.AGENTKIT_RUN_RUST_CONFORMANCE === "1" ? it : it.skip;
 
@@ -104,7 +99,10 @@ const CASES: Case[] = [
       "bin/bun": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
       "bin/node": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
       "package.json": {
-        contents: JSON.stringify({ name: "t", scripts: { test: "node x.mjs" } }),
+        contents: JSON.stringify({
+          name: "t",
+          scripts: { test: "node x.mjs" },
+        }),
       },
       "x.mjs": { contents: "1\n" },
       "sub/keep.txt": { contents: "x" },
@@ -190,7 +188,12 @@ async function tsOutcome(
   environment: Record<string, string>,
 ): Promise<{ kind: string; digest?: string }> {
   try {
-    const digest = await commandFingerprint(rootPath, cwdPath, command, environment);
+    const digest = await commandFingerprint(
+      rootPath,
+      cwdPath,
+      command,
+      environment,
+    );
     return digest === null ? { kind: "null" } : { kind: "digest", digest };
   } catch {
     return { kind: "error" };
@@ -199,60 +202,68 @@ async function tsOutcome(
 
 describe("rust command fingerprint differential", () => {
   for (const testCase of CASES) {
-    differential(`matches the TypeScript authority: ${testCase.name}`, async () => {
-      const rootPath = realpathSync(mkdtempSync(join(tmpdir(), "ak-fp-diff-")));
-      try {
-        for (const [name, file] of Object.entries(testCase.files)) {
-          const path = join(rootPath, name);
-          mkdirSync(dirname(path), { recursive: true });
-          writeFileSync(path, file.contents);
-          if (file.mode !== undefined) chmodSync(path, file.mode);
+    differential(
+      `matches the TypeScript authority: ${testCase.name}`,
+      async () => {
+        const rootPath = realpathSync(
+          mkdtempSync(join(tmpdir(), "ak-fp-diff-")),
+        );
+        try {
+          for (const [name, file] of Object.entries(testCase.files)) {
+            const path = join(rootPath, name);
+            mkdirSync(dirname(path), { recursive: true });
+            writeFileSync(path, file.contents);
+            if (file.mode !== undefined) chmodSync(path, file.mode);
+          }
+          const cwdPath = join(rootPath, testCase.cwd ?? ".");
+          const environment = { PATH: join(rootPath, "bin") };
+          const expected = {
+            root: rootPath,
+            cwd: cwdPath,
+            command: testCase.command,
+            environment,
+          };
+          const [rust, ts] = await Promise.all([
+            rustOutcome(expected),
+            tsOutcome(rootPath, cwdPath, testCase.command, environment),
+          ]);
+          expect(ts.kind).toBe(testCase.expect);
+          expect(rust.kind).toBe(testCase.expect);
+          if (testCase.expect === "digest") {
+            expect(rust.digest).toBe(ts.digest);
+          }
+        } finally {
+          rmSync(rootPath, { recursive: true, force: true });
         }
-        const cwdPath = join(rootPath, testCase.cwd ?? ".");
-        const environment = { PATH: join(rootPath, "bin") };
-        const expected = {
-          root: rootPath,
-          cwd: cwdPath,
-          command: testCase.command,
-          environment,
-        };
-        const [rust, ts] = await Promise.all([
-          rustOutcome(expected),
-          tsOutcome(rootPath, cwdPath, testCase.command, environment),
-        ]);
-        expect(ts.kind).toBe(testCase.expect);
-        expect(rust.kind).toBe(testCase.expect);
-        if (testCase.expect === "digest") {
-          expect(rust.digest).toBe(ts.digest);
-        }
-      } finally {
-        rmSync(rootPath, { recursive: true, force: true });
-      }
-    });
+      },
+    );
   }
 
-  differential("a workspace-external direct configuration is refused by both", async () => {
-    const outer = realpathSync(mkdtempSync(join(tmpdir(), "ak-fp-outer-")));
-    const rootPath = realpathSync(mkdtempSync(join(tmpdir(), "ak-fp-diff-")));
-    try {
-      writeFileSync(join(outer, "evil.toml"), "bad = 1\n");
-      mkdirSync(join(rootPath, "bin"), { recursive: true });
-      writeFileSync(join(rootPath, "bin", "bun"), "#!/bin/sh\nexit 0\n");
-      chmodSync(join(rootPath, "bin", "bun"), 0o755);
-      const environment = { PATH: join(rootPath, "bin") };
-      const command = `bun test --config ${join(outer, "evil.toml")}`;
-      const rust = await rustOutcome({
-        root: rootPath,
-        cwd: rootPath,
-        command,
-        environment,
-      });
-      const ts = await tsOutcome(rootPath, rootPath, command, environment);
-      expect(ts.kind).toBe("error");
-      expect(rust.kind).toBe("error");
-    } finally {
-      rmSync(outer, { recursive: true, force: true });
-      rmSync(rootPath, { recursive: true, force: true });
-    }
-  });
+  differential(
+    "a workspace-external direct configuration is refused by both",
+    async () => {
+      const outer = realpathSync(mkdtempSync(join(tmpdir(), "ak-fp-outer-")));
+      const rootPath = realpathSync(mkdtempSync(join(tmpdir(), "ak-fp-diff-")));
+      try {
+        writeFileSync(join(outer, "evil.toml"), "bad = 1\n");
+        mkdirSync(join(rootPath, "bin"), { recursive: true });
+        writeFileSync(join(rootPath, "bin", "bun"), "#!/bin/sh\nexit 0\n");
+        chmodSync(join(rootPath, "bin", "bun"), 0o755);
+        const environment = { PATH: join(rootPath, "bin") };
+        const command = `bun test --config ${join(outer, "evil.toml")}`;
+        const rust = await rustOutcome({
+          root: rootPath,
+          cwd: rootPath,
+          command,
+          environment,
+        });
+        const ts = await tsOutcome(rootPath, rootPath, command, environment);
+        expect(ts.kind).toBe("error");
+        expect(rust.kind).toBe("error");
+      } finally {
+        rmSync(outer, { recursive: true, force: true });
+        rmSync(rootPath, { recursive: true, force: true });
+      }
+    },
+  );
 });
