@@ -112,9 +112,15 @@ pub(crate) fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
 }
 
 impl SqliteStore {
+    /// Verify that the supplied lease still owns the task at `now`.
+    pub async fn verify_fence(&self, proof: &LeaseFence, now: i64) -> Result<()> {
+        let proof = proof.clone();
+        self.call(move |db| fence(db, &proof, now).map(|_| ()))
+            .await
+    }
     pub async fn submit(&self, input: SubmitTask) -> Result<TaskRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let task = insert(&transaction, input)?;
             transaction.commit()?;
             Ok(task)
@@ -128,7 +134,7 @@ impl SqliteStore {
         messages: Vec<MessageInput>,
     ) -> Result<TaskRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             if let Some(task) = get::<TaskRecord>(&transaction, "tasks", "id", &input.task_id)? {
                 if task.kind != input.kind
                     || task.scope_id != input.scope_id
@@ -170,7 +176,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<Vec<EventRecord>> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             fence(&transaction, &proof, now)?;
             let task: TaskRecord = required(&transaction, "tasks", "id", &proof.task_id)?;
             let records = append(&transaction, &proof.task_id, events, now)?;
@@ -210,7 +216,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<Vec<EventRecord>> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             fence(&transaction, &proof, now)?;
             let records = append(&transaction, &proof.task_id, events, now)?;
             transaction.commit()?;
@@ -236,7 +242,7 @@ impl SqliteStore {
                     "max_attempts and concurrency must be positive".into(),
                 ));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut tasks: Vec<TaskRecord> = all(&transaction, "tasks")?;
             let occupied = tasks
                 .iter()

@@ -81,7 +81,10 @@ impl ExecutionBudget {
         })
     }
     pub fn fail(&self, error: CoreError) {
-        *self.failure.lock().expect("budget lock poisoned") = Some(error);
+        self.failure
+            .lock()
+            .expect("budget lock poisoned")
+            .get_or_insert(error);
     }
     pub fn check(&self) -> Result<(), CoreError> {
         if let Some(error) = self.failure.lock().expect("budget lock poisoned").clone() {
@@ -95,11 +98,17 @@ impl ExecutionBudget {
     pub async fn consume(&self, counter: &str) -> Result<(), CoreError> {
         let _serial = self.consume_lock.lock().await;
         self.check()?;
-        let state = self.reserve(counter)?;
+        let state = match self.reserve(counter) {
+            Ok(state) => state,
+            Err(error) => {
+                self.fail(error.clone());
+                return Err(error);
+            }
+        };
         if let Some(checkpoint) = &self.checkpoint {
             if let Err(error) = checkpoint.checkpoint(state).await {
-                *self.failure.lock().expect("budget lock poisoned") = Some(error.clone());
-                return Err(error);
+                let mut failure = self.failure.lock().expect("budget lock poisoned");
+                return Err(failure.get_or_insert(error).clone());
             }
         }
         self.check()

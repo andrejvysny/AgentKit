@@ -202,8 +202,7 @@ pub async fn session_usage(
 }
 
 /// A JSON-serializable history: active-path messages, turns, inputs. No
-/// secrets. (Persisted summaries have no Rust home yet — the compaction
-/// milestone adds them, and this export will carry them then.)
+/// secrets. Derived summaries are exported separately from canonical messages.
 pub async fn export_session(
     store: &agentkit_store::SqliteStore,
     session_id: &str,
@@ -256,6 +255,30 @@ pub async fn export_session(
         out.insert("execution".into(), execution);
     }
     out.insert("messages".into(), messages.into());
+    let summaries = store
+        .list_context_summaries(session_id)
+        .await?
+        .into_iter()
+        .rev()
+        .map(|summary| {
+            let mut result = Map::new();
+            for field in [
+                "summaryId",
+                "coversThroughMessageId",
+                "firstKeptMessageId",
+                "summary",
+                "model",
+                "providerId",
+                "createdAt",
+            ] {
+                if let Some(value) = summary.get(field) {
+                    result.insert(field.into(), value.clone());
+                }
+            }
+            Value::Object(result)
+        })
+        .collect();
+    out.insert("summaries".into(), Value::Array(summaries));
     let turns: Vec<Value> = list_turn_tasks(store, session_id, &session_turn_kind(descriptor))
         .await?
         .iter()

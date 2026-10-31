@@ -1,0 +1,25 @@
+{
+  "name": "@agentkit/native-win32-x64-msvc",
+  "version": "0.1.0-dev",
+  "description": "AgentKit native runtime for Windows x64 MSVC",
+  "license": "MIT",
+  "private": true,
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "engines": {
+    "node": ">=22",
+    "bun": ">=1.4"
+  },
+  "main": "agentkit-native.win32-x64-msvc.node",
+  "files": [
+    "agentkit-native.win32-x64-msvc.node",
+    "README.md"
+  ],
+  "scripts": {
+    "prepack": "node -e \"require('node:fs').accessSync(require('./package.json').main)\""
+  }
+}

@@ -1,5 +1,13 @@
 # M3 — First Native TypeScript Binding: Design and Backlog
 
+The historical M3 record below is superseded for current migration status by
+[the 30 October checkpoint](parity.md#migration-checkpoint-30-october-2026).
+The private binding now has lazy loading, nine additional session-management
+methods, a separate stateless core streaming bridge, and staged platform packages.
+These additions do not establish drop-in host/storage parity or native-default
+qualification. No TypeScript database migration is planned: native stores start
+with their own fresh database identity.
+
 Status: FIRST SLICE IMPLEMENTED (crate `agentkit-napi` + package
 `@agentkit/native`, validated on x86_64-linux with Bun 1.4.4 and Node
 v22.20.0, Node-API 9; the packed-consumer gate runs both runtimes).
@@ -19,7 +27,7 @@ private until the npm-publish story is separate work). Committed: the
 crate, the TS wrapper (`src/index.ts`), the generated loader and
 `index.d.ts` (`generated/` — text, so `bun run typecheck` needs no Rust
 build; the `.node` binary is a build artifact and is gitignored), the
-contract code list (`src/codes.ts`, embedded into the Rust crate with
+contract code list (`rust/crates/napi/error-codes.json`, embedded into the Rust crate with
 `include_str!` and compared in a test), and the test suite
 (`tests/smoke.test.ts`, `tests/contract.test.ts`,
 `tests/helpers/binding.ts`).

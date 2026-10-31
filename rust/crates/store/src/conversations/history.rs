@@ -11,7 +11,7 @@ pub struct ImportConversation {
 impl SqliteStore {
     pub async fn import_conversation(&self, mut input: ImportConversation) -> Result<ChatRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             if get::<ChatRecord>(&transaction, "chats", "id", &input.chat.id)?.is_some() {
                 return Err(invalid_import("duplicate_chat"));
             }
@@ -55,7 +55,7 @@ impl SqliteStore {
             new_chat_id.to_owned(),
         );
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let source: ChatRecord = required(&transaction, "chats", "id", &chat_id)?;
             let mut cursor: MessageRecord =
                 get::<MessageRecord>(&transaction, "messages", "id", &from_message_id)?
@@ -116,7 +116,7 @@ impl SqliteStore {
     pub async fn delete_chat(&self, chat_id: &str) -> Result<()> {
         let chat_id = chat_id.to_owned();
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let _: ChatRecord = required(&transaction, "chats", "id", &chat_id)?;
             let tasks: Vec<TaskRecord> = all::<TaskRecord>(&transaction, "tasks")?
                 .into_iter()
@@ -157,7 +157,7 @@ impl SqliteStore {
     ) -> Result<MessageRecord> {
         let message_id = message_id.to_owned();
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut message: MessageRecord = required(&transaction, "messages", "id", &message_id)?;
             if let Some(proof) = proof {
                 crate::tasks::fence(&transaction, &proof, now)?;

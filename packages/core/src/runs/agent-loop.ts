@@ -3,6 +3,8 @@ import type {
   AiRunEvent,
   AiToolCall,
 } from "@agentkit/contracts";
+import { selectedBackend } from "../backend.js";
+import { nativeAgentLoop } from "./native-loop.js";
 import { createEventStamper } from "../events.js";
 import { newRunId, nowIso } from "../ids.js";
 import type { AiChatRequest } from "../providers/client.js";
@@ -69,6 +71,7 @@ export function runAgentLoop(
 export function runAgentLoop(
   input: AgentLoopInput,
 ): AsyncGenerator<AiRunEvent, AgentLoopResult, unknown> {
+  if (selectedBackend() === "native") return nativeAgentLoop(input);
   // No hooks: hand back the loop itself, so the hookless path pays for no
   // extra generator layer (and stays the exact code path `runChat` always was).
   if (!hasHooks(input)) return runLoop(input);

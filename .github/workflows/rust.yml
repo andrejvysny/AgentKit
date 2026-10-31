@@ -15,6 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        node-version: [22, 24]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +24,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libgl1-mesa-dev pkg-config
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: ${{ matrix.node-version }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
@@ -40,6 +41,9 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
         working-directory: rust
       - run: cargo test --workspace --all-features --locked
+        working-directory: rust
+      - name: Command cancellation and process-group timeout teardown
+        run: "cargo test -p agentkit-toolpacks-coding --lib exec_tools::tests:: --all-features --locked -- --ignored"
         working-directory: rust
       - name: Shared store and client interoperability
         run: bun test scripts/tests/rust-store-conformance.test.ts scripts/tests/rust-runner-conformance.test.ts packages/client/tests/rust-interop.test.ts packages/client/tests/rust-stream-boundaries.test.ts packages/react/tests/rust-interop.test.ts packages/transport-http/tests/rust-interop.test.ts
@@ -60,6 +64,11 @@ jobs:
         # If the committed loader/d.ts drifted from what the Rust source
         # exports, the freshly built files differ from the checkout.
         run: git diff --exit-code -- packages/native/generated
+      - name: Core public API runs on Rust
+        run: bun test packages/core
+        env:
+          AGENTKIT_BACKEND: native
+          AGENTKIT_REQUIRE_NATIVE: "1"
       - name: Packed native package installs and runs the acceptance lifecycle
         # Build packages/native, npm pack it, npm install the tarball into an
         # isolated temp directory OUTSIDE the repo, and drive the FULL
@@ -71,6 +80,8 @@ jobs:
         # packed artifact a consumer installs must qualify on the same SHA
         # and platform that built it, not only on Linux.
         run: node rust/scripts/check-native-package.mjs
+      - name: Verify the installed umbrella native backend
+        run: bun run build && bun run build:umbrella && node rust/scripts/check-native-umbrella.mjs
       - run: bun test
         env:
           AGENTKIT_REQUIRE_NATIVE: "1"
@@ -98,9 +109,16 @@ jobs:
   # mixed-runtime gate, and TS distribution gets qualified when the native
   # binding ships.
   native-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.97.0
@@ -141,6 +159,23 @@ jobs:
         # passing vacuously.
         run: cargo test -p agentkit-mcp --test bridge --test native --test security --test shapes --test manager --all-features --locked
         working-directory: rust
+      - name: Build Windows native addon
+        run: bun run --cwd packages/native build:native
+      - name: Generated Windows binding is current
+        run: git diff --exit-code -- packages/native/generated
+      - name: Windows binding lifecycle and store transactions
+        run: bun test packages/native
+        env:
+          AGENTKIT_REQUIRE_NATIVE: "1"
+      - name: Windows core public API runs on Rust
+        run: bun test packages/core
+        env:
+          AGENTKIT_BACKEND: native
+          AGENTKIT_REQUIRE_NATIVE: "1"
+      - name: Installed Windows native package
+        run: node rust/scripts/check-native-package.mjs
+      - name: Installed Windows umbrella native backend
+        run: bun run build && bun run build:umbrella && node rust/scripts/check-native-umbrella.mjs
   contracts:
     runs-on: ubuntu-latest
     steps:

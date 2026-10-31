@@ -54,7 +54,7 @@ impl SqliteStore {
 
     pub async fn renew(&self, proof: LeaseFence, now: i64, ttl_ms: i64) -> Result<Lease> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut lease = fence(&transaction, &proof, now)?;
             lease.expires_at = util::checked_expiry(now, ttl_ms)?;
             transaction.execute(
@@ -74,7 +74,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<()> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             fence(&transaction, &proof, now)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &proof.task_id)?;
             task.progress = Some(progress);
@@ -115,7 +115,7 @@ impl SqliteStore {
                     "settle requires terminal status".into(),
                 ));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let lease = fence(&transaction, &input.fence, input.now)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &input.fence.task_id)?;
             if !matches!(
@@ -181,7 +181,7 @@ impl SqliteStore {
     pub async fn cancel_task(&self, task_id: &str, now: i64) -> Result<TaskRecord> {
         let task_id = task_id.to_owned();
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &task_id)?;
             if !task.status.is_terminal() {
                 task.cancel_requested = true;
@@ -217,7 +217,7 @@ impl SqliteStore {
     pub async fn resume_task(&self, task_id: &str, now: i64) -> Result<TaskRecord> {
         let task_id = task_id.to_owned();
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &task_id)?;
             if task.status != TaskStatus::Interrupted {
                 return Err(StoreError::InvalidTransition(
@@ -246,7 +246,7 @@ impl SqliteStore {
             if max_attempts == 0 || retry_delay_ms < 0 {
                 return Err(StoreError::InvalidInput("invalid recovery limits".into()));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let leases: Vec<Lease> = all(&transaction, "leases")?;
             let mut recovered = Vec::new();
             for lease in leases.into_iter().filter(|lease| lease.expires_at <= now) {

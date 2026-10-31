@@ -4,9 +4,9 @@
  *
  * `bun test` and `cargo test` exercise `@agentkit/native` from the workspace
  * checkout, where the loader and the `.node` binary sit next to the sources
- * and a stale local build can mask packaging bugs. This gate exercises what a
- * consumer actually gets: it builds the package, `npm pack`s it, `npm
- * install`s the resulting tarball into an isolated temp directory OUTSIDE the
+ * and a stale local build can mask packaging bugs. This gate builds the
+ * wrapper and host addon, stages and packs separate wrapper and platform
+ * packages, then installs both into an isolated temp directory OUTSIDE the
  * repository, and runs one full scripted turn (in-memory `NativeStore` →
  * service → session → send → drain events → close) under BOTH bun and plain
  * node, asserting the loader resolves with no `ERR_MODULE_NOT_FOUND`.
@@ -17,17 +17,13 @@
  *
  * Two deliberate design points:
  *
- *  - The pack runs on a staging COPY inside the temp dir (plus a copy of
- *    `scripts/` so the package's `prepack`/`postpack` publishConfig swap
- *    resolves). Packing the live `packages/native` directory would let the
- *    repository `.gitignore` (which ignores `generated/*.node`) drop the
- *    binary from the tarball, and would rewrite the real `package.json`
- *    mid-run; the copy avoids both and leaves the working tree untouched.
+ *  - Packing uses temporary staging, including `scripts/` for the wrapper's
+ *    publishConfig swap. The host addon is staged only into its matching
+ *    platform package; no working-tree manifest or binary is rewritten.
  *  - `npm install` and both consumer runs execute under a PATH stripped of
- *    cargo/rustup/rustc/toolchain locations and shadowed by a stub bin
- *    holding non-executable `cargo`/`rustc`/`rustup` entries, and the script
- *    asserts — BEFORE installing — that spawning `cargo` (and `rustc`) under
- *    that PATH dies with a spawn error. The packed loader must resolve the
+ *    cargo/rustup/rustc/toolchain locations. Before installing, the script
+ *    checks candidate names and asserts that spawning those tools fails.
+ *    The packed loader must resolve the
  *    addon from the shipped binary; if a toolchain were reachable, a
  *    build-on-demand loader regression could pass this gate unnoticed.
  *
@@ -38,7 +34,6 @@
  */
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -48,8 +43,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stageNativePlatform } from "./stage-native-platform.mjs";
+import {
+  assertNoRust,
+  findRuntime,
+  findNpmCli,
+  pathEntries,
+  toolchainFreePath,
+  withPath,
+} from "./native-commands.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const nativePackage = join(repoRoot, "packages", "native");
@@ -80,33 +84,12 @@ function run(command, arguments_, options = {}) {
   return result.stdout ?? "";
 }
 
-function probe(command, arguments_) {
-  return spawnSync(command, arguments_, {
-    encoding: "utf8",
-    stdio: "ignore",
-  });
-}
-
-/** First candidate that spawns `--version` successfully; missing ones skipped. */
-function locate(candidates, label) {
-  for (const candidate of candidates) {
-    if (candidate && !probe(candidate, ["--version"]).error) return candidate;
-  }
-  fail(`no usable ${label}; tried: ${candidates.filter(Boolean).join(", ")}`);
-}
-
-const bunBinary = locate(
-  ["bun", join(home, ".bun/bin/bun")],
-  "bun binary (bun on PATH or ~/.bun/bin/bun)",
-);
-const nodeBinary = locate(
-  [
-    "node",
-    join(home, ".local/bin/node"),
-    process.execPath, // the gate itself runs under node; it can host itself
-  ],
-  "node binary (node on PATH or ~/.local/bin/node)",
-);
+const paths = pathEntries(process.env.PATH ?? process.env.Path);
+const bunBinary =
+  findRuntime("bun", [...paths, join(home, ".bun/bin")]) ??
+  fail("no usable bun binary");
+const nodeBinary =
+  findRuntime("node", [...paths, join(home, ".local/bin")]) ?? process.execPath;
 
 /** Absolute path of a node-family binary's real distribution bin directory
  * (follows symlinks: ~/.local/bin/node → ~/.local/lib/node-vX/bin/node). */
@@ -120,24 +103,11 @@ function realBinDir(binary) {
   return dirname(result.stdout.trim());
 }
 
-const npmBinary =
-  (() => {
-    const candidates = [
-      "npm",
-      realBinDir(nodeBinary) && join(realBinDir(nodeBinary), "npm"),
-      realBinDir(process.execPath) && join(realBinDir(process.execPath), "npm"),
-    ].filter((candidate) => candidate && existsSync(candidate));
-    return candidates.find(
-      (candidate) => !probe(candidate, ["--version"]).error,
-    );
-  })() ??
-  fail(
-    "no usable npm binary; tried `npm` on PATH and the npm next to the " +
-      "resolved node distributions",
-  );
+const npmBinary = findNpmCli(nodeBinary, [...paths, dirname(process.execPath)]);
 
 // Per-run temporary directories, both outside the repository.
 const temporary = mkdtempSync(join(tmpdir(), "agentkit-native-pack-"));
+process.env.npm_config_cache = join(temporary, "npm-cache");
 const consumerDirectory = mkdtempSync(
   join(tmpdir(), "agentkit-native-consumer-"),
 );
@@ -146,16 +116,7 @@ try {
   // -------------------------------------------------------------------------
   // Toolchain-free environment for the install + consumer runs.
   // -------------------------------------------------------------------------
-  const stubDirectory = join(temporary, "toolchain-stub-bin");
-  mkdirSync(stubDirectory, { recursive: true });
-  for (const tool of ["cargo", "rustc", "rustup"]) {
-    const stub = join(stubDirectory, tool);
-    writeFileSync(stub, "");
-    chmodSync(stub, 0o000);
-  }
-  // A bare PATH name like "bun" has no directory to add (dirname("bun") is
-  // "." — cwd pollution); only absolute installs contribute their bin dir.
-  const binDir = (binary) => (isAbsolute(binary) ? dirname(binary) : undefined);
+  const binDir = (binary) => dirname(binary);
   const toolDirectories = [];
   for (const directory of [
     realBinDir(nodeBinary),
@@ -171,39 +132,8 @@ try {
     )
       toolDirectories.push(directory);
   }
-  const systemPath = (process.env.PATH ?? "")
-    .split(delimiter)
-    .filter(
-      (entry) => entry !== "" && !/cargo|rustup|rustc|toolchain/i.test(entry),
-    )
-    // Directory names lie: `/usr/bin/cargo` is a real apt-installed toolchain
-    // on many images. Drop every remaining entry that actually holds one —
-    // glibc's execvp walks past non-executable stubs, so shadowing alone is
-    // not enough; the binaries must be off the search path entirely.
-    .filter(
-      (entry) =>
-        !["cargo", "rustc", "rustup"].some((tool) =>
-          existsSync(join(entry, tool)),
-        ),
-    );
-  const toolchainFreeEnvironment = {
-    ...process.env,
-    PATH: [stubDirectory, ...toolDirectories, ...systemPath].join(delimiter),
-  };
-
-  function assertToolchainAbsent(tool) {
-    const result = spawnSync(tool, ["--version"], {
-      env: toolchainFreeEnvironment,
-      stdio: "ignore",
-    });
-    if (!result.error)
-      fail(
-        `\`${tool}\` was reachable under the toolchain-free PATH (spawn ` +
-          "succeeded) — the packed loader must be proven binary-backed, so " +
-          "the install and consumer runs may not see a Rust toolchain. " +
-          `Stub directory: ${stubDirectory}`,
-      );
-  }
+  const cleanPath = toolchainFreePath([...toolDirectories, ...paths]);
+  const toolchainFreeEnvironment = withPath(process.env, cleanPath);
 
   // -------------------------------------------------------------------------
   // 1. Build the package artifacts (dist + generated loader and addon).
@@ -216,19 +146,17 @@ try {
   } else {
     // `build` runs tsc and `build:native` runs napi (cargo) — both under the
     // full environment; only the INSTALL and CONSUMER runs are cargo-free.
-    const buildEnvironment = {
-      ...process.env,
-      PATH: [
+    const buildEnvironment = withPath(
+      process.env,
+      [
         realBinDir(nodeBinary),
         binDir(bunBinary),
         binDir(npmBinary),
         join(home, ".bun/bin"),
         join(home, ".local/bin"),
-        ...(process.env.PATH ?? "").split(delimiter).filter(Boolean),
-      ]
-        .filter(Boolean)
-        .join(delimiter),
-    };
+        ...paths,
+      ].filter(Boolean),
+    );
     run(bunBinary, ["run", "--cwd", "packages/native", "build"], {
       env: buildEnvironment,
     });
@@ -247,6 +175,7 @@ try {
   cpSync(join(repoRoot, "scripts"), join(staging, "scripts"), {
     recursive: true,
   });
+  const platform = stageNativePlatform(repoRoot, staging);
 
   const manifest = JSON.parse(
     readFileSync(join(stagedPackage, "package.json"), "utf8"),
@@ -256,9 +185,18 @@ try {
   const tarballName = `${manifest.name.replace(/^@/, "").replace("/", "-")}-${manifest.version}.tgz`;
   const tarballs = join(temporary, "tarballs");
   mkdirSync(tarballs, { recursive: true });
-  run(npmBinary, ["pack", "--pack-destination", tarballs], {
+  run(nodeBinary, [npmBinary, "pack", "--pack-destination", tarballs], {
     cwd: stagedPackage,
   });
+  run(nodeBinary, [npmBinary, "pack", "--pack-destination", tarballs], {
+    cwd: platform.destination,
+  });
+  const platformTarball = join(
+    tarballs,
+    `agentkit-native-${platform.target}-${manifest.version}.tgz`,
+  );
+  if (!existsSync(platformTarball))
+    fail(`platform tarball missing: ${platformTarball}`);
   const tarball = join(tarballs, tarballName);
   if (!existsSync(tarball))
     fail(`npm pack did not produce ${tarballName} in ${tarballs}`);
@@ -275,10 +213,13 @@ try {
     "package/generated/index.js",
     "package/generated/index.d.ts",
   ].filter((entry) => !archiveList.includes(entry));
-  if (
-    !archiveList.some((entry) => /^package\/generated\/.+\.node$/.test(entry))
-  )
-    missing.push("package/generated/<platform>.node (the native addon)");
+  if (archiveList.some((entry) => /\.node$/.test(entry)))
+    fail("native package unexpectedly includes a platform addon");
+  const platformArchive = run("tar", ["-tzf", platformTarball], {
+    capture: true,
+  }).split("\n");
+  if (!platformArchive.includes(`package/${platform.binaryName}`))
+    fail(`platform tarball missing ${platform.binaryName}`);
   if (missing.length > 0)
     fail(
       `the packed tarball ${tarballName} is missing ${missing.join(", ")}.\n` +
@@ -302,13 +243,19 @@ try {
   // -------------------------------------------------------------------------
   // 3. Isolated install + consumer turn under bun AND node, cargo-free.
   // -------------------------------------------------------------------------
-  assertToolchainAbsent("cargo");
-  assertToolchainAbsent("rustc");
+  assertNoRust(toolchainFreeEnvironment, cleanPath);
 
   writeFileSync(
     join(consumerDirectory, "package.json"),
     `${JSON.stringify(
-      { name: "agentkit-native-pack-consumer", private: true, type: "module" },
+      {
+        name: "agentkit-native-pack-consumer",
+        private: true,
+        type: "module",
+        optionalDependencies: {
+          [`@agentkit/native-${platform.target}`]: `file:${platformTarball}`,
+        },
+      },
       null,
       2,
     )}\n`,
@@ -324,15 +271,30 @@ try {
     join(consumerDirectory, "consumer.mjs"),
   );
 
-  run(npmBinary, ["install", "--no-audit", "--no-fund", tarball], {
-    cwd: consumerDirectory,
-    env: toolchainFreeEnvironment,
-    timeout: 300_000,
-  });
+  run(
+    nodeBinary,
+    [npmBinary, "install", "--offline", "--no-audit", "--no-fund", tarball],
+    {
+      cwd: consumerDirectory,
+      env: toolchainFreeEnvironment,
+      timeout: 300_000,
+    },
+  );
   if (!existsSync(join(consumerDirectory, "node_modules/@agentkit/native")))
     fail(
       "npm install did not place @agentkit/native in the isolated consumer directory",
     );
+  if (
+    !existsSync(
+      join(
+        consumerDirectory,
+        "node_modules/@agentkit",
+        `native-${platform.target}`,
+        platform.binaryName,
+      ),
+    )
+  )
+    fail("matching optional platform addon was not installed");
 
   for (const [label, runtime] of [
     ["bun", bunBinary],
@@ -359,6 +321,33 @@ try {
       timeout: 120_000,
     });
   }
+
+  // The package can be imported without an addon; first use must fail loudly.
+  rmSync(
+    join(
+      consumerDirectory,
+      "node_modules/@agentkit",
+      `native-${platform.target}`,
+    ),
+    { recursive: true },
+  );
+  run(
+    nodeBinary,
+    [
+      "--input-type=module",
+      "-e",
+      `
+    import { NativeStore, bindingId } from '@agentkit/native';
+    if (bindingId !== 'agentkit-native') throw new Error('unexpected binding identity');
+    try { await NativeStore.inMemory(); throw new Error('missing addon unexpectedly loaded'); }
+    catch (error) { if (!String(error).includes('the native binding failed to load')) throw error; }
+  `,
+    ],
+    { cwd: consumerDirectory, env: toolchainFreeEnvironment },
+  );
+  process.stdout.write(
+    "check-native-package: missing addon fails on first use; import remains lazy.\n",
+  );
 
   process.stdout.write(
     `check-native-package: packed ${tarballName} installed isolated and ran ` +

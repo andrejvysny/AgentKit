@@ -56,6 +56,7 @@ describe("literal and indirect high-risk command forms", () => {
     "env NODE_ENV=test bun test",
     "command bun test",
     "./custom-test-runner",
+    "git -C ./workspace status",
     "ls",
   ])("ordinary indirect/unknown behavior remains: %s", (command) => {
     expect(classifyShellCommand(command)).toBe("unknown");
@@ -79,10 +80,14 @@ describe("indirect execution of destructive commands requires fresh approval", (
   ])("high risk: %s", (command) => {
     expect(classifyShellCommand(command)).toBe("high_risk");
   });
-  // GAP: classified unknown, not high_risk; never eligible, so never remembered
-  test.todo("git -c core.sshCommand=evil status is high_risk", () => {});
-  // GAP: classified unknown, not high_risk; never eligible, so never remembered
-  test.todo("npx rimraf x is high_risk", () => {});
+  test.each([
+    "git -c core.sshCommand=evil status",
+    "git -ccore.sshCommand=evil status",
+    "git --config-env=core.sshCommand=EVIL status",
+    "npx rimraf x",
+  ])("requires fresh approval: %s", (command) =>
+    expect(classifyShellCommand(command)).toBe("high_risk"),
+  );
   test.each(["git -c core.sshCommand=evil status", "npx rimraf x"])(
     "never eligible for standing approval: %s",
     (command) => {

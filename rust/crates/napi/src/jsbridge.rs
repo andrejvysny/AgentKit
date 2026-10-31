@@ -25,6 +25,11 @@ use tokio::sync::oneshot;
 pub(crate) enum PendingKind {
     Provider,
     Tool,
+    Retry,
+    Steering,
+    Budget,
+    Hook,
+    Settled,
 }
 
 struct Pending {
@@ -59,6 +64,29 @@ pub(crate) struct JsBridge {
     inner: Mutex<Inner>,
 }
 
+struct PendingGuard {
+    bridge: Arc<JsBridge>,
+    call_id: String,
+    abort_on_drop: bool,
+}
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        if self
+            .bridge
+            .cancel(&self.call_id, "the callback future was dropped")
+        {
+            let kind = if self.abort_on_drop {
+                "cancel"
+            } else {
+                "discard"
+            };
+            self.bridge.deliver_message(
+                serde_json::json!({"kind":kind,"callId":self.call_id}).to_string(),
+            );
+        }
+    }
+}
+
 impl JsBridge {
     pub(crate) fn new(deliver: ThreadsafeFunction<String>) -> Self {
         Self {
@@ -68,6 +96,20 @@ impl JsBridge {
                 pending: HashMap::new(),
             }),
         }
+    }
+
+    pub(crate) fn deliver_message(&self, text: String) -> napi::Status {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if inner.state != BridgeState::Open {
+            return napi::Status::Closing;
+        }
+        self.deliver
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .call(Ok(text), ThreadsafeFunctionCallMode::NonBlocking)
     }
 
     /// Release the JS event-loop reference held by the delivery function.
@@ -98,11 +140,23 @@ impl JsBridge {
         cancellation: &agentkit_core::CancellationToken,
     ) -> std::result::Result<Value, String> {
         let (sender, receiver) = oneshot::channel();
+        let abort_on_drop = matches!(&kind, PendingKind::Tool);
         let label = match kind {
             PendingKind::Provider => "provider",
             PendingKind::Tool => "tool",
+            PendingKind::Retry => "retry",
+            PendingKind::Steering => "steering",
+            PendingKind::Budget => "budget",
+            PendingKind::Hook => "hook",
+            PendingKind::Settled => "settled",
         };
-        {
+        let payload = serde_json::json!({
+            "kind": label,
+            "callId": call_id,
+            "request": request,
+        });
+        let text = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_owned());
+        let status = {
             let mut inner = self
                 .inner
                 .lock()
@@ -113,26 +167,24 @@ impl JsBridge {
                 ));
             }
             inner.pending.insert(call_id.to_owned(), Pending { sender });
-        }
-        calls()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(call_id.to_owned(), Arc::downgrade(&self));
-        let payload = serde_json::json!({
-            "kind": label,
-            "callId": call_id,
-            "request": request,
-        });
-        let text = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_owned());
-        let status = self
-            .deliver
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .call(Ok(text), ThreadsafeFunctionCallMode::Blocking);
+            calls()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(call_id.to_owned(), Arc::downgrade(&self));
+            self.deliver
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .call(Ok(text), ThreadsafeFunctionCallMode::NonBlocking)
+        };
         if status != napi::Status::Ok {
             self.cancel(call_id, "the JS delivery queue is closing");
             return Err("the JS delivery queue is closing".to_owned());
         }
+        let _guard = PendingGuard {
+            bridge: self.clone(),
+            call_id: call_id.to_owned(),
+            abort_on_drop,
+        };
         tokio::select! {
             result = receiver => match result {
                 Ok(Ok(value)) => Ok(value),
@@ -164,7 +216,7 @@ impl JsBridge {
         }
     }
 
-    fn cancel(&self, call_id: &str, reason: &str) {
+    fn cancel(&self, call_id: &str, reason: &str) -> bool {
         if let Some(pending) = self
             .inner
             .lock()
@@ -177,6 +229,9 @@ impl JsBridge {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .remove(call_id);
+            true
+        } else {
+            false
         }
     }
 
@@ -216,6 +271,13 @@ impl JsBridge {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .state = BridgeState::Closed;
     }
+}
+
+pub(crate) fn active(call_id: &str) -> bool {
+    calls()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains_key(call_id)
 }
 
 /// Exported resolver entry point: JS answers exactly one in-flight callback.

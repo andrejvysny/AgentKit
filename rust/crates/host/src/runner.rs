@@ -405,7 +405,14 @@ impl AgentHost {
         let outcome = loop {
             tokio::select! {
                 result = &mut execution => break result,
-                _ = heartbeat.tick() => self.heartbeat(&context).await?,
+                _ = heartbeat.tick() => {
+                    let renewal = self.heartbeat(&context);
+                    tokio::pin!(renewal);
+                    tokio::select! {
+                        result = &mut execution => break result,
+                        result = &mut renewal => result?,
+                    }
+                },
             }
         };
         // A parked turn was committed by the park itself: the attempt and

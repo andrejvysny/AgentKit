@@ -56,6 +56,101 @@ describe("execution budgets", () => {
       data: { errorCode: "execution_timeout" },
     });
   });
+  it("keeps the first-byte deadline after a local admission diagnostic", async () => {
+    const client: AiProviderClient = {
+      ...hanging(),
+      async *streamChat(input) {
+        yield {
+          type: "run.context.admitted",
+          runId: input.runId,
+          timestamp: new Date().toISOString(),
+          seq: 1,
+          data: {
+            requestId: "r",
+            windowTokens: 100,
+            windowSource: "fallback",
+            reserveTokens: 10,
+            toolTokens: 0,
+            extraTokens: 0,
+            estimatedInputTokens: 0,
+            budgetTokens: 90,
+            maxOutputTokens: 10,
+          },
+        } as AiRunEvent;
+        await never();
+      },
+    };
+    const events = await collect(client, {
+      firstByteMs: 5,
+      streamIdleMs: 1000,
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "run.failed",
+      data: {
+        errorCode: "execution_timeout",
+        errorMessage: expect.stringContaining("first_byte"),
+      },
+    });
+  });
+  it("uses stream-idle after transport activity following admission", async () => {
+    const client: AiProviderClient = {
+      ...hanging(),
+      async *streamChat(input) {
+        yield {
+          type: "run.context.admitted",
+          runId: input.runId,
+          timestamp: new Date().toISOString(),
+          seq: 1,
+          data: {
+            requestId: "r",
+            windowTokens: 100,
+            windowSource: "fallback",
+            reserveTokens: 10,
+            toolTokens: 0,
+            extraTokens: 0,
+            estimatedInputTokens: 0,
+            budgetTokens: 90,
+            maxOutputTokens: 10,
+          },
+        } as AiRunEvent;
+        input.onActivity?.();
+        await never();
+      },
+    };
+    const events = await collect(client, {
+      firstByteMs: 1000,
+      streamIdleMs: 5,
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "run.failed",
+      data: {
+        errorCode: "execution_timeout",
+        errorMessage: expect.stringContaining("stream_idle"),
+      },
+    });
+  });
+  it("keeps the first-byte deadline after a local warning", async () => {
+    const client: AiProviderClient = {
+      ...hanging(),
+      async *streamChat(input) {
+        yield {
+          type: "run.warning",
+          runId: input.runId,
+          timestamp: new Date().toISOString(),
+          data: { code: "local_diagnostic", message: "Request preparation" },
+        } as AiRunEvent;
+        await never();
+      },
+    };
+    const events = await collect(client, {
+      firstByteMs: 5,
+      streamIdleMs: 1000,
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "run.failed",
+      data: { errorMessage: expect.stringContaining("first_byte") },
+    });
+  });
   it("cancels an uncooperative provider without waiting for return", async () => {
     const controller = new AbortController();
     const work = collect(hanging(), { overallMs: 1000 }, controller.signal);

@@ -376,6 +376,18 @@ diff --git a/packages/host/src/context/bounded-context-client.ts b/packages/host
      ...(client.tracksTransportRequests === undefined
        ? {}
        : { tracksTransportRequests: client.tracksTransportRequests }),
+@@ -111,10 +107,5 @@ async function* guardedStream(
+     return;
+   }
+-  const enforceCeiling = !(
+-    client.protocol === "responses" &&
+-    "authKind" in client &&
+-    client.authKind === "chatgpt-account" &&
+-    request.maxOutputTokens === undefined
+-  );
++  const enforceCeiling = true;
+   const { maxOutputTokens, ...estimate } = admission;
+   // The loop re-stamps these events into its authoritative sequence and attempt.
 @@ -133,8 +129,5 @@ function requestAdmission(
    const toolTokens = estimateTools(request.tools ?? []);
 -  const extraTokens = (request.runContent?.messages ?? []).reduce(

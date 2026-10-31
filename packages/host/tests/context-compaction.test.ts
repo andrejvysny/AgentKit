@@ -403,18 +403,45 @@ describe("summary invalidation", () => {
     await f.store.conversations.updateMessage(q1?.id ?? "", {
       content: big("q1 edited"),
     });
-    await turn(f, big("q6"));
-    // Stale summary skipped; the over-budget history compacted afresh.
-    expect(f.mock.summaryRequests).toHaveLength(2);
+    const sixth = await turn(f, big("q6"));
+    // The stale cache is unusable and the complete prefix no longer fits.
+    expect(f.mock.summaryRequests).toHaveLength(1);
     const request = f.mock.requests.at(-2) ?? [];
     const text = JSON.stringify(request);
-    expect(text).toContain("SUMMARY-TWO");
+    expect(text).not.toContain("SUMMARY-TWO");
     expect(text).not.toContain("SUMMARY-ONE");
-    expect(await f.summaries.listSummaries(f.chatId)).toHaveLength(2);
+    expect(await f.summaries.listSummaries(f.chatId)).toHaveLength(1);
+    expect(await warningCodes(f, sixth.runId)).toContain("compaction_failed");
+    expect(await warningCodes(f, sixth.runId)).toContain("context_trimmed");
+    expect(
+      (await f.store.conversations.getMessage(q1?.id ?? ""))?.content,
+    ).toBe(big("q1 edited"));
   });
 });
 
 describe("compaction failure", () => {
+  it("records paid usage when the summarizer returns an incomplete result", async () => {
+    const f = await setup();
+    f.mock.setScript(scripts(6));
+    f.mock.summarizer.setScript([
+      { steps: [{ kind: "text", content: "partial" }], finishReason: "length" },
+    ]);
+    await fillFourTurns(f);
+    const fifth = await turn(f, big("q5"));
+    const log = await events(f, fifth.runId);
+    const usage = log.filter(
+      (event) => event.type === "run.usage" && event.data.step === 0,
+    );
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({
+      data: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+    });
+    expect(await warningCodes(f, fifth.runId)).toContain("compaction_failed");
+    expect(await f.summaries.listSummaries(f.chatId)).toEqual([]);
+    expect((await f.store.tasks.getTask(fifth.runId))?.status).toBe(
+      "completed",
+    );
+  });
   it("warns, trims, completes the turn and saves nothing", async () => {
     const f = await setup();
     f.mock.setScript(scripts(6));

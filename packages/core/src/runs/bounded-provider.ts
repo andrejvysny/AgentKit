@@ -87,7 +87,14 @@ async function* boundedProviderStream(
         return;
       }
       observeCompletion(completion, next.value);
-      if (next.value.type !== "run.started") activity.activity();
+      if (
+        next.value.type === "run.message.delta" ||
+        next.value.type === "run.message.reasoning-delta" ||
+        next.value.type === "run.message.completed" ||
+        next.value.type === "run.tool.requested" ||
+        next.value.type === "run.usage"
+      )
+        activity.activity();
       yield next.value;
     }
   } finally {

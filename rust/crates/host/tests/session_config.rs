@@ -243,7 +243,7 @@ async fn empty_skills_keep_the_payload_unchanged() {
 }
 
 #[tokio::test]
-async fn submit_refuses_context_overrides() {
+async fn submit_refuses_unsupported_context_policy() {
     let fixture = fixture();
     let input = CreateSessionInput {
         context: Some(json!({"policy": "final_answers", "windowTokens": 8192})),
@@ -306,27 +306,20 @@ async fn submit_refuses_provider_reasoning_effort() {
 }
 
 #[tokio::test]
-async fn compact_is_refused_without_a_compaction_runner() {
+async fn compact_records_deferred_request() {
     let fixture = fixture();
     fixture
         .service
         .create_session(&create_input())
         .await
         .unwrap();
-    let error = fixture
-        .service
-        .compact("s1")
-        .await
-        .expect_err("compact accepted with no consumer");
-    assert_eq!(error.code, "not_implemented");
-    assert!(!error.message.is_empty(), "refusal must explain itself");
-    // Nothing was recorded: the request cannot linger unconsumed.
+    fixture.service.compact("s1").await.unwrap();
     let chat = fixture.store.get_chat("s1").await.unwrap().unwrap();
     assert!(
         chat.metadata
             .get("agentkit.session.compactRequestedAt")
-            .is_none(),
-        "compact recorded a request nothing will run"
+            .is_some(),
+        "compact did not record the deferred request"
     );
     // Unknown sessions keep the not-found answer.
     assert_eq!(

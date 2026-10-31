@@ -7,7 +7,22 @@ declare type JsonValue = string | number | boolean | null | JsonValue[] | { [key
  */
 export declare const __napiBindingTarget: 'native' | 'wasm32-wasi' | 'wasm32-wasip1'
 
+export declare class NativeRunHandle {
+  static start(optionsJson: string, callback: ((err: Error | null, arg: string) => any)): Promise<NativeRunHandle>
+  next(): Promise<string>
+  close(): void
+  failBudget(code: string, message: string, providerRequests: number): void
+  cancel(): void
+}
+
 export declare class NativeStore {
+  /**
+   * Internal JSON port used by the compatibility facade. Rust owns validation,
+   * persistence, ordering, and atomicity; unknown operations never run effects.
+   */
+  callStore(operation: string, inputJson: string): Promise<string>
+  beginTransaction(): Promise<StoreTransactionHandle>
+  setTransactionGateTimeout(milliseconds: number): void
   /**
    * Open (creating if necessary) a durable store file. A second open of
    * the same path while it is owned is rejected with `already_owned`.
@@ -29,6 +44,15 @@ export declare class NativeStore {
 }
 
 export declare class SessionService {
+  setExecutionMode(sessionId: string, mode: string): Promise<string>
+  listApprovalGrants(sessionId: string): Promise<string>
+  revokeApprovalGrant(sessionId: string, grantId: string): Promise<string>
+  compact(sessionId: string): Promise<void>
+  fork(sessionId: string, fromMessageId: string): Promise<string>
+  setModel(sessionId: string, inputJson: string): Promise<string>
+  cancelQueuedInput(sessionId: string, inputId: string): Promise<boolean>
+  clearQueue(sessionId: string): Promise<number>
+  configure(sessionId: string, inputJson: string): Promise<string>
   /**
    * Register a JS-executed tool. `definitionJson` is the portable tool
    * definition: `{name, version?, effect?, capability?, description?,
@@ -111,6 +135,12 @@ export declare class SessionService {
   get closeUncertain(): boolean
 }
 
+export declare class StoreTransactionHandle {
+  callStore(operation: string, inputJson: string): Promise<string>
+  commit(): Promise<void>
+  rollback(): Promise<void>
+}
+
 /**
  * One turn subscription. `poll` drains the next committed events; the
  * stream is pull-based, so a slow consumer applies backpressure to the
@@ -136,6 +166,14 @@ export declare class SubscriptionHandle {
  * contract are all present before any session call is attempted.
  */
 export declare function bindingSmoke(): string
+
+export declare function endRunProvider(callId: string): boolean
+
+export declare function isRunCallbackActive(callId: string): boolean
+
+export declare function pushRunProviderEvent(callId: string, eventJson: string): Promise<boolean>
+
+export declare function reserveRunProviderRequest(callId: string): Promise<void>
 
 /**
  * The JS wrapper settles exactly one in-flight provider/tool callback with

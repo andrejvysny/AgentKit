@@ -9,7 +9,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<TaskRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             fence(&transaction, &proof, now)?;
             let parent: TaskRecord = required(&transaction, "tasks", "id", &proof.task_id)?;
             if parent.status != TaskStatus::Running || parent.cancel_requested {
@@ -39,7 +39,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<TaskRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             fence(&transaction, &proof, now)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &proof.task_id)?;
             if task.runtime_state != expected {
@@ -58,7 +58,7 @@ impl SqliteStore {
     /// Explicit boot-time policy. Ordinary opens never change queued work.
     pub async fn interrupt_queued(&self, before: i64) -> Result<usize> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut count = 0;
             for mut task in all::<TaskRecord>(&transaction, "tasks")?
                 .into_iter()

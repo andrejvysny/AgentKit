@@ -10,27 +10,46 @@
  */
 
 import {
-  NativeStore as RawNativeStore,
-  bindingSmoke,
-  resolveCall,
-} from "../generated/index.js";
+  withNativeTransaction,
+  type NativeStorePort,
+} from "./store-transaction.js";
+export type { NativeStorePort } from "./store-transaction.js";
 import type {
+  NativeStore as RawNativeStore,
   SessionService as RawSessionService,
   SubscriptionHandle as RawSubscriptionHandle,
 } from "../generated/index.js";
+import { loadBinding } from "./loader.js";
+import { CallbackRouter } from "./callback-router.js";
+import type {
+  ProviderFunction,
+  ToolDefinitionJson,
+  ToolRunFunction,
+} from "./callback-types.js";
+export type * from "./callback-types.js";
+import {
+  NativeSessionManagement,
+  waitFor,
+  type NativeCallOptions,
+} from "./management.js";
+export {
+  NativeRunHandle,
+  pushRunProviderEvent,
+  endRunProvider,
+  isRunCallbackActive,
+  reserveRunProviderRequest,
+  resolveCall,
+} from "./loader.js";
+export type { RawRunHandle } from "./loader.js";
+export type {
+  NativeCallOptions,
+  NativeModelInput,
+  NativeContextOptions,
+  NativeConfiguration,
+  StandingApprovalGrant,
+} from "./management.js";
 
-// The smoke probe validates the embedded error-code contract at load.
-const SMOKE = (() => {
-  try {
-    return bindingSmoke();
-  } catch (error) {
-    throw new Error(
-      `the native binding failed to load: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-})();
-
-export const bindingId: string = SMOKE;
+export const bindingId: string = "agentkit-native";
 
 /** A stable native failure. `code` is one of the codes in
  * `rust/crates/napi/error-codes.json` — the single shared contract. */
@@ -78,183 +97,6 @@ async function lift<T>(run: () => Promise<T>): Promise<T> {
 // Callback routing
 // ---------------------------------------------------------------------------
 
-/** One model request: the JS provider returns the final assistant result. */
-export interface ProviderRequest {
-  runId: string;
-  model: string;
-  messages: unknown[];
-  tools: unknown[];
-  temperature?: number | null;
-  maxOutputTokens?: number | null;
-}
-
-export interface ProviderToolCall {
-  id?: string;
-  name: string;
-  arguments?: unknown;
-}
-
-export interface ProviderResult {
-  content?: string;
-  toolCalls?: ProviderToolCall[];
-  finishReason?: string;
-  usage?: Record<string, unknown> | null;
-}
-
-export type ProviderFunction = (
-  request: ProviderRequest,
-) => Promise<ProviderResult> | ProviderResult;
-
-/** One tool execution: the JS tool returns the host tool-result shape. */
-export interface ToolCallRequest {
-  name: string;
-  toolCallId: string | null;
-  attemptId: string | null;
-  runId: string;
-  input: unknown;
-}
-
-export interface ToolResultJson {
-  ok?: boolean;
-  data?: unknown;
-  sources?: unknown[];
-  warnings?: string[];
-  truncated?: boolean;
-  limits?: { profile: string; maxBytes: number; maxItems?: number };
-  modelData?: unknown;
-  summary?: string;
-  status?: string;
-}
-
-export interface ToolDefinitionJson {
-  name: string;
-  version?: string;
-  effect?: "read" | "write";
-  capability?: string;
-  description?: string;
-  inputSchema: Record<string, unknown>;
-  outputSchema?: Record<string, unknown>;
-  timeoutMs?: number;
-}
-
-export type ToolRunFunction = (
-  input: unknown,
-  request: ToolCallRequest,
-) => Promise<ToolResultJson | unknown> | ToolResultJson | unknown;
-
-interface RegisteredTool {
-  definition: ToolDefinitionJson;
-  run: ToolRunFunction;
-}
-
-/**
- * The single JS entry point for every Rust-originated callback. One
- * callback = one in-flight call; the wrapper resolves it exactly once. A
- * user function that throws (or rejects) settles the call as a failure —
- * never as a success, never as a dangling entry.
- */
-class CallbackRouter {
-  private provider: ProviderFunction | null = null;
-  private tools = new Map<string, RegisteredTool>();
-  private closed = false;
-  /**
-   * Dispatched callbacks whose user function has not settled yet. The
-   * Rust bridge CANNOT carry this count: `Closing` drains its pending map
-   * (rejecting the Rust-side waiter) while the user promise may still be
-   * running outside the runtime. This counter spans exactly the window
-   * the runtime cannot control — from entering the user function until
-   * its promise settles — and survives `close()`, because that is when
-   * the distinction matters.
-   */
-  private inFlight = 0;
-
-  get pendingEffects(): number {
-    return this.inFlight;
-  }
-
-  setProvider(provider: ProviderFunction | null): void {
-    this.provider = provider;
-  }
-
-  registerTool(definition: ToolDefinitionJson, run: ToolRunFunction): void {
-    this.tools.set(definition.name, { definition, run });
-  }
-
-  close(): void {
-    this.closed = true;
-    this.provider = null;
-    this.tools.clear();
-  }
-
-  /** Invoked from Rust with one JSON envelope per callback. Must never
-   * throw: an escaping exception would strand the Rust pending entry. */
-  async handle(raw: string): Promise<void> {
-    let envelope: { kind?: unknown; callId?: unknown; request?: unknown };
-    try {
-      envelope = JSON.parse(raw);
-    } catch {
-      return; // Nothing addressable; Rust-side shutdown still reaps it.
-    }
-    const callId = typeof envelope.callId === "string" ? envelope.callId : null;
-    if (callId === null) return;
-    if (this.closed) {
-      resolveCall(callId, null, "the binding closed before the callback ran");
-      return;
-    }
-    try {
-      if (envelope.kind === "provider") {
-        const provider = this.provider;
-        if (provider === null) {
-          resolveCall(
-            callId,
-            null,
-            "no provider is registered for this session service",
-          );
-          return;
-        }
-        const outcome = await this.dispatchUser(async () => {
-          const result = await provider(envelope.request as ProviderRequest);
-          resolveCall(callId, JSON.stringify(result ?? {}), null);
-        });
-        return outcome;
-      }
-      if (envelope.kind === "tool") {
-        const request = envelope.request as ToolCallRequest;
-        const tool = this.tools.get(request?.name);
-        if (tool === undefined) {
-          resolveCall(callId, null, `no JS tool named ${request?.name}`);
-          return;
-        }
-        await this.dispatchUser(async () => {
-          const outcome = await tool.run(request.input, request);
-          resolveCall(callId, JSON.stringify(outcome ?? {}), null);
-        });
-        return;
-      }
-      resolveCall(callId, null, `unknown callback kind`);
-    } catch (error) {
-      resolveCall(
-        callId,
-        null,
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  }
-
-  /** One entry into USER code and its settlement — the only window the
-   * runtime cannot control, counted for `pendingEffects`. Errors pass
-   * through to the caller's rejection handling; the counter always
-   * settles. */
-  private async dispatchUser(run: () => Promise<void>): Promise<void> {
-    this.inFlight += 1;
-    try {
-      await run();
-    } finally {
-      this.inFlight -= 1;
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -288,15 +130,43 @@ export class NativeStore {
   }
 
   static async open(path: string): Promise<NativeStore> {
+    const { NativeStore: RawNativeStore } = await loadBinding();
     return new NativeStore(
       await lift(() => Promise.resolve(RawNativeStore.open(path))),
     );
   }
 
   static async inMemory(): Promise<NativeStore> {
+    const { NativeStore: RawNativeStore } = await loadBinding();
     return new NativeStore(
       await lift(() => Promise.resolve(RawNativeStore.memory())),
     );
+  }
+
+  /** Internal compatibility port. Unknown operations fail before effects. */
+  async callStore<T>(operation: string, input: unknown = {}): Promise<T> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    return JSON.parse(
+      await lift(() => this.raw.callStore(operation, JSON.stringify(input))),
+    ) as T;
+  }
+
+  async transaction<T>(fn: (view: NativeStorePort) => Promise<T>): Promise<T> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    const transaction = await lift(() => this.raw.beginTransaction());
+    return withNativeTransaction(transaction, fn, lift);
+  }
+
+  setTransactionGateTimeout(milliseconds: number): void {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    try {
+      this.raw.setTransactionGateTimeout(milliseconds);
+    } catch (error) {
+      throw mapError(error);
+    }
   }
 
   /** Create a session service over this store with one JS provider slot
@@ -410,8 +280,7 @@ export class TurnSubscription {
   }
 }
 
-export class NativeSessionService {
-  private readonly raw: RawSessionService;
+export class NativeSessionService extends NativeSessionManagement {
   private readonly router: CallbackRouter;
   /** Kept alive while the service exists: the store clone the worker and
    * session service run on must not be collected under the service. */
@@ -423,12 +292,14 @@ export class NativeSessionService {
     router: CallbackRouter,
     store: NativeStore,
   ) {
-    this.raw = raw;
+    super(raw, lift);
     this.router = router;
     this.store = store;
   }
 
   setProvider(provider: ProviderFunction | null): void {
+    if (this.closing !== null)
+      throw new NativeAgentError("closed", "the session service is closed");
     this.router.setProvider(provider);
   }
 
@@ -442,16 +313,23 @@ export class NativeSessionService {
 
   async createSession(
     input: CreateSessionInputJson,
+    options?: NativeCallOptions,
   ): Promise<Record<string, unknown>> {
-    const text = await lift(() =>
-      this.raw.createSession(JSON.stringify(input)),
+    const text = await waitFor(
+      () => lift(() => this.raw.createSession(JSON.stringify(input))),
+      options,
     );
     return JSON.parse(text) as Record<string, unknown>;
   }
 
-  async send(sessionId: string, input: SendInputJson): Promise<SendResultJson> {
-    const text = await lift(() =>
-      this.raw.send(sessionId, JSON.stringify(input)),
+  async send(
+    sessionId: string,
+    input: SendInputJson,
+    options?: NativeCallOptions,
+  ): Promise<SendResultJson> {
+    const text = await waitFor(
+      () => lift(() => this.raw.send(sessionId, JSON.stringify(input))),
+      options,
     );
     return JSON.parse(text) as SendResultJson;
   }
@@ -459,9 +337,11 @@ export class NativeSessionService {
   async followUp(
     sessionId: string,
     input: SendInputJson,
+    options?: NativeCallOptions,
   ): Promise<SendResultJson> {
-    const text = await lift(() =>
-      this.raw.followUp(sessionId, JSON.stringify(input)),
+    const text = await waitFor(
+      () => lift(() => this.raw.followUp(sessionId, JSON.stringify(input))),
+      options,
     );
     return JSON.parse(text) as SendResultJson;
   }
@@ -469,9 +349,11 @@ export class NativeSessionService {
   async steer(
     sessionId: string,
     input: SendInputJson,
+    options?: NativeCallOptions,
   ): Promise<SendResultJson> {
-    const text = await lift(() =>
-      this.raw.steer(sessionId, JSON.stringify(input)),
+    const text = await waitFor(
+      () => lift(() => this.raw.steer(sessionId, JSON.stringify(input))),
+      options,
     );
     return JSON.parse(text) as SendResultJson;
   }

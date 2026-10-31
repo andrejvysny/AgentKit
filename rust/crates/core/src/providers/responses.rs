@@ -132,6 +132,9 @@ impl ResponsesProvider {
 }
 #[async_trait]
 impl ChatProvider for ResponsesProvider {
+    fn allows_implicit_output_limit(&self) -> bool {
+        self.transport.auth_kind() != AuthKind::ChatGptAccount
+    }
     fn supports_usage_cleanup(&self) -> bool {
         true
     }

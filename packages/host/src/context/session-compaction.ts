@@ -18,6 +18,7 @@ import type {
 import type { AssistantStore } from "../ports/assistant-store.js";
 import type { ContextSummaryRecord } from "../ports/context-summary-store.js";
 import type { Clock } from "../ports/system.js";
+import { withCompactionUsage } from "./compaction-usage.js";
 import {
   COMPACT_REQUESTED_METADATA_KEY,
   type AgentSessionDescriptor,
@@ -116,26 +117,37 @@ export async function applySessionSummaries(
     return working.messages;
 
   const compactionNumber = stored.length + 1;
-  const outcome = await compactSessionContext({
-    sessionId: input.chatId,
-    messages: input.messages,
-    recordIds: input.recordIds,
-    client: input.client,
-    model: input.model,
-    providerId: input.providerId,
-    estimator,
-    windowTokens: input.windowTokens,
-    reserveTokens: input.reserveTokens,
-    keepRecentTokens:
-      input.session.context?.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS,
-    limits: input.limits,
-    ...(previous === undefined ? {} : { previous }),
-    signal: input.signal,
-    taskId: input.taskId,
-    compactionNumber,
-    summaryId: `${input.taskId}:compaction:${compactionNumber}`,
-    nowIso: input.clock.nowIso(),
-  });
+  const outcome = await withCompactionUsage(
+    input.client,
+    (client) =>
+      compactSessionContext({
+        sessionId: input.chatId,
+        messages: input.messages,
+        recordIds: input.recordIds,
+        client,
+        model: input.model,
+        providerId: input.providerId,
+        estimator,
+        windowTokens: input.windowTokens,
+        reserveTokens: input.reserveTokens,
+        keepRecentTokens:
+          input.session.context?.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS,
+        limits: input.limits,
+        ...(previous === undefined ? {} : { previous }),
+        signal: input.signal,
+        taskId: input.taskId,
+        compactionNumber,
+        summaryId: `${input.taskId}:compaction:${compactionNumber}`,
+        nowIso: input.clock.nowIso(),
+      }),
+    (usage) =>
+      input.appendEvent({
+        type: "run.usage",
+        runId: input.taskId,
+        timestamp: usage.timestamp,
+        data: { ...usage.data, step: 0 },
+      }),
+  );
 
   if (outcome === undefined) {
     // Nothing older than the kept tail: a manual request is satisfied, not retried forever.
@@ -167,14 +179,6 @@ export async function applySessionSummaries(
       reason: manual ? "manual" : "threshold",
     },
   });
-  for (const usage of outcome.usage) {
-    await input.appendEvent({
-      type: "run.usage",
-      runId: input.taskId,
-      timestamp: usage.timestamp,
-      data: { ...usage.data, step: 0 },
-    });
-  }
   const applied = await applyValidSummary(
     input.messages,
     input.recordIds,

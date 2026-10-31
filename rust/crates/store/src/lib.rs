@@ -1,29 +1,36 @@
 //! Durable storage. Every database mutation runs on one bounded, dedicated worker.
 mod actor;
 mod agent_inputs;
+mod context_summaries;
 mod conversations;
 mod data;
+mod deadline;
 mod execution_receipts;
 mod models;
 mod proposals;
+mod provider_catalog;
 mod schema;
 mod session_ops;
 mod settings_commit;
 mod tasks;
 mod timestamp;
+mod transaction;
 mod util;
 
 pub use actor::SqliteStore;
 pub use agent_inputs::*;
+pub use context_summaries::*;
 pub use conversations::*;
 pub use data::*;
 pub use execution_receipts::*;
 pub use models::*;
 pub use proposals::*;
+pub use provider_catalog::*;
 pub use schema::SCHEMA_VERSION;
 pub use session_ops::*;
 pub use settings_commit::{SettingWrite, SettingsCommit};
 pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};
+pub use transaction::StoreTransaction;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -61,6 +68,10 @@ pub enum StoreError {
     RecoveryUnreadable(String),
     #[error("store worker closed")]
     Closed,
+    #[error("transaction_gate_timeout")]
+    TransactionGateTimeout,
+    #[error("transaction scope expired")]
+    TransactionScopeExpired,
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;

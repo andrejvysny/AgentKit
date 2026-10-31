@@ -9,9 +9,11 @@ TypeScript. The wire types are JSON mirrors of the Rust serde shapes
 async iterator, nothing else.
 
 Status: **first slice** (see `docs/rust/native-binding-milestone.md`).
-Qualified on x86_64-linux with Bun and Node 22 (packed-consumer gate); the
-wider Node matrix, provider streaming deltas, `AbortSignal` mapping, and
-prebuilt per-triple packages are open. The Rust core's unix process/lease
+Historical x86_64-linux evidence is recorded in the milestone. The current
+working tree has local macOS arm64 packed-consumer evidence under Node 22.23.3
+and Bun 1.4.0. The wider matrix and durable-session provider streaming remain
+open. Platform package staging exists; publication and full qualification remain
+open. The Rust core's unix process/lease
 code compiles for Windows with fail-closed fallbacks (signals become no-ops,
 liveness probes answer "alive", quarantines stay blocked) — Windows
 qualification is CI-policy, not local, until the runner records it.
@@ -22,9 +24,9 @@ through relative imports in tests, not npm.
 
 | Path | Owner |
 | --- | --- |
-| `../rust/crates/napi` | the binding itself (napi-rs 3.x, async tokio runtime) |
-| `src/index.ts` | thin TS wrapper: JSON in/out, the one iterator, stable error classes |
-| `src/codes.ts` | the versioned error-code list — embedded into the Rust crate with `include_str!` and compared in a test, so the two languages cannot drift |
+| `../../rust/crates/napi` | the binding itself (napi-rs 3.x, async tokio runtime) |
+| `src/` | TypeScript wrappers for the native store, session service, callbacks, and streaming bridge |
+| `../../rust/crates/napi/error-codes.json` | versioned error-code list embedded into the Rust crate and checked by tests |
 | `generated/` | the napi loader and `index.d.ts`; **committed verbatim** so `bun run typecheck` needs no Rust build and the native CI job can gate staleness with `git diff --exit-code` against a fresh `build:native` (biome is switched off for this directory — reformatting would break that byte-exact gate) |
 | `tests/` | vertical slice, contract, and gating tests |
 
@@ -34,6 +36,13 @@ never committed. Build it with:
 ```sh
 bun run --cwd packages/native build:native
 ```
+
+Distribution stages the built addon into its matching private platform package;
+the wrapper declares these packages as optional dependencies. For an existing
+temporary directory outside the repository, run
+`node rust/scripts/stage-native-platform.mjs /path/to/staging` before packing.
+An absent addon fails at first use, and package installation never builds Rust.
+The isolated packed-consumer gate qualifies only its current host platform.
 
 ## Gating
 
@@ -57,7 +66,7 @@ const service = await store.createService({ closeTimeoutMs: 5_000 });
 
 service.setProvider(async (request) => ({
   content: "echo: " + request.messages.at(-1)?.content,
-  stopReason: "stop",
+  finishReason: "stop",
 }));
 
 await service.registerTool(
@@ -88,6 +97,30 @@ const usage = await service.getUsage("s1");
 await service.close(); // Open → Closing → Closed; idempotent, concurrent-safe
 await store.close();  // releases the file lock — service closes first
 ```
+
+Session management and send methods accept an optional `{ signal }`. A signal
+already aborted prevents the call. Aborting afterward stops waiting only;
+durable work may still complete. Use `cancel` or `interrupt` to request a stop.
+
+`compact(sessionId)` requests compaction on the next session turn. Requests stay
+pending if summarization fails. Responses-provider continuations are preserved
+without rebasing; compaction is unavailable for those turns and emits a warning.
+Native summary source hashes use a domain-separated v2 identity that includes
+tool-call IDs, names, arguments, and order. Earlier hashes are invalidated.
+If the complete source prefix cannot fit the summarization request, compaction
+fails rather than claiming coverage of unseen history. Observed summarizer usage
+is recorded even on failure. The TypeScript compactor uses the same safeguards;
+the default backend is unchanged.
+
+The native store exposes transaction-scoped views and provider and summary
+primitives. These internal building blocks do not replace the frozen TypeScript
+store adapters or host and service constructors. The memory adapter's public live
+Maps remain an open compatibility decision.
+
+Native coding-command standing approvals are disabled until executable, script,
+configuration, and environment identity can be bound. Eligible commands re-ask
+in modes that require approval; high-risk commands require a fresh approval even
+in `full_auto`.
 
 Approvals surface through the same calls: the run parks (`run.waiting`,
 visible in `getState().pendingHumanRequests`), `approve(requestId,
@@ -140,3 +173,17 @@ therefore labeled **provider-completion**, distinct from durable
 settlement (the terminal `TaskRecord`), exactly as the Rust side
 distinguishes `RunUpdate` from settlement. Streaming deltas are backlog
 item 1, with their own bounded lane.
+
+The core facade has a separate stateless streaming bridge selected by
+`AGENTKIT_BACKEND=native`; `AGENTKIT_BACKEND=ts` remains the default. It supports
+JavaScript async-iterable providers and tools without a durable session store.
+The bridge carries core hooks, steering, suspension, continuation, retry, and
+execution budgets. Its qualification scope and remaining migration gaps are
+documented in [`docs/rust/parity.md`](../../docs/rust/parity.md). This does not
+add a durable session delta lane or replace the public TypeScript host and
+storage facades.
+
+The installed umbrella smoke is `node rust/scripts/check-native-umbrella.mjs`,
+after `bun run build && bun run build:umbrella`. It runs the packed umbrella
+with the staged matching platform addon, then removes the addon and verifies
+the default TypeScript backend still runs while native use fails clearly.

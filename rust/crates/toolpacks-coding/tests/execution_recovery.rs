@@ -30,6 +30,20 @@ use agentkit_toolpacks_coding::coordination_lockdir::{
 
 static GATE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
+// macOS hides the environment of Apple-signed sleep; this fixture remains
+// visible to the actual marker scan used by recovery.
+#[test]
+#[ignore]
+fn marked_fixture() {
+    std::thread::sleep(std::time::Duration::from_secs(300));
+}
+
+fn marked_command() -> std::process::Command {
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test executable"));
+    command.args(["--ignored", "--exact", "marked_fixture"]);
+    command
+}
+
 fn gate() -> &'static tokio::sync::Mutex<()> {
     &GATE
 }
@@ -143,8 +157,7 @@ impl CrashFixture {
             .expect("spawn owner");
         let owner_pid = owner.id() as i32;
         let marker_owner_pid = std::process::id() as i32;
-        let marked = std::process::Command::new("/bin/sleep")
-            .arg("300")
+        let marked = marked_command()
             .env("AGENTKIT_EXEC_ID", format!("{marker_owner_pid}:{nonce}"))
             .stdin(detach())
             .stdout(detach())
@@ -661,8 +674,7 @@ async fn gate_child(workspace: std::path::PathBuf) {
     let owner_pid = owner.id() as i32;
     unsafe { libc::kill(owner_pid, libc::SIGKILL) };
     let _ = owner.wait();
-    let mut orphan = std::process::Command::new("/bin/sleep")
-        .arg("300")
+    let orphan = marked_command()
         .env("AGENTKIT_EXEC_ID", format!("{owner_pid}:{nonce}"))
         .stdin(detach())
         .stdout(detach())
@@ -670,11 +682,27 @@ async fn gate_child(workspace: std::path::PathBuf) {
         .process_group(0)
         .spawn()
         .expect("spawn orphan");
-    let orphan_pid = orphan.id() as i32;
+    let mut orphan = ChildGuard(orphan);
+    let orphan_pid = orphan.0.id() as i32;
     assert!(
         pid_alive(orphan_pid),
         "the orphan must be alive pre-recovery"
     );
+    let exec_id = format!("{owner_pid}:{nonce}");
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    loop {
+        if agentkit_toolpacks_coding::process_tree::find_marked_processes(&exec_id)
+            .await
+            .is_some_and(|pids| pids.contains(&orphan_pid))
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "orphan marker not observable"
+        );
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
 
     let coordinator = create_in_process_workspace_coordinator(None);
     let grant = tokio::time::timeout(
@@ -688,14 +716,26 @@ async fn gate_child(workspace: std::path::PathBuf) {
     // The grant returned — the orphan must already be dead: startup recovery
     // completed inside the acquisition, proving it is awaited/gating rather
     // than spawned-and-forgotten.
-    let killed = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        tokio::task::spawn_blocking(move || orphan.wait().expect("reap orphan")),
-    )
+    let killed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(status) = orphan.0.try_wait().expect("reap orphan") {
+                break status;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
+    })
     .await
-    .expect("the startup sweep must have terminated the orphan before/at grant")
-    .expect("join orphan reaper");
+    .expect("the startup sweep must have terminated the orphan before/at grant");
     assert!(killed.code().is_none(), "orphan died by signal: {killed:?}");
     assert!(!pid_alive(orphan_pid));
     drop(grant);
+}
+
+struct ChildGuard(std::process::Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }

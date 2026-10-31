@@ -18,7 +18,8 @@
     "rootDir": "./src",
     "baseUrl": ".",
     "paths": {
-      "@agentkit/contracts": ["../contracts/dist/index.d.ts"]
+      "@agentkit/contracts": ["../contracts/dist/index.d.ts"],
+      "@agentkit/native": ["../native/dist/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts"],

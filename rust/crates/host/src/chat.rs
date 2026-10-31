@@ -8,6 +8,16 @@ mod correction;
 #[path = "chat_history.rs"]
 mod history;
 pub use correction::CorrectionConfig;
+#[path = "compaction.rs"]
+mod compaction;
+#[path = "compaction_prompts.rs"]
+mod compaction_prompts;
+#[path = "compaction_request.rs"]
+mod compaction_request;
+#[path = "compaction_runner.rs"]
+mod compaction_runner;
+#[path = "chat_context.rs"]
+mod context_budget;
 #[path = "chat_hooks.rs"]
 mod hooks;
 pub use hooks::{AttachmentBudgets, ChatExecutorOptions, ChatHookTimeouts};
@@ -175,8 +185,22 @@ impl TaskExecutor for ChatExecutor {
         // Read the history AFTER the resume pass wrote its records: an
         // approval-mismatch refusal appended moments ago must be visible to
         // the model in this same attempt, not only after a restart.
-        let messages = history::assemble(
-            context.store.messages(chat_id, true).await?,
+        let records = context.store.messages(chat_id, true).await?;
+        let receipts = context
+            .store
+            .list_executions_by_chat(chat_id.to_owned())
+            .await
+            .map_err(|error| {
+                HostError::Execution(format!(
+                    "Cannot read durable execution receipts; mutations remain blocked. ({error})"
+                ))
+            })?;
+        let path_snapshot = serde_json::to_value(&records)
+            .map_err(|_| HostError::Execution("context snapshot failed".into()))?;
+        let receipt_snapshot = serde_json::to_value(&receipts)
+            .map_err(|_| HostError::Execution("receipt snapshot failed".into()))?;
+        let entries = history::assemble_with_ids(
+            records,
             self.options.history_limit,
             &anchor,
             resolved.system_prompt.clone(),
@@ -184,15 +208,7 @@ impl TaskExecutor for ChatExecutor {
             // never against an assumed absence (ADR 0020). Receipts are read
             // per chat: the calls being reconciled were recorded under the
             // run that owned them, not the run replaying history.
-            &context
-                .store
-                .list_executions_by_chat(chat_id.to_owned())
-                .await
-                .map_err(|error| {
-                    HostError::Execution(format!(
-                        "Cannot read durable execution receipts; mutations remain blocked. ({error})"
-                    ))
-                })?,
+            &receipts,
             &context.task.task_id,
         );
         let runtime: Arc<dyn agentkit_core::Runtime> =
@@ -203,11 +219,77 @@ impl TaskExecutor for ChatExecutor {
             runtime.clone(),
         )
         .await?;
+        let context_budget =
+            context_budget::ContextBudget::resolve(&context, chat_id, provider.id(), model).await?;
+        let prepared = Arc::new(hooks::PreparedProvider {
+            budget: context_budget.clone(),
+            inner: provider,
+            options: self.options.clone(),
+            context: context.clone(),
+            chat_id: chat_id.into(),
+        });
+        let messages = if session
+            && continuation.is_none()
+            && let Some(context_budget) = context_budget.clone()
+        {
+            compaction_runner::apply(compaction_runner::Input {
+                context: context.clone(),
+                chat_id: chat_id.into(),
+                model: model.into(),
+                provider: prepared.clone(),
+                request_budget: budget.clone(),
+                context_budget,
+                entries,
+                tools: registry.definitions(),
+                path_snapshot,
+                receipt_snapshot,
+                usage: self.options.usage.clone(),
+                usage_timeout_ms: self.options.hook_timeouts.usage_ms,
+            })
+            .await?
+            .into_iter()
+            .map(|(message, _)| message)
+            .collect()
+        } else {
+            if session && continuation.is_some() {
+                let manual = context.store.get_chat(chat_id).await?.is_some_and(|chat| {
+                    chat.metadata[agentkit_store::COMPACT_REQUESTED_METADATA_KEY].is_string()
+                });
+                let over = context_budget.as_ref().is_some_and(|budget| {
+                    let message_tokens: u64 = entries
+                        .iter()
+                        .map(|entry| context_budget::message_tokens(&entry.0))
+                        .sum();
+                    let tools = registry.definitions();
+                    let tool_tokens = if tools.is_empty() {
+                        0
+                    } else {
+                        serde_json::to_string(&tools)
+                            .unwrap_or_default()
+                            .encode_utf16()
+                            .count() as u64
+                    }
+                    .div_ceil(4);
+                    message_tokens.saturating_add(tool_tokens)
+                        > budget.window.saturating_sub(budget.reserve)
+                });
+                if manual || over {
+                    context.emit("run.warning", json!({"code":"compaction_failed","message":"Context compaction is unavailable for provider continuation; the continuation and request remain unchanged."})).await?;
+                }
+            }
+            entries.into_iter().map(|(message, _)| message).collect()
+        };
         let sink = Arc::new(history::DurableEvents {
             context: context.clone(),
             chat_id: chat_id.into(),
             anchor: anchor.clone(),
-            provider_id: provider.id().into(),
+            provider_id: prepared.id().into(),
+            fenced_tools: registry
+                .definitions()
+                .into_iter()
+                .filter(|definition| definition.effect == "write")
+                .map(|definition| definition.name)
+                .collect(),
             canonical: continuation.is_some(),
             display_metadata: context
                 .store
@@ -260,17 +342,11 @@ impl TaskExecutor for ChatExecutor {
             resume_calls,
             ..RunOptions::default()
         };
-        let prepared = hooks::PreparedProvider {
-            inner: provider,
-            options: self.options.clone(),
-            context: context.clone(),
-            chat_id: chat_id.into(),
-        };
         let session = correction::ChatSession {
             context: context.clone(),
             options: self.options.clone(),
             base: options,
-            provider: Arc::new(prepared),
+            provider: prepared,
             registry,
             sink,
             anchor,

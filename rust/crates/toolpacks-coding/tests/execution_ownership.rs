@@ -36,6 +36,20 @@ use tokio_util::sync::CancellationToken;
 
 const POLL_MS: u64 = 20;
 
+// macOS hides the environment of Apple-signed sleep; this executable remains
+// observable by the independent marker oracle while the real tool owns it.
+#[test]
+#[ignore]
+fn fixture_short() {
+    std::thread::sleep(Duration::from_secs(6));
+}
+
+#[test]
+#[ignore]
+fn fixture_long() {
+    std::thread::sleep(Duration::from_secs(120));
+}
+
 /// Pids whose `/proc/<pid>/environ` carries exactly this `AGENTKIT_EXEC_ID`.
 /// Every descendant inherits the marker, including ones that left the
 /// process group (setsid); a zombie's environ reads empty, so killed-but-
@@ -219,6 +233,18 @@ impl Harness {
         )
     }
 
+    fn sleeper(&self, short: bool, ignore_term: bool) -> String {
+        let executable = std::env::current_exe().unwrap();
+        let escaped = executable.to_string_lossy().replace('\'', "'\\''");
+        let test = if short {
+            "fixture_short"
+        } else {
+            "fixture_long"
+        };
+        let trap = if ignore_term { "trap '' TERM; " } else { "" };
+        self.command(&format!("{trap}exec '{escaped}' --ignored --exact {test}"))
+    }
+
     /// The contributed `run_command`, exactly as a host registers it.
     async fn run_command(&self) -> Arc<dyn Tool> {
         let context = ToolContributionContext {
@@ -375,7 +401,7 @@ async fn dropped_tool_future_keeps_the_lease_until_the_group_is_dead() {
     let tool = harness.run_command().await;
     // `timeoutSec: 1` keeps the driver's own timeout close after the drop, so
     // the group dies through the driver, not through natural exit.
-    let input = json!({ "command": harness.command("trap '' TERM; sleep 30"), "timeoutSec": 1 });
+    let input = json!({ "command": harness.sleeper(false, true), "timeoutSec": 1 });
     poll_past_spawn_then_drop(Arc::clone(&tool), input, &harness).await;
     let exec_id = harness.exec_id().await;
     assert!(
@@ -399,7 +425,7 @@ async fn caller_dropped_without_cancellation_holds_the_lease_until_exit() {
     let tool = harness.run_command().await;
     // No cancellation: the command runs to its natural exit (~6 s); the lease
     // must stay held across the whole run even though nobody awaits the tool.
-    let input = json!({ "command": harness.command("sleep 6"), "timeoutSec": 30 });
+    let input = json!({ "command": harness.sleeper(true, false), "timeoutSec": 30 });
     let mut future = Box::pin(tool.execute(tool_context(CancellationToken::new()), input));
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
@@ -437,7 +463,7 @@ async fn explicit_cancellation_reports_aborted_and_kills_the_group() {
     let harness = Harness::new("cancel").await;
     let tool = harness.run_command().await;
     let token = CancellationToken::new();
-    let input = json!({ "command": harness.command("sleep 30"), "timeoutSec": 30 });
+    let input = json!({ "command": harness.sleeper(false, false), "timeoutSec": 30 });
     let cancellation = token.clone();
     let running = tokio::spawn(async move {
         tool.execute(tool_context(cancellation), input)
@@ -481,7 +507,7 @@ async fn explicit_cancellation_reports_aborted_and_kills_the_group() {
 async fn pack_shutdown_drains_a_running_command() {
     let harness = Harness::new("shutdown").await;
     let tool = harness.run_command().await;
-    let input = json!({ "command": harness.command("sleep 117"), "timeoutSec": 60 });
+    let input = json!({ "command": harness.sleeper(false, false), "timeoutSec": 60 });
     let running = tokio::spawn(async move {
         tool.execute(tool_context(CancellationToken::new()), input)
             .await

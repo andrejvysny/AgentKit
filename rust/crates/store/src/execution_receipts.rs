@@ -11,7 +11,10 @@
 //! `admitted` without `completed`. Receipt records are separate from model
 //! conversation history and from process quarantine.
 
-use crate::{SqliteStore, StoreError, tasks::fence, util::json};
+use crate::{
+    AgentInputKind, AgentInputStatus, SqliteStore, StoreError, agent_inputs::get_input,
+    tasks::fence, util::json,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
@@ -182,6 +185,53 @@ fn select_run(db: &Connection, run_id: &str) -> Result<Vec<ExecutionReceiptRecor
     rows.map(|row| read_row(&row?)).collect()
 }
 
+fn validate_approval(
+    db: &Connection,
+    admission: &ExecutionReceiptAdmission,
+) -> Result<(), StoreError> {
+    let mismatch = || {
+        StoreError::InvalidInput(
+            "approval_mismatch: approval does not authorize this execution".into(),
+        )
+    };
+    let Some(id) = admission.approval_request_id.as_deref() else {
+        return if admission.approval_generation.is_none() {
+            Ok(())
+        } else {
+            Err(mismatch())
+        };
+    };
+    let request = get_input(db, id)?.ok_or_else(mismatch)?;
+    let content = &request.content;
+    let generation = content.get("approvalGeneration");
+    let legacy = content.get("uncertaintyGeneration");
+    let hash = content.get("contextSha256");
+    if generation.is_some_and(|value| !value.is_string())
+        || legacy.is_some_and(|value| !value.is_string())
+        || generation.is_some() && legacy.is_some() && generation != legacy
+        || hash.is_some_and(|value| !value.is_string())
+        || request.input_id != id
+        || request.kind != AgentInputKind::HumanRequest
+        || request.status != AgentInputStatus::Answered
+        || !request.applied_message_id.as_deref().is_some_and(|marker| {
+            marker.starts_with("approval:") && marker.len() > "approval:".len()
+        })
+        || request.answer_id.as_deref().is_none_or(str::is_empty)
+        || request.session_id != admission.chat_id
+        || request.target_task_id.as_deref() != Some(admission.run_id.as_str())
+        || request.tool_call_id.as_deref() != Some(admission.tool_call_id.as_str())
+        || content["kind"].as_str() != Some("approval")
+        || content["toolName"].as_str() != Some(admission.tool_name.as_str())
+        || content["argsSha256"].as_str() != Some(admission.args_sha256.as_str())
+        || generation.or(legacy).and_then(serde_json::Value::as_str)
+            != admission.approval_generation.as_deref()
+        || hash.is_some_and(|value| value.as_str() != Some(admission.context_sha256.as_str()))
+    {
+        return Err(mismatch());
+    }
+    Ok(())
+}
+
 impl SqliteStore {
     /// Atomic, fenced insert. Only a newly successful admission returns
     /// `true`; an existing execution, a consumed approval, or the pending
@@ -193,7 +243,7 @@ impl SqliteStore {
         admission: ExecutionReceiptAdmission,
     ) -> Result<bool, StoreError> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             fence(&transaction, &proof, admission.now)?;
             if admission.run_id != proof.task_id {
                 return Err(StoreError::InvalidInput(
@@ -218,6 +268,7 @@ impl SqliteStore {
                     "receipt hashes must be 64 lowercase hex characters".into(),
                 ));
             }
+            validate_approval(&transaction, &admission)?;
             // Anti-corruption on the existing rows this decision reads.
             let existing = select_run(&transaction, &admission.run_id)?;
             // Pending generation gate: while any execution of this exact
@@ -289,7 +340,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<(), StoreError> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             fence(&transaction, &proof, now)?;
             let row: Option<(String, String, Option<String>, String)> = transaction
                 .query_row(

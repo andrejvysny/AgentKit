@@ -273,14 +273,7 @@ describe("bounded standing approval fingerprint", () => {
     expect(await key()).toBeNull();
   });
 
-  test.each([
-    "tsc",
-    "npx tsc",
-    "bunx tsc",
-    "MODE=test tsc",
-    "env MODE=test tsc",
-    "command tsc",
-  ])(
+  test.each(["tsc", "MODE=test tsc", "env MODE=test tsc", "command tsc"])(
     "leading TypeScript runner retains directory semantics: %s",
     async (runner) => {
       writeFileSync(join(root, "bin", "tsc"), "#!/bin/sh\nexit 0\n", {
@@ -414,6 +407,34 @@ describe("bounded standing approval fingerprint", () => {
 });
 
 describe("package script executable binding", () => {
+  test("PATH assignment declines standing approval", async () => {
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { test: "PATH=./tools vitest run" } }),
+    );
+    writeFileSync(join(root, "bin", "vitest"), "#!/bin/sh\nexit 0\n", {
+      mode: 0o755,
+    });
+    expect(await key()).toBeNull();
+  });
+
+  test.each(["npx", "bunx"])(
+    "nested %s declines standing approval",
+    async (runner) => {
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ scripts: { test: `${runner} tsc --noEmit` } }),
+      );
+      writeFileSync(join(root, "bin", "tsc"), "#!/bin/sh\nexit 0\n", {
+        mode: 0o755,
+      });
+      expect(await key()).toBeNull();
+      writeFileSync(join(root, "bin", "tsc"), "#!/bin/sh\nexit 1\n", {
+        mode: 0o755,
+      });
+      expect(await key()).toBeNull();
+    },
+  );
   function setup(scripts: Record<string, string> = { test: "vitest run" }) {
     writeFileSync(join(root, "bin", "npm"), "#!/bin/sh\nexit 0\n", {
       mode: 0o755,

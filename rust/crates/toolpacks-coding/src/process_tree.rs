@@ -108,6 +108,12 @@ async fn run(file: &str, args: &[&str]) -> Result<String, std::io::Error> {
     )
     .await
     .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "ps timed out"))??;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "process scan failed: {}",
+            output.status
+        )));
+    }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
@@ -575,6 +581,13 @@ async fn sample_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn failed_process_scan_rejects_empty_and_partial_output() {
+        for script in ["exit 7", "printf '123 1 partial\\n'; exit 7"] {
+            assert!(run("/bin/sh", &["-c", script]).await.is_err());
+        }
+    }
 
     fn scan_with(suspects: Vec<i32>, classified: &[i32]) -> ProcScan {
         ProcScan {

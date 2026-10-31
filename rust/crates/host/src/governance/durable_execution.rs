@@ -48,6 +48,7 @@ pub struct ApprovalGrant {
     pub request_id: String,
     pub args_sha256: String,
     pub uncertainty_generation: Option<String>,
+    pub context_sha256: Option<String>,
 }
 
 /// Which approvable refusals may be remembered, and under what digest. The
@@ -364,6 +365,19 @@ impl DurableExecution {
         // The pending-generation gate opens only for the generation the
         // human actually named — never for the request id.
         let grant = self.approvals.get(&tool_call_id);
+        let current_context =
+            execution_context_sha256(self, &contribution.contribution, tool, effect_context);
+        if grant
+            .and_then(|grant| grant.context_sha256.as_deref())
+            .is_some_and(|hash| hash != current_context)
+        {
+            return Ok(Admission::Refused(receipt_refusal(
+                context,
+                "approval_mismatch",
+                "The approval no longer matches this execution context.",
+                None,
+            )));
+        }
         let approval_request_id = grant.map(|grant| grant.request_id.clone());
         let execution = execution_id(
             &self.context.task.task_id,
@@ -377,12 +391,7 @@ impl DurableExecution {
             tool_call_id,
             tool_name: tool.name.clone(),
             args_sha256: args_sha256(input),
-            context_sha256: execution_context_sha256(
-                self,
-                &contribution.contribution,
-                tool,
-                effect_context,
-            ),
+            context_sha256: current_context,
             attempt_id: self.context.attempt_id.clone(),
             approval_request_id: approval_request_id.clone(),
             approval_generation: grant.and_then(|grant| grant.uncertainty_generation.clone()),

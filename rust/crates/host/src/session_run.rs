@@ -504,6 +504,18 @@ pub(crate) async fn resolve_approved_calls(
             if hash.as_deref() != Some(approved_hash.as_str()) {
                 continue; // this ask was about different arguments
             }
+            let generation = request.content.get("approvalGeneration");
+            let legacy_generation = request.content.get("uncertaintyGeneration");
+            let context_hash = request.content.get("contextSha256");
+            if generation.is_some_and(|value| !value.is_string())
+                || legacy_generation.is_some_and(|value| !value.is_string())
+                || context_hash.is_some_and(|value| !value.is_string())
+                || generation.is_some()
+                    && legacy_generation.is_some()
+                    && generation != legacy_generation
+            {
+                continue;
+            }
             grant = Some(crate::governance::ApprovalGrant {
                 request_id: request.input_id.clone(),
                 args_sha256: approved_hash,
@@ -511,9 +523,11 @@ pub(crate) async fn resolve_approved_calls(
                 // unresolved execution it authorizes; the durable gate
                 // admits only that generation. An ordinary approval
                 // carries none.
-                uncertainty_generation: request.content["uncertaintyGeneration"]
-                    .as_str()
+                uncertainty_generation: generation
+                    .or(legacy_generation)
+                    .and_then(Value::as_str)
                     .map(str::to_owned),
+                context_sha256: context_hash.and_then(Value::as_str).map(str::to_owned),
             });
             break;
         }

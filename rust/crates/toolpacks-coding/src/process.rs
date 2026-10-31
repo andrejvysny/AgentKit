@@ -1979,18 +1979,26 @@ mod tests {
     #[tokio::test]
     async fn sweep_orphans_kills_a_marked_process_whose_owner_is_dead() {
         // A dead owner pid: far above any plausible live pid on this box.
-        let mut child = tokio::process::Command::new("/bin/sleep")
-            .arg("300")
+        // macOS hides the environment of Apple-signed binaries such as sleep.
+        let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "process::tests::orphan_fixture"])
             .env("AGENTKIT_EXEC_ID", "2000000000:orphan-test")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0)
+            .kill_on_drop(true)
             .spawn()
             .unwrap();
         let pid = child.id().unwrap() as i32;
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(pid_alive(pid));
+        assert!(
+            crate::process_tree::find_marked_processes("2000000000:orphan-test")
+                .await
+                .unwrap()
+                .contains(&pid)
+        );
         let seen = sweep_orphans(Some(500)).await;
         assert!(seen >= 1);
         // Reap it so `pid_alive` does not see a zombie.
@@ -1998,20 +2006,34 @@ mod tests {
         assert!(!pid_alive(pid));
     }
 
+    #[test]
+    #[ignore]
+    fn orphan_fixture() {
+        std::thread::sleep(Duration::from_secs(300));
+    }
+
     #[tokio::test]
     async fn sweep_orphans_leaves_a_marked_process_whose_owner_is_alive() {
-        let mut child = tokio::process::Command::new("/bin/sleep")
-            .arg("300")
-            .env("AGENTKIT_EXEC_ID", format!("{}:live-test", process_id()))
+        let exec_id = format!("{}:live-test", process_id());
+        let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "process::tests::orphan_fixture"])
+            .env("AGENTKIT_EXEC_ID", &exec_id)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0)
+            .kill_on_drop(true)
             .spawn()
             .unwrap();
         let pid = child.id().unwrap() as i32;
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(pid_alive(pid));
+        assert!(
+            crate::process_tree::find_marked_processes(&exec_id)
+                .await
+                .unwrap()
+                .contains(&pid)
+        );
         sweep_orphans(Some(200)).await;
         assert!(pid_alive(pid));
         unsafe { libc::kill(pid, libc::SIGKILL) };

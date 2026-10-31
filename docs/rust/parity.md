@@ -1,5 +1,94 @@
 # Rust parity baseline
 
+## Migration checkpoint: 30 October 2026
+
+The reviewed starting commit is `5a4bb61a479cc8ca3dfb0e24a8a0e1e0b37a9c61`.
+The working-tree migration remains **partial; native is not the default**.
+The earlier wire-fixture freeze below is historical. The public TypeScript API
+has a separate [31-report freeze](api/README.md); `bun run check:api` checks
+those reports without updating them. All 31 expanded reports, including inherited
+members and referenced declarations, match an independently compiled archive of
+the reviewed starting commit. Mutation drills reject both a new export and a
+change to an inherited public member.
+
+`AGENTKIT_BACKEND=ts|native` selects the core `runChat`/`runAgentLoop`
+implementation; the default is `ts`. The opt-in Rust loop bridges the core
+options, including provider streams and tools, hooks, steering, suspension and
+resumption, continuation, execution budgets, retry, and cancellation. Native
+errors do not trigger a TypeScript fallback. The latest native-core suite passed;
+that result does not establish parity for every native host or storage surface.
+
+The TypeScript host, storage adapters, local runner, coding-pack facade, MCP
+facades, and HTTP server facade are **not replaced** by this selector. Rust has
+native session management, deferred context compaction, transactional store views,
+provider records, and context-summary primitives. These do not yet replace the
+frozen TypeScript host constructors, adapter implementations, or service facades.
+The compatibility decision for the memory adapter's public live Maps remains
+open. Responses-provider compaction preserves private continuation state, emits a
+warning, and retains the request rather than rebasing that state.
+Native coding command standing approvals are disabled: the former key did not
+bind executable, script, configuration, or environment identity. Eligible
+commands therefore require fresh approval in modes that ask; high-risk commands
+require fresh approval even in `full_auto`. A native fingerprint implementation
+and remembered-approval parity remain open.
+
+The TypeScript and native compactors now bind ordered tool calls into a
+`agentkit-compaction-source-v2` hash, reject oversized complete prefixes rather
+than claiming unseen coverage, and retain observed summarizer usage on failure.
+Earlier summary hashes do not validate against the corrected algorithm. The
+summary prompt revision remains unchanged.
+
+Working-tree results on macOS arm64 with Bun 1.4.0:
+
+| Suite | Passed | Failed | Skipped | Evidence scope |
+| --- | ---: | ---: | ---: | --- |
+| Core | 395 | 0 | 0 | TypeScript core suite routed through the native loop |
+| Private native binding | 31 | 0 | 0 | Native binding tests; not the frozen TypeScript facade |
+| Host, runner-local, and adapters-sqlite | 1,187 | 0 | 12 | TypeScript host, runner, and SQLite suites; not evidence of native host/store facade replacement |
+| Complete reference suite | 3,364 | 0 | 15 | Default TypeScript routing plus explicitly native/interoperability tests |
+| Complete Rust workspace | 801 | 0 | 8 | All features; six child-process fixture helpers and two explicitly slow teardown tests are ignored by the default harness |
+
+The API freeze check covered 31 reports and two mutation drills. Typechecking,
+builds, formatting, changed-file lint, and 15 workflow tests also passed. The first
+aggregate reference run had one timeout in the unchanged React provider-404 test.
+Its isolated retry passed, then the complete rerun passed. No timeout increase or
+assertion weakening was applied. The final Rust workspace run, all-target
+workspace clippy with warnings denied, and formatting checks passed. A subsequent
+small callback-boundary extraction passed 432 core, private-binding, and
+architecture tests.
+The two slow command cancellation and process-group timeout tests also passed
+when explicitly selected with `--ignored`; the six helper entrypoints remain
+excluded from ordinary execution.
+
+The package ledger also passed all nine suites: 395 core, 674 host, 172 memory,
+321 SQLite, 192 runner, 682 coding, 100 MCP client, 112 MCP server, and 223 HTTP
+tests, with 12 aggregate skips. Only the core row selects its Rust replacement;
+the facade rows retain the implementation boundaries described above.
+
+Reproduce the package ledger with:
+
+```sh
+bun run --cwd packages/native build:native
+node scripts/check-backend-parity.mjs
+```
+
+The ledger records counts, routing scope, exit status, timeouts, and full logs in
+the temporary directory `agentkit-parity` (override `AGENTKIT_PARITY_OUTPUT`).
+A passing unrouted suite does not clear a native implementation gate. Core maps to
+AGENTKIT-53, host to AGENTKIT-54/59, storage and runner to AGENTKIT-55,
+coding/MCP/HTTP to AGENTKIT-56, and distribution/default cutover to
+AGENTKIT-57/58. No tracker records are modified by this checkpoint.
+
+Installed native-wrapper and umbrella tarballs have local macOS arm64 evidence
+under Node 22.23.3 and Bun 1.4.0, including fresh-process reopen and missing-addon
+failure with Rust tooling absent. Platform packages remain private. Node 24,
+Linux, Windows, crash-point qualification, and remote CI on these working-tree
+changes are not established. The Bun 1.3.14 guardian startup `connect ENOENT`
+failure was not reproduced; local passing teardown tests do not explain it.
+On macOS, nonzero `ps` handling was corrected. Apple-signed `/bin/sleep` hides
+the marker environment, so the controlled scanner test uses a non-Apple helper.
+This does not establish complete Darwin orphan visibility or close AGENTKIT-60.
+
 This is the phase 1 freeze of the TypeScript implementation at
 `36577829cfbfd78e5b0492d826f46ba6131835b6`, with contract version `0.7.0` and REST
 API version `v1`. It defines inputs and acceptance gates for the Rust port. It

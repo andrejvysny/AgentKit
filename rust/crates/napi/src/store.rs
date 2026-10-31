@@ -15,6 +15,11 @@ use napi::threadsafe_function::ThreadsafeFunction;
 
 use crate::errors;
 
+#[path = "store_ports.rs"]
+mod ports;
+#[path = "store_transactions.rs"]
+mod transactions;
+
 #[napi(js_name = "NativeStore")]
 pub struct NativeStore {
     inner: Mutex<Option<SqliteStore>>,

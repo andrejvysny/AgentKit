@@ -51,6 +51,8 @@ export function directScriptFiles(command: string): string[] {
       "nonliteral package script cannot receive standing approval",
     );
   const words = shellWords(command);
+  if (words.some((word) => /^PATH=/.test(word)))
+    throw new Error("package script PATH override is unsupported");
   const files = new Set(
     words.filter(
       (word) =>
@@ -65,10 +67,7 @@ export function directScriptFiles(command: string): string[] {
   )
     words.shift();
   const entry = words[0];
-  if (
-    ["npx", "bunx"].includes(executableName(entry ?? "")) &&
-    words[1] !== "tsc"
-  )
+  if (["npx", "bunx"].includes(executableName(entry ?? "")))
     throw new Error("nested package runner resolution is unsupported");
   if (entry?.startsWith("-") || /^(cd|pushd|popd)$/.test(entry ?? ""))
     throw new Error("unsupported package script command resolution");

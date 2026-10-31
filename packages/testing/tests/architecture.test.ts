@@ -27,6 +27,10 @@ const STREAM_CHAT_SITES: Record<string, string> = {
     "budget wrapper delegating to the wrapped client",
   "host/src/context/bounded-context-client.ts":
     "context admission wrapper delegating one request to the wrapped client",
+  "host/src/context/compaction-usage.ts":
+    "records observed billing while delegating the same compaction request",
+  "core/src/runs/native-provider.ts":
+    "JavaScript provider callback requested by the Rust loop, without model orchestration",
 };
 
 /** Allowed `.execute(` call sites → why. */
@@ -45,6 +49,8 @@ const EXECUTE_SITES: Record<string, string> = {
     "inbound MCP serving surface (no model loop)",
   "mcp-server/src/server.ts":
     "MCP tools/call routed to the tool source (no model loop)",
+  "core/src/runs/native-loop.ts":
+    "JavaScript tool callback after Rust schema, budget, and timeout admission",
 };
 
 /** Allowed `runChat(` / `runAgentLoop(` call sites outside their definitions. */
@@ -114,11 +120,13 @@ describe("architecture: one agent loop (ADR 0015)", () => {
       Object.keys(STREAM_CHAT_SITES).sort(),
     );
     expect(sites.get("core/src/runs/model-step.ts")).toBe(1);
+    expect(sites.get("core/src/runs/native-provider.ts")).toBe(1);
   });
 
   it("invokes tools and executors only from the allowlisted sites", () => {
     const sites = sitesMatching(/\.execute\(/g);
     expect([...sites.keys()].sort()).toEqual(Object.keys(EXECUTE_SITES).sort());
+    expect(sites.get("core/src/runs/native-loop.ts")).toBe(1);
   });
 
   it("drives the loop only from the runChat facade and TurnRunner", () => {

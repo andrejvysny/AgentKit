@@ -115,6 +115,7 @@ pub(super) async fn prepare_continuation(
         },
     }))
 }
+#[cfg(test)]
 pub(super) fn assemble(
     records: Vec<MessageRecord>,
     limit: usize,
@@ -123,15 +124,43 @@ pub(super) fn assemble(
     receipts: &[agentkit_store::ExecutionReceiptRecord],
     run_id: &str,
 ) -> Vec<ChatMessage> {
+    assemble_with_ids(records, limit, anchor, system_prompt, receipts, run_id)
+        .into_iter()
+        .map(|(message, _)| message)
+        .collect()
+}
+
+pub(super) fn assemble_with_ids(
+    records: Vec<MessageRecord>,
+    limit: usize,
+    anchor: &str,
+    system_prompt: Option<String>,
+    receipts: &[agentkit_store::ExecutionReceiptRecord],
+    run_id: &str,
+) -> Vec<(ChatMessage, Option<String>)> {
     let ordered = order_messages_for_provider(records);
-    // Select what the model may legitimately see BEFORE applying the limit:
-    // the active chain plus this run's internal (deliberately unactivated)
-    // records — a denial, an answered human request, an approval mismatch:
-    // those answer this run's calls and belong to its history (the
-    // TypeScript anchored-history rule). Truncating first and filtering
-    // after silently drops ACTIVE history whenever inactive siblings crowd
-    // the tail.
-    let eligible: Vec<&MessageRecord> = ordered
+    let eligible = eligible_records(&ordered, anchor, run_id);
+    let start = history_start(&eligible, limit);
+    let mut messages = vec![];
+    if let Some(prompt) = system_prompt.filter(|prompt| !prompt.is_empty()) {
+        messages.push((ChatMessage::text("system", &prompt), None, None));
+    }
+    let declared = declared_calls(&eligible[start..]);
+    for record in eligible.into_iter().skip(start) {
+        if let Some(message) = visible_message(record, &declared) {
+            messages.push(message);
+        }
+    }
+    reconcile(messages, receipts)
+}
+
+// Filter the active path before limiting so inactive siblings do not consume the window.
+fn eligible_records<'a>(
+    ordered: &'a [MessageRecord],
+    anchor: &str,
+    run_id: &str,
+) -> Vec<&'a MessageRecord> {
+    ordered
         .iter()
         .filter(|record| {
             record.active
@@ -145,26 +174,14 @@ pub(super) fn assemble(
                 && !(record.metadata.get("correctionPass").is_some()
                     && record.metadata["canonicalProviderTurn"] != true)
         })
-        .collect();
-    // Apply the limit to the eligible model-visible sequence only. The
-    // sequence is provider-ordered, so assistant groups sit adjacent to
-    // their tool results; extend the cut backward until the window does not
-    // open inside a group, keeping assistant/tool pairs intact.
+        .collect()
+}
+
+// Extend the cut when necessary to keep each tool result with its declaration.
+fn history_start(eligible: &[&MessageRecord], limit: usize) -> usize {
     let mut start = eligible.len().saturating_sub(limit);
     while start > 0 {
-        let declared: HashSet<(Option<String>, String)> = eligible[start..]
-            .iter()
-            .filter(|record| record.role == "assistant")
-            .flat_map(|record| {
-                record
-                    .tool_calls
-                    .as_ref()
-                    .and_then(|value| serde_json::from_value::<Vec<ToolCall>>(value.clone()).ok())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(move |call| (record.run_id.clone(), call.id))
-            })
-            .collect();
+        let declared = declared_calls(&eligible[start..]);
         let opens_in_group = eligible[start].role == "tool"
             && !eligible[start]
                 .tool_call_id
@@ -175,16 +192,11 @@ pub(super) fn assemble(
         }
         start -= 1;
     }
-    let mut messages: Vec<(ChatMessage, Option<String>)> = vec![];
-    if let Some(prompt) = system_prompt.filter(|prompt| !prompt.is_empty()) {
-        messages.push((ChatMessage::text("system", &prompt), None));
-    }
-    // Declaration membership is a property of the whole window, not of a
-    // position within it: the provider-ordering helper may place a run's
-    // tool results ahead of their declaring assistant, and a genuine
-    // result must not be dropped (and later synthesized as missing) just
-    // because the walk reached it first.
-    let declared: HashSet<(Option<String>, String)> = eligible[start..]
+    start
+}
+
+fn declared_calls(records: &[&MessageRecord]) -> HashSet<(Option<String>, String)> {
+    records
         .iter()
         .filter(|record| record.role == "assistant")
         .flat_map(|record| {
@@ -196,34 +208,39 @@ pub(super) fn assemble(
                 .into_iter()
                 .map(move |call| (record.run_id.clone(), call.id))
         })
-        .collect();
-    for record in eligible.into_iter().skip(start) {
-        let calls: Vec<ToolCall> = record
-            .tool_calls
+        .collect()
+}
+
+type OwnedHistoryMessage = (ChatMessage, Option<String>, Option<String>);
+fn visible_message(
+    record: &MessageRecord,
+    declared: &HashSet<(Option<String>, String)>,
+) -> Option<OwnedHistoryMessage> {
+    if record.role == "tool"
+        && record
+            .tool_call_id
             .as_ref()
-            .and_then(|value| serde_json::from_value(value.clone()).ok())
-            .unwrap_or_default();
-        if record.role == "tool"
-            && record
-                .tool_call_id
-                .as_ref()
-                .is_none_or(|id| !declared.contains(&(record.run_id.clone(), id.clone())))
-        {
-            continue;
-        }
-        messages.push((
-            ChatMessage {
-                role: record.role.clone(),
-                content: record.content.clone(),
-                name: record.metadata["toolName"].as_str().map(str::to_owned),
-                tool_call_id: record.tool_call_id.clone(),
-                tool_calls: calls,
-                metadata: None,
-            },
-            record.run_id.clone(),
-        ));
+            .is_none_or(|id| !declared.contains(&(record.run_id.clone(), id.clone())))
+    {
+        return None;
     }
-    reconcile(messages, receipts)
+    let calls: Vec<ToolCall> = record
+        .tool_calls
+        .as_ref()
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    Some((
+        ChatMessage {
+            role: record.role.clone(),
+            content: record.content.clone(),
+            name: record.metadata["toolName"].as_str().map(str::to_owned),
+            tool_call_id: record.tool_call_id.clone(),
+            tool_calls: calls,
+            metadata: None,
+        },
+        record.run_id.clone(),
+        Some(record.id.clone()),
+    ))
 }
 /// Resolve unanswered persisted calls against the durable receipts.
 /// Identity is at least `(run_id, tool_call_id)`: tool-call ids are stable
@@ -286,57 +303,67 @@ fn resolve_receipt(
     ReceiptDecision::Uncertain
 }
 fn reconcile(
-    messages: Vec<(ChatMessage, Option<String>)>,
+    messages: Vec<(ChatMessage, Option<String>, Option<String>)>,
     receipts: &[agentkit_store::ExecutionReceiptRecord],
-) -> Vec<ChatMessage> {
+) -> Vec<(ChatMessage, Option<String>)> {
     let mut answered: HashSet<(Option<String>, String)> = messages
         .iter()
-        .filter(|(message, _)| message.role == "tool")
-        .filter_map(|(message, owner)| message.tool_call_id.clone().map(|id| (owner.clone(), id)))
+        .filter(|(message, _, _)| message.role == "tool")
+        .filter_map(|(message, owner, _)| {
+            message.tool_call_id.clone().map(|id| (owner.clone(), id))
+        })
         .collect();
     let mut result = vec![];
-    for (message, owner) in messages {
+    for (message, owner, record_id) in messages {
         let calls = message.tool_calls.clone();
-        result.push(message);
+        result.push((message, record_id.clone()));
         for call in calls {
             if answered.insert((owner.clone(), call.id.clone())) {
-                // Reconcile against the durable receipt before falling back
-                // to the generic synthetic failure (ADR 0020): a completed,
-                // identity-matched receipt replays its recorded result; an
-                // admitted receipt — or evidence that conflicts with the
-                // declaring call — is an uncertain effect that must not be
-                // reissued.
-                let (text, code) = match resolve_receipt(receipts, owner.as_ref(), &call) {
-                    ReceiptDecision::Completed(model_json) => (model_json, None),
-                    ReceiptDecision::Uncertain => (
-                        "admitted execution has no durable result; uncertain side effect, do not reissue".into(),
-                        Some("tool_effect_uncertain"),
-                    ),
-                    ReceiptDecision::Missing => (
-                        "missing tool result for persisted tool call; reconciled as synthetic failure"
-                            .into(),
-                        Some(agentkit_core::TOOL_RESULT_MISSING_CODE),
-                    ),
-                };
-                let envelope = match code {
-                    None => text,
-                    Some(code) => json!({"ok":false,"status":"error","summary":text,"warnings":[],"truncated":false,"data":{"errorCode":code,"errorMessage":text}})
-                        .to_string(),
-                };
-                let mut missing = ChatMessage::text("tool", &envelope);
-                missing.tool_call_id = Some(call.id);
-                missing.name = Some(call.name);
-                result.push(missing);
+                result.push(synthetic_result(
+                    receipts,
+                    owner.as_ref(),
+                    record_id.as_deref(),
+                    call,
+                ));
             }
         }
     }
     result
+}
+fn synthetic_result(
+    receipts: &[agentkit_store::ExecutionReceiptRecord],
+    owner: Option<&String>,
+    record_id: Option<&str>,
+    call: ToolCall,
+) -> (ChatMessage, Option<String>) {
+    let (text, code) = match resolve_receipt(receipts, owner, &call) {
+        ReceiptDecision::Completed(model_json) => (model_json, None),
+        ReceiptDecision::Uncertain => (
+            "admitted execution has no durable result; uncertain side effect, do not reissue"
+                .into(),
+            Some("tool_effect_uncertain"),
+        ),
+        ReceiptDecision::Missing => (
+            "missing tool result for persisted tool call; reconciled as synthetic failure".into(),
+            Some(agentkit_core::TOOL_RESULT_MISSING_CODE),
+        ),
+    };
+    let envelope = match code {
+        None => text,
+        Some(code) => json!({"ok":false,"status":"error","summary":text,"warnings":[],"truncated":false,"data":{"errorCode":code,"errorMessage":text}}).to_string(),
+    };
+    let mut message = ChatMessage::text("tool", &envelope);
+    let id = record_id.map(|id| format!("{id}#missing:{}", call.id));
+    message.tool_call_id = Some(call.id);
+    message.name = Some(call.name);
+    (message, id)
 }
 pub(super) struct DurableEvents {
     pub context: ExecutionContext,
     pub chat_id: String,
     pub anchor: String,
     pub provider_id: String,
+    pub fenced_tools: std::collections::HashSet<String>,
     pub canonical: bool,
     pub display_metadata: Value,
     pub usage: Option<Arc<dyn UsageAuthorizer>>,
@@ -361,9 +388,16 @@ impl DurableEvents {
         event: &agentkit_contracts::AiRunEvent,
         messages: &[ChatMessage],
     ) -> Result<(), CoreError> {
-        let event = serde_json::to_value(event).map_err(|_| {
+        let mut event = serde_json::to_value(event).map_err(|_| {
             CoreError::new("event_serialization_failed", "event serialization failed")
         })?;
+        if event["type"] == "run.tool.running"
+            && event["data"]["toolName"]
+                .as_str()
+                .is_some_and(|name| self.fenced_tools.contains(name))
+        {
+            event["data"]["admissionProtocol"] = "fenced-v1".into();
+        }
         if event["type"] == "run.input.applied" {
             return self.persist_steered(&event).await;
         }

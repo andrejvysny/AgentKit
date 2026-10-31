@@ -1,6 +1,16 @@
 import { expect, it } from "bun:test";
 import type { AiRunEvent, TaskEventEnvelope } from "@agentkit/contracts";
-import type { AiChatRequest } from "@agentkit/core";
+import {
+  ResponsesClient,
+  type AiChatRequest,
+  type AiProviderClient,
+  type ResponsesTransportRequest,
+} from "@agentkit/core";
+import {
+  eventStream,
+  outputText,
+  response,
+} from "./provider-continuation-helpers.js";
 import { MockProviderClient } from "@agentkit/testing";
 import {
   AgentSessionService,
@@ -10,6 +20,7 @@ import {
 } from "../src/index.js";
 import { sessionWithAdmittedContext } from "../src/sessions/admitted-context.js";
 import { boundedContextClient } from "../src/context/bounded-context-client.js";
+import { MemoryAssistantStore } from "../../adapters-memory/src/index.js";
 import { FakeAgentInputStore, createHarness } from "./fakes.js";
 
 class Provider extends MockProviderClient {
@@ -53,10 +64,14 @@ async function fixture(
   context?: { windowTokens: number; reserveTokens?: number },
   contributors: ToolSetContributor[] = [],
   maxOutputTokens?: number,
+  provider?: AiProviderClient,
 ) {
   const h = createHarness();
-  h.store.inputs = new FakeAgentInputStore(h.clock);
-  await h.store.providers.upsertProvider({
+  const store = provider
+    ? new MemoryAssistantStore({ clock: h.clock, ids: h.ids })
+    : h.store;
+  if (!provider) h.store.inputs = new FakeAgentInputStore(h.clock);
+  await store.providers.upsertProvider({
     id: "p",
     label: "Mock",
     kind: "openai-compatible",
@@ -67,11 +82,17 @@ async function fixture(
   const mock = new Provider(maxOutputTokens);
   const runner = new TurnRunner({
     ...h,
-    providerFactory: () => mock,
+    store,
+    providerFactory: () => provider ?? mock,
     contributors,
   });
-  const tasks = new TaskService(h);
-  const service = new AgentSessionService({ ...h, turns: runner, tasks });
+  const tasks = new TaskService({ ...h, store });
+  const service = new AgentSessionService({
+    ...h,
+    store,
+    turns: runner,
+    tasks,
+  });
   await service.createSession({
     sessionId: "s",
     profile: { id: "default" },
@@ -79,7 +100,7 @@ async function fixture(
     model: "m",
     ...(context ? { context } : {}),
   });
-  return { ...h, runner, mock, service };
+  return { ...h, store, runner, mock, service };
 }
 
 async function outputClient(f: Awaited<ReturnType<typeof fixture>>) {
@@ -216,6 +237,75 @@ async function drive(f: Awaited<ReturnType<typeof fixture>>, taskId: string) {
     signal: new AbortController().signal,
   });
 }
+
+it.each(["api-key", "chatgpt-account"] as const)(
+  "runs an admitted session with a real %s Responses client",
+  async (authKind) => {
+    const sent: ResponsesTransportRequest[] = [];
+    const client = new ResponsesClient({
+      id: "p",
+      transport: {
+        identity: {
+          providerId: "p",
+          protocol: "responses",
+          connectionId: "fixture",
+          generation: 1,
+        },
+        authKind,
+        async request(input) {
+          sent.push(input);
+          return eventStream([response([outputText("answer")])]);
+        },
+      },
+    });
+    const f = await fixture(
+      { windowTokens: 4096, reserveTokens: 1024 },
+      [],
+      undefined,
+      client,
+    );
+    const id = await send(f, "hello");
+    await drive(f, id);
+    expect((await f.store.tasks.getTask(id))?.status).toBe("completed");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body?.max_output_tokens).toBe(
+      authKind === "api-key" ? 1024 : undefined,
+    );
+    const events = (await f.store.tasks.listEvents(id)) as AiRunEvent[];
+    const admission = events.find(
+      (event) => event.type === "run.context.admitted",
+    );
+    expect(admission?.data).toMatchObject({ reserveTokens: 1024 });
+    expect(admission?.data.maxOutputTokens).toBe(
+      authKind === "api-key" ? 1024 : undefined,
+    );
+    if (authKind === "chatgpt-account") {
+      const task = await f.store.tasks.getTask(id);
+      if (!task) throw new Error("Missing turn");
+      const guarded = await boundedContextClient(client, {
+        ...f,
+        task,
+        chatId: "s",
+        providerId: "p",
+        model: "m",
+        attemptId: "explicit",
+      });
+      const events: AiRunEvent[] = [];
+      for await (const event of guarded.streamChat({
+        runId: id,
+        model: "m",
+        messages: [],
+        maxOutputTokens: 50,
+      }))
+        events.push(event);
+      expect(events.at(-1)).toMatchObject({
+        type: "run.failed",
+        data: { errorCode: "unsupported_parameter" },
+      });
+      expect(sent).toHaveLength(1);
+    }
+  },
+);
 
 it("pins the admitted budget before execution despite future configuration", async () => {
   const f = await fixture({ windowTokens: 4000, reserveTokens: 1000 });

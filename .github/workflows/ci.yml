@@ -32,6 +32,12 @@ jobs:
 
       - run: bun run build
 
+      - run: bun run build:umbrella
+
+      - run: bun run check:api
+
+      - run: AGENTKIT_CHECK_API_GATE=1 bun test scripts/tests/public-api.test.ts
+
   lint:
     runs-on: ubuntu-latest
     steps:
