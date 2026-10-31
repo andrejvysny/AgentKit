@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,7 +54,21 @@ try {
   if (!bun) throw new Error("missing bun");
   const node = process.execPath;
   const npm = findNpmCli(node, paths);
-  const cleanPath = toolchainFreePath([dirname(bun), dirname(node), ...paths]);
+  let cleanPath = toolchainFreePath([dirname(bun), dirname(node), ...paths]);
+  // A system-wide Rust (e.g. /usr/bin/cargo) drops the directories that also
+  // hold `sh`, and npm runs prepack scripts through the shell. Provide the
+  // shell alone — never a directory that could hold a Rust tool — so the
+  // "no reachable Rust toolchain" guarantee stands. (Windows npm spawns
+  // cmd.exe through COMSPEC; that cell is qualified on its own runner.)
+  if (
+    process.platform !== "win32" &&
+    !cleanPath.some((entry) => existsSync(join(entry, "sh")))
+  ) {
+    const shellDir = join(temporary, "shell-bin");
+    mkdirSync(shellDir, { recursive: true });
+    symlinkSync("/bin/sh", join(shellDir, "sh"));
+    cleanPath = [shellDir, ...cleanPath];
+  }
   const env = {
     ...withPath(process.env, cleanPath),
     npm_config_cache: join(temporary, "npm-cache"),
