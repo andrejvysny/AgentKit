@@ -1,4 +1,5 @@
 import type { AiRunEvent } from "@agentkit/contracts";
+import type * as NativeModule from "@agentkit/native";
 import type { RawRunHandle } from "@agentkit/native";
 import type { AiToolExecutionContext } from "../tools/tool.js";
 import { frozenClone } from "./loop-hooks.js";
@@ -10,7 +11,19 @@ import type { AgentLoopInput, AgentLoopResult } from "./agent-loop.js";
 export async function* nativeAgentLoop(
   input: AgentLoopInput,
 ): AsyncGenerator<AiRunEvent, AgentLoopResult, unknown> {
-  const native = await import("@agentkit/native");
+  let native: typeof NativeModule;
+  try {
+    // Dynamic import is deliberate: bundlers must evaluate this module
+    // without touching the platform binary (browser-safe imports).
+    native = await import("@agentkit/native");
+  } catch (error) {
+    // Same contract as the loader when the addon itself is missing: the
+    // honest words are "the native binding failed to load", never a silent
+    // fallback to another engine.
+    throw new Error(
+      `the native binding failed to load: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const controller = new AbortController();
   const abort = () => controller.abort();
   input.signal?.addEventListener("abort", abort, { once: true });
