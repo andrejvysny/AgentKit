@@ -90,15 +90,18 @@ if (mode === "native") {
   } finally {
     budget.dispose();
   }
-} else if (mode === "ts") {
-  provider.setScript([
-    { steps: [{ kind: "text", content: "typescript result" }] },
-  ]);
-  const { result } = await collect(runChat(input));
-  assert(
-    result.terminal === "completed",
-    "default TypeScript backend failed without addon",
-  );
+} else if (mode === "default") {
+  // The Rust runtime is the only backend: the DEFAULT selection must fail
+  // honestly when the addon is gone — never fall back to a TypeScript engine.
+  try {
+    await collect(runChat(input));
+    throw new Error("default backend unexpectedly ran without addon");
+  } catch (error) {
+    assert(
+      String(error).includes("native binding failed to load"),
+      `wrong missing addon error: ${String(error)}`,
+    );
+  }
 } else if (mode === "missing") {
   try {
     await collect(runChat(input));

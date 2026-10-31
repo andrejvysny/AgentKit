@@ -8,7 +8,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { executeToolSafely } from "../../core/src/runs/tool-exec.js";
+import type { AiToolResult } from "@agentkit/contracts";
+import type { AiToolExecutionContext } from "../../core/src/tools/tool.js";
 import {
   type CoordinationWait,
   type LeaseHolder,
@@ -24,6 +25,83 @@ afterEach(cleanup);
 const read = (root: string, rel: string) =>
   readFileSync(join(root, rel), "utf-8");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Test-local copy of the executor's tool-timeout contract. Tool timeouts and
+ * cancellation are owned by the Rust runtime (the native loop's admission
+ * layers); this coordination test drives a coding-pack tool directly, so it
+ * keeps the executor's former semantics here: honour the declared
+ * `timeoutMs`, abort a tool that ignores its signal, and report a thrown
+ * error as `{ ok: false }` instead of rejecting. The real timer is deliberate:
+ * the test measures the tool's real coordination wait cap.
+ */
+type SafeTool = {
+  definition: { name: string; timeoutMs?: number };
+  execute: (
+    ctx: AiToolExecutionContext,
+    input: unknown,
+  ) => Promise<AiToolResult<unknown>>;
+};
+
+interface SafeToolOutcome {
+  ok: boolean;
+  value?: AiToolResult<unknown>;
+  error?: string;
+  retryable?: boolean;
+}
+
+async function executeToolSafely(
+  tool: SafeTool,
+  ctx: AiToolExecutionContext,
+  input: unknown,
+): Promise<SafeToolOutcome> {
+  try {
+    const timeoutMs = tool.definition.timeoutMs;
+    if (!timeoutMs || timeoutMs <= 0)
+      return { ok: true, value: await tool.execute(ctx, input) };
+    const controller = new AbortController();
+    const parent = ctx.signal;
+    if (parent) {
+      if (parent.aborted) controller.abort(parent.reason);
+      else
+        parent.addEventListener(
+          "abort",
+          () => controller.abort(parent.reason),
+          { once: true },
+        );
+    }
+    const running = (async () =>
+      tool.execute({ ...ctx, signal: controller.signal }, input))();
+    running.catch(() => {});
+    const { promise, reject } = Promise.withResolvers<SafeToolOutcome>();
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(
+        new Error(
+          `Tool ${tool.definition.name} timed out after ${timeoutMs}ms`,
+        ),
+      );
+    }, timeoutMs);
+    try {
+      return await Promise.race([
+        running.then((value) => ({ ok: true, value }) as SafeToolOutcome),
+        promise,
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      retryable:
+        typeof err === "object" &&
+        err !== null &&
+        "retryable" in err &&
+        (err as { retryable: unknown }).retryable === true,
+    };
+  }
+}
 const holder = (tool: string, label = tool): LeaseHolder => ({
   runId: "r",
   tool,

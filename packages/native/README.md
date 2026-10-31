@@ -174,9 +174,11 @@ settlement (the terminal `TaskRecord`), exactly as the Rust side
 distinguishes `RunUpdate` from settlement. Streaming deltas are backlog
 item 1, with their own bounded lane.
 
-The core facade has a separate stateless streaming bridge selected by
-`AGENTKIT_BACKEND=native`; `AGENTKIT_BACKEND=ts` remains the default. It supports
-JavaScript async-iterable providers and tools without a durable session store.
+The core facade runs on the Rust runtime: `runChat`/`runAgentLoop` are served
+by the native loop, which is the ONLY backend — `AGENTKIT_BACKEND` may be
+unset or `native`, and any other value (including the retired `ts` engine
+selector) fails closed with `invalid_input`. It supports JavaScript
+async-iterable providers and tools without a durable session store.
 The bridge carries core hooks, steering, suspension, continuation, retry, and
 execution budgets. Its qualification scope and remaining migration gaps are
 documented in [`docs/rust/parity.md`](../../docs/rust/parity.md). This does not
@@ -186,4 +188,5 @@ storage facades.
 The installed umbrella smoke is `node rust/scripts/check-native-umbrella.mjs`,
 after `bun run build && bun run build:umbrella`. It runs the packed umbrella
 with the staged matching platform addon, then removes the addon and verifies
-the default TypeScript backend still runs while native use fails clearly.
+the default backend fails clearly (`native binding failed to load`) rather
+than falling back to a TypeScript engine.

@@ -114,9 +114,19 @@ impl Tool for CallbackTool {
             return Err(failure);
         }
         if value["unserializable"] == true {
+            // Same template `agentkit_core::ToolResult::serialize_data` uses:
+            // the JS bridge carries only the serialization error message
+            // (the value itself cannot cross the JSON boundary), so the
+            // tool name and framing come from Rust here.
+            let error = value["error"]
+                .as_str()
+                .unwrap_or("value is not JSON-serializable");
             return Err(CoreError::new(
                 "result_unserializable",
-                "Tool result could not be serialized",
+                &format!(
+                    "Tool {} produced a result that could not be serialized: {error}",
+                    self.definition.name
+                ),
             ));
         }
         serde_json::from_value(value["result"].clone())

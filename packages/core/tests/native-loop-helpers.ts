@@ -1,18 +1,9 @@
-import {
-  available,
-  missing,
-  required,
-} from "../../native/tests/helpers/binding.js";
+import { available, missing } from "../../native/tests/helpers/binding.js";
 import { it } from "bun:test";
-if ((required || process.env.AGENTKIT_BACKEND === "native") && !available)
+if (!available)
   throw new Error(`Native binding required; missing ${missing.join(", ")}`);
-export const nativeIt =
-  available &&
-  (required ||
-    process.env.AGENTKIT_BACKEND === "native" ||
-    process.env.AGENTKIT_SKIP_NATIVE !== "1")
-    ? it
-    : it.skip;
+// The Rust runtime is the only backend: these tests are ordinary tests now.
+export const nativeIt = it;
 export async function drainRaw(
   handle: import("@agentkit/native").RawRunHandle,
   blockAfterToolRunning = false,

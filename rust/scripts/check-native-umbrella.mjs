@@ -130,7 +130,7 @@ try {
     { recursive: true },
   );
   for (const runtime of [node, bun]) {
-    run(runtime, ["consumer.mjs", "ts"], { cwd: consumer, env });
+    run(runtime, ["consumer.mjs", "default"], { cwd: consumer, env });
     run(runtime, ["consumer.mjs", "missing"], {
       cwd: consumer,
       env: { ...env, AGENTKIT_BACKEND: "native" },
