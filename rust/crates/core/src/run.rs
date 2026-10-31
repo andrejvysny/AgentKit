@@ -12,6 +12,13 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 #[path = "run_cleanup.rs"]
 mod cleanup;
+#[path = "run_hooks.rs"]
+mod hooks;
+
+#[async_trait::async_trait]
+pub trait RunEventGate: Send + Sync {
+    async fn wait(&self, cancellation: &CancellationToken);
+}
 
 #[derive(Clone)]
 pub struct RunOptions {
@@ -27,9 +34,15 @@ pub struct RunOptions {
     pub scope_id: Option<String>,
     pub user_id: Option<String>,
     pub bindings: Vec<Value>,
+    pub tool_metadata: serde_json::Map<String, Value>,
     pub cancellation: CancellationToken,
     pub runtime: Arc<dyn Runtime>,
     pub event_sink: Option<Arc<dyn crate::RunEventSink>>,
+    pub event_gate: Option<Arc<dyn RunEventGate>>,
+    pub tool_close: Option<CancellationToken>,
+    pub hook_timeout_ms: Option<u64>,
+    pub hooks: Option<Arc<dyn crate::RunHooks>>,
+    pub batch_suspension: bool,
     pub dispatch_guard: Option<Arc<dyn crate::DispatchGuard>>,
     /// Host park authority for human requests; absent means tools cannot
     /// ask (they must deny instead of hanging).
@@ -59,9 +72,15 @@ impl Default for RunOptions {
             scope_id: None,
             user_id: None,
             bindings: vec![],
+            tool_metadata: serde_json::Map::new(),
             cancellation: CancellationToken::new(),
             runtime: Arc::new(SystemRuntime),
             event_sink: None,
+            event_gate: None,
+            tool_close: None,
+            hook_timeout_ms: None,
+            hooks: None,
+            batch_suspension: false,
             dispatch_guard: None,
             suspender: None,
             interruption: None,
@@ -179,7 +198,11 @@ impl State {
         }
         self.seq += 1;
         self.pending_messages.clear();
-        let _ = self.sender.send(event).await;
+        if self.sender.send(event).await.is_ok() {
+            if let Some(gate) = &self.options.event_gate {
+                gate.wait(&self.options.cancellation).await;
+            }
+        }
         Ok(())
     }
     async fn warning(&mut self, code: &str, message: &str) -> Result<(), CoreError> {
@@ -196,21 +219,17 @@ impl State {
         let Some(source) = self.options.steering.clone() else {
             return Ok(());
         };
-        const HOOK_TIMEOUT: Duration = Duration::from_millis(5000);
+        let timeout = self.options.hook_timeout_ms.unwrap_or(5000);
+        let poll = source.pending_context(&self.run_id, step);
         let polled = tokio::select! {
             _ = self.options.cancellation.cancelled() => return Ok(()),
-            result = tokio::time::timeout(HOOK_TIMEOUT, source.pending()) => {
-                match result {
-                    Err(_) => {
-                        self.warning(
-                            "hook_timeout",
-                            "Steering source timed out; no steering applied this step.",
-                        )
-                        .await?;
-                        return Ok(());
-                    }
-                    Ok(items) => items,
-                }
+            result = async {
+                if timeout == 0 { Ok(poll.await) }
+                else { tokio::time::timeout(Duration::from_millis(timeout), poll).await }
+            } => match result {
+                Err(_) => { self.warning("hook_timeout", "Steering source timed out; no steering applied this step.").await?; return Ok(()); }
+                Ok(Err(_)) => { self.warning("hook_failed", "Steering source threw; no steering applied this step.").await?; return Ok(()); }
+                Ok(Ok(items)) => items,
             }
         };
         for item in polled {
@@ -277,6 +296,9 @@ impl State {
         registry: Arc<ToolRegistry>,
     ) -> Result<Terminal, CoreError> {
         self.options.request.tools = registry.definitions();
+        if self.options.hooks.is_some() {
+            self.observe("onRunStart", json!({"runId":self.run_id,"model":self.options.request.model,"toolNames":self.options.request.tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),"messageCount":self.messages.len()})).await?;
+        }
         if !self.options.resume_calls.is_empty() {
             // Approved calls that never ran execute first, ahead of any
             // model request (ADR 0019 part 1); their assistant record is
@@ -302,6 +324,14 @@ impl State {
             if self.interrupted() {
                 return Ok(Terminal::Completed);
             }
+            if self.options.hooks.is_some() {
+                self.observe(
+                    "onStepStart",
+                    json!({"runId":self.run_id,"step":iteration,"messages":self.messages}),
+                )
+                .await?;
+            }
+            self.check()?;
             let turn = self.provider_turn(provider.clone(), &registry).await?;
             let content = turn.content.clone().unwrap_or(turn.delta.clone());
             let mut calls = if turn.calls.is_empty() {
@@ -310,6 +340,9 @@ impl State {
                 turn.calls.clone()
             };
             let duplicates = tool_execution::dedupe(&mut calls);
+            if self.options.hooks.is_some() {
+                self.observe("onModelResponse", json!({"runId":self.run_id,"step":iteration,"content":content,"toolCalls":calls,"finishReason":if turn.finish.is_empty() { None } else { Some(&turn.finish) }})).await?;
+            }
             if turn.finish == "length" {
                 self.warning(
                     "truncated",
@@ -392,6 +425,7 @@ impl State {
         let mut stream = provider.stream_chat(request, provider_cancellation.clone());
         let mut turn = Turn::default();
         let mut first = true;
+        let mut retry_backoff = false;
         let mut last_activity = tokio::time::Instant::now();
         loop {
             if let Err(error) = self.check() {
@@ -413,6 +447,7 @@ impl State {
                     }
                 })
                 .map(|limit| limit.saturating_sub(elapsed));
+            let activity_limit = if retry_backoff { None } else { activity_limit };
             let overall_limit = budget.as_ref().and_then(|budget| budget.remaining_ms());
             let duration = minimum(activity_limit, overall_limit);
             let phase = if overall_limit
@@ -423,7 +458,7 @@ impl State {
                 phase
             };
             let next = tokio::select! { biased;
-                _ = self.options.cancellation.cancelled() => Err(CoreError::new("cancelled","aborted")),
+                _ = self.options.cancellation.cancelled() => Err(self.check().err().unwrap_or_else(|| CoreError::new("cancelled","aborted"))),
                 value = async { match duration { Some(ms) => tokio::time::timeout(Duration::from_millis(ms),stream.next()).await.map_err(|_|timeout(phase)),None => Ok(stream.next().await) } } => value,
             };
             let next = match next {
@@ -439,7 +474,23 @@ impl State {
             let Some(event) = next else {
                 break;
             };
+            if let Err(error) = self.check() {
+                provider_cancellation.cancel();
+                return Err(error);
+            }
             let event = event?;
+            match &event {
+                ProviderEvent::RequestStarted => {
+                    retry_backoff = false;
+                    first = true;
+                    last_activity = tokio::time::Instant::now();
+                }
+                ProviderEvent::RetryBackoff(ack) => {
+                    retry_backoff = true;
+                    ack.notify_one();
+                }
+                _ => {}
+            }
             if matches!(
                 &event,
                 ProviderEvent::Delta(_)
@@ -447,7 +498,7 @@ impl State {
                     | ProviderEvent::ToolRequested(_)
                     | ProviderEvent::Usage(_)
                     | ProviderEvent::Activity
-            ) || matches!(&event, ProviderEvent::Event {kind,..} if kind == "run.message.completed")
+            ) || matches!(&event, ProviderEvent::Event {kind,..} if kind == "run.message.completed" || kind == "run.message.reasoning-delta")
             {
                 first = false;
                 last_activity = tokio::time::Instant::now();
@@ -506,7 +557,9 @@ impl State {
                 self.emit("run.usage", data).await?;
             }
             ProviderEvent::Continuation(state) => self.continuation = Some(state),
-            ProviderEvent::Activity => {}
+            ProviderEvent::Activity
+            | ProviderEvent::RequestStarted
+            | ProviderEvent::RetryBackoff(_) => {}
             ProviderEvent::Event { kind, data } => {
                 if kind == "run.message.completed" {
                     turn.content = data["content"].as_str().map(str::to_owned);
@@ -528,9 +581,11 @@ impl State {
         cap: usize,
         push_assistant: bool,
     ) -> Result<(), CoreError> {
-        for call in &calls {
-            if !announced.contains(&call.id) {
-                self.emit("run.tool.requested",json!({"toolCallId":call.id,"toolName":call.name,"argumentsJson":call.arguments_json})).await?;
+        if push_assistant {
+            for call in &calls {
+                if !announced.contains(&call.id) {
+                    self.emit("run.tool.requested",json!({"toolCallId":call.id,"toolName":call.name,"argumentsJson":call.arguments_json})).await?;
+                }
             }
         }
         if calls.len() > cap {
@@ -551,7 +606,13 @@ impl State {
         }
         let mut cancelled = false;
         let mut budget_error = None;
+        let mut pending_suspension: Option<(crate::HumanRequestSpec, ToolCall)> = None;
         for (index, call) in calls.iter().enumerate() {
+            if self.options.batch_suspension && self.options.cancellation.is_cancelled() {
+                if let Some((_, held)) = pending_suspension.take() {
+                    self.cancel_suspended(&held).await?;
+                }
+            }
             let outcome = if self.options.cancellation.is_cancelled() || cancelled {
                 cancelled = true;
                 tool_execution::failed(
@@ -581,52 +642,69 @@ impl State {
                     json!({"toolCallId":call.id,"toolName":call.name}),
                 )
                 .await?;
-                let slot = Arc::new(crate::SuspendSlot::default());
-                let outcome = tool_execution::execute(
-                    registry,
-                    call,
-                    self.tool_context(call, Some(slot.clone())),
-                    self.options.default_tool_timeout_ms,
-                    self.options.request.budget.clone(),
-                )
-                .await;
-                if let Some(spec) = slot.take() {
-                    // The suspended call records NO tool result: the human
-                    // answer is what answers it. The pending assistant and
-                    // the results before it persist with the waiting event.
-                    let mut data = json!({
-                        "requestId": spec.request_id,
-                        "toolCallId": call.id,
-                        "toolName": call.name,
-                        "step": self.iteration,
-                        "prompt": spec.content.get("prompt").and_then(Value::as_str).unwrap_or(""),
-                    });
-                    if let Some(kind) = spec.content.get("kind") {
-                        data["kind"] = kind.clone();
-                    }
-                    // Approval fields ride the event too (parity with the
-                    // TypeScript `run.waiting`): the projection records the
-                    // request from these bytes.
-                    for key in ["argsSha256", "requestedMode", "standing"] {
-                        if let Some(value) = spec.content.get(key) {
-                            data[key] = value.clone();
-                        }
-                    }
-                    if let Some(expires) = &spec.expires_at {
-                        data["expiresAt"] = expires.clone().into();
-                    }
-                    self.emit("run.waiting", data).await?;
-                    let Some(sink) = self.options.suspender.clone() else {
-                        return Err(CoreError::new(
-                            "suspension_unavailable",
-                            "This host cannot park runs for human input; the request was refused.",
-                        ));
-                    };
-                    sink.park(&spec, &call.id).await?;
-                    self.suspended = true;
-                    return Ok(());
+                let gate = if self.options.hooks.is_some() {
+                    self.tool_gate(registry, call).await?
+                } else {
+                    None
+                };
+                if self.options.cancellation.is_cancelled() {
+                    cancelled = true;
                 }
-                outcome
+                let slot = Arc::new(crate::SuspendSlot::default());
+                let outcome = if cancelled {
+                    tool_execution::failed(
+                        call,
+                        &CoreError::new(
+                            "cancelled",
+                            "Run cancelled before this tool produced a result.",
+                        ),
+                        self.options.limits.max_bytes,
+                        json!({}),
+                    )
+                } else if let Some(message) = gate {
+                    tool_execution::failed(
+                        call,
+                        &CoreError::new("tool_hook_denied", &message),
+                        self.options.limits.max_bytes,
+                        json!({"phase":"guard", "retryable":false}),
+                    )
+                } else {
+                    tool_execution::execute(
+                        registry,
+                        call,
+                        self.tool_context(call, Some(slot.clone())),
+                        self.options.default_tool_timeout_ms,
+                        self.options.request.budget.clone(),
+                        self.options.tool_close.clone(),
+                    )
+                    .await
+                };
+                if let Some(spec) = slot.take() {
+                    if self.options.batch_suspension {
+                        let prompt = spec.content["prompt"].as_str().unwrap_or("");
+                        if prompt.trim().is_empty() {
+                            tool_execution::failed(
+                                call,
+                                &CoreError::new(
+                                    "suspend_invalid",
+                                    "suspend() needs a non-empty prompt for the human.",
+                                ),
+                                self.options.limits.max_bytes,
+                                json!({"phase":"execution","retryable":false}),
+                            )
+                        } else if pending_suspension.is_some() {
+                            tool_execution::failed(call, &CoreError::new("suspend_conflict", "Another tool call in this step is already waiting for human input."), self.options.limits.max_bytes, json!({"phase":"execution","retryable":false}))
+                        } else {
+                            pending_suspension = Some((spec, call.clone()));
+                            continue;
+                        }
+                    } else {
+                        self.park_suspension(&spec, call).await?;
+                        return Ok(());
+                    }
+                } else {
+                    outcome
+                }
             };
             if self.interrupted() {
                 // Stop without failing the calls that never ran: the resumed
@@ -665,7 +743,24 @@ impl State {
             message.name = Some(call.name.clone());
             self.pending_messages.push(message.clone());
             self.messages.push(message);
+            let status = if outcome.kind == "run.tool.succeeded" {
+                "succeeded"
+            } else {
+                "failed"
+            };
+            let error_code = outcome.data.get("errorCode").cloned();
             self.emit(outcome.kind, outcome.data).await?;
+            if !cancelled && self.options.hooks.is_some() {
+                self.observe("onToolResult", json!({"runId":self.run_id,"step":self.iteration,"toolCallId":call.id,"toolName":call.name,"status":status,"errorCode":error_code})).await?;
+            }
+        }
+        if let Some((spec, call)) = pending_suspension {
+            if self.options.cancellation.is_cancelled() {
+                self.cancel_suspended(&call).await?;
+            } else {
+                self.park_suspension(&spec, &call).await?;
+                return Ok(());
+            }
         }
         if let Some(error) = budget_error {
             return Err(error);

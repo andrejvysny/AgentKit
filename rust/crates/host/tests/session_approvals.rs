@@ -91,12 +91,29 @@ struct Mutate {
     definition: ToolDefinition,
     hits: Arc<AtomicUsize>,
     gate: Arc<Gate>,
+    context_revision: Arc<AtomicUsize>,
+}
+
+struct CountingVerifier(Arc<AtomicUsize>);
+#[async_trait]
+impl VerificationHook for CountingVerifier {
+    async fn verify(&self, _: ExecutionContext) -> HostResult<VerificationReport> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(VerificationReport {
+            status: "pass".into(),
+            deficiencies: vec![],
+        })
+    }
 }
 
 #[async_trait]
 impl Tool for Mutate {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
+    }
+    fn effect_context(&self) -> Option<Value> {
+        let revision = self.context_revision.load(Ordering::SeqCst);
+        (revision != 0).then(|| json!({"revision": revision}))
     }
     async fn execute(&self, context: ToolContext, _: Value) -> Result<ToolResult, CoreError> {
         self.hits.fetch_add(1, Ordering::SeqCst);
@@ -207,6 +224,7 @@ struct Fixture {
     requests: Arc<Mutex<Vec<ChatRequest>>>,
     ask: Arc<AtomicBool>,
     gate: Arc<Gate>,
+    context_revision: Arc<AtomicUsize>,
 }
 
 async fn fixture(
@@ -251,6 +269,7 @@ async fn fixture_with_options(
     let hits = Arc::new(AtomicUsize::new(0));
     let requests = Arc::new(Mutex::new(vec![]));
     let ask = Arc::new(AtomicBool::new(false));
+    let context_revision = Arc::new(AtomicUsize::new(0));
     let gate = Arc::new(Gate {
         armed: AtomicBool::new(false),
         entered: AtomicBool::new(false),
@@ -274,11 +293,17 @@ async fn fixture_with_options(
             Arc::new(ToolRegistry::new()),
         )
         .with_options(ChatExecutorOptions {
+            verification: options.verification.clone(),
+            correction: options
+                .verification
+                .as_ref()
+                .map(|_| CorrectionConfig::default()),
             tool_contributors: vec![Arc::new(WriterContributor {
                 tool: Arc::new(Mutate {
                     definition,
                     hits: hits.clone(),
                     gate: gate.clone(),
+                    context_revision: context_revision.clone(),
                 }),
             })],
             tool_guards: vec![Arc::new(AskGuard {
@@ -333,6 +358,7 @@ async fn fixture_with_options(
         requests,
         ask,
         gate,
+        context_revision,
     }
 }
 
@@ -702,7 +728,7 @@ async fn an_uncertain_effect_parks_until_a_generation_bound_approval() {
     let request = f.pending(&turn).await.into_iter().next().unwrap();
     assert_eq!(request.content["kind"], "approval");
     assert_eq!(request.content["toolName"], "write_file");
-    assert_eq!(request.content["uncertaintyGeneration"], generation);
+    assert_eq!(request.content["approvalGeneration"], generation);
     assert_eq!(
         request.content["argsSha256"],
         args_sha256(&json!({"path": "a.txt"}))
@@ -771,7 +797,7 @@ async fn a_later_uncertainty_requires_a_new_answer() {
     );
     assert_eq!(f.hits.load(Ordering::SeqCst), 1, "still not executed");
     let request = f.pending(&turn2).await.into_iter().next().unwrap();
-    assert_eq!(request.content["uncertaintyGeneration"], second);
+    assert_eq!(request.content["approvalGeneration"], second);
 
     f.service
         .approve(&request.input_id, "ans-2", None, None)
@@ -796,6 +822,7 @@ async fn a_later_uncertainty_requires_a_new_answer() {
 /// authorize the newer uncertainty.
 #[tokio::test]
 async fn a_second_uncertainty_in_the_same_run_needs_its_own_answer() {
+    let verification_calls = Arc::new(AtomicUsize::new(0));
     let f = fixture_with_options(
         "write_file",
         ARGS_A,
@@ -804,6 +831,7 @@ async fn a_second_uncertainty_in_the_same_run_needs_its_own_answer() {
         None,
         HostOptions {
             max_attempts: 10,
+            verification: Some(Arc::new(CountingVerifier(verification_calls.clone()))),
             ..Default::default()
         },
     )
@@ -849,7 +877,7 @@ async fn a_second_uncertainty_in_the_same_run_needs_its_own_answer() {
         "the re-presented call never runs again while its generation is unanswered"
     );
     let request_one = f.pending(&turn).await.into_iter().next().unwrap();
-    assert_eq!(request_one.content["uncertaintyGeneration"], first);
+    assert_eq!(request_one.content["approvalGeneration"], first);
     f.service
         .approve(&request_one.input_id, "ans-1", None, None)
         .await
@@ -886,12 +914,15 @@ async fn a_second_uncertainty_in_the_same_run_needs_its_own_answer() {
     // generation. Before the identity fix this park died `park_failed`:
     // the second request reused the answered first row's id with different
     // content, and the store's idempotency gate refused the rewrite.
+    let provider_requests_before = f.requests.lock().unwrap().len();
     f.host.run_once().await.unwrap();
     assert_eq!(
         f.status(&turn).await,
         TaskStatus::WaitingApproval,
         "the newer uncertainty re-parks the run for its own answer"
     );
+    assert_eq!(f.requests.lock().unwrap().len(), provider_requests_before);
+    assert_eq!(verification_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         f.hits.load(Ordering::SeqCst),
         2,
@@ -900,7 +931,7 @@ async fn a_second_uncertainty_in_the_same_run_needs_its_own_answer() {
     let requests = f.pending(&turn).await;
     assert_eq!(requests.len(), 1, "the second ask is its own pending row");
     let request_two = &requests[0];
-    assert_eq!(request_two.content["uncertaintyGeneration"], second);
+    assert_eq!(request_two.content["approvalGeneration"], second);
     assert_eq!(request_two.content["kind"], "approval");
     assert_ne!(
         request_two.input_id, request_one.input_id,
@@ -1010,7 +1041,7 @@ async fn two_answered_asks_for_one_call_resume_it_exactly_once() {
     f.service.resume("s1", &turn).await.unwrap();
     f.host.run_once().await.unwrap();
     let request_one = f.pending(&turn).await.into_iter().next().unwrap();
-    assert_eq!(request_one.content["uncertaintyGeneration"], first);
+    assert_eq!(request_one.content["approvalGeneration"], first);
     f.service
         .approve(&request_one.input_id, "ans-1", None, None)
         .await
@@ -1038,7 +1069,7 @@ async fn two_answered_asks_for_one_call_resume_it_exactly_once() {
     f.service.resume("s1", &turn).await.unwrap();
     f.host.run_once().await.unwrap();
     let request_two = f.pending(&turn).await.into_iter().next().unwrap();
-    assert_eq!(request_two.content["uncertaintyGeneration"], second);
+    assert_eq!(request_two.content["approvalGeneration"], second);
     f.service
         .approve(&request_two.input_id, "ans-2", None, None)
         .await
@@ -1339,4 +1370,72 @@ async fn a_replayed_plan_answer_never_consults_the_grant_policy() {
         before,
         "the replay consulted the policy not at all"
     );
+}
+
+#[tokio::test]
+async fn changed_effect_context_cannot_spend_an_approval() {
+    let f = fixture("write_file", false, None).await;
+    f.set_ask(true);
+    let turn = f.send("first", "t1").await;
+    f.host.run_once().await.unwrap();
+    let request = f.pending(&turn).await.remove(0);
+    assert!(
+        request.content["contextSha256"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64)
+    );
+    f.service
+        .approve(&request.input_id, "answer", None, None)
+        .await
+        .unwrap();
+    f.context_revision.store(1, Ordering::SeqCst);
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.hits.load(Ordering::SeqCst), 0);
+    assert!(
+        f.store
+            .list_executions_by_chat("s1".into())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn legacy_uncertainty_generation_approval_still_recovers() {
+    let f = fixture_with("write_file", ARGS_A, "other", false, None).await;
+    let generation = f.seed_uncertain("run-old", "write_file", ARGS_A).await;
+    f.set_ask(true);
+    let turn = f.send("mutate", "t1").await;
+    f.host.run_once().await.unwrap();
+    let current = f.pending(&turn).await.remove(0);
+    let mut legacy = current.content.clone();
+    legacy.as_object_mut().unwrap().remove("approvalGeneration");
+    legacy.as_object_mut().unwrap().remove("contextSha256");
+    legacy["uncertaintyGeneration"] = generation.into();
+    f.store
+        .create_input(
+            CreateAgentInput {
+                input_id: "legacy-approval".into(),
+                session_id: "s1".into(),
+                kind: AgentInputKind::HumanRequest,
+                content: legacy,
+                content_hash: "legacy".into(),
+                target_task_id: Some(turn.clone()),
+                on_settled: None,
+                attempt_id: current.attempt_id,
+                tool_call_id: Some("call-1".into()),
+                expires_at: None,
+            },
+            1_700_000_000_001,
+        )
+        .await
+        .unwrap();
+    f.service
+        .approve("legacy-approval", "legacy-answer", None, None)
+        .await
+        .unwrap();
+    f.set_ask(false);
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.hits.load(Ordering::SeqCst), 1);
 }

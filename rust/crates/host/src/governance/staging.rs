@@ -143,6 +143,9 @@ impl Tool for DirectWriteTool {
     fn definition(&self) -> &ToolDefinition {
         &self.definition
     }
+    fn effect_context(&self) -> Option<Value> {
+        self.inner.effect_context()
+    }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
         self.inner.execute(context, input).await
     }
@@ -440,6 +443,7 @@ impl Tool for GuardedTool {
                     &input,
                     &approvable,
                     uncertainty.as_ref(),
+                    effect_context.as_ref(),
                 )
                 .await?
         {
@@ -500,9 +504,30 @@ impl GuardedTool {
         input: &Value,
         approvable: &[ApprovalAsk],
         uncertainty: Option<&(ToolResult, String)>,
+        effect_context: Option<&Value>,
     ) -> Result<Option<ToolResult>, CoreError> {
         let durable = self.snapshot.contribution.durable.clone();
         let args = crate::governance::args_sha256(input);
+        let context_hash = durable.as_ref().map(|durable| {
+            super::durable_execution::execution_context_sha256(
+                durable,
+                &self.snapshot.contribution,
+                definition,
+                effect_context,
+            )
+        });
+        if context
+            .tool_call_id
+            .as_deref()
+            .and_then(|id| durable.as_ref()?.approvals.get(id))
+            .and_then(|grant| grant.context_sha256.as_deref())
+            .is_some_and(|hash| Some(hash) != context_hash.as_deref())
+        {
+            return Ok(Some(guard_refusal(
+                context,
+                "The approval no longer matches this execution context.",
+            )));
+        }
         // 1. One-use answered approval (exact call, exact arguments). For
         //    an uncertain reissue the grant must also name the exact
         //    unresolved generation; any other grant stays unspendable and
@@ -520,7 +545,7 @@ impl GuardedTool {
                         Some((_, generation)) => {
                             grant.uncertainty_generation.as_deref() == Some(generation.as_str())
                         }
-                        None => true,
+                        None => grant.uncertainty_generation.is_none(),
                     })
                     .map(|grant| (call_id.to_owned(), grant.clone()))
             })
@@ -580,7 +605,14 @@ impl GuardedTool {
         //    absent; for an uncertain call that final answer is the honest
         //    uncertainty refusal (which names the generation), never a
         //    generic guard message.
-        let spec = approval_spec(context, definition, approvable, args, standing_key);
+        let spec = approval_spec(
+            context,
+            definition,
+            approvable,
+            args,
+            standing_key,
+            context_hash,
+        );
         if context.request_human(spec) {
             // Inert: the loop takes the slot right after this returns,
             // records `run.waiting`, and parks the turn before admission —
@@ -627,6 +659,7 @@ fn approval_spec(
     approvable: &[ApprovalAsk],
     args_sha256: String,
     standing: Option<(String, String)>,
+    context_sha256: Option<String>,
 ) -> agentkit_core::HumanRequestSpec {
     let tool_call_id = context
         .tool_call_id
@@ -654,7 +687,10 @@ fn approval_spec(
     content.insert("kind".into(), "approval".into());
     content.insert("argsSha256".into(), args_sha256.clone().into());
     if let Some(generation) = &uncertainty {
-        content.insert("uncertaintyGeneration".into(), generation.clone().into());
+        content.insert("approvalGeneration".into(), generation.clone().into());
+    }
+    if let Some(hash) = &context_sha256 {
+        content.insert("contextSha256".into(), hash.clone().into());
     }
     if let Some(mode) = &requested_mode {
         content.insert("requestedMode".into(), mode.clone().into());
@@ -677,7 +713,10 @@ fn approval_spec(
     envelope.insert("kind".into(), "approval".into());
     envelope.insert("argsSha256".into(), args_sha256.into());
     if let Some(generation) = &uncertainty {
-        envelope.insert("uncertaintyGeneration".into(), generation.clone().into());
+        envelope.insert("approvalGeneration".into(), generation.clone().into());
+    }
+    if let Some(hash) = &context_sha256 {
+        envelope.insert("contextSha256".into(), hash.clone().into());
     }
     if let Some(mode) = &requested_mode {
         envelope.insert("requestedMode".into(), mode.clone().into());

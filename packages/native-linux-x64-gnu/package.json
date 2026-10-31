@@ -1,0 +1,28 @@
+{
+  "name": "@agentkit/native-linux-x64-gnu",
+  "version": "0.1.0-dev",
+  "description": "AgentKit native runtime for Linux x64 glibc",
+  "license": "MIT",
+  "private": true,
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "engines": {
+    "node": ">=22",
+    "bun": ">=1.4"
+  },
+  "main": "agentkit-native.linux-x64-gnu.node",
+  "files": [
+    "agentkit-native.linux-x64-gnu.node",
+    "README.md"
+  ],
+  "scripts": {
+    "prepack": "node -e \"require('node:fs').accessSync(require('./package.json').main)\""
+  }
+}

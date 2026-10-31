@@ -28,6 +28,7 @@ pub(crate) async fn execute(
     context: ToolContext,
     default_timeout: Option<u64>,
     budget: Option<Arc<ExecutionBudget>>,
+    close: Option<tokio_util::sync::CancellationToken>,
 ) -> ToolOutcome {
     let max = context.limits.max_bytes;
     let Some(tool) = registry.get(&call.name) else {
@@ -112,7 +113,9 @@ pub(crate) async fn execute(
     execute_context.cancellation = child.clone();
     let running = tool.execute(execute_context, args);
     tokio::pin!(running);
-    let result = if let Some(ms) = deadline {
+    let result = if let (None, Some(close)) = (&budget, &close) {
+        wait_unbudgeted(&mut running, &child, deadline, close, &call.name).await
+    } else if let Some(ms) = deadline {
         tokio::select! { biased;
             result = &mut running => result,
             _ = tokio::time::sleep(Duration::from_millis(ms)) => {
@@ -125,17 +128,43 @@ pub(crate) async fn execute(
                 } else {Err(CoreError::new("exec_failed",&format!("Tool {} timed out after {ms}ms",call.name)))}
             }
             _ = context.cancellation.cancelled() => {
-                child.cancel(); Err(CoreError::new("cancelled","Run cancelled before this tool produced a result."))
+                child.cancel(); Err(cancelled())
             }
         }
     } else {
         tokio::select! { biased;
             result = &mut running => result,
-            _ = context.cancellation.cancelled() => { child.cancel(); Err(CoreError::new("cancelled","Run cancelled before this tool produced a result.")) }
+            _ = context.cancellation.cancelled() => { child.cancel(); Err(cancelled()) }
         }
     };
     outcome(call, result, max, &context.limits)
 }
+fn cancelled() -> CoreError {
+    CoreError::new(
+        "cancelled",
+        "Run cancelled before this tool produced a result.",
+    )
+}
+async fn wait_unbudgeted<F>(
+    running: &mut F,
+    child: &tokio_util::sync::CancellationToken,
+    deadline: Option<u64>,
+    close: &tokio_util::sync::CancellationToken,
+    name: &str,
+) -> Result<crate::ToolResult, CoreError>
+where
+    F: std::future::Future<Output = Result<crate::ToolResult, CoreError>> + Unpin,
+{
+    tokio::select! { biased;
+        result = running => result,
+        _ = async { if let Some(ms) = deadline { tokio::time::sleep(Duration::from_millis(ms)).await } else { std::future::pending::<()>().await } } => {
+            child.cancel();
+            Err(CoreError::new("exec_failed", &format!("Tool {name} timed out after {}ms", deadline.unwrap_or(0))))
+        },
+        _ = close.cancelled() => { child.cancel(); Err(cancelled()) },
+    }
+}
+
 fn outcome(
     call: &ToolCall,
     result: Result<crate::ToolResult, CoreError>,

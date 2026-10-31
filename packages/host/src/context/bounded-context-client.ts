@@ -108,11 +108,22 @@ async function* guardedStream(
     yield deps.stamp({ type: "run.failed", ...base, data: admission });
     return;
   }
+  const enforceCeiling = !(
+    client.protocol === "responses" &&
+    "authKind" in client &&
+    client.authKind === "chatgpt-account" &&
+    request.maxOutputTokens === undefined
+  );
+  const { maxOutputTokens, ...estimate } = admission;
   // The loop re-stamps these events into its authoritative sequence and attempt.
-  yield deps.stamp({ type: "run.context.admitted", ...base, data: admission });
+  yield deps.stamp({
+    type: "run.context.admitted",
+    ...base,
+    data: { ...estimate, ...(enforceCeiling ? { maxOutputTokens } : {}) },
+  });
   yield* client.streamChat({
     ...request,
-    maxOutputTokens: admission.maxOutputTokens,
+    ...(enforceCeiling ? { maxOutputTokens: admission.maxOutputTokens } : {}),
   });
 }
 

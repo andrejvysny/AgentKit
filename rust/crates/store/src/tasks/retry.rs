@@ -10,7 +10,7 @@ impl SqliteStore {
                     "invalid retry limits or deadline".into(),
                 ));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let lease = fence(&transaction, &input.fence, input.now)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &input.fence.task_id)?;
             if task.status != TaskStatus::Running {

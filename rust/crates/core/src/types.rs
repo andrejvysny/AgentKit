@@ -259,6 +259,8 @@ pub enum ProviderEvent {
     Usage(Value),
     Continuation(Value),
     Activity,
+    RequestStarted,
+    RetryBackoff(Arc<tokio::sync::Notify>),
     Event {
         kind: String,
         data: Value,
@@ -268,6 +270,10 @@ pub type ProviderStream = Pin<Box<dyn Stream<Item = Result<ProviderEvent, CoreEr
 
 #[async_trait]
 pub trait ChatProvider: Send + Sync {
+    /// Whether the host may add an output limit when the caller omitted one.
+    fn allows_implicit_output_limit(&self) -> bool {
+        true
+    }
     /// After cancellation, polling may report billing but must never dispatch work.
     fn supports_usage_cleanup(&self) -> bool {
         false
@@ -300,6 +306,18 @@ pub trait RunEventSink: Send + Sync {
     ) -> Result<(), CoreError> {
         self.append(event).await
     }
+}
+
+#[async_trait]
+pub trait RunHooks: Send + Sync {
+    fn indexes(&self, name: &str) -> Vec<usize>;
+    async fn call(
+        &self,
+        name: &str,
+        index: usize,
+        context: Value,
+        cancellation: &CancellationToken,
+    ) -> Result<Value, CoreError>;
 }
 
 /// A tool's typed request to park the run until a human answers. The host
@@ -361,7 +379,8 @@ pub trait SuspendSink: Send + Sync {
 
 /// One steer the host offers the run at a tool boundary (ADR 0016 §3):
 /// the durable input's id and the user message it places.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SteeringItem {
     pub input_id: String,
     pub message: ChatMessage,
@@ -373,4 +392,11 @@ pub struct SteeringItem {
 #[async_trait]
 pub trait SteeringSource: Send + Sync {
     async fn pending(&self) -> Vec<SteeringItem>;
+    async fn pending_context(
+        &self,
+        _run_id: &str,
+        _step: u32,
+    ) -> Result<Vec<SteeringItem>, CoreError> {
+        Ok(self.pending().await)
+    }
 }

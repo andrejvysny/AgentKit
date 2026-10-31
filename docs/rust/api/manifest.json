@@ -1,0 +1,160 @@
+{
+  "frozenCommit": "5a4bb61a479cc8ca3dfb0e24a8a0e1e0b37a9c61",
+  "surfaces": [
+    {
+      "name": "@agentkit/adapters-memory",
+      "subpath": ".",
+      "report": "adapters-memory"
+    },
+    {
+      "name": "@agentkit/adapters-sqlite",
+      "subpath": ".",
+      "report": "adapters-sqlite"
+    },
+    {
+      "name": "@agentkit/adapters-sqlite",
+      "subpath": "./node",
+      "report": "adapters-sqlite--node"
+    },
+    {
+      "name": "agentkit",
+      "subpath": ".",
+      "report": "agentkit"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./contracts",
+      "report": "agentkit--contracts"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./client",
+      "report": "agentkit--client"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./react",
+      "report": "agentkit--react"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./core",
+      "report": "agentkit--core"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./host",
+      "report": "agentkit--host"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./testing",
+      "report": "agentkit--testing"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./mcp-client",
+      "report": "agentkit--mcp-client"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./transport-http",
+      "report": "agentkit--transport-http"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./mcp-server",
+      "report": "agentkit--mcp-server"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./adapters-memory",
+      "report": "agentkit--adapters-memory"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./adapters-sqlite",
+      "report": "agentkit--adapters-sqlite"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./runner-local",
+      "report": "agentkit--runner-local"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./adapters-sqlite-node",
+      "report": "agentkit--adapters-sqlite-node"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./runner-local/filesystem",
+      "report": "agentkit--runner-local--filesystem"
+    },
+    {
+      "name": "agentkit",
+      "subpath": "./toolpacks-coding",
+      "report": "agentkit--toolpacks-coding"
+    },
+    {
+      "name": "@agentkit/client",
+      "subpath": ".",
+      "report": "client"
+    },
+    {
+      "name": "@agentkit/contracts",
+      "subpath": ".",
+      "report": "contracts"
+    },
+    {
+      "name": "@agentkit/core",
+      "subpath": ".",
+      "report": "core"
+    },
+    {
+      "name": "@agentkit/host",
+      "subpath": ".",
+      "report": "host"
+    },
+    {
+      "name": "@agentkit/mcp-client",
+      "subpath": ".",
+      "report": "mcp-client"
+    },
+    {
+      "name": "@agentkit/mcp-server",
+      "subpath": ".",
+      "report": "mcp-server"
+    },
+    {
+      "name": "@agentkit/react",
+      "subpath": ".",
+      "report": "react"
+    },
+    {
+      "name": "@agentkit/runner-local",
+      "subpath": ".",
+      "report": "runner-local"
+    },
+    {
+      "name": "@agentkit/runner-local",
+      "subpath": "./filesystem",
+      "report": "runner-local--filesystem"
+    },
+    {
+      "name": "@agentkit/testing",
+      "subpath": ".",
+      "report": "testing"
+    },
+    {
+      "name": "@agentkit/toolpacks-coding",
+      "subpath": ".",
+      "report": "toolpacks-coding"
+    },
+    {
+      "name": "@agentkit/transport-http",
+      "subpath": ".",
+      "report": "transport-http"
+    }
+  ]
+}

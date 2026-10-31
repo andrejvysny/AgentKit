@@ -47,7 +47,7 @@ impl SqliteStore {
             owner_id.to_owned(),
         );
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let _: TaskRecord = required(&transaction, "tasks", "id", &task_id)?;
             let lease = acquire(&transaction, &task_id, &attempt_id, &owner_id, now, ttl_ms)?;
             transaction.commit()?;

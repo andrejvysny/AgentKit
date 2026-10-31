@@ -82,7 +82,7 @@ impl SqliteStore {
     ) -> Result<bool> {
         let (namespace, key) = (namespace.to_owned(), key.to_owned());
         self.call(move|db| {
-            let transaction=db.transaction()?;
+            let transaction=crate::transaction::atomic(db)?;
             let current:Option<String>=transaction.query_row("SELECT value FROM settings WHERE namespace=? AND key=?",params![namespace,key],|row|row.get(0)).optional()?;
             let current=current.map(|value|agentkit_contracts::parse_javascript_json(&value)).transpose()?;
             if current!=expected {return Ok(false);}
@@ -95,7 +95,7 @@ impl SqliteStore {
     pub async fn bind_setting(&self, namespace: &str, key: &str, value: Value) -> Result<bool> {
         let (namespace, key) = (namespace.to_owned(), key.to_owned());
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let existing: Option<String> = transaction
                 .query_row(
                     "SELECT value FROM settings WHERE namespace=? AND key=?",
@@ -139,7 +139,7 @@ impl SqliteStore {
                     "max_attempts must be positive".into(),
                 ));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut due: Vec<OutboxRecord> = all::<OutboxRecord>(&transaction, "outbox")?
                 .into_iter()
                 .filter(|r| {
@@ -189,7 +189,7 @@ impl SqliteStore {
     ) -> Result<()> {
         let (record_id, token) = (record_id.to_owned(), token.to_owned());
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut record: OutboxRecord = required(&transaction, "outbox", "id", &record_id)?;
             if record.claim_token.as_deref() != Some(&token)
                 || record.claim_until.is_none_or(|expiry| expiry <= now)
@@ -223,7 +223,7 @@ impl SqliteStore {
                     "max_attempts must be positive".into(),
                 ));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut removed = 0;
             for record in all::<OutboxRecord>(&transaction, "outbox")? {
                 if record.published_at.is_some_and(|at| at < before)

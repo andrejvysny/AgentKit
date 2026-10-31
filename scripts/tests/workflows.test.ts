@@ -13,6 +13,7 @@ interface Job {
   needs?: string[] | string;
   if?: string;
   "runs-on"?: string;
+  strategy?: { matrix?: Record<string, Array<string | number>> };
   steps?: Step[];
 }
 interface Workflow {
@@ -81,6 +82,31 @@ describe("workflow structural validity", () => {
 });
 
 describe("Rust native workflow qualification", () => {
+  it("requires native execution and installed artifacts on Node 22 and 24", () => {
+    for (const name of ["native", "native-windows"]) {
+      const job = rust.jobs[name];
+      expect(job.strategy?.matrix?.["node-version"]).toEqual([22, 24]);
+      const setup = job.steps?.find((step) =>
+        step.uses?.includes("setup-node"),
+      );
+      expect(setup).toBeDefined();
+      const core = job.steps?.find(
+        (step) => step.run === "bun test packages/core",
+      );
+      expect(core?.env?.AGENTKIT_BACKEND).toBe("native");
+      expect(core?.env?.AGENTKIT_REQUIRE_NATIVE).toBe("1");
+      expect(core?.if).toBeUndefined();
+      for (const script of [
+        "check-native-package.mjs",
+        "check-native-umbrella.mjs",
+      ]) {
+        const gate = job.steps?.find((step) => step.run?.includes(script));
+        expect(gate, `${name} ${script}`).toBeDefined();
+        expect(gate?.if).toBeUndefined();
+      }
+    }
+  });
+
   it("keeps the packaged-consumer gates as real steps in the native matrix", () => {
     expect(commands(rust.jobs.native)).toContain(
       "node rust/scripts/check-packages.mjs --offline",

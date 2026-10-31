@@ -7,10 +7,9 @@
 //! for a concurrent submit to lose a race in. The service holds no provider
 //! client. Descriptor settings the native dispatch path cannot honor —
 //! selected Skills (content selection), provider reasoning effort, context
-//! assembly overrides — are REFUSED before any turn effect with
+//! unsupported context policies — are REFUSED before any turn effect with
 //! `not_implemented` (never silently omitted), mirroring the HTTP boundary's
-//! 501 for `contentSelection`; `compact` is likewise refused because no
-//! native compaction runner consumes the request.
+//! 501 for `contentSelection`.
 
 mod descriptor;
 mod execution_authority;
@@ -1004,19 +1003,18 @@ impl AgentSessionService {
 
     // -- deferred compaction, queue maintenance, configuration -------------------
 
-    /// Ask for the session's context to be compacted (ADR 0017 part 2).
-    /// REFUSED: nothing in the native executor consumes
-    /// `compactRequestedAt` — the session's next turn performs no
-    /// compaction and never clears the request — so recording it would be
-    /// accept-but-ignore. Rejected with `not_implemented`, the same code the
-    /// HTTP boundary uses for unconfigured optional services, until a
-    /// compaction runner exists.
+    /// Request deferred compaction at the next session turn (ADR 0017 part 2).
     pub async fn compact(&self, session_id: &str) -> SessionResult<()> {
-        self.require_session(session_id).await?;
-        Err(SessionError::new(
-            "not_implemented",
-            "Deferred session compaction is not configured on the native executor; the next turn performs no compaction.",
-        ))
+        let (chat, descriptor) = self.require_session(session_id).await?;
+        self.store()
+            .request_compact(
+                session_id.into(),
+                session_turn_kind(&descriptor),
+                chat.metadata[SESSION_METADATA_KEY].clone(),
+                self.now_ms(),
+            )
+            .await?;
+        Ok(())
     }
 
     /// Pending inputs and the provider continuation are NOT copied.
@@ -1470,7 +1468,9 @@ impl AgentSessionService {
                 "Provider reasoning effort is not configured on the native executor.",
             ));
         }
-        if descriptor.get("context").is_some() {
+        if descriptor["context"].get("policy").is_some()
+            || descriptor["context"].get("toolResultElision").is_some()
+        {
             return Err(SessionError::new(
                 "not_implemented",
                 "Session context assembly overrides are not configured on the native executor.",
@@ -1481,6 +1481,10 @@ impl AgentSessionService {
         for (key, value) in turn_config(descriptor) {
             payload.insert(key, value);
         }
+        payload.insert(
+            "sessionContext".into(),
+            descriptor.get("context").cloned().unwrap_or(Value::Null),
+        );
         Ok(payload)
     }
 

@@ -605,7 +605,7 @@ impl SqliteStore {
     /// rejects when the turn was cancelled or already resumed.
     pub async fn answer_human_request(&self, input: AnswerHumanRequest) -> Result<AnswerOutcome> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let now_text = ConversationTimestamp::from_epoch_millis(input.now)?
                 .wire_text()?
                 .into_owned();
@@ -1002,7 +1002,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<Value> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut chat: ChatRecord = required(&transaction, "chats", "id", &session_id)?;
             let mut grants = writable_standing(&chat.metadata, &session_id)?;
             let Some(index) = grants.iter().position(|grant| {
@@ -1052,7 +1052,7 @@ impl SqliteStore {
     /// never holds the scope.
     pub async fn park_turn(&self, input: ParkTurn) -> Result<Option<String>> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             crate::tasks::fence(&transaction, &input.fence, input.now)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &input.fence.task_id)?;
             if task.status != TaskStatus::Running || task.cancel_requested {
@@ -1133,7 +1133,7 @@ impl SqliteStore {
         input: AppendProjectedInputs,
     ) -> Result<ProjectionCommit> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             crate::tasks::fence(&transaction, &input.fence, input.now)?;
             let task: TaskRecord = required(&transaction, "tasks", "id", &input.fence.task_id)?;
             let now = input.now;
@@ -1229,7 +1229,7 @@ impl SqliteStore {
     /// request the execution loop observes.
     pub async fn request_interrupt(&self, task_id: String, now: i64) -> Result<()> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut task: TaskRecord = match get_task_row(&transaction, &task_id)? {
                 Some(task) => task,
                 None => {
@@ -1263,7 +1263,7 @@ impl SqliteStore {
     /// park the RUNNING turn with its attempt and lease ended.
     pub async fn park_interrupted(&self, fence: LeaseFence, now: i64) -> Result<()> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             crate::tasks::fence(&transaction, &fence, now)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &fence.task_id)?;
             if task.status != TaskStatus::Running {
@@ -1722,7 +1722,7 @@ impl SqliteStore {
     /// writes NOTHING — never a queued task without its messages or receipt.
     pub async fn stage_queued_turn(&self, input: StageQueuedTurn) -> Result<Option<String>> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let busy: Option<String> = transaction
                 .query_row(
                     "SELECT id FROM tasks WHERE scope=?1 AND json_extract(record,'$.kind')=?2 \
@@ -1780,7 +1780,7 @@ impl SqliteStore {
     /// settlement left to run.
     pub async fn queue_or_stage_turn(&self, input: QueueOrStage) -> Result<QueueAdmission> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             // Only this session's turn kind drives its settlement queue.
             // An unrelated task sharing the scope cannot promise to promote
             // an accepted input when it finishes; reject before inserting it.
@@ -1883,14 +1883,14 @@ impl SqliteStore {
         &self,
         session_id: String,
         task_kind: String,
+        expected_descriptor: Value,
         now: i64,
     ) -> Result<()> {
         self.call(move |db| {
             let busy: Option<String> = db
                 .query_row(
                     "SELECT id FROM tasks WHERE scope=?1 AND json_extract(record,'$.kind')=?2 \
-                     AND (status IN ('running','waiting_approval','interrupted') \
-                     OR (status='queued' AND json_extract(record,'$.retryPending')=1)) LIMIT 1",
+                     AND status IN ('queued','running','waiting_approval','interrupted') LIMIT 1",
                     params![session_id, task_kind],
                     |row| row.get::<_, String>(0),
                 )
@@ -1899,6 +1899,9 @@ impl SqliteStore {
                 return Err(StoreError::ScopeBusy(session_id));
             }
             let mut chat: ChatRecord = required(db, "chats", "id", &session_id)?;
+            if chat.metadata.get(SESSION_METADATA_KEY) != Some(&expected_descriptor) {
+                return Err(StoreError::SessionDescriptorChanged(session_id));
+            }
             let mut metadata = chat.metadata.as_object().cloned().unwrap_or_default();
             metadata.insert(
                 COMPACT_REQUESTED_METADATA_KEY.into(),

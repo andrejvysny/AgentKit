@@ -6,18 +6,15 @@
 //! bounded by what they are, so eligibility is a POSITIVE allowlist over a
 //! character set with no shell syntax in it: a command is `eligible` only
 //! when every character is plain and its tokens spell one of a short list
-//! of build/test/inspect invocations. Everything else is `unknown` and asks
-//! the human each time. `high_risk` is a separate, earlier verdict used by
+//! of build/test/inspect invocations. Other commands are `unknown` and follow
+//! the configured mode. `high_risk` is a separate, earlier verdict used by
 //! the guard to force a fresh approval even in `full_auto`.
 //!
-//! Divergences (tracked): the Rust host has not ported the ADR 0019
-//! standing-approval ledger yet, so [`coding_standing_approval_key`] is
-//! exposed as a pure function for hosts that implement their own approval
-//! ledger. The high-risk guard is a real [`ToolGuard`] ([`HighRiskCommandGuard`])
-//! now that the host passes per-call `arguments` to `canExecute`.
+//! Native standing approvals are disabled until executable, script,
+//! configuration, and environment identity can be verified on each call.
+//! [`HighRiskCommandGuard`] forces a fresh approval for high-risk commands.
 
-use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
+use serde_json::Value;
 
 /// Ported classification of `packages/toolpacks-coding/src/command-policy.ts`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +46,7 @@ pub fn is_shell_tool(name: &str) -> bool {
 fn high_risk_words() -> &'static [&'static str] {
     &[
         "rm",
+        "rimraf",
         "rmdir",
         "unlink",
         "shred",
@@ -172,6 +170,121 @@ fn compiled(pattern: &str) -> regex::Regex {
     regex::Regex::new(pattern).expect("static pattern compiles")
 }
 
+fn shell_words(raw: &str) -> Vec<String> {
+    let mut words = vec![];
+    let mut word = String::new();
+    let mut quote = None;
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && quote != Some('\'') && chars.peek().is_some() {
+            word.push(chars.next().expect("peeked"));
+        } else if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() && (ch == '\'' || ch == '"') {
+            quote = Some(ch);
+        } else if quote.is_none() && (ch.is_whitespace() || ";&|()<>`$".contains(ch)) {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+        } else {
+            word.push(ch);
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+fn executable_name(word: &str) -> String {
+    word.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase()
+}
+
+fn has_inline_evaluation(words: &[String]) -> bool {
+    words.iter().enumerate().any(|(index, word)| {
+        let token = executable_name(word);
+        let rest: Vec<String> = words[index + 1..]
+            .iter()
+            .map(|arg| arg.to_lowercase())
+            .collect();
+        inline_shell(&token, &rest) || inline_node(&token, &rest) || inline_other(&token, &rest)
+    })
+}
+
+fn inline_shell(token: &str, rest: &[String]) -> bool {
+    static SHELL_CODE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| compiled(r"^-[a-z]*c"));
+    static PYTHON: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| compiled(r"^(python([0-9]+(\.[0-9]+)*)?|pypy[0-9]*)$"));
+    if matches!(token, "sh" | "bash" | "zsh" | "dash" | "ksh" | "fish") {
+        return rest.iter().any(|arg| SHELL_CODE.is_match(arg));
+    }
+    PYTHON.is_match(token)
+        && rest
+            .iter()
+            .any(|arg| arg == "-" || SHELL_CODE.is_match(arg))
+}
+
+fn inline_node(token: &str, rest: &[String]) -> bool {
+    if matches!(token, "node" | "nodejs")
+        && (rest.is_empty()
+            || rest.iter().all(|arg| arg.starts_with('-'))
+            || rest
+                .iter()
+                .any(|arg| arg == "-" || arg == "--input-type" || arg.starts_with("--input-type=")))
+    {
+        return true;
+    }
+    matches!(token, "node" | "nodejs" | "bun")
+        && rest.iter().enumerate().any(|(i, arg)| {
+            ["--import", "--loader", "--preload", "--require"]
+                .iter()
+                .any(|flag| {
+                    arg.starts_with(&format!("{flag}=data:"))
+                        || (arg == flag
+                            && rest
+                                .get(i + 1)
+                                .is_some_and(|next| next.starts_with("data:")))
+                })
+        })
+}
+
+fn inline_other(token: &str, rest: &[String]) -> bool {
+    static EVAL_SHORT: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| compiled(r"^-[a-z]*[ep]"));
+    if matches!(
+        token,
+        "node" | "nodejs" | "bun" | "ruby" | "perl" | "lua" | "luajit"
+    ) {
+        return rest.iter().any(|arg| {
+            arg == "--eval"
+                || arg.starts_with("--eval=")
+                || arg == "--print"
+                || arg.starts_with("--print=")
+                || EVAL_SHORT.is_match(arg)
+        });
+    }
+    if token == "php" {
+        return rest.iter().any(|arg| arg.starts_with("-r"));
+    }
+    if token == "deno" {
+        return rest.iter().any(|arg| arg == "eval");
+    }
+    if matches!(token, "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe") {
+        return rest.iter().any(|arg| {
+            matches!(
+                arg.as_str(),
+                "-c" | "-command" | "-encodedcommand" | "-enc" | "-e"
+            )
+        });
+    }
+    matches!(token, "awk" | "gawk" | "mawk")
+}
+
 fn is_high_risk(raw: &str) -> bool {
     static TOKEN_SPLIT: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| compiled(r"[\s;&|()<>\x60$]+"));
@@ -184,15 +297,37 @@ fn is_high_risk(raw: &str) -> bool {
         .build()
         .expect("static pattern compiles")
     });
-    let tokens: Vec<&str> = TOKEN_SPLIT
-        .split(raw)
-        .filter(|token| !token.is_empty())
-        .collect();
+    let stripped = raw.replace(['\'', '"'], "");
+    let mut words = shell_words(raw);
+    words.extend(
+        TOKEN_SPLIT
+            .split(&stripped)
+            .filter(|word| !word.is_empty())
+            .map(str::to_owned),
+    );
+    let tokens: Vec<String> = words.iter().map(|word| executable_name(word)).collect();
+    if has_inline_evaluation(&words) {
+        return true;
+    }
+    if tokens
+        .iter()
+        .any(|t| matches!(t.as_str(), "node" | "nodejs" | "bun"))
+        && raw.contains('<')
+    {
+        return true;
+    }
+    if tokens.iter().any(|t| t == "env")
+        && words
+            .iter()
+            .any(|word| word.starts_with("--split-string") || word.starts_with("-S"))
+    {
+        return true;
+    }
     // `find` is high risk only with an action flag, so it is judged per
     // command.
-    let has_find = tokens.contains(&"find");
+    let has_find = tokens.iter().any(|token| token == "find");
     for (index, token) in tokens.iter().enumerate() {
-        if high_risk_words().contains(token) {
+        if high_risk_words().contains(&token.as_str()) {
             return true;
         }
         // A flag names a build option (`--release`), not a target; only its
@@ -205,27 +340,32 @@ fn is_high_risk(raw: &str) -> bool {
         if DANGEROUS.is_match(word) {
             return true;
         }
-        if force_flags().contains(token) {
+        if force_flags().contains(&token.as_str()) {
             return true;
         }
-        if *token == "git" && tokens[index + 1..].iter().any(|t| is_risky_git_word(t)) {
-            return true;
-        }
-        if package_managers().contains(token)
-            && tokens[index + 1..]
-                .iter()
-                .any(|t| publish_subcommands().contains(t))
+        if token == "git"
+            && (tokens[index + 1..].iter().any(|t| is_risky_git_word(t))
+                || words[index + 1..]
+                    .iter()
+                    .any(|arg| arg.starts_with("-c") || arg.starts_with("--config-env")))
         {
             return true;
         }
-        if *token == "-f" && tokens[..index].iter().any(|t| is_force_host(t)) {
+        if package_managers().contains(&token.as_str())
+            && tokens[index + 1..]
+                .iter()
+                .any(|t| publish_subcommands().contains(&t.as_str()))
+        {
+            return true;
+        }
+        if token == "-f" && tokens[..index].iter().any(|t| is_force_host(t)) {
             return true;
         }
     }
     has_find
         && tokens
             .iter()
-            .any(|t| *t == "-delete" || *t == "-exec" || *t == "-execdir")
+            .any(|t| t == "-delete" || t == "-exec" || t == "-execdir")
 }
 
 fn is_risky_git_word(token: &str) -> bool {
@@ -442,12 +582,7 @@ pub struct StandingApprovalKey {
     pub label: String,
 }
 
-/// The standing-approval key for one shell call, or `None` when the call is
-/// uncoverable (not the coding namespace, not a shell tool, no chat, never
-/// eligible, escapes the workspace, cwd missing or not a directory). Port of
-/// the TS `keyFor` body minus the host's guard-refusal precondition (which
-/// the host ledger must re-check: every refusal must start with
-/// `approval_required:`).
+/// Decline standing approval until native execution inputs can be fingerprinted.
 pub async fn coding_standing_approval_key(
     namespace: &str,
     chat_id: Option<&str>,
@@ -455,67 +590,10 @@ pub async fn coding_standing_approval_key(
     args: &ShellArgs,
     workspace: &StandingApprovalWorkspace,
 ) -> Option<StandingApprovalKey> {
-    // TS `keyFor` preconditions (command-policy.ts): the refusal surface is
-    // the coding namespace's two shell tools with a chat; any other call is
-    // never keyable and must re-ask every time.
-    if namespace != crate::guard::CODING_NAMESPACE || !is_shell_tool(tool) {
-        return None;
-    }
-    let chat_id = chat_id?;
-    if classify_shell_command(&args.command) != CommandClass::Eligible {
-        return None;
-    }
-    let root = crate::paths::canonical_root(&workspace.root).await.ok()?;
-    let confined = crate::paths::resolve_inside_root(&root, args.cwd.as_deref().unwrap_or("."))
-        .await
-        .ok()?;
-    let cwd = tokio::fs::canonicalize(&confined.path).await.ok()?;
-    let cwd = cwd.to_string_lossy().into_owned();
-    if !tokio::fs::metadata(&cwd).await.ok()?.is_dir() {
-        return None;
-    }
-    let inside = crate::paths::relative(&root, &cwd);
-    if inside == ".." || inside.starts_with("../") || inside.starts_with('/') {
-        return None;
-    }
-    let mut payload = Map::new();
-    payload.insert("v".into(), Value::from(1));
-    payload.insert("chatId".into(), Value::String(chat_id.to_owned()));
-    payload.insert("tool".into(), Value::String(tool.to_owned()));
-    payload.insert("identity".into(), Value::String(workspace.identity.clone()));
-    payload.insert("root".into(), Value::String(root));
-    payload.insert("cwd".into(), Value::String(cwd));
-    payload.insert("command".into(), Value::String(args.command.clone()));
-    payload.insert(
-        "context".into(),
-        workspace
-            .context
-            .clone()
-            .map(Value::String)
-            .unwrap_or(Value::Null),
-    );
-    let encoded = serde_json::to_string(&Value::Object(payload)).ok()?;
-    let digest = {
-        let mut hasher = Sha256::new();
-        hasher.update(encoded.as_bytes());
-        hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    };
-    let label = if inside.is_empty() {
-        args.command.clone()
-    } else {
-        format!("{} (in {inside})", args.command)
-    };
-    Some(StandingApprovalKey {
-        digest,
-        // TS `label.slice(0, 512)` counts UTF-16 code units and may cut a
-        // surrogate pair; count the same units and let the orphan surrogate
-        // become U+FFFD exactly as a re-encoded JS string would.
-        label: String::from_utf16_lossy(&label.encode_utf16().take(512).collect::<Vec<_>>()),
-    })
+    // Without executable, script, configuration, and environment identity,
+    // any remembered approval can outlive a changed command implementation.
+    let _ = (namespace, chat_id, tool, args, workspace);
+    None
 }
 
 /// The workspace a chat's commands run in, resolved per chat. `None` means
@@ -717,6 +795,56 @@ mod tests {
     }
 
     #[test]
+    fn indirect_risk_requires_a_fresh_approval() {
+        for command in [
+            "npx rimraf x",
+            "git -c core.sshCommand=evil status",
+            "git -ccore.sshCommand=evil status",
+            "/usr/bin/git --config-env=core.sshCommand=EVIL status",
+            "\"rimraf\" x",
+            "r\\m x",
+            "/bin/rm x",
+            "node -",
+            "bash -c 'printf inert'",
+            "node --input-type=module -",
+            "node < ./input.js",
+            "node --import=data:text/javascript,console.log(1)",
+            "env -S '/bin/rm inert'",
+            "python3 -c 'print(1)'",
+            "echo \"$(/bin/rm inert)\"",
+            "'rm' inert",
+            "r''m inert",
+            "env SAFE=1 /bin/rm inert",
+            "env --split-string=\"rm inert\"",
+            "python3 -Ic'print(1)'",
+            "node --eval='console.log(1)'",
+            "node -p '1'",
+            "bun -e '1'",
+            "deno eval '1'",
+            "perl -e 'print 1'",
+            "ruby -e 'puts 1'",
+            "php -r 'echo 1;'",
+            "pwsh -EncodedCommand inert",
+            "awk '{print 1}'",
+            "node --input-type module",
+            "printf inert | node",
+            "node --import 'data:text/javascript,console.log(1)'",
+            "node --loader=data:text/javascript,console.log(1) script.js",
+            "bun --preload=data:text/javascript,console.log(1) test",
+        ] {
+            assert_eq!(
+                classify_shell_command(command),
+                CommandClass::HighRisk,
+                "{command}"
+            );
+        }
+        assert_eq!(
+            classify_shell_command("git -C /repo status"),
+            CommandClass::Unknown
+        );
+    }
+
+    #[test]
     fn unknown_commands() {
         for command in UNKNOWN {
             assert_eq!(
@@ -809,206 +937,48 @@ mod tests {
             None,
             "a chat-less call is never keyable"
         );
-        assert!(
-            coding_standing_approval_key(
-                crate::guard::CODING_NAMESPACE,
-                Some("chat-1"),
-                "run_command",
-                &args,
-                &workspace,
-            )
-            .await
-            .is_some(),
-            "the un-gated combination still keys"
-        );
-        let _ = tokio::fs::remove_dir_all(&root).await;
-    }
-
-    #[tokio::test]
-    async fn standing_key_label_slices_utf16_units_like_ts() {
-        // TS `label.slice(0, 512)` counts UTF-16 code units and may cut a
-        // surrogate pair in half. Build a cwd whose label crosses unit 512
-        // inside an emoji run and require the same cut.
-        let root = std::env::temp_dir().join(format!("ak-cmd-label-{}", std::process::id()));
-        let deep = root
-            .join("a".repeat(166))
-            .join("a".repeat(166))
-            .join("a".repeat(163));
-        tokio::fs::create_dir_all(&deep).await.unwrap();
-        let deep = deep.join("🎉🎉🎉🎉🎉🎉🎉");
-        tokio::fs::create_dir_all(&deep).await.unwrap();
-        // macOS's temporary directory may use /var as an alias of
-        // /private/var. Compare canonical paths on both sides.
-        let root = tokio::fs::canonicalize(&root).await.unwrap();
-        let deep = tokio::fs::canonicalize(&deep).await.unwrap();
-        let root_str = root.to_string_lossy().into_owned();
-        let workspace = StandingApprovalWorkspace {
-            root: root_str,
-            identity: "test-env".into(),
-            context: None,
-        };
-        let cwd = deep
-            .strip_prefix(&root)
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let key = coding_standing_approval_key(
-            crate::guard::CODING_NAMESPACE,
-            Some("chat-1"),
-            "run_command",
-            &ShellArgs {
-                command: "bun test".into(),
-                cwd: Some(cwd),
-            },
-            &workspace,
-        )
-        .await
-        .expect("eligible deep cwd is keyable");
-        assert_eq!(key.label.encode_utf16().count(), 512);
-        assert!(
-            key.label.ends_with('\u{FFFD}'),
-            "the cut must fall mid-surrogate like TS slice: {:?}",
-            &key.label[240..]
-        );
-        let _ = tokio::fs::remove_dir_all(&root).await;
-    }
-
-    #[tokio::test]
-    async fn standing_approval_key_identity_and_label() {
-        let root = std::env::temp_dir().join(format!("ak-cmd-policy-{}", std::process::id()));
-        tokio::fs::create_dir_all(root.join("pkg")).await.unwrap();
-        let root_str = tokio::fs::canonicalize(&root).await.unwrap();
-        let root_str = root_str.to_string_lossy().into_owned();
-        let workspace = StandingApprovalWorkspace {
-            root: root_str.clone(),
-            identity: "test-env".into(),
-            context: None,
-        };
-        let here = coding_standing_approval_key(
-            crate::guard::CODING_NAMESPACE,
-            Some("chat-1"),
-            "run_command",
-            &ShellArgs {
-                command: "bun test".into(),
-                cwd: None,
-            },
-            &workspace,
-        )
-        .await
-        .expect("root key");
-        assert!(
-            here.digest.len() == 64
-                && here
-                    .digest
-                    .chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-        );
-        assert_eq!(here.label, "bun test");
-        let nested = coding_standing_approval_key(
-            crate::guard::CODING_NAMESPACE,
-            Some("chat-1"),
-            "run_command",
-            &ShellArgs {
-                command: "bun test".into(),
-                cwd: Some("pkg".into()),
-            },
-            &workspace,
-        )
-        .await
-        .expect("nested key");
-        assert_eq!(nested.label, "bun test (in pkg)");
-        // cwd normalisation: `pkg/..` is the root; `.` is the root.
-        let dot = coding_standing_approval_key(
-            crate::guard::CODING_NAMESPACE,
-            Some("chat-1"),
-            "run_command",
-            &ShellArgs {
-                command: "bun test".into(),
-                cwd: Some(".".into()),
-            },
-            &workspace,
-        )
-        .await
-        .unwrap();
-        assert_eq!(dot.digest, here.digest);
-        let up = coding_standing_approval_key(
-            crate::guard::CODING_NAMESPACE,
-            Some("chat-1"),
-            "run_command",
-            &ShellArgs {
-                command: "bun test".into(),
-                cwd: Some("pkg/..".into()),
-            },
-            &workspace,
-        )
-        .await
-        .unwrap();
-        assert_eq!(up.digest, here.digest);
-        // Any bound dimension changes the digest, and all are distinct.
-        let mut digests = vec![here.digest.clone()];
-        for (chat, tool, identity, context) in [
-            ("chat-2", "run_command", "test-env", None),
-            ("chat-1", "run_tests", "test-env", None),
-            ("chat-1", "run_command", "other-env", None),
-            ("chat-1", "run_command", "test-env", Some("ctx".to_string())),
-        ] {
-            let key = coding_standing_approval_key(
-                crate::guard::CODING_NAMESPACE,
-                Some(chat),
-                tool,
-                &ShellArgs {
-                    command: "bun test".into(),
-                    cwd: None,
-                },
-                &StandingApprovalWorkspace {
-                    root: root_str.clone(),
-                    identity: identity.into(),
-                    context,
-                },
-            )
-            .await
-            .unwrap();
-            assert_ne!(key.digest, here.digest);
-            digests.push(key.digest);
-        }
-        digests.dedup();
-        assert_eq!(digests.len(), 5);
-        // Escapes, missing dirs and ineligible commands are uncoverable.
-        for cwd in [
-            Some("..".into()),
-            Some("/etc".into()),
-            Some("missing".into()),
-        ] {
-            assert_eq!(
-                coding_standing_approval_key(
-                    crate::guard::CODING_NAMESPACE,
-                    Some("chat-1"),
-                    "run_command",
-                    &ShellArgs {
-                        command: "bun test".into(),
-                        cwd,
-                    },
-                    &workspace,
-                )
-                .await,
-                None
-            );
-        }
         assert_eq!(
             coding_standing_approval_key(
                 crate::guard::CODING_NAMESPACE,
                 Some("chat-1"),
                 "run_command",
-                &ShellArgs {
-                    command: "bun run deploy".into(),
-                    cwd: None,
-                },
-                &workspace,
+                &args,
+                &workspace
             )
             .await,
-            None
+            None,
+            "unfingerprinted calls must re-ask"
         );
         let _ = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_unbound_digest_is_never_issued() {
+        // The former v1 digest omitted executable and environment identity.
+        // It cannot authorize any standing grant, even for an eligible command.
+        let workspace = StandingApprovalWorkspace {
+            root: "/".into(),
+            identity: "test".into(),
+            context: None,
+        };
+        for command in ["bun test", "npm run test", "npx tsc --noEmit", "vitest run"] {
+            let args = ShellArgs {
+                command: command.into(),
+                cwd: None,
+            };
+            assert_eq!(
+                coding_standing_approval_key(
+                    crate::guard::CODING_NAMESPACE,
+                    Some("chat-1"),
+                    "run_command",
+                    &args,
+                    &workspace
+                )
+                .await,
+                None,
+                "{command}"
+            );
+        }
     }
 
     #[test]

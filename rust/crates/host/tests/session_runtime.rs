@@ -13,6 +13,7 @@ use agentkit_store::{
     AppliedSteer, ClaimInput, MessageInput, RecoveryMode, SqliteStore, TaskStatus,
 };
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -30,6 +31,16 @@ struct Scripted {
     tool_first: bool,
     tool: &'static str,
     fail: bool,
+    fail_summary: Arc<AtomicBool>,
+    summary_barrier: Arc<SummaryBarrier>,
+    responses: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct SummaryBarrier {
+    enabled: AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 #[async_trait]
@@ -37,14 +48,53 @@ impl ChatProvider for Scripted {
     fn id(&self) -> &str {
         "test"
     }
+    fn connection_identity(&self) -> Option<agentkit_core::providers::ConnectionIdentity> {
+        self.responses.load(Ordering::SeqCst).then(|| {
+            agentkit_core::providers::ConnectionIdentity {
+                provider_id: "test".into(),
+                protocol: "responses".into(),
+                connection_id: "connection".into(),
+                generation: 1,
+            }
+        })
+    }
     fn stream_chat(&self, input: ChatRequest, _: CancellationToken) -> ProviderStream {
         let first = self.tool_first && self.requests.lock().unwrap().is_empty();
+        let summary = input
+            .messages
+            .iter()
+            .any(|message| message.content.to_string().contains("<conversation>"));
         self.requests.lock().unwrap().push(input);
+        if summary && self.fail_summary.load(Ordering::SeqCst) {
+            return Box::pin(futures::stream::iter([
+                Ok(ProviderEvent::Usage(
+                    json!({"callId":"summary-usage","attempt":1,"step":1,"model":"model","promptTokens":7,"completionTokens":2,"totalTokens":9,"source":"stream","finalForCall":true}),
+                )),
+                Err(CoreError::new("provider_error", "the provider said no")),
+            ]));
+        }
         if self.fail {
             return Box::pin(futures::stream::iter([Err(CoreError::new(
                 "provider_error",
                 "the provider said no",
             ))]));
+        }
+        if summary && self.summary_barrier.enabled.load(Ordering::SeqCst) {
+            let barrier = self.summary_barrier.clone();
+            let usage = json!({"callId":"summary-usage","attempt":1,"step":1,"model":"model","promptTokens":7,"completionTokens":2,"totalTokens":9,"source":"stream","finalForCall":true});
+            return Box::pin(
+                futures::stream::iter([Ok(ProviderEvent::Usage(usage))]).chain(
+                    futures::stream::once(async move {
+                        barrier.entered.notify_one();
+                        barrier.release.notified().await;
+                        Ok(ProviderEvent::Completed {
+                            content: "summary".into(),
+                            finish_reason: "stop".into(),
+                            tool_calls: vec![],
+                        })
+                    }),
+                ),
+            );
         }
         let calls = if first {
             vec![agentkit_core::ToolCall {
@@ -148,6 +198,22 @@ struct Fixture {
     service: AgentSessionService,
     calls: Arc<Mutex<Vec<String>>>,
     requests: Arc<Mutex<Vec<ChatRequest>>>,
+    fail_summary: Arc<AtomicBool>,
+    summary_barrier: Arc<SummaryBarrier>,
+    responses: Arc<AtomicBool>,
+    usage_records: Arc<Mutex<Vec<Value>>>,
+}
+
+struct UsageMeter(Arc<Mutex<Vec<Value>>>);
+#[async_trait]
+impl UsageAuthorizer for UsageMeter {
+    async fn authorize(&self, _: &str, _: &Value) -> HostResult<()> {
+        Ok(())
+    }
+    async fn record(&self, usage: &Value) -> HostResult<()> {
+        self.0.lock().unwrap().push(usage.clone());
+        Ok(())
+    }
 }
 
 async fn fixture() -> Fixture {
@@ -211,6 +277,10 @@ async fn fixture_with_runtime(
 ) -> Fixture {
     let calls = Arc::new(Mutex::new(vec![]));
     let requests = Arc::new(Mutex::new(vec![]));
+    let fail_summary = Arc::new(AtomicBool::new(false));
+    let summary_barrier = Arc::new(SummaryBarrier::default());
+    let responses = Arc::new(AtomicBool::new(false));
+    let usage_records = Arc::new(Mutex::new(vec![]));
     let executor: Arc<dyn TaskExecutor> = Arc::new(
         ChatExecutor::new(
             Arc::new(Scripted {
@@ -218,10 +288,14 @@ async fn fixture_with_runtime(
                 tool_first,
                 tool: "write_file",
                 fail,
+                fail_summary: fail_summary.clone(),
+                summary_barrier: summary_barrier.clone(),
+                responses: responses.clone(),
             }),
             Arc::new(ToolRegistry::new()),
         )
         .with_options(ChatExecutorOptions {
+            usage: Some(Arc::new(UsageMeter(usage_records.clone()))),
             tool_contributors: vec![Arc::new(WriterContributor {
                 tool: write_tool(calls.clone()),
             })],
@@ -267,6 +341,10 @@ async fn fixture_with_runtime(
         service,
         calls,
         requests,
+        fail_summary,
+        summary_barrier,
+        responses,
+        usage_records,
     }
 }
 
@@ -296,6 +374,25 @@ async fn pending_request(store: &SqliteStore, turn_id: &str) -> agentkit_store::
         "exactly one request must await the answer"
     );
     requests.into_iter().next().unwrap()
+}
+
+async fn assert_paid_summary_usage(f: &Fixture, turn_id: &str) {
+    let events = f
+        .store
+        .events_after_number(turn_id, None, 1000)
+        .await
+        .unwrap();
+    assert!(events.iter().any(|event| event.event["type"] == "run.usage"
+        && event.event["data"]["callId"] == "summary-usage"
+        && event.event["data"]["step"] == 0
+        && event.event["data"]["totalTokens"] == 9));
+    assert!(
+        f.usage_records
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|record| record["callId"] == "summary-usage" && record["totalTokens"] == 9)
+    );
 }
 
 #[tokio::test]
@@ -364,6 +461,11 @@ async fn an_asked_call_parks_answers_spends_once_and_the_queue_moves() {
         .approve(&request.input_id, "ans-1", None, None)
         .await
         .unwrap();
+    let running = events
+        .iter()
+        .find(|record| record.event["type"] == "run.tool.running")
+        .unwrap();
+    assert_eq!(running.event["data"]["admissionProtocol"], "fenced-v1");
     f.host.run_once().await.unwrap(); // attempt 2 runs the exact call
     assert_eq!(
         f.store.get_task(&turn_id).await.unwrap().unwrap().status,
@@ -553,6 +655,9 @@ async fn fixture_slow(
                 tool_first: true,
                 tool: "slow_write",
                 fail: false,
+                fail_summary: Arc::new(AtomicBool::new(false)),
+                summary_barrier: Arc::new(SummaryBarrier::default()),
+                responses: Arc::new(AtomicBool::new(false)),
             }),
             Arc::new(ToolRegistry::new()),
         )
@@ -612,6 +717,10 @@ async fn fixture_slow(
         service,
         calls: Arc::new(Mutex::new(vec![])),
         requests,
+        fail_summary: Arc::new(AtomicBool::new(false)),
+        summary_barrier: Arc::new(SummaryBarrier::default()),
+        responses: Arc::new(AtomicBool::new(false)),
+        usage_records: Arc::new(Mutex::new(vec![])),
     }
 }
 
@@ -750,6 +859,9 @@ async fn fixture_gated(
                 tool_first: true,
                 tool: "gated_write",
                 fail: false,
+                fail_summary: Arc::new(AtomicBool::new(false)),
+                summary_barrier: Arc::new(SummaryBarrier::default()),
+                responses: Arc::new(AtomicBool::new(false)),
             }),
             Arc::new(ToolRegistry::new()),
         )
@@ -802,6 +914,10 @@ async fn fixture_gated(
         service,
         calls: Arc::new(Mutex::new(vec![])),
         requests,
+        fail_summary: Arc::new(AtomicBool::new(false)),
+        summary_barrier: Arc::new(SummaryBarrier::default()),
+        responses: Arc::new(AtomicBool::new(false)),
+        usage_records: Arc::new(Mutex::new(vec![])),
     }
 }
 
@@ -2599,4 +2715,774 @@ async fn a_different_task_kind_cannot_accept_a_session_follow_up() {
             .status,
         TaskStatus::Completed
     );
+}
+
+#[tokio::test]
+async fn every_provider_request_has_a_prior_context_admission() {
+    let f = fixture().await;
+    let sent = f
+        .service
+        .send("s1", &send_input(json!("write it"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    let turn_id = match sent {
+        AgentSendResult::Turn { turn_id, .. } => turn_id,
+        AgentSendResult::Queued { .. } => panic!("expected a turn"),
+    };
+    f.host.run_once().await.unwrap();
+    let request = pending_request(&f.store, &turn_id).await;
+    f.service
+        .approve(&request.input_id, "answer", None, None)
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    let events = f
+        .store
+        .events_after_number(&turn_id, None, 10_000)
+        .await
+        .unwrap();
+    let admissions: Vec<_> = events
+        .iter()
+        .filter(|record| record.event["type"] == "run.context.admitted")
+        .collect();
+    assert_eq!(admissions.len(), f.requests.lock().unwrap().len());
+    assert!(admissions.len() >= 2);
+    assert_ne!(
+        admissions[0].event["data"]["requestId"],
+        admissions[1].event["data"]["requestId"]
+    );
+    for admission in &admissions {
+        assert_eq!(admission.event["data"]["windowSource"], "fallback");
+        assert_eq!(admission.event["data"]["maxOutputTokens"], 16384);
+    }
+    let waiting = events
+        .iter()
+        .find(|record| record.event["type"] == "run.waiting")
+        .unwrap();
+    assert_eq!(
+        waiting.event["data"]["contextSha256"],
+        request.content["contextSha256"]
+    );
+    assert!(
+        request.content["contextSha256"]
+            .as_str()
+            .is_some_and(|value| value.len() == 64)
+    );
+}
+
+#[tokio::test]
+async fn context_overflow_fails_before_provider_dispatch() {
+    let f = fixture_with(false).await;
+    f.store
+        .set_setting(
+            "http.provider-catalog",
+            "test",
+            json!([{"modelId":"model", "contextWindowTokens":100}]),
+        )
+        .await
+        .unwrap();
+    let sent = f
+        .service
+        .send(
+            "s1",
+            &send_input(json!("x".repeat(1000)), None, WhenBusy::Reject),
+        )
+        .await
+        .unwrap();
+    let turn_id = match sent {
+        AgentSendResult::Turn { turn_id, .. } => turn_id,
+        _ => panic!("expected a turn"),
+    };
+    f.host.run_once().await.unwrap();
+    assert!(f.requests.lock().unwrap().is_empty());
+    let events = f
+        .store
+        .events_after_number(&turn_id, None, 10_000)
+        .await
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event["type"] == "run.failed"
+                && event.event["data"]["errorCode"] == "context_overflow")
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.event["type"] == "run.context.admitted")
+    );
+}
+
+#[tokio::test]
+async fn deferred_compaction_summarizes_then_runs_and_preserves_canonical_history() {
+    let f = fixture_with(false).await;
+    f.service
+        .configure(
+            "s1",
+            None,
+            Some(json!({"windowTokens":4096,"reserveTokens":1024,"keepRecentTokens":1})),
+            None,
+        )
+        .await
+        .unwrap();
+    for content in ["first question", "second question"] {
+        f.service
+            .send("s1", &send_input(json!(content), None, WhenBusy::Reject))
+            .await
+            .unwrap();
+        assert!(f.host.run_once().await.unwrap());
+    }
+    let before = f.store.messages("s1", false).await.unwrap();
+    f.service.compact("s1").await.unwrap();
+    let sent = f
+        .service
+        .send(
+            "s1",
+            &send_input(json!("third question"), None, WhenBusy::Reject),
+        )
+        .await
+        .unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = sent else {
+        panic!("expected turn")
+    };
+    assert!(f.host.run_once().await.unwrap());
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    {
+        let requests = f.requests.lock().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert!(requests[2].tools.is_empty());
+        assert!(
+            requests[2]
+                .messages
+                .iter()
+                .any(|m| m.content.to_string().contains("<conversation>"))
+        );
+        assert!(
+            requests[3]
+                .messages
+                .iter()
+                .any(|m| m.content.to_string().contains("<summary>"))
+        );
+    }
+    assert_eq!(f.store.list_context_summaries("s1").await.unwrap().len(), 1);
+    assert!(
+        f.store
+            .get_chat("s1")
+            .await
+            .unwrap()
+            .unwrap()
+            .metadata
+            .get("agentkit.session.compactRequestedAt")
+            .is_none()
+    );
+    let after = f.store.messages("s1", false).await.unwrap();
+    assert!(before.iter().all(|message| {
+        after
+            .iter()
+            .any(|other| other.id == message.id && other.content == message.content)
+    }));
+    assert!(
+        f.store
+            .events_after_number(&turn_id, None, 1000)
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| event.event["type"] == "run.context.compacted")
+    );
+    f.service
+        .send("s1", &send_input(json!("fourth"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.requests.lock().unwrap().len(), 5);
+    assert_eq!(f.store.list_context_summaries("s1").await.unwrap().len(), 1);
+    assert!(
+        f.requests
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .messages
+            .iter()
+            .any(|m| m.content.to_string().contains("<summary>"))
+    );
+    let first = before
+        .iter()
+        .find(|message| message.role == "user")
+        .unwrap();
+    f.store
+        .update_message(&first.id, Some(json!("edited question")), None, None, 1000)
+        .await
+        .unwrap();
+    f.service
+        .send("s1", &send_input(json!("fifth"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    assert!(
+        !f.requests
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .messages
+            .iter()
+            .any(|m| m.content.to_string().contains("<summary>"))
+    );
+}
+
+#[tokio::test]
+async fn failed_summary_retains_request_and_canonical_history() {
+    let f = fixture_with(false).await;
+    f.service
+        .configure(
+            "s1",
+            None,
+            Some(json!({"windowTokens":4096,"reserveTokens":1024,"keepRecentTokens":1})),
+            None,
+        )
+        .await
+        .unwrap();
+    for text in ["first", "second"] {
+        f.service
+            .send("s1", &send_input(json!(text), None, WhenBusy::Reject))
+            .await
+            .unwrap();
+        f.host.run_once().await.unwrap();
+    }
+    let before = f.store.messages("s1", false).await.unwrap();
+    f.service.compact("s1").await.unwrap();
+    f.fail_summary.store(true, Ordering::SeqCst);
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send("s1", &send_input(json!("third"), None, WhenBusy::Reject))
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn")
+    };
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    assert!(
+        f.store
+            .list_context_summaries("s1")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(f.store.get_chat("s1").await.unwrap().unwrap().metadata["agentkit.session.compactRequestedAt"].is_string());
+    assert!(
+        f.store
+            .events_after_number(&turn_id, None, 1000)
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| event.event["type"] == "run.usage"
+                && event.event["data"]["callId"] == "summary-usage"
+                && event.event["data"]["step"] == 0
+                && event.event["data"]["totalTokens"] == 9)
+    );
+    assert!(
+        f.store
+            .events_after_number(&turn_id, None, 1000)
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| event.event["type"] == "run.warning"
+                && event.event["data"]["code"] == "compaction_failed")
+    );
+    let after = f.store.messages("s1", false).await.unwrap();
+    assert!(before.iter().all(|message| {
+        after
+            .iter()
+            .any(|other| other.id == message.id && other.content == message.content)
+    }));
+    f.fail_summary.store(false, Ordering::SeqCst);
+    f.service
+        .send("s1", &send_input(json!("retry"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.store.list_context_summaries("s1").await.unwrap().len(), 1);
+    assert!(
+        f.store
+            .get_chat("s1")
+            .await
+            .unwrap()
+            .unwrap()
+            .metadata
+            .get("agentkit.session.compactRequestedAt")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn overflow_summary_failure_trims_old_turns_and_preserves_latest() {
+    let f = fixture_with(false).await;
+    f.service
+        .configure(
+            "s1",
+            None,
+            Some(json!({"windowTokens":700,"reserveTokens":100,"keepRecentTokens":1})),
+            None,
+        )
+        .await
+        .unwrap();
+    f.service
+        .send(
+            "s1",
+            &send_input(json!("a".repeat(1800)), None, WhenBusy::Reject),
+        )
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    f.fail_summary.store(true, Ordering::SeqCst);
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send(
+            "s1",
+            &send_input(json!("b".repeat(1000)), None, WhenBusy::Reject),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn")
+    };
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    let events = f
+        .store
+        .events_after_number(&turn_id, None, 1000)
+        .await
+        .unwrap();
+    for code in ["context_trimmed", "compaction_failed"] {
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event["type"] == "run.warning"
+                    && event.event["data"]["code"] == code),
+            "missing {code}"
+        );
+    }
+    let requests = f.requests.lock().unwrap();
+    let last = requests.last().unwrap();
+    assert!(
+        last.messages
+            .iter()
+            .any(|m| m.content.to_string().contains(&"b".repeat(100)))
+    );
+    assert!(
+        !last
+            .messages
+            .iter()
+            .any(|m| m.content.to_string().contains(&"a".repeat(100)))
+    );
+}
+
+#[tokio::test]
+async fn overflow_automatically_compacts_without_manual_request() {
+    let f = fixture_with(false).await;
+    f.service
+        .configure(
+            "s1",
+            None,
+            Some(json!({"windowTokens":4096,"reserveTokens":1024,"keepRecentTokens":1})),
+            None,
+        )
+        .await
+        .unwrap();
+    f.service
+        .send(
+            "s1",
+            &send_input(json!("a".repeat(7000)), None, WhenBusy::Reject),
+        )
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send(
+            "s1",
+            &send_input(json!("b".repeat(7000)), None, WhenBusy::Reject),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn")
+    };
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    assert_eq!(f.store.list_context_summaries("s1").await.unwrap().len(), 1);
+    let events = f
+        .store
+        .events_after_number(&turn_id, None, 1000)
+        .await
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event["type"] == "run.context.compacted"
+                && event.event["data"]["reason"] == "threshold")
+    );
+    let requests = f.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests[2]
+            .messages
+            .iter()
+            .any(|message| message.content.to_string().contains("<summary>"))
+    );
+}
+
+#[tokio::test]
+async fn oversized_summary_input_fails_without_claiming_unseen_history() {
+    let f = fixture_with(false).await;
+    f.service
+        .configure(
+            "s1",
+            None,
+            Some(json!({"windowTokens":2048,"reserveTokens":512,"keepRecentTokens":1})),
+            None,
+        )
+        .await
+        .unwrap();
+    for index in 0..4 {
+        f.service
+            .send(
+                "s1",
+                &send_input(
+                    json!(format!("{index}{}", "x".repeat(1200))),
+                    None,
+                    WhenBusy::Reject,
+                ),
+            )
+            .await
+            .unwrap();
+        f.host.run_once().await.unwrap();
+    }
+    let before = f.store.messages("s1", false).await.unwrap();
+    f.service.compact("s1").await.unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send("s1", &send_input(json!("latest"), None, WhenBusy::Reject))
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn")
+    };
+    f.host.run_once().await.unwrap();
+    assert!(
+        f.store
+            .list_context_summaries("s1")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(f.store.get_chat("s1").await.unwrap().unwrap().metadata["agentkit.session.compactRequestedAt"].is_string());
+    assert!(
+        f.store
+            .events_after_number(&turn_id, None, 1000)
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| event.event["type"] == "run.warning"
+                && event.event["data"]["code"] == "compaction_failed")
+    );
+    let after = f.store.messages("s1", false).await.unwrap();
+    assert!(before.iter().all(|message| {
+        after
+            .iter()
+            .any(|other| other.id == message.id && other.content == message.content)
+    }));
+}
+
+#[tokio::test]
+async fn compact_is_busy_for_queued_turn_and_no_cut_clears_request() {
+    let f = fixture_with(false).await;
+    f.service
+        .send("s1", &send_input(json!("first"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    assert_eq!(f.service.compact("s1").await.unwrap_err().code, "chat_busy");
+    f.host.run_once().await.unwrap();
+    f.service.compact("s1").await.unwrap();
+    f.service
+        .send("s1", &send_input(json!("second"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    assert_eq!(f.requests.lock().unwrap().len(), 2);
+    assert!(
+        f.store
+            .list_context_summaries("s1")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        f.store
+            .get_chat("s1")
+            .await
+            .unwrap()
+            .unwrap()
+            .metadata
+            .get("agentkit.session.compactRequestedAt")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn compaction_rejects_changed_descriptor_and_newer_marker() {
+    for changed in ["marker", "descriptor", "path"] {
+        let f = fixture_with(false).await;
+        f.service
+            .configure(
+                "s1",
+                None,
+                Some(json!({"windowTokens":4096,"reserveTokens":1024,"keepRecentTokens":1})),
+                None,
+            )
+            .await
+            .unwrap();
+        for text in ["first", "second"] {
+            f.service
+                .send("s1", &send_input(json!(text), None, WhenBusy::Reject))
+                .await
+                .unwrap();
+            f.host.run_once().await.unwrap();
+        }
+        f.service.compact("s1").await.unwrap();
+        let AgentSendResult::Turn { turn_id, .. } = f
+            .service
+            .send("s1", &send_input(json!("third"), None, WhenBusy::Reject))
+            .await
+            .unwrap()
+        else {
+            panic!("expected turn")
+        };
+        f.summary_barrier.enabled.store(true, Ordering::SeqCst);
+        let host = f.host.clone();
+        let task = tokio::spawn(async move { host.run_once().await });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            f.summary_barrier.entered.notified(),
+        )
+        .await
+        .unwrap();
+        let mut chat = f.store.get_chat("s1").await.unwrap().unwrap();
+        if changed == "marker" {
+            chat.metadata["agentkit.session.compactRequestedAt"] =
+                json!("2099-01-01T00:00:00.000Z");
+        } else if changed == "descriptor" {
+            chat.metadata["agentkit.session"]["context"]["keepRecentTokens"] = json!(2);
+        } else {
+            let records = f.store.messages("s1", false).await.unwrap();
+            let message = records
+                .iter()
+                .find(|message| message.role == "user")
+                .unwrap();
+            f.store
+                .update_message(
+                    &message.id,
+                    Some(json!("edited while summarizing")),
+                    None,
+                    None,
+                    1000,
+                )
+                .await
+                .unwrap();
+        }
+        f.store
+            .update_chat("s1", None, Some(chat.metadata.clone()), None, 1000)
+            .await
+            .unwrap();
+        f.summary_barrier.release.notify_one();
+        task.await.unwrap().unwrap();
+        assert_paid_summary_usage(&f, &turn_id).await;
+        assert!(
+            f.store
+                .list_context_summaries("s1")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let current = f.store.get_chat("s1").await.unwrap().unwrap();
+        assert_eq!(current.metadata, chat.metadata);
+    }
+}
+
+#[tokio::test]
+async fn compacted_summary_survives_store_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("session.sqlite");
+    let summary_id;
+    {
+        let f = fixture_at(
+            SqliteStore::open(&path, 64).unwrap(),
+            false,
+            false,
+            HostOptions::default(),
+        )
+        .await;
+        f.service
+            .configure(
+                "s1",
+                None,
+                Some(json!({"windowTokens":4096,"reserveTokens":1024,"keepRecentTokens":1})),
+                None,
+            )
+            .await
+            .unwrap();
+        for text in ["first", "second"] {
+            f.service
+                .send("s1", &send_input(json!(text), None, WhenBusy::Reject))
+                .await
+                .unwrap();
+            f.host.run_once().await.unwrap();
+        }
+        f.service.compact("s1").await.unwrap();
+        f.service
+            .send("s1", &send_input(json!("third"), None, WhenBusy::Reject))
+            .await
+            .unwrap();
+        f.host.run_once().await.unwrap();
+        summary_id = f.store.list_context_summaries("s1").await.unwrap()[0]["summaryId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    }
+    let reopened = SqliteStore::open(&path, 64).unwrap();
+    let summaries = reopened.list_context_summaries("s1").await.unwrap();
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0]["summaryId"], summary_id);
+}
+
+#[tokio::test]
+async fn responses_continuation_keeps_history_and_retains_compaction_request() {
+    let f = fixture_with(false).await;
+    f.responses.store(true, Ordering::SeqCst);
+    f.service
+        .configure(
+            "s1",
+            None,
+            Some(json!({"windowTokens":4096,"reserveTokens":1024,"keepRecentTokens":1})),
+            None,
+        )
+        .await
+        .unwrap();
+    for text in ["first", "second"] {
+        f.service
+            .send("s1", &send_input(json!(text), None, WhenBusy::Reject))
+            .await
+            .unwrap();
+        f.host.run_once().await.unwrap();
+    }
+    f.service.compact("s1").await.unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send("s1", &send_input(json!("third"), None, WhenBusy::Reject))
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn")
+    };
+    f.host.run_once().await.unwrap();
+    assert!(
+        f.store
+            .list_context_summaries("s1")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(f.store.get_chat("s1").await.unwrap().unwrap().metadata["agentkit.session.compactRequestedAt"].is_string());
+    assert!(
+        f.store
+            .events_after_number(&turn_id, None, 1000)
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| event.event["type"] == "run.warning"
+                && event.event["data"]["code"] == "compaction_failed")
+    );
+    let requests = f.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests
+            .last()
+            .unwrap()
+            .messages
+            .iter()
+            .any(|message| message.content == json!("first"))
+    );
+    assert!(
+        requests
+            .last()
+            .unwrap()
+            .messages
+            .iter()
+            .any(|message| message.content == json!("third"))
+    );
+}
+
+#[tokio::test]
+async fn cancelling_summary_preserves_pending_request() {
+    let f = fixture_with(false).await;
+    f.service
+        .configure(
+            "s1",
+            None,
+            Some(json!({"windowTokens":4096,"reserveTokens":1024,"keepRecentTokens":1})),
+            None,
+        )
+        .await
+        .unwrap();
+    for text in ["first", "second"] {
+        f.service
+            .send("s1", &send_input(json!(text), None, WhenBusy::Reject))
+            .await
+            .unwrap();
+        f.host.run_once().await.unwrap();
+    }
+    f.service.compact("s1").await.unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send("s1", &send_input(json!("third"), None, WhenBusy::Reject))
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn")
+    };
+    f.summary_barrier.enabled.store(true, Ordering::SeqCst);
+    let host = f.host.clone();
+    let running = tokio::spawn(async move { host.run_once().await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        f.summary_barrier.entered.notified(),
+    )
+    .await
+    .unwrap();
+    f.service.cancel("s1", &turn_id).await.unwrap();
+    f.summary_barrier.release.notify_one();
+    running.await.unwrap().unwrap();
+    assert_paid_summary_usage(&f, &turn_id).await;
+    assert!(
+        f.store
+            .list_context_summaries("s1")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(f.store.get_chat("s1").await.unwrap().unwrap().metadata["agentkit.session.compactRequestedAt"].is_string());
 }

@@ -87,6 +87,7 @@ const SUBPATHS = [
   "adapters-sqlite",
   "runner-local",
   "toolpacks-coding",
+  "native",
 ];
 
 function fail(message) {
@@ -247,6 +248,17 @@ for (const name of SUBPATHS) {
   copyDistTree(srcDir, dstDir);
 }
 
+// Native facade imports ../generated; keep the generated loader verbatim so
+// platform package names and the NAPI-RS freshness gate retain their meaning.
+const nativeGenerated = join(UMBRELLA_DIST, "generated");
+mkdirSync(nativeGenerated, { recursive: true });
+for (const name of ["index.js", "index.d.ts"]) {
+  cpSync(
+    join(ROOT, "packages/native/generated", name),
+    join(nativeGenerated, name),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 4b. Root entry (`"."` export) — a tiny re-export of `./contracts`
 //
@@ -281,8 +293,11 @@ function collectFiles(dir, out = []) {
 
 const allFiles = collectFiles(UMBRELLA_DIST);
 
-const leftovers = allFiles.filter((file) =>
-  readFileSync(file, "utf8").includes("@agentkit/"),
+const leftovers = allFiles.filter(
+  (file) =>
+    !file.startsWith(join(UMBRELLA_DIST, "generated") + sep) &&
+    !file.endsWith(".node") &&
+    readFileSync(file, "utf8").includes("@agentkit/"),
 );
 if (leftovers.length > 0) {
   fail(

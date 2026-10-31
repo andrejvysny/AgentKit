@@ -1,5 +1,9 @@
 # Rust native SDK acceptance audit
 
+Current migration status: [30 October working-tree checkpoint](parity.md#migration-checkpoint-30-october-2026).
+Native default is not accepted. New opt-in facade tests do not replace the full
+public API, recovery, and operating-system/runtime matrix gates below.
+
 Audit date: 2026-10-23; execution-ownership rows and the 2026-10-28 validation
 record added on 2026-10-28, with the M2.1 hardening validation record (same
 date) at the end of this document. Authority: TypeScript contract `0.7.0`, REST `v1`, frozen

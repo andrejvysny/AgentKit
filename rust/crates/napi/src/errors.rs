@@ -77,6 +77,8 @@ pub fn store(error: agentkit_store::StoreError) -> Error {
         E::NotFound(_) => ("not_found", error.to_string()),
         E::Duplicate(_) => ("input_conflict", error.to_string()),
         E::ScopeBusy(_) => ("chat_busy", error.to_string()),
+        E::TransactionGateTimeout => ("transaction_gate_timeout", error.to_string()),
+        E::TransactionScopeExpired => ("transaction_scope_expired", error.to_string()),
         _ => ("unknown-store-error", error.to_string()),
     };
     stable(code, message, None)

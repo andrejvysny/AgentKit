@@ -365,7 +365,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<MessageRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             if let Some(proof) = proof {
                 crate::tasks::fence(&transaction, &proof, now)?;
                 if input.run_id.as_deref() != Some(&proof.task_id) {
@@ -408,7 +408,7 @@ impl SqliteStore {
     pub async fn activate_path(&self, message_id: &str) -> Result<Vec<MessageRecord>> {
         let message_id = message_id.to_owned();
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let path = activate(&transaction, &message_id)?;
             transaction.commit()?;
             Ok(path)

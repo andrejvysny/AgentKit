@@ -1,4 +1,4 @@
-use crate::{validate_schema, AiRunEvent, Optional, CONTRACT_VERSION};
+use crate::{AiRunEvent, CONTRACT_VERSION, Optional, validate_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

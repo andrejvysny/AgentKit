@@ -480,7 +480,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<(AgentInputRecord, bool)> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let now_text = crate::ConversationTimestamp::from_epoch_millis(now)?
                 .wire_text()?
                 .into_owned();
@@ -510,7 +510,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<AgentInputRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let now_text = crate::ConversationTimestamp::from_epoch_millis(now)?
                 .wire_text()?
                 .into_owned();
@@ -524,7 +524,7 @@ impl SqliteStore {
     /// Remove every input of a session, whatever its status.
     pub async fn delete_session_inputs(&self, session_id: String) -> Result<u64> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let removed = delete_session_inputs(&transaction, &session_id)?;
             transaction.commit()?;
             Ok(removed)

@@ -2,6 +2,7 @@ import { executableName, shellWords } from "./command-words.js";
 
 const HIGH_RISK_WORDS = new Set([
   "rm",
+  "rimraf",
   "rmdir",
   "unlink",
   "shred",
@@ -139,7 +140,18 @@ export function isHighRisk(raw: string): boolean {
     const word = token.startsWith("-") ? (token.split("=")[1] ?? "") : token;
     if (DANGEROUS_WORD.test(word)) return true;
     if (FORCE_FLAGS.has(token)) return true;
-    if (token === "git" && tokens.slice(index + 1).some(isRiskyGitWord))
+    if (
+      token === "git" &&
+      words
+        .slice(index + 1)
+        .some(
+          (arg) =>
+            isRiskyGitWord(executableName(arg)) ||
+            arg === "-c" ||
+            arg.startsWith("-c") ||
+            arg.startsWith("--config-env"),
+        )
+    )
       return true;
     if (
       PACKAGE_MANAGERS.has(token) &&

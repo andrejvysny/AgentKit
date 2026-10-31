@@ -21,6 +21,8 @@
     "spawn_failed",
     "store_closed",
     "subscription_overflow",
+    "transaction_gate_timeout",
+    "transaction_scope_expired",
     "unsupported_field",
     "unsupported_version",
     "workspace_busy",

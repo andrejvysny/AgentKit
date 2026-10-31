@@ -94,6 +94,11 @@
     "@modelcontextprotocol/server": "2.4.0",
     "@modelcontextprotocol/core": "2.4.0"
   },
+  "optionalDependencies": {
+    "@agentkit/native-darwin-arm64": "0.1.0-dev",
+    "@agentkit/native-linux-x64-gnu": "0.1.0-dev",
+    "@agentkit/native-win32-x64-msvc": "0.1.0-dev"
+  },
   "peerDependencies": {
     "react": ">=18",
     "better-sqlite3": "^13.0.3"

@@ -28,7 +28,7 @@ impl SqliteStore {
                     "provider_continuation_scope_mismatch".into(),
                 ));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             crate::tasks::fence(&transaction, &proof, now)?;
             if proof.task_id != run_id {
                 return Err(StoreError::InvalidInput(
@@ -99,7 +99,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<ProviderContinuationRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             crate::tasks::fence(&transaction, &proof, now)?;
             if proof.task_id != record.run_id {
                 return Err(StoreError::InvalidInput(

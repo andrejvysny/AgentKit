@@ -35,6 +35,7 @@ pub(super) struct ChatSession {
 }
 struct Pass {
     terminal: Terminal,
+    suspended: bool,
     content: String,
     tool_calls: usize,
     failure: Option<ExecutionFailure>,
@@ -111,6 +112,9 @@ impl ChatSession {
                 self.options.max_tool_iterations,
             )
             .await?;
+        if pass.suspended {
+            return Ok(pass);
+        }
         let mut passes = 1;
         if self.can_retry_chat_only(&pass) {
             passes += 1;
@@ -143,6 +147,9 @@ impl ChatSession {
             pass = self
                 .run_pass(messages, Arc::new(ToolRegistry::new()), 1)
                 .await?;
+        }
+        if pass.suspended {
+            return Ok(pass);
         }
         if pass.terminal != Terminal::Cancelled
             && pass.content.trim().is_empty()
@@ -254,6 +261,7 @@ impl ChatSession {
         transcript.extend(result.appended_messages);
         Ok(Pass {
             terminal: result.terminal,
+            suspended: result.suspended,
             content,
             tool_calls: calls.len(),
             failure,
@@ -424,6 +432,9 @@ impl ChatSession {
                     self.options.max_tool_iterations,
                 )
                 .await?;
+            if pass.suspended {
+                return Ok(pass);
+            }
             if pass.content.trim().is_empty() {
                 pass.content = superseded;
             }

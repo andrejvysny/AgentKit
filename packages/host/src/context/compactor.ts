@@ -140,7 +140,7 @@ export function summaryMessage(summary: string): AiChatMessage {
   };
 }
 
-/** sha256 hex over (id, role, content, toolCallId) of each record, in order. */
+/** Source identity includes ordered tool declarations, including their arguments. */
 export async function hashSource(
   messages: readonly AiChatMessage[],
   recordIds: readonly string[],
@@ -150,8 +150,13 @@ export async function hashSource(
     message.role,
     message.content,
     message.toolCallId ?? null,
+    (message.toolCalls ?? []).map((call) => ({
+      id: call.id,
+      name: call.name,
+      argumentsJson: call.argumentsJson,
+    })),
   ]);
-  return sha256Hex(JSON.stringify(rows));
+  return sha256Hex(JSON.stringify(["agentkit-compaction-source-v2", rows]));
 }
 
 export interface AppliedSummary {
@@ -418,8 +423,7 @@ export async function compactSessionContext(
     input.previous === undefined
       ? ""
       : `\n\n<previous-summary>\n${input.previous.summary}\n</previous-summary>`;
-  // The request has to fit the window itself: keep the newest part of an
-  // oversized covered range rather than send something the provider refuses.
+  // A summary cannot claim coverage for whole messages the summarizer never saw.
   const charBudget = Math.max(
     0,
     (input.windowTokens - input.reserveTokens) * 4 -
@@ -430,9 +434,12 @@ export async function compactSessionContext(
       "[... earlier conversation omitted]\n\n".length -
       8, // Two message estimates round upward; keep eight characters of slack.
   );
-  let conversation = serializeConversation(covered);
+  const conversation = serializeConversation(covered);
   if (conversation.length > charBudget)
-    conversation = `[... earlier conversation omitted]\n\n${charBudget > 0 ? conversation.slice(-charBudget) : ""}`;
+    return {
+      ok: false,
+      reason: "summarizer context overflow: complete source does not fit",
+    };
 
   const messages: AiChatMessage[] = [
     { role: "system", content: SUMMARIZATION_SYSTEM_PROMPT },

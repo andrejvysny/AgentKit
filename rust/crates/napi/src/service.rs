@@ -32,6 +32,9 @@ use crate::jsbridge::JsBridge;
 use crate::provider::JsProvider;
 use crate::tool::JsToolContributor;
 
+#[path = "service_management.rs"]
+mod management;
+
 const MAX_POLL_BATCH: i32 = 64;
 const DEFAULT_POLL_WAIT_MS: u64 = 25;
 const DEFAULT_CLOSE_TIMEOUT_MS: u64 = 5_000;

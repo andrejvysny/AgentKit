@@ -150,6 +150,7 @@ pub(crate) struct PreparedProvider {
     pub options: ChatExecutorOptions,
     pub context: ExecutionContext,
     pub chat_id: String,
+    pub budget: Option<super::context_budget::ContextBudget>,
 }
 #[async_trait]
 impl ChatProvider for PreparedProvider {
@@ -174,6 +175,7 @@ impl ChatProvider for PreparedProvider {
         Box::pin(futures::stream::once(async move {
             let (messages,warnings)=resolve_attachments(&provider.options,&provider.context,&provider.chat_id,input.messages).await.map_err(core_error)?;
             input.messages=messages;
+            let admission = provider.budget.as_ref().map(|budget| budget.admit(&mut input, provider.context.runtime.id(), provider.inner.allows_implicit_output_limit())).transpose()?;
             if let Some(usage)=&provider.options.usage {
                 let estimate=input.messages.iter().map(|message|message_text(&message.content).encode_utf16().count()).sum::<usize>().div_ceil(4);
                 let request=json!({"runId":input.run_id,"chatId":provider.chat_id,"providerId":provider.inner.id(),"model":input.model,"estimatedPromptTokens":estimate});
@@ -181,7 +183,9 @@ impl ChatProvider for PreparedProvider {
             }
             if cancellation.is_cancelled() {return Err(CoreError::new("cancelled","aborted"));}
             let warnings=futures::stream::iter(warnings.into_iter().map(Ok));
-            Ok(warnings.chain(provider.inner.stream_chat(input,cancellation)))
+            let admitted = futures::stream::iter(admission.into_iter().map(|data| Ok(ProviderEvent::Event { kind: "run.context.admitted".into(), data })));
+            let dispatch = futures::stream::once(async move { Ok(provider.inner.stream_chat(input,cancellation)) }).try_flatten();
+            Ok(warnings.chain(admitted).chain(dispatch))
         }).try_flatten())
     }
 }

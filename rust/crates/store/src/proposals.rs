@@ -204,7 +204,7 @@ impl SqliteStore {
     ) -> Result<ProposalRecord> {
         let proposal_id = proposal_id.to_owned();
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut proposal: ProposalRecord =
                 required(&transaction, "proposals", "id", &proposal_id)?;
             if !from.contains(&proposal.status) || !allowed(proposal.status, to) {
@@ -274,7 +274,7 @@ impl SqliteStore {
     ) -> Result<ReceiptRecord> {
         let (proposal_id, operation_id) = (proposal_id.to_owned(), operation_id.to_owned());
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut proposal: ProposalRecord =
                 required(&transaction, "proposals", "id", &proposal_id)?;
             if proposal.operation_id.as_deref() != Some(&operation_id) {
@@ -334,7 +334,7 @@ impl SqliteStore {
     pub async fn invalidate_pending(&self, scope: &str, revision: &str) -> Result<usize> {
         let (scope, revision) = (scope.to_owned(), revision.to_owned());
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut count = 0;
             for mut proposal in all::<ProposalRecord>(&transaction, "proposals")?
                 .into_iter()

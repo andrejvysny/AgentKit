@@ -1,0 +1,25 @@
+{
+  "name": "@agentkit/native-darwin-arm64",
+  "version": "0.1.0-dev",
+  "description": "AgentKit native runtime for macOS arm64",
+  "license": "MIT",
+  "private": true,
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=22",
+    "bun": ">=1.4"
+  },
+  "main": "agentkit-native.darwin-arm64.node",
+  "files": [
+    "agentkit-native.darwin-arm64.node",
+    "README.md"
+  ],
+  "scripts": {
+    "prepack": "node -e \"require('node:fs').accessSync(require('./package.json').main)\""
+  }
+}
