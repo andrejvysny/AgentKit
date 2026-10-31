@@ -4,17 +4,17 @@ import { join } from "node:path";
 /**
  * Gating for the native binding tests.
  *
- * The compiled `.node`, the loader, and the `.d.ts` are build artifacts
- * (`bun run build:native`), not committed files. Ordinary TypeScript CI
- * intentionally has no native build; the qualification job that DOES build
- * it sets `AGENTKIT_REQUIRE_NATIVE=1`, where a missing binary is a hard
- * failure rather than a silent skip.
+ * The Rust runtime is the only backend, so a missing compiled binding is a
+ * hard failure everywhere (the M2.1 A4 rule): `bun run build:native` (or an
+ * installed platform package) is a prerequisite of running the tests at all.
+ * `AGENTKIT_REQUIRE_NATIVE=1` remains the explicit qualification flag;
+ * absence of the binary fails regardless of it.
  */
 
 const packageRoot = join(import.meta.dir, "..", "..");
 const generatedDir = join(packageRoot, "generated");
 
-export const required: boolean = process.env.AGENTKIT_REQUIRE_NATIVE === "1";
+export const required: boolean = true;
 
 const loaderPresent = existsSync(join(generatedDir, "index.js"));
 const dtsPresent = existsSync(join(generatedDir, "index.d.ts"));

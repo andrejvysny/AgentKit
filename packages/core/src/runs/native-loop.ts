@@ -320,8 +320,15 @@ function toolContext(
 function serializeToolResult(result: unknown, suspension: unknown): string {
   try {
     return JSON.stringify({ result, suspension });
-  } catch {
-    return JSON.stringify({ unserializable: true });
+  } catch (error) {
+    // The honest text the TypeScript loop reports beside `result_unserializable`:
+    // Rust formats `Tool <name> produced a result that could not be
+    // serialized: <error>` from this message (agentkit_core::ToolResult
+    // template), so the event stays byte-identical across backends.
+    return JSON.stringify({
+      unserializable: true,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
