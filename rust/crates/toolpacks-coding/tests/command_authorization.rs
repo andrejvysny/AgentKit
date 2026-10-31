@@ -82,14 +82,18 @@ impl ToolContributor for Contributor {
         Ok(vec![ContributedTool::DirectWrite(self.0.clone())])
     }
 }
-struct Resolver(String);
+struct Resolver {
+    root: String,
+    environment: Option<HashMap<String, String>>,
+}
 #[async_trait]
 impl WorkspaceResolver for Resolver {
     async fn resolve(&self, _: &str) -> Option<StandingApprovalWorkspace> {
         Some(StandingApprovalWorkspace {
-            root: self.0.clone(),
+            root: self.root.clone(),
             identity: "test".into(),
             context: None,
+            environment: self.environment.clone(),
         })
     }
 }
@@ -101,6 +105,14 @@ struct Fixture {
     hits: Arc<AtomicUsize>,
 }
 async fn fixture(mode: CodingMode, command: &str, root: &str) -> Fixture {
+    fixture_with_environment(mode, command, root, None).await
+}
+async fn fixture_with_environment(
+    mode: CodingMode,
+    command: &str,
+    root: &str,
+    environment: Option<HashMap<String, String>>,
+) -> Fixture {
     let store = SqliteStore::memory(64).unwrap();
     let runtime: SharedRuntime = Arc::new(SystemRuntime);
     let hits = Arc::new(AtomicUsize::new(0));
@@ -126,7 +138,10 @@ async fn fixture(mode: CodingMode, command: &str, root: &str) -> Fixture {
             tool_contributors: vec![Arc::new(Contributor(tool))],
             tool_guards: vec![Arc::new(guard), Arc::new(HighRiskCommandGuard)],
             standing: Some(Arc::new(CodingStandingApproval {
-                resolver: Resolver(root.into()),
+                resolver: Resolver {
+                    root: root.into(),
+                    environment,
+                },
             })),
             ..Default::default()
         }),
@@ -243,10 +258,29 @@ async fn risky_commands_stop_before_inert_executor_in_every_mode() {
 
 #[tokio::test]
 async fn old_unbound_standing_grant_never_authorizes_script() {
-    let root = tempfile::tempdir().unwrap();
-    let canonical = std::fs::canonicalize(root.path()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let canonical = std::fs::canonicalize(dir.path()).unwrap();
     let root = canonical.to_str().unwrap();
-    let f = fixture(CodingMode::Ask, "npm run test", root).await;
+    // Hermetic identity: `npm` resolves to a stub, so the v2 key is issued
+    // deterministically and cannot accidentally depend on the test host.
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("npm");
+    std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let environment = HashMap::from([(
+        "PATH".to_owned(),
+        std::fs::canonicalize(&bin)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    )]);
+    let f =
+        fixture_with_environment(CodingMode::Ask, "npm run test", root, Some(environment)).await;
     // Former v1 keys contained no executable or environment fingerprint.
     let payload = json!({"v":1,"chatId":"chat","tool":"run_command","identity":"test","root":root,"cwd":root,"command":"npm run test","context":null});
     let digest = format!(
@@ -264,6 +298,13 @@ async fn old_unbound_standing_grant_never_authorizes_script() {
     assert_eq!(f.hits.load(Ordering::SeqCst), 0);
     let requests = pending(&f, &turn).await;
     assert_eq!(requests.len(), 1);
-    assert!(requests[0].content.get("standing").is_none());
+    // The pending request now carries a v2 key whose digest differs from the
+    // legacy one — which is exactly why the old grant must not settle it.
+    let standing = requests[0]
+        .content
+        .get("standing")
+        .expect("the v2 fingerprint key is offered");
+    assert_ne!(standing["digest"].as_str().unwrap(), digest);
+    assert_eq!(standing["label"].as_str().unwrap(), "npm run test");
     assert!(f.store.list_executions(turn).await.unwrap().is_empty());
 }

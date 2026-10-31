@@ -30,11 +30,18 @@ frozen TypeScript host constructors, adapter implementations, or service facades
 The compatibility decision for the memory adapter's public live Maps remains
 open. Responses-provider compaction preserves private continuation state, emits a
 warning, and retains the request rather than rebasing that state.
-Native coding command standing approvals are disabled: the former key did not
-bind executable, script, configuration, or environment identity. Eligible
-commands therefore require fresh approval in modes that ask; high-risk commands
-require fresh approval even in `full_auto`. A native fingerprint implementation
-and remembered-approval parity remain open.
+Native coding command standing approvals are live: `coding_standing_approval_key`
+issues the version-2 key only when the full identity — resolved executable,
+package-script entry points, flag-named configuration, and the relevant
+environment — fingerprints cleanly through the ported
+`command_fingerprint`; any refusal, bound violation, or ambiguity yields no
+key and the call re-asks. Digest equality with the TypeScript authority is
+qualified by the gated differential suite
+(`packages/toolpacks-coding/tests/command-fingerprint-rust.test.ts`) and the
+shared collation fixture (`rust/fixtures/coding-fingerprint/env-order.json`),
+whose order is pinned against both runtimes' `localeCompare`. Eligible
+commands therefore reuse a remembered grant when the identity is unchanged;
+high-risk commands still require fresh approval even in `full_auto`.
 
 The TypeScript and native compactors now bind ordered tool calls into a
 `agentkit-compaction-source-v2` hash, reject oversized complete prefixes rather

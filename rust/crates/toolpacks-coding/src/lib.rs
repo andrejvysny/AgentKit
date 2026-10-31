@@ -5,6 +5,7 @@
 //! See `docs/adr/0018-coding-tool-pack.md`.
 
 pub mod args;
+pub mod command_fingerprint;
 pub mod command_policy;
 pub mod context;
 pub mod coordination;
@@ -34,6 +35,10 @@ pub mod version_ledger;
 pub use agentkit_core::permission::PLAN_MODE_BLOCKED_HINT;
 pub use agentkit_host::SessionExecutionAuthority;
 pub use args::{as_record, opt_bool, opt_int, opt_string, req_string};
+pub use command_fingerprint::{
+    FingerprintError, command_fingerprint, direct_script_files, leading_executable,
+    script_executable,
+};
 pub use command_policy::{
     CommandClass, HighRiskCommandGuard, ShellArgs, classify_shell_command,
     coding_standing_approval_key, high_risk_refusal, is_shell_tool, shell_args_of,
