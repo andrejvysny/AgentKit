@@ -59,7 +59,7 @@ function assertDurableExecutionPreserved(directory: string): void {
     "packages/adapters-memory/src/memory-tool-execution-store.ts",
     "packages/adapters-sqlite/src/sqlite/tool-execution-store.ts",
     "packages/adapters-sqlite/src/sqlite/migrations.ts",
-    "packages/core/src/runs/bounded-provider.ts",
+    "packages/core/src/runs/agent-loop.ts",
     "packages/host/src/context/compactor.ts",
     "packages/toolpacks-coding/src/command-fingerprint.ts",
     "packages/toolpacks-coding/src/command-risk.ts",
