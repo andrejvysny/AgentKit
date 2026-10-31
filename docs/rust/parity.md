@@ -11,12 +11,16 @@ members and referenced declarations, match an independently compiled archive of
 the reviewed starting commit. Mutation drills reject both a new export and a
 change to an inherited public member.
 
-`AGENTKIT_BACKEND=ts|native` selects the core `runChat`/`runAgentLoop`
-implementation; the default is `ts`. The opt-in Rust loop bridges the core
-options, including provider streams and tools, hooks, steering, suspension and
-resumption, continuation, execution budgets, retry, and cancellation. Native
-errors do not trigger a TypeScript fallback. The latest native-core suite passed;
-that result does not establish parity for every native host or storage surface.
+The core `runChat`/`runAgentLoop` run on the Rust runtime and nothing else:
+the duplicated TypeScript execution engine (run-loop internals) was removed,
+`AGENTKIT_BACKEND` accepts unset or `native`, and any other value — including
+the retired `ts` selector — fails closed with `invalid_input`. The bridge
+carries the core options, including provider streams and tools, hooks,
+steering, suspension and resumption, continuation, execution budgets, retry,
+and cancellation. Native errors do not trigger a TypeScript fallback, and a
+missing compiled binding is a hard failure rather than a silent downgrade.
+The latest native-core suite passed; that result does not establish parity
+for every native host or storage surface.
 
 The TypeScript host, storage adapters, local runner, coding-pack facade, MCP
 facades, and HTTP server facade are **not replaced** by this selector. Rust has
