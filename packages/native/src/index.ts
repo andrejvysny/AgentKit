@@ -24,9 +24,18 @@ import { CallbackRouter } from "./callback-router.js";
 import type {
   ProviderFunction,
   ToolDefinitionJson,
+  ToolResultJson,
   ToolRunFunction,
 } from "./callback-types.js";
 export type * from "./callback-types.js";
+import type {
+  NativeMcpClientConfig,
+  NativeMcpConnection,
+  NativeMcpServerInfo,
+  NativeMcpServerOptions,
+  NativeMcpServerStatus,
+} from "./mcp.js";
+export * from "./mcp.js";
 import {
   NativeSessionManagement,
   waitFor,
@@ -247,7 +256,77 @@ export class NativeStore {
     return new NativeSessionService(raw, router, this, options?.providerConfig);
   }
 
-  /** Flush and release file ownership. Idempotent. */
+  /**
+   * Connect one MCP server (Rust `agentkit-mcp` client manager hosted by
+   * this store handle). `config` is the crate's `ServerConfig` shape —
+   * stdio `{kind:"stdio", command, args?, env?}` or
+   * `{kind:"http", url, headers?}`; see `NativeMcpClientConfig` in
+   * `mcp.ts` for every field. Effects are HOST-controlled: every returned
+   * descriptor is `effect:"write"` unless the host config sets
+   * `readOnly:true`. Register the descriptors through `registerTool` (or
+   * `registerMcpTools`) so the authority chain keeps judging them;
+   * `mcpCallTool(alias, descriptor.remoteName, args)` is the host call for
+   * the tool lane. Failures carry the `mcp_*` codes from the error
+   * contract; `secretRefs` entries fail with `mcp_secret_missing` (no
+   * resolver in this build). Configs are in-memory only.
+   */
+  async mcpConnect(
+    config: NativeMcpClientConfig,
+  ): Promise<NativeMcpConnection> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    const text = await lift(() =>
+      this.raw.mcpConnect(JSON.stringify(config)),
+    );
+    return JSON.parse(text) as NativeMcpConnection;
+  }
+
+  /**
+   * Invoke one tool on a connected MCP server. `toolName` accepts the
+   * remote's original name (`descriptor.remoteName`), a configured
+   * `toolAliases` target, or the full descriptor name. Arguments are
+   * validated LOCALLY against the descriptor's recorded input schema
+   * before dispatch — invalid arguments never reach the server
+   * (`mcp_invalid_arguments`). Returns the host tool-result contract.
+   * Call it from the `registerTool` run function (see
+   * `registerMcpTools`) so the durable guard and authority layers still
+   * judge the call; direct use from host code is a host decision, not a
+   * bypass of the engine lane.
+   */
+  async mcpCallTool(
+    alias: string,
+    toolName: string,
+    args: unknown,
+  ): Promise<ToolResultJson> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    const text = await lift(() =>
+      this.raw.mcpCallTool(alias, toolName, JSON.stringify(args ?? {})),
+    );
+    return JSON.parse(text) as ToolResultJson;
+  }
+
+  /** Disconnect one MCP server: handles revoked immediately, transport
+   * closed (stdio children killed), declaration dropped. Idempotent. */
+  async mcpDisconnect(alias: string): Promise<void> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    await lift(() => this.raw.mcpDisconnect(alias));
+  }
+
+  /** Every MCP server declared on this store, with the crate manager's
+   * live connected flag. */
+  async mcpListServers(): Promise<NativeMcpServerStatus[]> {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    const text = await lift(() => this.raw.mcpListServers());
+    const parsed = JSON.parse(text) as { servers: NativeMcpServerStatus[] };
+    return parsed.servers;
+  }
+
+  /** Flush and release file ownership. Idempotent. Connected MCP
+   * servers are torn down (handles revoked, transports closed) before
+   * the store is released. */
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -604,6 +683,41 @@ export class NativeSessionService extends NativeSessionManagement {
    * begins Closing. */
   async stopHttpServer(): Promise<void> {
     await lift(() => this.raw.stopHttpServer());
+  }
+
+  /**
+   * Start the Rust MCP server (streamable HTTP, official `rmcp` SDK) on
+   * THIS service's JS tool lane. The catalogue a remote client sees is
+   * exactly this service's registered JS tools: `tools/list` and
+   * `tools/call` hide write-effect tools while `writesEnabled` is false
+   * (the default), and a call executes the same `JsTool::execute` bridge
+   * request a local tool call takes. Every request must present
+   * `Authorization: Bearer <token>` for one of the REQUIRED
+   * `bearerTokens` (≥ 32 bytes each); invalid options fail with
+   * `invalid_input`, an unusable address with `service_unavailable`.
+   * Remote calls run WITHOUT the run-scoped plan-mode guard and durable
+   * execution receipts (see the module docs in
+   * `rust/crates/napi/src/mcp_server.rs` for the exact scope), so treat
+   * `writesEnabled: true` as granting real write authority. Fails if an
+   * MCP server already runs on this service (call `stopMcpServer()`
+   * first) or after `close()`.
+   */
+  async startMcpServer(
+    options: NativeMcpServerOptions,
+  ): Promise<NativeMcpServerInfo> {
+    const text = await lift(() =>
+      this.raw.startMcpServer(JSON.stringify(options)),
+    );
+    return JSON.parse(text) as NativeMcpServerInfo;
+  }
+
+  /** Stop the MCP server: session leases are revoked first (in-flight JS
+   * tool callbacks are cancelled), the listener closes immediately, and
+   * the accept loop drains up to the service's close deadline.
+   * Idempotent. `close()` stops a live server itself, before the runtime
+   * begins Closing. */
+  async stopMcpServer(): Promise<void> {
+    await lift(() => this.raw.stopMcpServer());
   }
 
   /** `Open → Closing → Closed` on the Rust side: no new callbacks are

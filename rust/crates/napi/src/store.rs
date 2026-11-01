@@ -21,6 +21,8 @@ mod continuations;
 mod conversations;
 #[path = "store_inputs.rs"]
 mod inputs;
+#[path = "mcp_client.rs"]
+mod mcp_client;
 #[path = "store_outbox.rs"]
 mod outbox;
 #[path = "store_ports.rs"]
@@ -39,6 +41,10 @@ mod transactions;
 #[napi(js_name = "NativeStore")]
 pub struct NativeStore {
     inner: Mutex<Option<SqliteStore>>,
+    /// MCP client state (crate manager + declarations + projected
+    /// descriptors). In-memory only, exactly like the crate's contract:
+    /// the store file never carries server configs or secrets.
+    mcp: tokio::sync::Mutex<Option<mcp_client::Registry>>,
 }
 
 #[napi]
@@ -51,6 +57,7 @@ impl NativeStore {
         let store = SqliteStore::open(Path::new(&path), capacity).map_err(errors::store)?;
         Ok(Self {
             inner: Mutex::new(Some(store)),
+            mcp: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -61,12 +68,17 @@ impl NativeStore {
         let store = SqliteStore::memory(capacity).map_err(errors::store)?;
         Ok(Self {
             inner: Mutex::new(Some(store)),
+            mcp: tokio::sync::Mutex::new(None),
         })
     }
 
     /// Flush all pending writes durably and release ownership. Idempotent.
+    /// Connected MCP servers are torn down first: their handles are revoked
+    /// and transports closed (stdio children killed) before the store is
+    /// released, so a closed store never leaves a live MCP connection.
     #[napi]
     pub async fn close(&self) -> Result<()> {
+        self.close_mcp().await;
         let store = self.take()?;
         store.flush().await.map_err(errors::store)?;
         drop(store);

@@ -36,6 +36,8 @@ use crate::tool::JsToolContributor;
 mod http_server;
 #[path = "service_management.rs"]
 mod management;
+#[path = "mcp_server.rs"]
+mod mcp_server;
 
 const MAX_POLL_BATCH: i32 = 64;
 const DEFAULT_POLL_WAIT_MS: u64 = 25;
@@ -49,6 +51,7 @@ struct Core {
     worker: Option<WorkerHandle>,
     subscriptions: Mutex<Vec<Arc<Subscription>>>,
     http: Option<http_server::HttpServer>,
+    mcp: Option<mcp_server::McpServerHandle>,
 }
 
 #[napi(js_name = "SessionService")]
@@ -189,6 +192,7 @@ impl SessionService {
                 worker: Some(worker),
                 subscriptions: Mutex::new(Vec::new()),
                 http: None,
+                mcp: None,
             })),
             bridge,
             gate: Arc::new(CloseGate {
@@ -553,14 +557,20 @@ impl SessionService {
     }
 
     async fn shutdown_once(&self) -> Result<()> {
-        // Stop the desktop HTTP listener FIRST: with the handle taken under
-        // the same lock that gates `startHttpServer`, no REST/SSE request
-        // can be admitted (or re-admitted) once Closing begins. The accept
-        // loop is awaited outside the lock so draining never blocks a
-        // concurrent service method.
+        // Stop the desktop HTTP and MCP listeners FIRST: with the handles
+        // taken under the same lock that gates `startHttpServer`/
+        // `startMcpServer`, no REST/SSE or MCP request can be admitted (or
+        // re-admitted) once Closing begins. The accept loops are awaited
+        // outside the lock so draining never blocks a concurrent service
+        // method. The MCP close revokes every session lease first, which
+        // cancels in-flight JS tool callbacks dispatched by remote calls.
         let mut core = self.core.lock().await.take();
         let http = core.as_mut().and_then(|core| core.http.take());
+        let mcp = core.as_mut().and_then(|core| core.mcp.take());
         if let Some(server) = http {
+            server.shutdown(self.close_timeout).await;
+        }
+        if let Some(server) = mcp {
             server.shutdown(self.close_timeout).await;
         }
         self.bridge.start_closing();

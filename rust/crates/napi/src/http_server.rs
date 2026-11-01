@@ -37,7 +37,7 @@ const DEFAULT_MODEL: &str = "model";
 /// Bound an accepted-then-stalled connection may outlive the shutdown
 /// signal; keeps `stopHttpServer()`/`close()` deterministic even with a
 /// client that never finishes reading (e.g. a parked SSE consumer).
-const CONNECTION_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+pub(super) const CONNECTION_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 /// One running desktop HTTP server: the accept-loop task plus the token
 /// that drains it. Cancelling closes the listener immediately (follow-up
@@ -83,7 +83,7 @@ struct ServerOptions {
     bearer_token: String,
 }
 
-fn optional_u64(object: &Value, key: &str) -> Result<Option<u64>> {
+pub(super) fn optional_u64(object: &Value, key: &str) -> Result<Option<u64>> {
     match object.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(value) => value.as_u64().map(Some).ok_or_else(|| {
@@ -92,7 +92,7 @@ fn optional_u64(object: &Value, key: &str) -> Result<Option<u64>> {
     }
 }
 
-fn optional_sized(object: &Value, key: &str) -> Result<Option<usize>> {
+pub(super) fn optional_sized(object: &Value, key: &str) -> Result<Option<usize>> {
     let Some(number) = optional_u64(object, key)? else {
         return Ok(None);
     };
@@ -106,7 +106,11 @@ fn optional_sized(object: &Value, key: &str) -> Result<Option<usize>> {
     Ok(Some(bytes))
 }
 
-fn optional_text(object: &Value, key: &str, allow_empty: bool) -> Result<Option<String>> {
+pub(super) fn optional_text(
+    object: &Value,
+    key: &str,
+    allow_empty: bool,
+) -> Result<Option<String>> {
     match object.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => {
@@ -181,7 +185,7 @@ fn normalize_base_path(path: &str) -> String {
 }
 
 /// Bracket IPv6 literals so the advertised URL is fetchable as-is.
-fn url_host(host: &str) -> String {
+pub(super) fn url_host(host: &str) -> String {
     if host.contains(':') {
         format!("[{host}]")
     } else {
@@ -190,8 +194,9 @@ fn url_host(host: &str) -> String {
 }
 
 /// Bind a socket before touching the store: an unusable address/port fails
-/// with `service_unavailable` and no durable trace.
-async fn bind_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener> {
+/// with `service_unavailable` and no durable trace. Shared with the MCP
+/// server listener, which binds the same way over the same host.
+pub(super) async fn bind_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener> {
     let bind_host = url_host(host);
     tokio::net::TcpListener::bind((bind_host.as_str(), port))
         .await
