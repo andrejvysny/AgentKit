@@ -36,17 +36,23 @@ export declare class NativeStore {
   /**
    * Invoke one tool on a connected MCP server. `toolName` accepts the
    * remote's original name, the configured alias target, or the full
-   * descriptor name. The arguments are validated LOCALLY against the
-   * descriptor's recorded input schema before dispatch (invalid
-   * arguments never reach the server, `mcp_invalid_arguments`; a
-   * schema that could not be compiled fails closed the same way).
+   * descriptor name. `handle` is the descriptor's `handle` field, i.e. the
+   * registration that minted it: it is REQUIRED once an alias has been
+   * re-registered (disconnect + reconnect under the same alias mints a new
+   * registration), and a call whose handle names a superseded registration
+   * is refused with `mcp_authority_revoked` — a descriptor from generation
+   * N never authorizes generation N+1's callback. The arguments are
+   * validated LOCALLY against the descriptor's recorded input schema before
+   * dispatch (invalid arguments never reach the server,
+   * `mcp_invalid_arguments`; a schema that could not be compiled fails
+   * closed the same way).
    * Returns the host tool-result contract as JSON text (`{ok, data,
    * modelData, summary, status, warnings, truncated, limits}`). Call
    * it from the `registerTool` run function so the durable guard and
    * authority layers keep judging the call — this host method is for
    * the JS tool lane, not a bypass around those checks.
    */
-  mcpCallTool(alias: string, toolName: string, argsJson: string): Promise<string>
+  mcpCallTool(alias: string, toolName: string, argsJson: string, handle?: string | undefined | null): Promise<string>
   /**
    * Disconnect one MCP server: its tool handles are revoked
    * immediately, its transport closed, and its declaration dropped.

@@ -175,6 +175,7 @@ async function registerCodingTools(
           ...(request.toolCallId === null
             ? {}
             : { toolCallId: request.toolCallId }),
+          ...(request.signal ? { signal: request.signal } : {}),
         };
         return tool.execute(ctx, input);
       },
