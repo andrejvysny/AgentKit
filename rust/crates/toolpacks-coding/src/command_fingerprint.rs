@@ -138,35 +138,36 @@ pub(crate) fn json_quote(value: &str) -> String {
 }
 
 /// JS `String.prototype.trim`: the ECMA-262 `WhiteSpace` + `LineTerminator`
-/// set, which is NOT Rust's `char::is_whitespace` (U+FEFF is whitespace to
-/// JS, U+0085 is not).
+/// set (the same 25 characters as JS `/\s/`, see
+/// [`crate::command_policy::js_is_space`]), which is NOT Rust's
+/// `char::is_whitespace` (U+FEFF is whitespace to JS, U+0085 is not).
 fn js_trim(value: &str) -> &str {
-    const TRIMMED: &[char] = &[
-        '\u{0009}', '\u{000a}', '\u{000b}', '\u{000c}', '\u{000d}', '\u{0020}', '\u{00a0}',
-        '\u{1680}', '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}',
-        '\u{2006}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200a}', '\u{2028}', '\u{2029}',
-        '\u{202f}', '\u{205f}', '\u{3000}', '\u{feff}',
-    ];
     let start = value
         .char_indices()
-        .find(|(_, c)| !TRIMMED.contains(c))
+        .find(|(_, c)| !crate::command_policy::js_is_space(*c))
         .map_or(value.len(), |(i, _)| i);
     let end = value
         .char_indices()
-        .rfind(|(_, c)| !TRIMMED.contains(c))
+        .rfind(|(_, c)| !crate::command_policy::js_is_space(*c))
         .map_or(0, |(i, c)| i + c.len_utf8());
     &value[start..end.max(start)]
 }
 
-/// `command.trim().split(/ +/)`: the only split character is U+0020. An
-/// all-whitespace command yields one empty token, exactly like JS `split` on
-/// the empty string.
+/// `command.trim().split(/ +/)`: the separator is a GREEDY run of U+0020, so
+/// repeated spaces produce ONE boundary, never an empty token (that is what
+/// `/ +/` means; only `/ /` interleaves empties). Tabs survive inside tokens;
+/// they are not separators here. An all-whitespace command yields one empty
+/// token, exactly like JS `split` on the empty string.
 fn js_split_tokens(command: &str) -> Vec<String> {
     let trimmed = js_trim(command);
     if trimmed.is_empty() {
         return vec![String::new()];
     }
-    trimmed.split(' ').map(|token| token.to_owned()).collect()
+    trimmed
+        .split(' ')
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Node `path.posix.dirname`, including the "keep multiple leading slashes"
@@ -267,7 +268,11 @@ fn assignment_prefix() -> &'static regex::Regex {
 
 fn file_like_word() -> &'static regex::Regex {
     static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"\A[\w./ -]+\.(?:[cm]?[jt]s|py|sh|rb|pl)\z").expect("static")
+        // JS `\w` is ASCII-only ([0-9A-Za-z_]); the regex crate's Unicode `\w`
+        // would additionally accept e.g. `café.py` as a bindable direct file,
+        // desynchronizing the digest against the TypeScript baseline.
+        regex::Regex::new(r"\A[0-9A-Za-z_./ -]+\.(?:[cm]?[jt]s|py|sh|rb|pl)\z")
+            .expect("static pattern")
     });
     &RE
 }
@@ -437,27 +442,51 @@ pub fn leading_executable(tokens: &[String]) -> Option<String> {
 // file identity primitives
 // ---------------------------------------------------------------------------
 
+/// The libc `stat` call takes `*const c_char`, which is `u8` on
+/// x86_64-pc-windows-msvc and `i8` everywhere else; `.cast()` keeps the
+/// single source compilable on every advertised target.
+fn char_ptr(text: &std::ffi::CString) -> *const libc::c_char {
+    text.as_ptr().cast()
+}
+
+/// `access`'s execute bit. libc defines `X_OK` on unix only; the MSVC CRT
+/// `_X_OK` the windows `access` binding dispatches to is the same `1`.
+#[cfg(not(windows))]
+const ACCESS_X_OK: libc::c_int = libc::X_OK;
+#[cfg(windows)]
+const ACCESS_X_OK: libc::c_int = 1;
+
 /// The six `String()`-formatted BigInt fields the TS identity array carries:
 /// dev, ino, mode, size, mtimeNs, ctimeNs. `Ok(None)` means "exists, not a
 /// regular file" — the TS `continue` path.
+///
+/// Rendering parity rules (`String(BigInt(x))`): signed fields render with
+/// their sign, so `st_dev` must keep its platform sign (i32 on apple) rather
+/// than being widened unsigned. The regular-file mask `S_IFMT == S_IFREG`
+/// (0o170000 == 0o100000) is numerically identical to the MSVC CRT
+/// `_S_IFMT/_S_IFREG` pair, so one mask serves every advertised target.
 fn stat_identity(path: &str) -> FpResult<Option<[String; 6]>> {
     let c_path = std::ffi::CString::new(path)
         .map_err(|_| FingerprintError::Message("path contains a NUL byte".to_owned()))?;
     let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    let rc = unsafe { libc::stat(c_path.as_ptr(), &mut stat) };
+    let rc = unsafe { libc::stat(char_ptr(&c_path), &mut stat) };
     if rc != 0 {
         return Err(FingerprintError::Io(std::io::Error::last_os_error()));
     }
-    #[cfg(target_os = "macos")]
-    let (mode, dev) = (u32::from(stat.st_mode), stat.st_dev as u64);
-    #[cfg(not(target_os = "macos"))]
+    // st_mode is u16 on apple/windows and u32 on linux; st_dev is signed
+    // i32 on apple (String() keeps the sign), u32 on windows (CRT drive
+    // number), u64 on linux. Widening to u64 would render a negative apple
+    // dev as a huge unsigned value the TS baseline never produces.
+    #[cfg(any(target_os = "macos", windows))]
+    let (mode, dev) = (u32::from(stat.st_mode), i64::from(stat.st_dev));
+    #[cfg(not(any(target_os = "macos", windows)))]
     let (mode, dev) = (stat.st_mode, stat.st_dev);
     if mode & 0o170000 != 0o100000 {
         return Ok(None);
     }
     let (mtime_sec, mtime_nsec, ctime_sec, ctime_nsec) = stat_timespecs(&stat);
-    let mtime_ns = mtime_sec as i128 * 1_000_000_000 + mtime_nsec as i128;
-    let ctime_ns = ctime_sec as i128 * 1_000_000_000 + ctime_nsec as i128;
+    let mtime_ns = i128::from(mtime_sec) * 1_000_000_000 + i128::from(mtime_nsec);
+    let ctime_ns = i128::from(ctime_sec) * 1_000_000_000 + i128::from(ctime_nsec);
     Ok(Some([
         dev.to_string(),
         stat.st_ino.to_string(),
@@ -468,11 +497,16 @@ fn stat_identity(path: &str) -> FpResult<Option<[String; 6]>> {
     ]))
 }
 
-/// Node's `stat(bigint)` reports `mtimeNs` and `ctimeNs` with nanosecond
-/// precision. The libc `stat` timespec field names differ per platform: Linux
-/// uses flat `st_mtime`/`st_mtime_nsec`, macOS uses `st_mtimespec`.
-#[cfg(target_os = "linux")]
+/// Node's `stat(bigint)` reports `mtimeNs` and `ctimeNs` at nanosecond
+/// precision. libc's `stat` carries FLAT `st_mtime`/`st_mtime_nsec` fields on
+/// both linux and apple (the Darwin `st_mtimespec` spelling exists in the
+/// kernel headers, not in libc's published struct), so one branch covers
+/// every unix target; windows gets the CRT `__stat64` second-precision pair.
+#[cfg(unix)]
 fn stat_timespecs(stat: &libc::stat) -> (i64, i64, i64, i64) {
+    // No casts: on every advertised target (x86_64/aarch64 linux and apple)
+    // `time_t` and `c_long` ARE i64; a cast would be a lint, a 32-bit port
+    // is not advertised by this binding.
     (
         stat.st_mtime,
         stat.st_mtime_nsec,
@@ -481,14 +515,17 @@ fn stat_timespecs(stat: &libc::stat) -> (i64, i64, i64, i64) {
     )
 }
 
-#[cfg(target_os = "macos")]
+/// The MSVC CRT `__stat64` has no sub-second component, and its `st_dev` /
+/// `st_ino` are the CRT drive number and a constant 0 — NOT Node's
+/// volume-serial / file-index identity, which needs Win32 handle information
+/// a libc-only path cannot reach. The windows fingerprint is therefore a
+/// conservative deterministic identity (second granularity); it is documented
+/// as such rather than claimed as byte-exact, and the standing-approval key
+/// version (see `coding_standing_approval_key`) keeps it from ever being
+/// compared against a digest minted on another platform's precision.
+#[cfg(windows)]
 fn stat_timespecs(stat: &libc::stat) -> (i64, i64, i64, i64) {
-    (
-        stat.st_mtimespec.tv_sec,
-        stat.st_mtimespec.tv_nsec,
-        stat.st_ctimespec.tv_sec,
-        stat.st_ctimespec.tv_nsec,
-    )
+    (stat.st_mtime, 0, stat.st_ctime, 0)
 }
 
 /// TS `isAbsent`: ENOENT, ENOTDIR and EACCES mean "not there for us";
@@ -576,7 +613,7 @@ fn executable(
             Ok(value) => value,
             Err(_) => return fail("path contains a NUL byte"),
         };
-        if unsafe { libc::access(c_path.as_ptr(), libc::X_OK) } != 0 {
+        if unsafe { libc::access(char_ptr(&c_path), ACCESS_X_OK) } != 0 {
             let error = std::io::Error::last_os_error();
             if is_absent(&error) {
                 continue;
@@ -1129,8 +1166,154 @@ mod tests {
     fn tokens_split_only_on_u0020() {
         // Tabs are NOT separators; JS `split(/ +/)` keeps them inside tokens.
         assert_eq!(js_split_tokens("a\tb c"), vec!["a\tb", "c"]);
-        assert_eq!(js_split_tokens("a  b"), vec!["a", "", "b"]);
+        // The separator is the greedy RUN of spaces (`/ +/`): repeated
+        // spaces yield one boundary, never an empty token. (The earlier pin
+        // of `["a", "", "b"]` was `split(" ")` behavior; both Node 22 and
+        // Bun 1.4 produce `["a", "b"]` — see the tokenizer fixture.)
+        assert_eq!(js_split_tokens("a  b"), vec!["a", "b"]);
+        assert_eq!(js_split_tokens(" bun   test "), vec!["bun", "test"]);
         assert_eq!(js_split_tokens(""), vec![""]);
+        assert_eq!(js_split_tokens("   "), vec![""]);
+        // U+00A0 trims (JS WhiteSpace) but never splits mid-token.
+        assert_eq!(
+            js_split_tokens("\u{a0}bun\u{a0}test\u{a0}"),
+            vec!["bun\u{a0}test"]
+        );
+    }
+
+    /// The shared TS↔Rust conformance fixture: every token list below is the
+    /// byte-identical output both the TypeScript baseline engine (Node
+    /// 22.20.0 and Bun 1.4.4, which agree across the whole corpus) and this
+    /// port produce — tokenizer, fingerprint token stream, `directScriptFiles`
+    /// (including the exact refusal messages) and `scriptExecutable`.
+    #[test]
+    fn tokenizer_agrees_with_the_typescript_baseline() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fixtures/coding-fingerprint/tokenizer.json"
+        ))
+        .expect("tokenizer fixture parses");
+        let strings = |value: &serde_json::Value| -> Vec<String> {
+            value
+                .as_array()
+                .expect("string array")
+                .iter()
+                .map(|entry| entry.as_str().expect("string entry").to_owned())
+                .collect()
+        };
+        for case in fixture["cases"].as_array().expect("cases") {
+            let input = case["input"].as_str().expect("input");
+            assert_eq!(
+                shell_words(input),
+                strings(&case["words"]),
+                "shellWords({input:?})"
+            );
+            assert_eq!(
+                js_split_tokens(input),
+                strings(&case["tokens"]),
+                "fingerprint tokens({input:?})"
+            );
+            match &case["files"] {
+                serde_json::Value::Object(fields) if fields.contains_key("error") => {
+                    let error =
+                        direct_script_files(input).expect_err("baseline refusal must reproduce");
+                    assert_eq!(
+                        error.to_string(),
+                        fields["error"].as_str().expect("error message"),
+                        "directScriptFiles({input:?}) refusal text"
+                    );
+                }
+                value => assert_eq!(
+                    direct_script_files(input).unwrap(),
+                    strings(&value["ok"]),
+                    "directScriptFiles({input:?})"
+                ),
+            }
+            let expected = match &case["scriptExecutable"]["ok"] {
+                serde_json::Value::Null => None,
+                value => Some(value.as_str().expect("string").to_owned()),
+            };
+            assert_eq!(
+                script_executable(input),
+                expected,
+                "scriptExecutable({input:?})"
+            );
+        }
+        for case in fixture["executableNames"]
+            .as_array()
+            .expect("executableNames")
+        {
+            let input = case["input"].as_str().expect("input");
+            assert_eq!(
+                executable_name(input),
+                case["name"].as_str().expect("name"),
+                "executableName({input:?})"
+            );
+        }
+    }
+
+    /// Finding 1 in isolation: JS keeps U+0085 and U+001C..U+001F INSIDE a
+    /// word (they are not `/\s/`), while U+2028/U+2029/U+FEFF split. The
+    /// pre-fix port used `char::is_whitespace` and would split all of them,
+    /// so `rm\u{85}-rf x` classified high-risk and a package-script word
+    /// tokenized differently than the approval was keyed on.
+    #[test]
+    fn word_splitting_pins_the_js_whitespace_set_not_unicode() {
+        for ch in ['\u{85}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{1f}', '\u{200b}'] {
+            let word = format!("a{ch}b");
+            assert_eq!(
+                shell_words(&word),
+                vec![word.clone()],
+                "U+{:04X} is not JS space",
+                ch as u32
+            );
+            assert_eq!(
+                js_split_tokens(&word),
+                vec![word],
+                "U+{:04X} is not U+0020",
+                ch as u32
+            );
+        }
+        for ch in [
+            '\u{2028}', '\u{2029}', '\u{feff}', '\u{a0}', '\u{b}', '\u{c}', '\u{d}',
+        ] {
+            assert_eq!(
+                shell_words(&format!("a{ch}b")),
+                vec!["a", "b"],
+                "U+{:04X} is JS whitespace",
+                ch as u32
+            );
+        }
+        // Tabs split shellWords but never the fingerprint token stream.
+        assert_eq!(shell_words("a\tb"), vec!["a", "b"]);
+        assert_eq!(js_split_tokens("a\tb"), vec!["a\tb"]);
+    }
+
+    /// Finding 1 at digest level: repeated spaces must not shift token
+    /// positions. Pre-fix, `bun  test` keyed a fingerprint whose `tokens[1]`
+    /// was `""` — the script-entrypoint selection (`run`/`test`) and the
+    /// npx-runner selection silently read different neighbors than TS.
+    #[test]
+    fn repeated_spaces_never_move_the_fingerprint_tokens() {
+        assert_eq!(
+            js_split_tokens("npx  vitest   run"),
+            vec!["npx", "vitest", "run"]
+        );
+        assert_eq!(
+            js_split_tokens(" npm   run  test "),
+            vec!["npm", "run", "test"]
+        );
+        let (root, environment) = fixture("space-runs");
+        let root_s = root.to_string_lossy().into_owned();
+        let spaced = command_fingerprint(&root_s, &root_s, "bun   test", &environment)
+            .unwrap()
+            .expect("keyable");
+        let plain = command_fingerprint(&root_s, &root_s, "bun test", &environment)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            spaced, plain,
+            "repeated spaces are one separator to both engines, so the same identity keys"
+        );
     }
 
     #[test]
@@ -1457,5 +1640,134 @@ mod tests {
         assert_eq!(json_quote("\u{1}\u{1f}"), "\"\\u0001\\u001f\"");
         assert_eq!(json_quote("\u{2028}"), "\"\\u2028\"");
         assert_eq!(json_quote("é✓"), "\"é✓\"");
+    }
+
+    /// Finding 2, verified against the 77fc558 baseline: `command-fingerprint.ts`
+    /// binds exactly `BASH_ENV`, `ENV` and `npm_config_userconfig` from the
+    /// environment as direct files, and `command-script-inputs.ts` parses no
+    /// environment at all — the review's premise that the baseline selects
+    /// `NODE_OPTIONS`/`BUN_OPTIONS` files into `directScriptFiles` is FALSE
+    /// (the tokenizer fixture pins the agreed, env-free outputs). The baseline
+    /// nevertheless forces re-approval whenever such a value appears or moves,
+    /// because every ENV_NAMES value — NODE_OPTIONS and BUN_OPTIONS included —
+    /// is digest key material. So a standing approval for `node script.js`
+    /// can never be replayed under `NODE_OPTIONS=--require ./evil.js`: the
+    /// digest differs, the grant never matches, and nothing executes.
+    #[test]
+    fn node_options_is_environment_identity_never_a_direct_input() {
+        let (root, environment) = fixture("node-options");
+        let root_s = root.to_string_lossy().into_owned();
+        std::fs::write(root.join("evil.js"), "spawn('rm')\n").unwrap();
+        std::fs::write(root.join("script.js"), "console.log(1)\n").unwrap();
+
+        // (1) Parity: the selected direct-input set is identical with and
+        // without an injected `--require` value — env is not an input to it.
+        let baseline = direct_script_files("node script.js").unwrap();
+        assert_eq!(baseline, vec!["script.js".to_owned()]);
+        assert!(
+            !baseline.iter().any(|word| word.contains("evil")),
+            "the baseline does not parse NODE_OPTIONS into direct inputs"
+        );
+
+        // (2) Re-approval: the value is bound, so its appearance, absence and
+        // every edit move the digest — the approval identity cannot survive
+        // a NODE_OPTIONS change.
+        let key = |env: &HashMap<String, String>| {
+            command_fingerprint(&root_s, &root_s, "node script.js", env)
+                .unwrap()
+                .expect("keyable")
+        };
+        let clean = key(&environment);
+        let mut with_evil = environment.clone();
+        with_evil.insert("NODE_OPTIONS".to_owned(), "--require ./evil.js".to_owned());
+        let evil = key(&with_evil);
+        assert_ne!(clean, evil, "an added NODE_OPTIONS must force re-approval");
+        let mut different_evil = with_evil.clone();
+        different_evil.insert("NODE_OPTIONS".to_owned(), "--require ./other.js".to_owned());
+        assert_ne!(
+            evil,
+            key(&different_evil),
+            "an edited NODE_OPTIONS must force re-approval"
+        );
+        let mut bun_options = environment.clone();
+        bun_options.insert("BUN_OPTIONS".to_owned(), "--preload ./evil.js".to_owned());
+        assert_ne!(clean, key(&bun_options), "BUN_OPTIONS binds too");
+        let mut irrelevant = environment.clone();
+        irrelevant.insert(
+            "SOME_OTHER_NAME".to_owned(),
+            "--require ./evil.js".to_owned(),
+        );
+        assert_eq!(clean, key(&irrelevant), "only ENV_NAMES bind");
+    }
+
+    /// Finding 3, identity half: the executable's dev/ino/mode/size/mtime/
+    /// ctime are re-stat'd on every fingerprint computation, so an executable
+    /// replaced between approval and the next claim changes the recomputed
+    /// digest and the stored grant stops matching.
+    #[test]
+    fn fingerprint_revalidates_executable_identity_at_claim_time() {
+        let (root, environment) = fixture("exec-identity");
+        let root_s = root.to_string_lossy().into_owned();
+        let approved = command_fingerprint(&root_s, &root_s, "bun test", &environment)
+            .unwrap()
+            .expect("keyable");
+        // Replace the resolved executable's bytes with a different length,
+        // like a swapped-in binary: `size` alone must move the key (an
+        // inode-preserving rewrite could otherwise land in the same
+        // nanosecond as creation on a coarse clock).
+        std::fs::write(root.join("bin/bun"), "#!/bin/sh\nexit 0\n# swapped\n").unwrap();
+        let after_replace = command_fingerprint(&root_s, &root_s, "bun test", &environment)
+            .unwrap()
+            .expect("still keyable");
+        assert_ne!(
+            approved, after_replace,
+            "a replaced executable must force re-approval"
+        );
+        // A mode-only change (same bytes) also moves the key: mode is bound.
+        let (root, environment) = fixture("exec-mode");
+        let root_s = root.to_string_lossy().into_owned();
+        let approved = command_fingerprint(&root_s, &root_s, "bun test", &environment)
+            .unwrap()
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join("bin/bun"), std::fs::Permissions::from_mode(0o750))
+                .unwrap();
+        }
+        let after_mode = command_fingerprint(&root_s, &root_s, "bun test", &environment)
+            .unwrap()
+            .unwrap();
+        assert_ne!(approved, after_mode, "mode is bound identity");
+    }
+
+    /// Finding 3, environment half at claim time: an ENV_NAMES value changed
+    /// after approval (PATH reordered is the sharpest case — it also moves
+    /// executable resolution) must re-key the call.
+    #[test]
+    fn fingerprint_revalidates_effective_environment_at_claim_time() {
+        let (root, environment) = fixture("claim-env");
+        let root_s = root.to_string_lossy().into_owned();
+        let approved = command_fingerprint(&root_s, &root_s, "bun test", &environment)
+            .unwrap()
+            .unwrap();
+        let mut later = environment.clone();
+        later.insert("NODE_ENV".to_owned(), "production".to_owned());
+        assert_ne!(
+            command_fingerprint(&root_s, &root_s, "bun test", &later)
+                .unwrap()
+                .unwrap(),
+            approved,
+            "an ENV_NAMES value change between approval and claim forces re-approval"
+        );
+        let mut poisoned_path = environment.clone();
+        poisoned_path.insert(
+            "PATH".to_owned(),
+            format!("/tmp/nonexistent-ak:/usr/bin:{}", later["PATH"]),
+        );
+        let reparsed = command_fingerprint(&root_s, &root_s, "bun test", &poisoned_path)
+            .unwrap()
+            .expect("still resolves through the tail of PATH");
+        assert_ne!(reparsed, approved, "a reordered PATH changes the key");
     }
 }
