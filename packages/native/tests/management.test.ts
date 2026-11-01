@@ -65,6 +65,8 @@ nativeTest(
         profileId: "p1",
         model: "old",
       });
+      expect((await service.archiveChat("s1")).archived).toBe(true);
+      expect((await service.unarchiveChat("s1")).archived).toBe(false);
       expect((await service.setExecutionMode("s1", "plan")).mode).toBe("plan");
       expect(await service.listApprovalGrants("s1")).toEqual([]);
       expect(await service.clearQueue("s1")).toBe(0);
@@ -89,6 +91,9 @@ nativeTest(
         () => service.cancelQueuedInput("s1", "missing"),
         () => service.clearQueue("s1"),
         () => service.configure("s1", {}),
+        () => service.deleteChat("s1"),
+        () => service.archiveChat("s1"),
+        () => service.unarchiveChat("s1"),
       ])
         await expect(operation()).rejects.toMatchObject({ code: "closed" });
       expect(() => service.setProvider(null)).toThrow();
@@ -206,6 +211,101 @@ nativeTest(
       }
     } finally {
       release();
+      await service.close();
+      await store.close();
+    }
+  },
+  20_000,
+);
+
+nativeTest(
+  "archive, unarchive, and delete drive the chat lifecycle through the store engine",
+  async () => {
+    const store = await NativeStore.inMemory();
+    const service = await store.createService();
+    try {
+      service.setProvider(async () => ({
+        content: "answer",
+        finishReason: "stop",
+      }));
+      await service.createSession({
+        sessionId: "lifecycle",
+        profileId: "p1",
+        model: "test",
+      });
+      const sent = await service.send("lifecycle", { content: "first" });
+      expect(sent.kind).toBe("turn");
+      if (sent.kind !== "turn") throw new Error("expected turn");
+      const subscription = await service.subscribeTurn(sent.turnId, 0);
+      while (!(await subscription.poll(64, 250)).done) {}
+
+      // Archive answers with the updated record and the flag is persisted in
+      // the store: reads outside and inside a transaction see it, and the
+      // default listing hides the chat while the archived listing shows it.
+      expect((await service.archiveChat("lifecycle")).archived).toBe(true);
+      expect(
+        await store.callStore<{ archived: boolean }>("chats.get", {
+          chatId: "lifecycle",
+        }),
+      ).toMatchObject({ id: "lifecycle", archived: true });
+      expect(await store.callStore<unknown[]>("chats.list")).toEqual([]);
+      expect(
+        (
+          await store.callStore<{ id: string; archived: boolean }[]>(
+            "chats.list",
+            { includeArchived: true },
+          )
+        ).map((chat) => chat.id),
+      ).toEqual(["lifecycle"]);
+      expect(
+        await store.transaction((tx) =>
+          tx.callStore<{ archived: boolean }>("chats.get", {
+            chatId: "lifecycle",
+          }),
+        ),
+      ).toMatchObject({ archived: true });
+
+      // Unarchive is the exact inverse and returns the chat to the listing.
+      expect((await service.unarchiveChat("lifecycle")).archived).toBe(false);
+      expect(
+        (await store.callStore<{ id: string }[]>("chats.list")).map(
+          (chat) => chat.id,
+        ),
+      ).toEqual(["lifecycle"]);
+
+      // All three refuse an unknown chat with the store's own code.
+      await expect(service.archiveChat("nope")).rejects.toMatchObject({
+        code: "not_found",
+      });
+      await expect(service.unarchiveChat("nope")).rejects.toMatchObject({
+        code: "not_found",
+      });
+      await expect(service.deleteChat("nope")).rejects.toMatchObject({
+        code: "not_found",
+      });
+
+      // Delete removes the aggregate: session reads and writes fail closed,
+      // and recreating the same id yields a FRESH chat, never the deleted
+      // messages resurrected.
+      await service.deleteChat("lifecycle");
+      expect(await store.callStore<unknown[]>("chats.list", {
+        includeArchived: true,
+      })).toEqual([]);
+      await expect(service.getState("lifecycle")).rejects.toMatchObject({
+        code: "session_not_found",
+      });
+      await expect(
+        service.send("lifecycle", { content: "again" }),
+      ).rejects.toMatchObject({ code: "session_not_found" });
+      await service.createSession({
+        sessionId: "lifecycle",
+        profileId: "p1",
+        model: "test",
+      });
+      const exported = await service.exportSession("lifecycle");
+      expect(exported.messages).toEqual([]);
+      expect((await service.archiveChat("lifecycle")).archived).toBe(true);
+    } finally {
       await service.close();
       await store.close();
     }

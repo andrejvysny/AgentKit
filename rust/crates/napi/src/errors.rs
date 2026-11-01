@@ -137,6 +137,20 @@ mod tests {
     }
 
     #[test]
+    fn answer_stale_crosses_the_boundary_verbatim() {
+        // The stale-answer code is part of the contract: a session-service
+        // stale refusal must reach JavaScript as `answer_stale` with the
+        // TypeScript message text, never redacted to `internal_error`.
+        let message = "Request req-1 can no longer be answered: it was cancelled.";
+        let error = session(agentkit_host::SessionError::new("answer_stale", message));
+        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
+        assert_eq!(payload["code"], "answer_stale");
+        assert_eq!(payload["message"], message);
+        assert!(payload.get("details").is_none());
+        assert!(is_contract_code("answer_stale"));
+    }
+
+    #[test]
     fn unknown_codes_are_redacted_not_leaked() {
         let error = stable("weird-debug-code", "raw internal detail", None);
         let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");

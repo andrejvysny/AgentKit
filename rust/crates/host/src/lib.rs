@@ -12,6 +12,7 @@ mod governance;
 pub mod http;
 mod mcp_configuration;
 mod ports;
+mod project_instructions;
 mod proposals;
 mod retry;
 mod runner;
@@ -25,6 +26,7 @@ pub use emulated_tool_call::{EMULATED_TOOL_CALL_MESSAGE, looks_like_emulated_too
 pub use governance::*;
 pub use mcp_configuration::*;
 pub use ports::*;
+pub use project_instructions::*;
 pub use proposals::*;
 pub use retry::*;
 pub use runner::*;

@@ -2,7 +2,7 @@
 
 The historical M3 record below is superseded for current migration status by
 [the 30 October checkpoint](parity.md#migration-checkpoint-30-october-2026).
-The private binding now has lazy loading, nine additional session-management
+The private binding now has lazy loading, twelve additional session-management
 methods, a separate stateless core streaming bridge, and staged platform packages.
 These additions do not establish drop-in host/storage parity or native-default
 qualification. No TypeScript database migration is planned: native stores start
@@ -55,11 +55,32 @@ generator's `ToTs`/TS codegen is deliberately NOT used for wire types):
   exportSession/getUsage, 1:1 with `AgentSessionService` request/response
   JSON; tool descriptors pass through verbatim (null-as-absent fields
   fixed, so `effect`/`capability`/`readOnly` survive the boundary).
+- `SessionService.deleteChat(sessionId)` — deletes the chat scope through
+  the store engine (`delete_chat`), which refuses atomically with
+  `chat_busy` while any task in the scope is non-terminal and answers
+  `not_found` for an unknown chat; the binding adds no policy of its own.
+- `SessionService.archiveChat(sessionId)` — a named pass-through over the
+  store's `archived` field (`update_chat`), answering with the updated
+  chat record JSON; `not_found` for an unknown chat.
+- `SessionService.unarchiveChat(sessionId)` — the inverse pass-through,
+  clearing `archived` and returning the updated record JSON.
+- `store.callStore("chats.get"/"chats.list")` — read-only chat port
+  (`list` takes `includeArchived`, default false), so the archived flag
+  is observable through the binding's public API and inside transactions.
+- Sessions whose descriptor carries a `{root, trusted}` workspace get
+  the `AGENTS.md`/`CLAUDE.md` system block from the Rust
+  `FileProjectInstructions` authority (canonicalized root, `O_NOFOLLOW`
+  identity checks, FIFO refusal, 65 536-byte cap); every skipped or
+  truncated file is a durable `run.warning
+  {code:"project_instructions_unavailable"}` on the turn. The binding
+  wires the FS source unconditionally; descriptor-less sessions are
+  untouched.
 - `subscribeTurn(taskId, afterSeq?)` → `SubscriptionHandle.poll(limit,
   waitMs)`: pull-based committed-event follower, batches capped at 64
   (out-of-range `limit` rejects), durable cursor — a slow consumer
   backpressures the follower instead of overflowing a queue; `cancel()`
-  and `done()` are sync.
+  and `done()` are sync. `afterSeq` is **exclusive** and sequences start
+  at 0: omit it to receive every event from the first.
 - `registerTool(definition, fn)` and `setProvider(fn)`: per-invocation
   references, reject maps to the normal tool/provider failure path
   (`tool_execution_failed`, `provider: <reason>`), no panic, and the full

@@ -57,6 +57,24 @@ export declare class SessionService {
   clearQueue(sessionId: string): Promise<number>
   configure(sessionId: string, inputJson: string): Promise<string>
   /**
+   * Delete the chat scope behind a session, straight through the store
+   * engine: an unknown chat fails `not_found`, and while any task in the
+   * scope is non-terminal the engine refuses atomically with `chat_busy`
+   * (never a delete that silently cancels live work). The binding adds no
+   * policy of its own.
+   */
+  deleteChat(sessionId: string): Promise<void>
+  /**
+   * Hide the chat from the default listing; a named pass-through over the
+   * store's `archived` field, answering with the updated record JSON.
+   */
+  archiveChat(sessionId: string): Promise<string>
+  /**
+   * The inverse of `archiveChat`: un-hide the chat, answering with the
+   * updated record JSON. An unknown chat fails `not_found`.
+   */
+  unarchiveChat(sessionId: string): Promise<string>
+  /**
    * Register a JS-executed tool. `definitionJson` is the portable tool
    * definition: `{name, version?, effect?, capability?, description?,
    * inputSchema, outputSchema?, timeoutMs?}`.

@@ -3,6 +3,7 @@
   "codes": [
     "already_owned",
     "answer_conflict",
+    "answer_stale",
     "callback_rejected",
     "chat_busy",
     "closed",

@@ -119,6 +119,7 @@ dependencies = [
  "axum",
  "chrono",
  "futures",
+ "libc",
  "regex",
  "reqwest",
  "rusqlite",

@@ -494,6 +494,15 @@ export class NativeSessionService extends NativeSessionManagement {
       : (JSON.parse(text) as SendResultJson);
   }
 
+  /**
+   * Replay-and-live pump over the turn's durable event log.
+   *
+   * `afterSeq` is an exclusive cursor ("deliver events AFTER this sequence"),
+   * and sequences start at 0 — pass `undefined` (or omit) to receive every
+   * event from the first. Passing `0` skips the seq-0 event, which is
+   * whatever the executor emitted first (for a session turn, a leading
+   * `run.warning`).
+   */
   async subscribeTurn(
     taskId: string,
     afterSeq?: number,

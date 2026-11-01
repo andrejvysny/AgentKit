@@ -41,6 +41,9 @@ interface ManagementBinding {
   cancelQueuedInput(id: string, input: string): Promise<boolean>;
   clearQueue(id: string): Promise<number>;
   configure(id: string, input: string): Promise<string>;
+  deleteChat(id: string): Promise<void>;
+  archiveChat(id: string): Promise<string>;
+  unarchiveChat(id: string): Promise<string>;
 }
 
 /** Aborting stops waiting, never cancels an admitted durable operation. */
@@ -154,5 +157,20 @@ export class NativeSessionManagement {
       () => this.raw.configure(id, JSON.stringify(patch)),
       options,
     );
+  }
+  deleteChat(id: string, options?: NativeCallOptions): Promise<void> {
+    return waitFor(() => this.lift(() => this.raw.deleteChat(id)), options);
+  }
+  archiveChat(
+    id: string,
+    options?: NativeCallOptions,
+  ): Promise<Record<string, unknown>> {
+    return this.json(() => this.raw.archiveChat(id), options);
+  }
+  unarchiveChat(
+    id: string,
+    options?: NativeCallOptions,
+  ): Promise<Record<string, unknown>> {
+    return this.json(() => this.raw.unarchiveChat(id), options);
   }
 }
