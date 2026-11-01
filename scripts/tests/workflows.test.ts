@@ -35,6 +35,7 @@ function load(path: string): Promise<Workflow> {
 }
 
 const rust = await load("../../.github/workflows/rust.yml");
+const ci = await load("../../.github/workflows/ci.yml");
 
 function commands(job: Job | undefined): string[] {
   return (job?.steps ?? []).flatMap((step) => (step.run ? [step.run] : []));
@@ -43,6 +44,15 @@ function commands(job: Job | undefined): string[] {
 function gate(results: Record<string, { result: string }>): number | null {
   const script = rust.jobs.qualification?.steps[0]?.run;
   if (!script) throw new Error("Missing native qualification gate script");
+  return spawnSync("bash", ["-e", "-c", script], {
+    env: { ...process.env, RESULTS: JSON.stringify(results) },
+    encoding: "utf8",
+  }).status;
+}
+
+function ciGate(results: Record<string, { result: string }>): number | null {
+  const script = ci.jobs.qualification?.steps[0]?.run;
+  if (!script) throw new Error("Missing CI qualification gate script");
   return spawnSync("bash", ["-e", "-c", script], {
     env: { ...process.env, RESULTS: JSON.stringify(results) },
     encoding: "utf8",
@@ -190,5 +200,91 @@ describe("Rust native workflow qualification", () => {
     const missing = { ...results };
     delete (missing as Record<string, never>)[required[0]];
     expect(gate(missing)).toBe(1);
+  });
+
+  it("builds the addon and the http fixture before the cargo test that consumes them", () => {
+    // The client route tests inside `cargo test --workspace` drive the
+    // TypeScript harness through Bun, which loads the native backend: the
+    // addon (and the lazily-built http_fixture) must exist first. On
+    // Windows the same ordering keeps AGENTKIT_REQUIRE_NATIVE suites from
+    // running against a missing artifact.
+    for (const name of ["native", "native-windows"]) {
+      const steps = rust.jobs[name]?.steps ?? [];
+      const addon = steps.findIndex((step) =>
+        step.run?.includes("packages/native build:native"),
+      );
+      const workspaceTest = steps.findIndex((step) =>
+        step.run?.includes("cargo test --workspace"),
+      );
+      expect(addon, `${name}: addon build step`).toBeGreaterThanOrEqual(0);
+      expect(workspaceTest, `${name}: cargo test step`).toBeGreaterThanOrEqual(
+        0,
+      );
+      expect(addon, `${name}: addon built BEFORE cargo test`).toBeLessThan(
+        workspaceTest,
+      );
+    }
+    const fixture = (rust.jobs.native?.steps ?? []).findIndex(
+      (step) => step.run === "bun run build:fixture",
+    );
+    const workspaceTest = (rust.jobs.native?.steps ?? []).findIndex((step) =>
+      step.run?.includes("cargo test --workspace"),
+    );
+    expect(fixture).toBeGreaterThanOrEqual(0);
+    expect(fixture).toBeLessThan(workspaceTest);
+  });
+
+  it("runs the command-fingerprint TS↔Rust differential as a required, explicitly enabled step", () => {
+    // The 15-case differential self-skips unless
+    // AGENTKIT_RUN_RUST_CONFORMANCE=1; it must therefore be its own named
+    // step with the variable set — never folded into the plain `bun test`.
+    const differential = (rust.jobs.native?.steps ?? []).find((step) =>
+      (step.run ?? "").includes("command-fingerprint-rust.test.ts"),
+    );
+    expect(differential).toBeDefined();
+    expect(differential?.env?.AGENTKIT_RUN_RUST_CONFORMANCE).toBe("1");
+    expect(differential?.if).toBeUndefined();
+  });
+});
+
+describe("TypeScript CI qualification", () => {
+  it("builds the native addon before the Node smoke consumes it", () => {
+    // Node consumers execute the core dist's runChat on the Rust runtime;
+    // without the built addon all three Node lanes died with
+    // "the native binding failed to load" (external review at 24b3d17).
+    const steps = ci.jobs["node-smoke"]?.steps ?? [];
+    const addon = steps.findIndex((step) =>
+      step.run?.includes("packages/native build:native"),
+    );
+    const smoke = steps.findIndex((step) =>
+      step.run?.includes("node scripts/node-smoke.mjs"),
+    );
+    expect(addon).toBeGreaterThanOrEqual(0);
+    expect(smoke).toBeGreaterThanOrEqual(0);
+    expect(addon).toBeLessThan(smoke);
+  });
+
+  it("aggregates CI qualification so skipped or missing lanes never pass", () => {
+    const required = [
+      "bun",
+      "lint",
+      "node-smoke",
+      "pack-smoke",
+      "umbrella-smoke",
+      "sqlite-node",
+      "sqlite-bun",
+    ].sort();
+    expect(ci.jobs.qualification?.if).toBe("always()");
+    expect([...(ci.jobs.qualification?.needs ?? [])].sort()).toEqual(required);
+    const results = Object.fromEntries(
+      required.map((name) => [name, { result: "success" }]),
+    );
+    expect(ciGate(results)).toBe(0);
+    for (const name of required)
+      for (const result of ["failure", "cancelled", "skipped"])
+        expect(ciGate({ ...results, [name]: { result } })).toBe(1);
+    const missing = { ...results };
+    delete (missing as Record<string, never>)[required[0]];
+    expect(ciGate(missing)).toBe(1);
   });
 });
