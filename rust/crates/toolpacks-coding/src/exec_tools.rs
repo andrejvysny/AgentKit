@@ -103,7 +103,10 @@ pub fn sanitized_env(source: &HashMap<String, String>, scratch: &str) -> HashMap
     env
 }
 
-fn process_env() -> HashMap<String, String> {
+/// Process environment with Node's lossy-UTF-8 decode of every inherited
+/// entry. `pub(crate)` so the standing-approval key path can read the same
+/// effective environment the spawn path sanitizes and execs with.
+pub(crate) fn process_env() -> HashMap<String, String> {
     // Node exposes every inherited entry with a lossy UTF-8 decode; Rust's
     // `vars()` silently DROPS non-UTF-8 pairs, so the child would lack them.
     std::env::vars_os()
