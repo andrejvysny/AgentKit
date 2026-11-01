@@ -22,11 +22,7 @@
  *     command's whole group down, not just the turn row.
  */
 import { expect, test } from "bun:test";
-import {
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // Differential oracle ONLY (contract item 1): the frozen TS pack stays for
@@ -159,7 +155,9 @@ async function openNativeCoding(options: {
       : "sessionId" in session && typeof session.sessionId === "string"
         ? session.sessionId
         : (() => {
-            throw new Error(`created session carries no id: ${JSON.stringify(session)}`);
+            throw new Error(
+              `created session carries no id: ${JSON.stringify(session)}`,
+            );
           })();
   return { provider, store, service, sessionId, dir };
 }
@@ -335,7 +333,9 @@ nativeTest(
         const entry = nativeTools.find(
           (candidate) => candidate.function?.name === name,
         )!;
-        expect(entry.type, `${name} is an advertised function`).toBe("function");
+        expect(entry.type, `${name} is an advertised function`).toBe(
+          "function",
+        );
         // Descriptions agree on the same words (an absent description on
         // one side is an absent description on the other). The one legal
         // addition is the HOST's honest annotation on DirectWrite-lane
@@ -509,7 +509,8 @@ nativeTest(
       expect(
         await waitFor(
           async () =>
-            (await turnStatus(service, sessionId, turn1)) === "waiting_approval",
+            (await turnStatus(service, sessionId, turn1)) ===
+            "waiting_approval",
           30_000,
         ),
       ).toBe(true);
@@ -520,9 +521,8 @@ nativeTest(
       expect(ask1!.content.kind).toBe("approval");
       expect(String(ask1!.content.argsSha256 ?? "")).toMatch(/^[0-9a-f]{64}$/);
       const digest1 = String(
-        (
-          ask1!.content.standing as Record<string, unknown> | undefined
-        )?.digest ?? "",
+        (ask1!.content.standing as Record<string, unknown> | undefined)
+          ?.digest ?? "",
       );
       expect(
         digest1,
@@ -574,7 +574,9 @@ nativeTest(
       ).toBe(true);
       expect(sawAsk, "the standing grant replaces the second ask").toBe(false);
       expect(await turnStatus(service, sessionId, turn2)).toBe("completed");
-      expect(counterBytes(counter), "the standing grant executed again").toBe(2);
+      expect(counterBytes(counter), "the standing grant executed again").toBe(
+        2,
+      );
 
       // ---- mutate the directly-bound startup input: the grant must not
       //      authorize the changed identity — fresh ask, ZERO execution,
@@ -590,7 +592,8 @@ nativeTest(
       expect(
         await waitFor(
           async () =>
-            (await turnStatus(service, sessionId, turn3)) === "waiting_approval",
+            (await turnStatus(service, sessionId, turn3)) ===
+            "waiting_approval",
           30_000,
         ),
       ).toBe(true);
@@ -603,9 +606,8 @@ nativeTest(
       const ask3 = await parkedApproval(service, sessionId);
       expect(ask3).toBeDefined();
       const digest3 = String(
-        (
-          ask3!.content.standing as Record<string, unknown> | undefined
-        )?.digest ?? "",
+        (ask3!.content.standing as Record<string, unknown> | undefined)
+          ?.digest ?? "",
       );
       expect(digest3).toMatch(/^[0-9a-f]{64}$/);
       expect(digest3, "the new key binds the mutated input").not.toBe(digest1);
@@ -697,7 +699,10 @@ nativeTest(
         }, 5_000),
       ).toBe(true);
     } finally {
-      Bun.spawn(["pkill", "-f", marker], { stdout: "ignore", stderr: "ignore" });
+      Bun.spawn(["pkill", "-f", marker], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
       await service.close().catch(() => undefined);
       await store.close();
       await provider.stop();

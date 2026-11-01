@@ -167,7 +167,7 @@ Leaving `AGENTKIT_MCP_SERVER_TOKEN` unset does not serve the route at all.
 | Sample tools | this example's own descriptors + `registerTool` runs | `src/tools.ts` |
 | MCP bridge (optional) | `@agentkit/native` (`store.mcpConnect` + `registerMcpTools`) | `src/wiring.ts` |
 | MCP server (optional) | `@agentkit/native` (`service.startMcpServer`) | `src/wiring.ts` (started) / `src/main.ts` (façade mounted at `/mcp`) |
-| Managed integrations (opt-in recipe) | `@agentkit/mcp-client` (OAuth connectors) + `@agentkit/host` (templates, skills) — a retained TS slice: the binding has no OAuth and no managed-content services | `src/managed-integrations.ts` |
+| Managed integrations (opt-in recipe) | `@agentkit/native` (`NativeManagedContent` — templates, skills, connections, run content execute in `agentkit-store::managed_content`). The OAuth connector leg has no native implementation yet; its acceptance harness (`src/managed-connector-acceptance.ts`) is the only `@agentkit/mcp-client` consumer and the leg stays `not_implemented` | `src/managed-integrations.ts` |
 
 One registration list is the single source of truth: the descriptors handed
 to `registerTool` are what the Rust executor can call, what the MCP server

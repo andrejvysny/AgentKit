@@ -28,7 +28,8 @@ if (required && !available)
 const nativeTest = available ? test : test.skip;
 
 /** The engine's hex64 witness (the sha-256 of "hello"). */
-const HEX64 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+const HEX64 =
+  "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 
 function template(id: string, revision: string, content: string) {
   return {
@@ -78,7 +79,11 @@ function transportEnv(config: unknown): Record<string, string> | undefined {
   if (typeof config !== "object" || config === null || !("transport" in config))
     return undefined;
   const transport = config.transport;
-  if (typeof transport !== "object" || transport === null || !("env" in transport))
+  if (
+    typeof transport !== "object" ||
+    transport === null ||
+    !("env" in transport)
+  )
     return undefined;
   const env = transport.env;
   if (typeof env !== "object" || env === null || Array.isArray(env))
@@ -305,7 +310,9 @@ nativeTest(
   async () => {
     const { store, managed } = await fresh();
     try {
-      await managed.promptTemplates.publish(template("greet", "1", "Hi {{name}}"));
+      await managed.promptTemplates.publish(
+        template("greet", "1", "Hi {{name}}"),
+      );
       const skill = await managed.skills.publish({
         source: "docs",
         path: "review",
@@ -444,9 +451,10 @@ nativeTest(
       () => managed.promptTemplates.publish(null as never),
       () => managed.promptTemplates.publish(template("", "1", "x") as never),
       () =>
-        managed.promptTemplates.publish(
-          { ...template("t", "1", "x"), messages: [] } as never,
-        ),
+        managed.promptTemplates.publish({
+          ...template("t", "1", "x"),
+          messages: [],
+        } as never),
       () =>
         managed.promptTemplates.publish({
           ...template("t", "1", "x"),
@@ -465,11 +473,21 @@ nativeTest(
           arguments: "nope",
         } as never),
       () => managed.skills.publish({ source: "a:b", path: "p", content: "c" }),
-      () => managed.skills.publish({ source: "a", path: "p", content: 42 as never }),
+      () =>
+        managed.skills.publish({
+          source: "a",
+          path: "p",
+          content: 42 as never,
+        }),
       () => managed.skills.get(""),
       () => managed.skills.remove(7 as never),
-      () => managed.connections.save({ ...connection("c", 0, "github") } as never, null),
-      () => managed.connections.save(connection("c", 1, "github") as never, 1.5),
+      () =>
+        managed.connections.save(
+          { ...connection("c", 0, "github") } as never,
+          null,
+        ),
+      () =>
+        managed.connections.save(connection("c", 1, "github") as never, 1.5),
       () => managed.connections.save(null as never, null),
       () => managed.connections.get(""),
       () => managed.connections.remove(null as never),
@@ -509,7 +527,9 @@ nativeTest(
     try {
       const first = await NativeStore.open(path);
       const managed = new NativeManagedContent({ store: first });
-      await managed.promptTemplates.publish(template("greet", "1", "Hi {{name}}"));
+      await managed.promptTemplates.publish(
+        template("greet", "1", "Hi {{name}}"),
+      );
       await managed.promptTemplates.publish(template("greet", "2", "Hello"));
       await managed.promptTemplates.remove("greet", "1");
       await managed.skills.publish({
@@ -517,7 +537,10 @@ nativeTest(
         path: "review",
         content: skillText("reviewer", "github"),
       });
-      await managed.connections.save(connection("c1", 1, " github ") as never, null);
+      await managed.connections.save(
+        connection("c1", 1, " github ") as never,
+        null,
+      );
       await first.close();
 
       // Witness: a completely fresh binding handle on the same file.
@@ -525,7 +548,9 @@ nativeTest(
       const reopened = new NativeManagedContent({ store: second });
       try {
         expect(
-          (await reopened.promptTemplates.list()).map((t) => `${t.id}@${t.revision}`),
+          (await reopened.promptTemplates.list()).map(
+            (t) => `${t.id}@${t.revision}`,
+          ),
         ).toEqual(["greet@2"]);
         expect(await reopened.promptTemplates.get("greet", "1")).toBeNull();
         await expect(

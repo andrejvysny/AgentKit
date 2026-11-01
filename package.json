@@ -62,6 +62,7 @@
     "qualify:package": "node scripts/qualify-package.mjs",
     "check:native-package": "node rust/scripts/check-native-package.mjs",
     "check:api": "node scripts/check-public-api.mjs",
+    "check:composition": "node scripts/check-composition-ownership.mjs",
     "check:parity": "node scripts/check-backend-parity.mjs",
     "check:native-umbrella": "node rust/scripts/check-native-umbrella.mjs",
     "update:api": "node scripts/check-public-api.mjs --update",

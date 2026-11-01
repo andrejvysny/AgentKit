@@ -379,10 +379,12 @@ async fn marked_processes_reliably(exec_id: &str, spawned_at_ms: u64) -> Option<
 /// of: (a) every pid the record NAMES is dead (named survivors/suspects
 /// are blocking evidence, not decoration); (b) the marker scan succeeds,
 /// no live process still carries the execution nonce, and no suspect
-/// survives; (c) the recorded process group is provably empty. A scan the
-/// platform cannot perform (`None`) is unknown, not empty, and never
-/// establishes cleanup; neither does a missing pgid (spawn was never
-/// confirmed).
+/// survives; (c) the recorded process group is provably empty — vacuous
+/// when no group was ever confirmed (`pgid: None`), because a successful
+/// spawn always records its pgid and every process a command spawned
+/// carries the execution marker the scan just cleared. A scan the platform
+/// cannot perform (`None`) is unknown, not empty, and never establishes
+/// cleanup.
 pub(crate) async fn cleanup_positively_established(
     identity: &crate::coordination::CommandCleanupIdentity,
     pids: &[i32],
@@ -406,7 +408,19 @@ pub(crate) async fn cleanup_positively_established(
     }
     match identity.pgid {
         Some(pgid) => !group_alive(pgid),
-        None => false,
+        // No process group was ever confirmed, so there is nothing to
+        // probe: the driver records a pgid the moment a spawn succeeds, so
+        // a missing pgid means either the spawn failed (the command never
+        // ran) or the crash left an un-upgraded pre-spawn record. Either
+        // way the marker scan above is the authority: every process the
+        // command ever spawned inherited the `AGENTKIT_EXEC_ID` nonce
+        // (including `setsid` escapers the group net could not reach), and
+        // a reliable scan excluded both marked survivors and every
+        // unreadable suspect. This matches `crashed_execution_survivors`,
+        // which already retires a pgid-less intent on a clean scan —
+        // demanding an unprobeable group here would strand the root
+        // behind evidence no scan can ever satisfy.
+        None => true,
     }
 }
 
@@ -416,21 +430,25 @@ pub(crate) async fn cleanup_positively_established(
 /// UNKNOWN — the platform cannot scan, or the recorded process group is
 /// still populated without a visible marker — and the root must stay
 /// blocked.
+///
+/// Uses the same reliability rule as the quarantine lift proof: a single
+/// pass is NEVER conclusive for UNKNOWN. A process caught mid-`execve`
+/// answers EPERM on `environ` for one moment, and on a busy machine an
+/// unfiltered scan (a spawn-unconfirmed record has `spawned_at_ms` 0 and
+/// so no time cut-off) touches every same-user process — one transient
+/// suspect there would otherwise publish a quarantine whose survivor set
+/// is unnameable (`pids: []`) and whose group can never be probed
+/// (`pgid: None`), a block no later poll can lift. Retrying across churn
+/// keeps the genuine unknowns (platform-unsupported, persistently
+/// unreadable suspects) unknown and lets churn artifacts retire.
 pub(crate) async fn crashed_execution_survivors(
     intent: &crate::coordination::ExecutionIntent,
 ) -> Option<Vec<i32>> {
-    let (marked, suspects) = find_marked_processes_outcome(
-        &intent.identity.execution_id,
-        Some(intent.identity.spawned_at_ms),
-    )
-    .await?;
+    let marked =
+        marked_processes_reliably(&intent.identity.execution_id, intent.identity.spawned_at_ms)
+            .await?;
     if !marked.is_empty() {
         return Some(marked);
-    }
-    if !suspects.is_empty() {
-        // A same-user live process with an unreadable environ could carry
-        // the nonce: the survivor set is unknown, the root stays blocked.
-        return None;
     }
     match intent.identity.pgid {
         Some(pgid) if group_alive(pgid) => None,
@@ -1544,27 +1562,40 @@ pub fn spawn_owned_execution_with_discovery(
     tokio::spawn(async move {
         // Upgrade the pre-spawn intent once the child exists: same nonce,
         // now with the confirmed process group and spawn time. Best effort
-        // by design — the pre-spawn intent already blocks reconciliation;
-        // a failed upgrade only delays the pgid annotation.
-        for _ in 0..200 {
+        // by design — the pre-spawn intent already blocks reconciliation,
+        // and reconciliation retires an un-upgraded record whenever its
+        // marker scan comes back clean — but every millisecond this write
+        // is late widens the window in which a crash mid-command leaves a
+        // spawn-UNCONFIRMED record for a command that demonstrably ran
+        // (a command's first effect can land within ms of its spawn). So
+        // poll tightly for the first ~100 ms, then back off to the normal
+        // cadence for the rest of the ~5 s budget, and retry a transiently
+        // failed write while the slot still reads a pgid.
+        for tick in 0..500u32 {
             let pgid = watcher_slot.load(Ordering::SeqCst);
             if pgid > 0 {
-                let _ = watcher_coordinator
-                    .record_execution_intent(&crate::coordination::ExecutionIntent {
-                        root: watcher_root,
-                        identity: crate::coordination::CommandCleanupIdentity {
-                            execution_id: watcher_id,
-                            owner_pid: i64::from(std::process::id()),
-                            pgid: Some(pgid as i32),
-                            spawned_at_ms,
-                        },
-                        holder: watcher_holder,
-                        spawned: true,
-                    })
-                    .await;
+                for _ in 0..3 {
+                    let written = watcher_coordinator
+                        .record_execution_intent(&crate::coordination::ExecutionIntent {
+                            root: watcher_root.clone(),
+                            identity: crate::coordination::CommandCleanupIdentity {
+                                execution_id: watcher_id.clone(),
+                                owner_pid: i64::from(std::process::id()),
+                                pgid: Some(pgid as i32),
+                                spawned_at_ms,
+                            },
+                            holder: watcher_holder.clone(),
+                            spawned: true,
+                        })
+                        .await;
+                    if written.is_ok() {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
+            tokio::time::sleep(Duration::from_millis(if tick < 100 { 1 } else { POLL_MS })).await;
         }
     });
     tokio::spawn(async move {

@@ -20,10 +20,10 @@
         "@agentkit/core": "workspace:*",
         "@agentkit/host": "workspace:*",
         "@agentkit/native": "workspace:*",
-        "@agentkit/toolpacks-coding": "workspace:*",
       },
       "devDependencies": {
         "@agentkit/testing": "workspace:*",
+        "@agentkit/toolpacks-coding": "workspace:*",
         "@types/bun": "^1.3.5",
         "typescript": "^5.8.3",
       },

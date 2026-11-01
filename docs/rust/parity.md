@@ -395,22 +395,28 @@ each TypeScript backend package is NOW:
 | Package | Production role | Note |
 | --- | --- | --- |
 | `core` | runtimes | `runChat`/`runAgentLoop` execute on Rust only; the TS loop engine is deleted. |
-| `host` | frozen library | Zero production consumers. `TurnRunner`/`ConversationService`/`TaskService` remain as frozen exports (removal is a breaking API change requiring approval); the package's own suites continue to pin their frozen behavior. |
+| `host` | frozen library | Production consumers are only the coding-agent CLI's profile/descriptor configuration helpers (`defaultProfileRegistry`, `readSessionDescriptor`, `REASONING_EFFORTS`) — no execution or storage runs through them; the carve-out is mechanically pinned by `scripts/check-composition-ownership.mjs`. `TurnRunner`/`ConversationService`/`TaskService` remain as frozen exports (removal is a breaking API change requiring approval); the package's own suites continue to pin their frozen behavior. |
 | `transport-http` | frozen library | Production REST/SSE = binding `startHttpServer` (Rust engine). The 223-suite TS server remains the behavioral authority the Rust route table is proven against — the client/react lane proof is that proof. |
 | `adapters-memory` / `adapters-sqlite` | frozen library | Production storage = Rust `SqliteStore` via `NativeStore`/`NativeAssistantStore` (shared conformance passed). TS adapters stay for frozen consumers. |
 | `runner-local` | frozen library | The queue/worker/lease engine lives in Rust; TS runner stays exported frozen. |
 | `mcp-client` / `mcp-server` | frozen library + feature holdout | Production MCP = binding (server hosting + client manager). The TS packages remain the ONLY implementation of OAuth, elicitation, rich content projection and the config/connection persistence layer — features the binding documents as open, not as parity. |
 | `contracts` | shared DTO/validation authority | Client-side and wire-level; not backend logic. |
-| `scripts/live`, `scripts/qualification` | developer tools | Compositions migrated to `@agentkit/native`; no script composes the TS backend stack anymore. |
+| `toolpacks-coding` | frozen library + differential asset | Production coding tools = Rust pack via `registerCodingTools` (`rust/crates/napi/src/coding_lane.rs`, pinned by `packages/native/tests/coding-native.test.ts` and the native authorization suite). The TS pack remains the fingerprint/authorization DIFFERENTIAL authority (the required TS↔Rust differential) and runs deliberately in `scripts/live/*` observation drivers. |
+| `scripts/live`, `scripts/qualification` | developer tools | App-shaped compositions (both examples, the smoke drivers) run on `@agentkit/native`. The TS coding pack still runs deliberately in `scripts/live/{coding,compaction,approval}-session.ts` — it IS the product surface under observation there — and the TS proposal engine drives the native store in `proposals-smoke.mjs` as a contract witness; both are allowlisted with reasons in `scripts/check-composition-ownership.mjs`. |
 
 Production backend paths — both examples, the client/react test lanes,
 session services, REST/SSE, MCP, storage, provider transports — run on
 Rust. The frozen TS backend libraries persist under the API-freeze
-constraint, exercised by their own suites. No example or script composes
-the TS backend stack anymore; `examples/coding-agent` still imports
-`@agentkit/host` for pure profile-registry policy helpers (`defaultProfileRegistry`,
-`REASONING_EFFORTS`, `readSessionDescriptor`) — no execution or storage
-runs through them.
+constraint, exercised by their own suites. No app-shaped composition runs a
+TS backend engine: `scripts/check-composition-ownership.mjs` (CI: lint job)
+rejects backend-implementation imports from `examples/*/src`, the desktop
+Node entries, and the qualification drivers, except an audited allowlist —
+the coding-agent CLI's profile/descriptor config helpers
+(`defaultProfileRegistry`, `REASONING_EFFORTS`, `readSessionDescriptor`; no
+execution or storage runs through them), `getPresetByKind` (static preset
+metadata), the OAuth acceptance harness, and the legacy-seed / conformance
+drivers that deliberately keep the TS implementations as differential
+witnesses until their replacement is proven.
 
 Working-tree results on macOS arm64 with Bun 1.4.0:
 
@@ -757,3 +763,44 @@ tests (native binding + wire capture) per the external review:
    structured verdicts propagate verbatim. Pinned by core
    `provider_transport_verdicts` tests and a binding revocation test
    (run fails with `connection_changed`, zero HTTP).
+
+## Coding-lane crash-recovery tranche (1 November 2026)
+
+1. **Crash adoption could strand the workspace behind an unsatisfiable
+   quarantine.** The approved re-execution of a crashed run's admitted
+   command settled `completed` WITHOUT executing: the coordinator refused
+   with `workspace_quarantined: ... an unknown surviving process ...`
+   (`pids: []`) and the durable receipt recorded the refusal as the result.
+   The chain: a SIGKILL landing between the command's spawn and the
+   driver's intent-upgrade write left a pre-spawn record (pgid null,
+   spawn-time 0); reconciliation's SINGLE-pass marker scan classified the
+   same-user long-lived daemons whose `environ` is permanently unreadable
+   (`systemd --user`, `sd-pam`, `sshd`) as suspects — the unanchored
+   spawn-time 0 set the suspect window to "everything" — so the survivor
+   set read UNKNOWN and reconciliation published a quarantine naming no
+   process and no group; the lift proof then demanded a process-group
+   probe that record shape can never satisfy, a block no poll or approval
+   could lift. Fixes: (a) pre-spawn records anchor their suspect window at
+   publication time, so daemons older than the record fall out of the
+   window while any genuine descendant (necessarily younger) stays in it;
+   (b) reconciliation uses the lift proof's reliability rule (retries
+   across churn, suspects resolved by a readable pass) instead of one
+   pass, so a transient mid-`execve` suspect no longer publishes unnameable
+   evidence; (c) the group proof is vacuous for a never-confirmed group —
+   every process the command ever spawned carries the `AGENTKIT_EXEC_ID`
+   marker and the reliable scan (marked absent, no suspect) is the
+   authority, matching the rule under which reconciliation already retired
+   such an intent; (d) the driver's spawn-upgrade write now polls tightly
+   for the first ~100 ms and retries the write, so a surviving spawner
+   records its pgid well before a mid-command kill can land. Pinned by the
+   lockdir tests `an_unconfirmed_spawn_quarantine_lifts_on_a_clean_scan`,
+   `a_pgid_less_record_still_blocks_while_a_marked_descendant_lives`, and
+   `a_dead_owner_never_spawned_intent_retires_on_a_clean_scan`; the
+   `execution_recovery` contract `unknown_group_keeps_the_root_blocked_
+   until_explicit_recovery` is replaced by
+   `unknown_group_resolves_on_positive_marker_exit` (live marked process
+   still blocks; positive marker exit self-heals); and the coding-agent
+   acceptance test `adopts a turn a killed process left unfinished,
+   without silently re-running the mutation` — deterministic on the loaded
+   machine where it previously failed deterministically, and passing
+   together with the rest of the acceptance file (15/15).

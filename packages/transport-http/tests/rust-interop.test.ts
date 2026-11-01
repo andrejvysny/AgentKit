@@ -357,7 +357,9 @@ async function assertManagedServiceUnavailable(
   expect(problem).toMatchObject({ status: 501, code: "not_implemented" });
 }
 
-async function assertManagedServiceLive(operation: RestOperation): Promise<void> {
+async function assertManagedServiceLive(
+  operation: RestOperation,
+): Promise<void> {
   // Delivered managed-content surface: authenticated traffic must reach the
   // real service — never the 501 stub. Per-route response contracts are
   // pinned in packages/native/tests/managed-content.test.ts; this lane pins

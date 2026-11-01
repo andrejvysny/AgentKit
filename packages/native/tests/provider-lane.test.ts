@@ -288,6 +288,110 @@ suite(
 );
 
 suite(
+  "responses: terminal-only reasoning survives into the public completed event",
+  async () => {
+    // Review parity row (Responses reasoning): a reasoning item that rides
+    // ONLY the final `response.completed` object (no delta frames) used to
+    // disappear. The frozen client keeps it; the binding must publish it on
+    // `run.message.completed` as `reasoningContent`.
+    const provider = await startProviderMock({
+      responses: {
+        deltas: ["answer"],
+        terminalReasoningText: "secret plan",
+      },
+    });
+    const store = await NativeStoreCtor.inMemory();
+    let service: NativeSessionService | undefined;
+    try {
+      const connectionId =
+        await NativeSessionServiceCtor.registerProviderConnection(
+          provider.baseUrl,
+          "sk-loopback",
+        );
+      service = await store.createService({
+        providerConfig: {
+          protocol: "responses",
+          providerId: "terminal-reasoning",
+          connectionId,
+          model: "model-r",
+        },
+      });
+      await service.createSession({ sessionId: "tr", profileId: "p1" });
+      const sent = await service.send("tr", { content: "say hi" });
+      if (sent.kind !== "turn") throw new Error("unreachable");
+      const { events, done, statuses } = await drainUntil(service, sent.turnId);
+      expect(done).toBe(true);
+      expect(statuses.at(-1)).toBe("completed");
+      const completed = events
+        .map((u) => eventOf(u))
+        .find((e) => e?.type === "run.message.completed");
+      if (!completed) throw new Error("no run.message.completed event");
+      expect(completed.data?.reasoningContent).toBe("secret plan");
+      const streamedReasoning = events
+        .map((u) => eventOf(u))
+        .some((e) => e?.type === "run.message.reasoning-delta");
+      expect(streamedReasoning).toBe(false); // never streamed — final object only
+    } finally {
+      await service?.close();
+      await store.close();
+      await provider.stop();
+    }
+  },
+);
+
+suite(
+  "responses: final reasoning that conflicts with the streamed prefix fails stream_output_mismatch",
+  async () => {
+    // The stream said "thin"; the final object says "different" for the
+    // same part. The frozen TS client reports `stream_output_mismatch`;
+    // the binding must terminalize as failed with that errorCode and
+    // publish NO completed message.
+    const provider = await startProviderMock({
+      responses: {
+        deltas: ["answer"],
+        reasoningDeltas: ["thin"],
+        terminalReasoningText: "different",
+      },
+    });
+    const store = await NativeStoreCtor.inMemory();
+    let service: NativeSessionService | undefined;
+    try {
+      const connectionId =
+        await NativeSessionServiceCtor.registerProviderConnection(
+          provider.baseUrl,
+          "sk-loopback",
+        );
+      service = await store.createService({
+        providerConfig: {
+          protocol: "responses",
+          providerId: "conflicting-reasoning",
+          connectionId,
+          model: "model-r",
+        },
+      });
+      await service.createSession({ sessionId: "cr", profileId: "p1" });
+      const sent = await service.send("cr", { content: "say hi" });
+      if (sent.kind !== "turn") throw new Error("unreachable");
+      const { events, done, statuses } = await drainUntil(service, sent.turnId);
+      expect(done).toBe(true);
+      expect(statuses.at(-1)).toBe("failed");
+      const failure = events
+        .map((u) => eventOf(u))
+        .find((e) => e?.type === "run.failed");
+      if (!failure?.data) throw new Error("no run.failed event");
+      expect(failure.data.errorCode).toBe("stream_output_mismatch");
+      expect(
+        events.some((u) => eventOf(u)?.type === "run.message.completed"),
+      ).toBe(false);
+    } finally {
+      await service?.close();
+      await store.close();
+      await provider.stop();
+    }
+  },
+);
+
+suite(
   "binding without a provider slot or lane settles the turn as failed",
   async () => {
     const store = await NativeStoreCtor.inMemory();
@@ -304,6 +408,96 @@ suite(
       await service?.close();
       await store.close();
     }
+  },
+);
+
+suite(
+  "context.policy is honored through the binding: final_answers drops prior run records, transcript replays them",
+  async () => {
+    // Review §6.4: a public option that is accepted but ignored fails
+    // qualification. `context.policy` reaches Rust verbatim through the
+    // descriptor; the observable is the WIRE history of the follow-up
+    // request after a tool-call turn — the frozen lane drops prior-run
+    // tool-call/result records under `final_answers` and replays them
+    // under `transcript`.
+    const drive = async (policy: "final_answers" | "transcript") => {
+      const provider = await startProviderMock({
+        chatStages: [
+          {
+            toolCalls: [
+              { id: "call_hist_1", name: "probe_hist", arguments: {} },
+            ],
+          },
+          { deltas: ["done"] },
+        ],
+      });
+      const store = await NativeStoreCtor.inMemory();
+      let service: NativeSessionService | undefined;
+      try {
+        const connectionId =
+          await NativeSessionServiceCtor.registerProviderConnection(
+            provider.baseUrl,
+            "sk-loopback",
+          );
+        service = await store.createService({
+          jsToolAuthority: { configuredMode: "full_auto" },
+          providerConfig: {
+            protocol: "chat-completions",
+            providerId: "policy",
+            connectionId,
+            model: "cap-model",
+          },
+        });
+        await service.registerTool(
+          {
+            name: "probe_hist",
+            effect: "read",
+            capability: "test.probe",
+            inputSchema: { type: "object", properties: {} },
+          },
+          async () => ({ data: "probe-ran" }),
+        );
+        await service.createSession({
+          sessionId: `p-${policy}`,
+          profileId: "p1",
+          model: "cap-model",
+          context: {
+            windowTokens: 4000,
+            reserveTokens: 1000,
+            policy,
+          },
+        });
+        const first = await service.send(`p-${policy}`, { content: "go" });
+        if (first.kind !== "turn") throw new Error("unreachable");
+        expect((await drainUntil(service, first.turnId)).statuses.at(-1)).toBe(
+          "completed",
+        );
+        const second = await service.send(`p-${policy}`, { content: "more" });
+        if (second.kind !== "turn") throw new Error("unreachable");
+        expect((await drainUntil(service, second.turnId)).statuses.at(-1)).toBe(
+          "completed",
+        );
+        // Request 3 carries the follow-up turn's history (req 1 asked for
+        // the tool, req 2 concluded the tool pass).
+        const followUp = provider.requests[2];
+        if (!followUp)
+          throw new Error(`expected 3 provider requests, saw ${provider.requests.length}`);
+        return JSON.stringify(followUp.body.messages ?? []);
+      } finally {
+        await service?.close().catch(() => undefined);
+        await store.close();
+        await provider.stop();
+      }
+    };
+
+    const transcript = await drive("transcript");
+    expect(transcript).toInclude("call_hist_1"); // prior tool call + result replayed
+    expect(transcript).toInclude("probe-ran");
+
+    const finalAnswers = await drive("final_answers");
+    expect(finalAnswers).not.toInclude("call_hist_1"); // prior run records dropped
+    expect(finalAnswers).not.toInclude("probe-ran");
+    expect(finalAnswers).toInclude("more"); // visible answers stay
   },
 );
 

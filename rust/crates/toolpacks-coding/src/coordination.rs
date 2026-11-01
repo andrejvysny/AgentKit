@@ -208,10 +208,14 @@ pub struct CommandCleanupIdentity {
     /// The host process that spawned the command; its death means the run
     /// crashed without running teardown.
     pub owner_pid: i64,
-    /// The child's process-group id (`setpgid`); `None` when the command
-    /// died before it was recorded.
+    /// The child's process-group id (`setpgid`); `None` when the spawn was
+    /// never confirmed (pre-spawn record, or a spawn that failed before the
+    /// pgid was reported) — cleanup then rests on the marker scan alone.
     pub pgid: Option<i32>,
-    /// Wall-clock spawn time (ms since epoch) of the command.
+    /// Wall-clock anchor (ms since epoch) for the suspect window: the real
+    /// spawn time once the driver confirmed it, otherwise the publication
+    /// time of the pre-spawn record. Any process that could carry the
+    /// execution nonce is younger than this stamp.
     pub spawned_at_ms: u64,
 }
 
