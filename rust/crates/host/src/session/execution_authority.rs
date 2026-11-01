@@ -84,6 +84,18 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             .service
             .get_execution(session_id)
             .await
+            // A chat that is not an agent session has no session-level
+            // decision — the same absence as a session that never set
+            // execution state, and the configured mode applies (a REST-minted
+            // chat must be able to run its tools). Only a real read failure
+            // stays an error; the guard then fails closed.
+            .or_else(|error| {
+                if error.code == "session_not_found" {
+                    Ok(None)
+                } else {
+                    Err(error)
+                }
+            })
             .map_err(|error| {
                 HostError::Execution(format!(
                     "Cannot read the session's execution state; permissions stay with the guard. ({error:?})"
@@ -121,15 +133,18 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
         let Some(session_id) = chat_id else {
             return Ok(None); // not a session: nothing can have approved this plan
         };
-        let state = self
-            .service
-            .get_execution(session_id)
-            .await
-            .map_err(|error| {
-                HostError::Execution(format!(
+        let state = match self.service.get_execution(session_id).await {
+            Ok(state) => state,
+            // Not an agent session: nothing can have approved this plan —
+            // the same answer as a chat without a session at all, and never
+            // a silent pass.
+            Err(error) if error.code == "session_not_found" => return Ok(None),
+            Err(error) => {
+                return Err(HostError::Execution(format!(
                     "Cannot read the session's execution state; the plan stays unjudged. ({error:?})"
-                ))
-            })?;
+                )))
+            }
+        };
         let Some(state) = state else {
             return Ok(Some(false)); // a session with no execution state has no approval
         };

@@ -318,14 +318,14 @@ const app = await start(nativePath);
 }
 let chatId;
 try {
-  // The chat is a NATIVE SESSION, not a `POST /v1/chats` record: the JS
-  // tool guard answers every call from the session's durable execution
-  // state (`getExecution`), and a REST-minted chat id is not a session —
-  // the lookup throws `session_not_found` and the guard fails closed
-  // ("guard error") on every tool call. The session id IS the chatId the
-  // REST routes accept (submit/stream/drain/getRun/listMessages all run
-  // against it unchanged), and declaring a session for a conversation this
-  // host executes is exactly what the durable permission scope expects.
+  // The chat is opened as a NATIVE SESSION because this host executes JS
+  // write tools: the session carries the durable permission scope (the
+  // execution state the guard consults, the allowance binding for the
+  // proposal fixture). A REST-minted chat would also run its tools — the
+  // guard answers absence with the configured mode since 2026-11-01 — but
+  // a host with write tools should be governed, not merely permitted. The
+  // session id IS the chatId the REST routes accept (submit/stream/drain/
+  // getRun/listMessages all run against it unchanged).
   chatId = crypto.randomUUID();
   await app.service.createSession({
     sessionId: chatId,
