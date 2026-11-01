@@ -204,8 +204,10 @@ async function openNativeNode(
   const store = await NativeStore.open(dbPath);
   const port = new NativeAssistantStore({ store });
   const { pack, tools } = await contributeCodingTools(root);
-  const connectionId =
-    await NativeSessionService.registerProviderConnection(BASE_URL, null);
+  const connectionId = await NativeSessionService.registerProviderConnection(
+    BASE_URL,
+    null,
+  );
   const service = await store.createService({
     jsToolAuthority: { configuredMode: "full_auto" },
     providerConfig: {

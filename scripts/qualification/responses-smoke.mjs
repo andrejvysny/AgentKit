@@ -19,6 +19,7 @@
 // store itself, and proposal settlement here is synchronous inside the tool
 // call, so no boot sweep has anything to recover.
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { NodeSqliteAssistantStore } from "agentkit/adapters-sqlite-node";
@@ -90,19 +91,27 @@ function responseOutput() {
 // output array. The captured `{ path, headers, body }` entries keep the old
 // `sent[i].body.input` assertions verbatim.
 async function startProviderMock() {
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    async fetch(request) {
-      const url = new URL(request.url);
-      if (request.method !== "POST" || url.pathname !== "/responses")
-        return new Response("not found", { status: 404 });
+  // `node:http`, not `Bun.serve`: the qualification consumers run this
+  // script under plain `node` (scripts/qualify-package.mjs).
+  const server = createServer((incoming, outgoing) => {
+    if (
+      incoming.method !== "POST" ||
+      new URL(incoming.url, "http://127.0.0.1").pathname !== "/responses"
+    ) {
+      outgoing.writeHead(404);
+      outgoing.end("not found");
+      return;
+    }
+    const chunks = [];
+    incoming.on("data", (chunk) => chunks.push(chunk));
+    incoming.on("end", () => {
       const headers = {};
-      request.headers.forEach((value, key) => {
-        headers[key.toLowerCase()] = value;
-      });
-      const body = JSON.parse(await request.text());
-      sent.push({ path: url.pathname, headers, body });
+      for (const [key, value] of Object.entries(incoming.headers))
+        headers[key.toLowerCase()] = Array.isArray(value)
+          ? value.join(", ")
+          : value;
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      sent.push({ path: incoming.url, headers, body });
       const frame = {
         type: "response.completed",
         response: {
@@ -112,14 +121,20 @@ async function startProviderMock() {
           usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 },
         },
       };
-      return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`, {
-        headers: { "content-type": "text/event-stream" },
-      });
-    },
+      outgoing.writeHead(200, { "content-type": "text/event-stream" });
+      outgoing.end(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`);
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
   });
   return {
-    baseUrl: `http://127.0.0.1:${server.port}`,
-    stop: () => server.stop(),
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    stop: () =>
+      new Promise((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
   };
 }
 function tool() {

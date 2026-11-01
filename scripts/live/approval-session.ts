@@ -301,15 +301,19 @@ async function openNativeNode(
   const store = await NativeStore.open(dbPath);
   const port = new NativeAssistantStore({ store });
   const { pack, tools } = await contributeCodingTools(root);
-  const allowed = tools.filter((tool) => toolNames.includes(tool.definition.name));
+  const allowed = tools.filter((tool) =>
+    toolNames.includes(tool.definition.name),
+  );
   if (allowed.length !== toolNames.length) {
     const missing = toolNames.filter(
       (name) => !allowed.some((tool) => tool.definition.name === name),
     );
     throw new Error(`coding pack is missing tools: ${missing.join(",")}`);
   }
-  const connectionId =
-    await NativeSessionService.registerProviderConnection(BASE_URL, null);
+  const connectionId = await NativeSessionService.registerProviderConnection(
+    BASE_URL,
+    null,
+  );
   const service = await store.createService({
     jsToolAuthority: {
       configuredMode: "ask",
@@ -911,11 +915,10 @@ const S3: Scenario = {
     const exec = (await ctx.service.getExecution(sid)) as
       // Binding boundary: the durable execution record's projected shape is
       // fixed by the binding's management contract; re-attach lost types.
-      | {
-          mode?: string;
-          grantedPlan?: { mode?: string; requestedMode?: string };
-        }
-      | null;
+      {
+        mode?: string;
+        grantedPlan?: { mode?: string; requestedMode?: string };
+      } | null;
     const grant = exec?.grantedPlan;
     ctx.check(
       "S3 execution mode left plan with grantedPlan set",

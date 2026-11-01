@@ -70,9 +70,17 @@ function archive(source, evidence, manifest, checks) {
 function sourceGates(source, evidence, checks) {
   for (const [name, executable, args] of [
     ["install", "bun", ["install", "--frozen-lockfile"]],
+    // The runtime is Rust: `bun test`, the node smoke below, and every
+    // consumer in packAndQualify load the platform addon. Build it first so
+    // a missing binary is this named gate failing, never a later cryptic
+    // "the native binding failed to load".
+    ["native", "bun", ["run", "--cwd", "packages/native", "build:native"]],
     ["typecheck", "bun", ["run", "typecheck"]],
     ["lint", "bun", ["run", "lint"]],
-    ["tests", "bun", ["test"]],
+    // --timeout matches the ci.yml bun job: full-run suites drive real
+    // native runs with approval waits and exceed the 5s per-test default
+    // on slow runners (external review at 24b3d17).
+    ["tests", "bun", ["test", "--timeout", "60000"]],
     ["build", "bun", ["run", "build"]],
     ["umbrella", "bun", ["run", "build:umbrella"]],
     ["node-smoke", "node", ["scripts/node-smoke.mjs"]],

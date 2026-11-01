@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stageNativePlatform } from "../rust/scripts/stage-native-platform.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const options = Object.fromEntries(
@@ -120,7 +121,12 @@ function run(command, args, cwd, label, environment = {}) {
   return log.trim();
 }
 
-function writeConsumerManifest(directory, manager, artifact = tarball) {
+function writeConsumerManifest(
+  directory,
+  manager,
+  artifact = tarball,
+  nativePlatform = null,
+) {
   writeFileSync(
     join(directory, "package.json"),
     `${JSON.stringify(
@@ -133,6 +139,9 @@ function writeConsumerManifest(directory, manager, artifact = tarball) {
           agentkit: `file:${artifact}`,
           react: "19.2.0",
           "better-sqlite3": sqliteVersion,
+          ...(nativePlatform
+            ? { [nativePlatform.name]: `file:${nativePlatform.tarball}` }
+            : {}),
         },
         devDependencies: {
           esbuild: "0.25.12",
@@ -148,10 +157,10 @@ function writeConsumerManifest(directory, manager, artifact = tarball) {
   );
 }
 
-function prepareConsumer(manager, artifact = tarball) {
+function prepareConsumer(manager, artifact = tarball, nativePlatform = null) {
   const directory = join(output, `${manager}-consumer`);
   mkdirSync(directory);
-  writeConsumerManifest(directory, manager, artifact);
+  writeConsumerManifest(directory, manager, artifact, nativePlatform);
   for (const { name, bytes } of capturedFixtures)
     writeFileSync(join(directory, name), bytes);
   writeFileSync(
@@ -173,7 +182,7 @@ function prepareConsumer(manager, artifact = tarball) {
 }
 
 function qualify(manager) {
-  const directory = prepareConsumer(manager);
+  const directory = prepareConsumer(manager, tarball, native);
   const args =
     manager === "npm" ? ["install", "--no-audit", "--no-fund"] : ["install"];
   run(manager, args, directory, `${manager}-install`);
@@ -283,7 +292,7 @@ function qualifyMigration() {
 function prepareElectronConsumer(version) {
   if (!/^\d+\.\d+\.\d+$/.test(version))
     throw new Error("Electron version must be exact");
-  const directory = prepareConsumer("electron");
+  const directory = prepareConsumer("electron", tarball, native);
   run(
     "npm",
     [
@@ -364,6 +373,46 @@ function parseRuntime(log) {
   return JSON.parse(line);
 }
 
+// The consumers execute runChat on the Rust runtime, so — exactly like a
+// published install — they must receive the host's platform native package.
+// The umbrella assembly deliberately excludes `*.node` binaries
+// (scripts/build-umbrella.mjs), so without this the node-host exercise died
+// with "the native binding failed to load" (external review at 24b3d17).
+// stageNativePlatform refuses to fabricate or cross-label a binary: an
+// unbuilt addon fails this qualification loudly, never silently.
+function stageNative() {
+  const stage = join(output, "native-platform");
+  mkdirSync(stage, { recursive: true });
+  const staged = stageNativePlatform(root, stage);
+  const tarballs = join(output, "native-tarballs");
+  mkdirSync(tarballs);
+  run(
+    "npm",
+    ["pack", "--pack-destination", tarballs],
+    staged.destination,
+    "native-platform-pack",
+  );
+  const manifest = JSON.parse(
+    readFileSync(join(staged.destination, "package.json"), "utf8"),
+  );
+  const packedName = manifest.name.replace(/^@/, "").replace("/", "-");
+  const platformTarball = join(
+    tarballs,
+    `${packedName}-${manifest.version}.tgz`,
+  );
+  evidence.nativePlatform = {
+    package: manifest.name,
+    version: manifest.version,
+  };
+  record();
+  return {
+    target: staged.target,
+    manifest,
+    name: manifest.name,
+    tarball: platformTarball,
+  };
+}
+
 record();
 evidence.npm = run("npm", ["--version"], root, "npm-version");
 evidence.bun = run("bun", ["--version"], root, "bun-version");
@@ -380,6 +429,17 @@ if (JSON.stringify(packed).includes("workspace:"))
   throw new Error("Packed manifest contains workspace dependency");
 if (packed.name !== "agentkit")
   throw new Error("Expected packed agentkit umbrella");
+const native = stageNative();
+// The consumer installs the platform addon as a plain `file:` dependency;
+// the umbrella's own optionalDependencies must pin that exact version, or
+// the binary the consumer fetched would not be the one being qualified.
+if (
+  packed.optionalDependencies?.[native.manifest.name] !==
+  native.manifest.version
+)
+  throw new Error(
+    `umbrella pins ${native.manifest.name}@${packed.optionalDependencies?.[native.manifest.name]}, staged platform package is ${native.manifest.version}`,
+  );
 qualify("npm");
 qualify("bun");
 if (options["migration-from"]) {

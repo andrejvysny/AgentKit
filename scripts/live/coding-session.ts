@@ -178,8 +178,10 @@ async function attachNativeService(
   connectionId: string;
 }> {
   const { pack, tools } = await contributeCodingTools(root);
-  const connectionId =
-    await NativeSessionService.registerProviderConnection(BASE_URL, null);
+  const connectionId = await NativeSessionService.registerProviderConnection(
+    BASE_URL,
+    null,
+  );
   const service = await store.createService({
     jsToolAuthority: { configuredMode: "full_auto" },
     providerConfig: {
@@ -217,7 +219,10 @@ function makeNode(
 
 async function openNativeNode(dbPath: string, root: string): Promise<Node> {
   const { store, port } = await openNativeStore(dbPath);
-  const { service, pack, connectionId } = await attachNativeService(store, root);
+  const { service, pack, connectionId } = await attachNativeService(
+    store,
+    root,
+  );
   return makeNode(store, port, service, pack, connectionId);
 }
 
