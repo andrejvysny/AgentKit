@@ -657,3 +657,153 @@ suite(
     await store.close();
   },
 );
+
+suite(
+  "a registered JS write tool executes on a REST-minted chat under full_auto",
+  async () => {
+    // Regression: the session authority treated a chat that was never
+    // opened through `createSession` as `session_not_found` and propagated
+    // it as a guard ERROR, so every JS tool call on a REST-minted chat was
+    // refused ("guard error") — even in `full_auto` — and a consumer using
+    // only `POST /v1/chats` could not run registered tools at all. A chat
+    // that is not a session is ABSENCE of a session decision (the guard
+    // falls back to its configured mode), never a failure.
+    const provider = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (request.method !== "POST" || url.pathname !== "/responses")
+          return new Response("not found", { status: 404 });
+        await request.text();
+        requests += 1;
+        const output =
+          requests === 1
+            ? [
+                {
+                  type: "message",
+                  id: "message-check",
+                  role: "assistant",
+                  status: "completed",
+                  content: [{ type: "output_text", text: "Checking" }],
+                },
+                {
+                  type: "function_call",
+                  id: "item-w",
+                  call_id: "call-w",
+                  name: "rest_write",
+                  namespace: "agentkit",
+                  arguments: JSON.stringify({ x: 1 }),
+                  status: "completed",
+                },
+              ]
+            : [
+                {
+                  type: "message",
+                  id: "message-done",
+                  role: "assistant",
+                  status: "completed",
+                  content: [{ type: "output_text", text: "Done" }],
+                },
+              ];
+        const frame = {
+          type: "response.completed",
+          response: {
+            id: "response",
+            status: "completed",
+            output,
+            usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 },
+          },
+        };
+        return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+    });
+    let requests = 0;
+    let writes = 0;
+    const store = await NativeStoreCtor.inMemory();
+    let service: NativeSessionService | undefined;
+    try {
+      const { NativeSessionService } = await import("../src/index.js");
+      const connectionId = await NativeSessionService.registerProviderConnection(
+        `http://127.0.0.1:${provider.port}`,
+        "sk-loopback",
+      );
+      service = await store.createService({
+        jsToolAuthority: { configuredMode: "full_auto" },
+        providerConfig: {
+          protocol: "responses",
+          providerId: "rest-minted",
+          connectionId,
+          model: "model",
+        },
+      });
+      await service.registerTool(
+        {
+          name: "rest_write",
+          version: "1",
+          effect: "write",
+          capability: "fixture.write",
+          description: "Write a fixture value",
+          inputSchema: {
+            type: "object",
+            properties: { x: { type: "number" } },
+            additionalProperties: false,
+          },
+        },
+        async () => {
+          writes += 1;
+          return { data: { written: true } };
+        },
+      );
+      const http = await service.startHttpServer({
+        bearerToken: "0123456789abcdef0123456789abcdef",
+        defaultModel: "model",
+      });
+      const auth = {
+        authorization: "Bearer 0123456789abcdef0123456789abcdef",
+        "content-type": "application/json",
+      };
+      const created = await (
+        await fetch(`${http.baseUrl}/v1/chats`, {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({ title: "rest-minted" }),
+        })
+      ).json() as { id: string };
+      // The chat is REST-minted: NO createSession was ever called for it.
+      const submitted = await (
+        await fetch(`${http.baseUrl}/v1/chats/${created.id}/messages`, {
+          method: "POST",
+          headers: { ...auth, "idempotency-key": "turn-1" },
+          body: JSON.stringify({ content: "go" }),
+        })
+      ).json() as { runId: string };
+      const deadline = Date.now() + 15_000;
+      let run: { status: string } = { status: "running" };
+      while (Date.now() < deadline) {
+        run = (await (
+          await fetch(`${http.baseUrl}/v1/runs/${submitted.runId}`, {
+            headers: auth,
+          })
+        ).json()) as { status: string };
+        if (["completed", "failed", "cancelled", "interrupted"].includes(run.status)) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(run.status).toBe("completed");
+      expect(requests).toBe(2);
+      expect(writes).toBe(1);
+      const messages = (await (
+        await fetch(`${http.baseUrl}/v1/chats/${created.id}/messages`, {
+          headers: auth,
+        })
+      ).json()) as { items: { role: string; content: unknown }[] };
+      expect(messages.items.at(-1)?.content).toContain("Done");
+    } finally {
+      await service?.close();
+      await store.close();
+      provider.stop();
+    }
+  },
+);

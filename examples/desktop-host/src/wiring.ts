@@ -37,9 +37,11 @@
  *     carry, nothing more: the `/mcp` mount, CORS for the two Vite origins,
  *     the three JS-served routes documented under "TS SLICES KEPT", and
  *     chat-as-session creation (`POST /v1/chats` goes through
- *     `service.createSession`, because the binding's tool authority reads
- *     the session's durable execution state and fails CLOSED — "guard
- *     error" on every JS tool — for a descriptor-less backend chat).
+ *     `service.createSession` so every chat this host executes carries the
+ *     durable session permission state; a descriptor-less chat would also
+ *     run tools — the guard falls back to the configured mode for absence
+ *     since 2026-11-01 — but a host with JS write tools should be
+ *     governed, not merely permitted).
  *     It injects the private bearer token toward the Rust server, so the
  *     external API keeps its token-free loopback contract while the Rust
  *     backend still enforces its own auth floor.
