@@ -30,11 +30,30 @@
  *
  * Run from the package directory being packed (that is where npm invokes
  * lifecycle scripts) — this script always operates on `./package.json`.
+ *
+ * `apply` additionally pins every `workspace:` protocol range to a concrete
+ * version. The workspace protocol is a link-time fiction of the monorepo:
+ * npm cannot resolve it for an installed consumer (`EUNSUPPORTEDPROTOCOL`),
+ * and a packed manifest that keeps one is a hard gate failure —
+ * `rust/scripts/check-native-package.mjs` and `scripts/qualify-package.mjs`
+ * both refuse any tarball whose package.json still contains `workspace:`.
+ * Resolution walks the sibling package (`../<name>` etc.) for its real
+ * version and falls back to the packed package's own version, which is
+ * correct under this repo's lockstep versioning (every workspace ships the
+ * same `0.1.0-dev` until `snapshot-release` bumps them together) and is what
+ * lets a staged single-package copy — where no sibling exists, as in
+ * `check-native-package.mjs`'s staging directory — pack cleanly.
  */
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const BACKUP_PATH = "package.json.publishconfig-backup";
 const PKG_PATH = "package.json";
+
+function fail(message) {
+  console.error(`${PKG_PATH}: ${message}`);
+  process.exit(1);
+}
 // Fields npm's own historical (pre-`exports`) publishConfig override
 // supports for `main`/`bin`, extended here to the fields this repo actually
 // overrides. Anything else under `publishConfig` (e.g. registry/tag/access,
@@ -47,6 +66,71 @@ const OVERRIDABLE_FIELDS = [
   "bin",
   "exports",
 ];
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+];
+
+/** First real version found for `name` among the ancestors of `cwd`, using
+ * the repo layout (`<ancestor>/packages/<name>`, `<ancestor>/examples/<name>`,
+ * `<ancestor>/<name>`); `undefined` when no sibling is on disk. */
+function siblingVersion(name, cwd) {
+  const bare = name.startsWith("@") ? name.slice(name.indexOf("/") + 1) : name;
+  let dir = cwd;
+  for (;;) {
+    for (const candidate of [
+      join(dir, "packages", bare),
+      join(dir, "examples", bare),
+      join(dir, bare),
+    ]) {
+      const manifest = join(candidate, "package.json");
+      if (existsSync(manifest)) {
+        try {
+          const version = JSON.parse(readFileSync(manifest, "utf8")).version;
+          if (typeof version === "string") return version;
+        } catch {
+          /* not a readable manifest — keep walking */
+        }
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+/** Replace every `workspace:` range in the dependency fields with a concrete
+ * pin (`workspace:*` → exact, `workspace:^`/`workspace:~` → prefixed), so a
+ * packed manifest resolves for plain npm/bun. Aliases and exotic specs fail
+ * loudly — a pack must never ship a range no installer can parse. */
+function pinWorkspaceRanges(pkg, cwd) {
+  let pinned = 0;
+  for (const field of DEPENDENCY_FIELDS) {
+    const deps = pkg[field];
+    if (!deps || typeof deps !== "object") continue;
+    for (const [name, range] of Object.entries(deps)) {
+      if (typeof range !== "string" || !range.startsWith("workspace:"))
+        continue;
+      const spec = range.slice("workspace:".length);
+      if (spec !== "*" && spec !== "^" && spec !== "~")
+        fail(
+          `${field}.${name} uses ${JSON.stringify(range)}; only workspace:*, ` +
+            "workspace:^ and workspace:~ are packable — name the alias or use a plain range.",
+        );
+      const version = siblingVersion(name, cwd) ?? pkg.version;
+      if (typeof version !== "string" || version.length === 0)
+        fail(
+          `cannot pin ${field}.${name}@${range}: no sibling manifest found ` +
+            `above ${cwd} and the packed package has no version of its own`,
+        );
+      deps[name] = spec === "*" ? version : `${spec}${version}`;
+      pinned += 1;
+    }
+  }
+  return pinned;
+}
 
 function apply() {
   if (existsSync(BACKUP_PATH)) {
@@ -66,6 +150,11 @@ function apply() {
   for (const field of OVERRIDABLE_FIELDS) {
     if (field in overrides) pkg[field] = overrides[field];
   }
+  const pinned = pinWorkspaceRanges(pkg, process.cwd());
+  if (pinned > 0)
+    process.stdout.write(
+      `prepack: pinned ${pinned} workspace: dependency range(s) in ${PKG_PATH}\n`,
+    );
   writeFileSync(PKG_PATH, `${JSON.stringify(pkg, null, 2)}\n`);
 }
 

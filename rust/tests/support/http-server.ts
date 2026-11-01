@@ -6,15 +6,22 @@ import { createAgentKitClient } from "@agentkit/client";
 const root = resolve(import.meta.dir, "../../..");
 let build: Promise<void> | undefined;
 
-// Cross-language tests need a compiled native fixture. The intentional job for
-// them is the `native` job in .github/workflows/rust.yml: pinned toolchain,
-// locked dependency fetch, warm cargo cache, one prebuilt fixture. Ordinary
-// TypeScript CI (`.github/workflows/ci.yml`) sets AGENTKIT_SKIP_NATIVE=1
-// because it has no prepared Cargo cache — an offline `cargo build` there
-// fails on missing registry packages and every native test would fail for a
-// test-setup reason, not a product reason. Native tests must gate on this
-// flag with test.skipIf/describe.skipIf, and the jobs that run them must not
-// set the variable.
+// Cross-language tests need a compiled native fixture. Every CI job that
+// runs these mixed suites prebuilds BOTH native artifacts before `bun test`
+// starts: the binding (`bun run --cwd packages/native build:native`) and this
+// fixture (`bun run build:fixture` — the `bun` and `coverage` jobs of
+// .github/workflows/ci.yml; the `native` job of .github/workflows/rust.yml
+// gets the example binary from its prior `cargo test --workspace` step). The
+// lazy `cargo build` below is the local-dev fallback so a fresh checkout
+// still runs these tests without setup; on CI it is a cold cache and a
+// minutes-long spawn racing sibling test processes, so it must stay fallback.
+// `AGENTKIT_SKIP_NATIVE=1` is an explicit, developer-invoked escape hatch for
+// running the suite with the native fixture turned off — no shipped CI job
+// sets it (verified 2026-11-01: the only references outside this file are
+// historical validation notes in docs/rust/acceptance.md). Native tests gate
+// on `nativeBackendAvailable` so a deliberate local skip reports as skipped;
+// jobs must unset it (or never set it), and a missing fixture in a job that
+// does not set it fails the test, never silently skips.
 export const nativeBackendAvailable =
   process.env["AGENTKIT_SKIP_NATIVE"] !== "1";
 

@@ -455,6 +455,48 @@ were re-qualified locally with Node v22.20.0 installed.
   pass. No live provider contacted; live-provider and live keychain
   qualification remain separate release gates (gate 5).
 
+### CI gate inventory additions (2026-11-01)
+
+- Named fingerprint-conformance gates: the shared TS↔Rust fixtures
+  `rust/fixtures/coding-fingerprint/{tokenizer.json,env-order.json}` and
+  `rust/crates/host/tests/governance/fixtures/locale-fingerprints.json`
+  previously ran only inside `cargo test --workspace`. `.github/workflows/rust.yml`
+  now runs their exact consumers as two named required steps in the `native`
+  job: `cargo test -p agentkit-host --test governance --all-features --locked --
+  native_write_fingerprint_is_versioned_locale_free_and_excludes_action_id`
+  (1 test) and
+  `cargo test -p agentkit-toolpacks-coding --lib --all-features --locked --
+  command_fingerprint::tests::tokenizer_agrees_with_the_typescript_baseline
+  command_fingerprint::tests::environment_is_restricted_sorted_and_bounded
+  command_fingerprint::tests::fingerprint_is_stable_and_reacts_to_every_bound_input`
+  (3 tests; the latter two are the fixture's collation/digest consumers via
+  `ENV_ORDER`). Verified 2026-11-01: both filters select exactly
+  1 and 3 tests respectively and pass. The TypeScript half of the same
+  fixtures stays pinned by `command-fingerprint-collation.test.ts` and the
+  `contracts` job's fixture-export `--check`.
+- Mixed-runtime fixture prebuild: root script `bun run build:fixture`
+  (`cargo build --manifest-path rust/Cargo.toml -p agentkit-host --features
+  http --example http_fixture --locked`) runs in the `ci.yml` `bun` and
+  `coverage` jobs after the binding build and before `bun test`, so the
+  mixed Rust/TS suites never pay for a cold `cargo build` racing parallel
+  test processes; the lazy build in `rust/tests/support/http-server.ts`
+  remains the local-dev fallback. Its header comment now states the reality:
+  `AGENTKIT_SKIP_NATIVE=1` is an explicit escape hatch no shipped job sets
+  (repo-wide grep 2026-11-01: only this document's historical records
+  reference it outside the support file).
+- Packed-manifest workspace pinning: `scripts/prepack-publish-config.mjs`
+  now pins every `workspace:` range (`*`, `^`, `~`) in all four dependency
+  fields to the sibling workspace's concrete version (fallback: the packed
+  package's own lockstep version, which is what the single-package staging
+  directories of `rust/scripts/check-native-package.mjs` resolve through).
+  Previously `npm pack` shipped `@agentkit/native`'s devDependencies as
+  `workspace:*`, which the gate's own no-`workspace:` assertion rejects.
+  The packed `@agentkit/native` tarball installs into an isolated temp
+  directory with production dependencies only and loads the addon under both
+  Bun and Node (`check-native-package.mjs` full lifecycle; verified
+  2026-11-01 with the gate's skip-build knob while an in-flight `agentkit-napi`
+  edit occupied the release build).
+
 ## Remaining release gates
 
 1. Preserve the recorded local gates, approved unpaired-surrogate exception and
