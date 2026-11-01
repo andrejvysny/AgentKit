@@ -166,6 +166,17 @@ place of `restApiVersion`, `medium` instead of `small` as the default context
 preference, and decimal-integer settings rejection. All four are now corrected and asserted in the real-host interoperability test;
 inventory tests alone did not catch them.
 
+### Binding runtime surface qualified 2026-11-01
+
+| Operation | Current real implementation/evidence | Remaining qualification or boundary |
+| --- | --- | --- |
+| `startHttpServer` / `stopHttpServer` | Rust REST v1 + SSE (`agentkit-transport-http` over `DesktopBackend`) served from the service's own host/store; full client (157) and react (76) suites pass against the Rust engine with the suites unmodified; exact `problem+json` envelopes, idempotency replay/mismatch, close-before-shutdown-window. | CORS and provider-write routes are unwired in the binding (secret/catalogue ports); no live-provider qualification through this lane. |
+| `startMcpServer` / `stopMcpServer` | Crate streamable-HTTP MCP server over the service's registered JS tools; official SDK client proves initialize/list/call, bearer refusal, session binding, writes gating; stop revokes leases before drop. | Remote calls carry no run-scoped plan-mode/ask guard or durable receipt (documented reduction); no OAuth/elicitation. |
+| `mcpConnect` / `mcpCallTool` / `mcpDisconnect` / `mcpListServers` | Crate client manager on the binding runtime (stdio + streamable HTTP); host-decided effect via config `readOnly`, local schema validation fail-closed, server-echoed secrets redacted, approval parking with zero remote calls until granted; children reaped on close. | Configs in-memory; `secretRefs` fail closed (deny-all resolver); no OAuth or elicitation. |
+| `callStore` (67 ops) + `NativeAssistantStore` | Complete `AssistantStore` surface through thin transaction-compatible arms; the frozen aggregate passes the SHARED adapter conformance drivers (assistant-store/agent-input/context-summary) with `atomicTransactions`/`search` earned; commit/rollback tested per namespace. | Priority aging remains a TS store-layer feature the Rust claim path lacks (two conformance cases skip by name); `now` injection is binding-level. |
+| `startProviderConnection` + `providerConfig` | Rust provider lane (chat-completions + responses) with key-only-in-Rust registry, streamed deltas/reasoning/usage, continuation replay, revoked-connection refusal; loopback wire tests both protocols. | Live-provider qualification is a release gate; Responses omits non-numeric usage fields where TS would fail `malformed_usage`. |
+| `subscribeTurn` | Durable replay-and-live pump; used by every lane proof above; cursor documented exclusive (seq starts at 0). | None beyond general stream qualification. |
+
 ## Validation record and limits
 
 Execution-ownership tranche, 2026-10-28 (supersedes nothing above; those
