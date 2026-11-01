@@ -48,6 +48,10 @@ pub(crate) struct Registry {
     manager: Arc<McpClientManager>,
     configs: BTreeMap<String, ServerConfig>,
     tools: HashMap<String, Vec<CachedTool>>,
+    /// How many times each alias has been (re)registered on this store. It
+    /// never goes down — not even on `mcpDisconnect` — so a descriptor from a
+    /// superseded registration can never be passed off as the current one.
+    registrations: HashMap<String, u64>,
 }
 
 /// One projected remote tool. Projection mirrors the crate's own
@@ -60,6 +64,37 @@ pub(crate) struct CachedTool {
     canonical: String,
     descriptor: Value,
     validator: Option<agentkit_contracts::SchemaValidator>,
+    /// The registration that minted this descriptor, in the form handed to JS
+    /// as `descriptor.handle` and required back by `mcpCallTool`.
+    handle: String,
+}
+
+/// Resolve the addressable name a caller used for one alias's cached tools.
+/// Precedence is explicit — the remote's ORIGINAL name first, then the full
+/// descriptor name, then a configured `toolAliases` target — so resolution
+/// can never depend on the order the listing happened to arrive in. The
+/// connect-time gates (`project_tool`, mirroring `bridge::resolve_original`
+/// and `bridge::aliases_are_one_step`) make those three domains disjoint,
+/// which is what makes one entry per name provable; the ordering here is
+/// defense in depth for a cache built by any other path.
+fn resolve_entry<'a>(entries: &'a [CachedTool], tool_name: &str) -> Option<&'a CachedTool> {
+    entries
+        .iter()
+        .find(|entry| entry.original == tool_name)
+        .or_else(|| {
+            entries.iter().find(|entry| {
+                entry.descriptor.get("name").and_then(Value::as_str) == Some(tool_name)
+            })
+        })
+        .or_else(|| entries.iter().find(|entry| entry.effective == tool_name))
+}
+
+/// The opaque handle one registration issues. Opaque to JS, but it names the
+/// (alias, registration) pair, so a stale descriptor cannot be repaired by
+/// editing it: only the value `mcpConnect` returned for the CURRENT
+/// registration of that alias is admitted.
+fn handle_for(alias: &str, registration: u64) -> String {
+    format!("{alias}#{registration}")
 }
 
 /// The binding's secret resolver: nothing is available in-process, so a
@@ -104,6 +139,7 @@ fn project_tool(
     alias: &str,
     config: &ServerConfig,
     tool: RemoteTool,
+    registration: u64,
 ) -> std::result::Result<CachedTool, McpClientError> {
     let original = tool.name.trim().to_owned();
     if !tool_name_valid(&original) {
@@ -115,6 +151,22 @@ fn project_tool(
         .cloned()
         .unwrap_or_else(|| original.clone());
     if !tool_name_valid(&effective) {
+        return Err(McpClientError::Configuration);
+    }
+    // Same one-step gate the crate applies when it constructs a tool set: a
+    // chain (`echo -> shadow` alongside `write_note -> echo`) makes one name
+    // denote two tools, so the descriptor cache — the catalogue the host and
+    // every JS caller address — could advertise what its resolver reaches
+    // elsewhere. Refused at connect, before any descriptor is handed out.
+    if !agentkit_mcp::aliases_are_one_step(&config.tool_aliases) {
+        return Err(McpClientError::Configuration);
+    }
+    // The crate's own inverse (`bridge::resolve_original`): a name this config
+    // has renamed away is not this server's address, so a descriptor must never
+    // advertise a canonical id the crate would route elsewhere.
+    if agentkit_mcp::resolve_original(&config.tool_aliases, &effective)
+        .is_none_or(|source| source != original)
+    {
         return Err(McpClientError::Configuration);
     }
     let canonical = format!("mcp.{alias}.{effective}");
@@ -129,6 +181,7 @@ fn project_tool(
             .unwrap_or_else(|| format!("MCP tool {original} from {alias}")),
         "inputSchema": Value::Object((*tool.input_schema).clone()),
         "remoteName": original,
+        "handle": handle_for(alias, registration),
     });
     // Pre-compile the recorded schema so every call is gated locally
     // before a byte leaves the process; a rejected schema validates
@@ -144,6 +197,7 @@ fn project_tool(
         canonical,
         descriptor: definition,
         validator,
+        handle: handle_for(alias, registration),
     })
 }
 
@@ -250,6 +304,7 @@ impl NativeStore {
                 manager: Arc::new(manager),
                 configs: BTreeMap::new(),
                 tools: HashMap::new(),
+                registrations: HashMap::new(),
             });
         }
         let registry = state
@@ -262,35 +317,48 @@ impl NativeStore {
             )));
         }
         let alias = config.alias.clone();
-        let previous = registry.configs.clone();
-        let mut configs = previous.clone();
-        configs.insert(alias.clone(), config.clone());
-        let taken_tools = std::mem::take(&mut registry.tools);
-        registry
-            .manager
-            .replace_configs(configs.values().cloned().collect())
-            .await
-            .map_err(map_client)?;
+        // Build the NEXT state completely before publishing any of it. The
+        // mirrors (`configs`, `tools`, `registrations`) are written only once
+        // the new server has connected AND projected, so every failure path
+        // leaves the servers that were already connected exactly as they were —
+        // including their cached descriptors, which a clear-then-connect
+        // ordering would drop on the floor.
+        // A reconnect under a known alias is a NEW registration: it mints new
+        // handles, and the previous registration's handles stop being admitted
+        // even though the alias (and every tool name under it) is unchanged.
+        let registration = registry
+            .registrations
+            .get(&alias)
+            .copied()
+            .unwrap_or(0)
+            .wrapping_add(1);
+        let mut next_configs = registry.configs.clone();
+        next_configs.insert(alias.clone(), config.clone());
+        // Cross-server descriptor uniqueness is checked against the CURRENT
+        // cache plus the candidate set, before anything is published.
+        let mut names: Vec<String> = registry
+            .tools
+            .values()
+            .flatten()
+            .filter_map(|entry| entry.descriptor.get("name")?.as_str().map(str::to_owned))
+            .collect();
+        let mut canonicals: Vec<String> = registry
+            .tools
+            .values()
+            .flatten()
+            .map(|entry| entry.canonical.clone())
+            .collect();
         let cancellation = CancellationToken::new();
         let projected = async {
-            registry
-                .manager
-                .connect(&alias, cancellation.clone())
+            let manager = Arc::clone(&registry.manager);
+            manager
+                .replace_configs(next_configs.values().cloned().collect())
                 .await?;
-            let listed = registry.manager.list_tools(&alias, cancellation).await?;
+            manager.connect(&alias, cancellation.clone()).await?;
+            let listed = manager.list_tools(&alias, cancellation).await?;
             let mut projected = Vec::new();
-            let mut names: Vec<String> = taken_tools
-                .values()
-                .flatten()
-                .filter_map(|entry| entry.descriptor.get("name")?.as_str().map(str::to_owned))
-                .collect();
-            let mut canonicals: Vec<String> = taken_tools
-                .values()
-                .flatten()
-                .map(|entry| entry.canonical.clone())
-                .collect();
             for tool in listed {
-                let entry = project_tool(&alias, &config, tool)?;
+                let entry = project_tool(&alias, &config, tool, registration)?;
                 let name = entry
                     .descriptor
                     .get("name")
@@ -312,19 +380,18 @@ impl NativeStore {
         let projected = match projected {
             Ok(projected) => projected,
             Err(error) => {
-                // All-or-nothing: a failed connect leaves no half-known
-                // server behind — roll the declaration back and close any
-                // transport the attempt opened.
-                let rollback = previous.values().cloned().collect::<Vec<_>>();
-                registry.configs = previous;
-                registry.tools = taken_tools;
+                // The new server never became usable: roll the MANAGER back to
+                // the declaration set it started from. The mirrors were never
+                // touched, so kept servers keep their live transports, their
+                // descriptors and their handles.
+                let rollback = registry.configs.values().cloned().collect::<Vec<_>>();
                 let _ = registry.manager.replace_configs(rollback).await;
                 return Err(map_client(error));
             }
         };
-        registry.configs = configs;
-        registry.tools = taken_tools;
+        registry.configs = next_configs;
         registry.tools.insert(alias.clone(), projected);
+        registry.registrations.insert(alias.clone(), registration);
         Ok(json!({
             "alias": alias,
             "tools": registry
@@ -338,10 +405,16 @@ impl NativeStore {
 
     /// Invoke one tool on a connected MCP server. `toolName` accepts the
     /// remote's original name, the configured alias target, or the full
-    /// descriptor name. The arguments are validated LOCALLY against the
-    /// descriptor's recorded input schema before dispatch (invalid
-    /// arguments never reach the server, `mcp_invalid_arguments`; a
-    /// schema that could not be compiled fails closed the same way).
+    /// descriptor name. `handle` is the descriptor's `handle` field, i.e. the
+    /// registration that minted it: it is REQUIRED once an alias has been
+    /// re-registered (disconnect + reconnect under the same alias mints a new
+    /// registration), and a call whose handle names a superseded registration
+    /// is refused with `mcp_authority_revoked` — a descriptor from generation
+    /// N never authorizes generation N+1's callback. The arguments are
+    /// validated LOCALLY against the descriptor's recorded input schema before
+    /// dispatch (invalid arguments never reach the server,
+    /// `mcp_invalid_arguments`; a schema that could not be compiled fails
+    /// closed the same way).
     /// Returns the host tool-result contract as JSON text (`{ok, data,
     /// modelData, summary, status, warnings, truncated, limits}`). Call
     /// it from the `registerTool` run function so the durable guard and
@@ -353,6 +426,7 @@ impl NativeStore {
         alias: String,
         tool_name: String,
         args_json: String,
+        handle: Option<String>,
     ) -> Result<String> {
         let arguments: Value = match args_json.trim() {
             "" | "null" => json!({}),
@@ -365,7 +439,7 @@ impl NativeStore {
         // Snapshot under the lock, dispatch WITHOUT it: a slow remote
         // must never serialize other calls or block disconnects behind
         // this binding's own mutex.
-        let (manager, canonical, original, valid) = {
+        let (manager, canonical, original, valid, admitted) = {
             let state = self.mcp.lock().await;
             let registry = state
                 .as_ref()
@@ -374,21 +448,25 @@ impl NativeStore {
                 .tools
                 .get(&alias)
                 .ok_or_else(|| errors::stable("not_found", "unknown MCP server alias", None))?;
-            let entry = entries
-                .iter()
-                .find(|entry| {
-                    entry.original == tool_name
-                        || entry.effective == tool_name
-                        || entry.descriptor.get("name").and_then(Value::as_str)
-                            == Some(tool_name.as_str())
-                })
-                .ok_or_else(|| {
-                    errors::stable(
-                        "not_found",
-                        format!("MCP server {alias} exposes no tool {tool_name}"),
-                        None,
-                    )
-                })?;
+            let entry = resolve_entry(entries, &tool_name).ok_or_else(|| {
+                errors::stable(
+                    "not_found",
+                    format!("MCP server {alias} exposes no tool {tool_name}"),
+                    None,
+                )
+            })?;
+            // Registration admission, checked against the very entry this call
+            // is about to execute: the handle the caller presents must be the
+            // one that minted it. Names alone cannot settle that — after a
+            // reconnect under the same alias, the superseded descriptor and the
+            // current one share name, capability and remoteName.
+            let registration = registry.registrations.get(&alias).copied().unwrap_or(0);
+            let admitted = match handle.as_deref() {
+                Some(presented) => presented == entry.handle,
+                // An alias registered exactly once has no earlier generation to
+                // be confused with, so the legacy three-argument call is exact.
+                None => registration <= 1,
+            };
             // Fail closed exactly like the crate's RemoteTool: no schema
             // proof, no dispatch.
             let valid = entry
@@ -400,8 +478,20 @@ impl NativeStore {
                 entry.canonical.clone(),
                 entry.original.clone(),
                 valid,
+                admitted,
             )
         };
+        if !admitted {
+            return Err(errors::stable(
+                "mcp_authority_revoked",
+                format!(
+                    "MCP tool {alias}.{tool_name} was addressed with a handle from a superseded \
+                     registration of server {alias}; use the descriptor handle mcpConnect() \
+                     returned for the current registration"
+                ),
+                None,
+            ));
+        }
         if !valid {
             return Err(errors::stable(
                 "mcp_invalid_arguments",
@@ -429,17 +519,30 @@ impl NativeStore {
         let Some(registry) = state.as_mut() else {
             return Ok(());
         };
-        if registry.configs.remove(&alias).is_none() {
+        if !registry.configs.contains_key(&alias) {
             registry.tools.remove(&alias);
             return Ok(());
         }
-        registry.tools.remove(&alias);
-        let remaining = registry.configs.values().cloned().collect::<Vec<_>>();
-        registry
+        // Compute the next set first; the mirrors are only edited once the
+        // manager has accepted it. A failure here means the manager could not
+        // CLOSE the dropped transport — the session was already revoked and
+        // removed either way, so the mirrors must match the manager, not the
+        // declaration the call started from.
+        let remaining = registry
+            .configs
+            .values()
+            .filter(|config| config.alias != alias)
+            .cloned()
+            .collect::<Vec<_>>();
+        let failure = registry
             .manager
             .replace_configs(remaining)
             .await
-            .map_err(map_client)
+            .err()
+            .map(map_client);
+        registry.configs.remove(&alias);
+        registry.tools.remove(&alias);
+        failure.map_or(Ok(()), Err)
     }
 
     /// Every MCP server declared on this store: `{alias, kind, enabled,
@@ -466,6 +569,16 @@ impl NativeStore {
                             "enabled": config.enabled,
                             "readOnly": config.read_only,
                             "connected": connected.contains(&config.alias),
+                            "registration": registry
+                                .registrations
+                                .get(&config.alias)
+                                .copied()
+                                .unwrap_or(0),
+                            "handle": registry
+                                .registrations
+                                .get(&config.alias)
+                                .copied()
+                                .map(|registration| handle_for(&config.alias, registration)),
                             "tools": registry
                                 .tools
                                 .get(&config.alias)
@@ -537,6 +650,93 @@ mod tests {
         );
     }
 
+    fn alias_config(aliases: Value) -> ServerConfig {
+        serde_json::from_value(json!({
+            "alias": "dual",
+            "transport": {"kind": "stdio", "command": "bun", "args": ["fixture.ts"]},
+            "toolAliases": aliases,
+        }))
+        .expect("test config parses")
+    }
+
+    /// A replacement that is itself a renamed-away original (`echo -> shadow`
+    /// alongside `write_note -> echo`) makes ONE name denote two tools: the
+    /// forward map reaches `echo`, an inverse lookup reaches `write_note`.
+    /// The crate refuses that in `McpToolSet::new`; this mirror must refuse it
+    /// too, or the cache the host addresses could advertise a callback its
+    /// resolver reaches elsewhere.
+    #[test]
+    fn an_alias_chain_is_refused_before_any_descriptor_is_minted() {
+        let schema =
+            json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]});
+        let chained = alias_config(json!({"echo": "shadow", "write_note": "echo"}));
+        assert!(
+            matches!(
+                project_tool("dual", &chained, remote("echo", &schema, None), 1),
+                Err(McpClientError::Configuration)
+            ),
+            "the renamed-away tool must not be projected"
+        );
+        assert!(
+            matches!(
+                project_tool("dual", &chained, remote("write_note", &schema, None), 1),
+                Err(McpClientError::Configuration)
+            ),
+            "the chain is a property of the map, so no projection of it survives"
+        );
+        // A legal one-step rename still works, and renames ONLY the advertised
+        // identity — the route back stays the remote's own name.
+        let legal = alias_config(json!({"echo": "shadow", "write_note": "note"}));
+        let entry = project_tool("dual", &legal, remote("echo", &schema, None), 3)
+            .expect("a one-step rename projects");
+        assert_eq!(entry.effective, "shadow");
+        assert_eq!(entry.original, "echo");
+        assert_eq!(entry.canonical, "mcp.dual.shadow");
+        assert_eq!(entry.descriptor["remoteName"], "echo");
+        assert_eq!(entry.handle, "dual#3");
+    }
+
+    fn cached(original: &str, effective: &str, handle: &str) -> CachedTool {
+        let canonical = format!("mcp.s.{effective}");
+        CachedTool {
+            original: original.into(),
+            effective: effective.into(),
+            descriptor: json!({
+                "name": canonical.replace('.', "__"),
+                "remoteName": original,
+                "handle": handle,
+            }),
+            canonical,
+            validator: None,
+            handle: handle.into(),
+        }
+    }
+
+    /// Resolution is a function of the name, never of the order the listing
+    /// arrived in: the remote's ORIGINAL name wins over any alias target that
+    /// happens to equal it, descriptor names resolve to their own entry, and
+    /// an alias target reaches the entry that advertised it.
+    #[test]
+    fn resolution_never_routes_by_the_order_the_listing_arrived_in() {
+        // A cache in which one tool's alias TARGET equals another tool's
+        // ORIGINAL name — the ordering hazard the connect gates exclude, so
+        // the resolver must still be order-independent. `note` is renamed to
+        // "echo" and is listed BEFORE the genuine `echo`.
+        let entries = vec![cached("note", "echo", "s#1"), cached("echo", "echo", "s#1")];
+        assert_eq!(resolve_entry(&entries, "echo").unwrap().original, "echo");
+        assert_eq!(resolve_entry(&entries, "note").unwrap().original, "note");
+        // A legal cache: every addressable name resolves to exactly one entry.
+        let entries = vec![cached("note", "memo", "s#2"), cached("echo", "echo", "s#2")];
+        assert_eq!(resolve_entry(&entries, "note").unwrap().effective, "memo");
+        assert_eq!(resolve_entry(&entries, "memo").unwrap().original, "note");
+        assert_eq!(
+            resolve_entry(&entries, "mcp__s__memo").unwrap().original,
+            "note",
+            "the full descriptor name addresses its own entry"
+        );
+        assert!(resolve_entry(&entries, "nope").is_none());
+    }
+
     #[test]
     fn projection_mirrors_the_crate_identity_and_host_effect() {
         let schema =
@@ -545,6 +745,7 @@ mod tests {
             "notes",
             &config(false),
             remote("write-note", &schema, Some("Persist a note")),
+            1,
         )
         .expect("valid tool projects");
         assert_eq!(write.canonical, "mcp.notes.save-note");
@@ -555,15 +756,28 @@ mod tests {
         assert_eq!(write.descriptor["description"], "Persist a note");
         assert!(write.validator.is_some(), "a sound schema compiles");
         // Host `readOnly:true` is the ONLY way an effect becomes "read".
-        let read = project_tool("notes", &config(true), remote("read-note", &schema, None))
-            .expect("read-only tool projects");
+        let read = project_tool(
+            "notes",
+            &config(true),
+            remote("read-note", &schema, None),
+            1,
+        )
+        .expect("read-only tool projects");
         assert_eq!(read.descriptor["effect"], "read");
         assert_eq!(
             read.descriptor["description"], "MCP tool read-note from notes",
             "a descriptionless tool keeps the crate's fallback wording"
         );
         // Remote identities outside the crate's grammar are refused.
-        assert!(project_tool("notes", &config(false), remote("Bad Name", &schema, None)).is_err());
+        assert!(
+            project_tool(
+                "notes",
+                &config(false),
+                remote("Bad Name", &schema, None),
+                1
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -572,6 +786,7 @@ mod tests {
             "notes",
             &config(false),
             remote("echo", &json!({"type": 42}), None),
+            1,
         )
         .expect("projection is permissive; validation is what fails closed");
         assert!(entry.validator.is_none());

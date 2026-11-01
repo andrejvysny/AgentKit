@@ -8,6 +8,22 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+/// The exact connection a tool handle was minted from.
+///
+/// A handle is only ever valid for the `(registration, generation)` pair it was
+/// listed from: `registration` identifies ONE `Session` record installed under
+/// an alias (a config replacement installs a new one), and `generation`
+/// identifies one established transport of that session (every reconnect
+/// installs a new one, so a second server process behind the same alias is a
+/// different generation). Both halves are checked again at dispatch — see
+/// [`McpConnection::call_tool_bound`] — so a descriptor from one generation can
+/// never authorize a callback belonging to another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToolBinding {
+    pub registration: u64,
+    pub generation: u64,
+}
+
 #[async_trait]
 pub trait McpConnection: Send + Sync {
     async fn list_tools(
@@ -31,6 +47,39 @@ pub trait McpConnection: Send + Sync {
     ) -> Result<model::CallToolResult, McpClientError> {
         super::check_dispatch(guard, &cancellation).await?;
         self.call_tool(name, arguments, cancellation).await
+    }
+    /// The connection a handle must be pinned to, or `None` for a connection
+    /// that has no registration (a bare [`McpClient`], a test double). A
+    /// manager session answers with `(registration, generation)` of its LIVE
+    /// transport and `None` whenever it has none, so a catalogue can never be
+    /// minted against a connection that is not currently established.
+    fn binding(&self) -> Option<ToolBinding> {
+        None
+    }
+    /// Dispatch on the ONE connection `binding` names, or refuse.
+    ///
+    /// The invariant is that the callback which runs is the transport this
+    /// handle was listed from — not whichever one the session holds now. A
+    /// session that owns generations re-verifies the binding on BOTH sides of
+    /// the host's authorization: up front (a handle whose transport is already
+    /// gone never reaches the guard) and from inside the guard the connection
+    /// lane consults immediately before it calls out, host guard first, so a
+    /// lease that expired during a reconnect is still reported by the lease.
+    /// A reconnected or replaced transport therefore fails with
+    /// [`McpClientError::Authority`] instead of serving the stale handle.
+    /// Connections that own no registrations (a bare [`McpClient`], a test
+    /// double) have one transport and keep the guarded path.
+    async fn call_tool_bound(
+        &self,
+        binding: ToolBinding,
+        name: &str,
+        arguments: model::JsonObject,
+        cancellation: CancellationToken,
+        guard: Option<Arc<dyn agentkit_core::DispatchGuard>>,
+    ) -> Result<model::CallToolResult, McpClientError> {
+        let _ = binding;
+        self.call_tool_guarded(name, arguments, cancellation, guard)
+            .await
     }
 }
 #[async_trait]

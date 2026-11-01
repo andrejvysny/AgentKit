@@ -1,5 +1,6 @@
 use super::{
-    ManagerClock, McpConnection, McpConnector, McpSecretResolver, ServerConfig, TransportConfig,
+    ManagerClock, McpConnection, McpConnector, McpSecretResolver, ServerConfig, ToolBinding,
+    TransportConfig,
 };
 use crate::{McpClientError, model};
 use async_trait::async_trait;
@@ -27,12 +28,21 @@ struct State {
 }
 pub(super) struct Session {
     pub config: ServerConfig,
+    /// Which config record this session IS. A config replacement under the
+    /// same alias mints a new one, so a tool handle can tell "the transport
+    /// behind my server reconnected" apart from "my server was replaced".
+    registration: u64,
     secrets: Arc<dyn McpSecretResolver>,
     connector: Arc<dyn McpConnector>,
     clock: Arc<dyn ManagerClock>,
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
     lifecycle: AsyncMutex<()>,
 }
+
+/// Process-wide registration counter; two sessions never share one id, so a
+/// handle can never be re-admitted by a look-alike replacement.
+static REGISTRATIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 type Connected = (
     Arc<dyn McpConnection>,
     u64,
@@ -155,11 +165,12 @@ impl Session {
     ) -> Self {
         Self {
             config,
+            registration: REGISTRATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             secrets,
             connector,
             clock,
             lifecycle: AsyncMutex::new(()),
-            state: Mutex::new(State {
+            state: Arc::new(Mutex::new(State {
                 client: None,
                 material: Arc::new(SecretMaterial::default()),
                 generation: 0,
@@ -169,7 +180,7 @@ impl Session {
                 revoked: false,
                 epoch: 0,
                 lifetime: CancellationToken::new(),
-            }),
+            })),
         }
     }
     pub fn connected(&self) -> bool {
@@ -436,6 +447,72 @@ impl Session {
         }
         self.teardown().await
     }
+    /// The `(registration, generation)` of the live transport, or `None` when
+    /// this session has none.
+    fn live_binding(&self) -> Option<ToolBinding> {
+        let state = self.state.lock().unwrap();
+        (!state.disposed && !state.revoked && state.client.is_some()).then(|| ToolBinding {
+            registration: self.registration,
+            generation: state.generation,
+        })
+    }
+    /// Capture the ONE connection `want` designates, refusing anything else.
+    ///
+    /// Every check happens under the single state lock, so the connection this
+    /// returns IS the transport the binding named at that instant — a
+    /// replacement (new registration), a revoke/dispose, or a reconnect (new
+    /// generation) each fail it. `Closed` reports a session that no longer has
+    /// a transport at all; `Authority` reports a handle whose transport has
+    /// been superseded while the server itself stayed connected.
+    fn pinned(&self, want: ToolBinding) -> Result<Connected, McpClientError> {
+        pinned_in(&self.state, self.registration, want)
+    }
+    /// Dispatch pinned to one binding through the session's ordinary request
+    /// machinery (same `ensure`/reconnect/retry semantics as the unbound lane),
+    /// with the handle verified on BOTH sides of the host's authorization.
+    ///
+    /// The up-front check is the authorization side: a handle whose transport
+    /// is gone never reaches the guard. The execution side runs INSIDE the
+    /// guard the connection lane consults immediately before it dispatches —
+    /// wrapped, so the host's own verdict is still taken first (a lease that
+    /// expired while the session reconnected is reported by the lease, exactly
+    /// as on the unbound path), and only then the handle. Dispatch therefore
+    /// cannot happen on a transport that stopped being the one this handle was
+    /// minted from, with no await left between the two decisions.
+    async fn call_bound(
+        &self,
+        want: ToolBinding,
+        name: &str,
+        arguments: &model::JsonObject,
+        cancellation: CancellationToken,
+        guard: Option<Arc<dyn agentkit_core::DispatchGuard>>,
+    ) -> Result<model::CallToolResult, McpClientError> {
+        self.pinned(want)?;
+        let guard = Some(Arc::new(BoundGuard {
+            inner: guard,
+            state: Arc::clone(&self.state),
+            registration: self.registration,
+            want,
+        }) as Arc<dyn agentkit_core::DispatchGuard>);
+        match self
+            .request(Some(name), arguments.clone(), cancellation, guard)
+            .await
+        {
+            Ok(Response::Call(result)) => Ok(result),
+            Ok(Response::Tools(_)) => unreachable!(),
+            // The request machinery reports a torn-down transport as `Closed`,
+            // or as `Cancelled` when the session's lifetime went away with it.
+            // For a pinned handle that situation IS an authority loss — the
+            // transport this handle was minted from is gone — so the pin's own
+            // verdict is what the host hears, never a cancellation it never
+            // asked for. A failure the pin does not explain (a remote error, a
+            // genuine cancellation) is reported unchanged.
+            Err(error) => Err(match self.pinned(want) {
+                Ok(_) => error,
+                Err(pin) => pin,
+            }),
+        }
+    }
     async fn invoke(
         &self,
         connected: &Connected,
@@ -590,5 +667,97 @@ impl McpConnection for Session {
     }
     async fn close(&self) -> Result<(), McpClientError> {
         self.close_session().await
+    }
+    fn binding(&self) -> Option<ToolBinding> {
+        self.live_binding()
+    }
+    async fn call_tool_bound(
+        &self,
+        binding: ToolBinding,
+        name: &str,
+        arguments: model::JsonObject,
+        cancellation: CancellationToken,
+        guard: Option<Arc<dyn agentkit_core::DispatchGuard>>,
+    ) -> Result<model::CallToolResult, McpClientError> {
+        self.call_bound(binding, name, &arguments, cancellation, guard)
+            .await
+    }
+}
+
+/// The live-transport check [`Session::pinned`] performs, factored out so the
+/// bound dispatch path can run it from inside the guard the connection lane
+/// consults immediately before it calls out.
+fn pinned_in(
+    state: &Arc<Mutex<State>>,
+    registration: u64,
+    want: ToolBinding,
+) -> Result<Connected, McpClientError> {
+    let state = state.lock().unwrap();
+    if state.revoked || state.disposed || state.lifetime.is_cancelled() {
+        return Err(McpClientError::Closed);
+    }
+    if state.generation != want.generation || registration != want.registration {
+        return Err(McpClientError::Authority);
+    }
+    state
+        .client
+        .as_ref()
+        .map(|client| {
+            (
+                client.clone(),
+                state.generation,
+                state.lifetime.clone(),
+                state.material.clone(),
+            )
+        })
+        .ok_or(McpClientError::Closed)
+}
+
+/// The guard the bound path hands the connection lane: the host's own guard
+/// first (its verdict — a lost lease, a cancelled dispatch — is never
+/// preempted by ours), then this handle's transport. `check_dispatch` turns any
+/// error here into [`McpClientError::Authority`], the same stable refusal the
+/// unbound lane gives for a denied authorization.
+struct BoundGuard {
+    inner: Option<Arc<dyn agentkit_core::DispatchGuard>>,
+    state: Arc<Mutex<State>>,
+    registration: u64,
+    want: ToolBinding,
+}
+impl std::fmt::Debug for BoundGuard {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BoundGuard")
+            .field("inner", &self.inner.as_ref().map(|_| "host guard"))
+            .field("registration", &self.registration)
+            .field("want", &self.want)
+            .finish_non_exhaustive()
+    }
+}
+#[async_trait]
+impl agentkit_core::DispatchGuard for BoundGuard {
+    async fn check(&self) -> Result<(), agentkit_core::CoreError> {
+        if let Some(inner) = &self.inner {
+            inner.check().await?;
+        }
+        pinned_in(&self.state, self.registration, self.want)
+            .map(|_| ())
+            .map_err(|error| {
+                let reason =
+                    format!("MCP tool handle is not the session's live transport: {error}");
+                agentkit_core::CoreError::new("mcp_authority_revoked", &reason)
+            })
+    }
+    fn fence(&self) -> agentkit_core::DispatchFence {
+        match &self.inner {
+            Some(inner) => inner.fence(),
+            // No host fence exists on this call; the pin adds no fence of its
+            // own — it is an authority check, not a lease.
+            None => agentkit_core::DispatchFence {
+                task_id: String::new(),
+                attempt_id: String::new(),
+                fencing_token: 0,
+            },
+        }
     }
 }

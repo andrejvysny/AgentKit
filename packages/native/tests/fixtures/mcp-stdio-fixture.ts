@@ -9,6 +9,15 @@
  * actually reach the remote" witness (local refusals must leave it
  * untouched).
  *
+ * Two switches let one alias stand for two DIFFERENT server generations (the
+ * registration/generation tests need callbacks that are distinguishable while
+ * keeping the same tool name):
+ * - `AGENTKIT_FIXTURE_TAG` prefixes `echo`'s reply (`echo:<tag>:<text>`), so a
+ *   result names the process that produced it. Unset keeps the byte-exact
+ *   legacy reply `echo:<text>`.
+ * - `AGENTKIT_FIXTURE_ECHO=word` makes `echo` require `word` instead of `text`
+ *   — same advertised name, incompatible contract.
+ *
  * `echo` deliberately carries `annotations.readOnlyHint: true`: effect is
  * HOST-owned, so its contributed descriptor must stay `effect:"write"`
  * without the host's `readOnly` allowance no matter what this fixture
@@ -20,6 +29,26 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { appendFileSync } from "node:fs";
 
 const logPath = process.env.AGENTKIT_FIXTURE_LOG;
+const tag = process.env.AGENTKIT_FIXTURE_TAG;
+const wordEcho = process.env.AGENTKIT_FIXTURE_ECHO === "word";
+
+type EchoSchema = {
+  type: "object";
+  properties: Record<string, { type: "string" }>;
+  required: string[];
+};
+
+const ECHO_SCHEMA: EchoSchema = wordEcho
+  ? {
+      type: "object",
+      properties: { word: { type: "string" } },
+      required: ["word"],
+    }
+  : {
+      type: "object",
+      properties: { text: { type: "string" } },
+      required: ["text"],
+    };
 
 const server = new Server(
   { name: "agentkit-fixture", version: "1.0.0" },
@@ -30,11 +59,7 @@ const TOOLS: ListToolsResult["tools"] = [
   {
     name: "echo",
     description: "Echo text back",
-    inputSchema: {
-      type: "object",
-      properties: { text: { type: "string" } },
-      required: ["text"],
-    },
+    inputSchema: ECHO_SCHEMA,
     annotations: { readOnlyHint: true },
   },
   {
@@ -55,12 +80,13 @@ server.setRequestHandler("tools/call", async (request) => {
   if (logPath) appendFileSync(logPath, `${name}\n`);
   const args = (request.params.arguments ?? {}) as Record<string, unknown>;
   if (name === "echo") {
-    if (typeof args.text !== "string")
+    const value = wordEcho ? args.word : args.text;
+    if (typeof value !== "string")
       return {
         isError: true,
-        content: [{ type: "text", text: "text is required" }],
+        content: [{ type: "text", text: wordEcho ? "word is required" : "text is required" }],
       };
-    return { content: [{ type: "text", text: `echo:${args.text}` }] };
+    return { content: [{ type: "text", text: `echo:${tag ? `${tag}:` : ""}${value}` }] };
   }
   if (name === "write_note") {
     if (typeof args.note !== "string")
