@@ -9,7 +9,7 @@ use serde_json::Value;
 agentkit_contracts::impl_json_via_serde!(OutboxRecord);
 
 mod continuation;
-mod continuation_validation;
+pub(crate) mod continuation_validation;
 pub use continuation::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

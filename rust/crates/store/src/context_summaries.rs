@@ -6,7 +6,7 @@ use serde_json::Value;
 
 pub const CONTEXT_SUMMARIES_NAMESPACE: &str = "agentkit.compat.context-summaries";
 
-fn valid(value: &Value) -> bool {
+pub(crate) fn valid(value: &Value) -> bool {
     value.is_object()
         && [
             "summaryId",

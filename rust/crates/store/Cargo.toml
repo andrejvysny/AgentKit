@@ -19,6 +19,11 @@ thiserror = "2"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 uuid = { version = "1", features = ["v4"] }
 
+[features]
+# Off by default: importing a TypeScript adapters-sqlite database is a migration
+# step, not something every consumer pays to compile.
+ts-import = []
+
 [dev-dependencies]
 rusqlite = { version = "0.38", features = ["hooks"] }
 tempfile = "3"
