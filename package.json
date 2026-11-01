@@ -69,7 +69,8 @@
     "snapshot:release": "node scripts/snapshot-release.mjs",
     "test:coding-agent": "bun test examples/coding-agent",
     "start:coding-agent": "bun run examples/coding-agent/src/main.ts",
-    "build:native": "npx --no-install tsc -p packages/native/tsconfig.build.json"
+    "build:native": "npx --no-install tsc -p packages/native/tsconfig.build.json",
+    "build:fixture": "cargo build --manifest-path rust/Cargo.toml -p agentkit-host --features http --example http_fixture --locked"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",

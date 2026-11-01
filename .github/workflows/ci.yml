@@ -33,6 +33,13 @@ jobs:
           workspaces: rust
       - run: bun run --cwd packages/native build:native
 
+      # The mixed-runtime fixtures (packages/*/tests/rust-interop*.test.ts,
+      # rust-stream-boundaries) prebuild the Rust http_fixture HERE: a cold
+      # `cargo build` inside parallel test processes would race the shared
+      # target dir and add minutes to the suite. The lazy build in
+      # rust/tests/support/http-server.ts stays as a local-dev fallback.
+      - run: bun run build:fixture
+
       - run: bun test
 
       - run: bun run build
@@ -72,6 +79,8 @@ jobs:
         with:
           workspaces: rust
       - run: bun run --cwd packages/native build:native
+
+      - run: bun run build:fixture
 
       - name: bun test --coverage
         run: |
