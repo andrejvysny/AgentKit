@@ -103,6 +103,7 @@ pub(super) async fn prepare_continuation(
             anchor,
             None,
             Some(metadata),
+            None,
             Some(context.fence.clone()),
             context.runtime.now_ms(),
         )
@@ -550,6 +551,7 @@ mod tests {
             depth: 0,
             branch_index: 0,
             active,
+            archived: false,
             created_at: ConversationTimestamp::from_epoch_millis(1_700_000_000_000).unwrap(),
         }
     }

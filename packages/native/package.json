@@ -63,6 +63,9 @@
     "directory": "packages/native"
   },
   "devDependencies": {
+    "@agentkit/contracts": "workspace:*",
+    "@agentkit/host": "workspace:*",
+    "@agentkit/testing": "workspace:*",
     "@napi-rs/cli": "^3.4.0",
     "@types/bun": "^1.3.5",
     "typescript": "^5.8.3"

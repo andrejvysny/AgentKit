@@ -92,6 +92,16 @@ generator's `ToTs`/TS codegen is deliberately NOT used for wire types):
   service's `close()` stops the listener BEFORE entering the closing
   window, so no request is admitted mid-shutdown. Errors cross as
   `problem+json` from the Rust transport.
+- `store.callStore("<ns>.<method>")` covers the WHOLE
+  `AssistantStore` surface — `conversations`/`tasks`/`proposals`/
+  `inputs`/`settings`/`outbox`/`continuations`/`toolExecutions` (67
+  ops), each thin parse→engine→serialize, all transaction-compatible
+  (the same arms run under `beginTransaction`). `NativeAssistantStore`
+  implements the frozen `@agentkit/host` port aggregate over it and
+  passes the shared adapter conformance drivers (atomic transactions,
+  indexed search) — storage on Rust for the TypeScript host stack.
+  Known gap: priority aging lives in the TS store layer, not yet the
+  Rust claim path (two conformance cases skip by name).
 - `registerTool(definition, fn)` and `setProvider(fn)`: per-invocation
   references, reject maps to the normal tool/provider failure path
   (`tool_execution_failed`, `provider: <reason>`), no panic, and the full

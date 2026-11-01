@@ -92,6 +92,7 @@ async fn import(store: &SqliteStore, action: &Value, now: i64) -> Result<()> {
             depth: 0,
             branch_index: 0,
             active: message["active"].as_bool().unwrap(),
+            archived: false,
             created_at: now.into(),
         })
         .collect();

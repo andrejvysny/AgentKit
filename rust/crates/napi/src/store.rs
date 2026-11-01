@@ -15,8 +15,24 @@ use napi::threadsafe_function::ThreadsafeFunction;
 
 use crate::errors;
 
+#[path = "store_continuations.rs"]
+mod continuations;
+#[path = "store_conversations.rs"]
+mod conversations;
+#[path = "store_inputs.rs"]
+mod inputs;
+#[path = "store_outbox.rs"]
+mod outbox;
 #[path = "store_ports.rs"]
 mod ports;
+#[path = "store_proposals.rs"]
+mod proposals;
+#[path = "store_settings.rs"]
+mod settings;
+#[path = "store_tasks.rs"]
+mod tasks;
+#[path = "store_tool_executions.rs"]
+mod tool_executions;
 #[path = "store_transactions.rs"]
 mod transactions;
 

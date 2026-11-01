@@ -8,7 +8,7 @@ use std::{
 const APPLICATION_ID: i64 = 0x414b5253;
 /// The schema version this build creates and accepts; migrations land as
 /// `version < N` steps below.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 const VERSION: i64 = SCHEMA_VERSION;
 
 fn ownership(path: &Path) -> Result<Option<File>> {
@@ -81,7 +81,7 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<File>)> {
     if !fresh && identity != APPLICATION_ID {
         return Err(StoreError::ForeignDatabase);
     }
-    if !fresh && ![1, 2, 3, VERSION].contains(&version) {
+    if !fresh && ![1, 2, 3, 4, VERSION].contains(&version) {
         return Err(StoreError::UnsupportedVersion(version));
     }
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -103,6 +103,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<File>)> {
         if version < 4 {
             migrate_sessions(&mut connection)?;
         }
+        if version < 5 {
+            migrate_free_receipts(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -114,7 +117,26 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<File>)> {
 fn validate_schema(connection: &Connection, version: i64) -> Result<()> {
     let expected = Connection::open_in_memory()?;
     expected.execute_batch(&schema_sql(version))?;
-    if schema_signature(connection)? != schema_signature(&expected)? {
+    // A v1..v4 database legitimately still carries the proposal-bound
+    // `receipts.proposal_id`; `migrate_free_receipts` relaxes it below, so the
+    // signature comparison normalizes that one column away on both sides.
+    let normalize =
+        |rows: Vec<(String, String, String, String)>| -> Vec<(String, String, String, String)> {
+            rows.into_iter()
+            .map(|(kind, name, table, sql)| {
+                (
+                    kind,
+                    name,
+                    table,
+                    sql.replace(
+                        "proposal_id TEXT NOT NULL UNIQUE REFERENCES proposals(id) ON DELETE CASCADE",
+                        "proposal_id TEXT UNIQUE REFERENCES proposals(id) ON DELETE CASCADE",
+                    ),
+                )
+            })
+            .collect()
+        };
+    if normalize(schema_signature(connection)?) != normalize(schema_signature(&expected)?) {
         return Err(StoreError::ForeignDatabase);
     }
     let counter_ok:bool=connection.query_row(
@@ -152,6 +174,15 @@ fn schema_sql(version: i64) -> String {
     if version >= 4 {
         sql.push_str(SESSIONS_SCHEMA);
     }
+    if version >= 5 {
+        // Port-compat at version 5: a receipt may exist without a proposal
+        // (the port's `recordOutcome` keys by operation id alone), so the
+        // column is nullable — NULL passes the foreign-key check honestly.
+        sql = sql.replace(
+            "proposal_id TEXT NOT NULL UNIQUE REFERENCES proposals(id) ON DELETE CASCADE",
+            "proposal_id TEXT UNIQUE REFERENCES proposals(id) ON DELETE CASCADE",
+        );
+    }
     sql
 }
 
@@ -179,6 +210,39 @@ fn migrate_receipts(connection: &mut Connection) -> Result<()> {
     transaction.execute_batch(RECEIPTS_SCHEMA)?;
     backfill_legacy_uncertain(&transaction)?;
     transaction.pragma_update(None, "user_version", 3)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Version 5: receipt rows are no longer proposal-bound — the port's
+/// `recordOutcome` dedups by operation id alone, so `proposal_id` becomes
+/// nullable (NULL passes the foreign key honestly; any legacy empty-string
+/// sentinel from the transition window is normalized to NULL).
+fn migrate_free_receipts(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    let current = match transaction.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='receipts'",
+        [],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(sql) => Some(sql),
+        Err(rusqlite::Error::QueryReturnedNoRows) => None,
+        Err(error) => return Err(error.into()),
+    };
+    if current.is_some_and(|sql| sql.contains("NOT NULL UNIQUE REFERENCES proposals")) {
+        // Column redefine via the empty-orphan pattern: a table rebuild that
+        // renames a foreign-key parent needs `legacy_alter_table`, so the
+        // rows are parked in a plain scratch table instead. The scratch lives
+        // only inside this transaction; a failure below rolls the whole
+        // migration back (user_version included) and leaves `receipts`
+        // exactly as it was.
+        transaction.execute_batch("CREATE TABLE receipts_copy(operation_id TEXT PRIMARY KEY, proposal_id TEXT, record TEXT NOT NULL);")?;
+        transaction.execute_batch("INSERT INTO receipts_copy SELECT operation_id, NULLIF(proposal_id,''), record FROM receipts;")?;
+        transaction.execute_batch("DROP TABLE receipts;")?;
+        transaction.execute_batch("CREATE TABLE receipts(operation_id TEXT PRIMARY KEY, proposal_id TEXT UNIQUE REFERENCES proposals(id) ON DELETE CASCADE, record TEXT NOT NULL);")?;
+        transaction.execute_batch("INSERT INTO receipts SELECT operation_id, proposal_id, record FROM receipts_copy; DROP TABLE receipts_copy;")?;
+    }
+    transaction.pragma_update(None, "user_version", 5)?;
     transaction.commit()?;
     Ok(())
 }

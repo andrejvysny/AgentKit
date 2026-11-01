@@ -32,6 +32,7 @@ fn message(id: &str, timestamp: ConversationTimestamp) -> MessageRecord {
         depth: 0,
         branch_index: 0,
         active: true,
+        archived: false,
         created_at: timestamp,
     }
 }

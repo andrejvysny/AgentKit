@@ -255,6 +255,34 @@ export class NativeStore {
   }
 }
 
+/**
+ * The same compatibility port `NativeStore` exposes, wrapped directly around
+ * a raw binding handle (same JSON in/out and stable-error contract, no
+ * closed-flag bookkeeping). `NativeAssistantStore` uses it for `{ raw }`
+ * construction and for nothing else.
+ */
+export function createNativeStorePort(raw: RawNativeStore): NativeStorePort {
+  return {
+    async callStore<T>(operation: string, input: unknown = {}): Promise<T> {
+      return JSON.parse(
+        await lift(() => raw.callStore(operation, JSON.stringify(input))),
+      ) as T;
+    },
+    async transaction<T>(
+      fn: (view: NativeStorePort) => Promise<T>,
+    ): Promise<T> {
+      const transaction = await lift(() => raw.beginTransaction());
+      return withNativeTransaction(transaction, fn, lift);
+    },
+  };
+}
+
+export { NativeAssistantStore } from "./assistant-store.js";
+export type {
+  NativeAssistantStoreOptions,
+  NativeAssistantStoreClock,
+} from "./assistant-store.js";
+
 // ---------------------------------------------------------------------------
 // Session service
 // ---------------------------------------------------------------------------

@@ -31,6 +31,15 @@ pub(super) fn acquire(
 }
 
 impl SqliteStore {
+    /// The task's current lease, if it has one. Callers holding only the
+    /// port's `{taskId, leaseToken}` pair resolve the full fencing proof from
+    /// this record; every fenced engine write re-verifies it internally.
+    pub async fn get_lease(&self, task_id: &str) -> Result<Option<Lease>> {
+        let task_id = task_id.to_owned();
+        self.call(move |db| get(db, "leases", "task_id", &task_id))
+            .await
+    }
+
     /// Mints fresh authority, replacing any existing lease even for a terminal task.
     /// This trusted low-level operation does not perform worker admission or create an attempt.
     pub async fn acquire_lease(
