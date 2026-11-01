@@ -1,62 +1,78 @@
-# Rust migration - final pre-merge review record
+# Rust migration - review and hardening record
 
-- Date: 2026-11-01
-- Branch: `rust-migration` @ merge commit `26bc6d0` (Merge branch `rust-migration-t1`, external-review tranche W4-W11)
-- Review diff for the tranche: `82ad438..26bc6d0` (46 files, +5690/-212); full branch diff vs `master` is the whole migration.
-- Claim scope: Linux x64, Bun 1.4.4, Node v22.20.0 qualified cells. No live-provider or unavailable external integration results are claimed.
+- Dates: initial record 2026-11-01 (pre-merge); revised same day after an external review at `24b3d17` which rejected several claims in the first version. This version supersedes it; the first version's "all backend execution is Rust / frozen TS has no production consumers / fresh-process qualification / Windows verified" claims were **overstated** — see "Claim corrections".
+- Claim scope: Linux x64, Bun 1.4.4 (+ Node qualified cells). No live-provider, OAuth/keychain, macOS/Windows *execution*, or unavailable external integration results are claimed here. Windows lanes are compile/clippy-verified locally where toolchains allow; CI is the execution gate.
+- Branch: `rust-migration`. The hardening tranche responding to the review (reproduced P1s: MCP write-handler gate bypass, expired queued callback dispatch, MCP post-cancel dispatch, NODE_OPTIONS startup-file approvals, restart continuation, post-admission `maxTokens` override; P1/P2 core hook/terminal parity; typed-install P2; CI lane failures; section-3 parity rows) is recorded in `docs/rust/parity.md` / `acceptance.md` per slice.
 
-## What the branch delivers
+## Claim corrections (against the first version of this record)
 
-The entire backend runs on Rust (`rust/crates/*`) behind the frozen public TypeScript API, exposed through NAPI-RS bindings (`packages/native`). Client-side TS/React (`client`, `react`, `contracts`) is preserved; frozen TS backend libraries remain only as API-freeze artifacts with zero production consumers. Compositions: both examples, all four live scripts, and the qualification smoke run on `@agentkit/native`.
+| First-version claim | Corrected status |
+|---|---|
+| "The entire backend runs on Rust... zero production consumers" | Was true only for loop/store/host/session lanes. Coding pack executed TS tool bodies through the example until this tranche's `registerCodingTools`; desktop managed-integrations, `node-host.mjs`, and the OpenPCB smoke still ran TS backend implementations at review time — their status is tracked in the tranche entries, not claimed here. |
+| "Binding suite... MCP... green" as binding-level assurance | The binding paths bypassed crate-level guarantees (write gate vs executed callback, unbound dispatch, cancel-after-settle). Binding-level pins now exist (`mcp.test.ts`, `tool-identity`, `invocation-liveness`), which is what the first version should have meant. |
+| "Foreign targets: clean" | Windows cells FAILED CI at `24b3d17` (E0658 unstable `windows_by_handle` in the project-instructions reader). Fixed in the tranche via a stable-API identity path; CI remains the execution gate. "Compile/semantics verified" was honest; "clean" was not. |
+| "responses-smoke bridge-free exit 0" implying restart proof | The old smoke proved store-reopen under one process-global connection, NOT application restart. A real two-process continuation test now exists (`provider-continuity.test.ts`) and the smoke has a genuine two-process phase. |
+
+## What the branch delivers (verified)
+
+Backend logic in Rust (`rust/crates/*`) behind the frozen public TypeScript API via NAPI-RS bindings (`packages/native`): core loop incl. hooks/deadlines/terminal/media parity pins, store incl. receipts/conformance-parity, host session/compaction/permissions/leases, two-protocol provider lane with admission-consistent request building, durable logical provider connections surviving restart, MCP client+server with identity/authority invariants pinned at the binding, native coding toolpack with standing approvals (v4 fingerprints), native HTTP server incl. IPv6. Client-side TS/React preserved. Frozen TS backend libraries remain only as API-freeze + differential-test assets.
 
 ## Review map
 
 | Area | Start here |
 |---|---|
-| Surface ledger (per package: production role, test-only consumers) | `docs/rust/parity.md` |
-| Verification ledger (engine conformance, binding runtime surface, JS-tool guard/proposal-apply rows) | `docs/rust/acceptance.md` |
-| Binding milestone + reductions (MCP OAuth/elicitation, CORS, provider-write routes) | `docs/rust/native-binding-milestone.md` |
-| Public-API freeze reports | `docs/rust/api/*.api.md` (`bun run check:api`) |
-| Changelog narrative | `CHANGELOG.md` (Unreleased) |
-| Review-tranche commits | `git log 82ad438..26bc6d0 --oneline` |
+| Per-package production role + per-slice fix ledger | `docs/rust/parity.md` |
+| Verification ledger (conformance, binding surface, per-tranche evidence) | `docs/rust/acceptance.md` |
+| Binding milestone + documented reductions | `docs/rust/native-binding-milestone.md` |
+| Public-API freeze | `bun run check:api` (31 reports) |
+| Changelog | `CHANGELOG.md` Unreleased |
 
-## Review focus (highest-risk changes in the tranche)
+## Verification gates (re-run all before merge)
 
-1. **Proposal finalization** - `rust/crates/store/src/proposals.rs`: terminal stamp derives only from the committed receipt (first-write-wins); no-evidence plain CAS refused. Pinned by store unit tests + fresh-process reopen tests + binding-level port projections (`packages/native/tests/proposals.test.ts`).
-2. **MCP identity/dispatch** - `rust/crates/mcp/src/manager/*`, `rust/crates/napi/src/mcp_client.rs`: advertised==executed catalogue, one-step alias gate, `call_bound` goes through `request()` with a handle-pinned guard and wire-last cancellation check. Tests: `rust/crates/mcp/tests/generation.rs`, `packages/native/tests/mcp.test.ts` (real SDK client).
-3. **Cancellation bridge** - `rust/crates/napi/src/jsbridge.rs` + `packages/native/src/callback-router.ts`: host cancel reaches JS callbacks (`signal.aborted` observed at ~4 ms); cancelled coding runs take their process group down. Tests: `packages/native/tests/cancellation.test.ts`.
-4. **Approval fingerprint agreement** - `rust/crates/toolpacks-coding/src/command_fingerprint.rs` vs `packages/toolpacks-coding/src/command-fingerprint.ts`: shared tokenizer fixture (`rust/fixtures/coding-fingerprint/tokenizer.json`) run from both sides; effective-env claim revalidation; envelope v3. Gate name: `fingerprint-conformance` in CI.
-5. **Windows paths / instructions** - `rust/crates/host/src/project_instructions/fs.rs`, `packages/native/src/assistant-store.ts` (`fileURLToPath`): compile/semantics verified here; execution CI runs in the `native-windows` MSVC job (this host is Linux).
+| Gate | Command |
+|---|---|
+| Rust | `cd rust && cargo test --workspace --locked`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo fmt --all --check` |
+| Windows compile | `cargo clippy -p agentkit-host --target x86_64-pc-windows-msvc -- -D warnings` (CI `native-windows`) |
+| TS suites | root `bun test`; `cd packages/native && bun test tests` |
+| Typecheck | root typecheck incl. examples + native tests |
+| API/parity | `bun run check:api`; `bun run check:parity` |
+| Fingerprint differential (REQUIRED) | `AGENTKIT_RUN_RUST_CONFORMANCE=1 bun test packages/toolpacks-coding/tests/command-fingerprint-rust.test.ts` + named CI step |
+| Acceptance | `bun scripts/qualification/responses-smoke.mjs <db>` (two-process; fresh db path; Bun only) |
+| Installed artifacts | pack + strict-typed consumer + runtime smoke (bun/node) via the qualify scripts / CI pack lanes |
 
-## Verification matrix (observed on the pre-merge tree `1b00d15`, merged byte-identically)
+Rebuild note: `cd packages/native && bun run build:native` is the canonical binding build (root `build` is tsc-only).
 
-| Gate | Command | Result |
-|---|---|---|
-| Rust tests | `cargo test --workspace --locked` | 0 failures (incl. store proposals, host 223, mcp incl. `generation`, napi) |
-| Rust lints | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo fmt --all --check` | clean |
-| Foreign targets | FingerprintGuard 3-target clippy gate; CI `native-windows` (MSVC) | clean / branch-compiling |
-| Root suite | `bun test` | 3921 tests / 0 fail / 36 skip (273 files) |
-| Binding suite | `cd packages/native && bun test tests` | 199 pass / 0 fail / 2 skip (documented no-priority-aging cases) |
-| Typecheck | root `tsc` across packages + examples + native tests | clean |
-| API freeze | `bun run build && bun run build:umbrella && bun run check:api` | exit 0, 31 reports match |
-| Parity | `bun run check:parity` | exit 0 (transport-http 223, mcp-server 112, mcp-client 100, 192, 1034) |
-| End-to-end acceptance | `bun scripts/qualification/responses-smoke.mjs <db>` (bridge-free) | exit 0 - `{requests:3, toolExecutions:1, privateContinuationReopened:true, publicLeak:false}` |
+## Known limitations (honest, as of this tranche)
 
-Notes for re-running: build the binding first (`bun run build:native` in `packages/native`; root `build` only runs `tsc`). The smoke takes the DB path as a positional argument and must run under Bun (`Bun.serve`); remove a stale DB file before a re-run.
-
-## Known limitations (documented, non-blocking)
-
-- Frozen TS backend packages stay as exports - removal is an approval-gated breaking change; production has zero consumers (ledger in `parity.md`).
-- MCP binding: no OAuth/elicitation, deny-all `secretRefs`, in-memory configs; HTTP server: CORS + provider-write routes unwired in `startHttpServer`; store scheduler: priority aging skipped in 2 conformance cases (the 2 binding-suite skips).
-- Live-provider qualification and the two MANUAL live smokes (`coding-session`, `approval-session`, `compaction-session`) need a real model endpoint; not executed or claimed in this record.
-- Node support beyond the qualified cells is untested.
+- MCP binding: no OAuth/elicitation, deny-all `secretRefs`, in-memory configs (reductions documented in the milestone doc).
+- Store scheduler priority aging: the 2 binding-suite skips.
+- Node beyond qualified cells, live providers, macOS/Windows execution: untested here; CI/state as above.
+- Frozen TS backend packages remain published (API-freeze constraint); production consumers are removed per-slice — see parity ledger for the final consumer state, NOT this summary.
 
 ## Merge readiness checklist
 
-- [x] Tranche fully merged (`26bc6d0`), tree clean, no unpushed commits after push
-- [x] All gates green on the merged content (matrix above)
-- [x] API freeze + parity untouched or intentionally updated (no report deltas in tranche)
-- [x] Docs updated: `parity.md` ledger + engine-fix entries, `acceptance.md` rows, CHANGELOG Unreleased
-- [x] No TODO/PLAN scaffolding files; no `TODO: implement` markers in tranche diff
-- [ ] Maintainer: CI green on push (local-only policy prevented remote CI runs)
-- [ ] Maintainer: tag/release decision per `DEVELOPING.md`
+- [ ] Tranche merged/pushed; CI green on push for the declared release scope (the one gate this machine cannot run)
+- [x] All gates green locally on the final tree (matrix below)
+- [x] Reviewer-reproduced P1s closed through the public bindings with permanent boundary tests
+- [x] This record corrected against the first version's overclaims
+- [ ] Maintainer: tag/release decision per `DEVELOPMENT.md`
+
+## Verification matrix (final integration chain, single quiet-machine sequential run)
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all --check` (rust) | clean |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo test --workspace` | NO-FAILURES across all crates |
+| Windows cross-clippy (local) | ENVIRONMENT BLOCK: dies in dependency build scripts (`cc-rs`: `lib.exe` not found; `aws-lc-sys`, `libsqlite3-sys`); zero rustc/clippy errors reached any `agentkit` crate. CI `native-windows` (windows-latest, in `rust.yml`) is the execution gate — runs on push |
+| Root `bun test` | 4009 pass / 0 fail / 42 skip |
+| Native binding suite (`packages/native`, Bun) | 270 pass / 0 fail / 2 skip (skips = priority-aging, documented) |
+| Root typecheck (all packages + examples + native tests) | 0 errors |
+| `bun run check:api` (public-API freeze) | 31 reports match |
+| `bun run check:parity` | pass |
+| Fingerprint differential (`AGENTKIT_RUN_RUST_CONFORMANCE=1`) | pass |
+| `bun run check:native-package` (staged `npm pack` + platform tarball + strict typed consumer) | pass |
+| `scripts/node-smoke.mjs` (Node 22 cell) | exit 0 |
+| `scripts/umbrella-smoke.mjs` | exit 0 |
+| `scripts/qualification/responses-openpcb-smoke.mjs` (Node) | exit 0 |
+| `scripts/qualification/responses-smoke.mjs` (two-process; fresh DB) | exit 0 under Bun and under Node |
