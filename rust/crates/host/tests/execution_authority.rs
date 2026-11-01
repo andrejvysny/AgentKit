@@ -13,7 +13,7 @@ use agentkit_host::{
     AgentSessionService, AgentSessionServiceDeps, CodingPermissionAuthority, CreateSessionInput,
     PermissionContext, SessionExecutionAuthority, SystemRuntime,
 };
-use agentkit_store::{SqliteStore, EXECUTION_METADATA_KEY};
+use agentkit_store::{EXECUTION_METADATA_KEY, SqliteStore};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -44,7 +44,10 @@ async fn non_session_chats_answer_absence_never_error() {
         .await
         .unwrap();
 
-    assert_eq!(authority.mode_of(&context("rest-chat")).await.unwrap(), None);
+    assert_eq!(
+        authority.mode_of(&context("rest-chat")).await.unwrap(),
+        None
+    );
     assert_eq!(
         authority
             .plan_approved(Some("rest-chat"), "digest")
@@ -55,7 +58,10 @@ async fn non_session_chats_answer_absence_never_error() {
     // A chat id that does not exist at all is the same absence.
     assert_eq!(authority.mode_of(&context("nope")).await.unwrap(), None);
     assert_eq!(
-        authority.plan_approved(Some("nope"), "digest").await.unwrap(),
+        authority
+            .plan_approved(Some("nope"), "digest")
+            .await
+            .unwrap(),
         None
     );
     // A real session keeps its behavior: no execution state yet is absence.
@@ -112,8 +118,10 @@ async fn a_session_durable_mode_answers_and_malformed_state_stays_an_error() {
         .await
         .unwrap();
     assert!(authority.mode_of(&context("session-1")).await.is_err());
-    assert!(authority
-        .plan_approved(Some("session-1"), "digest")
-        .await
-        .is_err());
+    assert!(
+        authority
+            .plan_approved(Some("session-1"), "digest")
+            .await
+            .is_err()
+    );
 }
