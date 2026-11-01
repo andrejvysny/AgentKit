@@ -44,6 +44,14 @@ export interface ResponsesCanned {
    * includes `reasoning.encrypted_content`, so reasoning without it is a
    * protocol violation the provider must reject). */
   encryptedContent?: string;
+  /** Attach `content: [{type:"reasoning_text",text}]` to the reasoning
+   * item on the FINAL response object while `response.output_item.added`
+   * is emitted without any delta frames — terminal-only reasoning, which
+   * must survive into the completed event. Combined with streamed
+   * `reasoningDeltas` it models a conflict instead: text that does not
+   * extend the streamed prefix must fail `stream_output_mismatch` rather
+   * than complete. */
+  terminalReasoningText?: string;
 }
 
 export interface LoopbackOptions {
@@ -130,9 +138,12 @@ function responsesSse(canned: ResponsesCanned, stage: number): string {
   ];
   const output: Record<string, unknown>[] = [];
   const reasoningDeltas = stage === 0 ? (canned.reasoningDeltas ?? []) : [];
+  const hasReasoningItem =
+    stage === 0 &&
+    (reasoningDeltas.length > 0 || canned.terminalReasoningText !== undefined);
   const messageDeltas = reasoningDeltas.length > 0 && stage === 0 ? [] : deltas;
   let outputIndex = 0;
-  if (reasoningDeltas.length > 0) {
+  if (hasReasoningItem) {
     frames.push(
       sseEvent({
         type: "response.output_item.added",
@@ -151,11 +162,17 @@ function responsesSse(canned: ResponsesCanned, stage: number): string {
         }),
       );
     }
-    output.push({
+    const finalReasoning: Record<string, unknown> = {
       id: "reasoning1",
       type: "reasoning",
       encrypted_content: canned.encryptedContent ?? "enc_loopback",
-    });
+    };
+    if (canned.terminalReasoningText !== undefined) {
+      finalReasoning.content = [
+        { type: "reasoning_text", text: canned.terminalReasoningText },
+      ];
+    }
+    output.push(finalReasoning);
     outputIndex += 1;
   }
   if (messageDeltas.length > 0) {

@@ -2,6 +2,63 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**Crash recovery cannot strand a workspace behind unnameable evidence.**
+The native coding lane's approved re-execution after a mid-command SIGKILL
+could settle `completed` without ever running the command: reconciliation
+of the crash's never-upgraded pre-spawn intent published a quarantine
+naming no process (`pids: []`) and no group, and the lift proof demanded a
+process-group probe that record shape can never satisfy. Pre-spawn records
+now anchor their suspect window at publication time (long-lived same-user
+daemons with unreadable `environ` — the perpetual suspects on a busy
+machine — fall outside it while any genuine, necessarily-younger descendant
+stays inside); reconciliation retries the marker scan across churn before
+calling the survivor set UNKNOWN; a never-confirmed group is vacuous for the
+lift proof, whose reliable scan (no marked process, no unreadable suspect)
+is the authority, matching the rule under which reconciliation already
+retired such intents; and the driver's pgid-reporting write got a tight
+initial poll plus retries so a surviving spawner records its group before a
+kill typically can land. A live marked descendant still blocks — quarantine
+lifts only on positive exit. See `docs/rust/parity.md`
+"coding-lane crash-recovery tranche"; pinned by three lockdir tests, the
+revised `unknown_group_resolves_on_positive_marker_exit` contract, and the
+coding-agent crash-adoption acceptance test (deterministic on the loaded
+machine that previously failed it deterministically).
+
+**The migration's structural gate is mechanical, not narrative.**
+`scripts/check-composition-ownership.mjs` (root script `check:composition`,
+required in the CI lint job) rejects backend-implementation imports from
+shipped compositions — `examples/*/src`, the desktop Node entries, and
+`scripts/qualification` drivers — while allowing bindings, public types
+(`import type` always passes), browser clients, and an audited per-file
+allowlist that carries each exception's documented reason (coding-agent CLI
+profile/descriptor helpers, `getPresetByKind` preset metadata, the OAuth
+acceptance harness, the legacy-seed and proposal-conformance drivers kept
+deliberately as differential witnesses). Frozen engine symbols
+(`TurnRunner`, `TaskService`, `SingleProcessTaskRunner`, `createRestHandler`,
+`createCodingToolPack`, `createLockDirWorkspaceCoordinator`) are hard-banned
+even inside allowlisted files; namespace/default and `require()` imports of
+backend packages fail closed. `scripts/tests/composition-ownership.test.ts`
+pins both directions: the clean tree passes and each reintroduction shape is
+rejected. The `docs/rust/parity.md` ledger now states what the code says —
+the `host` row lists the real carve-out instead of "zero production
+consumers", `scripts/live` admits the deliberately-TS coding-pack drivers,
+and a `toolpacks-coding` row records that production coding tools run in
+Rust (`registerCodingTools`) with the TS pack retained as the fingerprint
+differential. The stale wiring claims in the two example READMEs are
+corrected, and `@agentkit/toolpacks-coding` moved to `devDependencies` of
+`examples/coding-agent` (only the acceptance test's foreign-coordinator
+contender still touches it).
+
+**Responses reasoning parity now has binding-level proof.** The two frozen
+client verdicts that previously had only Rust-integration evidence —
+terminal-only reasoning (no delta frames) surviving into the public
+`run.message.completed` as `reasoningContent`, and final reasoning that
+conflicts with the streamed prefix failing `stream_output_mismatch` with no
+completed message — are pinned through the public binding in
+`packages/native/tests/provider-lane.test.ts`. The loopback provider
+helper's `ResponsesCanned` gained `terminalReasoningText` to script the
+final-object reasoning content part.
+
 **Managed content is native end to end.** The store port grew the whole
 managed-content surface — `promptTemplates.publish|list|get|remove|render`,
 `skills.publish|list|get|remove`, `connections.list|get|save|remove` and

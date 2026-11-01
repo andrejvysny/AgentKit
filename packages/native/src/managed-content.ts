@@ -118,8 +118,7 @@ function invalid(message: string): never {
 
 /** `ports::text` mirror: required string, refused before the FFI. */
 function text(value: unknown, field: string): string {
-  if (typeof value !== "string")
-    invalid(`${field} must be a string`);
+  if (typeof value !== "string") invalid(`${field} must be a string`);
   return value as string;
 }
 
@@ -166,7 +165,11 @@ function validateTemplateShape(template: unknown): PromptTemplate {
   text(value["description"], "template.description");
   object(value["argumentsSchema"], "template.argumentsSchema");
   const messages = value["messages"];
-  if (!Array.isArray(messages) || messages.length === 0 || messages.length > 100)
+  if (
+    !Array.isArray(messages) ||
+    messages.length === 0 ||
+    messages.length > 100
+  )
     invalid("template.messages must be an array of 1 to 100 messages");
   for (const message of messages as unknown[]) {
     const entry = object(message, "template.messages[]");
@@ -447,7 +450,11 @@ function buildSurfaces(port: NativeStorePort): {
     resolve: async (input) => {
       const value = object(input, "input");
       const tolerate = value["tolerateUnavailable"];
-      if (tolerate !== undefined && tolerate !== null && typeof tolerate !== "boolean")
+      if (
+        tolerate !== undefined &&
+        tolerate !== null &&
+        typeof tolerate !== "boolean"
+      )
         invalid("tolerateUnavailable must be a boolean");
       return call<RunContentResolution>("runContent.resolve", {
         selection: validateRunContentSelection(value["selection"]),

@@ -492,12 +492,14 @@ async fn lockdir_intent_survives_reopen_and_blocks_until_explicit_recovery() {
     crash.kill_marked();
 }
 
-/// Unknown cleanup never self-clears: an intent that died before its
-/// process group was recorded (pgid `None`) cannot be positively proven
-/// gone, so the root stays blocked even after the marked process is killed,
-/// until recovery is explicitly recorded.
+/// A record with an unknown group must never become a PERMANENT block: an
+/// intent that died before its process group was recorded (pgid `None`)
+/// has no group to probe, so the marker scan is the authority — while any
+/// marked process lives the root stays blocked, and positive exit of the
+/// marked processes (the only possible positive proof for a group never
+/// recorded) lifts it without an operator's explicit recovery.
 #[tokio::test(flavor = "multi_thread")]
-async fn unknown_group_keeps_the_root_blocked_until_explicit_recovery() {
+async fn unknown_group_resolves_on_positive_marker_exit() {
     let _serial = gate().lock().await;
     let workspace = tempfile::tempdir().expect("workspace");
     let root = workspace.path().to_string_lossy().into_owned();
@@ -523,28 +525,18 @@ async fn unknown_group_keeps_the_root_blocked_until_explicit_recovery() {
     )
     .await
     .expect("prompt")
-    .expect_err("unknown cleanup is blocking evidence");
-    assert_eq!(error.code, "workspace_quarantined");
-
-    // Even after the marked child is dead, the group was never recorded —
-    // cleanup cannot be positively established, so the hold persists.
-    crash.kill_marked();
-    assert!(wait_until_gone(crash.marked_pid, 5).await);
-    let error = acquire(&reopened, &root, "next-run", 300)
-        .await
-        .expect_err("unknown must not silently resolve");
+    .expect_err("a live marked process is blocking evidence");
     assert_eq!(error.code, "workspace_quarantined");
     assert!(error.message.contains(&nonce));
 
-    assert!(
-        reopened
-            .clear_workspace_quarantine(&root)
-            .await
-            .expect("recovery")
-    );
-    let mut lease = acquire(&reopened, &root, "recovered", 2_000)
+    // Positive exit of the marked process lifts the hold for good: the
+    // reliable scan names nothing and finds no suspect, and there is no
+    // recorded group left to prove empty.
+    crash.kill_marked();
+    assert!(wait_until_gone(crash.marked_pid, 5).await);
+    let mut lease = acquire(&reopened, &root, "next-run", 2_000)
         .await
-        .expect("explicit recovery unblocks");
+        .expect("a positively gone marked process resolves the unknown group");
     lease.release().await;
 }
 

@@ -223,7 +223,13 @@ async fn run_shell(
     // spawn time — so the next boot can reconcile the crashed run's
     // process group instead of guessing from a bare pid. No durable
     // intent, no spawn: the failure is returned and the workspace stays
-    // unmodified.
+    // unmodified. The pre-spawn record anchors `spawned_at_ms` at its own
+    // publication: any process the command could still spawn is younger
+    // than this stamp, so the suspect window of the cleanup scan can
+    // exclude the same-user long-lived daemons whose environ is
+    // permanently unreadable (an unanchored 0 would make every one of them
+    // a permanent suspect and the record unsatisfiable). The driver
+    // upgrades the stamp to the real spawn time together with the pgid.
     env.coordinator
         .record_execution_intent(&crate::coordination::ExecutionIntent {
             root: root.clone(),
@@ -231,7 +237,7 @@ async fn run_shell(
                 execution_id: execution_id.clone(),
                 owner_pid: i64::from(process_id()),
                 pgid: None,
-                spawned_at_ms: 0,
+                spawned_at_ms: crate::coordination::now_ms_u64(),
             },
             holder: holder.clone(),
             spawned: false,

@@ -2417,4 +2417,201 @@ mod tests {
         assert!(errors.lock().expect("errors").is_empty());
         assert!(reopened_errors.lock().expect("errors").is_empty());
     }
+
+    /// The spawn-UNCONFIRMED quarantine shape: reconciliation publishes it
+    /// when a dead owner's intent never reported its spawn (pgid null).
+    /// Such a record must never become a permanent block: no process group
+    /// was ever confirmed, so there is no group to probe — once the
+    /// reliable marker scan shows no marked process and no unreadable
+    /// suspect younger than the record anchor, cleanup is positively
+    /// established and the next acquisition lifts the record itself.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unconfirmed_spawn_quarantine_lifts_on_a_clean_scan() {
+        let dir = temp_dir("unconfirmed-dir");
+        let root = temp_dir("unconfirmed-root");
+        let (created, errors) = coordinator(&dir, None);
+        let ws = ws_dir(&dir, &root).await;
+        std::fs::create_dir_all(&ws).expect("create ws dir");
+        // A nonce no process has ever carried: the scan is clean.
+        let nonce = format!("{}:{}", std::process::id(), uuid::Uuid::new_v4().simple());
+        std::fs::write(
+            format!("{ws}/quarantine.json"),
+            serde_json::json!({
+                "pids": [],
+                "quarantinedAtMs": crate::coordination::now_ms_u64(),
+                "runId": "crashed-run",
+                "chatId": "chat",
+                "toolCallId": "call-1",
+                "tool": "run_command",
+                "label": "make install",
+                "identity": {
+                    "executionId": nonce,
+                    "ownerPid": dead_pid().await,
+                    "pgid": null,
+                    "spawnedAtMs": crate::coordination::now_ms_u64().saturating_sub(3_600_000),
+                },
+            })
+            .to_string(),
+        )
+        .expect("write the reconciler-shaped record");
+        let mut lease = tokio::time::timeout(
+            Duration::from_secs(30),
+            created.acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("next", "run_command", "make test"),
+                cancellation: None,
+                max_wait_ms: None,
+                execution_id: None,
+            }),
+        )
+        .await
+        .expect("the unconfirmable block lifts on its own")
+        .expect("acquires once the scan is clean");
+        lease.release().await;
+        assert!(
+            !std::path::Path::new(&format!("{ws}/quarantine.json")).exists(),
+            "positive evidence retires the record"
+        );
+        assert!(errors.lock().expect("errors").is_empty());
+    }
+
+    /// The missing pgid must never WEAKEN the marker scan: a dead owner's
+    /// never-spawned intent whose marked descendant is still alive blocks
+    /// the root — reconciliation publishes the named survivor as durable
+    /// evidence instead of retiring — and only the descendant's positive
+    /// exit lifts the block.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_pgid_less_record_still_blocks_while_a_marked_descendant_lives() {
+        let dir = temp_dir("marked-dir");
+        let root = temp_dir("marked-root");
+        let (created, errors) = coordinator(&dir, None);
+        let nonce = format!("{}:{}", std::process::id(), uuid::Uuid::new_v4().simple());
+        let mut survivor = tokio::process::Command::new("/bin/sleep")
+            .arg("120")
+            .env(crate::process_tree::EXEC_ID_ENV, &nonce)
+            .spawn()
+            .expect("spawn the marked descendant");
+        let survivor_pid = survivor.id().expect("survivor pid") as i32;
+        created
+            .record_execution_intent(&ExecutionIntent {
+                root: root.clone(),
+                identity: CommandCleanupIdentity {
+                    execution_id: nonce.clone(),
+                    owner_pid: dead_pid().await,
+                    pgid: None,
+                    spawned_at_ms: crate::coordination::now_ms_u64(),
+                },
+                holder: holder("crashed", "run_command", "make install"),
+                spawned: false,
+            })
+            .await
+            .expect("pre-spawn intent publishes");
+        let error = created
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("next", "run_command", "make test"),
+                cancellation: None,
+                max_wait_ms: Some(80),
+                execution_id: None,
+            })
+            .await
+            .expect_err("a live marked descendant keeps the root blocked");
+        assert_eq!(error.code, "workspace_quarantined");
+        let ws = ws_dir(&dir, &root).await;
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(format!("{ws}/quarantine.json")).unwrap(),
+        )
+        .expect("readable quarantine");
+        assert!(
+            record["pids"]
+                .as_array()
+                .expect("pids array")
+                .iter()
+                .any(|pid| pid.as_i64() == Some(i64::from(survivor_pid))),
+            "the named survivor is the blocking evidence: {record}"
+        );
+        // Positive exit of the named process lifts the record for good.
+        let _ = survivor.start_kill();
+        let _ = survivor.wait().await;
+        let mut lease = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match created
+                    .acquire_workspace(AcquireWorkspaceInput {
+                        root: root.clone(),
+                        holder: holder("after", "run_command", "make test"),
+                        cancellation: None,
+                        max_wait_ms: Some(80),
+                        execution_id: None,
+                    })
+                    .await
+                {
+                    Ok(lease) => return lease,
+                    Err(error) if error.code == "workspace_quarantined" => {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    Err(error) => panic!("unexpected block: {error:?}"),
+                }
+            }
+        })
+        .await
+        .expect("the root frees once the marked descendant exits");
+        lease.release().await;
+        assert!(
+            !std::path::Path::new(&format!("{ws}/quarantine.json")).exists(),
+            "positive evidence retires the record"
+        );
+        assert_eq!(
+            entries(&ws),
+            Vec::<String>::new(),
+            "neither intent nor quarantine survives recovery"
+        );
+        assert!(errors.lock().expect("errors").is_empty());
+    }
+
+    /// Reconciliation of a DEAD owner's never-spawned intent (the shape a
+    /// SIGKILL leaves when the driver died before reporting its spawn):
+    /// a clean marker scan retires the intent outright — no quarantine is
+    /// published — and the next acquisition admits immediately.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dead_owner_never_spawned_intent_retires_on_a_clean_scan() {
+        let dir = temp_dir("retire-dir");
+        let root = temp_dir("retire-root");
+        let (created, errors) = coordinator(&dir, None);
+        let nonce = format!("{}:{}", std::process::id(), uuid::Uuid::new_v4().simple());
+        created
+            .record_execution_intent(&ExecutionIntent {
+                root: root.clone(),
+                identity: CommandCleanupIdentity {
+                    execution_id: nonce.clone(),
+                    owner_pid: dead_pid().await,
+                    pgid: None,
+                    spawned_at_ms: crate::coordination::now_ms_u64(),
+                },
+                holder: holder("crashed", "run_command", "make install"),
+                spawned: false,
+            })
+            .await
+            .expect("pre-spawn intent publishes");
+        let mut lease = tokio::time::timeout(
+            Duration::from_secs(30),
+            created.acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("next", "run_command", "make test"),
+                cancellation: None,
+                max_wait_ms: None,
+                execution_id: None,
+            }),
+        )
+        .await
+        .expect("reconciliation resolves the crashed run")
+        .expect("the workspace is free once no marked process exists");
+        lease.release().await;
+        let ws = ws_dir(&dir, &root).await;
+        assert_eq!(
+            entries(&ws),
+            Vec::<String>::new(),
+            "the retired intent leaves neither intent nor quarantine"
+        );
+        assert!(errors.lock().expect("errors").is_empty());
+    }
 }

@@ -67,6 +67,12 @@ jobs:
 
       - run: bun run lint
 
+      # Structural migration gate (review 2026-11-01 §6.6): shipped
+      # compositions execute the Rust backend through @agentkit/native;
+      # backend-implementation imports fail the build (scripts/tests/
+      # composition-ownership.test.ts pins the scanner itself).
+      - run: bun run check:composition
+
   # Informational only — no threshold gate, never fails the build. Runs
   # alongside `bun` rather than after it so it doesn't add to CI wall time.
   coverage:
