@@ -49,7 +49,10 @@ async function withService(
   const store = await NativeStore.inMemory();
   const service = await store.createService();
   if (provider)
-    service.setProvider(() => ({ content: "the answer", finishReason: "stop" }));
+    service.setProvider(() => ({
+      content: "the answer",
+      finishReason: "stop",
+    }));
   return { store, service };
 }
 
@@ -228,7 +231,9 @@ nativeTest(
       expect(stream.contentType).toStartWith("text/event-stream");
       expect(stream.text).toContain("run.message.delta");
       expect(stream.text).toContain("the answer");
-      expect(stream.text).toEndWith("event: agentkit.stream.settled\ndata: {}\n\n");
+      expect(stream.text).toEndWith(
+        "event: agentkit.stream.settled\ndata: {}\n\n",
+      );
 
       // Second start while running is refused; stop then frees the port.
       await expect(
@@ -343,11 +348,327 @@ nativeTest(
         call(`http://127.0.0.1:${port}/v1/chats`, { headers: AUTH }),
       ).resolves.toMatchObject({ status: 200 });
       await service.close();
-      await expect(fetch(`http://127.0.0.1:${port}/v1/chats`)).rejects.toThrow();
+      await expect(
+        fetch(`http://127.0.0.1:${port}/v1/chats`),
+      ).rejects.toThrow();
       await expect(service.stopHttpServer()).resolves.toBeUndefined();
       await expect(
         service.startHttpServer({ bearerToken: TOKEN }),
       ).rejects.toMatchObject({ code: "closed" });
+    } finally {
+      await service.close();
+      await store.close();
+    }
+  },
+  20_000,
+);
+
+nativeTest(
+  "startHttpServer binds the IPv6 loopback and answers over [::1]:port",
+  async () => {
+    // (External review, section 3.) `::1` used to die in DNS: the bracketed
+    // literal was handed to the resolver as a HOSTNAME. Both spellings of
+    // the literal — bare `::1` and URL-copied `[::1]` — must start the
+    // server and answer real requests.
+    const { store, service } = await withService(false);
+    const start = async (host: string) => {
+      try {
+        return await service.startHttpServer({
+          host,
+          port: 0,
+          bearerToken: TOKEN,
+        });
+      } catch (error) {
+        const cause = JSON.stringify(
+          (error as { details?: unknown })?.details ?? "",
+        );
+        // Skip ONLY for a sandbox with no IPv6 loopback (bind of the literal
+        // dies with EADDRNOTAVAIL / unsupported family). A DNS-lookup cause
+        // means the bracketed host reached the resolver — the exact bug this
+        // test pins — so it must FAIL, never skip.
+        if (/address family|cannot assign|eaddrnotavail|ipv6/i.test(cause)) {
+          // Skip only for a sandbox without an IPv6 loopback, documenting
+          // the OS's own error rather than silently passing.
+          console.log(
+            `SKIPPING IPv6 listen on ${host}: this sandbox cannot bind the IPv6 loopback (${cause})`,
+          );
+          return null;
+        }
+        throw error;
+      }
+    };
+    try {
+      for (const host of ["::1", "[::1]"]) {
+        const info = await start(host);
+        if (info === null) return;
+        expect(info.baseUrl).toBe(`http://[::1]:${info.port}`);
+        const anonymous = await call(`${info.baseUrl}/v1/chats`);
+        expect(anonymous.status).toBe(401);
+        expect(anonymous.contentType).toBe("application/problem+json");
+        const listed = await call(`${info.baseUrl}/v1/chats`, {
+          headers: AUTH,
+        });
+        expect(listed.status).toBe(200);
+        expect(Array.isArray(listed.body)).toBe(true);
+        await service.stopHttpServer();
+      }
+    } finally {
+      await service.close();
+      await store.close();
+    }
+  },
+  20_000,
+);
+
+nativeTest(
+  "cors option answers the reference transport's exact CORS matrix",
+  async () => {
+    // (External review, section 5.) The retired TypeScript transport
+    // decorated cross-origin responses; the native server must answer a
+    // browser identically — or, with `cors` omitted, byte-for-byte as if
+    // no browser was ever expected.
+    const { store, service } = await withService(false);
+    const ALLOWED = "http://localhost:5173";
+    const FOREIGN = "http://evil.example";
+    try {
+      const { baseUrl } = await service.startHttpServer({
+        bearerToken: TOKEN,
+        cors: {
+          origins: [ALLOWED],
+          exposeHeaders: ["X-Total-Count"],
+          maxAgeSeconds: 600,
+        },
+      });
+      const pre = await fetch(`${baseUrl}/v1/chats`, {
+        method: "OPTIONS",
+        headers: {
+          origin: ALLOWED,
+          "access-control-request-method": "POST",
+        },
+      });
+      expect(pre.status).toBe(204);
+      expect(pre.headers.get("access-control-allow-origin")).toBe(ALLOWED);
+      expect(pre.headers.get("vary")).toBe("Origin");
+      const methods = (pre.headers.get("access-control-allow-methods") ?? "")
+        .split(", ")
+        .filter(Boolean);
+      // Truth about THIS path: /v1/chats serves GET+POST — OPTIONS itself
+      // must not leak into the list.
+      expect(methods).toContain("GET");
+      expect(methods).toContain("POST");
+      expect(methods).not.toContain("OPTIONS");
+      expect(pre.headers.get("access-control-allow-headers")).toBe(
+        "Content-Type, Idempotency-Key, Last-Event-ID, Authorization",
+      );
+      expect(pre.headers.get("access-control-max-age")).toBe("600");
+
+      // Rejected origin: not 403 — the ordinary 405 for the OPTIONS verb,
+      // no ACAO, but the shared-cache `Vary: Origin` still rides.
+      const rejected = await fetch(`${baseUrl}/v1/chats`, {
+        method: "OPTIONS",
+        headers: { origin: FOREIGN },
+      });
+      expect(rejected.status).toBe(405);
+      expect(rejected.headers.get("access-control-allow-origin")).toBeNull();
+      expect(rejected.headers.get("vary")).toBe("Origin");
+
+      // Preflight to an unrouted path: 404, still CORS-decorated.
+      const ghost = await fetch(`${baseUrl}/v1/nope`, {
+        method: "OPTIONS",
+        headers: { origin: ALLOWED },
+      });
+      expect(ghost.status).toBe(404);
+      expect(ghost.headers.get("access-control-allow-origin")).toBe(ALLOWED);
+      expect(ghost.headers.get("access-control-allow-methods")).toBeNull();
+
+      // Matched ordinary response: allow-origin + expose + vary.
+      const ok = await fetch(`${baseUrl}/v1/chats`, {
+        headers: { ...AUTH, origin: ALLOWED },
+      });
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("access-control-allow-origin")).toBe(ALLOWED);
+      expect(ok.headers.get("access-control-expose-headers")).toBe(
+        "X-Total-Count",
+      );
+      expect(ok.headers.get("vary")).toBe("Origin");
+
+      // A refusal is decorated too — a policy that skips the 401 is a
+      // CORS error on the day something actually goes wrong.
+      const anon = await fetch(`${baseUrl}/v1/chats`, {
+        headers: { origin: ALLOWED },
+      });
+      expect(anon.status).toBe(401);
+      expect(anon.headers.get("access-control-allow-origin")).toBe(ALLOWED);
+
+      // Foreign origin: the SAME 200 body; only the browser blocks.
+      const foreign = await fetch(`${baseUrl}/v1/chats`, {
+        headers: { ...AUTH, origin: FOREIGN },
+      });
+      expect(foreign.status).toBe(200);
+      expect(foreign.headers.get("access-control-allow-origin")).toBeNull();
+      expect(foreign.headers.get("vary")).toBe("Origin");
+
+      await service.stopHttpServer();
+
+      // Unconfigured server: no response is touched, byte for byte, and
+      // OPTIONS falls through to the plain 405 like any other verb.
+      const plain = await service.startHttpServer({ bearerToken: TOKEN });
+      const untouched = await fetch(`${plain.baseUrl}/v1/chats`, {
+        headers: { ...AUTH, origin: ALLOWED },
+      });
+      expect(untouched.status).toBe(200);
+      expect(untouched.headers.get("vary")).toBeNull();
+      expect(untouched.headers.get("access-control-allow-origin")).toBeNull();
+      const plainPre = await fetch(`${plain.baseUrl}/v1/chats`, {
+        method: "OPTIONS",
+        headers: { origin: ALLOWED },
+      });
+      expect(plainPre.status).toBe(405);
+      expect(plainPre.headers.get("access-control-allow-origin")).toBeNull();
+      await service.stopHttpServer();
+    } finally {
+      await service.close();
+      await store.close();
+    }
+  },
+  20_000,
+);
+
+nativeTest(
+  "cors/providerSecrets options are strictly parsed, never ignored",
+  async () => {
+    const { store, service } = await withService(false);
+    try {
+      for (const options of [
+        { bearerToken: TOKEN, cors: {} },
+        { bearerToken: TOKEN, cors: { origins: [] } },
+        { bearerToken: TOKEN, cors: { origins: 5 } },
+        { bearerToken: TOKEN, cors: { origins: ["ok"], bogus: 1 } },
+        { bearerToken: TOKEN, cors: { origins: [" "] } },
+        { bearerToken: TOKEN, cors: { origins: ["ok", 7] } },
+        { bearerToken: TOKEN, cors: { origins: "*", allowHeaders: [""] } },
+        { bearerToken: TOKEN, cors: { origins: "*", exposeHeaders: "x" } },
+        { bearerToken: TOKEN, cors: { origins: "*", maxAgeSeconds: -1 } },
+        { bearerToken: TOKEN, cors: "on" },
+        { bearerToken: TOKEN, providerSecrets: "disk" },
+        { bearerToken: TOKEN, providerSecrets: true },
+      ] as const) {
+        await expect(
+          service.startHttpServer(options as never),
+        ).rejects.toMatchObject({ code: "invalid_input" });
+      }
+      // The wildcard spelling and a zero max-age ARE valid shapes.
+      const { baseUrl } = await service.startHttpServer({
+        bearerToken: TOKEN,
+        cors: { origins: "*", maxAgeSeconds: 0 },
+      });
+      const pre = await fetch(`${baseUrl}/v1/chats`, {
+        method: "OPTIONS",
+        headers: { origin: "http://anywhere.test" },
+      });
+      expect(pre.status).toBe(204);
+      expect(pre.headers.get("access-control-allow-origin")).toBe("*");
+      expect(pre.headers.get("access-control-max-age")).toBe("0");
+      await service.stopHttpServer();
+    } finally {
+      await service.close();
+      await store.close();
+    }
+  },
+  20_000,
+);
+
+nativeTest(
+  "provider management routes are real when providerSecrets wires a vault",
+  async () => {
+    // (External review, section 5.) Without a vault the credential writes
+    // answer 501 exactly like the TypeScript transport running with no
+    // `SecretStore`; with `"memory"` they really store, list, rename, and
+    // retire providers — and the plaintext key never comes back.
+    const { store, service } = await withService(false);
+    const provider = {
+      id: "review-fake",
+      label: "Review",
+      kind: "openai-compatible",
+      baseUrl: "https://api.review.test/v1",
+      defaultModel: "rev-1",
+    };
+    try {
+      const bare = await service.startHttpServer({ bearerToken: TOKEN });
+      const refused = await call(`${bare.baseUrl}/v1/providers`, {
+        method: "POST",
+        headers: { ...AUTH, "content-type": "application/json" },
+        body: JSON.stringify({ ...provider, apiKey: "sk-bare" }),
+      });
+      expect(refused.status).toBe(501);
+      expect(refused.body.code).toBe("not_implemented");
+      await service.stopHttpServer();
+
+      const wired = await service.startHttpServer({
+        bearerToken: TOKEN,
+        providerSecrets: "memory",
+      });
+      const created = await call(`${wired.baseUrl}/v1/providers`, {
+        method: "POST",
+        headers: { ...AUTH, "content-type": "application/json" },
+        body: JSON.stringify({ ...provider, apiKey: "sk-do-not-leak" }),
+      });
+      expect(created.status).toBe(201);
+      expect(created.body).toMatchObject({
+        id: "review-fake",
+        label: "Review",
+        kind: "openai-compatible",
+        baseUrl: "https://api.review.test/v1",
+        defaultModel: "rev-1",
+        enabled: true,
+        apiKeySecretRef: "provider/review-fake/api-key",
+      });
+      expect(JSON.stringify(created.body)).not.toContain("sk-do-not-leak");
+
+      const listed = await call(`${wired.baseUrl}/v1/providers`, {
+        headers: AUTH,
+      });
+      expect(listed.status).toBe(200);
+      const values = JSON.parse(listed.text) as Array<Record<string, unknown>>;
+      expect(values.map((v) => v.id)).toContain("review-fake");
+
+      const renamed = await call(`${wired.baseUrl}/v1/providers/review-fake`, {
+        method: "PATCH",
+        headers: { ...AUTH, "content-type": "application/json" },
+        body: JSON.stringify({ label: "Renamed" }),
+      });
+      expect(renamed.status).toBe(200);
+      expect(renamed.body.label).toBe("Renamed");
+
+      const duplicate = await call(`${wired.baseUrl}/v1/providers`, {
+        method: "POST",
+        headers: { ...AUTH, "content-type": "application/json" },
+        body: JSON.stringify(provider),
+      });
+      expect(duplicate.status).toBe(409);
+      expect(duplicate.body.code).toBe("duplicate_provider");
+
+      // Missing vault for a key update still needs the vault present —
+      // it is, so a rotate works and keeps the ref stable.
+      const rotated = await call(`${wired.baseUrl}/v1/providers/review-fake`, {
+        method: "PATCH",
+        headers: { ...AUTH, "content-type": "application/json" },
+        body: JSON.stringify({ apiKey: "sk-rotated" }),
+      });
+      expect(rotated.status).toBe(200);
+      expect(rotated.body.apiKeySecretRef).toBe("provider/review-fake/api-key");
+      expect(JSON.stringify(rotated.body)).not.toContain("sk-rotated");
+
+      const removed = await call(`${wired.baseUrl}/v1/providers/review-fake`, {
+        method: "DELETE",
+        headers: AUTH,
+      });
+      expect(removed.status).toBe(204);
+      const after = await call(`${wired.baseUrl}/v1/providers`, {
+        headers: AUTH,
+      });
+      expect((JSON.parse(after.text) as unknown[]).length).toBe(0);
+      await service.stopHttpServer();
     } finally {
       await service.close();
       await store.close();

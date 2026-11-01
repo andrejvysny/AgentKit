@@ -288,9 +288,11 @@ nativeTest(
       // and recreating the same id yields a FRESH chat, never the deleted
       // messages resurrected.
       await service.deleteChat("lifecycle");
-      expect(await store.callStore<unknown[]>("chats.list", {
-        includeArchived: true,
-      })).toEqual([]);
+      expect(
+        await store.callStore<unknown[]>("chats.list", {
+          includeArchived: true,
+        }),
+      ).toEqual([]);
       await expect(service.getState("lifecycle")).rejects.toMatchObject({
         code: "session_not_found",
       });

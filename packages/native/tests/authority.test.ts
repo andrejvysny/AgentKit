@@ -715,9 +715,12 @@ suite(
             usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 },
           },
         };
-        return new Response(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`, {
-          headers: { "content-type": "text/event-stream" },
-        });
+        return new Response(
+          `data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`,
+          {
+            headers: { "content-type": "text/event-stream" },
+          },
+        );
       },
     });
     let requests = 0;
@@ -726,10 +729,11 @@ suite(
     let service: NativeSessionService | undefined;
     try {
       const { NativeSessionService } = await import("../src/index.js");
-      const connectionId = await NativeSessionService.registerProviderConnection(
-        `http://127.0.0.1:${provider.port}`,
-        "sk-loopback",
-      );
+      const connectionId =
+        await NativeSessionService.registerProviderConnection(
+          `http://127.0.0.1:${provider.port}`,
+          "sk-loopback",
+        );
       service = await store.createService({
         jsToolAuthority: { configuredMode: "full_auto" },
         providerConfig: {
@@ -765,21 +769,21 @@ suite(
         authorization: "Bearer 0123456789abcdef0123456789abcdef",
         "content-type": "application/json",
       };
-      const created = await (
+      const created = (await (
         await fetch(`${http.baseUrl}/v1/chats`, {
           method: "POST",
           headers: auth,
           body: JSON.stringify({ title: "rest-minted" }),
         })
-      ).json() as { id: string };
+      ).json()) as { id: string };
       // The chat is REST-minted: NO createSession was ever called for it.
-      const submitted = await (
+      const submitted = (await (
         await fetch(`${http.baseUrl}/v1/chats/${created.id}/messages`, {
           method: "POST",
           headers: { ...auth, "idempotency-key": "turn-1" },
           body: JSON.stringify({ content: "go" }),
         })
-      ).json() as { runId: string };
+      ).json()) as { runId: string };
       const deadline = Date.now() + 15_000;
       let run: { status: string } = { status: "running" };
       while (Date.now() < deadline) {
@@ -788,7 +792,12 @@ suite(
             headers: auth,
           })
         ).json()) as { status: string };
-        if (["completed", "failed", "cancelled", "interrupted"].includes(run.status)) break;
+        if (
+          ["completed", "failed", "cancelled", "interrupted"].includes(
+            run.status,
+          )
+        )
+          break;
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       expect(run.status).toBe("completed");

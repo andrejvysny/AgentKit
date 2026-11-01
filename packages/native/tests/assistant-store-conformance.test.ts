@@ -77,7 +77,10 @@ describeAssistantStoreConformance({
     describe,
     it: (name: string, fn: () => void | Promise<void>) => {
       if (name in AGING_ENGINE_GAPS) {
-        it.skip(`${name} (skipped: Rust engine has no priority aging — see file comment)`, fn);
+        it.skip(
+          `${name} (skipped: Rust engine has no priority aging — see file comment)`,
+          fn,
+        );
         return;
       }
       it(name, fn);

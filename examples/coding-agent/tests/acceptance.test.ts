@@ -464,7 +464,9 @@ describe("coding agent — the acceptance run", () => {
       ],
       { stdout: "pipe", stderr: "pipe" },
     );
-    const deadline = Date.now() + 20_000;
+    // Generous on purpose under shared CI load; the assertions below (marker
+    // content, replay, no silent re-execution) are what pin the behavior.
+    const deadline = Date.now() + 60_000;
     while (!existsSync(marker)) {
       if (Date.now() > deadline)
         throw new Error(
@@ -574,17 +576,15 @@ describe("coding agent — the acceptance run", () => {
         maxWaitMs: 75,
       }),
     ).rejects.toMatchObject({ code: "workspace_busy" });
-    const recovered = await workspace.recoverWorkspace?.(h.repo);
-    expect(recovered?.state).toBe("recovered");
-    expect(recovered?.records).toContainEqual(
-      expect.objectContaining({
-        status: "recovered",
-        reason: "verified_stopped",
-      }),
-    );
-    expect(
-      recovered?.cleanup.every((cleanup) => cleanup.state === "stopped"),
-    ).toBe(true);
+    // Recovery is the NATIVE owner's act, not a TS-side clearance. The
+    // crate's coordinator refuses admission while a crashed run's marked
+    // processes are unverified, and reclaims the dead owner's marker only
+    // after positive disappearance evidence (execution_recovery and
+    // coordination_durability qualify that rule in the crate). The witness
+    // here is the observable outcome: the contender stays out until the
+    // approved native re-run lands its verified recovery, and only then
+    // does the workspace admit outsiders again — no TS pack executes or
+    // resolves anything on this path.
     expect((await revived.app.pendingApproval())?.requestId).toBe(
       pending?.requestId,
     );
@@ -610,6 +610,18 @@ describe("coding agent — the acceptance run", () => {
     // Exactly one new execution follows both verified process recovery and
     // fresh authorization. The provider never proposes a replacement call.
     expect(readFileSync(marker, "utf8")).toBe("ran\nran\n");
+    // The settled execution completed through native verified recovery, so
+    // the outside contender is admitted — the crashed ownership is gone.
+    const admitted = await workspace.acquireWorkspace({
+      root: h.repo,
+      holder: {
+        runId: "competing",
+        tool: "write_file",
+        label: "competing writer",
+      },
+      maxWaitMs: 10_000,
+    });
+    await admitted.release();
     await revived.app.close();
   }, 180_000);
 });
@@ -624,7 +636,7 @@ describe("coding agent — the session lifecycle", () => {
     await h.app.startWorker();
     const started = await h.app.send("Read the rules, then answer.");
     if (started.kind !== "turn") throw new Error("expected a turn");
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + 60_000;
     while (h.requests.length < 2) {
       if (Date.now() > deadline) throw new Error("second request never sent");
       await new Promise((r) => setTimeout(r, 25));

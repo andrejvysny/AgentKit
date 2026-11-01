@@ -19,11 +19,16 @@ import { available } from "./helpers/binding.js";
 
 const nativeTest = available ? test : test.skip;
 
-function portFor(store: NativeStore): InstanceType<typeof NativeAssistantStore> {
+function portFor(
+  store: NativeStore,
+): InstanceType<typeof NativeAssistantStore> {
   return new NativeAssistantStore({ store });
 }
 
-function proposalInput(id: string, operations: unknown[] = [{ op: "write", path: "a.ts" }]) {
+function proposalInput(
+  id: string,
+  operations: unknown[] = [{ op: "write", path: "a.ts" }],
+) {
   return {
     id,
     chatId: "chat-1",
@@ -39,23 +44,36 @@ function proposalInput(id: string, operations: unknown[] = [{ op: "write", path:
   } as never;
 }
 
-async function toApplying(port: ReturnType<typeof portFor>, id: string, operation: string) {
+async function toApplying(
+  port: ReturnType<typeof portFor>,
+  id: string,
+  operation: string,
+) {
   await port.proposals.create(proposalInput(id));
   await port.proposals.transition(id, ["pending"], "approved", {
     decision: { actor: "user", decidedAt: new Date().toISOString() },
   });
-  await port.proposals.transition(id, ["approved"], "applying", { operationId: operation });
+  await port.proposals.transition(id, ["approved"], "applying", {
+    operationId: operation,
+  });
 }
 
 nativeTest(
   "transition to applied without a recorded outcome leaves no receipt, even after reopen",
-    async () => {
-    const directory = mkdtempSync(join(tmpdir(), "agentkit-proposal-evidence-"));
+  async () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), "agentkit-proposal-evidence-"),
+    );
     const path = join(directory, "store.sqlite");
     const store = await NativeStore.open(path);
     const port = portFor(store);
     await toApplying(port, "prp-uncas", "op-uncas");
-    const applied = await port.proposals.transition("prp-uncas", ["applying"], "applied", {});
+    const applied = await port.proposals.transition(
+      "prp-uncas",
+      ["applying"],
+      "applied",
+      {},
+    );
     expect(applied?.status).toBe("applied");
     expect(applied?.claimedAt).toBeDefined(); // claim survives finishing
     expect(await port.proposals.getOutcome("op-uncas")).toBeNull();
@@ -80,7 +98,7 @@ nativeTest(
 
 nativeTest(
   "a committed receipt is first-write-wins and the stamp derives from it, not the replay",
-    async () => {
+  async () => {
     const directory = mkdtempSync(join(tmpdir(), "agentkit-proposal-receipt-"));
     const path = join(directory, "store.sqlite");
     const store = await NativeStore.open(path);
@@ -91,16 +109,22 @@ nativeTest(
       appliedOps: 1,
       failedOps: [{ opIndex: 1, error: "halfway" }],
     };
-    const recorded = await port.proposals.recordOutcome(
-      "op-partial",
-      { ...partial, resultJson: null, revision: null } as never,
-    );
+    const recorded = await port.proposals.recordOutcome("op-partial", {
+      ...partial,
+      resultJson: null,
+      revision: null,
+    } as never);
     // The port projects the verdict out of the engine's receipt; absent
     // optional strings are omitted, not nulled (baseline projection).
     expect(recorded).toEqual(partial);
     // The settle goes through the receipt: replaying a DIFFERENT outcome via
     // transition must not restate the evidence.
-    const applied = await port.proposals.transition("prp-partial", ["applying"], "applied", {});
+    const applied = await port.proposals.transition(
+      "prp-partial",
+      ["applying"],
+      "applied",
+      {},
+    );
     expect(applied?.status).toBe("applied");
     const receipt = await port.proposals.getOutcome("op-partial");
     expect(receipt).toEqual(partial);
@@ -113,7 +137,10 @@ nativeTest(
       appliedOps: 0,
       failedOps: [{ opIndex: 0, error: "rewrite" }],
     };
-    const replay = await port2.proposals.recordOutcome("op-partial", restated as never);
+    const replay = await port2.proposals.recordOutcome(
+      "op-partial",
+      restated as never,
+    );
     expect(replay).toEqual(partial);
     expect((await port2.proposals.get("prp-partial"))?.status).toBe("applied");
     await reopened.close();
