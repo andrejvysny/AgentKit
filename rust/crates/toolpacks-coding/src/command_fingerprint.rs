@@ -902,6 +902,10 @@ fn bind_script_entrypoints(
                 let found = script_runner(dir, &bare, env)?;
                 executables.push((Some(bare), found));
             }
+            // P1-D: `NODE_OPTIONS` startup selectors — inherited, assigned
+            // on the script line, or behind an `env` wrapper — select files
+            // the launched node preloads; each is direct input identity.
+            bind_node_option_startup_files(root, dir, &shell_words(command), env, state)?;
         }
     }
     Ok(())
@@ -994,6 +998,174 @@ fn bind_explicit_configs(
         if let Some(file) = env.get(name) {
             bind_direct_file(root, &js_resolve(cwd, &[file]), state)?;
         }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// NODE_OPTIONS startup selectors (external review P1-D)
+// ---------------------------------------------------------------------------
+
+/// The exact ASCII whitespace set used to split a `NODE_OPTIONS` value on
+/// both sides of the differential (JS `String.prototype.split` on the same
+/// class, Rust `split` on this char set). Deliberately NOT JS `/\s/`:
+/// U+00A0 etc. must not become separators on one side only.
+fn ascii_word_split(value: &str) -> Vec<&str> {
+    value
+        .split(|c: char| c.is_ascii_whitespace() || c == '\u{c}')
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// A strict abbreviation of `--require`/`--import`. Node accepts unambiguous
+/// long-option prefixes, so an abbreviated selector would make the launched
+/// process read a file this parser did not bind: refuse instead.
+fn selector_abbreviation(token: &str) -> bool {
+    (token.starts_with("--requir") && !token.starts_with("--require"))
+        || (token.starts_with("--impor") && token != "--import" && !token.starts_with("--import="))
+}
+
+/// Startup-file selectors Node honors in `NODE_OPTIONS` that this parser
+/// does not enumerate (`--loader`, `--experimental-loader`, CLI-only `-r`).
+/// A standing approval must never authorize a process whose preloaded file
+/// it cannot name, so these are refusals, not ignored tokens.
+fn unsupported_selector(token: &str) -> bool {
+    token == "-r"
+        || token == "--loader"
+        || token.starts_with("--loader=")
+        || token == "--experimental-loader"
+        || token.starts_with("--experimental-loader=")
+}
+
+/// A selector target must be a literal path this side can resolve exactly
+/// the way the launcher will: absolute or explicitly relative. A bare
+/// specifier resolves through module-resolution candidates (NODE_PATH,
+/// ancestor `node_modules`) that the fingerprint cannot enumerate, and any
+/// shell metacharacter means the value is not literal at all. Both are
+/// refusals.
+fn selector_path(candidate: &str) -> FpResult<String> {
+    if candidate.is_empty()
+        || candidate.starts_with('-')
+        || candidate
+            .chars()
+            .any(|c| matches!(c, '$' | '`' | ';' | '&' | '|' | '<' | '>'))
+    {
+        return fail("NODE_OPTIONS startup selector is not a literal file");
+    }
+    if !candidate.starts_with('/') && !candidate.starts_with("./") && !candidate.starts_with("../")
+    {
+        return fail("NODE_OPTIONS startup selector is not a literal path");
+    }
+    Ok(candidate.to_owned())
+}
+
+/// Pull the `--require=<path>` / `--require <path>` / `--import=<path>` /
+/// `--import <path>` startup files out of one `NODE_OPTIONS` value.
+fn parse_node_options(value: &str) -> FpResult<Vec<String>> {
+    let words = ascii_word_split(value);
+    let mut files: Vec<String> = Vec::new();
+    let mut index = 0usize;
+    while index < words.len() {
+        let token = words[index];
+        if token == "--require" || token == "--import" {
+            let Some(candidate) = words.get(index + 1) else {
+                return fail("NODE_OPTIONS startup selector is missing its file");
+            };
+            files.push(selector_path(candidate)?);
+            index += 2;
+            continue;
+        }
+        let equal = token.find('=');
+        let head = equal.map(|at| &token[..at]).unwrap_or(token);
+        if let Some(at) = equal
+            && (head == "--require" || head == "--import")
+        {
+            files.push(selector_path(&token[at + 1..])?);
+            index += 1;
+            continue;
+        }
+        if unsupported_selector(token) || selector_abbreviation(token) {
+            return fail("unsupported NODE_OPTIONS startup selector");
+        }
+        index += 1;
+    }
+    Ok(files)
+}
+
+/// The startup files the EFFECTIVE `NODE_OPTIONS` selects for the node
+/// process this command line launches, across the supported forms: an
+/// inherited value, a leading `NODE_OPTIONS=value` assignment, and an `env`
+/// wrapper (assignments before or after `env`). `words` is the command
+/// already split; `inherited` is the effective-environment value.
+///
+/// Anything the walk cannot confidently attribute to the launched process —
+/// a second assignment before the entry, a `NODE_OPTIONS` reassignment after
+/// the interpreter, `env` option flags, unparsed selector forms — is a
+/// refusal: the caller maps it to "ask again", so a standing approval never
+/// authorizes a startup file it did not bind.
+fn node_option_startup_files(words: &[String], inherited: Option<&str>) -> FpResult<Vec<String>> {
+    let mut index = 0usize;
+    let mut assigned: Option<&str> = None;
+    while let Some(word) = words.get(index) {
+        if assignment_prefix().is_match(word) {
+            let equal = word.find('=').expect("assignment prefix has `=`");
+            if &word[..equal] == "NODE_OPTIONS" {
+                if assigned.is_some() {
+                    return fail("NODE_OPTIONS is assigned twice before the launched process");
+                }
+                assigned = Some(&word[equal + 1..]);
+            }
+            index += 1;
+            continue;
+        }
+        if wrapper_word().is_match(word) {
+            if word == "env"
+                && words
+                    .get(index + 1)
+                    .is_some_and(|next| next.starts_with('-') && next != "--")
+            {
+                // `env -i` (and friends) rewrite the inherited environment
+                // the launched process sees: attribution is ambiguous.
+                return fail("env wrapper flags make NODE_OPTIONS attribution ambiguous");
+            }
+            index += 1;
+            // `env --` ends option parsing; the command words follow.
+            if words.get(index).map(String::as_str) == Some("--") {
+                index += 1;
+            }
+            continue;
+        }
+        break;
+    }
+    let entry = executable_name(words.get(index).map(String::as_str).unwrap_or(""));
+    if !node_bun_name().is_match(&entry) {
+        return Ok(Vec::new());
+    }
+    for word in &words[index + 1..] {
+        if assignment_prefix().is_match(word) && word.starts_with("NODE_OPTIONS=") {
+            return fail("NODE_OPTIONS is reassigned after the launched interpreter");
+        }
+    }
+    match assigned.or(inherited) {
+        None => Ok(Vec::new()),
+        Some(value) => parse_node_options(value),
+    }
+}
+
+/// Bind every startup file the effective `NODE_OPTIONS` selects for this
+/// command line, exactly like the direct-input binding for explicit CLI
+/// `--require` flags: the content hash of the SELECTED file is key material,
+/// so editing it invalidates the grant instead of silently authorizing the
+/// mutated preload.
+fn bind_node_option_startup_files(
+    root: &str,
+    base: &str,
+    words: &[String],
+    env: &HashMap<String, String>,
+    state: &mut BindState,
+) -> FpResult<()> {
+    for word in node_option_startup_files(words, env.get("NODE_OPTIONS").map(String::as_str))? {
+        bind_direct_file(root, &js_resolve(base, &[&word]), state)?;
     }
     Ok(())
 }
@@ -1100,6 +1272,7 @@ pub fn command_fingerprint(
     bind_metadata(&dirs, &mut state)?;
     bind_script_entrypoints(root, &dirs, &tokens, &env, &mut executables, &mut state)?;
     bind_explicit_configs(root, cwd, &tokens, &env, &mut state)?;
+    bind_node_option_startup_files(root, cwd, &tokens, &env, &mut state)?;
     let document = format!(
         "{{\"v\":1,\"executables\":[{}],\"files\":[{}],\"environment\":[{}]}}",
         executables
@@ -1642,36 +1815,36 @@ mod tests {
         assert_eq!(json_quote("é✓"), "\"é✓\"");
     }
 
-    /// Finding 2, verified against the 77fc558 baseline: `command-fingerprint.ts`
-    /// binds exactly `BASH_ENV`, `ENV` and `npm_config_userconfig` from the
-    /// environment as direct files, and `command-script-inputs.ts` parses no
-    /// environment at all — the review's premise that the baseline selects
-    /// `NODE_OPTIONS`/`BUN_OPTIONS` files into `directScriptFiles` is FALSE
-    /// (the tokenizer fixture pins the agreed, env-free outputs). The baseline
-    /// nevertheless forces re-approval whenever such a value appears or moves,
-    /// because every ENV_NAMES value — NODE_OPTIONS and BUN_OPTIONS included —
-    /// is digest key material. So a standing approval for `node script.js`
-    /// can never be replayed under `NODE_OPTIONS=--require ./evil.js`: the
-    /// digest differs, the grant never matches, and nothing executes.
+    /// Finding 2 (updated by external review P1-D): `NODE_OPTIONS` is BOTH
+    /// effective-environment key material (every ENV_NAMES value is) AND —
+    /// for the `--require`/`--import` startup selectors — a DIRECT-INPUT
+    /// selector: each selected existing file enters the digest content-hashed
+    /// like an explicit CLI `--require`, so editing the file (with the value
+    /// string untouched) invalidates the grant. `directScriptFiles` itself
+    /// still parses no environment (the tokenizer fixture pins the agreed,
+    /// env-free outputs); the selector binding is a separate pass. Shapes
+    /// that cannot be bound fail closed: the key is refused and a fresh
+    /// approval is required.
     #[test]
-    fn node_options_is_environment_identity_never_a_direct_input() {
+    fn node_options_is_environment_identity_and_a_direct_input_selector() {
         let (root, environment) = fixture("node-options");
         let root_s = root.to_string_lossy().into_owned();
         std::fs::write(root.join("evil.js"), "spawn('rm')\n").unwrap();
+        std::fs::write(root.join("other.js"), "x\n").unwrap();
         std::fs::write(root.join("script.js"), "console.log(1)\n").unwrap();
 
-        // (1) Parity: the selected direct-input set is identical with and
-        // without an injected `--require` value — env is not an input to it.
+        // (1) Tokenizer parity: the `directScriptFiles` set is identical
+        // with and without an injected `--require` value — that function
+        // never reads the environment; the selector binding is separate.
         let baseline = direct_script_files("node script.js").unwrap();
         assert_eq!(baseline, vec!["script.js".to_owned()]);
         assert!(
             !baseline.iter().any(|word| word.contains("evil")),
-            "the baseline does not parse NODE_OPTIONS into direct inputs"
+            "directScriptFiles itself remains env-free"
         );
 
-        // (2) Re-approval: the value is bound, so its appearance, absence and
-        // every edit move the digest — the approval identity cannot survive
-        // a NODE_OPTIONS change.
+        // (2) Re-approval: the value string binds, so its appearance,
+        // absence and every edit move the digest.
         let key = |env: &HashMap<String, String>| {
             command_fingerprint(&root_s, &root_s, "node script.js", env)
                 .unwrap()
@@ -1698,6 +1871,259 @@ mod tests {
             "--require ./evil.js".to_owned(),
         );
         assert_eq!(clean, key(&irrelevant), "only ENV_NAMES bind");
+
+        // (3) P1-D: the SELECTED file is direct input identity. The command
+        // and the NODE_OPTIONS value string stay constant; editing the file
+        // the selector names changes the digest, and restoring the bytes
+        // restores the digest (content-addressed, not mtime noise).
+        let before = key(&with_evil);
+        std::fs::write(root.join("evil.js"), "spawn('rm -rf /')\n").unwrap();
+        let after_edit = key(&with_evil);
+        assert_ne!(
+            before, after_edit,
+            "editing the startup file NODE_OPTIONS selects must invalidate the key"
+        );
+        std::fs::write(root.join("evil.js"), "spawn('rm')\n").unwrap();
+        assert_eq!(key(&with_evil), before, "content addressing is stable");
+    }
+
+    /// External review P1-D, all supported selector forms: keep the selector
+    /// string CONSTANT and mutate only the selected startup file — the
+    /// fingerprint must change, so the stored grant stops matching and a
+    /// fresh approval is required. Forms: inherited `NODE_OPTIONS`, literal
+    /// `VAR=value cmd` assignment on the package-script line, and the `env`
+    /// wrapper; plus the explicit CLI `node --require` control that already
+    /// worked (it must keep working).
+    #[test]
+    fn startup_selector_file_edits_invalidate_the_key_in_every_supported_form() {
+        let (root, environment) = fixture("selector-forms");
+        let root_s = root.to_string_lossy().into_owned();
+        std::fs::write(root.join("cli.js"), "console.log('cli')\n").unwrap();
+        let forms: &[(&str, Option<&str>)] = &[
+            ("node cli.js", Some("--require=./bootstrap.cjs")),
+            (
+                "node cli.js",
+                Some("--require ./bootstrap.cjs --import=./bootstrap.cjs"),
+            ),
+            ("NODE_OPTIONS=--require=./bootstrap.cjs node cli.js", None),
+            (
+                "NODE_OPTIONS=--require=./bootstrap.cjs env node cli.js",
+                None,
+            ),
+            ("NODE_OPTIONS=--import=./bootstrap.cjs node cli.js", None),
+            ("node --require ./bootstrap.cjs cli.js", None),
+        ];
+        for (index, (script, inherited)) in forms.iter().enumerate() {
+            std::fs::write(root.join("bootstrap.cjs"), "module.exports = 'v1'\n").unwrap();
+            std::fs::write(
+                root.join("package.json"),
+                format!(r#"{{"name":"t","scripts":{{"test":"{script}"}}}}"#),
+            )
+            .unwrap();
+            let mut env = environment.clone();
+            match inherited {
+                Some(value) => {
+                    env.insert("NODE_OPTIONS".to_owned(), (*value).to_owned());
+                }
+                None => {
+                    env.remove("NODE_OPTIONS");
+                }
+            }
+            let fingerprint = || {
+                command_fingerprint(&root_s, &root_s, "bun test", &env)
+                    .unwrap()
+                    .expect("keyable")
+            };
+            let approved = fingerprint();
+            assert_eq!(fingerprint(), approved, "form {index} is stable");
+            std::fs::write(root.join("bootstrap.cjs"), "module.exports = 'MUTATED'\n").unwrap();
+            let mutated = fingerprint();
+            assert_ne!(
+                approved, mutated,
+                "form {index} ({script}): editing the constant-selector startup file \
+                 must invalidate the standing approval"
+            );
+            std::fs::write(root.join("bootstrap.cjs"), "module.exports = 'v1'\n").unwrap();
+            assert_eq!(
+                fingerprint(),
+                approved,
+                "form {index} binds content, not mtime noise"
+            );
+        }
+    }
+
+    /// A per-command assignment REPLACES the inherited value for the
+    /// node it launches, but the wrapping runner (here `bun test` itself)
+    /// still runs under the inherited value — so BOTH selected files are
+    /// direct input identity: editing either must re-key, and a file
+    /// selected by neither never does.
+    #[test]
+    fn startup_selector_assignment_and_inherited_values_are_both_bound() {
+        let (root, environment) = fixture("selector-shadow");
+        let root_s = root.to_string_lossy().into_owned();
+        std::fs::write(root.join("cli.js"), "console.log('cli')\n").unwrap();
+        std::fs::write(root.join("inherited.cjs"), "1\n").unwrap();
+        std::fs::write(root.join("assigned.cjs"), "1\n").unwrap();
+        std::fs::write(root.join("unselected.cjs"), "1\n").unwrap();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name":"t","scripts":{"test":"NODE_OPTIONS=--require=./assigned.cjs node cli.js"}}"#,
+        )
+        .unwrap();
+        let mut env = environment.clone();
+        env.insert(
+            "NODE_OPTIONS".to_owned(),
+            "--require=./inherited.cjs".to_owned(),
+        );
+        let fingerprint = || {
+            command_fingerprint(&root_s, &root_s, "bun test", &env)
+                .unwrap()
+                .expect("keyable")
+        };
+        let approved = fingerprint();
+        std::fs::write(root.join("inherited.cjs"), "MUTATED\n").unwrap();
+        assert_ne!(
+            fingerprint(),
+            approved,
+            "the runner itself preloads the inherited selector's file"
+        );
+        std::fs::write(root.join("inherited.cjs"), "1\n").unwrap();
+        std::fs::write(root.join("assigned.cjs"), "MUTATED\n").unwrap();
+        assert_ne!(
+            fingerprint(),
+            approved,
+            "the launched node preloads the assigned selector's file"
+        );
+        std::fs::write(root.join("assigned.cjs"), "1\n").unwrap();
+        std::fs::write(root.join("unselected.cjs"), "MUTATED\n").unwrap();
+        assert_eq!(
+            fingerprint(),
+            approved,
+            "a file no selector names is never direct input"
+        );
+    }
+
+    /// Fail-closed matrix: every `NODE_OPTIONS` startup mechanism the parser
+    /// cannot confidently enumerate or attribute is a REFUSAL (the caller
+    /// maps it to "ask again"), never a silent grant without the file bound.
+    #[test]
+    fn ambiguous_startup_selector_shapes_fail_closed() {
+        let (root, environment) = fixture("selector-fail");
+        let root_s = root.to_string_lossy().into_owned();
+        std::fs::write(root.join("cli.js"), "console.log('cli')\n").unwrap();
+        std::fs::write(root.join("bootstrap.cjs"), "1\n").unwrap();
+        std::fs::create_dir_all(root.join("cfgdir")).unwrap();
+        let plain = r#"{"name":"t","scripts":{"test":"node cli.js"}}"#;
+        for (label, script, inherited) in [
+            (
+                "absent selector file",
+                plain,
+                Some("--require=./never-ak.cjs"),
+            ),
+            ("empty equals target", plain, Some("--require=")),
+            ("dangling selector", plain, Some("--require")),
+            (
+                "selector value is another flag",
+                plain,
+                Some("--require --require=./bootstrap.cjs"),
+            ),
+            (
+                "bare module specifier",
+                plain,
+                Some("--require=bootstrap.cjs"),
+            ),
+            (
+                "directory as selector target",
+                plain,
+                Some("--require=./cfgdir"),
+            ),
+            (
+                "unsupported loader selector",
+                plain,
+                Some("--loader=./x.mjs"),
+            ),
+            (
+                "unsupported experimental-loader",
+                plain,
+                Some("--experimental-loader=./x.mjs"),
+            ),
+            (
+                "CLI-only -r in NODE_OPTIONS",
+                plain,
+                Some("-r ./bootstrap.cjs"),
+            ),
+            (
+                "abbreviated --require prefix",
+                plain,
+                Some("--requir=./bootstrap.cjs"),
+            ),
+            (
+                "abbreviated --import prefix",
+                plain,
+                Some("--impor=./bootstrap.cjs"),
+            ),
+            (
+                "nonliteral selector value",
+                plain,
+                Some("--require=./$(evil).cjs"),
+            ),
+            (
+                "mid-command reassignment",
+                r#"{"name":"t","scripts":{"test":"node cli.js NODE_OPTIONS=--require=./evil.cjs"}}"#,
+                None,
+            ),
+            (
+                "duplicate assignment before the entry",
+                r#"{"name":"t","scripts":{"test":"NODE_OPTIONS=--require=./bootstrap.cjs NODE_OPTIONS=--import=./bootstrap.cjs node cli.js"}}"#,
+                None,
+            ),
+            (
+                "env wrapper option flags",
+                r#"{"name":"t","scripts":{"test":"env -i NODE_OPTIONS=--require=./bootstrap.cjs node cli.js"}}"#,
+                None,
+            ),
+        ] {
+            std::fs::write(root.join("package.json"), script).unwrap();
+            let mut env = environment.clone();
+            match inherited {
+                Some(value) => {
+                    env.insert("NODE_OPTIONS".to_owned(), value.to_owned());
+                }
+                None => {
+                    env.remove("NODE_OPTIONS");
+                }
+            }
+            assert!(
+                command_fingerprint(&root_s, &root_s, "bun test", &env).is_err(),
+                "{label}: must refuse to key, never authorize an unbound startup file"
+            );
+        }
+
+        // An unreadable selector target is a refusal, not an absence.
+        #[cfg(unix)]
+        if unsafe { libc::geteuid() } != 0 {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(root.join("package.json"), plain).unwrap();
+            std::fs::set_permissions(
+                root.join("bootstrap.cjs"),
+                std::fs::Permissions::from_mode(0o000),
+            )
+            .unwrap();
+            let mut env = environment.clone();
+            env.insert(
+                "NODE_OPTIONS".to_owned(),
+                "--require=./bootstrap.cjs".to_owned(),
+            );
+            assert!(
+                command_fingerprint(&root_s, &root_s, "bun test", &env).is_err(),
+                "an unreadable startup file fails closed"
+            );
+            std::fs::set_permissions(
+                root.join("bootstrap.cjs"),
+                std::fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+        }
     }
 
     /// Finding 3, identity half: the executable's dev/ino/mode/size/mtime/

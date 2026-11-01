@@ -143,6 +143,8 @@ impl Tool for WriteFile {
             model_data: None,
             summary: None,
             status: None,
+
+            model_content: None,
         })
     }
 }
@@ -630,6 +632,8 @@ impl Tool for SlowWrite {
             model_data: None,
             summary: None,
             status: None,
+
+            model_content: None,
         })
     }
 }
@@ -831,6 +835,8 @@ impl Tool for GatedWrite {
             model_data: None,
             summary: None,
             status: None,
+
+            model_content: None,
         })
     }
 }
@@ -1897,7 +1903,12 @@ impl SessionFlushPlanner for Racy {
                 }
                 Race::UnsupportedConfigAfterSnapshot => {
                     self.inner
-                        .configure("s1", None, Some(json!({"policy": "transcript"})), None)
+                        .configure(
+                            "s1",
+                            Some(vec![json!({"id": "skill", "revision": "1"})]),
+                            None,
+                            None,
+                        )
                         .await
                         .unwrap();
                 }
@@ -2411,9 +2422,11 @@ async fn a_model_change_after_planning_reaches_the_later_follow_up() {
 }
 
 /// Checking only model/provider keys would still accept an obsolete plan
-/// after the session acquired unsupported context options. A refreshed plan
-/// must use the same host validation as submission and leave the input
-/// visible instead of dispatching a turn that silently ignores those options.
+/// after the session acquired a setting the native executor refuses (selected
+/// Skills — context assembly options are honored since S4, so they can no
+/// longer stage a turn that silently ignores them). A refreshed plan must use
+/// the same host validation as submission and leave the input visible instead
+/// of dispatching a turn the executor cannot honor.
 #[tokio::test]
 async fn a_config_change_after_planning_revalidates_queued_turns() {
     let f = fixture_with(false).await;
@@ -3493,4 +3506,466 @@ async fn cancelling_summary_preserves_pending_request() {
             .is_empty()
     );
     assert!(f.store.get_chat("s1").await.unwrap().unwrap().metadata["agentkit.session.compactRequestedAt"].is_string());
+}
+
+// ---------------------------------------------------------------------------
+// Context assembly (S4): the recipe's exact config admits and compacts, the
+// anchored-history policy drops prior-run records, and stale tool results are
+// elided to the frozen head+tail marker.
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+async fn seed_message(
+    f: &Fixture,
+    now: i64,
+    id: &str,
+    run: Option<&str>,
+    role: &str,
+    content: Value,
+    parent: Option<&str>,
+    tool_call_id: Option<&str>,
+    tool_calls: Option<Value>,
+    metadata: Value,
+) {
+    f.store
+        .append_message(
+            MessageInput {
+                id: Some(id.into()),
+                chat_id: "s1".into(),
+                run_id: run.map(str::to_owned),
+                role: role.into(),
+                content,
+                parent_message_id: parent.map(str::to_owned),
+                tool_call_id: tool_call_id.map(str::to_owned),
+                tool_calls,
+                model_result_json: None,
+                metadata,
+                ..Default::default()
+            },
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+}
+
+/// Script one finished turn of history directly into the store: the user
+/// record, its run's internal tool-call assistant, the tool result, optionally
+/// a steering record, and the final answer. Records chain one under the next
+/// — exactly the shape staging and the durable projection leave behind — and
+/// the NEXT scripted turn chains under this one's final answer.
+#[allow(clippy::too_many_arguments)]
+async fn seed_turn(
+    f: &Fixture,
+    now: i64,
+    run: &str,
+    user_id: &str,
+    user: &str,
+    call_id: &str,
+    tool_content: Value,
+    steering: Option<(&str, &str)>,
+    answer_id: &str,
+    answer: &str,
+) {
+    seed_message(
+        f,
+        now,
+        user_id,
+        None,
+        "user",
+        json!(user),
+        None,
+        None,
+        None,
+        json!({}),
+    )
+    .await;
+    let call_record = format!("{user_id}#call");
+    let tool_record = format!("{user_id}#tool");
+    let calls =
+        json!([{"id": call_id, "name": "read_file", "argumentsJson": "{\"path\":\"a.txt\"}"}]);
+    seed_message(
+        f,
+        now + 1,
+        &call_record,
+        Some(run),
+        "assistant",
+        json!(""),
+        Some(user_id),
+        None,
+        Some(calls),
+        json!({"internal": true}),
+    )
+    .await;
+    seed_message(
+        f,
+        now + 2,
+        &tool_record,
+        Some(run),
+        "tool",
+        tool_content,
+        Some(&call_record),
+        Some(call_id),
+        None,
+        json!({"internal": true, "toolName": "read_file"}),
+    )
+    .await;
+    let mut answer_parent = tool_record.clone();
+    if let Some((input_id, text)) = steering {
+        let steer_id = format!("steer:{input_id}");
+        seed_message(
+            f,
+            now + 3,
+            &steer_id,
+            Some(run),
+            "user",
+            json!(text),
+            Some(&tool_record),
+            None,
+            None,
+            json!({"steering": true, "inputId": input_id}),
+        )
+        .await;
+        answer_parent = steer_id;
+    }
+    seed_message(
+        f,
+        now + 4,
+        answer_id,
+        Some(run),
+        "assistant",
+        json!(answer),
+        Some(&answer_parent),
+        None,
+        None,
+        json!({"placeholder": false}),
+    )
+    .await;
+}
+
+fn shape(request: &agentkit_core::ChatRequest) -> Vec<String> {
+    request
+        .messages
+        .iter()
+        .map(|message| {
+            // Tool rows are identified by their call id (frozen TS shape,
+            // `context-transcript.test.ts`), everything else by a content
+            // prefix.
+            if message.role == "tool" {
+                return format!("tool:{}", message.tool_call_id.clone().unwrap_or_default());
+            }
+            format!(
+                "{}:{}",
+                message.role,
+                match &message.content {
+                    Value::String(text) => text.chars().take(24).collect::<String>(),
+                    other => other.to_string().chars().take(24).collect::<String>(),
+                }
+            )
+        })
+        .collect()
+}
+
+/// The frozen elision fixture: `elideStaleToolResults` on a 9000-character
+/// result (defaults 2/6000/2000/1000) cuts it to 3092 characters —
+/// head(2000) followed by
+/// `\n…[6000 characters of an earlier tool result elided; call the tool
+/// again if you need them]…\n` followed by tail(1000). sha256
+/// `c0234dd33ad2c17372db91edbf1532a2577d03f0c58b281753f8a969f8289c5c` —
+/// pinned from the TS helper's output, so the native marker string and the
+/// head/tail/omitted arithmetic are byte-checked against the frozen lane.
+const ELIDED_9000_SHA256: &str = "c0234dd33ad2c17372db91edbf1532a2577d03f0c58b281753f8a969f8289c5c";
+
+#[tokio::test]
+async fn stale_tool_results_elide_to_head_and_tail_before_compaction() {
+    let f = fixture_with(false).await;
+    let big = format!(
+        "{}{}{}",
+        "H".repeat(2000),
+        "m".repeat(6000),
+        "T".repeat(1000)
+    );
+    seed_turn(
+        &f,
+        10,
+        "run-r1",
+        "u1",
+        "q1",
+        "call-old",
+        json!(big),
+        None,
+        "a1",
+        "answer one",
+    )
+    .await;
+    seed_turn(
+        &f,
+        20,
+        "run-r2",
+        "u2",
+        "q2",
+        "call-mid",
+        json!(big),
+        None,
+        "a2",
+        "answer two",
+    )
+    .await;
+    f.service
+        .send("s1", &send_input(json!("q3"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    let requests = f.requests.lock().unwrap();
+    let last = requests.last().unwrap();
+    // Transcript replay still pairs every call with its result…
+    assert_eq!(
+        shape(last),
+        [
+            "user:q1".to_owned(),
+            "assistant:".to_owned(),
+            "tool:call-old".to_owned(),
+            "assistant:answer one".to_owned(),
+            "user:q2".to_owned(),
+            "assistant:".to_owned(),
+            "tool:call-mid".to_owned(),
+            "assistant:answer two".to_owned(),
+            "user:q3".to_owned(),
+        ]
+    );
+    let tools: Vec<&agentkit_core::ChatMessage> =
+        last.messages.iter().filter(|m| m.role == "tool").collect();
+    assert_eq!(tools.len(), 2);
+    // …but the result older than the last two turns is cut to head + tail,
+    // byte-for-byte the frozen helper's output…
+    let cut = tools[0].content.as_str().unwrap();
+    {
+        use sha2::{Digest, Sha256};
+        assert_eq!(
+            format!("{:x}", Sha256::digest(cut.as_bytes())),
+            ELIDED_9000_SHA256,
+            "elided content diverged from the frozen TS helper output"
+        );
+    }
+    assert!(cut.starts_with(&"H".repeat(2000)));
+    assert!(cut.ends_with(&"T".repeat(1000)));
+    assert!(
+        cut.contains("[6000 characters of an earlier tool result elided; call the tool again if you need them]"),
+        "{cut}"
+    );
+    assert_eq!(cut.chars().count(), 3092);
+    // …while the last two turns' result stays whole.
+    assert_eq!(tools[1].content, json!(big));
+}
+
+#[tokio::test]
+async fn final_answers_policy_drops_prior_run_records_as_frozen() {
+    let f = fixture_with(false).await;
+    f.service
+        .configure("s1", None, Some(json!({"policy": "final_answers"})), None)
+        .await
+        .unwrap();
+    seed_turn(
+        &f,
+        10,
+        "run-r1",
+        "u1",
+        "q1",
+        "call-old",
+        json!("small result"),
+        Some(("st-1", "steer text")),
+        "a1",
+        "answer one",
+    )
+    .await;
+    seed_turn(
+        &f,
+        20,
+        "run-r2",
+        "u2",
+        "q2",
+        "call-mid",
+        json!("small result"),
+        None,
+        "a2",
+        "answer two",
+    )
+    .await;
+    f.service
+        .send("s1", &send_input(json!("q3"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    let requests = f.requests.lock().unwrap();
+    // Pinned to the frozen TS contract (`context-transcript.test.ts`
+    // "keeps final answers only when the descriptor says so"): the tool call,
+    // the tool result and the steering record of PRIOR runs drop out; the
+    // visible user/assistant answers remain.
+    assert_eq!(
+        shape(requests.last().unwrap()),
+        [
+            "user:q1".to_owned(),
+            "assistant:answer one".to_owned(),
+            "user:q2".to_owned(),
+            "assistant:answer two".to_owned(),
+            "user:q3".to_owned(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn transcript_policy_replays_prior_run_calls_results_and_steering() {
+    let f = fixture_with(false).await;
+    f.service
+        .configure("s1", None, Some(json!({"policy": "transcript"})), None)
+        .await
+        .unwrap();
+    seed_turn(
+        &f,
+        10,
+        "run-r1",
+        "u1",
+        "q1",
+        "call-old",
+        json!("small result"),
+        Some(("st-1", "steer text")),
+        "a1",
+        "answer one",
+    )
+    .await;
+    seed_turn(
+        &f,
+        20,
+        "run-r2",
+        "u2",
+        "q2",
+        "call-mid",
+        json!("small result"),
+        None,
+        "a2",
+        "answer two",
+    )
+    .await;
+    f.service
+        .send("s1", &send_input(json!("q3"), None, WhenBusy::Reject))
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    let requests = f.requests.lock().unwrap();
+    // The same history under `transcript` (the frozen default) keeps every
+    // prior run's records, slotted ahead of that run's final answer.
+    assert_eq!(
+        shape(requests.last().unwrap()),
+        [
+            "user:q1".to_owned(),
+            "assistant:".to_owned(),
+            "tool:call-old".to_owned(),
+            "user:steer text".to_owned(),
+            "assistant:answer one".to_owned(),
+            "user:q2".to_owned(),
+            "assistant:".to_owned(),
+            "tool:call-mid".to_owned(),
+            "assistant:answer two".to_owned(),
+            "user:q3".to_owned(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn the_live_compaction_recipe_config_admits_and_compacts() {
+    // The EXACT composition of `scripts/live/compaction-session.ts`:
+    // context { policy: "transcript", windowTokens: 24000, reserveTokens:
+    // 4000, keepRecentTokens: 6000 }. Before S4 this failed at task staging
+    // with `not_implemented` before its first provider request.
+    let f = fixture_with(false).await;
+    f.service
+        .configure(
+            "s1",
+            None,
+            Some(json!({
+                "policy": "transcript",
+                "windowTokens": 24000,
+                "reserveTokens": 4000,
+                "keepRecentTokens": 6000
+            })),
+            None,
+        )
+        .await
+        .unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send("s1", &send_input(json!("first"), None, WhenBusy::Reject))
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn");
+    };
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    // The admission carries the recipe's resolved budget, not the fallback.
+    let events = f
+        .store
+        .events_after_number(&turn_id, None, 1000)
+        .await
+        .unwrap();
+    let admitted = events
+        .iter()
+        .find(|record| record.event["type"] == "run.context.admitted")
+        .expect("the provider request has a prior context admission");
+    assert_eq!(admitted.event["data"]["windowTokens"], 24000);
+    assert_eq!(admitted.event["data"]["windowSource"], "descriptor");
+    assert_eq!(admitted.event["data"]["reserveTokens"], 4000);
+
+    // Compaction witness: an oversized scripted history under the recipe
+    // config compacts automatically before the next provider request.
+    f.service
+        .send(
+            "s1",
+            &send_input(json!("a".repeat(45000)), None, WhenBusy::Reject),
+        )
+        .await
+        .unwrap();
+    f.host.run_once().await.unwrap();
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send(
+            "s1",
+            &send_input(json!("b".repeat(45000)), None, WhenBusy::Reject),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn");
+    };
+    f.host.run_once().await.unwrap();
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        TaskStatus::Completed
+    );
+    let events = f
+        .store
+        .events_after_number(&turn_id, None, 1000)
+        .await
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event["type"] == "run.context.compacted"
+                && event.event["data"]["reason"] == "threshold"),
+        "the recipe config never compacted: {:?}",
+        events.iter().map(|e| &e.event["type"]).collect::<Vec<_>>()
+    );
+    let requests = f.requests.lock().unwrap();
+    assert!(
+        requests
+            .last()
+            .unwrap()
+            .messages
+            .iter()
+            .any(|message| message.content.to_string().contains("<summary>")),
+        "the compacted view never reached the provider"
+    );
 }

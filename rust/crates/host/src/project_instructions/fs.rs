@@ -129,10 +129,12 @@ fn read_plain_file(
 /// the platform's own primitives: `symlink_metadata` opens with
 /// `FILE_FLAG_OPEN_REPARSE_POINT` (a link or junction is seen as itself),
 /// and the identity check compares the volume serial + file index that the
-/// handle itself reports (the `fstat`/`dev`/`ino` equivalent). There is no
-/// `O_NOFOLLOW`, so a swap between the check and the open is caught by the
-/// identity mismatch — the opened handle then names a different file and the
-/// read is refused, never followed blindly.
+/// handle itself reports via `GetFileInformationByHandle` — the
+/// `fstat`/`dev`/`ino` equivalent (see [`file_identity`]; the `std` getters
+/// for these fields are unstable, so the check goes through `windows-sys`).
+/// There is no `O_NOFOLLOW`, so a swap between the check and the open is
+/// caught by the identity mismatch — the opened handle then names a
+/// different file and the read is refused, never followed blindly.
 #[cfg(windows)]
 fn read_plain_file(
     root: &str,
@@ -141,7 +143,8 @@ fn read_plain_file(
 ) -> HostResult<Option<ProjectInstructionsText>> {
     use std::fs::OpenOptions;
     use std::io::ErrorKind;
-    use std::os::windows::fs::MetadataExt;
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
 
     let real_root = std::fs::canonicalize(root)
         .map_err(|error| HostError::Execution(format!("Cannot resolve workspace root: {error}")))?;
@@ -165,6 +168,22 @@ fn read_plain_file(
             "Instruction file is not a regular file.".into(),
         ));
     }
+    // `lstat` half of the identity check: query the volume serial + file
+    // index of the entry itself. The reparse-point flag means the handle is
+    // the path entry we just inspected — never the file a link points at —
+    // mirroring what `lstat` sees on POSIX.
+    let inspected = OpenOptions::new()
+        .read(true)
+        .attributes(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(&target)
+        .map_err(|error| {
+            HostError::Execution(format!("Cannot inspect instruction file: {error}"))
+        })?;
+    let expected_identity = file_identity(&inspected)?;
+    drop(inspected);
+    // `O_NOFOLLOW` has no Windows equivalent, so the swap between the check
+    // and the open is caught below instead: the opened handle follows any
+    // link, and an identity mismatch then names a different file.
     let mut file = OpenOptions::new()
         .read(true)
         .open(&target)
@@ -172,15 +191,42 @@ fn read_plain_file(
     let opened = file
         .metadata()
         .map_err(|error| HostError::Execution(format!("Cannot stat instruction file: {error}")))?;
-    if !opened.is_file()
-        || opened.volume_serial_number() != expected.volume_serial_number()
-        || opened.file_index() != expected.file_index()
-    {
+    if !opened.is_file() || file_identity(&file)? != expected_identity {
         return Err(HostError::Execution(
             "Instruction file changed during open.".into(),
         ));
     }
     Ok(Some(drain_and_decode(&mut file, max_bytes)?))
+}
+
+/// The volume serial + file index the system reports FOR THE OPEN HANDLE —
+/// the `fstat`/`dev`/`ino` equivalent. Queried through
+/// `GetFileInformationByHandle` (stable `windows-sys` binding) because the
+/// matching `std::os::windows::fs::MetadataExt` getters are unstable behind
+/// `windows_by_handle`, which the pinned stable toolchain rejects outright.
+#[cfg(windows)]
+fn file_identity(handle: &impl std::os::windows::io::AsRawHandle) -> HostResult<(u32, u64)> {
+    use std::mem::MaybeUninit;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    // SAFETY: `handle` is an open handle owned by the caller, and the
+    // out-param points at writable memory of the exact struct size.
+    let reported = unsafe { GetFileInformationByHandle(handle.as_raw_handle(), info.as_mut_ptr()) };
+    if reported == 0 {
+        return Err(HostError::Execution(format!(
+            "Cannot identify instruction file: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    // SAFETY: a successful call fills the whole struct.
+    let info = unsafe { info.assume_init() };
+    Ok((
+        info.dwVolumeSerialNumber,
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    ))
 }
 
 /// Read `max_bytes + 1` (the truncation witness, mirroring Node's

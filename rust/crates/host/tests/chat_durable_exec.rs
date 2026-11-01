@@ -97,6 +97,8 @@ impl Tool for Mutate {
             model_data: None,
             summary: None,
             status: None,
+
+            model_content: None,
         })
     }
 }
@@ -281,6 +283,8 @@ fn recorded_result(executions: u64) -> Value {
         model_data: None,
         summary: None,
         status: None,
+
+        model_content: None,
     })
     .unwrap()
 }

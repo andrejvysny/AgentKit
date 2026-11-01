@@ -31,7 +31,10 @@ use crate::errors;
 use crate::jsbridge::JsBridge;
 use crate::provider::JsProvider;
 use crate::tool::JsToolContributor;
+use coding_lane::{CodingLane, CodingLaneContributor, CodingLaneGuard, LaneWorkspaceResolver};
 
+#[path = "coding_lane.rs"]
+mod coding_lane;
 #[path = "http_server.rs"]
 mod http_server;
 #[path = "service_management.rs"]
@@ -48,6 +51,7 @@ struct Core {
     host: AgentHost,
     service: AgentSessionService,
     contributor: Arc<JsToolContributor>,
+    lane: Arc<CodingLane>,
     worker: Option<WorkerHandle>,
     subscriptions: Mutex<Vec<Arc<Subscription>>>,
     http: Option<http_server::HttpServer>,
@@ -85,10 +89,15 @@ impl SessionService {
     /// `optionsJson` (optional): `{closeTimeoutMs?, jsToolAuthority?:
     /// {configuredMode?, planToolNames?, planGrantMode?}, providerConfig?:
     /// {protocol, providerId, connectionId, model, temperature?,
-    /// maxTokens?}}`. With `providerConfig`, provider HTTP/SSE executes in
+    /// maxTokens?}, providerAuthKind?: "api-key"|"chatgpt-account"}`.
+    /// With `providerConfig`, provider HTTP/SSE executes in
     /// Rust over a connection registered via `registerProviderConnection`
     /// (keys never appear in `optionsJson`); without it, the JS callback
-    /// provider slot serves turns as before. JS write tools
+    /// provider slot serves turns as before. `providerAuthKind` declares
+    /// the JS callback lane's parameter capabilities: `"chatgpt-account"`
+    /// (an account-backed adapter that rejects sampling/output parameters)
+    /// suppresses the implicit output cap and omits undeclared options from
+    /// the bridge payload; the default `"api-key"` lane is unchanged. JS write tools
     /// are governed by the Rust coding-pack authority (plan mode blocks
     /// them; ask mode asks per call; only plan-tool approval escalates,
     /// durably) — an unsupported configuration is refused at construction,
@@ -103,13 +112,18 @@ impl SessionService {
         let runtime: SharedRuntime = std::sync::Arc::new(agentkit_host::SystemRuntime);
         let contributor = Arc::new(JsToolContributor::new(Arc::clone(&bridge)));
         let authority = Arc::new(BindingAuthority::new());
+        let coding_authority = Arc::clone(&authority) as Arc<dyn CodingPermissionAuthority>;
+        let lane = Arc::new(CodingLane::new(Arc::clone(&coding_authority)));
         let guard = JsToolGuard::new(
-            Arc::clone(&authority) as Arc<dyn CodingPermissionAuthority>,
+            coding_authority,
             options.configured_mode,
             options.plan.clone(),
         );
         let provider: Arc<dyn agentkit_core::ChatProvider> = match &options.provider {
-            None => Arc::new(JsProvider::new(Arc::clone(&bridge))),
+            None => Arc::new(
+                JsProvider::new(Arc::clone(&bridge))
+                    .with_account_backed(options.account_backed_provider),
+            ),
             Some(lane) => {
                 // The same fence the callback bridge enforces: once `close()`
                 // has begun, no new provider request may leave the process.
@@ -151,8 +165,31 @@ impl SessionService {
         let executor: Arc<dyn TaskExecutor> = Arc::new(
             ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
                 ChatExecutorOptions {
-                    tool_contributors: vec![Arc::clone(&contributor) as Arc<dyn ToolContributor>],
-                    tool_guards: vec![Arc::new(guard) as Arc<dyn ToolGuard>],
+                    tool_contributors: vec![
+                        Arc::clone(&contributor) as Arc<dyn ToolContributor>,
+                        // The Rust coding toolpack, once registered, joins
+                        // the SAME lane: same snapshot, same durable
+                        // execution, same receipts.
+                        Arc::new(CodingLaneContributor::new(Arc::clone(&lane)))
+                            as Arc<dyn ToolContributor>,
+                    ],
+                    tool_guards: vec![
+                        Arc::new(guard) as Arc<dyn ToolGuard>,
+                        // Both coding-namespace guards of the crate's own
+                        // chain: the permission matrix and the high-risk
+                        // fresh-approval guard. Each judges only the
+                        // `coding` namespace; the JS namespace stays on the
+                        // JS guard — guards compose with AND.
+                        Arc::new(CodingLaneGuard::new(Arc::clone(&lane))) as Arc<dyn ToolGuard>,
+                        Arc::new(agentkit_toolpacks_coding::HighRiskCommandGuard)
+                            as Arc<dyn ToolGuard>,
+                    ],
+                    // Exact-call remembering for native shell approvals:
+                    // the crate's fingerprint-v4 policy over the registered
+                    // lane's workspace. Unregistered resolves to nothing,
+                    // so every approvable call keeps asking.
+                    standing: Some(LaneWorkspaceResolver::standing_policy(Arc::clone(&lane))
+                        as Arc<dyn agentkit_host::StandingApprovalPolicy>),
                     // Sessions whose descriptor carries a workspace get the
                     // AGENTS.md/CLAUDE.md system block exactly as the
                     // TypeScript authority injects it; descriptor-less
@@ -189,6 +226,7 @@ impl SessionService {
                 host,
                 service,
                 contributor,
+                lane,
                 worker: Some(worker),
                 subscriptions: Mutex::new(Vec::new()),
                 http: None,
@@ -219,6 +257,36 @@ impl SessionService {
         core.contributor
             .register(&definition_json)
             .map_err(errors::invalid)
+    }
+
+    /// Register the RUST coding toolpack as a first-class contributor on
+    /// this service's executor lane: `read_file`, `list_dir`, `find_files`,
+    /// `code_search`, `repo_map`, `git_inspect`, `edit_file`, `write_file`,
+    /// `run_command`, `run_tests`, and `submit_plan` — the crate's own
+    /// descriptors, executed by Rust, governed by the crate's own
+    /// permission + high-risk guards over the binding's durable authority,
+    /// with the crate's fingerprint-v4 standing approvals for the shell
+    /// tools. Nothing on this path crosses into JS: no callback, no TS
+    /// pack, no fallback.
+    ///
+    /// `optionsJson`: `{workspaceRoot (REQUIRED, absolute), sandbox?
+    /// ("required"|"off", default "required"), network?, testCommands?,
+    /// allowGitWrites?, allowSensitive?, configuredMode?
+    /// ("read_only"|"ask"|"auto_edit"|"full_auto"|"plan", default "ask" —
+    /// the mode used until the session's durable execution state says
+    /// otherwise), role? ("implementer"|"reviewer"|"supervisor"),
+    /// planToolNames? (default ["submit_plan"]), identity? (default the
+    /// root; part of the standing-approval key envelope), coordinationDir?
+    /// (default the per-uid shared lock dir), coordinationWaitMs?}`.
+    /// One-shot: a second registration is refused; the descriptor set of a
+    /// service is immutable once the worker can claim turns.
+    #[napi]
+    pub async fn register_coding_tools(&self, options_json: String) -> Result<()> {
+        let core_guard = self.core.lock().await;
+        let core = core_guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        core.lane.register(&options_json).await
     }
 
     #[napi]
@@ -584,6 +652,12 @@ impl SessionService {
                     Err(_) => self.uncertain.store(true, Ordering::SeqCst),
                 }
             }
+            // Native coding commands this process owns get the crate's own
+            // teardown (drain + scratch removal) once no new dispatch can
+            // start; anything a DEAD process left is the next boot's
+            // startup sweep, not ours. Outcomes stay whatever the receipt
+            // log decides — teardown never claims them.
+            core.lane.dispose().await;
             drop(core);
         }
         self.bridge.mark_closed();
@@ -808,6 +882,14 @@ struct ServiceOptions {
     configured_mode: CodingMode,
     plan: PlanConfiguration,
     provider: Option<ProviderLane>,
+    /// The JS callback lane's declared parameter capabilities (P: account
+    /// parity). `true` means the callback wraps an account-backed client
+    /// that REJECTS sampling/output parameters: admission then never
+    /// injects an implicit output cap (TS reference: `bounded-context-client`
+    /// enforces the ceiling only when the request carries one, for
+    /// `chatgpt-account` clients), and the bridge payload omits options the
+    /// adapter does not declare. The API-key lane (default) is unchanged.
+    account_backed_provider: bool,
 }
 
 /// The Rust-native provider lane selected by `providerConfig`. A
@@ -815,6 +897,7 @@ struct ServiceOptions {
 /// preset (`chat-completions` or `responses`) over a registered connection
 /// instead of the JS callback provider. Credentials are NOT part of this —
 /// they live only in the connection registry, keyed by `connection_id`.
+#[derive(Debug)]
 struct ProviderLane {
     protocol: ProviderProtocol,
     provider_id: String,
@@ -827,7 +910,7 @@ struct ProviderLane {
     max_tokens: Option<u64>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProviderProtocol {
     ChatCompletions,
     Responses,
@@ -852,6 +935,7 @@ impl Default for ServiceOptions {
                 granted_mode: CodingMode::Ask,
             },
             provider: None,
+            account_backed_provider: false,
         }
     }
 }
@@ -913,6 +997,20 @@ fn parse_service_options(text: Option<&str>) -> Result<ServiceOptions> {
     }
     if let Some(value) = object.get("providerConfig") {
         options.provider = Some(parse_provider_config(value)?);
+    }
+    if let Some(value) = object.get("providerAuthKind") {
+        let kind = value
+            .as_str()
+            .filter(|text| *text == "api-key" || *text == "chatgpt-account")
+            .ok_or_else(|| {
+                errors::invalid("providerAuthKind must be \"api-key\" or \"chatgpt-account\"")
+            })?;
+        if kind == "chatgpt-account" && options.provider.is_some() {
+            return Err(errors::invalid(
+                "providerAuthKind \"chatgpt-account\" describes the JS callback lane; the Rust lane over providerConfig is API-key shaped",
+            ));
+        }
+        options.account_backed_provider = kind == "chatgpt-account";
     }
     Ok(options)
 }
@@ -980,9 +1078,18 @@ fn parse_provider_config(value: &Value) -> Result<ProviderLane> {
     };
     let max_tokens = match object.get("maxTokens") {
         None | Some(Value::Null) => None,
-        Some(value) => Some(value.as_u64().filter(|value| *value > 0).ok_or_else(|| {
-            errors::invalid("providerConfig.maxTokens must be a positive integer")
-        })?),
+        Some(value) => Some(
+            value
+                .as_u64()
+                .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
+                .ok_or_else(|| {
+                    // Service construction is the earliest layer that sees the
+                    // value, so it is the layer that must refuse it: a cap that
+                    // admission could not represent never reaches the request
+                    // (P1-F — the admitted request is the transmitted request).
+                    errors::invalid("providerConfig.maxTokens must be a positive safe integer")
+                })?,
+        ),
     };
     Ok(ProviderLane {
         protocol,
@@ -1173,4 +1280,116 @@ fn receipt_json(receipt: &agentkit_store::AnswerReceipt) -> String {
         "duplicate": receipt.duplicate,
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn lane(max_tokens: Value) -> Result<ProviderLane> {
+        parse_provider_config(&json!({
+            "protocol": "responses",
+            "providerId": "p",
+            "connectionId": "c",
+            "model": "m",
+            "maxTokens": max_tokens,
+        }))
+    }
+
+    fn options_with(body: Value) -> Result<ServiceOptions> {
+        parse_service_options(Some(&body.to_string()))
+    }
+
+    #[test]
+    fn js_lane_declares_parameter_capabilities_only_for_itself() {
+        // The default JS callback lane is API-key shaped: the host stamps
+        // the implicit output cap exactly as before.
+        assert!(!parse_service_options(None).unwrap().account_backed_provider);
+        assert!(
+            !options_with(json!({"providerAuthKind": "api-key"}))
+                .unwrap()
+                .account_backed_provider
+        );
+        // An account-backed declaration suppresses the implicit cap.
+        assert!(
+            options_with(json!({"providerAuthKind": "chatgpt-account"}))
+                .unwrap()
+                .account_backed_provider
+        );
+        for rejected in [json!("account"), json!("API-KEY"), json!(null), json!(1)] {
+            let error = options_with(json!({"providerAuthKind": rejected.clone()}))
+                .err()
+                .unwrap_or_else(|| panic!("{rejected} must be refused"));
+            let payload: Value = serde_json::from_str(&error.reason).unwrap();
+            assert_eq!(payload["code"], "invalid_input", "{rejected}");
+        }
+        // The Rust lane over providerConfig is always API-key shaped, so
+        // declaring an account adapter alongside it is a contradiction.
+        let conflicting = options_with(json!({
+            "providerAuthKind": "chatgpt-account",
+            "providerConfig": {
+                "protocol": "responses",
+                "providerId": "p",
+                "connectionId": "c",
+                "model": "m"
+            }
+        }))
+        .err()
+        .expect("account lane over providerConfig must be refused");
+        let payload: Value = serde_json::from_str(&conflicting.reason).unwrap();
+        assert_eq!(payload["code"], "invalid_input");
+        // Declaring the api-key kind explicitly is consistent with it.
+        assert!(
+            !options_with(json!({
+                "providerAuthKind": "api-key",
+                "providerConfig": {
+                    "protocol": "responses",
+                    "providerId": "p",
+                    "connectionId": "c",
+                    "model": "m"
+                }
+            }))
+            .unwrap()
+            .account_backed_provider
+        );
+    }
+
+    #[test]
+    fn provider_config_max_tokens_is_resolved_at_construction() {
+        // P1-F: service construction is the earliest layer that sees
+        // `providerConfig.maxTokens`, so out-of-range values die here —
+        // they never reach admission, the budget, or the wire.
+        assert_eq!(lane(json!(128)).unwrap().max_tokens, Some(128));
+        assert_eq!(
+            lane(json!(9_007_199_254_740_991u64)).unwrap().max_tokens,
+            Some(9_007_199_254_740_991)
+        );
+        for rejected in [
+            json!(18_014_398_509_481_984_u64),
+            json!(0),
+            json!(-5),
+            json!(1.5),
+            json!("128"),
+        ] {
+            let error = lane(rejected.clone()).expect_err(&rejected.to_string());
+            let payload: Value = serde_json::from_str(&error.reason).unwrap();
+            assert_eq!(payload["code"], "invalid_input", "{rejected}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("providerConfig.maxTokens must be a positive safe integer"),
+                "{rejected}: {error}"
+            );
+        }
+        // Absent or null means "no configured cap", not a rejection.
+        let absent = parse_provider_config(&json!({
+            "protocol": "responses",
+            "providerId": "p",
+            "connectionId": "c",
+            "model": "m"
+        }))
+        .unwrap();
+        assert_eq!(absent.max_tokens, None);
+    }
 }

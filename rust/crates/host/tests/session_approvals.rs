@@ -133,6 +133,8 @@ impl Tool for Mutate {
             model_data: None,
             summary: None,
             status: None,
+
+            model_content: None,
         })
     }
 }

@@ -58,13 +58,22 @@ impl ChatCompletionsProvider {
             };
             // The request never produced a response (DNS, refused connection,
             // TLS, a fetch double that threw): distinct from a provider that
-            // answered with an error status.
+            // answered with an error status. The transport codes genuine
+            // network failures as `transport_error`; every other structured
+            // verdict the transport raises (a revoked/rotated connection's
+            // `connection_changed`, an `invalid_input` operation refusal)
+            // IS the classification — the frozen TS client throws those
+            // before the fetch, so collapsing them into `network_error`
+            // here would misreport a revocation as an outage.
             let response = match response {
                 Ok(response) => response,
                 Err(_) if cancellation.is_cancelled() => {
                     return Err(CoreError::new("cancelled", "aborted"))
                 }
-                Err(error) => return Err(CoreError::new("network_error", &error.message)),
+                Err(error) if error.code == "transport_error" => {
+                    return Err(CoreError::new("network_error", &error.message))
+                }
+                Err(error) => return Err(error),
             };
             if response.status().is_success() {
                 // A response without a body can never carry an SSE stream; the

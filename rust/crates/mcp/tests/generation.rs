@@ -381,6 +381,63 @@ async fn a_reconnect_under_one_alias_refuses_the_previous_generations_handle() {
 }
 
 #[tokio::test]
+async fn the_manager_bound_lane_pins_dispatch_to_the_listed_generation() {
+    // The public lane the NAPI binding uses: capture the binding with
+    // `binding()`, dispatch with `call_tool_bound()`. A descriptor listed
+    // from generation 1 must never execute generation 2's callback after an
+    // automatic reconnect — and the refusal must be the wire witness, not
+    // just an error string.
+    let first = Stub::new("generation-1");
+    let second = Stub::new("generation-2");
+    let (manager, connector) = manager_with(
+        vec![config_with("a", &[])],
+        vec![first.clone(), second.clone()],
+    );
+    manager.connect("a", token()).await.unwrap();
+    assert!(manager.binding("unknown").is_none());
+    let binding = manager.binding("a").expect("a connected alias is bound");
+
+    let payload = |result: model::CallToolResult| match &result.content[0] {
+        model::ContentBlock::Text(text) => text.text.clone(),
+        _ => unreachable!("the stub answers with text"),
+    };
+    let live = manager
+        .call_tool_bound("mcp.a.t", binding, Map::new(), token())
+        .await
+        .expect("the listed generation dispatches");
+    assert_eq!(payload(live), "generation-1");
+    assert_eq!(first.received(), ["t"]);
+
+    // Automatic reconnect under the SAME registration: generation 2 installs.
+    manager.close("a").await.unwrap();
+    manager.connect("a", token()).await.unwrap();
+    assert_ne!(manager.binding("a").expect("live"), binding);
+
+    let stale = manager
+        .call_tool_bound("mcp.a.t", binding, Map::new(), token())
+        .await
+        .expect_err("a generation-1 binding must not dispatch on generation 2");
+    assert_eq!(stale.code(), "mcp_authority_revoked");
+    assert!(
+        second.received().is_empty(),
+        "the generation-2 callback ran for a generation-1 descriptor"
+    );
+    assert_eq!(first.received(), ["t"], "the pinned call re-dispatched");
+
+    // The CURRENT generation's own binding dispatches, and only on it.
+    let current = manager.binding("a").expect("live");
+    let fresh = manager
+        .call_tool_bound("mcp.a.t", current, Map::new(), token())
+        .await
+        .expect("the current generation dispatches");
+    assert_eq!(payload(fresh), "generation-2");
+    assert_eq!(second.received(), ["t"]);
+    assert_eq!(first.received(), ["t"]);
+    assert_eq!(connector.attempts.load(Ordering::SeqCst), 2);
+    manager.dispose().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_replacement_landing_inside_the_authorization_await_is_not_executed() {
     let first = Stub::new("v1");
     let second = Stub::new("v2");

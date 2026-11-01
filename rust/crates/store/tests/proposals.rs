@@ -567,3 +567,250 @@ async fn pre_recorded_failed_outcome_completes_failed_regardless_of_the_replayed
     assert_eq!(done.status, ProposalStatus::Failed);
     assert_eq!(done.applied_at, Some(1003));
 }
+
+#[tokio::test]
+async fn finalize_apply_refuses_the_loser_of_two_competing_terminal_transitions() {
+    // The port's terminal transition carries an expected-state comparison:
+    // with a committed receipt, two competing terminal requests may not both
+    // land. The winner stamps from the receipt; the loser's `from` no longer
+    // holds at write time and the machine refuses it with its own
+    // `InvalidTransition` — the same refusal the reference adapters make
+    // synchronously. The receipt stays the byte-identical first committed
+    // outcome, and the refused rival writes nothing, not even its patch.
+    let store = SqliteStore::memory(4).unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store.create_proposal(proposal("first")).await.unwrap();
+    applying(&store, "first", "operation").await;
+    store
+        .record_outcome("operation", outcome(), 1002)
+        .await
+        .unwrap();
+
+    let receipt = store
+        .finalize_apply(FinalizeApply {
+            proposal_id: "first".into(),
+            operation_id: "operation".into(),
+            outcome: outcome(),
+            from: vec![ProposalStatus::Applying],
+            to: ProposalStatus::Applied,
+            patch: ProposalPatch::default(),
+            now: 1003,
+        })
+        .await
+        .unwrap();
+    assert_eq!(receipt.created_at, 1002, "first committed outcome wins");
+    let loser = store
+        .finalize_apply(FinalizeApply {
+            proposal_id: "first".into(),
+            operation_id: "operation".into(),
+            outcome: outcome(),
+            from: vec![ProposalStatus::Applying],
+            to: ProposalStatus::Failed,
+            patch: ProposalPatch {
+                reason: Some("late rival".into()),
+                ..Default::default()
+            },
+            now: 1004,
+        })
+        .await;
+    assert!(
+        matches!(loser, Err(StoreError::InvalidTransition(_))),
+        "the second competing terminal request is refused: {loser:?}"
+    );
+    let done = store.get_proposal("first").await.unwrap().unwrap();
+    assert_eq!(done.status, ProposalStatus::Applied);
+    assert_eq!(done.applied_at, Some(1003), "only one stamp landed");
+    assert_eq!(done.reason, None, "the loser wrote no patch");
+    assert_eq!(
+        store.receipt("operation").await.unwrap().unwrap(),
+        receipt,
+        "the committed outcome is untouched by the refused rival"
+    );
+}
+
+#[tokio::test]
+async fn finalize_apply_lands_the_patch_reason_with_the_stamp() {
+    // A failed apply without its reason is not actionable by the UI or the
+    // model; the port's patch lands atomically with the terminal stamp, on
+    // both the receipt-bound and the plain path.
+    let store = SqliteStore::memory(4).unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store.create_proposal(proposal("first")).await.unwrap();
+    applying(&store, "first", "operation").await;
+    let mut failed = outcome();
+    failed.status = "failed".into();
+    failed.applied_ops = 0;
+    failed.failed_ops = vec![json!({"opIndex": 0, "error": "apply failed"})];
+    store
+        .record_outcome("operation", failed.clone(), 1002)
+        .await
+        .unwrap();
+
+    let receipt = store
+        .finalize_apply(FinalizeApply {
+            proposal_id: "first".into(),
+            operation_id: "operation".into(),
+            outcome: failed.clone(),
+            from: vec![ProposalStatus::Applying],
+            to: ProposalStatus::Failed,
+            patch: ProposalPatch {
+                reason: Some("applier said so".into()),
+                ..Default::default()
+            },
+            now: 1003,
+        })
+        .await
+        .unwrap();
+    assert_eq!(receipt.outcome, failed);
+    let done = store.get_proposal("first").await.unwrap().unwrap();
+    assert_eq!(done.status, ProposalStatus::Failed);
+    assert_eq!(done.reason.as_deref(), Some("applier said so"));
+    assert_eq!(done.applied_at, Some(1003));
+
+    // The late rival — even one naming the same terminal status — is refused
+    // and cannot restate the record.
+    assert!(matches!(
+        store
+            .finalize_apply(FinalizeApply {
+                proposal_id: "first".into(),
+                operation_id: "operation".into(),
+                outcome: failed,
+                from: vec![ProposalStatus::Applying],
+                to: ProposalStatus::Failed,
+                patch: ProposalPatch {
+                    reason: Some("rewritten".into()),
+                    ..Default::default()
+                },
+                now: 1004,
+            })
+            .await,
+        Err(StoreError::InvalidTransition(_))
+    ));
+    assert_eq!(
+        store
+            .get_proposal("first")
+            .await
+            .unwrap()
+            .unwrap()
+            .reason
+            .as_deref(),
+        Some("applier said so")
+    );
+}
+
+#[tokio::test]
+async fn finalize_apply_requires_the_expected_state_and_a_terminal_request() {
+    let store = SqliteStore::memory(4).unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store.create_proposal(proposal("first")).await.unwrap();
+    applying(&store, "first", "operation").await;
+
+    // A stale expected state refuses before any write.
+    assert!(matches!(
+        store
+            .finalize_apply(FinalizeApply {
+                proposal_id: "first".into(),
+                operation_id: "operation".into(),
+                outcome: outcome(),
+                from: vec![ProposalStatus::Approved],
+                to: ProposalStatus::Applied,
+                patch: ProposalPatch::default(),
+                now: 1003,
+            })
+            .await,
+        Err(StoreError::InvalidTransition(_))
+    ));
+    // Only the terminal edges are finalize's job.
+    assert!(matches!(
+        store
+            .finalize_apply(FinalizeApply {
+                proposal_id: "first".into(),
+                operation_id: "operation".into(),
+                outcome: outcome(),
+                from: vec![ProposalStatus::Applying],
+                to: ProposalStatus::Approved,
+                patch: ProposalPatch::default(),
+                now: 1003,
+            })
+            .await,
+        Err(StoreError::InvalidInput(_))
+    ));
+    // The claim's operation identity is still the binding.
+    assert!(matches!(
+        store
+            .finalize_apply(FinalizeApply {
+                proposal_id: "first".into(),
+                operation_id: "foreign".into(),
+                outcome: outcome(),
+                from: vec![ProposalStatus::Applying],
+                to: ProposalStatus::Applied,
+                patch: ProposalPatch::default(),
+                now: 1003,
+            })
+            .await,
+        Err(StoreError::InvalidInput(_))
+    ));
+    // Nothing landed: still applying, no receipt.
+    assert_eq!(
+        store.get_proposal("first").await.unwrap().unwrap().status,
+        ProposalStatus::Applying
+    );
+    assert!(store.receipt("operation").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn duplicate_action_id_is_a_stable_store_refusal_with_a_single_row() {
+    // A held (scopeKey, actionId) reservation is the store's own refusal —
+    // a `Duplicate`, not an opaque constraint failure — and the loser
+    // creates no second row (no duplicate effect to recover from).
+    let store = SqliteStore::memory(4).unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store.create_proposal(proposal("first")).await.unwrap();
+    let loser = store.create_proposal(proposal("second")).await;
+    assert!(
+        matches!(&loser, Err(StoreError::Duplicate(message))
+            if message.contains("action_id change already used in scope document")),
+        "duplicate is the store's own refusal: {loser:?}"
+    );
+    assert_eq!(
+        store
+            .proposals(Some("chat".into()), None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .proposal_by_action("document", "change")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        "first"
+    );
+    // Releasing the reservation (no-effect terminal) frees the key.
+    store
+        .transition_proposal(
+            "first",
+            vec![ProposalStatus::Pending],
+            ProposalStatus::Rejected,
+            ProposalPatch::default(),
+            1001,
+        )
+        .await
+        .unwrap();
+    store.create_proposal(proposal("second")).await.unwrap();
+}

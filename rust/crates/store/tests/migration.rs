@@ -14,6 +14,11 @@ fn version_one(path: &Path) {
         DROP TABLE events_v2;
         DROP TABLE tool_executions;
         DROP TABLE agent_inputs;
+        DROP TABLE provider_connections;
+        DROP TABLE prompt_templates;
+        DROP TABLE connector_connections;
+        DROP TABLE managed_skills;
+        DROP TABLE run_content_records;
         DELETE FROM counters WHERE name='input_order';
         PRAGMA user_version=1;
         COMMIT;").unwrap();

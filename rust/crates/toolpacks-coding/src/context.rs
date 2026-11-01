@@ -251,6 +251,8 @@ impl Tool for WrappedTool {
             limits: context.limits.clone(),
             summary: outcome.summary,
             status: None,
+
+            model_content: None,
         })
     }
 }

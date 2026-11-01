@@ -773,6 +773,8 @@ fn guard_refusal(context: &ToolContext, reason: &str) -> ToolResult {
         truncated: false,
         limits: context.limits.clone(),
         status: None,
+
+        model_content: None,
     }
 }
 

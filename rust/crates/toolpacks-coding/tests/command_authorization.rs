@@ -83,6 +83,8 @@ impl Tool for Inert {
             model_data: None,
             summary: None,
             status: None,
+
+            model_content: None,
         })
     }
 }
@@ -322,7 +324,7 @@ async fn old_unbound_standing_grant_never_authorizes_script() {
     assert_eq!(f.hits.load(Ordering::SeqCst), 0);
     let requests = pending(&f, &turn).await;
     assert_eq!(requests.len(), 1);
-    // The pending request now carries a current-version (v3) key whose
+    // The pending request now carries a current-version (v4) key whose
     // digest differs from the legacy one — which is exactly why the old
     // grant must not settle it.
     let standing = requests[0]
@@ -602,6 +604,232 @@ async fn unsafe_saved_identity_never_authorizes_under_the_new_version() {
         requests[0].content["standing"]["digest"].as_str().unwrap(),
         minted,
         "the fresh ask carries the current-version key"
+    );
+    assert!(f.store.list_executions(turn).await.unwrap().is_empty());
+}
+
+/// Hermetic P1-D workspace: `bun test` runs a package script that launches
+/// `node cli.js` preloaded with `bootstrap.cjs` through the given selector
+/// form (the script line is kept constant for the whole scenario).
+fn selector_tree(dir: &std::path::Path, script: &str) -> HashMap<String, String> {
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for name in ["bun", "node"] {
+        let stub = bin.join(name);
+        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    std::fs::write(
+        dir.join("package.json"),
+        format!(r#"{{"name":"t","scripts":{{"test":"{script}"}}}}"#),
+    )
+    .unwrap();
+    std::fs::write(dir.join("cli.js"), "console.log('cli')\n").unwrap();
+    std::fs::write(dir.join("bootstrap.cjs"), "module.exports = 'v1'\n").unwrap();
+    HashMap::from([(
+        "PATH".to_owned(),
+        std::fs::canonicalize(&bin)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+    )])
+}
+
+/// External review P1-D at decision level, all selector forms: approve once
+/// (counter byte + execution receipt), then mutate ONLY the
+/// `NODE_OPTIONS`-selected startup file with the command and the effective
+/// environment strings constant. The next claim must request a NEW approval
+/// with ZERO new counter bytes and ZERO new execution receipts; a freshly
+/// re-minted grant then authorizes the mutated content again (the counter is
+/// not a dead letter).
+#[tokio::test]
+async fn standing_approval_zero_execution_after_node_options_startup_file_mutation() {
+    for (index, (label, script, inherited)) in [
+        (
+            "inherited",
+            "node cli.js",
+            Some("--require=./bootstrap.cjs"),
+        ),
+        (
+            "assignment",
+            "NODE_OPTIONS=--require=./bootstrap.cjs node cli.js",
+            None,
+        ),
+        (
+            "env wrapper",
+            "NODE_OPTIONS=--require=./bootstrap.cjs env node cli.js",
+            None,
+        ),
+        (
+            "explicit CLI control",
+            "node --require ./bootstrap.cjs cli.js",
+            None,
+        ),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(dir.path()).unwrap();
+        let root = canonical.to_str().unwrap();
+        let mut environment = selector_tree(dir.path(), script);
+        if let Some(value) = inherited {
+            environment.insert("NODE_OPTIONS".to_owned(), (*value).to_owned());
+        }
+        let counter = dir.path().join(format!("counter-{index}.bin"));
+        let approved = mint_key(root, &environment).await;
+        let f = fixture_inner(
+            CodingMode::Ask,
+            "bun test",
+            root,
+            Some(environment.clone()),
+            Some(counter.clone()),
+        )
+        .await;
+        grant(&f, &approved).await;
+        let first = run(&f).await;
+        assert_eq!(
+            counter_bytes(&counter),
+            1,
+            "{label}: the granted call executes once"
+        );
+        assert!(pending(&f, &first).await.is_empty());
+        assert!(
+            !f.store.list_executions(first).await.unwrap().is_empty(),
+            "{label}: the admitted run left its receipt"
+        );
+
+        // Mutate ONLY the selected file; the selector string and the whole
+        // effective environment stay byte-constant.
+        std::fs::write(
+            dir.path().join("bootstrap.cjs"),
+            "module.exports = 'MUTATED'\n",
+        )
+        .unwrap();
+        let second = run(&f).await;
+        assert_eq!(
+            counter_bytes(&counter),
+            1,
+            "{label}: editing the NODE_OPTIONS-selected startup file must not execute under the old approval"
+        );
+        let requests = pending(&f, &second).await;
+        assert_eq!(
+            requests.len(),
+            1,
+            "{label}: the mutated file forces a fresh ask"
+        );
+        assert_ne!(
+            requests[0].content["standing"]["digest"].as_str().unwrap(),
+            approved,
+            "{label}: the new key binds the mutated file"
+        );
+        assert!(f.store.list_executions(second).await.unwrap().is_empty());
+
+        // A fresh approval on the mutated content authorizes again (a fresh
+        // fixture: the previous turn still parks on its unanswered request).
+        let reapproved = mint_key(root, &environment).await;
+        assert_ne!(reapproved, approved, "{label}: the re-minted key differs");
+        let control = fixture_inner(
+            CodingMode::Ask,
+            "bun test",
+            root,
+            Some(environment.clone()),
+            Some(counter.clone()),
+        )
+        .await;
+        grant(&control, &reapproved).await;
+        let third = run(&control).await;
+        assert_eq!(
+            counter_bytes(&counter),
+            2,
+            "{label}: the counter is not a dead letter"
+        );
+        assert!(pending(&control, &third).await.is_empty());
+    }
+}
+
+/// An identity saved by the UNSAFE v3 path — pre-fix key material that did
+/// not bind `NODE_OPTIONS`-selected startup files, hashed under the `v: 3`
+/// envelope — never authorizes again under v4. Mirrors the v2 regression
+/// pinned by `unsafe_saved_identity_never_authorizes_under_the_new_version`.
+#[tokio::test]
+async fn unsafe_v3_saved_identity_never_authorizes_under_v4() {
+    let dir = tempfile::tempdir().unwrap();
+    let canonical = std::fs::canonicalize(dir.path()).unwrap();
+    let root = canonical.to_str().unwrap();
+    let environment = selector_tree(
+        dir.path(),
+        "NODE_OPTIONS=--require=./bootstrap.cjs node cli.js",
+    );
+    let counter = dir.path().join("counter.bin");
+
+    // Reproduce the pre-fix digest: the CURRENT fingerprint wrapped in the
+    // legacy v3 envelope (the fingerprint body was not re-versioned).
+    let canonical_root = agentkit_toolpacks_coding::canonical_root(root)
+        .await
+        .unwrap();
+    let confined = agentkit_toolpacks_coding::resolve_inside_root(&canonical_root, ".")
+        .await
+        .unwrap();
+    let cwd = std::fs::canonicalize(&confined.path)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let fingerprint = agentkit_toolpacks_coding::command_fingerprint(
+        &canonical_root,
+        &cwd,
+        "bun test",
+        &environment,
+    )
+    .ok()
+    .unwrap()
+    .expect("keyable");
+    let quote = |value: &str| json!(value).to_string();
+    let envelope = |version: u32| {
+        format!(
+            "{{\"v\":{version},\"fingerprint\":{},\"chatId\":{},\"tool\":{},\"identity\":{},\"root\":{},\"cwd\":{},\"command\":{},\"context\":null}}",
+            quote(&fingerprint),
+            quote("chat"),
+            quote("run_command"),
+            quote("test"),
+            quote(&canonical_root),
+            quote(&cwd),
+            quote("bun test"),
+        )
+    };
+    let unsafe_digest = format!("{:x}", Sha256::digest(envelope(3).as_bytes()));
+    let minted = mint_key(root, &environment).await;
+    assert_ne!(
+        unsafe_digest, minted,
+        "the v3-to-v4 bump structurally retires the unbound identity"
+    );
+
+    let f = fixture_inner(
+        CodingMode::Ask,
+        "bun test",
+        root,
+        Some(environment.clone()),
+        Some(counter.clone()),
+    )
+    .await;
+    grant(&f, &unsafe_digest).await;
+    let turn = run(&f).await;
+    assert_eq!(
+        counter_bytes(&counter),
+        0,
+        "a v3-version grant must never authorize execution"
+    );
+    let requests = pending(&f, &turn).await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].content["standing"]["digest"].as_str().unwrap(),
+        minted,
+        "the fresh ask carries the current-version (v4) key"
     );
     assert!(f.store.list_executions(turn).await.unwrap().is_empty());
 }

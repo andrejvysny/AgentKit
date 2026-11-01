@@ -35,6 +35,12 @@ regex = "=1.13.1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# The instruction reader's identity check (project_instructions/fs.rs) queries
+# the opened handle through `GetFileInformationByHandle`; the `std` getters for
+# the same fields are unstable (`windows_by_handle`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+
 [dev-dependencies]
 rusqlite = { version = "0.38", features = ["bundled"] }
 tempfile = "3"

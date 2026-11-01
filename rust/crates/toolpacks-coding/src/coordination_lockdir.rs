@@ -400,6 +400,41 @@ async fn try_create(
     insert_text(&mut record, "runId", Some(holder.run_id.as_str()));
     insert_text(&mut record, "toolCallId", holder.tool_call_id.as_deref());
     insert_text(&mut record, "executionId", execution_id);
+    // TS parity (`coordination-record.ts` `isStale`): an external TS
+    // coordinator treats a marker as stale — stealable — whenever the owner
+    // pid is dead, UNLESS the record nests the durable `execution` intent
+    // whose cleanup is not positively "stopped". The native reader gets the
+    // same guarantee from the separate `intent-*.json` record; a command
+    // lease must carry BOTH so a crash leaves one workspace whose
+    // unsettled ownership is visible to either implementation.
+    if let Some(execution_id) = execution_id {
+        let mut execution = serde_json::Map::new();
+        execution.insert(
+            "runId".to_owned(),
+            serde_json::Value::String(holder.run_id.clone()),
+        );
+        if let Some(tool_call_id) = holder.tool_call_id.as_deref() {
+            execution.insert(
+                "toolCallId".to_owned(),
+                serde_json::Value::String(tool_call_id.to_owned()),
+            );
+        }
+        // `{owner_pid}:{uuid}` nonce; the attempt half is the part after
+        // the last colon, exactly what the TS lease names
+        // `executionAttemptId` (`execId` is `{pid}:{attemptId}` there too).
+        let attempt = execution_id
+            .rsplit_once(':')
+            .map_or(execution_id, |(_, tail)| tail);
+        execution.insert(
+            "executionAttemptId".to_owned(),
+            serde_json::Value::String(attempt.to_owned()),
+        );
+        execution.insert(
+            "execId".to_owned(),
+            serde_json::Value::String(execution_id.to_owned()),
+        );
+        record.insert("execution".to_owned(), serde_json::Value::Object(execution));
+    }
     record.insert("createdAt".to_owned(), serde_json::Value::from(now_ms()));
     let temp = format!("{dir}/.tmp-{}", uuid::Uuid::new_v4());
     let written: Result<(), CodingError> = async {

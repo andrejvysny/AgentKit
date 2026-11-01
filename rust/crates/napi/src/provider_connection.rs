@@ -23,12 +23,19 @@ use tokio::sync::Mutex;
 
 use crate::errors;
 
-/// A registered provider connection. This map entry is the only place a key
-/// exists after registration; nothing else clones it across the boundary.
+/// A registered provider connection. This map entry is the only place a
+/// key exists after registration; nothing else clones it across the
+/// boundary. `generation` is the connection's fence counter: for keyed
+/// (logical) registrations it mirrors the store-persisted generation set
+/// by `agentkit_store::register_provider_connection` — stable across
+/// restarts, advanced only by credential rotation — so the durable
+/// continuation scope binds `{logical identity, generation}` rather than
+/// a process-local accident.
 #[derive(Clone)]
 struct Connection {
     base_url: String,
     api_key: Option<String>,
+    generation: u64,
 }
 
 /// Binding-instance connection registry, keyed by connection id (the same
@@ -44,10 +51,24 @@ static CONNECTIONS: LazyLock<Mutex<HashMap<String, Connection>>> =
 /// `/models`), and `apiKey` — when present — is presented as
 /// `Authorization: Bearer`. The key crosses the boundary exactly here and
 /// never again: only the returned connection id may appear in options JSON.
+///
+/// Without `optionsJson` the id is a process-local random: correct for a
+/// scratch lane, but a Responses continuation bound to it dies with the
+/// process. For a lane whose continuation must survive restarts, pass
+/// `{connectionKey, storePath}` — the durable LOGICAL identity door
+/// (P1-E): the id is derived from the key alone (never from the secret),
+/// the store persists the credential fingerprint + generation, and the
+/// credential-restoration rules hold: same key + same credential on every
+/// restart → the same id AND generation (the continuation keeps working);
+/// same key + a different credential → a rotation (new generation under
+/// the same identity, stored scopes restamped, continuation continues);
+/// a wrong credential is the provider's verdict — an auth error at
+/// request time, never a silent identity change.
 #[napi]
 pub async fn register_provider_connection(
     base_url: String,
     api_key: Option<String>,
+    options_json: Option<String>,
 ) -> Result<String> {
     if base_url.is_empty() {
         return Err(errors::invalid("baseUrl must be a non-empty string"));
@@ -56,11 +77,46 @@ pub async fn register_provider_connection(
     // `authorization` header for a falsy apiKey, and this lane must not
     // send a bare `Bearer `.
     let api_key = api_key.filter(|key| !key.is_empty());
-    let connection_id = format!("conn_{}", uuid::Uuid::new_v4());
-    CONNECTIONS
-        .lock()
-        .await
-        .insert(connection_id.clone(), Connection { base_url, api_key });
+    let (connection_id, generation) = match options_json.as_deref() {
+        None | Some("") => (format!("conn_{}", uuid::Uuid::new_v4()), 1),
+        Some(text) => {
+            let options: Value = agentkit_contracts::parse_javascript_json(text)
+                .map_err(|_| errors::invalid("provider connection options must be valid JSON"))?;
+            let field = |key: &str| -> Result<String> {
+                options
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        errors::invalid(format!(
+                            "provider connection options.{key} must be a non-empty string"
+                        ))
+                    })
+            };
+            let connection_key = field("connectionKey")?;
+            let store_path = field("storePath")?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_millis() as i64)
+                .unwrap_or(0);
+            agentkit_store::register_provider_connection(
+                std::path::Path::new(&store_path),
+                &connection_key,
+                api_key.as_deref(),
+                now,
+            )
+            .map_err(errors::store)?
+        }
+    };
+    CONNECTIONS.lock().await.insert(
+        connection_id.clone(),
+        Connection {
+            base_url,
+            api_key,
+            generation,
+        },
+    );
     Ok(connection_id)
 }
 
@@ -104,7 +160,7 @@ impl BindingTransport {
                 "providerConfig.providerId must be non-empty",
             ));
         }
-        CONNECTIONS
+        let connection = CONNECTIONS
             .lock()
             .await
             .get(connection_id)
@@ -122,7 +178,12 @@ impl BindingTransport {
                 provider_id: provider_id.to_owned(),
                 protocol: protocol.to_owned(),
                 connection_id: connection_id.to_owned(),
-                generation: 1,
+                // The registration's generation — durable for keyed
+                // connections, 1 for process-local ones. A service built
+                // after a rotation carries the new generation; a stale
+                // pre-rotation object is rejected at the next admission
+                // (the host's scope comparison), never silently trusted.
+                generation: connection.generation,
             },
             fence,
             client,
@@ -203,11 +264,16 @@ fn join_url(base_url: &str, operation: &str) -> String {
     format!("{base}/{operation}")
 }
 
-/// Applies the service-level `temperature`/`maxTokens` defaults to every
-/// request before delegating to the core preset. The host builds the chat
-/// request without sampling parameters, so this is where the configured
-/// lane options reach the wire; a request that already carries a value
-/// keeps it — the config supplies defaults, never overrides.
+/// Applies the service-level `temperature`/`maxTokens` as REQUEST DEFAULTS
+/// through [`ChatProvider::apply_request_defaults`] — i.e. BEFORE the
+/// host's context admission — and then delegates untouched. The host
+/// builds the chat request without sampling parameters, so the configured
+/// lane options reach the request here; admission then clamps the output
+/// cap, and the admitted value is what goes on the wire (P1-F): the
+/// transmitted cap is min(context cap, configured maxTokens), and no
+/// layer after admission — including this one — may override token limits.
+/// A request that already carries a value keeps it; the config supplies
+/// defaults, never overrides.
 pub(crate) struct ConfiguredProvider {
     inner: Arc<dyn ChatProvider>,
     temperature: Option<f64>,
@@ -233,6 +299,15 @@ impl ChatProvider for ConfiguredProvider {
     fn allows_implicit_output_limit(&self) -> bool {
         self.inner.allows_implicit_output_limit()
     }
+    fn apply_request_defaults(&self, input: &mut ChatRequest) {
+        self.inner.apply_request_defaults(input);
+        if input.temperature.is_none() {
+            input.temperature = self.temperature;
+        }
+        if input.max_output_tokens.is_none() {
+            input.max_output_tokens = self.max_tokens;
+        }
+    }
     fn supports_usage_cleanup(&self) -> bool {
         self.inner.supports_usage_cleanup()
     }
@@ -245,20 +320,10 @@ impl ChatProvider for ConfiguredProvider {
     fn id(&self) -> &str {
         self.inner.id()
     }
-    fn stream_chat(
-        &self,
-        mut input: ChatRequest,
-        cancellation: CancellationToken,
-    ) -> ProviderStream {
-        // providerConfig is the service-level authority: when it carries a
-        // value it overrides whatever the host's default output budget or
-        // sampling defaults put on the request.
-        if self.temperature.is_some() {
-            input.temperature = self.temperature;
-        }
-        if self.max_tokens.is_some() {
-            input.max_output_tokens = self.max_tokens;
-        }
+    fn stream_chat(&self, input: ChatRequest, cancellation: CancellationToken) -> ProviderStream {
+        // The admitted request IS the transmitted request: nothing here
+        // may touch the token budget or sampling parameters the host
+        // resolved before admission.
         self.inner.stream_chat(input, cancellation)
     }
     async fn list_models(
@@ -322,10 +387,35 @@ mod tests {
     }
 
     async fn registered(connection_id: &str, base_url: String, api_key: Option<String>) {
-        CONNECTIONS
-            .lock()
-            .await
-            .insert(connection_id.to_owned(), Connection { base_url, api_key });
+        CONNECTIONS.lock().await.insert(
+            connection_id.to_owned(),
+            Connection {
+                base_url,
+                api_key,
+                generation: 1,
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_carries_the_registrations_generation() {
+        CONNECTIONS.lock().await.insert(
+            "test-generation".to_owned(),
+            Connection {
+                base_url: "http://127.0.0.1:1/v1".to_owned(),
+                api_key: None,
+                generation: 4,
+            },
+        );
+        let transport =
+            BindingTransport::connect("configured", "responses", "test-generation", open_fence())
+                .await
+                .unwrap();
+        // The scope the continuation binds comes from the registration,
+        // not from a construction-time constant: a rotated connection
+        // builds a service at the persisted generation, and a stale
+        // pre-rotation object cannot silently keep the old fence.
+        assert_eq!(transport.identity().generation, 4);
     }
 
     #[test]
@@ -504,21 +594,44 @@ mod tests {
             .build()
             .unwrap();
         runtime.block_on(async {
-            let error = register_provider_connection(String::new(), None)
+            let error = register_provider_connection(String::new(), None, None)
                 .await
                 .expect_err("an empty baseUrl is refused");
             let payload: Value = serde_json::from_str(&error.reason).unwrap();
             assert_eq!(payload["code"], "invalid_input");
-            let connection_id =
-                register_provider_connection("https://api.test/v1".to_owned(), Some(String::new()))
-                    .await
-                    .unwrap();
+            // A keyless registration stays the process-local random door…
+            let connection_id = register_provider_connection(
+                "https://api.test/v1".to_owned(),
+                Some(String::new()),
+                None,
+            )
+            .await
+            .unwrap();
             assert!(
                 revoke_provider_connection(connection_id.clone())
                     .await
                     .unwrap()
             );
             assert!(!revoke_provider_connection(connection_id).await.unwrap());
+            // …and the keyed door is validated up front: both fields or
+            // nothing, never a half-durable identity.
+            for options in [
+                "{",
+                r#"{"connectionKey":"k"}"#,
+                r#"{"storePath":"/tmp/never.sqlite"}"#,
+                r#"{"connectionKey":"","storePath":"/tmp/never.sqlite"}"#,
+                r#"{"connectionKey":"k","storePath":""}"#,
+            ] {
+                let error = register_provider_connection(
+                    "https://api.test/v1".to_owned(),
+                    Some("sk".to_owned()),
+                    Some(options.to_owned()),
+                )
+                .await
+                .expect_err("malformed connection options are refused");
+                let payload: Value = serde_json::from_str(&error.reason).unwrap();
+                assert_eq!(payload["code"], "invalid_input", "{options}");
+            }
         });
     }
 
@@ -540,23 +653,37 @@ mod tests {
         }
     }
     #[test]
-    fn lane_config_overrides_host_request_defaults() {
+    fn lane_config_supplies_defaults_before_admission_and_never_overrides() {
         let capture = Arc::new(Capture {
             seen: std::sync::Mutex::new(None),
         });
         let lane = ConfiguredProvider::new(capture.clone(), Some(0.25), Some(99));
-        // The host stamps its default output budget on every request; the
-        // service-level providerConfig must win, not merely fill a hole.
-        let request = ChatRequest {
+        // The defaults land on a bare request BEFORE admission fills the
+        // budget…
+        let mut request = ChatRequest {
             model: "m".into(),
-            temperature: Some(0.9),
-            max_output_tokens: Some(16_384),
             ..Default::default()
         };
-        let _ = lane.stream_chat(request, CancellationToken::new());
+        lane.apply_request_defaults(&mut request);
+        assert_eq!(request.temperature, Some(0.25));
+        assert_eq!(request.max_output_tokens, Some(99));
+        // …and a value the request already carries is kept (P1-F: the
+        // config supplies defaults, never overrides).
+        let mut carried = ChatRequest {
+            model: "m".into(),
+            temperature: Some(0.9),
+            max_output_tokens: Some(16),
+            ..Default::default()
+        };
+        lane.apply_request_defaults(&mut carried);
+        assert_eq!(carried.temperature, Some(0.9));
+        assert_eq!(carried.max_output_tokens, Some(16));
+        // Nothing after admission may move them: a request whose cap the
+        // host already clamped reaches the inner provider untouched.
+        let _ = lane.stream_chat(carried.clone(), CancellationToken::new());
         let seen = capture.seen.lock().unwrap().clone().unwrap();
-        assert_eq!(seen.temperature, Some(0.25));
-        assert_eq!(seen.max_output_tokens, Some(99));
+        assert_eq!(seen.temperature, Some(0.9));
+        assert_eq!(seen.max_output_tokens, Some(16));
     }
     #[test]
     fn lane_without_config_passes_request_through() {
@@ -564,12 +691,13 @@ mod tests {
             seen: std::sync::Mutex::new(None),
         });
         let lane = ConfiguredProvider::new(capture.clone(), None, None);
-        let request = ChatRequest {
+        let mut request = ChatRequest {
             model: "m".into(),
             temperature: Some(0.9),
             max_output_tokens: Some(16_384),
             ..Default::default()
         };
+        lane.apply_request_defaults(&mut request);
         let _ = lane.stream_chat(request, CancellationToken::new());
         let seen = capture.seen.lock().unwrap().clone().unwrap();
         assert_eq!(seen.temperature, Some(0.9));

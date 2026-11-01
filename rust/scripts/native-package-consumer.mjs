@@ -19,16 +19,32 @@
  *                                a re-dispatch would strand an unsettled
  *                                callback, and completion text must be
  *                                present from durable state alone.
+ *   consumer.mjs types <tscPath> STRICT typed consumer against the INSTALLED
+ *                                package: compiles
+ *                                `native-package-typed-consumer.ts` with
+ *                                `tsc --strict --module nodenext
+ *                                --moduleResolution nodenext`, skipLibCheck
+ *                                OFF and `types: []` (the probe uses no
+ *                                ambient globals). Catches declarations that
+ *                                resolve inside the workspace but TS2307
+ *                                for a clean install — the packed
+ *                                `@agentkit/host` import regression that
+ *                                external review reproduced. Must run under
+ *                                Node (it spawns `process.execPath` for the
+ *                                compiler).
  *
  * The public export contains durable task/message projections and input
  * records, not private tool receipt rows. This gate verifies those public
  * outcomes; direct receipt-state assertions remain in the Rust suites.
  */
-import { rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { bindingId, NativeStore } from "@agentkit/native";
 
 function assert(condition, message) {
-  if (!condition) throw new Error("assertion failed: " + message);
+  if (!condition) throw new Error(`assertion failed: ${message}`);
 }
 
 async function waitFor(read, accept, timeoutMs = 20000) {
@@ -38,7 +54,7 @@ async function waitFor(read, accept, timeoutMs = 20000) {
     await new Promise((resolve) => setTimeout(resolve, 20));
     value = await read();
   }
-  assert(accept(value), "condition not reached within " + timeoutMs + "ms");
+  assert(accept(value), `condition not reached within ${timeoutMs}ms`);
   return value;
 }
 
@@ -68,18 +84,19 @@ const mode = process.argv[2];
 const dbPath = process.argv[3];
 assert(
   bindingId === "agentkit-native",
-  "binding identity probe returned " + String(bindingId),
+  `binding identity probe returned ${String(bindingId)}`,
 );
-assert(dbPath, "usage: consumer.mjs <run|reopen> <dbPath>");
+if (mode !== "types")
+  assert(dbPath, "usage: consumer.mjs <run|reopen> <dbPath>");
 
 const runtime = process.versions.bun
-  ? "bun " + process.versions.bun
-  : "node " + process.version;
+  ? `bun ${process.versions.bun}`
+  : `node ${process.version}`;
 
 if (mode === "run") {
   rmSync(dbPath, { force: true });
-  rmSync(dbPath + "-wal", { force: true });
-  rmSync(dbPath + "-shm", { force: true });
+  rmSync(`${dbPath}-wal`, { force: true });
+  rmSync(`${dbPath}-shm`, { force: true });
   const store = await NativeStore.open(dbPath);
   const service = await store.createService({ closeTimeoutMs: 5000 });
   let providerCalls = 0;
@@ -119,7 +136,7 @@ if (mode === "run") {
       };
     }
     // Tripwire: the cancelled turn must never drive a fourth request.
-    throw new Error("unexpected provider request " + providerCalls);
+    throw new Error(`unexpected provider request ${providerCalls}`);
   });
   await service.registerTool(
     {
@@ -163,7 +180,7 @@ if (mode === "run") {
 
     // Turn 1: approval wait → answer → resume → terminal completion.
     const sent = await service.send("pack-sess", { content: "list files" });
-    assert(sent.kind === "turn", "send() returned kind " + String(sent.kind));
+    assert(sent.kind === "turn", `send() returned kind ${String(sent.kind)}`);
     const waiting = await waitFor(
       () => service.getState("pack-sess"),
       (state) => state.waiting && typeof state.waiting.inputId === "string",
@@ -180,12 +197,12 @@ if (mode === "run") {
     assert(turn1.done, "the approved turn never settled");
     assert(
       turn1.statuses.includes("completed"),
-      "approved turn did not reach completed: " + turn1.statuses.join(","),
+      `approved turn did not reach completed: ${turn1.statuses.join(",")}`,
     );
     assert(commandEffects === 1, "approved command did not act exactly once");
     assert(
       JSON.stringify(commandInput) === JSON.stringify({ command: "ls -la" }),
-      "callback received " + JSON.stringify(commandInput),
+      `callback received ${JSON.stringify(commandInput)}`,
     );
 
     // Turn 2: cancel a live turn mid-effect.
@@ -207,7 +224,7 @@ if (mode === "run") {
     assert(turn2.done, "the cancelled turn never settled");
     assert(
       turn2.statuses.includes("cancelled"),
-      "cancelled turn did not reach cancelled: " + turn2.statuses.join(","),
+      `cancelled turn did not reach cancelled: ${turn2.statuses.join(",")}`,
     );
     assert(
       !turn2.statuses.includes("completed"),
@@ -220,7 +237,7 @@ if (mode === "run") {
     );
     assert(
       providerCalls === 3,
-      "unexpected provider call count " + providerCalls,
+      `unexpected provider call count ${providerCalls}`,
     );
     assert(
       commandEffects === 1,
@@ -265,12 +282,56 @@ if (mode === "run") {
       service.pendingCallbacks === 0,
       "replay re-dispatched a callback in a tool-less process",
     );
-    console.log("packed-native-consumer-ok mode=reopen runtime=" + runtime);
+    console.log(`packed-native-consumer-ok mode=reopen runtime=${runtime}`);
   } finally {
     await service.close();
     await store.close();
   }
+} else if (mode === "types") {
+  // The strict typed consumer. The compiler is the workspace's own
+  // typescript (the isolated directory has none, and an npm-installed one
+  // would need registry access); EVERYTHING it resolves comes from this
+  // directory's node_modules — exactly what a stranger from `npm install`
+  // sees. skipLibCheck is pinned OFF: with it on, an unresolved import in
+  // a shipped .d.ts disappears and the regression class returns.
+  const tscEntry = process.argv[3];
+  assert(
+    tscEntry,
+    "usage: consumer.mjs types <path-to-typescript-bin-tsc> (run under node)",
+  );
+  const consumerDirectory = dirname(fileURLToPath(import.meta.url));
+  writeFileSync(
+    join(consumerDirectory, "tsconfig.typed.json"),
+    `${JSON.stringify(
+      {
+        compilerOptions: {
+          strict: true,
+          target: "esnext",
+          module: "nodenext",
+          moduleResolution: "nodenext",
+          noEmit: true,
+          skipLibCheck: false,
+          types: [],
+        },
+        files: ["native-package-typed-consumer.ts"],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const result = spawnSync(
+    process.execPath,
+    [tscEntry, "-p", "tsconfig.typed.json"],
+    { cwd: consumerDirectory, stdio: "inherit" },
+  );
+  if (result.error)
+    throw new Error(`tsc could not be started: ${result.error.message}`);
+  assert(
+    result.status === 0,
+    `strict typed consumer check failed with status ${result.status}`,
+  );
+  console.log(`packed-native-consumer-ok mode=types runtime=${runtime}`);
 } else {
-  console.error("usage: consumer.mjs <run|reopen> <dbPath>");
+  console.error("usage: consumer.mjs <run|reopen> <dbPath> | types <tscPath>");
   process.exitCode = 2;
 }

@@ -5,10 +5,10 @@ use std::{
     path::Path,
 };
 
-const APPLICATION_ID: i64 = 0x414b5253;
+pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// The schema version this build creates and accepts; migrations land as
 /// `version < N` steps below.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 7;
 const VERSION: i64 = SCHEMA_VERSION;
 
 fn ownership(path: &Path) -> Result<Option<File>> {
@@ -81,7 +81,7 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<File>)> {
     if !fresh && identity != APPLICATION_ID {
         return Err(StoreError::ForeignDatabase);
     }
-    if !fresh && ![1, 2, 3, 4, VERSION].contains(&version) {
+    if !fresh && !(1..=VERSION).contains(&version) {
         return Err(StoreError::UnsupportedVersion(version));
     }
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
@@ -105,6 +105,12 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<File>)> {
         }
         if version < 5 {
             migrate_free_receipts(&mut connection)?;
+        }
+        if version < 6 {
+            migrate_provider_connections(&mut connection)?;
+        }
+        if version < 7 {
+            migrate_managed_content(&mut connection)?;
         }
     }
     if path != Path::new(":memory:") {
@@ -183,7 +189,57 @@ fn schema_sql(version: i64) -> String {
             "proposal_id TEXT UNIQUE REFERENCES proposals(id) ON DELETE CASCADE",
         );
     }
+    if version >= 6 {
+        sql.push_str(CONNECTIONS_SCHEMA);
+    }
+    if version >= 7 {
+        sql.push_str(MANAGED_CONTENT_SCHEMA);
+    }
     sql
+}
+
+/// Durable provider-connection state (P1-E), additive at schema version 6.
+/// One row per LOGICAL provider connection registered with a durable
+/// `connectionKey`: the credential is kept only as a sha-256 digest
+/// (rotation detection — never the secret), and `generation` advances on
+/// every rotation so the continuation scope binds
+/// `{logical identity, generation}` across process restarts.
+const CONNECTIONS_SCHEMA: &str = r#"
+CREATE TABLE provider_connections(connection_id TEXT PRIMARY KEY, credential_digest TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation>=1), updated_at INTEGER NOT NULL);
+"#;
+
+fn migrate_provider_connections(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(CONNECTIONS_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 6)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Managed content (the managed-integrations recipe's backend), additive at
+/// schema version 7. The template/connection tables mirror the shared
+/// TypeScript adapters one-to-one (`prompt_templates` keeps the tombstoned
+/// primary key that permanently reserves an immutable revision;
+/// `connector_connections` keeps `revision` beside the record for the
+/// compare-and-swap write). `managed_skills` stores the published skill
+/// documents under their content-addressed revision, and
+/// `run_content_records` persists the `{skill, path, revision}` references
+/// the activation flow records, in insertion order. No table here carries a
+/// secret: connection reads redact credential-shaped transport values and
+/// `secretRefs` entries are refused at write time.
+const MANAGED_CONTENT_SCHEMA: &str = r#"
+CREATE TABLE prompt_templates(id TEXT NOT NULL, revision TEXT NOT NULL, template TEXT NOT NULL, PRIMARY KEY(id, revision));
+CREATE TABLE connector_connections(id TEXT PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision>=1), record TEXT NOT NULL);
+CREATE TABLE managed_skills(source_id TEXT NOT NULL, path TEXT NOT NULL, revision TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY(source_id, path));
+CREATE TABLE run_content_records(id INTEGER PRIMARY KEY, record TEXT NOT NULL);
+"#;
+
+fn migrate_managed_content(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(MANAGED_CONTENT_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 7)?;
+    transaction.commit()?;
+    Ok(())
 }
 
 /// Durable execution receipts (ADR 0020), additive at schema version 3.

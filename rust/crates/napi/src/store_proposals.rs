@@ -54,10 +54,7 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
                 applied_at: None,
             };
             Ok(record(
-                store
-                    .create_proposal(proposal)
-                    .await
-                    .map_err(errors::store)?,
+                store.create_proposal(proposal).await.map_err(port_error)?,
             ))
         }
         "get" => Ok(optional_record(
@@ -140,6 +137,38 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
                 .map_err(port_error)?;
             Ok(record(receipt))
         }
+        "finalize" => {
+            // The receipt-bound terminal apply WITH the CAS's expected-state
+            // comparison: `from`/`to` are re-checked against the proposal at
+            // write time inside the engine transaction, so a competing
+            // terminal request that raced past the facade's read is refused
+            // (`invalid_proposal_transition`) instead of silently succeeding,
+            // and the patch's `reason`/`decision` land with the stamp.
+            let from: Vec<ProposalStatus> = deserialized(&input, "from")?;
+            let to: ProposalStatus = deserialized(&input, "to")?;
+            let outcome: ApplyOutcome = deserialized(&input, "outcome")?;
+            let patch = input.get("patch").cloned().unwrap_or(Value::Null);
+            let receipt = store
+                .finalize_apply(agentkit_store::FinalizeApply {
+                    proposal_id: text(&input, "proposalId")?.to_owned(),
+                    operation_id: text(&input, "operationId")?.to_owned(),
+                    outcome,
+                    from,
+                    to,
+                    patch: ProposalPatch {
+                        operation_id: opt_text(&patch, "operationId")?.map(str::to_owned),
+                        decision: match patch.get("decision") {
+                            None | Some(Value::Null) => None,
+                            Some(value) => Some(value.clone()),
+                        },
+                        reason: opt_text(&patch, "reason")?.map(str::to_owned),
+                    },
+                    now: instant_or_now(&input, "now")?,
+                })
+                .await
+                .map_err(port_error)?;
+            Ok(record(receipt))
+        }
         "recordOutcome" => {
             let outcome: ApplyOutcome = deserialized(&input, "outcome")?;
             Ok(record(
@@ -179,9 +208,12 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
     }
 }
 
-/// Port-surface error mapping: the proposal machine's own refusal codes.
+/// Port-surface error mapping: the proposal machine's own refusal codes —
+/// transition legality is `invalid_proposal_transition`, and a held
+/// (scopeKey, actionId) reservation is the port's public `duplicate_action_id`
+/// (the same refusal the reference adapters raise).
 fn port_error(error: agentkit_store::StoreError) -> napi::Error {
-    crate::errors::store_port(error, "invalid_proposal_transition", "input_conflict")
+    crate::errors::store_port(error, "invalid_proposal_transition", "duplicate_action_id")
 }
 
 fn opt_limit(opts: &Value) -> Result<Option<usize>> {
@@ -387,6 +419,150 @@ mod tests {
                     .unwrap_err()
             ),
             "not_implemented"
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_action_id_and_competing_terminals_carry_stable_port_codes() {
+        // (External review, section 3.) Through the port surface — with no
+        // TypeScript facade pre-check in front — a held (scopeKey, actionId)
+        // is refused with the port's public `duplicate_action_id`, never an
+        // opaque internal error, and the loser adds no row. And the
+        // receipt-bound terminal apply carries the CAS's expected-state
+        // comparison: the second competing request is refused
+        // `invalid_proposal_transition`, the committed receipt is untouched,
+        // and the winner's patch reason lands with the stamp.
+        let store = store();
+        seed_chat(&store).await;
+        call(&store, "proposals.create", proposal_input("p1"))
+            .await
+            .expect("first proposal");
+        assert_eq!(
+            code(
+                call(&store, "proposals.create", proposal_input("p2"))
+                    .await
+                    .unwrap_err()
+            ),
+            "duplicate_action_id",
+            "the reservation refusal is a public code, not internal_error"
+        );
+        assert_eq!(
+            call(&store, "proposals.listByChat", json!({"chatId":"c1"}))
+                .await
+                .unwrap()
+                .as_array()
+                .expect("list")
+                .len(),
+            1,
+            "the refused create left no second row"
+        );
+
+        call(
+            &store,
+            "proposals.transition",
+            json!({"proposalId":"p1","from":["pending"],"to":"approved","now":NOW}),
+        )
+        .await
+        .expect("approved");
+        call(
+            &store,
+            "proposals.transition",
+            json!({"proposalId":"p1","from":["approved"],"to":"applying",
+                "patch":{"operationId":"op1"},"now":NOW}),
+        )
+        .await
+        .expect("apply claimed");
+        call(
+            &store,
+            "proposals.recordOutcome",
+            json!({"operationId":"op1","outcome":{"status":"applied","appliedOps":1,
+                "failedOps":[],"resultJson":null,"revision":null},"now":NOW}),
+        )
+        .await
+        .expect("outcome recorded");
+        let receipt = call(
+            &store,
+            "proposals.finalize",
+            json!({"proposalId":"p1","operationId":"op1",
+                "outcome":{"status":"applied","appliedOps":1,"failedOps":[]},
+                "from":["applying"],"to":"applied","patch":{},"now":NOW}),
+        )
+        .await
+        .expect("winner finalized");
+        assert_eq!(receipt["outcome"]["status"], "applied");
+        assert_eq!(
+            code(
+                call(
+                    &store,
+                    "proposals.finalize",
+                    json!({"proposalId":"p1","operationId":"op1",
+                        "outcome":{"status":"applied","appliedOps":1,"failedOps":[]},
+                        "from":["applying"],"to":"failed",
+                        "patch":{"reason":"late rival"},"now":NOW}),
+                )
+                .await
+                .unwrap_err()
+            ),
+            "invalid_proposal_transition",
+            "the loser of two competing terminal transitions is refused"
+        );
+        let done = call(&store, "proposals.get", json!({"proposalId":"p1"}))
+            .await
+            .unwrap();
+        assert_eq!(done["status"], "applied", "only the winner stamped");
+        assert!(done["reason"].is_null(), "the loser wrote no patch");
+        assert_eq!(
+            call(&store, "proposals.getOutcome", json!({"operationId":"op1"}))
+                .await
+                .unwrap()["outcome"]["status"],
+            "applied",
+            "the committed receipt is untouched by the refused rival"
+        );
+
+        // The winner's patch reason lands with the stamp on a fresh apply.
+        let mut other = proposal_input("p9");
+        other["input"]["actionId"] = json!("act-9");
+        call(&store, "proposals.create", other)
+            .await
+            .expect("second proposal");
+        call(
+            &store,
+            "proposals.transition",
+            json!({"proposalId":"p9","from":["pending"],"to":"approved","now":NOW}),
+        )
+        .await
+        .expect("approved");
+        call(
+            &store,
+            "proposals.transition",
+            json!({"proposalId":"p9","from":["approved"],"to":"applying",
+                "patch":{"operationId":"op9"},"now":NOW}),
+        )
+        .await
+        .expect("apply claimed");
+        let failed_outcome = json!({"status":"failed","appliedOps":0,
+            "failedOps":[{"opIndex":0,"error":"apply failed"}]});
+        call(
+            &store,
+            "proposals.recordOutcome",
+            json!({"operationId":"op9","outcome":failed_outcome,"now":NOW}),
+        )
+        .await
+        .expect("failure recorded");
+        call(
+            &store,
+            "proposals.finalize",
+            json!({"proposalId":"p9","operationId":"op9",
+                "outcome":failed_outcome,"from":["applying"],"to":"failed",
+                "patch":{"reason":"applier said so"},"now":NOW}),
+        )
+        .await
+        .expect("failed finalized with its reason");
+        assert_eq!(
+            call(&store, "proposals.get", json!({"proposalId":"p9"}))
+                .await
+                .unwrap()["reason"],
+            "applier said so"
         );
     }
 

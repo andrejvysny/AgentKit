@@ -66,6 +66,31 @@ pub fn build(result: &ToolResult, limits: &ToolLimits) -> Value {
         cut |= truncated;
         envelope["truncated"] = cut.into();
     }
+    // Frozen `buildEnvelope`: model-visible attachments ride in the stored
+    // envelope (that is what makes replay expand them identically), but the
+    // result byte budget outranks them — an envelope that only exceeds the
+    // cap because of its attachments drops them, marks the result truncated
+    // and says so in a warning.
+    let attachments = result
+        .model_content
+        .as_ref()
+        .filter(|parts| !parts.is_empty())
+        .cloned();
+    if let Some(parts) = attachments {
+        envelope["modelContent"] = parts.into();
+        if !fits(&envelope, limits.max_bytes) {
+            envelope
+                .as_object_mut()
+                .expect("object")
+                .remove("modelContent");
+            envelope["truncated"] = true.into();
+            if let Some(warnings) = envelope["warnings"].as_array_mut() {
+                warnings.push(
+                    "Tool attachments exceeded the result byte budget and were omitted.".into(),
+                );
+            }
+        }
+    }
     fit(envelope, limits.max_bytes)
 }
 fn fits(value: &Value, max: usize) -> bool {

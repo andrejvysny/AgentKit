@@ -1,4 +1,5 @@
 //! Optional REST/SSE adapter. Backends own durable state and actor isolation.
+mod cors;
 mod handler;
 mod idempotency;
 mod problem;
@@ -6,6 +7,7 @@ mod routes;
 mod stream;
 mod validation;
 
+pub use cors::{CorsConfig, CorsOrigins, DEFAULT_ALLOW_HEADERS};
 pub use handler::{Config, router};
 pub use idempotency::{Idempotency, derive_task_id};
 pub use problem::Problem;

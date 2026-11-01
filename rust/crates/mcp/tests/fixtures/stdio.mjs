@@ -21,9 +21,8 @@ let ErrorCode;
 try {
   ({ Server } = await import("mcp-sdk-v1/server/index.js"));
   ({ StdioServerTransport } = await import("mcp-sdk-v1/server/stdio.js"));
-  ({ CallToolRequestSchema, ListToolsRequestSchema, McpError, ErrorCode } = await import(
-    "mcp-sdk-v1/types.js"
-  ));
+  ({ CallToolRequestSchema, ListToolsRequestSchema, McpError, ErrorCode } =
+    await import("mcp-sdk-v1/types.js"));
 } catch (error) {
   console.error(
     "agentkit stdio MCP fixture (stdio.mjs): cannot load the MCP server SDK " +

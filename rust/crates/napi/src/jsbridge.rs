@@ -34,6 +34,11 @@ pub(crate) enum PendingKind {
 
 struct Pending {
     sender: oneshot::Sender<std::result::Result<Value, String>>,
+    /// Set once the JS router has synchronously claimed this envelope for
+    /// dispatch (see [`JsBridge::claim`]). A second claim of the same id —
+    /// a replayed or duplicated envelope — fails, so exactly one entry into
+    /// user code is possible per live call.
+    claimed: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -178,7 +183,13 @@ impl JsBridge {
                     "the {label} callback was not dispatched: the binding is closing"
                 ));
             }
-            inner.pending.insert(call_id.to_owned(), Pending { sender });
+            inner.pending.insert(
+                call_id.to_owned(),
+                Pending {
+                    sender,
+                    claimed: false,
+                },
+            );
             calls()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -232,6 +243,34 @@ impl JsBridge {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .remove(call_id);
+        }
+    }
+
+    /// The JS router's synchronous liveness gate, answered under the pending
+    /// lock: true exactly once, only while the call is still live. Every
+    /// give-up path removes the pending entry — settle/rejection (`settle`,
+    /// `resolve`), host cancellation and executor abandonment (`cancel`,
+    /// including the `PendingGuard` drop when the executor's timeout arm
+    /// abandons this future mid-await), and service close (`start_closing`'s
+    /// atomic drain) — so a false answer here means Rust has already settled
+    /// the call and the arriving envelope is stale: the router must settle
+    /// nothing and, above all, must NOT enter user code. Marking the entry
+    /// claimed makes the gate single-use: a replayed envelope for the same
+    /// live id cannot dispatch twice.
+    pub(crate) fn claim(&self, call_id: &str) -> bool {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if inner.state != BridgeState::Open {
+            return false;
+        }
+        match inner.pending.get_mut(call_id) {
+            Some(pending) if !pending.claimed => {
+                pending.claimed = true;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -297,6 +336,20 @@ pub(crate) fn active(call_id: &str) -> bool {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .contains_key(call_id)
+}
+
+/// Synchronous liveness claim for one routed callback: forwards to the
+/// owning bridge without disturbing the routing entry (the resolver must
+/// still be able to settle a claimed call — see [`JsBridge::claim`]).
+/// False for unknown, already-settled, cancelled, abandoned, claimed, or
+/// closing/closed ids: the router must not enter user code on that answer.
+pub(crate) fn claim(call_id: &str) -> bool {
+    calls()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(call_id)
+        .and_then(|weak| weak.upgrade())
+        .is_some_and(|bridge| bridge.claim(call_id))
 }
 
 /// Exported resolver entry point: JS answers exactly one in-flight callback.
