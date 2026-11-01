@@ -109,6 +109,16 @@ impl ServerConfig {
                 return Err(McpClientError::Configuration);
             }
         }
+        // Same one-step-rename rule the bridge enforces (`McpToolSet::new`):
+        // routing inverts this map, so a replacement that is itself renamed
+        // (`a -> b` alongside `b -> c`) would make `mcp.<alias>.b` address two
+        // different server tools. Refuse the ambiguous config up front.
+        if aliases
+            .iter()
+            .any(|(source, target)| source != target && aliases.contains_key(target))
+        {
+            return Err(McpClientError::Configuration);
+        }
         self.tool_aliases = aliases;
         Ok(self)
     }

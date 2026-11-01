@@ -134,10 +134,16 @@ export interface NativeMcpClientConfig {
 
 /** One contributed remote tool: the portable tool descriptor contract
  * (directly registerable via `NativeSessionService.registerTool`) plus
- * `remoteName`, the unmodified server-side name for `mcpCallTool`. */
+ * `remoteName`, the unmodified server-side name for `mcpCallTool`, and the
+ * registration `handle` that `mcpCallTool` requires back. */
 export interface NativeMcpToolDescriptor extends ToolDefinitionJson {
   /** Unmodified name as the remote server declared it. */
   remoteName: string;
+  /** The registration that minted this descriptor (`"<alias>#<n>"`). Pass it
+   * as `mcpCallTool`'s fourth argument: a descriptor from a superseded
+   * registration of the same alias is refused with `mcp_authority_revoked`
+   * instead of executing the replacement server's callback. */
+  handle: string;
 }
 
 /** What one `mcpConnect` established. */
@@ -155,6 +161,13 @@ export interface NativeMcpServerStatus {
   enabled: boolean;
   readOnly: boolean;
   connected: boolean;
+  /** How many times this alias has been (re)registered on this store; it
+   * never decreases, so `1` means the descriptors are still the original
+   * registration's. */
+  registration: number;
+  /** The current registration's handle (`"<alias>#<n>"`), or null when the
+   * alias is declared but has never connected. */
+  handle: string | null;
   tools: number;
 }
 
@@ -165,12 +178,15 @@ export interface McpToolRegistrar {
 }
 
 /** Structural view of the store's client lane (satisfied by
- * `NativeStore`). */
+ * `NativeStore`). `handle` is the descriptor's registration handle; omit it
+ * only for an alias that has never been re-registered, otherwise the call is
+ * refused with `mcp_authority_revoked`. */
 export interface McpToolCaller {
   mcpCallTool(
     alias: string,
     toolName: string,
     args: unknown,
+    handle?: string,
   ): Promise<ToolResultJson>;
 }
 
@@ -178,11 +194,13 @@ export interface McpToolCaller {
  * Register every descriptor of a connected MCP server through the
  * EXISTING `registerTool` path — the authority lane. Each registered
  * tool's execution invokes `mcpCallTool` for the descriptor's
- * `remoteName`, so the Rust `BindingAuthority` + `JsToolGuard` chain
- * (plan mode, approvals, effect taxonomy) judges the call exactly as it
- * judges any other JS tool, and the effect on the descriptor came from
- * the host `readOnly` config alone. Returns the descriptors it
- * registered, unchanged.
+ * `remoteName` WITH THAT DESCRIPTOR'S OWN HANDLE, so the Rust
+ * `BindingAuthority` + `JsToolGuard` chain (plan mode, approvals, effect
+ * taxonomy) judges the call exactly as it judges any other JS tool, and a
+ * callback from a superseded registration of the same alias can never be
+ * reached by a descriptor the host authorized earlier. The effect on the
+ * descriptor came from the host `readOnly` config alone. Returns the
+ * descriptors it registered, unchanged.
  */
 export async function registerMcpTools(
   service: McpToolRegistrar,
@@ -191,6 +209,7 @@ export async function registerMcpTools(
 ): Promise<NativeMcpToolDescriptor[]> {
   for (const tool of connection.tools) {
     const remoteName = tool.remoteName;
+    const handle = tool.handle;
     await service.registerTool(
       {
         name: tool.name,
@@ -200,7 +219,7 @@ export async function registerMcpTools(
         description: tool.description,
         inputSchema: tool.inputSchema,
       },
-      (input: unknown) => store.mcpCallTool(connection.alias, remoteName, input),
+      (input: unknown) => store.mcpCallTool(connection.alias, remoteName, input, handle),
     );
   }
   return connection.tools;
