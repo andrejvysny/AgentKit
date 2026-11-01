@@ -1,9 +1,11 @@
 /**
  * The wiring for a standalone coding agent on the NATIVE composition: the
  * Rust runtime owns sessions, storage, scheduling, governance, durable
- * execution and recovery; the coding tool pack executes its tools here, in
- * the host process, through the binding's JS tool lane. No Pi and no
- * OneMind in sight.
+ * execution and recovery — and, since `registerCodingTools`, the coding
+ * tools themselves: the Rust toolpack's descriptors, bodies, permission
+ * guard, high-risk guard, and fingerprint-v4 standing approvals all live
+ * on the same executor lane as the (optional) JS tools. No Pi, no OneMind,
+ * and no TS coding pack in sight.
  *
  * What the runtime owns, and what this file refuses to reimplement:
  *
@@ -11,12 +13,13 @@
  *    Rust's — this file never calls a provider directly and never parks or
  *    adopts a turn itself;
  *  - sessions, follow-ups, steering and approvals are `NativeSessionService`;
- *  - permission is the Rust coding-pack authority over each registered
- *    tool's effect+capability, so a mode is a fact in the database, not a
- *    variable a running turn could talk its way into;
- *  - the JS provider callback and the JS tool callbacks are the only code
- *    that crosses into this process, and both are settled honestly by the
- *    binding — never fabricated.
+ *  - permission is the Rust coding-pack authority over each tool's
+ *    effect+capability (JS tools via the binding's JS-tool guard, native
+ *    tools via the crate's own guard chain), so a mode is a fact in the
+ *    database, not a variable a running turn could talk its way into;
+ *  - the JS provider callback is the only code that crosses into this
+ *    process (the JS tool callbacks remain available for host tools), and
+ *    both are settled honestly by the binding — never fabricated.
  */
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -26,26 +29,19 @@ import type {
   AiToolDefinition,
 } from "@agentkit/contracts";
 import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
-import {
-  defaultProfileRegistry,
-  readSessionDescriptor,
-  type ToolContributionContext,
-} from "@agentkit/host";
+import { defaultProfileRegistry, readSessionDescriptor } from "@agentkit/host";
 import type { ProfileRegistry, SessionReasoningEffort } from "@agentkit/host";
 import {
   NativeSessionService,
   NativeStore,
   type ProviderRequest,
   type ProviderResult,
-  type ToolDefinitionJson,
 } from "@agentkit/native";
-import {
-  SUBMIT_PLAN_TOOL_NAME,
-  createCodingToolPack,
-  type CodingMode,
-  type CodingToolPack,
-} from "@agentkit/toolpacks-coding";
-import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
+
+/** The tool whose approvable refusal is a PLAN approval — the same name
+ * the Rust pack registers, spelled locally so nothing runtime crosses in
+ * from the TS pack. */
+const SUBMIT_PLAN_TOOL_NAME = "submit_plan";
 
 const TERMINAL: Readonly<Record<string, true>> = {
   completed: true,
@@ -61,6 +57,11 @@ const NATIVE_MODES: Readonly<Record<string, true>> = {
   full_auto: true,
   plan: true,
 };
+
+/** The permission modes the native runtime understands — the same words
+ * the Rust coding pack and the binding's JS-tool guard parse. Spelled
+ * locally so no runtime import crosses from the TS pack. */
+export type CodingMode = NativeMode;
 
 /** The durable status of one turn, as the native scheduler records it. */
 export type TurnStatus =
@@ -274,8 +275,6 @@ export class CodingAgentApp {
   private constructor(
     readonly options: CodingAgentOptions,
     readonly store: NativeStore,
-    private readonly pack: CodingToolPack,
-    private readonly tools: readonly AiTool[],
     service: NativeSessionService,
     private readonly profiles: ProfileRegistry,
   ) {
@@ -311,39 +310,22 @@ export class CodingAgentApp {
       );
     }
     const store = await NativeStore.open(options.dbPath);
-    const pack = createCodingToolPack({
-      workspace: { root: resolve(options.repo) },
-      testCommands: options.testCommands ?? ["bun test"],
-      sandbox: options.sandbox ?? "required",
-    });
-    const contribution: ToolContributionContext = {
-      bindings: [],
-      limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
-    };
-    const tools = await pack.contribute(contribution);
-    const app = {
-      options,
-      store,
-      pack,
-      tools,
-      profiles,
-    };
+    const app = { options, store, profiles };
     const service = await CodingAgentApp.buildService(app);
-    return new CodingAgentApp(options, store, pack, tools, service, profiles);
+    return new CodingAgentApp(options, store, service, profiles);
   }
 
   /** One service over the store: the tool lane (or the Rust provider lane,
-   * when no provider was injected) plus the Rust coding-pack authority.
-   * Recreated by `recover()` — every registered callback and descriptor is
-   * re-registered here, so a fresh service is indistinguishable from the
-   * one `open()` built. */
+   * when no provider was injected) plus the Rust coding-pack authority AND
+   * the Rust-owned coding tools. Recreated by `recover()` — every
+   * registered callback and descriptor is re-registered here, so a fresh
+   * service is indistinguishable from the one `open()` built. */
   private static async buildService(app: {
     options: CodingAgentOptions;
     store: NativeStore;
-    tools: readonly AiTool[];
     profiles: ProfileRegistry;
   }): Promise<NativeSessionService> {
-    const { options, store, tools, profiles } = app;
+    const { options, store, profiles } = app;
     const profile = profiles.resolve(options.profileId);
     const wantedMode = options.mode ?? profile?.permissionMode ?? "ask";
     if (NATIVE_MODES[wantedMode] !== true)
@@ -413,31 +395,18 @@ export class CodingAgentApp {
       const client = provider;
       service.setProvider((request) => finalResult(client, request));
     }
-    const sessionId = options.sessionId;
-    await Promise.all(
-      tools.map((tool) =>
-        service.registerTool(
-          tool.definition as unknown as ToolDefinitionJson,
-          (input, request) => {
-            const ctx: AiToolExecutionContext = {
-              runId: request.runId,
-              chatId: sessionId,
-              bindings: [],
-              limits: {
-                profile: "medium",
-                maxBytes: 256 * 1024,
-                maxItems: 1024,
-              },
-              ...(request.toolCallId === null
-                ? {}
-                : { toolCallId: request.toolCallId }),
-              ...(request.signal ? { signal: request.signal } : {}),
-            };
-            return tool.execute(ctx, input);
-          },
-        ),
-      ),
-    );
+    // The coding tools are the Rust pack's: descriptors, bodies, guards,
+    // sandbox, leases and standing approvals all execute in Rust on the
+    // same executor lane, judged by the same durable mode this service's
+    // authority reads. Registering them here (not in `open()`) is what
+    // makes `recover()`'s fresh service indistinguishable from the first.
+    await service.registerCodingTools({
+      workspaceRoot: resolve(options.repo),
+      sandbox: options.sandbox ?? "required",
+      testCommands: [...(options.testCommands ?? ["bun test"])],
+      configuredMode: configuredMode,
+      planToolNames: [SUBMIT_PLAN_TOOL_NAME],
+    });
     return service;
   }
 
@@ -510,7 +479,6 @@ export class CodingAgentApp {
     this.service = await CodingAgentApp.buildService({
       options: this.options,
       store: this.store,
-      tools: this.tools,
       profiles: this.profiles,
     });
   }
@@ -846,14 +814,10 @@ export class CodingAgentApp {
       }
       await service.close();
     }
-    try {
-      // Close tool admission and settle commands this process owns; anything
-      // a dead process left behind is reconciled by the next pack's startup
-      // sweep, not here.
-      await this.pack.dispose?.();
-    } catch {
-      // Best-effort: teardown must not lose the closed store.
-    }
+    // `close()` on the binding already settled the native coding lane:
+    // live commands this process owns are taken down by the crate's own
+    // teardown after the worker drained; anything a dead process left
+    // behind is reconciled by the next boot's startup sweep, not here.
     await this.store.close();
   }
 }

@@ -56,17 +56,29 @@
  *  - `GET /v1/providers` is answered from a settings-backed seed document
  *    (first-boot seeding from env, exactly as before). Evidence:
  *    `createProvider`/`updateProvider` in `rust/crates/host/src/http/
- *    providers.rs` call `require_secret_port`, and the binding's
- *    `DesktopBackend::open` wires no secrets port — so provider WRITES have
- *    no native path; the list the old `store.providers` table served is
- *    persisted under the whitelisted `metadata` key of the one settings
- *    document both lanes share (`settings.getSettings` /
- *    `settings.updateSettings` through `callStore`).
- *  - CORS is façade-side. Evidence: the binding's server `Config` carries
- *    only `base_path`/`max_body_bytes`/`max_query_bytes`/`streaming` — no
- *    CORS — where `@agentkit/transport-http` exposed `deps.cors`.
- *  - The managed-integrations layer (OAuth connectors, prompt templates,
- *    skills) stays TypeScript outright — see `./managed-integrations.ts`.
+ *    providers.rs` gate credential writes on a wired secret vault
+ *    (`require_secret_port`), and the example deliberately starts the
+ *    server WITHOUT the binding's `providerSecrets: "memory"` vault —
+ *    that vault stores credentials in the connection repository, while
+ *    THIS example's provider records live in the one settings document
+ *    both lanes share, so the façade's list stays the authority
+ *    (`settings.getSettings` / `settings.updateSettings` through
+ *    `callStore`). The engine-level path itself is qualified in
+ *    `packages/native/tests/http-server.test.ts`.
+ *  - CORS is wired at BOTH layers now: the server itself starts with the
+ *    same two Vite origins (`startHttpServer({ cors })` carries the
+ *    transport's `CorsConfig` — `rust/crates/transport-http/src/cors.rs`,
+ *    Server-option closure round), and the façade still answers preflight
+ *    and decorates the responses IT produces (the mount-path routes —
+ *    tools/version/providers/MCP — that never reach the Rust router).
+ *  - The managed-integrations layer (prompt templates, skills, connection
+ *    configuration, run-content) is the typed native binding wrapper —
+ *    `NativeManagedContent` over `callStore` arms executed by
+ *    `agentkit-store::managed_content` — see `./managed-integrations.ts`.
+ *    The one honest gap is the MCP-OAuth lifecycle leg:
+ *    `connect`/`test`/`action` reach the port surface and are refused
+ *    `not_implemented`, exactly as the REST lane answers
+ *    `connectionAction` with 501 (no OAuth in the Rust MCP client).
  *  - Remote MCP calls carry no run-scoped plan-mode/ask guard and no
  *    `x-agentkit-chat` session pinning (the binding's `BearerSet` never
  *    extracts a chat header — `rust/crates/napi/src/mcp_server.rs`); both
@@ -417,23 +429,6 @@ function json(body: unknown, corsOrigin: string | null): Response {
   return new Response(JSON.stringify(body), { status: 200, headers });
 }
 
-async function readJsonObject(
-  request: Request,
-): Promise<Record<string, unknown>> {
-  const text = await request.text();
-  if (text === "") return {};
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return parsed !== null &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
 function withCors(headers: Headers, corsOrigin: string | null): Headers {
   const copy = new Headers(headers);
   if (corsOrigin !== null) copy.set("access-control-allow-origin", corsOrigin);
@@ -571,6 +566,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     basePath: BASE_PATH,
     bearerToken,
     defaultModel: provider.defaultModel,
+    // The same two origins the retired TypeScript transport was given:
+    // the Rust engine enforces CORS itself for everything it serves, and
+    // the façade adds the decoration for its own mount-path routes.
+    cors: { origins: Object.keys(CORS_ORIGINS) },
   });
 
   // 6. The optional MCP SERVER — the same tools, offered to an outside MCP
@@ -658,14 +657,50 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
       // every chat is a session. The ChatDto the client gets back is the
       // backend's own projection of the stored row, so the wire shape is
       // unchanged.
-      const body = await readJsonObject(request);
+      //
+      // The wire shape itself is adjudicated by the NATIVE server, not by
+      // a second parser here: the raw bytes are forwarded to the private
+      // backend's own `POST /v1/chats`, so a malformed body, an array body,
+      // a mistyped `title`, or a body over `max_body_bytes` is refused with
+      // the Rust engine's own 400/413 problem+json — mirrored to the client
+      // verbatim — exactly as it is when the backend is called directly.
+      // A request the Rust parser accepts creates a throwaway bare row,
+      // which is retired immediately (the desktop contract above forbids
+      // serving it); the session write then runs against the SAME object
+      // the Rust parser validated.
+      const raw = await request.arrayBuffer();
+      const verdict = await fetch(`${http.baseUrl}/v1/chats`, {
+        method: "POST",
+        headers: {
+          "content-type":
+            request.headers.get("content-type") ?? "application/json",
+          authorization: `Bearer ${bearerToken}`,
+        },
+        body: raw,
+        redirect: "manual",
+      });
+      if (verdict.status !== 201)
+        return new Response(await verdict.arrayBuffer(), {
+          status: verdict.status,
+          headers: withCors(verdict.headers, corsOrigin),
+        });
+      // Accepted: this is the backend's own projection of what the Rust
+      // parser read — the one authoritative parse of the body.
+      const accepted = (await verdict.json()) as Record<string, unknown>;
+      if (typeof accepted.id === "string" && accepted.id !== "")
+        await fetch(`${http.baseUrl}/v1/chats/${accepted.id}`, {
+          method: "DELETE",
+          headers: { authorization: `Bearer ${bearerToken}` },
+        });
       const created = await service.createSession({
         profileId: "desktop-host",
-        ...(typeof body.title === "string" ? { title: body.title } : {}),
-        ...(body.metadata !== null &&
-        typeof body.metadata === "object" &&
-        !Array.isArray(body.metadata)
-          ? { metadata: body.metadata as Record<string, unknown> }
+        ...(typeof accepted.title === "string"
+          ? { title: accepted.title }
+          : {}),
+        ...(accepted.metadata !== null &&
+        typeof accepted.metadata === "object" &&
+        !Array.isArray(accepted.metadata)
+          ? { metadata: accepted.metadata as Record<string, unknown> }
           : {}),
       });
       const chatId = created.sessionId;
