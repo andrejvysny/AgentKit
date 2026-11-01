@@ -230,6 +230,14 @@ async fn receipt_binds_proposal_and_operation_and_first_outcome_wins_after_reope
             .await
             .is_err()
     );
+    // Once the receipt is committed, the terminal stamp is receipt-bound:
+    // the plain status CAS must refuse (finalizing goes through
+    // `complete_proposal`). Without any receipt the CAS is the baseline's
+    // plain status move — pinned by `unrecorded_terminal_cas_writes_no_receipt`.
+    store
+        .record_outcome("operation", outcome(), 1003)
+        .await
+        .unwrap();
     assert!(
         store
             .transition_proposal(
@@ -405,6 +413,83 @@ async fn record_outcome_is_idempotent_and_requires_the_claimed_operation() {
         .unwrap();
     assert!(unclaimed.proposal_id.is_empty());
     assert_eq!(unclaimed.operation_id, "never-claimed");
+}
+
+#[tokio::test]
+async fn unrecorded_terminal_cas_writes_no_receipt() {
+    // A status request must never manufacture appliedOps evidence: without
+    // a recorded outcome the terminal transition is the plain CAS the
+    // TypeScript baseline had, it leaves NO receipt row, and a later
+    // `recordOutcome` can still stand up the real evidence.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("agent.db");
+    let store = SqliteStore::open(&path, 4).unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store.create_proposal(proposal("first")).await.unwrap();
+    applying(&store, "first", "operation").await;
+    let applied = store
+        .transition_proposal(
+            "first",
+            vec![ProposalStatus::Applying],
+            ProposalStatus::Applied,
+            ProposalPatch::default(),
+            1003,
+        )
+        .await
+        .unwrap();
+    assert_eq!(applied.status, ProposalStatus::Applied);
+    assert_eq!(applied.applied_at, Some(1003));
+    assert!(store.receipt("operation").await.unwrap().is_none());
+    drop(store);
+    // Fresh process: the evidence was never written, not even durably.
+    let reopened = SqliteStore::open(&path, 4).unwrap();
+    assert!(reopened.receipt("operation").await.unwrap().is_none());
+    assert_eq!(
+        reopened
+            .get_proposal("first")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ProposalStatus::Applied
+    );
+    // Late evidence still stands on its own, as the port contract allows.
+    let late = reopened
+        .record_outcome("operation", outcome(), 1100)
+        .await
+        .unwrap();
+    assert_eq!(late.proposal_id, "first");
+    assert_eq!(late.outcome.status, "applied");
+
+    // The failed direction is the same plain CAS.
+    let store2 = SqliteStore::memory(4).unwrap();
+    store2
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    let mut second = proposal("second");
+    second.action_id = None;
+    store2.create_proposal(second).await.unwrap();
+    applying(&store2, "second", "operation-two").await;
+    let failed = store2
+        .transition_proposal(
+            "second",
+            vec![ProposalStatus::Applying],
+            ProposalStatus::Failed,
+            ProposalPatch {
+                reason: Some("apply refused".into()),
+                ..Default::default()
+            },
+            1004,
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed.status, ProposalStatus::Failed);
+    assert_eq!(failed.reason.as_deref(), Some("apply refused"));
+    assert!(store2.receipt("operation-two").await.unwrap().is_none());
 }
 
 #[tokio::test]

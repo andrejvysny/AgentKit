@@ -6,6 +6,14 @@ export interface ProviderRequest {
   tools: unknown[];
   temperature?: number | null;
   maxOutputTokens?: number | null;
+  /**
+   * Aborts when the host has given up on this callback — run cancellation
+   * (`cancel` notification) or `close()` (`discard`/drain). The provider is
+   * expected to thread it into its fetch; the bridge settles the call as
+   * cancelled regardless, so honoring the signal is what stops the network,
+   * not what stops the run.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ProviderToolCall {
@@ -32,6 +40,15 @@ export interface ToolCallRequest {
   attemptId: string | null;
   runId: string;
   input: unknown;
+  /**
+   * Aborts when the host has given up on this invocation: run cancellation
+   * delivers the bridge `cancel` notification, and `close()` aborts
+   * everything still in flight. Consumers that own side effects (the coding
+   * pack spawns process groups) MUST thread this into what they start; a
+   * tool that ignores it keeps effects running after cancellation, and the
+   * runtime has already reported the call as settled.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ToolResultJson {

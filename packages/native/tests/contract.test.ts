@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * The error-code contract is the single source of truth shared between the
@@ -9,7 +10,9 @@ import { join } from "node:path";
  * `.d.ts` must expose exactly the classes the wrapper imports.
  */
 
-const packageRoot = new URL("..", import.meta.url).pathname;
+// `fileURLToPath`, not `URL.pathname`: on win32 `.pathname` yields
+// `/C:/…`, which no filesystem call accepts.
+const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const repoRoot = join(packageRoot, "..", "..");
 const contractPath = join(
   repoRoot,

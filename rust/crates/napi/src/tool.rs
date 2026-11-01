@@ -146,14 +146,17 @@ impl JsToolContributor {
             .clone()
     }
 
+    /// The catalogue the MCP server advertises: exactly the definitions
+    /// [`Self::lookup`] can resolve, deduplicated with the resolver's own
+    /// first-match rule. Kept next to `lookup` on purpose — one rule, so a
+    /// remote client can never be shown one callback and be served another.
+    pub(crate) fn advertised_definitions(&self) -> Vec<ToolDefinition> {
+        advertised(&self.tool_definitions())
+    }
+
     /// One registered definition by tool name.
     pub(crate) fn lookup(&self, name: &str) -> Option<ToolDefinition> {
-        self.definitions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .find(|definition| definition.name == name)
-            .cloned()
+        resolve_first(&self.tool_definitions(), name).cloned()
     }
 
     /// Execute a registered definition through the exact `JsTool::execute`
@@ -173,6 +176,36 @@ impl JsToolContributor {
         .execute(context, input)
         .await
     }
+}
+
+/// The resolver `call_tool` uses: the FIRST definition registered under a
+/// name wins (a duplicate under a new version is a redefinition, and the
+/// router only ever reaches the live registration under that name).
+fn resolve_first<'a>(definitions: &'a [ToolDefinition], name: &str) -> Option<&'a ToolDefinition> {
+    definitions
+        .iter()
+        .find(|definition| definition.name == name)
+}
+
+/// The catalogue a remote client may be shown: one entry per name, holding
+/// exactly what [`resolve_first`] — and therefore `call_tool` — will execute.
+/// Deriving it from the resolver's own rule is the point: advertising every
+/// registered definition would let `t@1.0.0` and `t@2.0.0` both appear while
+/// only the first is addressable, i.e. show one callback and serve another.
+fn advertised(definitions: &[ToolDefinition]) -> Vec<ToolDefinition> {
+    let mut seen: Vec<&str> = Vec::new();
+    definitions
+        .iter()
+        .filter(|definition| {
+            if seen.contains(&definition.name.as_str()) {
+                false
+            } else {
+                seen.push(&definition.name);
+                true
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 fn required_string<'a>(object: &'a Value, key: &str) -> std::result::Result<&'a str, String> {
@@ -263,5 +296,84 @@ impl ToolContributor for JsToolContributor {
                 }
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ToolDefinition, advertised, resolve_first};
+    use serde_json::json;
+
+    fn definition(name: &str, version: &str, description: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.into(),
+            version: version.into(),
+            effect: "write".into(),
+            capability: "general".into(),
+            description: description.into(),
+            input_schema: json!({"type":"object","properties":{"text":{"type":"string"}}}),
+            output_schema: None,
+            timeout_ms: None,
+        }
+    }
+
+    /// The exact scenario the streamable-HTTP server must never get wrong:
+    /// `t@1.0.0` and a redefinition `t@2.0.0` are BOTH registered, but only
+    /// one callback is addressable by name. What `list_tools` advertises
+    /// (`advertised`) and what `call_tool` executes (`resolve_first`) have to
+    /// be the same definition — never the definition the client was shown
+    /// while the other one ran.
+    #[test]
+    fn the_advertised_catalog_is_exactly_what_the_resolver_executes() {
+        let registered = vec![
+            definition("t", "1.0.0", "first"),
+            definition("u", "1.0.0", "other"),
+            definition("t", "2.0.0", "replacement"),
+        ];
+        let shown = advertised(&registered);
+        assert_eq!(
+            shown.len(),
+            2,
+            "one catalogue entry per name — the unaddressable replacement is never shown"
+        );
+        assert_eq!(shown[0].name, "t");
+        assert_eq!(shown[1].name, "u");
+        let resolved = resolve_first(&registered, "t").expect("t resolves");
+        let advertised_t = shown
+            .iter()
+            .find(|tool| tool.name == "t")
+            .expect("t is shown");
+        // Same definition, field for field: the client is shown the callback
+        // it will actually invoke.
+        assert_eq!(advertised_t.version, resolved.version);
+        assert_eq!(advertised_t.description, resolved.description);
+        assert_eq!(advertised_t.input_schema, resolved.input_schema);
+        assert_eq!(resolved.version, "1.0.0", "the FIRST registration wins");
+        assert_eq!(
+            resolve_first(&registered, "u").map(|tool| tool.version.as_str()),
+            Some("1.0.0")
+        );
+        assert!(resolve_first(&registered, "missing").is_none());
+    }
+
+    #[test]
+    fn parse_rules_keep_the_taxonomy_and_schema_gates() {
+        let parsed = super::parse_definition(&json!({
+            "name": "t", "effect": "read", "inputSchema": {"type":"object"}
+        }))
+        .expect("a minimal definition parses");
+        assert_eq!(parsed.version, "1.0.0", "a missing version defaults");
+        assert_eq!(parsed.effect, "read");
+        assert!(
+            super::parse_definition(&json!({
+                "name": "t", "effect": "danger", "inputSchema": {"type":"object"}
+            }))
+            .is_err(),
+            "an effect outside the host taxonomy is refused"
+        );
+        assert!(
+            super::parse_definition(&json!({"name": "t", "inputSchema": 7})).is_err(),
+            "a non-object schema validates nothing and is refused"
+        );
     }
 }

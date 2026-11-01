@@ -19,6 +19,23 @@ smokes and the live scripts compose `@agentkit/native` only; the TypeScript
 backend packages remain frozen, API-compatible libraries with zero
 production consumers (`docs/rust/parity.md` keeps the per-package ledger).
 
+**MCP handles are pinned to the registration that minted them.** Every
+descriptor `mcpConnect` hands out now carries a `handle` (`"<alias>#<n>"`,
+plus a monotonic `registration` in `mcpListServers`), and `mcpCallTool` takes
+it as a fourth argument: after an alias is re-registered under the same name,
+a call presenting a superseded, foreign-alias, or (once re-registered)
+missing handle is refused with `mcp_authority_revoked` before the transport is
+touched, so one generation's descriptor can never authorize another
+generation's callback. Server-side, the advertised catalogue is now derived
+from the resolver's own first-match rule (`advertised_definitions`), so a
+remote client is always shown the callback it will execute. Alias maps are
+validated by one shared gate (`bridge::aliases_are_one_step`, applied both in
+`McpToolSet::new` and in the binding's projection mirror): a rename that lands
+on another tool's own name — which would make one name denote two tools — is
+refused at connect with `mcp_invalid_config`, and a configuration change whose
+new side fails rolls the manager back so the already-connected servers keep
+their transports, descriptors and handles.
+
 **Two engine fixes on the consumer path.** `complete_proposal` finalizes an
 `Applying` proposal behind a pre-existing receipt — the store port records
 the outcome before requesting the terminal transition, and the old early
@@ -29,6 +46,47 @@ answers the permission guard with ABSENCE (configured-mode fallback) instead
 of a guard error, so REST-minted chats run their registered JS tools — a
 non-session chat had been refused "guard error" on every tool call;
 malformed session state stays fail-closed.
+
+**Cancellation now reaches user code, promptly.** The bridge's host-cancel
+path cleared the pending entry before its drop-guard ran, so the
+`cancel` notification the callback router aborts on was never sent — JS
+tool signals never fired on `service.cancel`. The branch now delivers the
+same notification the drop guard sends; `session.cancel` additionally
+rouses the idle worker and the active attempt (`wake_active`, keyed by
+task id) instead of waiting for the next heartbeat tick, and the router
+registers a per-call `AbortController` before entering user code, exposing
+the documented `signal` on `ProviderRequest`/`ToolCallRequest`. Measured
+abort latency after the fix: 4 ms; the binding suite pins the JS-tool
+abort, the ignored late settle, and that a cancelled coding-pack run
+takes its process group down (`packages/native/tests/cancellation.test.ts`).
+
+**Coding fingerprint agrees with the baseline and revalidates at claim.**
+The tokenizer now mirrors JavaScript exactly (the 25-code-point ECMA
+whitespace class, greedy single-space token splitting, ASCII `\w` in
+file-like words) and is pinned against a shared fixture
+(`rust/fixtures/coding-fingerprint/tokenizer.json`) from both sides. The
+standing-approval key is recomputed at claim from the same lossy-decoded
+effective environment the exec path spawns from (`std::env::vars()`
+silently dropped non-UTF-8 pairs), executable identity is revalidated at
+claim, and the hashed envelope carries version 3 so no digest minted
+before these fixes can ever authorize again — persisted shape unchanged,
+old grants inert by non-match. The stat identity module compiles on
+Apple and Windows targets again (flat `st_mtime`, signed `st_dev`,
+Windows CRT-stat documented as conservative identity).
+
+**Project instructions read on Windows.** `FileProjectInstructions`
+refused every read off-POSIX, a regression against the frozen TypeScript
+port; Windows now mirrors the POSIX two-step — reparse-point refusal up
+front, then the opened handle's volume-serial/file-index must match the
+inspected metadata or the read is refused. Other non-POSIX targets keep
+the hard refusal; never an unchecked read.
+
+**Qualification hardening.** CI prebuilds the `http_fixture` example
+(`build:fixture`) before mixed-runtime suites; `prepack-publish-config`
+pins `workspace:` ranges so the packed native manifest installs
+standalone; `rust.yml` runs the shared-fingerprint conformance tests as
+named steps; `contract.test.ts` uses `fileURLToPath` (win32 `URL.pathname`
+yielded `/C:/…`); the missing-addon gate audit found no vacuous passes.
 
 **Native TS binding, first slice.** `rust/crates/napi` (`agentkit-napi`, napi-rs 3.x) and the workspace
 package `@agentkit/native` expose the Rust runtime to Node/Bun over JSON mirrors of the serde wire shapes:

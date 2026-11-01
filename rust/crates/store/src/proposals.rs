@@ -217,9 +217,28 @@ impl SqliteStore {
                 )));
             }
             if matches!(to, ProposalStatus::Applied | ProposalStatus::Failed) {
-                return Err(StoreError::InvalidInput(
-                    "terminal apply transition requires complete_proposal and bound receipt".into(),
-                ));
+                // A committed receipt makes the terminal stamp its own:
+                // finalizing then goes through `complete_proposal` so the
+                // first-committed outcome stays byte-identical and the stamp
+                // derives from the evidence. With NO receipt this is the
+                // plain status CAS the TypeScript baseline had — it never
+                // writes an outcome row, so a status request cannot
+                // manufacture appliedOps evidence.
+                let bound = proposal
+                    .operation_id
+                    .as_deref()
+                    .is_some_and(|operation_id| {
+                        get::<ReceiptRecord>(&transaction, "receipts", "operation_id", operation_id)
+                            .ok()
+                            .flatten()
+                            .is_some()
+                    });
+                if bound {
+                    return Err(StoreError::InvalidInput(
+                        "terminal apply transition requires complete_proposal and bound receipt"
+                            .into(),
+                    ));
+                }
             }
             if to == ProposalStatus::Applying
                 && patch.operation_id.as_deref().is_none_or(str::is_empty)
