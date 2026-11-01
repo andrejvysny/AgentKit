@@ -28,13 +28,16 @@ import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import type { AiRunEvent } from "@agentkit/contracts";
-import type { CodingMode } from "@agentkit/toolpacks-coding";
 import {
   REASONING_EFFORTS,
   defaultProfileRegistry,
   type SessionReasoningEffort,
 } from "@agentkit/host";
-import { CodingAgentApp, type PendingApproval } from "./app.js";
+import {
+  CodingAgentApp,
+  type CodingMode,
+  type PendingApproval,
+} from "./app.js";
 import {
   MODES,
   exportTo,
