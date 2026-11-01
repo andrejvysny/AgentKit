@@ -27,6 +27,12 @@ export interface ChatCompletionCanned {
   reasoningDeltas?: string[];
   /** Final usage object exactly as an OpenAI-compatible server reports it. */
   usage?: unknown;
+  /** When non-empty, the message finishes with `finish_reason:
+   * "tool_calls"` and carries these function calls, streamed as one
+   * `delta.tool_calls` chunk — the shape a real server sends when the
+   * model asks for a tool. Used to prove the lane refuses provider-emitted
+   * calls under a disabled tool-calling config. */
+  toolCalls?: Array<{ id?: string; name: string; arguments?: unknown }>;
 }
 
 export interface ResponsesCanned {
@@ -42,6 +48,11 @@ export interface ResponsesCanned {
 
 export interface LoopbackOptions {
   chat?: ChatCompletionCanned;
+  /** Per-request script for POST /chat/completions: the Nth request is
+   * answered with `chatStages[min(N, last)]` — the final entry repeats,
+   * exactly like the `responses` stage counter. Used to make a turn's
+   * first generation ask for a tool and its follow-up conclude. */
+  chatStages?: ChatCompletionCanned[];
   responses?: ResponsesCanned;
 }
 
@@ -74,7 +85,24 @@ function chatSse(canned: ChatCompletionCanned): string {
   for (const delta of canned.deltas ?? ["Hello world"]) {
     chunk({ content: delta }, null);
   }
-  chunk({}, "stop");
+  if (canned.toolCalls && canned.toolCalls.length > 0) {
+    chunk(
+      {
+        tool_calls: canned.toolCalls.map((call, index) => ({
+          index,
+          id: call.id ?? `call_loopback_${index}`,
+          type: "function",
+          function: {
+            name: call.name,
+            arguments: JSON.stringify(call.arguments ?? {}),
+          },
+        })),
+      },
+      "tool_calls",
+    );
+  } else {
+    chunk({}, "stop");
+  }
   if (canned.usage !== undefined) {
     id += 1;
     chunks.push(
@@ -199,6 +227,7 @@ export async function startProviderMock(
 ): Promise<LoopbackProvider> {
   const requests: CapturedRequest[] = [];
   let responsesStage = 0;
+  let chatStage = 0;
   const chat = options.chat ?? {
     deltas: ["Hel", "lo", " world"],
     reasoningDeltas: ["thinking"],
@@ -237,7 +266,13 @@ export async function startProviderMock(
       requests.push({ path: url.pathname, headers, body });
       let sse: string;
       if (url.pathname === "/chat/completions") {
-        sse = chatSse(chat);
+        if (options.chatStages && options.chatStages.length > 0) {
+          const stage = Math.min(chatStage, options.chatStages.length - 1);
+          chatStage += 1;
+          sse = chatSse(options.chatStages[stage] ?? {});
+        } else {
+          sse = chatSse(chat);
+        }
       } else {
         const stage = responsesStage;
         responsesStage += 1;

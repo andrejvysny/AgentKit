@@ -102,7 +102,13 @@ async function serveProvider(
                       object: "chat.completion.chunk",
                       created: 1,
                       model: "loopback-model",
-                      choices: [{ index: 0, delta: { content: "…" }, finish_reason: null }],
+                      choices: [
+                        {
+                          index: 0,
+                          delta: { content: "…" },
+                          finish_reason: null,
+                        },
+                      ],
                     })}\n\n`,
                   ),
                 );
@@ -133,7 +139,12 @@ async function serveProvider(
 
 async function openService(
   provider: Served,
-  jsToolMode: "read_only" | "ask" | "auto_edit" | "full_auto" | "plan" = "full_auto",
+  jsToolMode:
+    | "read_only"
+    | "ask"
+    | "auto_edit"
+    | "full_auto"
+    | "plan" = "full_auto",
 ) {
   const store = await NativeStore.open(
     join(mkdtempSync(join(tmpdir(), "agentkit-cancel-")), "store.sqlite"),
@@ -181,7 +192,7 @@ async function waitFor(
 
 nativeTest(
   "a cancelled tool call aborts the JS tool signal and terminalizes the turn",
-    async () => {
+  async () => {
     const provider = await serveProvider([
       { kind: "toolCall", name: "probe_block", args: {} },
       { kind: "content", text: "unreachable" },
@@ -238,7 +249,7 @@ nativeTest(
 
 nativeTest(
   "cancelling a held provider stream terminalizes without waiting for the stream",
-    async () => {
+  async () => {
     const provider = await serveProvider([{ kind: "hold" }]);
     const { store, service } = await openService(provider);
     try {
@@ -257,9 +268,9 @@ nativeTest(
       ).toBe(true);
       expect(Date.now() - t0).toBeLessThan(5_000);
       // The provider connection must be torn down, not left streaming.
-      expect(
-        await waitFor(() => provider.providerAborts > 0, 5_000),
-      ).toBe(true);
+      expect(await waitFor(() => provider.providerAborts > 0, 5_000)).toBe(
+        true,
+      );
     } finally {
       await service.close().catch(() => undefined);
       await store.close();
@@ -271,7 +282,7 @@ nativeTest(
 
 nativeTest(
   "a tool that resolves after cancellation cannot rewrite the terminal outcome",
-    async () => {
+  async () => {
     const provider = await serveProvider([
       { kind: "toolCall", name: "probe_stubborn", args: {} },
       { kind: "content", text: "unreachable" },
@@ -330,7 +341,7 @@ nativeTest(
 
 nativeTest(
   "a coding-owned process receives cancellation and stops",
-    async () => {
+  async () => {
     const workspace = mkdtempSync(join(tmpdir(), "agentkit-cancel-ws-"));
     // Per-run marker: a constant marker lets a survivor of a previous run
     // (or a parallel test) satisfy the pgrep witnesses and race the cancel
@@ -359,7 +370,9 @@ nativeTest(
         bindings: [],
         limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
       });
-      const runCommand = tools.find((tool) => tool.definition.name === "run_command");
+      const runCommand = tools.find(
+        (tool) => tool.definition.name === "run_command",
+      );
       if (!runCommand) throw new Error("run_command missing from pack");
       await service.registerTool(
         runCommand.definition as never,
@@ -368,7 +381,11 @@ nativeTest(
             {
               runId: request.runId,
               bindings: [],
-              limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
+              limits: {
+                profile: "medium",
+                maxBytes: 256 * 1024,
+                maxItems: 1024,
+              },
               ...(request.signal ? { signal: request.signal } : {}),
             } as never,
             input,
@@ -379,7 +396,10 @@ nativeTest(
       const sent = await service.send(sessionId, { content: "sleep please" });
       const turnId = String((sent as Record<string, unknown>).turnId ?? "");
       const sleepRunning = async () => {
-        const probe = Bun.spawn(["pgrep", "-f", marker], { stdout: "ignore", stderr: "ignore" });
+        const probe = Bun.spawn(["pgrep", "-f", marker], {
+          stdout: "ignore",
+          stderr: "ignore",
+        });
         return (await probe.exited) === 0;
       };
       expect(await waitFor(sleepRunning, 15_000)).toBe(true); // process started
@@ -388,7 +408,9 @@ nativeTest(
       // The durable turn terminalizes AND the spawned process group is gone:
       // the cancel message must reach the tool callback and its abort must
       // kill the group, not leave `sleep 45` running.
-      expect(await waitFor(async () => !(await sleepRunning()), 8_000)).toBe(true);
+      expect(await waitFor(async () => !(await sleepRunning()), 8_000)).toBe(
+        true,
+      );
       expect(Date.now() - t0).toBeLessThan(10_000);
       expect(
         await waitFor(async () => {
@@ -397,7 +419,10 @@ nativeTest(
         }, 5_000),
       ).toBe(true);
     } finally {
-      Bun.spawn(["pkill", "-f", marker], { stdout: "ignore", stderr: "ignore" });
+      Bun.spawn(["pkill", "-f", marker], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
       await service.close().catch(() => undefined);
       await store.close();
       await provider.stop();

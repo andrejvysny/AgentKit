@@ -16,10 +16,13 @@
  * close clean up.
  */
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import {
+  Client,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import { NativeStore } from "../src/index.js";
 import { registerMcpTools } from "../src/index.js";
 import type {
@@ -77,7 +80,9 @@ function fixtureLog(): { path: string; calls: () => string[] } {
     path,
     calls: () =>
       existsSync(path)
-        ? readFileSync(path, "utf8").split("\n").filter((line) => line !== "")
+        ? readFileSync(path, "utf8")
+            .split("\n")
+            .filter((line) => line !== "")
         : [],
   };
 }
@@ -100,7 +105,11 @@ function scripted(...responses: unknown[]) {
     calls.push(request);
     const response = responses[index];
     if (response === undefined)
-      return { content: "script exhausted", finishReason: "stop", toolCalls: [] };
+      return {
+        content: "script exhausted",
+        finishReason: "stop",
+        toolCalls: [],
+      };
     return response as ProviderResult;
   };
   return { calls, provider };
@@ -160,7 +169,10 @@ function waitingRequestId(state: Record<string, unknown>): string | null {
 
 /** `Client` + `StreamableHTTPClientTransport` with the bearer header
  * attached: the crate authenticates EVERY request, not just initialize. */
-function newMcpClient(url: string, token: string): [Client, StreamableHTTPClientTransport] {
+function newMcpClient(
+  url: string,
+  token: string,
+): [Client, StreamableHTTPClientTransport] {
   const client = new Client(
     { name: "native-mcp-test", version: "1.0.0" },
     { capabilities: {} },
@@ -219,7 +231,9 @@ nativeTest(
         return { data: { echoed: value }, summary: `echo:${value}` };
       });
       await service.registerTool(MARK_WRITE, async () => {
-        throw new Error("write tools must never execute while writesEnabled is false");
+        throw new Error(
+          "write tools must never execute while writesEnabled is false",
+        );
       });
 
       const info = await service.startMcpServer({ bearerTokens: [TOKEN] });
@@ -291,7 +305,9 @@ nativeTest(
 
       await service.stopMcpServer();
       // Stopped: the listener is gone, follow-up connections are refused.
-      await expect(fetch(`${info.url}/`, { method: "POST", body: "{}" })).rejects.toThrow();
+      await expect(
+        fetch(`${info.url}/`, { method: "POST", body: "{}" }),
+      ).rejects.toThrow();
       // Idempotent stop.
       await service.stopMcpServer();
     } finally {
@@ -427,7 +443,9 @@ nativeTest(
       });
       expect(connection.alias).toBe("fixture");
       const echo = connection.tools.find((tool) => tool.remoteName === "echo");
-      const note = connection.tools.find((tool) => tool.remoteName === "write_note");
+      const note = connection.tools.find(
+        (tool) => tool.remoteName === "write_note",
+      );
       const handleOf = (remote: string) =>
         connection.tools.find((tool) => tool.remoteName === remote)!.handle;
       expect(echo).toBeDefined();
@@ -463,7 +481,8 @@ nativeTest(
         "mcp_invalid_arguments",
       );
       await expectCode(
-        () => store.mcpCallTool("fixture", "echo", { text: 7 }, handleOf("echo")),
+        () =>
+          store.mcpCallTool("fixture", "echo", { text: 7 }, handleOf("echo")),
         "mcp_invalid_arguments",
       );
       expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["echo"]);
@@ -495,7 +514,8 @@ nativeTest(
       const sent = await service.send(sessionId, {
         content: { type: "text", text: "echo via engine" },
       });
-      if (sent.kind !== "turn") throw new Error("expected a durable turn submission");
+      if (sent.kind !== "turn")
+        throw new Error("expected a durable turn submission");
       await awaitRunSettled(service, sent.turnId);
       // The engine delivered the tool result into the model transcript.
       expect(JSON.stringify(calls[1]?.messages ?? [])).toContain("echo:engine");
@@ -525,7 +545,11 @@ nativeTest(
       );
       const again = await store.mcpConnect({
         alias: "fixture",
-        transport: { kind: "stdio", command: process.execPath, args: [FIXTURE] },
+        transport: {
+          kind: "stdio",
+          command: process.execPath,
+          args: [FIXTURE],
+        },
         readOnly: true,
       });
       expect(again.tools.every((tool) => tool.effect === "read")).toBe(true);
@@ -534,7 +558,11 @@ nativeTest(
         () =>
           store.mcpConnect({
             alias: "fixture",
-            transport: { kind: "stdio", command: process.execPath, args: [FIXTURE] },
+            transport: {
+              kind: "stdio",
+              command: process.execPath,
+              args: [FIXTURE],
+            },
           }),
         "invalid_input",
       );
@@ -597,7 +625,8 @@ nativeTest(
       if (requestId === null)
         throw new Error("the write tool never parked on an approval");
       await service.approve(requestId, "ans-1", "ok");
-      if (sent.kind !== "turn") throw new Error("expected a durable turn submission");
+      if (sent.kind !== "turn")
+        throw new Error("expected a durable turn submission");
       await awaitRunSettled(service, sent.turnId);
       expect(dir.calls()).toEqual(["echo"]);
     } finally {
@@ -654,9 +683,12 @@ nativeTest(
       const runOne = await service.send(session.sessionId, {
         content: { type: "text", text: "first generation" },
       });
-      if (runOne.kind !== "turn") throw new Error("expected a durable turn submission");
+      if (runOne.kind !== "turn")
+        throw new Error("expected a durable turn submission");
       await awaitRunSettled(service, runOne.turnId);
-      expect(JSON.stringify(calls[1]?.messages ?? [])).toContain("echo:gen1:engine");
+      expect(JSON.stringify(calls[1]?.messages ?? [])).toContain(
+        "echo:gen1:engine",
+      );
       expect(log.calls()).toEqual(["echo"]);
 
       // The host now replaces the server behind the SAME alias: same tool
@@ -665,7 +697,10 @@ nativeTest(
       await store.mcpDisconnect("dual");
       const second = await store.mcpConnect({
         alias: "dual",
-        transport: spawn({ AGENTKIT_FIXTURE_TAG: "gen2", AGENTKIT_FIXTURE_ECHO: "word" }),
+        transport: spawn({
+          AGENTKIT_FIXTURE_TAG: "gen2",
+          AGENTKIT_FIXTURE_ECHO: "word",
+        }),
       });
       const echoTwo = second.tools.find((tool) => tool.remoteName === "echo")!;
       expect(echoTwo.handle).toBe("dual#2");
@@ -677,7 +712,8 @@ nativeTest(
       const runTwo = await service.send(session.sessionId, {
         content: { type: "text", text: "second generation" },
       });
-      if (runTwo.kind !== "turn") throw new Error("expected a durable turn submission");
+      if (runTwo.kind !== "turn")
+        throw new Error("expected a durable turn submission");
       await awaitRunSettled(service, runTwo.turnId);
       // The engine sees the binding's refusal: the tool result is the
       // handle-rejection failure (the binding's message names the superseded
@@ -692,7 +728,8 @@ nativeTest(
 
       // The same refusals hold on the direct host lane.
       await expectCode(
-        () => store.mcpCallTool("dual", "echo", { text: "stale" }, echoOne.handle),
+        () =>
+          store.mcpCallTool("dual", "echo", { text: "stale" }, echoOne.handle),
         "mcp_authority_revoked",
       );
       await expectCode(
@@ -709,13 +746,22 @@ nativeTest(
       // generation 1's argument shape refused locally, proving the descriptor
       // set really is the new generation's.
       await expectCode(
-        () => store.mcpCallTool("dual", "echo", { text: "stale" }, echoTwo.handle),
+        () =>
+          store.mcpCallTool("dual", "echo", { text: "stale" }, echoTwo.handle),
         "mcp_invalid_arguments",
       );
-      const via2 = await store.mcpCallTool("dual", "echo", { word: "two" }, echoTwo.handle);
+      const via2 = await store.mcpCallTool(
+        "dual",
+        "echo",
+        { word: "two" },
+        echoTwo.handle,
+      );
       expect(textOf(via2)).toBe("echo:gen2:two");
       expect(log.calls()).toEqual(["echo", "echo"]);
-      expect((await store.mcpListServers()).find((entry) => entry.alias === "dual")?.registration).toBe(2);
+      expect(
+        (await store.mcpListServers()).find((entry) => entry.alias === "dual")
+          ?.registration,
+      ).toBe(2);
     } finally {
       await service.close();
       await store.close();
@@ -755,7 +801,9 @@ nativeTest(
         },
       });
       const aEcho = a.tools.find((tool) => tool.remoteName === "echo")!;
-      const bShadowed = b.tools.find((tool) => tool.remoteName === "write_note")!;
+      const bShadowed = b.tools.find(
+        (tool) => tool.remoteName === "write_note",
+      )!;
       const bRenamedAway = b.tools.find((tool) => tool.remoteName === "echo")!;
       expect(aEcho.name).toBe("mcp__a__echo");
       // The fixture annotates `echo` readOnlyHint:true; effect is HOST-owned,
@@ -785,16 +833,19 @@ nativeTest(
           }),
         "mcp_invalid_config",
       );
-      expect((await store.mcpListServers()).map((entry) => entry.alias)).toEqual(["a", "b"]);
       expect(
-        (
-          await store.mcpCallTool("a", "echo", { text: "alive" }, aEcho.handle)
-        ).ok,
+        (await store.mcpListServers()).map((entry) => entry.alias),
+      ).toEqual(["a", "b"]);
+      expect(
+        (await store.mcpCallTool("a", "echo", { text: "alive" }, aEcho.handle))
+          .ok,
       ).toBe(true);
       expect(logA.calls()).toEqual(["echo"]);
       // Canonical identities stay distinct across the aliases.
       const names = new Set([...a.tools, ...b.tools].map((tool) => tool.name));
-      const caps = new Set([...a.tools, ...b.tools].map((tool) => tool.capability));
+      const caps = new Set(
+        [...a.tools, ...b.tools].map((tool) => tool.capability),
+      );
       expect(names.size).toBe(4);
       expect(caps.size).toBe(4);
 
@@ -839,7 +890,8 @@ nativeTest(
         "mcp_authority_revoked",
       );
       await expectCode(
-        () => store.mcpCallTool("a", "write_note", { note: "x" }, bShadowed.handle),
+        () =>
+          store.mcpCallTool("a", "write_note", { note: "x" }, bShadowed.handle),
         "mcp_authority_revoked",
       );
       // ...and nothing reached either server while those were refused.
@@ -867,8 +919,13 @@ nativeTest(
           env: { AGENTKIT_FIXTURE_LOG: log.path },
         },
       });
-      const keepHandle = keep.tools.find((tool) => tool.remoteName === "echo")!.handle;
-      expect((await store.mcpCallTool("keep", "echo", { text: "one" }, keepHandle)).data).toEqual(
+      const keepHandle = keep.tools.find(
+        (tool) => tool.remoteName === "echo",
+      )!.handle;
+      expect(
+        (await store.mcpCallTool("keep", "echo", { text: "one" }, keepHandle))
+          .data,
+      ).toEqual(
         expect.objectContaining({ text: "echo:one", toolName: "echo" }),
       );
 
@@ -894,7 +951,11 @@ nativeTest(
         () =>
           store.mcpConnect({
             alias: "missing",
-            transport: { kind: "stdio", command: "/nonexistent/agentkit-mcp-fixture", args: [] },
+            transport: {
+              kind: "stdio",
+              command: "/nonexistent/agentkit-mcp-fixture",
+              args: [],
+            },
           }),
         "mcp_connect_failed",
       );
@@ -923,10 +984,392 @@ nativeTest(
         handle: "keep#1",
         tools: 2,
       });
-      const again = await store.mcpCallTool("keep", "echo", { text: "two" }, keepHandle);
+      const again = await store.mcpCallTool(
+        "keep",
+        "echo",
+        { text: "two" },
+        keepHandle,
+      );
       expect(again.ok).toBe(true);
       expect(textOf(again)).toBe("echo:two");
       expect(log.calls()).toEqual(["echo", "echo"]);
+    } finally {
+      await store.close();
+    }
+  },
+  60_000,
+);
+
+// ---------------------------------------------------------------------------
+// Invocation cancellation, transport-generation binding, and cross-namespace
+// name ambiguity (external review P1-C + section-3). Everything runs through
+// the real binding, the stdio fixture, and the registerTool/engine lane; the
+// witness is always the fixture's on-disk call log (a `tools/call` the remote
+// actually executed), printed by each test.
+// ---------------------------------------------------------------------------
+
+/** A rejection's stable code, or `undefined` when the call resolved. */
+async function rejectionCode(
+  run: () => Promise<unknown>,
+): Promise<string | undefined> {
+  try {
+    await run();
+    return undefined;
+  } catch (error) {
+    return codeOf(error);
+  }
+}
+
+nativeTest(
+  "MCP client: an aborted invocation never dispatches — not queued, not in flight (P1-C)",
+  async () => {
+    const log = fixtureLog();
+    const { store } = await withService();
+    try {
+      const connection = await store.mcpConnect({
+        alias: "fast",
+        transport: {
+          kind: "stdio",
+          command: process.execPath,
+          args: [FIXTURE],
+          env: {
+            AGENTKIT_FIXTURE_LOG: log.path,
+            AGENTKIT_FIXTURE_SLOW_CALL_MS: "2500",
+          },
+        },
+      });
+      const echo = connection.tools.find((tool) => tool.remoteName === "echo")!;
+
+      // (1) Already-aborted signal: the binding must refuse BEFORE the wire —
+      // the pre-fix helper ignored ctx.signal and minted a fresh (never
+      // cancelled) token, so the remote call went out anyway.
+      const pre = new AbortController();
+      pre.abort();
+      await expectCode(
+        () =>
+          store.mcpCallTool(
+            "fast",
+            "echo",
+            { text: "gone" },
+            echo.handle,
+            pre.signal,
+          ),
+        "mcp_request_aborted",
+      );
+      console.log(
+        `witness: remote calls after pre-aborted dispatch = ${JSON.stringify(log.calls())}`,
+      );
+      expect(log.calls()).toEqual([]);
+
+      // (2) In-flight abort: the call is torn down while the server effect is
+      // still pending. Pre-fix this settled SUCCESSFUL after the full 2.5s
+      // stall (the fresh token was never cancelled); now it must reject fast.
+      const mid = new AbortController();
+      const started = Date.now();
+      const pending = store.mcpCallTool(
+        "fast",
+        "echo",
+        { text: "torn" },
+        echo.handle,
+        mid.signal,
+      );
+      // Real time deliberately: the stall lives inside a spawned child's
+      // handler and the abort deadline inside the tokio runtime — no
+      // deterministic time control reaches either side (same convention as
+      // the `waitFor` helper above). 150ms is well inside the 2500ms
+      // server-side stall, so the abort necessarily lands mid-call.
+      await Bun.sleep(150);
+      mid.abort();
+      await expectCode(() => pending, "mcp_request_aborted");
+      const elapsed = Date.now() - started;
+      console.log(`witness: in-flight abort settled after ${elapsed}ms`);
+      expect(elapsed).toBeLessThan(2000);
+      // An abort after the request left keeps its ambiguous-delivery
+      // semantics: whatever the stalled handler eventually writes stays the
+      // server's truth — the binding never launders it into a client success.
+    } finally {
+      await store.close();
+    }
+  },
+  40_000,
+);
+
+nativeTest(
+  "MCP client: a cancelled run dispatches ZERO remote calls across the reconnect window (P1-C)",
+  async () => {
+    const log = fixtureLog();
+    const arm = join(disposableDir(), "init-arm");
+    const { store, service } = await withService({
+      jsToolAuthority: { configuredMode: "full_auto" },
+    });
+    try {
+      // One alias, two possible server generations: the first spawn
+      // initializes fast; once the arm file exists, every spawn stalls its
+      // session initialization for 2.5s — UNDER the crate's 5s connect
+      // timeout, so a call queued behind the reconnect DOES complete the
+      // connection and (pre-fix) reach the wire long after the run settled.
+      const connection = await store.mcpConnect({
+        alias: "slow",
+        transport: {
+          kind: "stdio",
+          command: process.execPath,
+          args: [FIXTURE],
+          env: {
+            AGENTKIT_FIXTURE_LOG: log.path,
+            AGENTKIT_FIXTURE_DIE: "1",
+            AGENTKIT_FIXTURE_INIT_DELAY_MS: "2500",
+            AGENTKIT_FIXTURE_INIT_ARM_FILE: arm,
+          },
+        },
+      });
+      await registerMcpTools(service, store, connection);
+      const handle = connection.tools.find(
+        (tool) => tool.remoteName === "echo",
+      )!.handle;
+      expect(
+        textOf(
+          await store.mcpCallTool("slow", "echo", { text: "base" }, handle),
+        ),
+      ).toBe("echo:base");
+      expect(log.calls()).toEqual(["echo"]);
+
+      // Crash the transport (the child exits without answering): the manager
+      // notices and tears the session down, so the NEXT host call is the one
+      // that would queue into a 2.5s reconnect behind the armed slow init.
+      await store.mcpCallTool("slow", "die", {}, handle).catch(() => undefined);
+      expect(log.calls()).toEqual(["echo", "die"]);
+      writeFileSync(arm, "armed");
+
+      // The review's repro shape: a run whose tool calls the MCP helper via
+      // `registerMcpTools` (the run function threads the ctx signal),
+      // cancelled before any remote `tools/call` could be sent.
+      const { calls, provider } = scripted(
+        toolCall("call-1", "mcp__slow__echo", { text: "never" }),
+        final("done"),
+      );
+      service.setProvider(provider);
+      const created = await service.createSession({
+        profileId: "mcp-cancel",
+        model: "test-model",
+      });
+      const sessionId = created.sessionId as string;
+      const sent = await service.send(sessionId, {
+        content: { type: "text", text: "echo please" },
+      });
+      if (sent.kind !== "turn")
+        throw new Error("expected a durable turn submission");
+      // Let the provider answer and the engine enter the tool lane, THEN
+      // cancel — the cancellation must land while the remote call is
+      // queued/starting, not before the tool ever began. Real time: entry
+      // into the JS run function has no observable event before the cancel
+      // window closes, and 60ms is orders of magnitude inside the 2.5s
+      // initialize stall the call is queued behind.
+      await waitFor(
+        () => Promise.resolve(calls.length),
+        (n) => n >= 1,
+      );
+      await Bun.sleep(60);
+      await service.cancel(sessionId, sent.turnId);
+      const settledAt = Date.now();
+      await awaitRunSettled(service, sent.turnId);
+      const settleMs = Date.now() - settledAt;
+      console.log(`witness: cancelled turn settled in ${settleMs}ms`);
+      expect(settleMs).toBeLessThan(6000);
+      const transcript = JSON.stringify(
+        calls.map((call) => call.messages ?? []),
+      );
+      expect(transcript).not.toContain("echo:never");
+
+      // The zero-call witness past the FULL delayed-initialize window: a
+      // call that was queued/cancelled never dispatches — not now, not late.
+      // Real time deliberately: the 2.5s initialize stall runs in a spawned
+      // child against the crate's tokio clock; the only observable signal
+      // that the window has passed IS that much real time (window plus a
+      // full second of margin).
+      await Bun.sleep(3500);
+      console.log(
+        `witness: remote tool-call log after the full init-delay window = ${JSON.stringify(log.calls())}`,
+      );
+      expect(log.calls()).toEqual(["echo", "die"]);
+
+      // And the same stale-descriptor lane fails CLOSED directly: the
+      // transport it names is gone; no reconnect is resurrected for it.
+      const code = await rejectionCode(() =>
+        store.mcpCallTool("slow", "echo", { text: "stale" }, handle),
+      );
+      console.log(`witness: stale-descriptor call after crash → ${code}`);
+      expect(typeof code).toBe("string");
+      expect(code).not.toBeUndefined();
+      expect(log.calls()).toEqual(["echo", "die"]);
+    } finally {
+      await service.close();
+      await store.close();
+    }
+  },
+  60_000,
+);
+
+nativeTest(
+  "MCP client: a descriptor is bound to the transport it was listed from (W1d)",
+  async () => {
+    const log = fixtureLog();
+    const modeFile = join(disposableDir(), "mode");
+    writeFileSync(modeFile, "A");
+    const { store } = await withService();
+    const transport = {
+      kind: "stdio" as const,
+      command: process.execPath,
+      args: [FIXTURE],
+      env: {
+        AGENTKIT_FIXTURE_LOG: log.path,
+        AGENTKIT_FIXTURE_MODE_FILE: modeFile,
+        AGENTKIT_FIXTURE_DIE: "1",
+      },
+    };
+    try {
+      const first = await store.mcpConnect({ alias: "flip", transport });
+      const echo = first.tools.find((tool) => tool.remoteName === "echo")!;
+      const die = first.tools.find((tool) => tool.remoteName === "die")!;
+      expect(echo.handle).toBe("flip#1");
+      // Generation 1 answers from its own catalogue (mode file says A).
+      expect(
+        textOf(
+          await store.mcpCallTool("flip", "echo", { text: "one" }, echo.handle),
+        ),
+      ).toBe("echo:A:one");
+      expect(log.calls()).toEqual(["echo"]);
+
+      // Induced transport death: the child exits without answering.
+      await store
+        .mcpCallTool("flip", "die", {}, die.handle)
+        .catch(() => undefined);
+      expect(log.calls()).toEqual(["echo", "die"]);
+      // The replacement generation advertises a DIFFERENT catalogue: `echo`
+      // now requires `word` and answers `echo:word:` — so "which generation
+      // ran" is readable from the marker log.
+      writeFileSync(modeFile, "word");
+
+      // Documented contract (parity: bound dispatch refuses stale): the
+      // retained generation-1 descriptor must FAIL — never execute the new
+      // generation's handler. Which stable refusal (stale transport vs lost
+      // authority) depends on whether the teardown was already noticed; what
+      // is deterministic is that no dispatch happens.
+      const stale = await rejectionCode(() =>
+        store.mcpCallTool("flip", "echo", { text: "stale" }, echo.handle),
+      );
+      console.log(`witness: stale-generation dispatch → ${stale}`);
+      expect(typeof stale).toBe("string");
+      expect(
+        log.calls(),
+        "the replacement callback ran for a stale descriptor",
+      ).toEqual(["echo", "die"]);
+
+      // The documented refresh: reconnect publishes a fresh descriptor set,
+      // and ONLY the current registration's descriptor drives the new
+      // generation — its schema and effect prove it is generation 2's own.
+      await store.mcpDisconnect("flip");
+      const second = await store.mcpConnect({ alias: "flip", transport });
+      const echoTwo = second.tools.find((tool) => tool.remoteName === "echo")!;
+      expect(echoTwo.handle).toBe("flip#2");
+      // The generation-1 handle can never authorize the new callback…
+      await expectCode(
+        () => store.mcpCallTool("flip", "echo", { text: "x" }, echo.handle),
+        "mcp_authority_revoked",
+      );
+      // …while the current descriptor meets the NEW schema (gen 1's shape is
+      // refused locally) and executes the NEW handler exactly once.
+      await expectCode(
+        () => store.mcpCallTool("flip", "echo", { text: "x" }, echoTwo.handle),
+        "mcp_invalid_arguments",
+      );
+      expect(
+        textOf(
+          await store.mcpCallTool(
+            "flip",
+            "echo",
+            { word: "two" },
+            echoTwo.handle,
+          ),
+        ),
+      ).toBe("echo:word:two");
+      console.log(
+        `witness: tool-call log across the reconnect = ${JSON.stringify(log.calls())}`,
+      );
+      expect(log.calls()).toEqual(["echo", "die", "echo"]);
+    } finally {
+      await store.close();
+    }
+  },
+  60_000,
+);
+
+nativeTest(
+  "MCP client: a cross-namespace ambiguous catalogue is refused at connect (W1e)",
+  async () => {
+    const ambLog = fixtureLog();
+    const healthyLog = fixtureLog();
+    const { store } = await withService();
+    try {
+      // The defective pair: under alias `names`, `echo` advertises the
+      // descriptor name `mcp__names__echo` — which is the OTHER tool's
+      // remote name. The ORIGINAL-first resolver used to advertise one
+      // handler and dispatch the other.
+      await expectCode(
+        () =>
+          store.mcpConnect({
+            alias: "names",
+            transport: {
+              kind: "stdio",
+              command: process.execPath,
+              args: [FIXTURE],
+              env: {
+                AGENTKIT_FIXTURE_LOG: ambLog.path,
+                AGENTKIT_FIXTURE_AMBIGUOUS: "1",
+              },
+            },
+          }),
+        "mcp_invalid_config",
+      );
+      // Nothing partially published: no declaration, no descriptors, and
+      // the refusal consumed no registration — the healthy connect below
+      // is still registration 1.
+      expect(await store.mcpListServers()).toEqual([]);
+
+      // The healthy catalogue under the same alias publishes unchanged and
+      // every advertised name dispatches to its OWN handler: calling the
+      // FULL advertised name of `echo` runs echo's callback (counter
+      // witness), and the foreign shadow never executes.
+      const healthy = await store.mcpConnect({
+        alias: "names",
+        transport: {
+          kind: "stdio",
+          command: process.execPath,
+          args: [FIXTURE],
+          env: { AGENTKIT_FIXTURE_LOG: healthyLog.path },
+        },
+      });
+      expect(healthy.tools.map((tool) => tool.name)).toEqual([
+        "mcp__names__echo",
+        "mcp__names__write_note",
+      ]);
+      expect((await store.mcpListServers())[0]).toMatchObject({
+        alias: "names",
+        registration: 1,
+        handle: "names#1",
+        tools: 2,
+      });
+      const viaFull = await store.mcpCallTool(
+        "names",
+        "mcp__names__echo",
+        { text: "mine" },
+        "names#1",
+      );
+      expect(textOf(viaFull)).toBe("echo:mine");
+      console.log(
+        `witness: healthy alias call by full advertised name → ${JSON.stringify(healthyLog.calls())} (ambiguous server saw ${JSON.stringify(ambLog.calls())})`,
+      );
+      expect(healthyLog.calls()).toEqual(["echo"]);
+      expect(ambLog.calls()).toEqual([]);
     } finally {
       await store.close();
     }

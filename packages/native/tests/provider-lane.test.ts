@@ -74,7 +74,10 @@ async function drainUntil(
   done: boolean;
   statuses: (string | undefined)[];
 }> {
-  const subscription = await service.subscribeTurn(taskId, 0);
+  // No cursor: afterSeq is EXCLUSIVE, and a passing admission event is
+  // emitted before run.started, so it owns seq 0 — `0` would skip it
+  // (same convention as project-instructions.test.ts).
+  const subscription = await service.subscribeTurn(taskId);
   const events: unknown[] = [];
   const statuses: (string | undefined)[] = [];
   const started = Date.now();
@@ -333,3 +336,117 @@ suite("js callback lane keeps single-chunk delta semantics", async () => {
     await store.close();
   }
 });
+
+// P1-F — the admitted request is the transmitted request. `providerConfig
+// .maxTokens` used to be stamped onto the outgoing request AFTER context
+// admission (`ConfiguredProvider::stream_chat`), so a 1024 cap sailed past
+// a 16-token admission and even the unsafe integer 18014398509481984
+// reached the wire. The lane now resolves the configured cap BEFORE
+// admission; the wire value equals the `run.context.admitted` event's
+// `maxOutputTokens`, which is min(cap, configured) when configured, and
+// out-of-range values are refused at `createService` — the earliest layer
+// that sees them.
+suite(
+  "provider output cap is resolved before admission: admission event, accounting and wire agree",
+  async () => {
+    const capCases: Array<{
+      label: string;
+      configured: number | undefined;
+      expected: number;
+    }> = [
+      { label: "no-override", configured: undefined, expected: 16 },
+      { label: "in-range-override", configured: 8, expected: 8 },
+      { label: "over-cap-override", configured: 1024, expected: 16 },
+    ];
+    for (const protocol of ["responses", "chat-completions"] as const) {
+      for (const capCase of capCases) {
+        const provider = await startProviderMock();
+        const store = await NativeStoreCtor.inMemory();
+        let service: NativeSessionService | undefined;
+        try {
+          const connectionId =
+            await NativeSessionServiceCtor.registerProviderConnection(
+              provider.baseUrl,
+              "sk-loopback",
+            );
+          service = await store.createService({
+            providerConfig: {
+              protocol,
+              providerId: "cap",
+              connectionId,
+              model: "cap-model",
+              ...(capCase.configured === undefined
+                ? {}
+                : { maxTokens: capCase.configured }),
+            },
+          });
+          const sessionId = `cap-${protocol}-${capCase.label}`;
+          await service.createSession({
+            sessionId,
+            profileId: "p1",
+            model: "cap-model",
+            context: { windowTokens: 128, reserveTokens: 16 },
+          });
+          const sent = await service.send(sessionId, { content: "say hi" });
+          if (sent.kind !== "turn") throw new Error("unreachable");
+          const { events, done, statuses } = await drainUntil(
+            service,
+            sent.turnId,
+          );
+          expect(done).toBe(true);
+          expect(statuses.at(-1)).toBe("completed");
+          const admission = events
+            .map((u) => eventOf(u))
+            .find((e) => e?.type === "run.context.admitted");
+          if (!admission?.data)
+            throw new Error(
+              `no run.context.admitted event for ${protocol}/${capCase.label}`,
+            );
+          const request = provider.requests[0];
+          if (!request) throw new Error("loopback captured no request");
+          const wireKey =
+            protocol === "responses" ? "max_output_tokens" : "max_tokens";
+          // The admission event and the actual wire body AGREE.
+          expect([
+            admission.data.maxOutputTokens,
+            request.body[wireKey],
+          ]).toEqual([capCase.expected, capCase.expected]);
+          // …and the budget accounting behind the admission is the
+          // descriptor's own window/reserve.
+          expect(admission.data.windowTokens).toBe(128);
+          expect(admission.data.reserveTokens).toBe(16);
+        } finally {
+          await service?.close();
+          await store.close();
+          await provider.stop();
+        }
+      }
+    }
+  },
+);
+
+suite(
+  "providerConfig.maxTokens outside the finite safe-integer range is rejected at construction",
+  async () => {
+    const store = await NativeStoreCtor.inMemory();
+    try {
+      for (const bad of [18014398509481984, -5, 0, Number.NaN, 1.5]) {
+        await expect(
+          store.createService({
+            providerConfig: {
+              protocol: "responses",
+              providerId: "cap",
+              connectionId: "cap-conn",
+              model: "cap-model",
+              maxTokens: bad,
+            },
+          }),
+        ).rejects.toThrow(
+          /providerConfig\.maxTokens must be a positive safe integer/,
+        );
+      }
+    } finally {
+      await store.close();
+    }
+  },
+);
