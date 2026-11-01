@@ -394,6 +394,16 @@ async function bindExplicitConfigs(
   }
 }
 
+/**
+ * The fingerprint token stream: JS `trim()` then a greedy U+0020-run split
+ * (`/ +/`), so repeated spaces are one separator and an all-whitespace
+ * command yields the single empty token JS produces. Pinned case-for-case
+ * against the shared fixture by tests/tokenizer-baseline-fixture.test.ts.
+ */
+export function fingerprintTokens(command: string): string[] {
+  return command.trim().split(/ +/);
+}
+
 /** Bounded configuration identity, never a claim about arbitrary transitive code. */
 export async function commandFingerprint(
   root: string,
@@ -404,7 +414,7 @@ export async function commandFingerprint(
   const dirs = ancestors(root, cwd);
   if (dirs === null) return null;
   const env = executionEnvironment(environment);
-  const tokens = command.trim().split(/ +/);
+  const tokens = fingerprintTokens(command);
   const main = await executable(tokens[0]!, cwd, env);
   if (main === null) return null;
   const executables: object[] = [main];
