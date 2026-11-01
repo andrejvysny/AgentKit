@@ -1,9 +1,12 @@
 # @agentkit/example-desktop-host
 
-A runnable composition root: `SqliteAssistantStore` + `SingleProcessTaskRunner`
-+ an OpenAI-compatible provider + two sample tools + the REST/SSE transport,
-wired together the way `packages/host/README.md`'s embedding sketch describes
-and served over real HTTP with `Bun.serve`.
+A runnable composition root on the NATIVE backend: `@agentkit/native` —
+`NativeStore` + `NativeSessionService` + the Rust REST v1 + SSE server + the
+Rust MCP server — plus an OpenAI-compatible provider lane and two sample
+tools, wired together and served over real HTTP with `Bun.serve`. Every
+runtime decision (storage, durable queue, worker, governance authority,
+REST/SSE, MCP) executes in Rust; the TypeScript here is the embedding recipe
+and the loopback façade.
 
 Not a package other code imports — `private: true`, nothing published. It
 exists to be read (`src/wiring.ts` is the wiring recipe, step by step) and to
@@ -28,24 +31,25 @@ Env vars, all optional:
 
 | Var | Default | What it does |
 | --- | --- | --- |
-| `AGENTKIT_DB` | `./agentkit.sqlite` | sqlite file path |
+| `AGENTKIT_DB` | `./agentkit.sqlite` | native store file path (the native store's own database identity — the TypeScript adapter's sqlite file is a different store and is not migrated) |
 | `AGENTKIT_HOST` | `127.0.0.1` | bind address. **Loopback on purpose** — see the warning below |
 | `AGENTKIT_PORT` | `8787` | HTTP port |
-| `AGENTKIT_PROVIDER_KIND` | `openai-compatible` | a kind from `@agentkit/core`'s `AI_PROVIDER_PRESETS` (`openai`, `openrouter`, `lmstudio`, `omlx`, `ollama`, `openai-compatible`) — only read on first boot, when no provider is configured yet |
+| `AGENTKIT_PROVIDER_KIND` | `openai-compatible` | a kind from `@agentkit/core`'s `AI_PROVIDER_PRESETS` (`openai`, `openrouter`, `lmstudio`, `omlx`, `ollama`, `openai-compatible`) — only read on first boot, when no provider is seeded yet |
 | `AGENTKIT_BASE_URL` | the kind's preset `defaultBaseUrl` | provider base URL |
 | `AGENTKIT_MODEL` | the kind's preset `defaultModel` | model id |
-| `AGENTKIT_API_KEY` | unset | provider API key — stored in the in-memory `SecretStore`, never inline on the provider config (see `@agentkit/adapters-memory`'s `MemorySecretStore`, wired in `src/wiring.ts`) |
-| `AGENTKIT_MCP_COMMAND` | unset | a stdio MCP server command; when set, its tools are bridged in via `@agentkit/mcp-client` |
+| `AGENTKIT_API_KEY` | unset | provider API key — crosses into the Rust provider lane exactly once via `NativeSessionService.registerProviderConnection` (the service options only ever carry the connection id, never the key) |
+| `AGENTKIT_MCP_COMMAND` | unset | a stdio MCP server command; when set, its tools are bridged in via the native client (`NativeStore.mcpConnect` + `registerMcpTools`) |
 | `AGENTKIT_MCP_ARGS` | unset | space-separated args for that command |
-| `AGENTKIT_MCP_SERVER_TOKEN` | unset | when set, this host's own tools are ALSO served **as** an MCP server at `/mcp`, behind this bearer token — see below |
+| `AGENTKIT_MCP_SERVER_TOKEN` | unset | when set, this host's own tools are ALSO served **as** an MCP server at `/mcp`, behind this bearer token (the Rust MCP server, `NativeSessionService.startMcpServer`) — see below |
 
-> **This example wires no `authenticate` and no `authorize`.** Every route is
-> open to whatever can reach the socket, including `POST /v1/providers` (which
-> stores provider API keys) and the chat routes (which spend them). That is
-> why `main.ts` binds `127.0.0.1` explicitly instead of taking `Bun.serve`'s
-> default, which is every interface. Set `AGENTKIT_HOST` only together with
-> real `authenticate`/`authorize` in `src/wiring.ts`'s `RestHandlerDeps`;
-> `main.ts` prints a warning at boot when the bind address is not loopback.
+> **This example wires no client-facing `authenticate`.** The façade holds a
+> private bearer token toward the Rust backend, so every route is open to
+> whatever can reach the socket, including the chat routes (which spend the
+> seeded provider's API key). That is why `main.ts` binds `127.0.0.1`
+> explicitly instead of taking `Bun.serve`'s default, which is every
+> interface. Set `AGENTKIT_HOST` only together with a real authentication
+> layer in front of `src/wiring.ts`'s façade; `main.ts` prints a warning at
+> boot when the bind address is not loopback.
 
 To point it at a local [Ollama](https://ollama.com):
 
@@ -54,13 +58,13 @@ AGENTKIT_PROVIDER_KIND=ollama AGENTKIT_MODEL=llama3.2 bun run start
 ```
 
 The provider is seeded **once** — on the first boot against a given
-`AGENTKIT_DB`. Deleting the sqlite file resets everything (providers, chats,
-runs, proposals) and the next boot seeds fresh from whatever env is set then.
+`AGENTKIT_DB`. Deleting the store file resets everything (the seeded provider,
+chats, runs) and the next boot seeds fresh from whatever env is set then.
 
 ## curl walkthrough
 
 The server mounts the contract under `basePath: "/api/agentkit"` (see
-`src/wiring.ts`'s step 11) — every route below is `/api/agentkit/v1/...`.
+`src/wiring.ts`'s step 5) — every route below is `/api/agentkit/v1/...`.
 
 ```sh
 BASE=http://localhost:8787/api/agentkit
@@ -116,10 +120,7 @@ Point a client at it:
       "type": "http",
       "url": "http://127.0.0.1:8787/mcp",
       "headers": {
-        "Authorization": "Bearer <the AGENTKIT_MCP_SERVER_TOKEN you set>",
-        // Optional. Pins the session to one chat, so tools that depend on a
-        // chat's bindings see that chat. Read ONCE, at initialize.
-        "x-agentkit-chat": "chat_...."
+        "Authorization": "Bearer <the AGENTKIT_MCP_SERVER_TOKEN you set>"
       }
     }
   }
@@ -132,19 +133,25 @@ Or check it by hand:
 # No token — 401, with no body to learn anything from.
 curl -i -X POST http://127.0.0.1:8787/mcp
 
-# A rebound Host — 403, before the MCP SDK is asked to do anything.
+# A rebound Host — refused before the MCP SDK is asked to do anything.
 curl -i -X POST http://127.0.0.1:8787/mcp \
   -H "Authorization: Bearer $AGENTKIT_MCP_SERVER_TOKEN" \
   -H "Host: evil.com"
 ```
 
-Unlike the REST routes, this endpoint is **not** open when it is served: there
-is no unauthenticated mode, the bearer token is compared in constant time,
-`Host` must be loopback (any port), and a session's chat scope is fixed at
-initialize rather than read per call. Write tools would still be hidden —
-`writesEnabled` defaults to `false`, and this example ships none anyway. The
-full security model is in
-[`packages/mcp-server/README.md`](../../packages/mcp-server/README.md).
+Unlike the REST routes, this endpoint is **not** open when it is served:
+there is no unauthenticated mode, the bearer set is compared by constant-time
+digest, sessions are principal-bound per token, the `Host` header must be
+loopback (an allow list), and crate session/body/batch/concurrency/deadline
+bounds hold on every request. Write-effect tools are still hidden —
+`writesEnabled` defaults to `false`, and this example ships none anyway.
+Two reductions are documented, not hidden: a remote call runs WITHOUT the
+run-scoped plan-mode/ask guard or a durable execution receipt (the engine has
+no standalone tool-dispatch entry point), and there is no per-chat session
+pinning header — sessions scope per bearer principal, per token. The native
+MCP surface is documented in
+[`docs/rust/native-binding-milestone.md`](../../docs/rust/native-binding-milestone.md)
+and `packages/native/src/mcp.ts`.
 
 Leaving `AGENTKIT_MCP_SERVER_TOKEN` unset does not serve the route at all.
 
@@ -152,25 +159,23 @@ Leaving `AGENTKIT_MCP_SERVER_TOKEN` unset does not serve the route at all.
 
 | Concern | Package | File |
 | --- | --- | --- |
-| Storage | `@agentkit/adapters-sqlite` | `src/wiring.ts` |
-| Task queue | `@agentkit/runner-local` | `src/wiring.ts` |
-| Provider client | `@agentkit/core` (`OpenAiCompatibleClient`) | `src/wiring.ts` |
+| Storage, sessions, durable queue, worker, governance | `@agentkit/native` (`NativeStore`, `NativeSessionService`) | `src/wiring.ts` |
+| REST v1 + SSE | `@agentkit/native` (`service.startHttpServer` — the Rust transport) | `src/wiring.ts` (started) / `src/main.ts` (façade mounted on the public port) |
+| Provider lane (real boot) | `@agentkit/native` (`registerProviderConnection` + `providerConfig` — HTTP/SSE in Rust) | `src/wiring.ts` |
+| Provider lane (tests) | `@agentkit/core` client interface + `@agentkit/testing` (`MockProviderClient`) over the JS `setProvider` callback | `src/wiring.ts` |
 | Provider presets | `@agentkit/core` (`getPresetByKind`) | `src/wiring.ts` |
-| Secrets | tiny in-memory `SecretStore` (this example's own) | `src/wiring.ts` |
-| Sample tools | this example's own `ToolSetContributor` | `src/tools.ts` |
-| MCP bridge (optional) | `@agentkit/mcp-client` | `src/wiring.ts` |
-| MCP server (optional) | `@agentkit/mcp-server` | `src/wiring.ts` (built) / `src/main.ts` (mounted at `/mcp`) |
-| Tool guards | `@agentkit/host` (`ToolGuard`) — one `toolGuards` array, shared | `src/wiring.ts` |
-| Turn execution | `@agentkit/host` (`TurnRunner`, `ChatTurnExecutor`) | `src/wiring.ts` |
-| HTTP + SSE | `@agentkit/transport-http` (`serveRest`) | `src/main.ts` |
+| Sample tools | this example's own descriptors + `registerTool` runs | `src/tools.ts` |
+| MCP bridge (optional) | `@agentkit/native` (`store.mcpConnect` + `registerMcpTools`) | `src/wiring.ts` |
+| MCP server (optional) | `@agentkit/native` (`service.startMcpServer`) | `src/wiring.ts` (started) / `src/main.ts` (façade mounted at `/mcp`) |
+| Managed integrations (opt-in recipe) | `@agentkit/mcp-client` (OAuth connectors) + `@agentkit/host` (templates, skills) — a retained TS slice: the binding has no OAuth and no managed-content services | `src/managed-integrations.ts` |
 
-Three places stage the same contributors — `TurnRunner`, the `GET /v1/tools`
-catalogue, and the MCP server's tool source — so `src/wiring.ts` defines
-`toolGuards` ONCE and passes that same array to all three. The array is empty
-here (this example has no policy to enforce); the point is the single source. A
-host that guards the runner but not the catalogue advertises tools its own turns
-refuse, and one that guards neither the MCP source hands an outside client a
-tool set its chats do not have.
+One registration list is the single source of truth: the descriptors handed
+to `registerTool` are what the Rust executor can call, what the MCP server
+offers remote clients, and what the façade's `GET /v1/tools` advertises — so
+what the route shows, what a turn runs, and what an outside client sees
+cannot drift. (The native HTTP server exposes no tool-catalogue port yet —
+`DesktopBackend::open` wires none — which is exactly why the catalogue route
+is the façade's; see the module header of `src/wiring.ts`.)
 
 ## Tests
 
@@ -179,12 +184,15 @@ bun test tests   # from this directory, or: bun test examples/desktop-host
 ```
 
 `tests/smoke.test.ts` boots the exact same `buildApp` wiring `main.ts` uses,
-with a temp-dir sqlite file and a scripted `MockProviderClient` standing in
-for the real database and the network, served on an ephemeral port (`:0`) —
-then drives it over real HTTP: create a chat, submit a message with an
-`Idempotency-Key`, follow the SSE stream to `run.completed`, read the answer
-back, and (separately) round-trip the `example_echo` tool. It cleans up its
-temp directory and server on every run.
+with a temp-dir native store file and a scripted `MockProviderClient` (over
+the binding's JS provider lane) standing in for the real database and the
+network, then mounts the same loopback façade `main.ts` gives `Bun.serve` on
+an ephemeral port (`:0`) — and drives it over real HTTP end to end, through
+the Rust REST v1 + SSE engine: create a chat (which the façade creates as an
+agent session), submit a message with an `Idempotency-Key`, follow the SSE
+stream to `run.completed`, read the answer back, and (separately) round-trip
+the `example_echo` tool. It cleans up its temp directory and server on every
+run.
 
 ## Node fake-provider counterpart
 
