@@ -107,9 +107,17 @@ impl Backend for BindingBackend {
         &self,
         _scope: &SessionScope,
     ) -> std::result::Result<Vec<CatalogTool>, ErrorData> {
+        // `lookup` — the resolution `call_tool` uses — takes the FIRST
+        // definition under a name. Advertising every registered definition
+        // would therefore let a client be shown one callback and be served
+        // another: `t@1.0.0` plus a later `t@2.0.0` is two catalogue entries
+        // with one name, and a streamable-HTTP client keys tools by name. The
+        // advertised set is deduplicated by the contributor with exactly the
+        // resolver's rule, so what a remote client sees is always what it will
+        // execute.
         Ok(self
             .contributor
-            .tool_definitions()
+            .advertised_definitions()
             .into_iter()
             .map(|definition| CatalogTool {
                 definition: Tool::new(
@@ -133,11 +141,26 @@ impl Backend for BindingBackend {
         arguments: JsonObject,
         scope: &SessionScope,
     ) -> std::result::Result<CallToolResult, ErrorData> {
+        // ONE definition decides everything about this call: the write gate,
+        // the argument validation below, and the callback that runs. Reading
+        // them from separate lookups would let a tool re-registered between the
+        // handler's catalogue check and this line be authorized against one
+        // descriptor and executed as another.
         let Some(definition) = self.contributor.lookup(name) else {
             return Err(ErrorData::invalid_params("Unknown tool", None));
         };
         if definition.effect == "write" && !self.writes_enabled {
             return Err(ErrorData::invalid_params("Unknown tool", None));
+        }
+        let schema = definition.input_schema.clone();
+        let validator = agentkit_contracts::compile_tool_schema(&schema)
+            .map_err(|_| ErrorData::internal_error("Internal error", None))?;
+        if !validator.is_valid(&Value::Object(arguments.clone())) {
+            // Same verdict the crate's handler gives for invalid arguments: a
+            // tool-reported failure, not a transport error.
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                "Invalid tool arguments",
+            )]));
         }
         let cancellation = scope.cancellation.child_token();
         let actor = scope.actor_id.clone();

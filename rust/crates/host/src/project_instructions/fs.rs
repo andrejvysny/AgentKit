@@ -13,9 +13,11 @@
 //! withheld". Oversize files are truncated to `max_bytes`, not refused: a
 //! long AGENTS.md still carries useful rules in its first 64 KiB.
 //!
-//! Platform limit: the `O_NOFOLLOW` open and the `dev`/`ino` identity check
-//! are POSIX; on non-Unix platforms every read is a refusal (skip with a
-//! warning), never an unchecked read.
+//! Platform limit: POSIX uses `O_NOFOLLOW` plus the `dev`/`ino` identity
+//! check; Windows refuses reparse points up front and verifies the opened
+//! handle's volume-serial/file-index identity (see `read_plain_file` below).
+//! On any other platform every read is a refusal (a hard error), never an
+//! unchecked read.
 
 use async_trait::async_trait;
 
@@ -23,7 +25,8 @@ use super::{ProjectInstructionsSource, ProjectInstructionsText};
 use crate::{HostError, HostResult};
 
 /// Reads `AGENTS.md` / `CLAUDE.md` from a workspace root through a
-/// symlink-refusing, root-confining open (Unix only; see the module docs).
+/// symlink-refusing, root-confining open (POSIX and Windows; see the module
+/// docs).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FileProjectInstructions;
 
@@ -53,7 +56,14 @@ impl ProjectInstructionsSource for FileProjectInstructions {
                 .await
                 .map_err(|_| HostError::Execution("Instruction reader stopped.".into()))?
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let (root, name) = (root.to_owned(), name.to_owned());
+            tokio::task::spawn_blocking(move || read_plain_file(&root, &name, max_bytes))
+                .await
+                .map_err(|_| HostError::Execution("Instruction reader stopped.".into()))?
+        }
+        #[cfg(all(not(unix), not(windows)))]
         {
             let _ = (root, max_bytes);
             Err(HostError::Execution(
@@ -70,7 +80,7 @@ fn read_plain_file(
     max_bytes: usize,
 ) -> HostResult<Option<ProjectInstructionsText>> {
     use std::fs::OpenOptions;
-    use std::io::{ErrorKind, Read};
+    use std::io::ErrorKind;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
     // A symlinked root is the caller's explicit choice: resolve it once.
@@ -111,7 +121,76 @@ fn read_plain_file(
             "Instruction file changed during open.".into(),
         ));
     }
-    // One byte past the cap is the truncation witness (Node reads maxBytes+1).
+    Ok(Some(drain_and_decode(&mut file, max_bytes)?))
+}
+
+/// Windows reads the same two ways the POSIX branch does — refuse the
+/// symlink up front, then verify the OPEN file is the inspected file — with
+/// the platform's own primitives: `symlink_metadata` opens with
+/// `FILE_FLAG_OPEN_REPARSE_POINT` (a link or junction is seen as itself),
+/// and the identity check compares the volume serial + file index that the
+/// handle itself reports (the `fstat`/`dev`/`ino` equivalent). There is no
+/// `O_NOFOLLOW`, so a swap between the check and the open is caught by the
+/// identity mismatch — the opened handle then names a different file and the
+/// read is refused, never followed blindly.
+#[cfg(windows)]
+fn read_plain_file(
+    root: &str,
+    name: &str,
+    max_bytes: usize,
+) -> HostResult<Option<ProjectInstructionsText>> {
+    use std::fs::OpenOptions;
+    use std::io::ErrorKind;
+    use std::os::windows::fs::MetadataExt;
+
+    let real_root = std::fs::canonicalize(root)
+        .map_err(|error| HostError::Execution(format!("Cannot resolve workspace root: {error}")))?;
+    let target = real_root.join(name);
+    let expected = match std::fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(HostError::Execution(format!(
+                "Cannot inspect instruction file: {error}"
+            )));
+        }
+    };
+    if expected.file_type().is_symlink() {
+        return Err(HostError::Execution(
+            "Instruction file is a symlink.".into(),
+        ));
+    }
+    if !expected.is_file() {
+        return Err(HostError::Execution(
+            "Instruction file is not a regular file.".into(),
+        ));
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(&target)
+        .map_err(|error| HostError::Execution(format!("Cannot open instruction file: {error}")))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| HostError::Execution(format!("Cannot stat instruction file: {error}")))?;
+    if !opened.is_file()
+        || opened.volume_serial_number() != expected.volume_serial_number()
+        || opened.file_index() != expected.file_index()
+    {
+        return Err(HostError::Execution(
+            "Instruction file changed during open.".into(),
+        ));
+    }
+    Ok(Some(drain_and_decode(&mut file, max_bytes)?))
+}
+
+/// Read `max_bytes + 1` (the truncation witness, mirroring Node's
+/// `maxBytes + 1`) and decode like `Buffer.toString("utf8")`.
+fn drain_and_decode<R: std::io::Read>(
+    file: &mut R,
+    max_bytes: usize,
+) -> HostResult<ProjectInstructionsText> {
+    use std::io::ErrorKind;
+
     let mut buffer = vec![0u8; max_bytes + 1];
     let mut total = 0usize;
     while total < buffer.len() {
@@ -134,5 +213,5 @@ fn read_plain_file(
     if truncated && let Some(stripped) = text.strip_suffix('\u{FFFD}') {
         text.truncate(stripped.len());
     }
-    Ok(Some(ProjectInstructionsText { text, truncated }))
+    Ok(ProjectInstructionsText { text, truncated })
 }

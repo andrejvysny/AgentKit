@@ -1,4 +1,4 @@
-use crate::{McpClientError, McpConnection, model};
+use crate::{McpClientError, McpConnection, ToolBinding, model};
 use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -63,6 +63,16 @@ impl McpToolSet {
                 return Err(BridgeError::Collision);
             }
         }
+        // The map must stay a set of ONE-STEP renames. If a replacement is
+        // itself a renamed server name (`a -> b` alongside `b -> c`), then
+        // `mcp.<alias>.b` denotes two different server tools depending on which
+        // direction you consult: the projection reaches `a`, while a caller
+        // addressing `b` reaches the rename chain. Dispatch resolves names
+        // through the inverse map, so such a configuration is refused here
+        // rather than routed by whichever map happens to be read first.
+        if !aliases_are_one_step(&normalized) {
+            return Err(BridgeError::Collision);
+        }
         Ok(Self {
             alias: alias.into(),
             aliases: normalized,
@@ -71,16 +81,29 @@ impl McpToolSet {
         })
     }
     /// Validate the complete batch before returning any tool to a host registry.
+    ///
+    /// Every returned handle is pinned to the connection it was listed from
+    /// ([`ToolBinding`]); a handle whose transport has since been replaced or
+    /// reconnected fails at dispatch instead of reaching another generation's
+    /// callback.
     pub async fn contribute(
         &self,
         cancellation: CancellationToken,
     ) -> Result<Vec<Arc<dyn Tool>>, BridgeError> {
+        // Capture the binding on both sides of the listing: a transport that
+        // swapped underneath the list would make a catalogue of two servers'
+        // tools, and no handle projected from it could be trusted.
+        let before = self.client.binding();
         let listed = self.client.list_tools(cancellation).await?;
+        let binding = self.client.binding();
+        if before != binding {
+            return Err(BridgeError::Client(McpClientError::Authority));
+        }
         let mut names = BTreeSet::new();
         let mut canonical = BTreeSet::new();
         let mut result: Vec<Arc<dyn Tool>> = Vec::new();
         for tool in listed {
-            let tool = self.project(tool)?;
+            let tool = self.project(tool, binding)?;
             if !canonical.insert(tool.definition.capability.clone())
                 || !names.insert(tool.definition.name.clone())
             {
@@ -107,7 +130,11 @@ impl McpToolSet {
         }
         Ok(result)
     }
-    fn project(&self, tool: model::Tool) -> Result<RemoteTool, BridgeError> {
+    fn project(
+        &self,
+        tool: model::Tool,
+        binding: Option<ToolBinding>,
+    ) -> Result<RemoteTool, BridgeError> {
         let original = tool.name.trim();
         if !tool_name(original) {
             return Err(BridgeError::Identity);
@@ -117,6 +144,13 @@ impl McpToolSet {
             .get(original)
             .map(String::as_str)
             .unwrap_or(original);
+        // The route back must land on exactly this tool: if the config renames
+        // ANOTHER server tool onto this effective name, the two are
+        // indistinguishable by canonical id and the whole batch is refused
+        // rather than routed by whichever map is read first.
+        if resolve_original(&self.aliases, effective) != Some(original) {
+            return Err(BridgeError::Collision);
+        }
         let canonical = format!("mcp.{}.{effective}", self.alias);
         // Remote annotations are DESCRIPTIVE ONLY: whatever `readOnlyHint` the
         // server claims, the contributed effect comes solely from the host's
@@ -151,6 +185,7 @@ impl McpToolSet {
             client: self.client.clone(),
             original: original.into(),
             alias: self.alias.clone(),
+            binding,
         })
     }
 }
@@ -161,6 +196,9 @@ struct RemoteTool {
     client: Arc<dyn McpConnection>,
     original: String,
     alias: String,
+    /// The connection this descriptor was listed from; dispatch is pinned to
+    /// it. `None` only for a client that has no registrations at all.
+    binding: Option<ToolBinding>,
 }
 #[async_trait]
 impl Tool for RemoteTool {
@@ -186,16 +224,34 @@ impl Tool for RemoteTool {
         if context.dispatch_guard.is_none() {
             return Ok(self.failure(context, McpClientError::Authority));
         }
-        match self
-            .client
-            .call_tool_guarded(
-                &self.original,
-                arguments,
-                context.cancellation.clone(),
-                context.dispatch_guard.clone(),
-            )
-            .await
-        {
+        // Pinned dispatch: the connection that answers is the one this
+        // descriptor was listed from, never whichever transport the session
+        // happens to hold now. An unbound client (no registrations) keeps the
+        // guarded path.
+        let result = match self.binding {
+            Some(binding) => {
+                self.client
+                    .call_tool_bound(
+                        binding,
+                        &self.original,
+                        arguments,
+                        context.cancellation.clone(),
+                        context.dispatch_guard.clone(),
+                    )
+                    .await
+            }
+            None => {
+                self.client
+                    .call_tool_guarded(
+                        &self.original,
+                        arguments,
+                        context.cancellation.clone(),
+                        context.dispatch_guard.clone(),
+                    )
+                    .await
+            }
+        };
+        match result {
             Ok(result) => Ok(self.outcome(context, result)),
             Err(error) => Ok(self.failure(context, error)),
         }
@@ -283,6 +339,41 @@ impl RemoteTool {
             limits: context.limits,
         }
     }
+}
+/// The server-side name an effective name addresses, or `None` when that name
+/// is not one this server's projection can produce.
+///
+/// Projection sends `original` to `aliases[original] ?? original`; routing must
+/// invert exactly that, so a name the config has RENAMED (`a` under
+/// `a -> b`) is refused rather than reaching the callback whose canonical
+/// identity is `mcp.<alias>.b`. Authorization and dispatch therefore decide on
+/// the same `(name, alias)` tuple the bridge minted the descriptor from — every
+/// consumer (the crate manager, the napi binding, a host's own router) inverts
+/// through THIS function so no two of them can disagree.
+pub fn resolve_original<'a>(
+    aliases: &'a BTreeMap<String, String>,
+    effective: &'a str,
+) -> Option<&'a str> {
+    if let Some((original, _)) = aliases
+        .iter()
+        .find(|(_, target)| target.as_str() == effective)
+    {
+        return Some(original);
+    }
+    (!aliases.contains_key(effective)).then_some(effective)
+}
+/// The one-step invariant `resolve_original` depends on, exposed for every
+/// projection mirror (the napi binding projects its own descriptor cache):
+/// a replacement must never itself be a renamed-away original (`a -> b`
+/// alongside `b -> c`). Such a map makes `mcp.<alias>.b` denote two tools —
+/// the forward map reaches `a`, an inverse lookup reaches the chain — so it
+/// must be refused wherever descriptors are minted, not merely where the
+/// crate's own [`McpToolSet`] is constructed.
+#[must_use]
+pub fn aliases_are_one_step(aliases: &BTreeMap<String, String>) -> bool {
+    !aliases
+        .iter()
+        .any(|(original, replacement)| original != replacement && aliases.contains_key(replacement))
 }
 pub(crate) fn server_alias(value: &str) -> bool {
     value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)

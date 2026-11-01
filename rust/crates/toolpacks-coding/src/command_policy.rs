@@ -176,6 +176,23 @@ fn compiled(pattern: &str) -> regex::Regex {
     regex::Regex::new(pattern).expect("static pattern compiles")
 }
 
+/// JS `/\s/`: the ECMA-262 `WhiteSpace` ∪ `LineTerminator` set — 25 code
+/// points. NOT Rust's `char::is_whitespace` (the Unicode `White_Space`
+/// property additionally covers U+0085 and U+001C..U+001F, which JS keeps
+/// INSIDE a word, and excludes U+FEFF, which JS splits on). Shared by the
+/// tokenizer, the risk splitter, and the fingerprint's `trim`; pinned against
+/// the TypeScript engine through `fixtures/coding-fingerprint/tokenizer.json`.
+pub(crate) fn js_is_space(ch: char) -> bool {
+    matches!(ch,
+        '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}'
+        | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}'
+        | '\u{205f}' | '\u{3000}' | '\u{feff}')
+}
+
+/// The same 25 characters as a regex class, for splits that mirror a JS
+/// `split(/[\s…]+/)`.
+pub(crate) const JS_SPACE_CLASS: &str = r"\u{9}\u{a}\u{b}\u{c}\u{d}\u{20}\u{a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}";
+
 pub(crate) fn shell_words(raw: &str) -> Vec<String> {
     let mut words = vec![];
     let mut word = String::new();
@@ -188,9 +205,7 @@ pub(crate) fn shell_words(raw: &str) -> Vec<String> {
             quote = None;
         } else if quote.is_none() && (ch == '\'' || ch == '"') {
             quote = Some(ch);
-        } else if quote.is_none()
-            && (ch.is_whitespace() || ch == '\u{feff}' || ";&|()<>`$".contains(ch))
-        {
+        } else if quote.is_none() && (js_is_space(ch) || ";&|()<>`$".contains(ch)) {
             if !word.is_empty() {
                 words.push(std::mem::take(&mut word));
             }
@@ -295,7 +310,7 @@ fn inline_other(token: &str, rest: &[String]) -> bool {
 
 fn is_high_risk(raw: &str) -> bool {
     static TOKEN_SPLIT: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| compiled(r"[\s;&|()<>\x60$]+"));
+        std::sync::LazyLock::new(|| compiled(&format!("[{JS_SPACE_CLASS};&|()<>\\x60$]+")));
     static DANGEROUS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::RegexBuilder::new(&format!(
             r"(^|[:_-]){}(([:_-])|$)",
@@ -593,11 +608,30 @@ pub struct StandingApprovalKey {
     pub label: String,
 }
 
+/// Identity version of the standing-approval key envelope. The TypeScript
+/// baseline minted `v: 2` keys; the Rust port issues `v: 3` because findings
+/// in the port's own key material were repaired — the tokenizer split (JS
+/// `/\s/` set, greedy `split(/ +/)` runs), the ASCII-only `\w` for bindable
+/// direct files, and the lossy-decoded fallback environment. Those fixes
+/// change digest inputs, so every identity the unsafe path ever persisted
+/// must be unable to authorize again: the version lives INSIDE the hashed
+/// envelope, so a bump makes all older digests inert without touching the
+/// persisted grant shape (the store keeps validating `{version:1,
+/// grants:[{digest…}]}` unchanged, and stale rows simply never match —
+/// the same fail-closed mechanism the `v: 1`-key regression test pins).
+const STANDING_KEY_VERSION: u32 = 3;
+
 /// Port of the TS `keyFor` body behind
 /// `createCodingStandingApprovals`: the command must be eligible, the
 /// workspace must canonicalize, the cwd must resolve inside it, and the
-/// full identity must fingerprint. Every deviation — including any throw
-/// the TS `try` swallows — yields `None`, which means "ask again".
+/// full identity must fingerprint — against the EFFECTIVE environment the
+/// command would run under right now (re-read per call, exactly like the TS
+/// `workspace.environment ?? process.env`), never a copy captured at
+/// approval time. Claim-time staleness (an ENV_NAMES value changed, the
+/// executable replaced by a different dev/ino/mode/size/mtime/ctime) makes
+/// the recomputed digest differ from every stored grant, so staging takes
+/// the ask path with no effect started. Every deviation — including any
+/// throw the TS `try` swallows — yields `None`, which means "ask again".
 pub async fn coding_standing_approval_key(
     namespace: &str,
     chat_id: Option<&str>,
@@ -628,14 +662,20 @@ pub async fn coding_standing_approval_key(
     if inside == ".." || inside.starts_with("../") {
         return None;
     }
+    // The same lossy-decoded view of the process environment the exec path
+    // spawns with (`process_env`); `std::env::vars()` silently DROPS
+    // non-UTF-8 pairs — including a non-UTF-8 `PATH`, an ENV_NAMES name —
+    // which would key the approval against a different PATH than the command
+    // actually runs under.
     let environment = workspace
         .environment
         .clone()
-        .unwrap_or_else(|| std::env::vars().collect());
+        .unwrap_or_else(crate::exec_tools::process_env);
     let fingerprint = command_fingerprint(&root, &cwd, &args.command, &environment).ok()??;
-    // `JSON.stringify` of the v2 key envelope, in TS field order.
+    // `JSON.stringify` of the key envelope, in TS field order (see
+    // `STANDING_KEY_VERSION` for why this is v3, not the baseline's v2).
     let digest_input = format!(
-        "{{\"v\":2,\"fingerprint\":{},\"chatId\":{},\"tool\":{},\"identity\":{},\"root\":{},\"cwd\":{},\"command\":{},\"context\":{}}}",
+        "{{\"v\":{STANDING_KEY_VERSION},\"fingerprint\":{},\"chatId\":{},\"tool\":{},\"identity\":{},\"root\":{},\"cwd\":{},\"command\":{},\"context\":{}}}",
         json_quote(&fingerprint),
         json_quote(chat_id),
         json_quote(tool),
@@ -1169,6 +1209,166 @@ mod tests {
             std::env::temp_dir().join(format!("ak-cmd-bind-{}", std::process::id())),
         )
         .await;
+    }
+
+    /// Finding 3, claim half: the key function re-reads the effective
+    /// environment and re-stats the executable on EVERY call — a standing
+    /// approval's digest is a fresh computation, never a cached capture, so
+    /// an ENV_NAMES change or an executable swap between approval and the
+    /// next claim yields a digest no stored grant matches (staging then asks,
+    /// with zero effects started).
+    #[tokio::test]
+    async fn standing_key_revalidates_environment_and_executable_at_claim_time() {
+        async fn digest_of(root: &str, environment: &HashMap<String, String>) -> String {
+            let workspace = StandingApprovalWorkspace {
+                root: root.to_owned(),
+                identity: "test".into(),
+                context: None,
+                environment: Some(environment.clone()),
+            };
+            coding_standing_approval_key(
+                crate::guard::CODING_NAMESPACE,
+                Some("chat-1"),
+                "run_command",
+                &ShellArgs {
+                    command: "bun test".into(),
+                    cwd: None,
+                },
+                &workspace,
+            )
+            .await
+            .expect("keyable")
+            .digest
+        }
+        let (root, environment) = standing_fixture("claim").await;
+        let approved = digest_of(&root, &environment).await;
+        assert_eq!(
+            digest_of(&root, &environment).await,
+            approved,
+            "pure re-computation is stable"
+        );
+
+        // An ENV_NAMES value appearing after the approval — e.g. the
+        // `NODE_OPTIONS='--require ./evil.js'` scenario — re-keys the call.
+        let mut with_options = environment.clone();
+        with_options.insert("NODE_OPTIONS".to_owned(), "--require ./evil.js".to_owned());
+        let mutated = digest_of(&root, &with_options).await;
+        assert_ne!(
+            mutated, approved,
+            "NODE_OPTIONS is effective-environment identity"
+        );
+        assert_eq!(
+            digest_of(&root, &with_options).await,
+            mutated,
+            "and stable thereafter"
+        );
+
+        // The executable replaced (different size => different identity) also
+        // re-keys, even though environment and command text are untouched.
+        let stub = std::path::Path::new(&root).join("bin").join("bun");
+        tokio::fs::write(&stub, "#!/bin/sh\nexit 0\n# swapped\n")
+            .await
+            .unwrap();
+        assert_ne!(
+            digest_of(&root, &with_options).await,
+            mutated,
+            "executable identity is revalidated at claim time"
+        );
+    }
+
+    /// Finding 4: the identity version lives inside the hashed envelope, so
+    /// every digest the unsafe (v2) path persisted is structurally unable to
+    /// match a v3 key — stale rows in the store are inert, no migration or
+    /// schema change needed. This pins the exact envelope bytes for both
+    /// versions.
+    #[tokio::test]
+    async fn standing_key_version_never_resurrects_unsafe_saved_identities() {
+        let (root, environment) = standing_fixture("version").await;
+        let base = StandingApprovalWorkspace {
+            root: root.clone(),
+            identity: "test".into(),
+            context: None,
+            environment: Some(environment.clone()),
+        };
+        let args = ShellArgs {
+            command: "bun test".into(),
+            cwd: None,
+        };
+        let key = coding_standing_approval_key(
+            crate::guard::CODING_NAMESPACE,
+            Some("chat-1"),
+            "run_command",
+            &args,
+            &base,
+        )
+        .await
+        .expect("keyable");
+        let canonical_root = crate::paths::canonical_root(&root).await.unwrap();
+        let confined = crate::paths::resolve_inside_root(&canonical_root, ".")
+            .await
+            .unwrap();
+        let cwd = tokio::fs::canonicalize(&confined.path)
+            .await
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let fingerprint = command_fingerprint(&canonical_root, &cwd, &args.command, &environment)
+            .ok()
+            .unwrap()
+            .expect("keyable");
+        let envelope = |version: u32| {
+            format!(
+                "{{\"v\":{version},\"fingerprint\":{},\"chatId\":{},\"tool\":{},\"identity\":{},\"root\":{},\"cwd\":{},\"command\":{},\"context\":null}}",
+                json_quote(&fingerprint),
+                json_quote("chat-1"),
+                json_quote("run_command"),
+                json_quote("test"),
+                json_quote(&canonical_root),
+                json_quote(&cwd),
+                json_quote(&args.command),
+            )
+        };
+        assert_eq!(
+            key.digest,
+            hex_sha256(envelope(STANDING_KEY_VERSION).as_bytes()),
+            "the envelope is hashed verbatim at the minted version"
+        );
+        assert_eq!(STANDING_KEY_VERSION, 3);
+        assert_ne!(
+            key.digest,
+            hex_sha256(envelope(2).as_bytes()),
+            "an identity saved by the unsafe v2 path can never authorize again"
+        );
+        assert_ne!(
+            key.digest,
+            hex_sha256(envelope(1).as_bytes()),
+            "the legacy unbound shape stays dead too"
+        );
+    }
+
+    /// Finding 1 on the risk side: the baseline `command-risk.ts` splits with
+    /// the same `shellWords` and a JS `/\s/` character class, so U+0085 and
+    /// U+001C..U+001F never start a `rm` token, while U+2028 does.
+    #[test]
+    fn high_risk_splitting_uses_the_js_whitespace_set() {
+        assert_eq!(
+            classify_shell_command("rm -rf target"),
+            CommandClass::HighRisk
+        );
+        for ch in ['\u{85}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{1f}'] {
+            assert_eq!(
+                classify_shell_command(&format!("rm{ch}-rf target")),
+                CommandClass::Unknown,
+                "U+{:04X} is not JS whitespace, so no rm token begins",
+                ch as u32
+            );
+        }
+        assert_eq!(
+            classify_shell_command("rm\u{2028}-rf target"),
+            CommandClass::HighRisk,
+            "U+2028 IS JS whitespace: the rm token appears"
+        );
     }
 
     #[test]

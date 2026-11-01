@@ -292,16 +292,24 @@ export class NativeStore {
    * `registerMcpTools`) so the durable guard and authority layers still
    * judge the call; direct use from host code is a host decision, not a
    * bypass of the engine lane.
+   *
+   * `handle` is the descriptor's registration handle
+   * (`descriptor.handle`, e.g. `"fix#2"`). Pass it: once an alias has been
+   * re-registered, a call whose handle is missing or comes from a
+   * superseded registration is refused with `mcp_authority_revoked`
+   * before the transport is touched, so a stale descriptor can never
+   * execute the replacement server's callback.
    */
   async mcpCallTool(
     alias: string,
     toolName: string,
     args: unknown,
+    handle?: string,
   ): Promise<ToolResultJson> {
     if (this.closed)
       throw new NativeAgentError("closed", "the native store is closed");
     const text = await lift(() =>
-      this.raw.mcpCallTool(alias, toolName, JSON.stringify(args ?? {})),
+      this.raw.mcpCallTool(alias, toolName, JSON.stringify(args ?? {}), handle),
     );
     return JSON.parse(text) as ToolResultJson;
   }

@@ -28,6 +28,7 @@ import type {
   ProviderRequest,
   ProviderResult,
   ToolDefinitionJson,
+  ToolResultJson,
 } from "../src/index.js";
 import { available, missing, required } from "./helpers/binding.js";
 
@@ -44,6 +45,13 @@ function codeOf(error: unknown): string | undefined {
   return error instanceof Error && "code" in error
     ? (error as NativeAgentError).code
     : undefined;
+}
+
+/** The fixture's payload rides in the host tool-result contract's `data`
+ * slot (shape fixed by the binding's `outcome`). */
+function textOf(result: ToolResultJson): string {
+  const data = result.data as { text?: string } | null | undefined;
+  return data?.text ?? "";
 }
 
 async function expectCode(
@@ -420,6 +428,8 @@ nativeTest(
       expect(connection.alias).toBe("fixture");
       const echo = connection.tools.find((tool) => tool.remoteName === "echo");
       const note = connection.tools.find((tool) => tool.remoteName === "write_note");
+      const handleOf = (remote: string) =>
+        connection.tools.find((tool) => tool.remoteName === remote)!.handle;
       expect(echo).toBeDefined();
       expect(note).toBeDefined();
       // Identity mirrors the crate's contributed-tool shape...
@@ -434,9 +444,12 @@ nativeTest(
 
       // Direct host call round-trips through the crate manager. (Shape
       // fixed by the binding's `outcome`: the host tool-result contract.)
-      const called = await store.mcpCallTool("fixture", "echo", {
-        text: "hi",
-      });
+      const called = await store.mcpCallTool(
+        "fixture",
+        "echo",
+        { text: "hi" },
+        handleOf("echo"),
+      );
       const data = called.data as { text?: string; toolName?: string };
       expect(called.ok).toBe(true);
       expect(data.text).toBe("echo:hi");
@@ -446,11 +459,11 @@ nativeTest(
       // Invalid arguments are refused LOCALLY — the remote never sees the
       // call (the witness log stays at the one entry above).
       await expectCode(
-        () => store.mcpCallTool("fixture", "echo", {}),
+        () => store.mcpCallTool("fixture", "echo", {}, handleOf("echo")),
         "mcp_invalid_arguments",
       );
       await expectCode(
-        () => store.mcpCallTool("fixture", "echo", { text: 7 }),
+        () => store.mcpCallTool("fixture", "echo", { text: 7 }, handleOf("echo")),
         "mcp_invalid_arguments",
       );
       expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["echo"]);
@@ -498,6 +511,8 @@ nativeTest(
           enabled: true,
           readOnly: false,
           connected: true,
+          registration: 1,
+          handle: "fixture#1",
           tools: 2,
         },
       ]);
@@ -505,7 +520,7 @@ nativeTest(
       await store.mcpDisconnect("fixture"); // idempotent
       expect(await store.mcpListServers()).toEqual([]);
       await expectCode(
-        () => store.mcpCallTool("fixture", "echo", { text: "x" }),
+        () => store.mcpCallTool("fixture", "echo", { text: "x" }, "fixture#9"),
         "not_found",
       );
       const again = await store.mcpConnect({
@@ -591,4 +606,330 @@ nativeTest(
     }
   },
   40_000,
+);
+
+// ---------------------------------------------------------------------------
+// Registration generations: a descriptor must never authorize another
+// generation's callback. Everything here runs through the real binding
+// (`@agentkit/native`), a real stdio MCP server fixture, and the real
+// registerTool/engine lane; the witness is the fixture's call log.
+// ---------------------------------------------------------------------------
+
+nativeTest(
+  "MCP client: a superseded registration never authorizes the replacement server's callback",
+  async () => {
+    const log = fixtureLog();
+    const { store, service } = await withService({
+      jsToolAuthority: { configuredMode: "full_auto" },
+    });
+    const spawn = (env: Record<string, string>) => ({
+      kind: "stdio" as const,
+      command: process.execPath,
+      args: [FIXTURE],
+      env: { AGENTKIT_FIXTURE_LOG: log.path, ...env },
+    });
+    try {
+      // Generation 1 behind alias `dual`, registered through the authority lane.
+      const first = await store.mcpConnect({
+        alias: "dual",
+        transport: spawn({ AGENTKIT_FIXTURE_TAG: "gen1" }),
+      });
+      const echoOne = first.tools.find((tool) => tool.remoteName === "echo")!;
+      expect(echoOne.handle).toBe("dual#1");
+      expect(echoOne.name).toBe("mcp__dual__echo");
+      await registerMcpTools(service, store, first);
+
+      const session = (await service.createSession({
+        profileId: "mcp-generations",
+        model: "test-model",
+      })) as { sessionId: string };
+      const { calls, provider } = scripted(
+        toolCall("call-1", "mcp__dual__echo", { text: "engine" }),
+        final("done"),
+        toolCall("call-2", "mcp__dual__echo", { text: "stale" }),
+        final("after"),
+      );
+      service.setProvider(provider);
+
+      const runOne = await service.send(session.sessionId, {
+        content: { type: "text", text: "first generation" },
+      });
+      if (runOne.kind !== "turn") throw new Error("expected a durable turn submission");
+      await awaitRunSettled(service, runOne.turnId);
+      expect(JSON.stringify(calls[1]?.messages ?? [])).toContain("echo:gen1:engine");
+      expect(log.calls()).toEqual(["echo"]);
+
+      // The host now replaces the server behind the SAME alias: same tool
+      // name, same descriptor name and capability, different callback (it
+      // answers with a different payload and demands a different argument).
+      await store.mcpDisconnect("dual");
+      const second = await store.mcpConnect({
+        alias: "dual",
+        transport: spawn({ AGENTKIT_FIXTURE_TAG: "gen2", AGENTKIT_FIXTURE_ECHO: "word" }),
+      });
+      const echoTwo = second.tools.find((tool) => tool.remoteName === "echo")!;
+      expect(echoTwo.handle).toBe("dual#2");
+      expect(echoTwo.name).toBe(echoOne.name);
+      expect(echoTwo.capability).toBe(echoOne.capability);
+
+      // The registered tool still carries the generation-1 handle, so the
+      // engine's second call is refused and the replacement never runs.
+      const runTwo = await service.send(session.sessionId, {
+        content: { type: "text", text: "second generation" },
+      });
+      if (runTwo.kind !== "turn") throw new Error("expected a durable turn submission");
+      await awaitRunSettled(service, runTwo.turnId);
+      // The engine sees the binding's refusal: the tool result is the
+      // handle-rejection failure (the binding's message names the superseded
+      // registration), never the replacement server's answer.
+      const transcript = JSON.stringify(calls[3]?.messages ?? []);
+      expect(transcript).toContain("superseded registration");
+      expect(transcript).not.toContain("echo:gen2");
+      expect(
+        log.calls(),
+        "the replacement callback ran for a stale descriptor",
+      ).toEqual(["echo"]);
+
+      // The same refusals hold on the direct host lane.
+      await expectCode(
+        () => store.mcpCallTool("dual", "echo", { text: "stale" }, echoOne.handle),
+        "mcp_authority_revoked",
+      );
+      await expectCode(
+        () => store.mcpCallTool("dual", "echo", { text: "stale" }),
+        "mcp_authority_revoked",
+      );
+      await expectCode(
+        () => store.mcpCallTool("dual", "echo", { text: "stale" }, "dual#7"),
+        "mcp_authority_revoked",
+      );
+      expect(log.calls()).toEqual(["echo"]);
+
+      // And the CURRENT registration reaches ONLY the current callback — with
+      // generation 1's argument shape refused locally, proving the descriptor
+      // set really is the new generation's.
+      await expectCode(
+        () => store.mcpCallTool("dual", "echo", { text: "stale" }, echoTwo.handle),
+        "mcp_invalid_arguments",
+      );
+      const via2 = await store.mcpCallTool("dual", "echo", { word: "two" }, echoTwo.handle);
+      expect(textOf(via2)).toBe("echo:gen2:two");
+      expect(log.calls()).toEqual(["echo", "echo"]);
+      expect((await store.mcpListServers()).find((entry) => entry.alias === "dual")?.registration).toBe(2);
+    } finally {
+      await service.close();
+      await store.close();
+    }
+  },
+  60_000,
+);
+
+nativeTest(
+  "MCP client: an alias whose replacement name shadows another alias routes by (alias, generation)",
+  async () => {
+    const logA = fixtureLog();
+    const logB = fixtureLog();
+    const { store } = await withService();
+    try {
+      const a = await store.mcpConnect({
+        alias: "a",
+        transport: {
+          kind: "stdio",
+          command: process.execPath,
+          args: [FIXTURE],
+          env: { AGENTKIT_FIXTURE_LOG: logA.path },
+        },
+      });
+      // Alias `b` RENAMES both of its tools (`echo -> shadow`,
+      // `write_note -> note`). Identity, authorization and execution must all
+      // use the same (name, alias, generation) tuple, so neither alias can
+      // reach the other's callback.
+      const b = await store.mcpConnect({
+        alias: "b",
+        toolAliases: { echo: "shadow", write_note: "note" },
+        transport: {
+          kind: "stdio",
+          command: process.execPath,
+          args: [FIXTURE],
+          env: { AGENTKIT_FIXTURE_LOG: logB.path },
+        },
+      });
+      const aEcho = a.tools.find((tool) => tool.remoteName === "echo")!;
+      const bShadowed = b.tools.find((tool) => tool.remoteName === "write_note")!;
+      const bRenamedAway = b.tools.find((tool) => tool.remoteName === "echo")!;
+      expect(aEcho.name).toBe("mcp__a__echo");
+      // The fixture annotates `echo` readOnlyHint:true; effect is HOST-owned,
+      // so without the host's readOnly allowance it stays "write".
+      expect(aEcho.effect).toBe("write");
+      expect(bShadowed.name).toBe("mcp__b__note"); // renamed on the way out...
+      expect(bShadowed.effect).toBe("write"); // ...but the contract is write_note's
+      expect(bShadowed.capability).toBe("mcp.b.note");
+      expect(bRenamedAway.name).toBe("mcp__b__shadow");
+
+      // An AMBIGUOUS rename — a replacement that is itself a renamed-away
+      // name (`echo -> shadow` alongside `write_note -> echo`) — denotes two
+      // different tools with one name. It is refused at connect, before a
+      // descriptor could advertise one callback while the resolver reaches
+      // the other; and the refusal takes nothing down with it (finding 3).
+      await expectCode(
+        () =>
+          store.mcpConnect({
+            alias: "c",
+            toolAliases: { echo: "shadow", write_note: "echo" },
+            transport: {
+              kind: "stdio",
+              command: process.execPath,
+              args: [FIXTURE],
+              env: { AGENTKIT_FIXTURE_LOG: logA.path },
+            },
+          }),
+        "mcp_invalid_config",
+      );
+      expect((await store.mcpListServers()).map((entry) => entry.alias)).toEqual(["a", "b"]);
+      expect(
+        (
+          await store.mcpCallTool("a", "echo", { text: "alive" }, aEcho.handle)
+        ).ok,
+      ).toBe(true);
+      expect(logA.calls()).toEqual(["echo"]);
+      // Canonical identities stay distinct across the aliases.
+      const names = new Set([...a.tools, ...b.tools].map((tool) => tool.name));
+      const caps = new Set([...a.tools, ...b.tools].map((tool) => tool.capability));
+      expect(names.size).toBe(4);
+      expect(caps.size).toBe(4);
+
+      // Execution side: b's shadowing descriptor runs b's write_note.
+      const viaB = await store.mcpCallTool(
+        "b",
+        bShadowed.remoteName,
+        { note: "kept" },
+        bShadowed.handle,
+      );
+      expect(textOf(viaB)).toBe("saved:kept");
+      expect(logB.calls()).toEqual(["write_note"]);
+      expect(logA.calls(), "b's call reached alias a").toEqual(["echo"]);
+
+      // And a's plain echo still runs a's echo — the shadow never hijacked it.
+      const viaA = await store.mcpCallTool(
+        "a",
+        aEcho.remoteName,
+        { text: "kept" },
+        aEcho.handle,
+      );
+      expect(textOf(viaA)).toBe("echo:kept");
+      expect(logA.calls()).toEqual(["echo", "echo"]);
+      expect(logB.calls()).toEqual(["write_note"]);
+
+      // The renamed-away descriptor still dispatches to b's OWN echo —
+      // alias `a`'s identically named tool never hijacks it.
+      const viaShadow = await store.mcpCallTool(
+        "b",
+        "echo",
+        { text: "x" },
+        bRenamedAway.handle,
+      );
+      expect(textOf(viaShadow)).toBe("echo:x");
+      expect(logB.calls()).toEqual(["write_note", "echo"]);
+
+      // Authorization is per (alias, generation): a live handle from one
+      // alias cannot authorize a call on the other, even for the tool whose
+      // EFFECTIVE name collides between them.
+      await expectCode(
+        () => store.mcpCallTool("b", "echo", { text: "x" }, aEcho.handle),
+        "mcp_authority_revoked",
+      );
+      await expectCode(
+        () => store.mcpCallTool("a", "write_note", { note: "x" }, bShadowed.handle),
+        "mcp_authority_revoked",
+      );
+      // ...and nothing reached either server while those were refused.
+      expect(logA.calls()).toEqual(["echo", "echo"]);
+      expect(logB.calls()).toEqual(["write_note", "echo"]);
+    } finally {
+      await store.close();
+    }
+  },
+  60_000,
+);
+
+nativeTest(
+  "MCP client: a failed configuration change leaves the already-connected servers usable",
+  async () => {
+    const log = fixtureLog();
+    const { store } = await withService();
+    try {
+      const keep = await store.mcpConnect({
+        alias: "keep",
+        transport: {
+          kind: "stdio",
+          command: process.execPath,
+          args: [FIXTURE],
+          env: { AGENTKIT_FIXTURE_LOG: log.path },
+        },
+      });
+      const keepHandle = keep.tools.find((tool) => tool.remoteName === "echo")!.handle;
+      expect((await store.mcpCallTool("keep", "echo", { text: "one" }, keepHandle)).data).toEqual(
+        expect.objectContaining({ text: "echo:one", toolName: "echo" }),
+      );
+
+      // A new alias the crate REJECTS at validation (zero request timeout)
+      // changes no state at all.
+      await expectCode(
+        () =>
+          store.mcpConnect({
+            alias: "doomed",
+            resilience: { requestTimeoutMs: 0 },
+            transport: {
+              kind: "stdio",
+              command: process.execPath,
+              args: [FIXTURE],
+              env: { AGENTKIT_FIXTURE_LOG: log.path },
+            },
+          }),
+        "mcp_invalid_config",
+      );
+      // A new alias whose transport cannot start at all is reported as a
+      // connection failure — and again takes nothing down with it.
+      await expectCode(
+        () =>
+          store.mcpConnect({
+            alias: "missing",
+            transport: { kind: "stdio", command: "/nonexistent/agentkit-mcp-fixture", args: [] },
+          }),
+        "mcp_connect_failed",
+      );
+      // A secret-referencing declaration fails closed, never half-applied.
+      await expectCode(
+        () =>
+          store.mcpConnect({
+            alias: "secret",
+            secretRefs: { TOKEN: "env://AGENTKIT_ABSENT" },
+            transport: {
+              kind: "stdio",
+              command: process.execPath,
+              args: [FIXTURE],
+            },
+          }),
+        "mcp_secret_missing",
+      );
+
+      // `keep` survived every failed replacement untouched: same status, same
+      // registration generation, still dispatchable on its original handle.
+      const servers = await store.mcpListServers();
+      expect(servers.map((entry) => entry.alias)).toEqual(["keep"]);
+      expect(servers[0]).toMatchObject({
+        connected: true,
+        registration: 1,
+        handle: "keep#1",
+        tools: 2,
+      });
+      const again = await store.mcpCallTool("keep", "echo", { text: "two" }, keepHandle);
+      expect(again.ok).toBe(true);
+      expect(textOf(again)).toBe("echo:two");
+      expect(log.calls()).toEqual(["echo", "echo"]);
+    } finally {
+      await store.close();
+    }
+  },
+  60_000,
 );

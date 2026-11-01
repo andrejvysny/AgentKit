@@ -42,6 +42,24 @@ jobs:
         working-directory: rust
       - run: cargo test --workspace --all-features --locked
         working-directory: rust
+      # Named reviewable gates for the shared TS↔Rust fingerprint fixtures,
+      # so a reviewer sees one run per gate instead of trusting they are
+      # inside the workspace run above. Filters are exact: the two commands
+      # consume ALL fixture readers — rust/crates/host/tests/governance/
+      # fixtures/locale-fingerprints.json (policy.rs include_str!),
+      # rust/fixtures/coding-fingerprint/tokenizer.json and
+      # rust/fixtures/coding-fingerprint/env-order.json (command_fingerprint
+      # include_str! / ENV_ORDER, exercised via environment collation and the
+      # full bound-input digest). The TypeScript side of the same fixtures is
+      # pinned by packages/toolpacks-coding/tests/
+      # command-fingerprint-collation.test.ts and the `contracts` job's
+      # `bun scripts/export-rust-fixtures.ts --check`.
+      - name: Shared locale-fingerprint conformance (host governance fixture)
+        run: cargo test -p agentkit-host --test governance --all-features --locked -- native_write_fingerprint_is_versioned_locale_free_and_excludes_action_id
+        working-directory: rust
+      - name: Shared coding-fingerprint conformance (tokenizer + env collation + bound digest)
+        run: cargo test -p agentkit-toolpacks-coding --lib --all-features --locked -- command_fingerprint::tests::tokenizer_agrees_with_the_typescript_baseline command_fingerprint::tests::environment_is_restricted_sorted_and_bounded command_fingerprint::tests::fingerprint_is_stable_and_reacts_to_every_bound_input
+        working-directory: rust
       - name: Command cancellation and process-group timeout teardown
         run: "cargo test -p agentkit-toolpacks-coding --lib exec_tools::tests:: --all-features --locked -- --ignored"
         working-directory: rust

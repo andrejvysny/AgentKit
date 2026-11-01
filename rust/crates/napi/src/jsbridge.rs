@@ -204,7 +204,14 @@ impl JsBridge {
                 Err(_) => Err(format!("{label} callback was dropped before settling")),
             },
             _ = cancellation.cancelled() => {
-                self.cancel(call_id, "the call was cancelled by the host");
+                // The router can only abort the user's callback if it hears
+                // from us: same notification the Drop guard sends, and only
+                // when we are the ones who settled the pending entry.
+                if self.cancel(call_id, "the call was cancelled by the host") {
+                    self.deliver_message(
+                        serde_json::json!({"kind": "cancel", "callId": call_id}).to_string(),
+                    );
+                }
                 Err(format!("the {label} call was cancelled"))
             }
         }
