@@ -102,6 +102,25 @@ generator's `ToTs`/TS codegen is deliberately NOT used for wire types):
   indexed search) — storage on Rust for the TypeScript host stack.
   Known gap: priority aging lives in the TS store layer, not yet the
   Rust claim path (two conformance cases skip by name).
+- MCP over the binding (2026-11-01):
+  `SessionService.startMcpServer(options)/stopMcpServer()` hosts the
+  crate's streamable-HTTP MCP server (bearer set ≥32B with constant-time
+  compare, per-token principal, crate session/body/batch/concurrency/
+  deadline bounds) over the service's REGISTERED JS tools — `tools/call`
+  executes through the exact `JsTool::execute` bridge request a local
+  tool call takes; writes hidden and refused unless `writesEnabled`.
+  `Store.mcpConnect/mcpCallTool/mcpDisconnect/mcpListServers` run the
+  resilient client manager from Rust (stdio or streamable HTTP,
+  host-decided effect via config `readOnly` only, local schema
+  validation fail-closed before dispatch, secrets redacted);
+  `registerMcpTools` feeds the descriptors into the existing
+  `registerTool` authority lane — default-ask write tools park on
+  approval with zero remote calls. Documented reduction: remote calls
+  carry no run-scoped plan-mode/ask guard or durable execution receipt
+  (task-lease-bound layers; the engine has no standalone tool-dispatch
+  entry point). Open gaps: no OAuth, no elicitation/sampling,
+  in-memory configs, deny-all secret resolution (a `secretRefs` entry
+  fails connect, never a fake lookup).
 - `registerTool(definition, fn)` and `setProvider(fn)`: per-invocation
   references, reject maps to the normal tool/provider failure path
   (`tool_execution_failed`, `provider: <reason>`), no panic, and the full

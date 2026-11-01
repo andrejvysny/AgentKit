@@ -17,6 +17,51 @@ export declare class NativeRunHandle {
 
 export declare class NativeStore {
   /**
+   * Connect one MCP server. `configJson` is the crate's `ServerConfig`
+   * shape: `{alias, transport: {kind:"stdio", command, args?, env?} |
+   * {kind:"http", url, headers?}, secretRefs?, enabled?, toolAliases?,
+   * readOnly?, resilience?}`. Effects are HOST-controlled: every
+   * returned descriptor carries `effect:"write"` UNLESS the host config
+   * sets `readOnly:true` — remote annotations never raise or lower it.
+   * Returns `{alias, tools}` where `tools` are descriptors ready for
+   * `NativeSessionService.registerTool`; call `mcpCallTool(alias,
+   * descriptor.remoteName, args)` from the tool lane to invoke. Fails
+   * with `mcp_invalid_config` for a bad declaration or remote identity,
+   * `mcp_connect_failed`/`mcp_*` for transport problems, and
+   * `mcp_secret_missing` if the config carries `secretRefs` (the
+   * binding has no secret resolver yet). Connecting an already-known
+   * alias fails with `invalid_input`; disconnect it first.
+   */
+  mcpConnect(configJson: string): Promise<string>
+  /**
+   * Invoke one tool on a connected MCP server. `toolName` accepts the
+   * remote's original name, the configured alias target, or the full
+   * descriptor name. The arguments are validated LOCALLY against the
+   * descriptor's recorded input schema before dispatch (invalid
+   * arguments never reach the server, `mcp_invalid_arguments`; a
+   * schema that could not be compiled fails closed the same way).
+   * Returns the host tool-result contract as JSON text (`{ok, data,
+   * modelData, summary, status, warnings, truncated, limits}`). Call
+   * it from the `registerTool` run function so the durable guard and
+   * authority layers keep judging the call — this host method is for
+   * the JS tool lane, not a bypass around those checks.
+   */
+  mcpCallTool(alias: string, toolName: string, argsJson: string): Promise<string>
+  /**
+   * Disconnect one MCP server: its tool handles are revoked
+   * immediately, its transport closed, and its declaration dropped.
+   * Idempotent — disconnecting an unknown or already-disconnected
+   * alias is a no-op success.
+   */
+  mcpDisconnect(alias: string): Promise<void>
+  /**
+   * Every MCP server declared on this store: `{alias, kind, enabled,
+   * readOnly, connected, tools}`. `connected` is the crate manager's
+   * live-session view (a connected server whose transport dropped
+   * reports false and reconnects on the next host call).
+   */
+  mcpListServers(): Promise<string>
+  /**
    * Internal JSON port used by the compatibility facade. Rust owns validation,
    * persistence, ordering, and atomicity; unknown operations never run effects.
    */
@@ -30,7 +75,12 @@ export declare class NativeStore {
   static open(path: string): NativeStore
   /** Open an in-memory store (tests, throwaway sessions). */
   static memory(): NativeStore
-  /** Flush all pending writes durably and release ownership. Idempotent. */
+  /**
+   * Flush all pending writes durably and release ownership. Idempotent.
+   * Connected MCP servers are torn down first: their handles are revoked
+   * and transports closed (stdio children killed) before the store is
+   * released, so a closed store never leaves a live MCP connection.
+   */
   close(): Promise<void>
   /**
    * Create the session service over this store: host + chat executor +
@@ -97,6 +147,34 @@ export declare class SessionService {
    * updated record JSON. An unknown chat fails `not_found`.
    */
   unarchiveChat(sessionId: string): Promise<string>
+  /**
+   * Start the Rust MCP server (streamable HTTP, official-SDK-backed)
+   * on this service's JS tool lane. `optionsJson`: `{host?, port?,
+   * bearerTokens, allowedHosts?, allowedOrigins?, writesEnabled?,
+   * maxConcurrentCalls?, maxBatchSize?, callDeadlineMs?, idleTtlMs?,
+   * maxBodyBytes?, maxSessionsPerPrincipal?}` — `bearerTokens` is a
+   * REQUIRED non-empty array, every entry at least 32 bytes; invalid
+   * values fail with `invalid_input`, an unusable address with
+   * `service_unavailable`. Defaults: `127.0.0.1`, ephemeral port,
+   * `writesEnabled: false`, the crate's frozen limit defaults. Returns
+   * `{port, url}` as JSON text. The catalogue a remote client sees is
+   * exactly this service's registered JS tools (list AND call hide
+   * write tools while `writesEnabled` is false); a `tools/call`
+   * executes the same `JsTool::execute` bridge request a local tool
+   * call takes. Fails with `invalid_input` if an MCP server already
+   * runs on this service, and `closed` after `close()`.
+   */
+  startMcpServer(optionsJson: string): Promise<string>
+  /**
+   * Stop the MCP server: every session lease is revoked first (cancels
+   * in-flight JS tool callbacks), the listener closes immediately
+   * (follow-up connections are refused), and the accept loop is
+   * force-stopped after the close deadline. Idempotent — stopping a
+   * service that never started, or was already stopped or closed, is a
+   * no-op success. `close()` stops a live server itself, before the
+   * bridge begins Closing.
+   */
+  stopMcpServer(): Promise<void>
   /**
    * Register a JS-executed tool. `definitionJson` is the portable tool
    * definition: `{name, version?, effect?, capability?, description?,

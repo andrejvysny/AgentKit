@@ -135,6 +135,44 @@ impl JsToolContributor {
         definitions.push(definition);
         Ok(())
     }
+
+    /// The registered definitions — the same list `contribute` hands the
+    /// executor. The MCP server advertises exactly this catalogue, so a
+    /// remote client sees precisely the tools a run can call.
+    pub(crate) fn tool_definitions(&self) -> Vec<ToolDefinition> {
+        self.definitions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// One registered definition by tool name.
+    pub(crate) fn lookup(&self, name: &str) -> Option<ToolDefinition> {
+        self.definitions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .find(|definition| definition.name == name)
+            .cloned()
+    }
+
+    /// Execute a registered definition through the exact `JsTool::execute`
+    /// lane a run-scoped call takes: same bridge request, same pending
+    /// kind, same result mapping. The caller supplies the execution
+    /// context; this only supplies the tool.
+    pub(crate) async fn invoke(
+        &self,
+        definition: ToolDefinition,
+        context: ToolContext,
+        input: Value,
+    ) -> Result<ToolResult, CoreError> {
+        JsTool {
+            definition,
+            bridge: Arc::clone(&self.bridge),
+        }
+        .execute(context, input)
+        .await
+    }
 }
 
 fn required_string<'a>(object: &'a Value, key: &str) -> std::result::Result<&'a str, String> {

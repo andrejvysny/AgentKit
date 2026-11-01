@@ -163,6 +163,34 @@ AGING is a TS-store-layer feature the Rust claim path lacks
 conformance cases skip by name until the engine grows claim-aging
 params. Native suite: 187 pass / 2 named skips / 0 fail.
 
+Native client-contract proof (2026-11-01, AGENTKIT-56/59 evidence). With
+`AGENTKIT_TEST_BACKEND=rust`, the ENTIRE unchanged client suite (157
+tests) and react suite (76 tests) pass against the Rust server:
+`DesktopBackend` over `agentkit-transport-http`, real SQLite, JS
+provider bridge — zero skips, all 39 contract routes already served,
+no engine gaps surfaced. The single baseline failure was fixture drift
+(`http_fixture` left the SSE `retry_hint` at the 500 ms default while
+the TS harness configures 10 ms; against 99 deliberate severings the
+client slept on the long hint) — fixed to mirror the TS streaming
+block. The TypeScript lanes remain green side-by-side.
+
+Native MCP (2026-11-01). The binding hosts the crate's streamable-HTTP
+MCP SERVER over the service's registered JS tools (`tools/call`
+executes through the exact `JsTool::execute` bridge request a local
+call takes; bearer set with constant-time compare, per-token principal,
+crate bounds, writes hidden and refused unless enabled) and runs the
+client manager (`mcpConnect/mcpCallTool/mcpDisconnect/mcpListServers`:
+host-decided effect via config `readOnly` only, local schema validation
+fail-closed, server-echoed secrets redacted, stdio children reaped on
+close). `registerMcpTools` feeds MCP descriptors into the existing
+`registerTool` authority lane — the default-ask approval test proves a
+remote write tool parks with ZERO remote calls until approved.
+Documented reductions, not silent gaps: remote calls carry no run-scoped
+plan-mode guard or durable execution receipt (the engine has no
+standalone tool-dispatch entry point — evidence in the module header);
+OAuth, elicitation, config persistence and the secret resolver remain
+open (deny-all: `secretRefs` fails connect).
+
 Working-tree results on macOS arm64 with Bun 1.4.0:
 
 | Suite | Passed | Failed | Skipped | Evidence scope |
