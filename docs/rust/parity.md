@@ -191,6 +191,29 @@ standalone tool-dispatch entry point — evidence in the module header);
 OAuth, elicitation, config persistence and the secret resolver remain
 open (deny-all: `secretRefs` fails connect).
 
+Engine fixes on the consumer path (2026-11-01), both found while running
+real compositions against the binding, not while reading code:
+
+- `complete_proposal` finalized nothing behind a pre-existing receipt.
+  The store port's apply records the outcome BEFORE requesting the
+  terminal transition, so the receipt exists while the status stamp has
+  not landed; the existing-receipt early return handed the receipt back
+  and skipped the stamp, leaving every host `ProposalService.apply` over
+  the native store durably `applying` with an applied receipt. The
+  receipt stays the byte-identical first committed outcome; the stamp now
+  lands idempotently from the RECEIPT's outcome, never the replayed
+  argument (`crates/store/tests/proposals.rs`, plus the bridge-free
+  `responses-smoke` proposal assertions).
+- A chat that is not a session is ABSENCE, not an error, for the
+  permission guard. `SessionExecutionAuthority` propagated
+  `session_not_found` as a guard error, so every JS tool call on a
+  REST-minted chat — one never opened through `createSession` — was
+  refused with "guard error", even in `full_auto`. The guard now falls
+  back to its configured mode for a non-session chat exactly as for a
+  session with no execution state; malformed state on a real session
+  stays a hard error (`crates/host/tests/execution_authority.rs`,
+  `packages/native/tests/authority.test.ts`).
+
 Backend surface ledger after the consumer migration (2026-11-01). What
 each TypeScript backend package is NOW:
 
