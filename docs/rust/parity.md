@@ -101,6 +101,24 @@ warning: `subscribeTurn`'s `afterSeq` is an exclusive cursor and
 sequences start at 0, so `afterSeq: 0` silently drops the first event;
 the wrapper now documents it.
 
+Native REST/SSE server (2026-11-01). The binding gained
+`startHttpServer`/`stopHttpServer`: `agentkit-transport-http`'s router
+over the host crate's `DesktopBackend` (bearer token enforced engine-side,
+≥32 bytes) serves AgentKit REST v1 and the SSE run stream **from Rust**
+on the session service's own host/store — a Bun process gets the whole
+REST surface without the TypeScript transport. `close()` stops the
+listener before the closing window; stop is idempotent and aborts a
+never-finishing accept loop after the close budget. Evidence:
+`packages/native/tests/http-server.test.ts` (exact `problem+json`
+401/404/405/413/422 envelopes, idempotency-key replay and fingerprint
+mismatch, chat round-trips, a submitted turn executed by the service's
+own worker with `run.message.delta` replay and the engine's exact
+settled terminator, rebinding, close-with-live-server) and 4 napi unit
+tests for option validation. This makes the REST surface reachable from
+Rust; `packages/transport-http` remains the implementation for consumers
+on the TypeScript host stack, and the TS-server replacement (AGENTKIT-56)
+stays open until that stack's consumers move onto the native path.
+
 Working-tree results on macOS arm64 with Bun 1.4.0:
 
 | Suite | Passed | Failed | Skipped | Evidence scope |

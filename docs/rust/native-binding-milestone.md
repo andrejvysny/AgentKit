@@ -81,6 +81,17 @@ generator's `ToTs`/TS codegen is deliberately NOT used for wire types):
   backpressures the follower instead of overflowing a queue; `cancel()`
   and `done()` are sync. `afterSeq` is **exclusive** and sequences start
   at 0: omit it to receive every event from the first.
+- `SessionService.startHttpServer(options)` / `stopHttpServer()`: serves
+  AgentKit REST v1 + SSE **from Rust** (`agentkit-transport-http` router
+  over `DesktopBackend`, which enforces the bearer token itself) on the
+  SAME host/store as the session service — one worker executes, no
+  second engine. Options: `host` (default 127.0.0.1), `port` (0 =
+  ephemeral; the bound `{port, baseUrl}` is returned), `basePath`,
+  `maxBodyBytes`, `maxQueryBytes`, `actorId`, `defaultModel`, and the
+  required ≥32-byte `bearerToken`. `stopHttpServer` is idempotent; the
+  service's `close()` stops the listener BEFORE entering the closing
+  window, so no request is admitted mid-shutdown. Errors cross as
+  `problem+json` from the Rust transport.
 - `registerTool(definition, fn)` and `setProvider(fn)`: per-invocation
   references, reject maps to the normal tool/provider failure path
   (`tool_execution_failed`, `provider: <reason>`), no panic, and the full

@@ -138,6 +138,41 @@ export interface NativeProviderConfig {
   maxTokens?: number;
 }
 
+/** Options for `NativeSessionService.startHttpServer` (mirrors
+ * `startHttpServer` in `rust/crates/napi/src/http_server.rs`). The server
+ * is the Rust REST v1 + SSE engine serving this service's own host and
+ * store. Only `bearerToken` is required; the backend itself refuses tokens
+ * shorter than 32 bytes, and the binding rejects them up front. */
+export interface NativeHttpServerOptions {
+  /** Interface to bind. Default `127.0.0.1`. */
+  host?: string;
+  /** Port to bind; `0` (the default) asks the OS for an ephemeral port. */
+  port?: number;
+  /** Optional URL prefix; routes then live under `{basePath}/v1/...`. */
+  basePath?: string;
+  /** Request body cap in bytes. Default 1048576 (1 MiB). */
+  maxBodyBytes?: number;
+  /** Query-string cap in bytes. Default 16384. */
+  maxQueryBytes?: number;
+  /** Durable desktop actor identity that owns the store. Default
+   * `desktop-user`; the first start binds it to the store permanently. */
+  actorId?: string;
+  /** Model label recorded on REST-submitted turns when neither the
+   * request nor the stored settings name one. Default `model`. */
+  defaultModel?: string;
+  /** REQUIRED shared secret; clients must present it as
+   * `Authorization: Bearer <token>`. At least 32 bytes. */
+  bearerToken: string;
+}
+
+/** Where a started desktop server actually listens (an ephemeral port is
+ * resolved by the OS; `baseUrl` already includes the normalized base
+ * path). */
+export interface NativeHttpServerInfo {
+  port: number;
+  baseUrl: string;
+}
+
 export class NativeStore {
   private readonly raw: RawNativeStore;
   private closed = false;
@@ -511,6 +546,36 @@ export class NativeSessionService extends NativeSessionManagement {
       this.raw.subscribeTurn(taskId, afterSeq ?? null),
     );
     return new TurnSubscription(raw);
+  }
+
+  /**
+   * Start the Rust REST v1 + SSE desktop server over THIS service's host
+   * and store: a message submitted via `POST /v1/chats/:chatId/messages`
+   * is durable work executed by this service's own worker, exactly like a
+   * `send()` from JS. The bearer token is checked by the Rust backend
+   * (constant-time); every non-public route refuses a missing or wrong
+   * token with a `problem+json` 401. Invalid options fail with
+   * `invalid_input`; an address that cannot be bound fails with
+   * `service_unavailable`. Fails if a server already runs on this service
+   * (call `stopHttpServer()` first) or after `close()`.
+   */
+  async startHttpServer(
+    options: NativeHttpServerOptions,
+  ): Promise<NativeHttpServerInfo> {
+    const text = await lift(() =>
+      this.raw.startHttpServer(JSON.stringify(options)),
+    );
+    return JSON.parse(text) as NativeHttpServerInfo;
+  }
+
+  /** Stop the desktop server started by `startHttpServer`: the listener
+   * closes immediately (follow-up requests are refused) and in-flight
+   * requests drain up to the service's close deadline. Idempotent —
+   * stopping a never-started, already-stopped, or closed service is a
+   * no-op. `close()` stops a live server itself, before the runtime
+   * begins Closing. */
+  async stopHttpServer(): Promise<void> {
+    await lift(() => this.raw.stopHttpServer());
   }
 
   /** `Open → Closing → Closed` on the Rust side: no new callbacks are

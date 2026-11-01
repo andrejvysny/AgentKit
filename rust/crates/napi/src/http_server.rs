@@ -1,0 +1,377 @@
+//! The desktop REST/SSE server, served by the Rust HTTP engine over the
+//! service's own host and store.
+//!
+//! This is NOT a second runtime: the listener runs on the `AgentHost` the
+//! service already owns (same executors, same worker, same SQLite actor), so
+//! a REST-submitted turn is durable work exactly like a `send()` from JS —
+//! recovery, leases, and close semantics are unchanged. Exactly one server
+//! may run per service; `close()` stops it before the bridge closes, so no
+//! new REST dispatch can enter mid-shutdown. The bearer token is validated
+//! by `DesktopBackend` itself (constant-time compare, ≥ 32 bytes) — the
+//! binding refuses weaker tokens at parse time rather than letting the
+//! backend reject construction later.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use agentkit_host::http::DesktopBackend;
+use agentkit_transport_http::{Actor, Config, StreamOptions};
+use napi::bindgen_prelude::*;
+use serde_json::{Value, json};
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+use super::{SessionService, parse_object};
+use crate::errors;
+
+/// Floor enforced by `DesktopBackend::new` (`token.len() < 32`); mirrored
+/// here so the refusal crosses the boundary as `invalid_input`, not as an
+/// opaque backend problem.
+const MIN_TOKEN_BYTES: usize = 32;
+const DEFAULT_HOST: &str = "127.0.0.1";
+const DEFAULT_ACTOR: &str = "desktop-user";
+/// Last-resort model label recorded on REST-submitted turns when neither
+/// the request body nor the stored `http/settings` name one.
+const DEFAULT_MODEL: &str = "model";
+/// Bound an accepted-then-stalled connection may outlive the shutdown
+/// signal; keeps `stopHttpServer()`/`close()` deterministic even with a
+/// client that never finishes reading (e.g. a parked SSE consumer).
+const CONNECTION_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+/// One running desktop HTTP server: the accept-loop task plus the token
+/// that drains it. Cancelling closes the listener immediately (follow-up
+/// connections are refused); in-flight requests get
+/// `CONNECTION_SHUTDOWN_GRACE` before the task is force-stopped.
+pub(super) struct HttpServer {
+    token: CancellationToken,
+    join: JoinHandle<()>,
+}
+
+impl HttpServer {
+    /// Idempotent stop. Cancelling the token makes `axum` stop accepting
+    /// (the listener is dropped immediately — follow-up connections are
+    /// refused) and signals every connection task to finish its current
+    /// response. The accept-loop join is awaited up to `grace`, then
+    /// force-aborted so `stopHttpServer()`/`close()` stay deterministic
+    /// even against a client that never finishes reading (e.g. a parked
+    /// SSE consumer on an unsettled run; the socket is already closed, the
+    /// orphaned connection task can only hold its store clone until the
+    /// run finally settles).
+    pub(super) async fn shutdown(self, grace: Duration) {
+        self.token.cancel();
+        let deadline = tokio::time::Instant::now() + grace.max(CONNECTION_SHUTDOWN_GRACE);
+        while !self.join.is_finished() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        self.join.abort();
+    }
+}
+
+/// Validated `startHttpServer` options (see the TS wrapper for the public
+/// shape). Everything here selects real behavior; an unsupported value
+/// fails the call with `invalid_input` instead of being ignored.
+#[derive(Debug)]
+struct ServerOptions {
+    host: String,
+    port: u16,
+    base_path: String,
+    max_body_bytes: usize,
+    max_query_bytes: usize,
+    actor_id: String,
+    default_model: String,
+    bearer_token: String,
+}
+
+fn optional_u64(object: &Value, key: &str) -> Result<Option<u64>> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value.as_u64().map(Some).ok_or_else(|| {
+            errors::invalid(format!("{key} must be a non-negative integer when present"))
+        }),
+    }
+}
+
+fn optional_sized(object: &Value, key: &str) -> Result<Option<usize>> {
+    let Some(number) = optional_u64(object, key)? else {
+        return Ok(None);
+    };
+    let bytes = usize::try_from(number)
+        .map_err(|_| errors::invalid(format!("{key} is out of range for this platform")))?;
+    if bytes == 0 {
+        return Err(errors::invalid(format!(
+            "{key} must be positive when present"
+        )));
+    }
+    Ok(Some(bytes))
+}
+
+fn optional_text(object: &Value, key: &str, allow_empty: bool) -> Result<Option<String>> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => {
+            if !allow_empty && text.trim().is_empty() {
+                return Err(errors::invalid(format!(
+                    "{key} must not be empty when present"
+                )));
+            }
+            Ok(Some(text.clone()))
+        }
+        Some(_) => Err(errors::invalid(format!(
+            "{key} must be a string when present"
+        ))),
+    }
+}
+
+fn parse_server_options(text: &str) -> Result<ServerOptions> {
+    let object = parse_object(text, "HTTP server options")?;
+    let bearer_token = match object.get("bearerToken") {
+        Some(Value::String(token)) => token.clone(),
+        None | Some(Value::Null) => {
+            return Err(errors::invalid(
+                "bearerToken is required: the desktop server never serves unauthenticated",
+            ));
+        }
+        Some(_) => {
+            return Err(errors::invalid("bearerToken must be a string"));
+        }
+    };
+    if bearer_token.len() < MIN_TOKEN_BYTES {
+        return Err(errors::invalid(format!(
+            "bearerToken must be at least {MIN_TOKEN_BYTES} bytes; the desktop backend refuses weaker tokens"
+        )));
+    }
+    let host = optional_text(&object, "host", false)?.unwrap_or_else(|| DEFAULT_HOST.to_owned());
+    if host.contains('/') || host.chars().any(char::is_whitespace) {
+        return Err(errors::invalid(
+            "host must be a bare hostname or IP literal",
+        ));
+    }
+    let port = optional_u64(&object, "port")?
+        .map(|port| {
+            u16::try_from(port).map_err(|_| {
+                errors::invalid("port must be 0..=65535 (0 selects an ephemeral port)")
+            })
+        })
+        .transpose()?
+        .unwrap_or(0);
+    Ok(ServerOptions {
+        host,
+        port,
+        base_path: optional_text(&object, "basePath", true)?.unwrap_or_default(),
+        max_body_bytes: optional_sized(&object, "maxBodyBytes")?.unwrap_or(1_048_576),
+        max_query_bytes: optional_sized(&object, "maxQueryBytes")?.unwrap_or(16_384),
+        actor_id: optional_text(&object, "actorId", false)?
+            .unwrap_or_else(|| DEFAULT_ACTOR.to_owned()),
+        default_model: optional_text(&object, "defaultModel", false)?
+            .unwrap_or_else(|| DEFAULT_MODEL.to_owned()),
+        bearer_token,
+    })
+}
+
+/// Normalize a base path exactly as `agentkit_transport_http::router` does,
+/// so the advertised `baseUrl` is the path that actually routes.
+fn normalize_base_path(path: &str) -> String {
+    let path = path.trim().trim_end_matches('/').to_owned();
+    if !path.is_empty() && !path.starts_with('/') {
+        format!("/{path}")
+    } else {
+        path
+    }
+}
+
+/// Bracket IPv6 literals so the advertised URL is fetchable as-is.
+fn url_host(host: &str) -> String {
+    if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    }
+}
+
+/// Bind a socket before touching the store: an unusable address/port fails
+/// with `service_unavailable` and no durable trace.
+async fn bind_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener> {
+    let bind_host = url_host(host);
+    tokio::net::TcpListener::bind((bind_host.as_str(), port))
+        .await
+        .map_err(|error| {
+            errors::stable(
+                "service_unavailable",
+                format!("unable to listen on {bind_host}:{port}"),
+                Some(json!({ "cause": error.to_string() })),
+            )
+        })
+}
+
+#[napi]
+impl SessionService {
+    /// Start the Rust REST v1 + SSE server on this service's host and
+    /// store. `optionsJson`: `{host?, port?, basePath?, maxBodyBytes?,
+    /// maxQueryBytes?, actorId?, defaultModel?, bearerToken}` —
+    /// `bearerToken` is REQUIRED and at least 32 bytes (the backend's own
+    /// floor); invalid values fail with `invalid_input`, an unusable
+    /// address with `service_unavailable`. Defaults: `127.0.0.1`, ephemeral
+    /// port, no base path, 1 MiB body / 16 KiB query caps. Returns
+    /// `{port, baseUrl}` as JSON text (the wrapper parses it). Fails with
+    /// `invalid_input` if a server already runs on this service, and
+    /// `closed` after `close()`. Every request is authenticated by the
+    /// backend's bearer check; a REST-submitted turn is executed by this
+    /// service's worker like any other durable task.
+    #[napi]
+    pub async fn start_http_server(&self, options_json: String) -> Result<String> {
+        let options = parse_server_options(&options_json)?;
+        let listener = bind_listener(&options.host, options.port).await?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| {
+                errors::stable(
+                    "service_unavailable",
+                    "the desktop listener lost its bound address",
+                    Some(json!({ "cause": error.to_string() })),
+                )
+            })?
+            .port();
+        // Held across the open/spawn: exactly one start can win, and close
+        // can slip a stop in only under this same lock.
+        let mut guard = self.core.lock().await;
+        let core = guard
+            .as_mut()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        if core.http.is_some() {
+            return Err(errors::invalid(
+                "an HTTP server is already running on this service; call stopHttpServer() first",
+            ));
+        }
+        let backend = DesktopBackend::open(
+            core.host.clone(),
+            Actor {
+                id: options.actor_id,
+                metadata: BTreeMap::new(),
+            },
+            &options.bearer_token,
+            &options.default_model,
+        )
+        .await
+        .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
+        let router = Arc::new(backend).into_router(Config {
+            base_path: options.base_path.clone(),
+            max_body_bytes: options.max_body_bytes,
+            max_query_bytes: options.max_query_bytes,
+            streaming: StreamOptions::default(),
+        });
+        let token = CancellationToken::new();
+        let serve_token = token.clone();
+        let join = tokio::spawn(async move {
+            // The accept loop only ends via the shutdown signal: the
+            // listener is dropped (new connections refused) and each
+            // connection drains under `HttpServer::shutdown`'s deadline.
+            // An io failure ends it early; requests then fail at the
+            // socket, which is what the caller observes either way.
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move { serve_token.cancelled().await })
+                .await;
+        });
+        core.http = Some(HttpServer { token, join });
+        Ok(json!({
+            "port": port,
+            "baseUrl": format!("http://{}:{}{}", url_host(&options.host), port, normalize_base_path(&options.base_path)),
+        })
+        .to_string())
+    }
+
+    /// Stop the desktop server: the listener closes immediately (follow-up
+    /// connections are refused), in-flight requests drain up to the
+    /// service's close deadline, and the accept loop is force-stopped
+    /// after. Idempotent — stopping a service that never started, or was
+    /// already stopped or closed, is a no-op success.
+    #[napi]
+    pub async fn stop_http_server(&self) -> Result<()> {
+        let server = {
+            let mut guard = self.core.lock().await;
+            guard.as_mut().and_then(|core| core.http.take())
+        };
+        if let Some(server) = server {
+            server.shutdown(self.close_timeout).await;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(text: &str) -> Result<ServerOptions> {
+        parse_server_options(text)
+    }
+
+    fn code(error: napi::Error) -> String {
+        serde_json::from_str::<Value>(&error.reason).expect("error payload is JSON")["code"]
+            .as_str()
+            .expect("payload carries a code")
+            .to_owned()
+    }
+
+    const TOKEN: &str = "12345678901234567890123456789012";
+
+    #[test]
+    fn defaults_fill_every_field_but_the_required_token() {
+        let options = parse(&json!({ "bearerToken": TOKEN }).to_string()).unwrap();
+        assert_eq!(options.host, DEFAULT_HOST);
+        assert_eq!(options.port, 0);
+        assert_eq!(options.base_path, "");
+        assert_eq!(options.max_body_bytes, 1_048_576);
+        assert_eq!(options.max_query_bytes, 16_384);
+        assert_eq!(options.actor_id, DEFAULT_ACTOR);
+        assert_eq!(options.default_model, DEFAULT_MODEL);
+        assert_eq!(options.bearer_token, TOKEN);
+    }
+
+    #[test]
+    fn token_is_required_with_the_backend_min_length() {
+        assert_eq!(code(parse("{}").unwrap_err()), "invalid_input");
+        assert_eq!(
+            code(parse(&json!({ "bearerToken": null }).to_string()).unwrap_err()),
+            "invalid_input"
+        );
+        assert_eq!(
+            code(parse(&json!({ "bearerToken": "short" }).to_string()).unwrap_err()),
+            "invalid_input"
+        );
+        // 31 bytes fails, 32 passes — the backend's exact byte floor.
+        assert!(parse(&json!({ "bearerToken": "x".repeat(31) }).to_string()).is_err());
+        assert!(parse(&json!({ "bearerToken": "x".repeat(32) }).to_string()).is_ok());
+    }
+
+    #[test]
+    fn malformed_values_are_refused_as_invalid_input() {
+        for bad in [
+            json!({"bearerToken": 7}),
+            json!({"bearerToken": TOKEN, "host": ""}),
+            json!({"bearerToken": TOKEN, "host": "http://x"}),
+            json!({"bearerToken": TOKEN, "host": "a b"}),
+            json!({"bearerToken": TOKEN, "port": -1}),
+            json!({"bearerToken": TOKEN, "port": 65536}),
+            json!({"bearerToken": TOKEN, "port": 1.5}),
+            json!({"bearerToken": TOKEN, "maxBodyBytes": 0}),
+            json!({"bearerToken": TOKEN, "maxQueryBytes": "16"}),
+            json!({"bearerToken": TOKEN, "actorId": "  "}),
+            json!({"bearerToken": TOKEN, "defaultModel": ""}),
+        ] {
+            let error = parse(&bad.to_string()).unwrap_err();
+            assert_eq!(code(error), "invalid_input", "must reject {bad}");
+        }
+        assert!(parse("[]").is_err());
+        assert!(parse("nonsense").is_err());
+    }
+
+    #[test]
+    fn base_url_mirrors_the_router_and_brackets_ipv6() {
+        assert_eq!(normalize_base_path(" api/v1/ "), "/api/v1");
+        assert_eq!(normalize_base_path("/api/v1///"), "/api/v1");
+        assert_eq!(normalize_base_path(""), "");
+        assert_eq!(url_host("127.0.0.1"), "127.0.0.1");
+        assert_eq!(url_host("::1"), "[::1]");
+    }
+}
