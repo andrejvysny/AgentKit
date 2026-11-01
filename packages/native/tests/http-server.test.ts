@@ -201,8 +201,7 @@ nativeTest(
       expect(messages.status).toBe(200);
       const items = messages.body.items as Record<string, unknown>[];
       expect(items.map((m) => m.role)).toEqual(["user", "assistant"]);
-      expect(items[0].content).toBe("question");
-      expect(items[1].content).toBe("the answer");
+      expect(items.map((m) => m.content)).toEqual(["question", "the answer"]);
 
       // Durable replay: same key + body replays the original 201 result.
       const replay = await call(`${baseUrl}/v1/chats/${chatId}/messages`, {

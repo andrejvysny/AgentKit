@@ -206,6 +206,10 @@ export async function exportFixtures(
     (path) =>
       !files.has(path) &&
       !path.startsWith("conformance/") &&
+      // Port-owned shared fixtures, hand-frozen and pinned by their own
+      // cross-runtime tests (not contracts-derived): the collation table
+      // must NOT be regenerated from a runtime's localeCompare.
+      !path.startsWith("coding-fingerprint/") &&
       path !== "schema-validation.json",
   );
   return [...drift, ...unexpected].sort();
