@@ -18,43 +18,74 @@
  * twice with a fresh session and repo; retries are recorded. Writes
  * docs/baseline/live-approval-2026-10-27.md (the hand-written Observations
  * section of an existing report is preserved) and exits non-zero on any FAIL.
+ *
+ * NATIVE COMPOSITION (same recipe as scripts/live/coding-session.ts and
+ * examples/coding-agent/src/app.ts). Every runtime piece is built ONLY
+ * through `@agentkit/native`:
+ *  - `SqliteAssistantStore` → `NativeStore.open` (one Rust store actor owns
+ *    the file; S5 therefore swaps its node — close, then reopen — instead of
+ *    running two live owners over the same database).
+ *  - reads for waits/metrics/records (`store.tasks.*`,
+ *    `store.conversations.*`) → `NativeAssistantStore`, the same
+ *    `AssistantStore` port over the native store.
+ *  - `SingleProcessTaskRunner` + `TurnRunner` + `TaskService` +
+ *    `AgentSessionService` + `ExecutorRegistry` + `createDispatchingWorker` →
+ *    one `store.createService(...)`: the Rust scheduler, worker and session
+ *    service (worker starts at construction; `close()` drains it — there is
+ *    no manual startWorker/stopWorker, and none is needed: this script never
+ *    kills a process, so no lease ever expires — S7/S8 interrupt and resume
+ *    inside the live worker. The binding does not expose the scheduler's
+ *    lease TTL; the Rust default lives in rust/crates/host/src/runner.rs).
+ *  - `providers.upsertProvider` + `settings.updateSettings` +
+ *    `OpenAiCompatibleClient.fromConfig` → the Rust provider lane:
+ *    `NativeSessionService.registerProviderConnection(BASE_URL, null)` plus
+ *    `createService({providerConfig:{protocol:"chat-completions",…}})`.
+ *  - `createCodingPermissionGuard({mode:"ask", authority})` +
+ *    `createProfilePermissionAuthority` + `AgentSessionService.planApproval`
+ *    → `createService({jsToolAuthority:{configuredMode:"ask",
+ *    planToolNames:["submit_plan"], planGrantMode:"auto_edit"}})`: the Rust
+ *    coding-pack authority judges every JS tool call and owns the plan
+ *    escalation (rust/crates/napi/src/authority.rs); the refusal records the
+ *    assertions read (`tool_guard_refused` / `approval_denied`) are emitted
+ *    by the same Rust code (host governance staging + session_ops).
+ *  - `projectInstructions: fileProjectInstructions()` → built into the
+ *    binding; the AGENTS.md system block is injected natively for workspace
+ *    sessions.
+ *  - ROLE CEILINGS (S5). The native JS-tool authority has NO role axis, so
+ *    the HOST prunes: each S5 phase registers ONLY its profile's tool
+ *    descriptors on its own service (the engine offers the model exactly the
+ *    registered set, and the responses/chat lanes refuse a call for a tool
+ *    outside it). Consequence asserted: the retired TypeScript host emitted
+ *    `run.warning profile_tools_pruned`; the native engine never emits that
+ *    event, so S5 asserts the truthful witnesses instead — for every
+ *    forbidden tool there is NO `run.tool.requested`, NO `run.tool.running`
+ *    and NO `run.tool.succeeded` in the durable log (the model was never
+ *    even offered the tool), with the refusal branch kept as the fallback
+ *    witness (`tool_guard_refused` / unknown-tool failure through the
+ *    tool-result path) should a model hallucinate a pruned call anyway.
+ *    Never assert an event the engine does not emit.
  */
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AiRunEvent } from "@agentkit/contracts";
-import { SqliteAssistantStore } from "@agentkit/adapters-sqlite";
-import { OpenAiCompatibleClient } from "@agentkit/core";
+import type { AiTool } from "@agentkit/core";
 import {
-  AgentSessionService,
-  ChatTurnExecutor,
-  ExecutorRegistry,
-  TaskService,
-  TurnRunner,
-  createDispatchingWorker,
-  createProfilePermissionAuthority,
-  defaultClock,
-  defaultIds,
-  defaultProfileRegistry,
-  type AgentSessionState,
-  type AssistantStore,
-  type WorkerHandle,
-} from "@agentkit/host";
-import { SingleProcessTaskRunner } from "@agentkit/runner-local";
+  NativeAssistantStore,
+  NativeSessionService,
+  NativeStore,
+  type ToolDefinitionJson,
+} from "@agentkit/native";
 import {
-  SUBMIT_PLAN_TOOL_NAME,
-  createCodingPermissionGuard,
   createCodingToolPack,
-  type CodingMode,
+  type CodingToolPack,
 } from "@agentkit/toolpacks-coding";
-import { fileProjectInstructions } from "../../packages/runner-local/src/project-instructions.js";
 
 const BASE_URL =
   process.env["AGENTKIT_LIVE_BASE_URL"] ?? "http://127.0.0.1:8000/v1";
 const MODEL = process.env["AGENTKIT_LIVE_MODEL"] ?? "Qwen3.8-Flash-Next";
 const PROVIDER_ID = "live-local";
-const LEASE_TTL_MS = 15_000;
 const TURN_TIMEOUT_MS = 4 * 60_000;
 const MAX_RETRIES = 2;
 /** What the host grants on a plan approval, whatever the plan requests. */
@@ -88,6 +119,28 @@ const READ_TOOLS = new Set([
   "repo_map",
   "git_inspect",
 ]);
+
+/** The descriptors `createCodingToolPack` contributes (the exact set the
+ * retired `defaultProfileRegistry` listed under profile `coding`). */
+const ALL_CODING_TOOL_NAMES = [
+  "read_file",
+  "list_dir",
+  "find_files",
+  "code_search",
+  "repo_map",
+  "git_inspect",
+  "edit_file",
+  "write_file",
+  "run_command",
+  "run_tests",
+  "submit_plan",
+];
+/** Host-side pruning for S5: the tool sets the retired
+ * `coding/reviewer` / `coding/supervisor` profiles allowed (see
+ * `packages/host/src/profiles/agent-profile.ts` — READ_ONLY_TOOLS, plus
+ * `run_tests` for the reviewer). Registering only these IS the ceiling. */
+const REVIEWER_TOOL_NAMES = [...READ_TOOLS, "run_tests"];
+const SUPERVISOR_TOOL_NAMES = [...READ_TOOLS];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -179,85 +232,108 @@ describe("clamp", () => {
 }
 
 // ---------------------------------------------------------------------------
-// Node: store + runner + turn runner + service over the shared db
+// Node: one native store file + one native session service over it
 // ---------------------------------------------------------------------------
 
 interface Node {
-  store: SqliteAssistantStore;
-  service: AgentSessionService;
-  startWorker(): Promise<void>;
-  stopWorker(): Promise<void>;
+  store: NativeStore;
+  /** The `AssistantStore` port over the same native handle: task/event/
+   * message reads for waits, metrics and records. */
+  port: NativeAssistantStore;
+  service: NativeSessionService;
+  stop(): Promise<void>;
 }
 
-function buildNode(dbPath: string, root: string): Node {
-  const store = new SqliteAssistantStore(dbPath, { leaseTtlMs: LEASE_TTL_MS });
-  const taskRunner = new SingleProcessTaskRunner({
-    store,
-    leaseTtlMs: LEASE_TTL_MS,
-    heartbeatMs: 1_000,
-    pollMs: 50,
+/** The coding pack's tools, contributed once per node; only the allowed
+ * descriptors are bridged onto the binding's JS tool lane (host-side
+ * pruning — the only role ceiling the native authority needs the host to
+ * enforce, see the header). */
+async function contributeCodingTools(
+  root: string,
+): Promise<{ pack: CodingToolPack; tools: readonly AiTool[] }> {
+  const pack = createCodingToolPack({
+    workspace: { root },
+    testCommands: ["bun test"],
   });
-  const profiles = defaultProfileRegistry();
-  const authority = createProfilePermissionAuthority<CodingMode>({
-    store,
-    profiles,
-    fallbackMode: "ask",
+  const tools = await pack.contribute({
+    bindings: [],
+    limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
   });
-  const turnRunner = new TurnRunner({
-    store,
-    taskRunner,
-    providerFactory: (config) => OpenAiCompatibleClient.fromConfig(config),
-    contributors: [
-      createCodingToolPack({
-        workspace: { root },
-        testCommands: ["bun test"],
-        permission: authority,
-      }),
-    ],
-    toolGuards: [createCodingPermissionGuard({ mode: "ask", authority })],
-    profiles,
-    projectInstructions: fileProjectInstructions(),
-    maxToolIterations: 30,
-    clock: defaultClock,
-    ids: defaultIds,
-  });
-  const tasks = new TaskService({
-    store,
-    taskRunner,
-    ids: defaultIds,
-    clock: defaultClock,
-  });
-  const service = new AgentSessionService({
-    store,
-    turns: turnRunner,
-    tasks,
-    taskRunner,
-    clock: defaultClock,
-    ids: defaultIds,
-    planApproval: {
-      toolNames: [SUBMIT_PLAN_TOOL_NAME],
-      grantedMode: PLAN_GRANTED_MODE,
+  return { pack, tools };
+}
+
+async function registerCodingTools(
+  service: NativeSessionService,
+  tools: readonly AiTool[],
+): Promise<void> {
+  for (const tool of tools) {
+    await service.registerTool(
+      tool.definition as unknown as ToolDefinitionJson,
+      (input, request) => {
+        return tool.execute(
+          {
+            runId: request.runId,
+            bindings: [],
+            limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
+            ...(request.toolCallId === null
+              ? {}
+              : { toolCallId: request.toolCallId }),
+          },
+          input,
+        );
+      },
+    );
+  }
+}
+
+/** The service over a fresh store on `dbPath`: Rust worker + session
+ * service, the Rust provider lane (a connection over the base URL — this
+ * local vLLM needs no key, and the key never reaches the database either
+ * way), and the ask-mode JS-tool authority the retired
+ * `createCodingPermissionGuard` + `planApproval` carried, plan escalation
+ * included. Constructing it crash-reconciles and starts the worker. */
+async function openNativeNode(
+  dbPath: string,
+  root: string,
+  toolNames: readonly string[] = ALL_CODING_TOOL_NAMES,
+): Promise<Node> {
+  const store = await NativeStore.open(dbPath);
+  const port = new NativeAssistantStore({ store });
+  const { pack, tools } = await contributeCodingTools(root);
+  const allowed = tools.filter((tool) => toolNames.includes(tool.definition.name));
+  if (allowed.length !== toolNames.length) {
+    const missing = toolNames.filter(
+      (name) => !allowed.some((tool) => tool.definition.name === name),
+    );
+    throw new Error(`coding pack is missing tools: ${missing.join(",")}`);
+  }
+  const connectionId =
+    await NativeSessionService.registerProviderConnection(BASE_URL, null);
+  const service = await store.createService({
+    jsToolAuthority: {
+      configuredMode: "ask",
+      planToolNames: ["submit_plan"],
+      planGrantMode: PLAN_GRANTED_MODE,
+    },
+    providerConfig: {
+      protocol: "chat-completions",
+      providerId: PROVIDER_ID,
+      connectionId,
+      model: MODEL,
     },
   });
-  const registry = new ExecutorRegistry();
-  registry.register(new ChatTurnExecutor(turnRunner));
-  const worker = createDispatchingWorker(registry, {
-    store,
-    clock: defaultClock,
-  });
-  let handle: WorkerHandle | null = null;
+  await registerCodingTools(service, allowed);
   return {
     store,
+    port,
     service,
-    async startWorker() {
-      handle = await taskRunner.startWorker(worker, {
-        concurrency: 1,
-        ownerId: `live-${defaultIds.messageId()}`,
-      });
-    },
-    async stopWorker() {
-      await handle?.stop();
-      handle = null;
+    async stop() {
+      // close() drains the Rust worker; the pack then settles its own
+      // commands, and the store actor is released last.
+      await service.close();
+      await pack.dispose?.();
+      await store.close();
+      await NativeSessionService.revokeProviderConnection(connectionId);
     },
   };
 }
@@ -270,6 +346,21 @@ interface Check {
   name: string;
   pass: boolean;
   detail?: string;
+}
+
+/** The projection `NativeSessionService.getState` returns (the same
+ * `AgentSessionState` shape the binding's session-answer parity pins). */
+interface SessionState {
+  waitingApproval?: {
+    requestId: string;
+    toolCallId: string;
+    toolName: string;
+  } | null;
+  waitingPlan?: {
+    requestId: string;
+    planDigest: string;
+    requestedMode?: string;
+  } | null;
 }
 
 interface ApprovalRecord {
@@ -290,7 +381,7 @@ interface DriveOpts {
   }) => ApprovalVerdict | Promise<ApprovalVerdict>;
   /** Per plan approval; default approve. */
   onPlan?: (
-    plan: NonNullable<AgentSessionState["waitingPlan"]>,
+    plan: NonNullable<SessionState["waitingPlan"]>,
   ) => ApprovalVerdict | Promise<ApprovalVerdict>;
   /** Polled with the live event log; true stops driving (turn left as is). */
   onTick?: (events: AiRunEvent[]) => boolean | Promise<boolean>;
@@ -305,14 +396,28 @@ class Ctx {
   readonly failureCodes: string[] = [];
   readonly notes: string[] = [];
   private answerSeq = 0;
+  node: Node;
   constructor(
-    readonly node: Node,
+    node: Node,
     readonly root: string,
     readonly attempt: number,
-  ) {}
+    readonly dbPath: string,
+  ) {
+    this.node = node;
+  }
 
-  get service(): AgentSessionService {
+  get service(): NativeSessionService {
     return this.node.service;
+  }
+
+  /** Close the current node and reopen one whose JS tool lane registers
+   * only `toolNames` — the host-side role ceiling for S5. The store is
+   * exclusively owned, so this is sequential close-then-reopen over the
+   * same db file, never two live owners. */
+  async replaceNode(toolNames: readonly string[]): Promise<void> {
+    await this.node.stop();
+    this.node = await openNativeNode(this.dbPath, this.root, toolNames);
+    log(`node rebuilt with tools [${toolNames.join(",")}]`);
   }
 
   check(name: string, pass: boolean, detail?: string): void {
@@ -342,14 +447,23 @@ class Ctx {
     executionMode?: string,
   ): Promise<string> {
     const id = `${sessionId}-a${this.attempt}`;
+    // `coding/plan` carried its plan mode through the retired profile
+    // registry's permissionMode; the native createSession takes the durable
+    // execution mode directly, and the other profiles' modes are the
+    // argument the scenarios already passed.
+    const mode =
+      executionMode ?? (profileId === "coding/plan" ? "plan" : undefined);
     await this.service.createSession({
       sessionId: id,
-      profile: { id: profileId },
+      profileId,
       providerId: PROVIDER_ID,
       model: MODEL,
       workspace: { root: this.root, trusted: true },
-      context: { policy: "transcript", windowTokens: 200_000 },
-      ...(executionMode === undefined ? {} : { executionMode }),
+      // The retired host's `policy: "transcript"` is the native executor's
+      // own single assembly; the binding refuses a context-policy override
+      // (`not_implemented`), so only the window budget is passed.
+      context: { windowTokens: 200_000 },
+      ...(mode === undefined ? {} : { executionMode: mode }),
     });
     this.sessionIds.push(id);
     return id;
@@ -364,7 +478,7 @@ class Ctx {
   }
 
   events(turnId: string): Promise<AiRunEvent[]> {
-    return eventsOf(this.node.store, turnId);
+    return eventsOf(this.node.port, turnId);
   }
 
   /**
@@ -379,18 +493,21 @@ class Ctx {
     const deadline = Date.now() + (opts.timeoutMs ?? TURN_TIMEOUT_MS);
     const answered = new Set<string>();
     for (;;) {
-      const task = await this.node.store.tasks.getTask(turnId);
+      const task = await this.node.port.tasks.getTask(turnId);
       if (task && TERMINAL.has(task.status))
         return { status: task.status, stopped: false };
       if (opts.onTick && (await opts.onTick(await this.events(turnId))))
         return { status: task?.status ?? "unknown", stopped: true };
       if (Date.now() > deadline)
         return { status: `timeout(${task?.status})`, stopped: false };
-      const state = await this.service.getState(sessionId);
-      const wa = state.waitingApproval;
+      const state = (await this.service.getState(sessionId)) as SessionState;
+      // The binding returns the same AgentSessionState projection this
+      // interface declares (the session-answer parity the binding tests pin);
+      // the cast only re-attaches the type the JSON crossing lost.
+      const wa = state.waitingApproval ?? undefined;
       if (wa && !answered.has(wa.requestId)) {
         answered.add(wa.requestId);
-        const plan = state.waitingPlan;
+        const plan = state.waitingPlan ?? undefined;
         const verdict = plan
           ? await (opts.onPlan?.(plan) ?? "approve")
           : await (opts.onApproval?.(wa) ?? "approve");
@@ -434,12 +551,14 @@ class Ctx {
     turnId: string,
     exclude: Set<string>,
     timeoutMs = 120_000,
-  ): Promise<NonNullable<AgentSessionState["waitingApproval"]> | null> {
+  ): Promise<NonNullable<SessionState["waitingApproval"]> | null> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const task = await this.node.store.tasks.getTask(turnId);
+      const task = await this.node.port.tasks.getTask(turnId);
       if (task && TERMINAL.has(task.status)) return null;
-      const wa = (await this.service.getState(sessionId)).waitingApproval;
+      const state = (await this.service.getState(sessionId)) as SessionState;
+      // Same binding-boundary cast as in drive().
+      const wa = state.waitingApproval ?? undefined;
       if (wa && !exclude.has(wa.requestId)) {
         // The answer is only accepted once the turn has parked on the request.
         if (task?.status === "waiting_approval") return wa;
@@ -451,14 +570,14 @@ class Ctx {
 }
 
 async function eventsOf(
-  store: AssistantStore,
+  store: NativeAssistantStore,
   taskId: string,
 ): Promise<AiRunEvent[]> {
   return (await store.tasks.listEvents(taskId)) as AiRunEvent[];
 }
 
 async function waitTaskStatus(
-  store: AssistantStore,
+  store: NativeAssistantStore,
   taskId: string,
   want: string,
   timeoutMs = 30_000,
@@ -575,7 +694,7 @@ function warningCodes(events: AiRunEvent[]): string[] {
 }
 
 async function toolRecords(
-  store: AssistantStore,
+  store: NativeAssistantStore,
   sessionId: string,
 ): Promise<{ toolCallId: string; content: string }[]> {
   const msgs = await store.conversations.listMessages(sessionId);
@@ -678,7 +797,7 @@ const S2: Scenario = {
       "S2 src/ still exists",
       existsSync(join(ctx.root, "src/math.ts")),
     );
-    const records = await toolRecords(ctx.node.store, sid);
+    const records = await toolRecords(ctx.node.port, sid);
     const deniedIds = new Set(denied.map((d) => d.toolCallId));
     const rec = records.filter(
       (r) =>
@@ -753,7 +872,7 @@ const S3: Scenario = {
       const failures = toolFailures(pre);
       // The model-facing tool record carries the specific code; the
       // run.tool.failed event only says tool_failed (see FOLLOW-UPS).
-      const records = await toolRecords(ctx.node.store, sid);
+      const records = await toolRecords(ctx.node.port, sid);
       const recordOf = (id: string) =>
         records.find((r) => r.toolCallId === id)?.content ?? "";
       const attemptedIds = attempted.flatMap((e) =>
@@ -788,11 +907,18 @@ const S3: Scenario = {
         ),
       );
     }
-    const exec = await ctx.service.getExecution(sid);
+    const exec = (await ctx.service.getExecution(sid)) as
+      // Binding boundary: the durable execution record's projected shape is
+      // fixed by the binding's management contract; re-attach lost types.
+      | {
+          mode?: string;
+          grantedPlan?: { mode?: string; requestedMode?: string };
+        }
+      | null;
     const grant = exec?.grantedPlan;
     ctx.check(
       "S3 execution mode left plan with grantedPlan set",
-      exec !== undefined && exec.mode !== "plan" && grant !== undefined,
+      exec !== null && exec?.mode !== "plan" && grant !== undefined,
       `mode=${exec?.mode}`,
     );
     ctx.check(
@@ -849,7 +975,11 @@ const S4: Scenario = {
     if (dup) ctx.failureCodes.push(`duplicate approve: ${dup}`);
     let replay: { duplicate: boolean } | undefined;
     try {
-      replay = await ctx.service.approve(first.requestId, "ans-a");
+      // Binding boundary: the approve result's idempotency flag is fixed by
+      // the binding's answer contract; re-attach the lost type.
+      replay = (await ctx.service.approve(first.requestId, "ans-a")) as {
+        duplicate: boolean;
+      };
     } catch {
       replay = undefined;
     }
@@ -874,9 +1004,13 @@ const S4: Scenario = {
       stale ?? "accepted",
     );
     if (stale) ctx.failureCodes.push(`approve after cancel: ${stale}`);
-    const task = await ctx.node.store.tasks.getTask(tid);
+    const task = await ctx.node.port.tasks.getTask(tid);
     ctx.check("S4 turn cancelled", task?.status === "cancelled", task?.status);
-    const exp = await ctx.service.exportSession(sid);
+    // Binding boundary: the export projection's input list is fixed by the
+    // durable projection contract; re-attach the lost types.
+    const exp = (await ctx.service.exportSession(sid)) as {
+      inputs: { inputId: string; status: string }[];
+    };
     const byId = new Map(exp.inputs.map((i) => [i.inputId, i.status]));
     ctx.check(
       "S4 export: first request answered, second cancelled",
@@ -898,6 +1032,20 @@ const S5: Scenario = {
   id: "S5",
   title: "role ceilings under full_auto",
   async run(ctx) {
+    // The native JS-tool authority has no role axis, so the HOST prunes:
+    // each phase runs on its own node whose service registers ONLY the
+    // profile's descriptors (the store is exclusively owned, so the swap is
+    // a sequential close-then-reopen over the same db file). The engine
+    // offers the model exactly the registered tool set and refuses anything
+    // outside it at the provider lane (`unknown_tool`), so — unlike the
+    // retired TypeScript host — it never emits `run.warning
+    // profile_tools_pruned`. The truthful native witnesses asserted below:
+    // for every forbidden tool there is NO `run.tool.requested`, NO
+    // `run.tool.running` and NO `run.tool.succeeded` in the durable log
+    // (the tool was never staged, so it could never run); the refusal
+    // branch (`tool_guard_refused`, or the unknown-tool failure a
+    // hallucinated call settles as) is kept as the fallback witness through
+    // the tool-result path. Never assert an event the engine does not emit.
     const role = async (
       tag: string,
       sidBase: string,
@@ -924,20 +1072,29 @@ const S5: Scenario = {
       const fails = toolFailures(ev);
       const refused = fails.filter(
         (f) =>
-          f.code === "tool_guard_refused" || f.message.includes("role_ceiling"),
+          f.code === "tool_guard_refused" ||
+          f.code === "unknown_tool" ||
+          f.code === "not_found" ||
+          f.message.includes("role_ceiling"),
       );
-      const prunedMsg = ev.flatMap((e) =>
-        e.type === "run.warning" && e.data.code === "profile_tools_pruned"
-          ? [e.data.message]
-          : [],
-      );
-      const named = [...forbidden].filter((n) =>
-        prunedMsg.some((m) => m.includes(n)),
+      // Native replacement for the pruned-warning witness: the forbidden
+      // tools never appear anywhere in the tool lifecycle (never staged —
+      // the host pruned the registry before the model was ever asked).
+      const staged = requestedTools(ev);
+      const neverStaged = [...forbidden].every(
+        (name) =>
+          !staged.includes(name) &&
+          !ev.some(
+            (e) =>
+              (e.type === "run.tool.running" ||
+                e.type === "run.tool.succeeded") &&
+              e.data.toolName === name,
+          ),
       );
       ctx.check(
         `${tag} forbidden tools absent from staged set or refused`,
-        named.length === forbidden.size || refused.length > 0,
-        `pruned=[${named.join(",")}] warnings=${warns.join(",") || "-"} refusals=${refused.length}`,
+        neverStaged || refused.length > 0,
+        `staged=[${staged.join(",")}] warnings=${warns.join(",") || "-"} refusals=${refused.length}`,
       );
       for (const f of fails)
         ctx.failureCodes.push(`${tag} ${f.tool}: ${f.code}: ${f.message}`);
@@ -945,6 +1102,7 @@ const S5: Scenario = {
         `${tag}: requested tools [${requestedTools(ev).join(",") || "none"}]`,
       );
     };
+    await ctx.replaceNode(REVIEWER_TOOL_NAMES);
     await role(
       "S5a reviewer",
       "s5-reviewer",
@@ -952,6 +1110,7 @@ const S5: Scenario = {
       "Edit src/math.ts to add a comment using edit_file.",
       new Set(["edit_file", "write_file", "run_command"]),
     );
+    await ctx.replaceNode(SUPERVISOR_TOOL_NAMES);
     await role(
       "S5b supervisor",
       "s5-supervisor",
@@ -986,7 +1145,7 @@ const S6: Scenario = {
       ),
     );
     const failed = toolFailures(ev).filter((f) => ids.has(f.toolCallId));
-    const records = (await toolRecords(ctx.node.store, sid)).filter((r) =>
+    const records = (await toolRecords(ctx.node.port, sid)).filter((r) =>
       ids.has(r.toolCallId),
     );
     // run_command reports `[exit code N]` and ok:false for a non-zero exit.
@@ -1032,7 +1191,7 @@ const S7: Scenario = {
     );
     if (!first.stopped) return;
     await ctx.service.interrupt(sid, tid);
-    const st = await waitTaskStatus(ctx.node.store, tid, "interrupted");
+    const st = await waitTaskStatus(ctx.node.port, tid, "interrupted");
     ctx.check("S7 task status interrupted", st === "interrupted", st);
     const mid = await ctx.events(tid);
     ctx.check(
@@ -1043,7 +1202,7 @@ const S7: Scenario = {
     await ctx.service.resume(sid, tid);
     const { status } = await ctx.drive(sid, tid);
     const ev = await ctx.events(tid);
-    const task = await ctx.node.store.tasks.getTask(tid);
+    const task = await ctx.node.port.tasks.getTask(tid);
     ctx.check("S7 turn completed after resume", status === "completed", status);
     ctx.check(
       "S7 attemptCount is 2",
@@ -1055,7 +1214,7 @@ const S7: Scenario = {
       eventSeqContiguous(ev),
       `${ev.length} events`,
     );
-    const recs = await toolRecords(ctx.node.store, sid);
+    const recs = await toolRecords(ctx.node.port, sid);
     const ids = recs.map((r) => r.toolCallId);
     ctx.check(
       "S7 tool-call ids unique among tool records",
@@ -1103,7 +1262,7 @@ const S8: Scenario = {
     );
     if (!first.stopped) return;
     await ctx.service.interrupt(sid, tid);
-    const st = await waitTaskStatus(ctx.node.store, tid, "interrupted", 60_000);
+    const st = await waitTaskStatus(ctx.node.port, tid, "interrupted", 60_000);
     ctx.check("S8 task status interrupted", st === "interrupted", st);
     const mid = await ctx.events(tid);
     const runId = [...runningCounts(mid).keys()].at(-1);
@@ -1157,7 +1316,7 @@ const S8: Scenario = {
     const fails = toolFailures(ev);
     for (const f of fails)
       ctx.failureCodes.push(`${f.tool}: ${f.code}: ${f.message}`);
-    const rec8 = (await toolRecords(ctx.node.store, sid)).find(
+    const rec8 = (await toolRecords(ctx.node.port, sid)).find(
       (r) => r.toolCallId === runId,
     );
     ctx.note(`S8 timeline: ${timeline(ev)}`);
@@ -1250,20 +1409,16 @@ async function runScenario(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     log(`=== ${s.id} ${s.title} (attempt ${attempt + 1}) ===`);
     const root = await createRepo(s.files);
-    const node = buildNode(dbPath, root);
-    await node.store.providers.upsertProvider({
-      id: PROVIDER_ID,
-      label: "Local vLLM",
-      kind: "openai-compatible",
-      baseUrl: BASE_URL,
-      defaultModel: MODEL,
-      enabled: true,
-    });
-    await node.store.settings.updateSettings({
-      defaultProviderId: PROVIDER_ID,
-    });
-    await node.startWorker();
-    const ctx = new Ctx(node, root, attempt);
+    // The provider lives in the Rust lane (the connection + providerConfig),
+    // not the database: no upsertProvider/updateSettings step. Constructing
+    // the service starts the worker; `stop()` drains it and releases the
+    // store actor. (S5 swaps its node mid-scenario via `ctx.replaceNode`.)
+    const ctx = new Ctx(
+      await openNativeNode(dbPath, root),
+      root,
+      attempt,
+      dbPath,
+    );
     // session ids repeat across attempts: namespace the attempt into them.
     const t0 = Date.now();
     try {
@@ -1278,8 +1433,7 @@ async function runScenario(
     const done = failed.length === 0 || attempt === MAX_RETRIES;
     if (done) {
       const m = await collectMetrics(ctx);
-      await node.stopWorker();
-      node.store.close?.();
+      await ctx.node.stop();
       return {
         id: s.id,
         title: s.title,
@@ -1296,8 +1450,7 @@ async function runScenario(
         failureCodes: [...new Set([...ctx.failureCodes, ...m.failureCodes])],
       };
     }
-    await node.stopWorker();
-    node.store.close?.();
+    await ctx.node.stop();
   }
   throw new Error(`unreachable ${last?.ms}`);
 }
