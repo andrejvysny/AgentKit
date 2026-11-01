@@ -1,90 +1,140 @@
 /**
- * The wiring for a standalone coding agent: AgentKit's host, the sqlite store,
- * the local task runner and the coding tool pack, with no Pi and no OneMind in
- * sight. The CLI in `main.ts` is a thin shell over this; the acceptance test
- * drives the same object with a scripted provider.
+ * The wiring for a standalone coding agent on the NATIVE composition: the
+ * Rust runtime owns sessions, storage, scheduling, governance, durable
+ * execution and recovery; the coding tool pack executes its tools here, in
+ * the host process, through the binding's JS tool lane. No Pi and no
+ * OneMind in sight.
  *
- * What the host owns, and what this file refuses to reimplement:
+ * What the runtime owns, and what this file refuses to reimplement:
  *
- *  - the agent loop is `@agentkit/core`'s — this file never calls a provider;
- *  - scheduling, leases and crash recovery are `TaskStore`/`TaskRunner`;
- *  - sessions, follow-ups, steering and approvals are `AgentSessionService`;
- *  - permission is the coding guard plus the session's durable execution state,
- *    so a mode is a fact in the database, not a variable a running turn could
- *    talk its way into.
+ *  - the agent loop, the scheduler, leases and crash reconciliation are
+ *    Rust's — this file never calls a provider directly and never parks or
+ *    adopts a turn itself;
+ *  - sessions, follow-ups, steering and approvals are `NativeSessionService`;
+ *  - permission is the Rust coding-pack authority over each registered
+ *    tool's effect+capability, so a mode is a fact in the database, not a
+ *    variable a running turn could talk its way into;
+ *  - the JS provider callback and the JS tool callbacks are the only code
+ *    that crosses into this process, and both are settled honestly by the
+ *    binding — never fabricated.
  */
 import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
-import { SqliteAssistantStore } from "@agentkit/adapters-sqlite";
-import type { AiRunEvent, TaskEventEnvelope } from "@agentkit/contracts";
-import { OpenAiCompatibleClient, type AiProviderClient } from "@agentkit/core";
+import type {
+  AiChatMessage,
+  AiRunEvent,
+  AiToolDefinition,
+} from "@agentkit/contracts";
+import type { AiChatRequest, AiProviderClient } from "@agentkit/core";
 import {
-  AgentSessionService,
-  ChatTurnExecutor,
-  ExecutorRegistry,
-  PROVIDER_SECRET_REF_KEY,
-  TaskService,
-  TurnRunner,
-  createDispatchingWorker,
-  createProfilePermissionAuthority,
-  defaultClock,
-  defaultIds,
   defaultProfileRegistry,
   readSessionDescriptor,
-  type AgentInputRecord,
-  type AgentSessionExport,
-  type AgentSessionState,
-  type AgentSessionUsage,
-  type AgentTurnSummary,
-  type ProfileRegistry,
-  type SessionReasoningEffort,
-  type SecretStore,
-  type TaskStatus,
-  type ToolSetContributor,
-  type WorkerHandle,
+  type ToolContributionContext,
 } from "@agentkit/host";
-import { SingleProcessTaskRunner } from "@agentkit/runner-local";
+import type { ProfileRegistry, SessionReasoningEffort } from "@agentkit/host";
+import {
+  NativeSessionService,
+  NativeStore,
+  type ProviderRequest,
+  type ProviderResult,
+  type ToolDefinitionJson,
+} from "@agentkit/native";
 import {
   SUBMIT_PLAN_TOOL_NAME,
-  createCodingPermissionGuard,
   createCodingToolPack,
   type CodingMode,
+  type CodingToolPack,
 } from "@agentkit/toolpacks-coding";
+import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
 
-const TERMINAL: ReadonlySet<TaskStatus> = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-]);
+const TERMINAL: Readonly<Record<string, true>> = {
+  completed: true,
+  failed: true,
+  cancelled: true,
+};
 
-/** An env-var-backed secret store: the key never enters the database. */
-export function envSecretStore(
-  env: NodeJS.ProcessEnv = process.env,
-): SecretStore {
-  return {
-    async get(ref) {
-      const value = env[ref];
-      return typeof value === "string" && value !== "" ? value : null;
-    },
-    async set(ref, secret) {
-      env[ref] = secret;
-    },
-    async delete(ref) {
-      delete env[ref];
-    },
-    // An env-backed store cannot enumerate the process environment as if it were
-    // an inventory of this app's secrets: the list would be every variable the
-    // machine has, most of them nobody's credentials.
-    async listRefs() {
-      return [];
-    },
+type NativeMode = "read_only" | "ask" | "auto_edit" | "full_auto" | "plan";
+const NATIVE_MODES: Readonly<Record<string, true>> = {
+  read_only: true,
+  ask: true,
+  auto_edit: true,
+  full_auto: true,
+  plan: true,
+};
+
+/** The durable status of one turn, as the native scheduler records it. */
+export type TurnStatus =
+  | "queued"
+  | "running"
+  | "interrupted"
+  | "waiting_approval"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+/** The session's durable facts, as the native session service projects them. */
+export interface NativeSessionState {
+  sessionId: string;
+  descriptor: {
+    version: number;
+    profile: { id: string };
+    model?: string;
+    reasoningEffort?: SessionReasoningEffort;
+    workspace?: { root: string; trusted?: boolean };
   };
+  activeTurn: { turnId: string; status: TurnStatus } | null;
+  pending: unknown[];
+  waiting: {
+    inputId: string;
+    content?: Record<string, unknown>;
+  } | null;
+  waitingApproval?: {
+    requestId: string;
+    toolName: string;
+    argsSha256?: string;
+    prompt?: string;
+  } | null;
+  waitingPlan?: {
+    plan?: string;
+    planDigest?: string;
+    requestedMode?: string;
+  } | null;
+}
+
+export interface AgentTurnSummary {
+  turnId: string;
+  status: TurnStatus;
+  attempts: number;
+  createdAt: number;
+  finishedAt?: number;
+  model?: string;
+  error?: string;
+}
+
+export interface AgentSessionUsage {
+  sessionId: string;
+  turns: {
+    turnId: string;
+    requests: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  }[];
+  totals: {
+    requests: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  contextWindowTokens: number;
+  contextWindowSource: string;
+  lastPromptTokens?: number;
 }
 
 export interface CodingAgentOptions {
   /** The repository to work in. Explicit, absolute, and the only root granted. */
   repo: string;
-  /** SQLite file for sessions, tasks and transcripts. */
+  /** SQLite file for the native store: sessions, tasks, transcripts, receipts. */
   dbPath: string;
   sessionId: string;
   /** A profile id; see `defaultProfileRegistry()`. */
@@ -92,10 +142,13 @@ export interface CodingAgentOptions {
   model: string;
   /** Applied with `setModel` on a new session, or when it differs on an existing one. */
   reasoningEffort?: SessionReasoningEffort;
-  baseUrl: string;
-  /** Name of the environment variable holding the API key. */
+  /** OpenAI-compatible endpoint for the Rust provider lane. Required when no
+   * `providerFactory` is injected; ignored by the injected (JS) provider lane. */
+  baseUrl?: string;
+  /** Name of the environment variable holding the API key. The key crosses
+   * into the runtime only through `registerProviderConnection` and never
+   * enters the database. */
   apiKeyEnv?: string;
-  providerId?: string;
   /** Permission mode to start the session in; the profile's wins if unset. */
   mode?: CodingMode;
   /** Commands `run_tests` may run. Default ["bun test"]. */
@@ -105,18 +158,13 @@ export interface CodingAgentOptions {
    * `sandbox-exec`) refuse. "off" runs unsandboxed — an explicit opt-in for
    * trusted hosts and CI, never the default. */
   sandbox?: "required" | "off";
-  /** Injected by the acceptance test; production uses the real client. */
+  /** Injected by the acceptance test; production uses the Rust provider lane
+   * (an OpenAI-compatible connection over `baseUrl` + `apiKeyEnv`). */
   providerFactory?: (config: {
-    baseUrl: string;
+    baseUrl?: string;
     defaultModel: string;
     apiKey?: string;
   }) => AiProviderClient;
-  /** Extra tool contributors (a host's own domain tools). */
-  extraContributors?: readonly ToolSetContributor[];
-  profiles?: ProfileRegistry;
-  leaseTtlMs?: number;
-  maxToolIterations?: number;
-  quiet?: boolean;
 }
 
 export interface PendingApproval {
@@ -137,24 +185,114 @@ export interface SessionListing {
   model?: string;
   reasoningEffort?: SessionReasoningEffort;
   turns: number;
-  lastTurnStatus?: TaskStatus;
+  lastTurnStatus?: TurnStatus;
+}
+
+/** Collapse one scripted/streamed provider answer into the single final
+ * result the binding's JS provider lane expects (the runtime synthesizes
+ * the durable provider event stream from it). A failed run is a thrown
+ * error — never a fabricated success. Usage is not reported by this lane. */
+async function finalResult(
+  client: AiProviderClient,
+  request: ProviderRequest,
+): Promise<ProviderResult> {
+  const input: AiChatRequest = {
+    runId: request.runId,
+    model: request.model,
+    messages: request.messages as AiChatMessage[],
+    ...(request.tools.length > 0
+      ? { tools: request.tools as AiToolDefinition[] }
+      : {}),
+    ...(request.temperature === null || request.temperature === undefined
+      ? {}
+      : { temperature: request.temperature }),
+    ...(request.maxOutputTokens === null ||
+    request.maxOutputTokens === undefined
+      ? {}
+      : { maxOutputTokens: request.maxOutputTokens }),
+  };
+  let content = "";
+  let finishReason = "stop";
+  const toolCalls: { id?: string; name: string; arguments?: unknown }[] = [];
+  for await (const event of client.streamChat(input)) {
+    switch (event.type) {
+      case "run.message.delta": {
+        const delta = (event.data as { delta?: string }).delta;
+        if (typeof delta === "string") content += delta;
+        break;
+      }
+      case "run.message.completed": {
+        const data = event.data as {
+          content?: string;
+          finishReason?: string;
+        };
+        if (typeof data.content === "string") content = data.content;
+        if (typeof data.finishReason === "string")
+          finishReason = data.finishReason;
+        break;
+      }
+      case "run.tool.requested": {
+        const data = event.data as {
+          toolCallId?: string;
+          toolName: string;
+          argumentsJson: string;
+        };
+        toolCalls.push({
+          ...(data.toolCallId === undefined ? {} : { id: data.toolCallId }),
+          name: data.toolName,
+          arguments: JSON.parse(data.argumentsJson) as unknown,
+        });
+        finishReason = "tool_calls";
+        break;
+      }
+      case "run.failed": {
+        const data = event.data as { errorMessage?: string };
+        throw new Error(data.errorMessage ?? "provider failed");
+      }
+      case "run.cancelled":
+        throw new Error("provider call cancelled");
+      default:
+        break;
+    }
+  }
+  return {
+    content,
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    finishReason,
+  };
 }
 
 export class CodingAgentApp {
+  private service: NativeSessionService | null = null;
+  private closing = false;
+  /** Turns this process started or explicitly resumed: a `running` task held
+   * by one of these is live local work that `recover()` must never disturb;
+   * a `running` task that is NOT one of them belongs to a dead process, and
+   * recreating the service is what adopts (or refuses to adopt) it honestly. */
+  private readonly localTurns = new Set<string>();
+
   private constructor(
     readonly options: CodingAgentOptions,
-    readonly store: SqliteAssistantStore,
-    readonly taskRunner: SingleProcessTaskRunner,
-    readonly service: AgentSessionService,
-    readonly profiles: ProfileRegistry,
-    private readonly registry: ExecutorRegistry,
-    private worker: WorkerHandle | null,
-  ) {}
+    readonly store: NativeStore,
+    private readonly pack: CodingToolPack,
+    private readonly tools: readonly AiTool[],
+    service: NativeSessionService,
+    private readonly profiles: ProfileRegistry,
+  ) {
+    this.service = service;
+  }
+
+  private live(): NativeSessionService {
+    if (this.service === null)
+      throw new Error("the coding agent app is closed");
+    return this.service;
+  }
 
   /**
    * Open (creating if needed) everything the agent needs. Nothing here starts a
    * model call: opening an app must not resume work by itself, or a crash loop
-   * would become a model-call loop.
+   * would become a model-call loop. The native service crash-reconciles on
+   * construction and its worker never claims an interrupted turn.
    */
   static async open(options: CodingAgentOptions): Promise<CodingAgentApp> {
     if (!isAbsolute(options.repo))
@@ -162,8 +300,7 @@ export class CodingAgentApp {
     if (!isAbsolute(options.dbPath))
       throw new Error("dbPath must be an absolute path");
     mkdirSync(dirname(options.dbPath), { recursive: true });
-    const providerId = options.providerId ?? "local";
-    const profiles = options.profiles ?? defaultProfileRegistry();
+    const profiles = defaultProfileRegistry();
     const profile = profiles.resolve(options.profileId);
     if (profile === undefined) {
       throw new Error(
@@ -173,184 +310,208 @@ export class CodingAgentApp {
           .join(", ")}.`,
       );
     }
-
-    // ONE lease policy for both halves of the scheduler: the store grants the
-    // lease when it claims a task, the runner renews it. Setting them apart is
-    // how a host gets a heartbeat that outlives the lease it is renewing.
-    const leaseTtlMs = options.leaseTtlMs ?? 30_000;
-    const store = new SqliteAssistantStore(options.dbPath, { leaseTtlMs });
-    await store.providers.upsertProvider({
-      id: providerId,
-      label: `OpenAI-compatible (${options.baseUrl})`,
-      kind: "openai-compatible",
-      baseUrl: options.baseUrl,
-      defaultModel: options.model,
-      enabled: true,
-      ...(options.apiKeyEnv === undefined
-        ? {}
-        : {
-            metadata: { [PROVIDER_SECRET_REF_KEY]: options.apiKeyEnv },
-          }),
+    const store = await NativeStore.open(options.dbPath);
+    const pack = createCodingToolPack({
+      workspace: { root: resolve(options.repo) },
+      testCommands: options.testCommands ?? ["bun test"],
+      sandbox: options.sandbox ?? "required",
     });
-    await store.settings.updateSettings({ defaultProviderId: providerId });
-
-    const taskRunner = new SingleProcessTaskRunner({
+    const contribution: ToolContributionContext = {
+      bindings: [],
+      limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
+    };
+    const tools = await pack.contribute(contribution);
+    const app = {
+      options,
       store,
-      leaseTtlMs,
-      heartbeatMs: Math.max(250, Math.floor(leaseTtlMs / 3)),
-      pollMs: 50,
-      // Manual + interrupt: opening never restarts work, and closing parks a
-      // running turn `interrupted` so only an explicit resume continues it.
-      recoveryMode: "manual",
-      shutdownMode: "interrupt",
-    });
-    // The profile and the session's durable execution state decide permission;
-    // `options.mode` is the floor for a session that has said nothing yet.
-    const authority = createProfilePermissionAuthority<CodingMode>({
-      store,
+      pack,
+      tools,
       profiles,
-      ...(options.mode === undefined ? {} : { fallbackMode: options.mode }),
-    });
-    const contributors: ToolSetContributor[] = [
-      createCodingToolPack({
-        workspace: { root: resolve(options.repo) },
-        testCommands: options.testCommands ?? ["bun test"],
-        sandbox: options.sandbox ?? "required",
-        permission: authority,
-      }),
-      ...(options.extraContributors ?? []),
-    ];
-    const turnRunner = new TurnRunner({
-      store,
-      taskRunner,
-      providerFactory: (config) =>
-        options.providerFactory
-          ? options.providerFactory({
-              baseUrl: config.baseUrl,
-              defaultModel: config.defaultModel,
-              ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
-            })
-          : OpenAiCompatibleClient.fromConfig(config),
-      contributors,
-      // ONE guard, consulting the host-owned authority: the model never chooses
-      // its own mode, and a role ceiling stays final under every mode.
-      toolGuards: [
-        createCodingPermissionGuard({
-          mode: options.mode ?? "ask",
-          authority,
-        }),
-      ],
-      profiles,
-      secrets: envSecretStore(),
-      ...(options.maxToolIterations === undefined
-        ? {}
-        : { maxToolIterations: options.maxToolIterations }),
-      clock: defaultClock,
-      ids: defaultIds,
-    });
-    const tasks = new TaskService({
-      store,
-      taskRunner,
-      ids: defaultIds,
-      clock: defaultClock,
-    });
-    const service = new AgentSessionService({
-      store,
-      turns: turnRunner,
-      tasks,
-      taskRunner,
-      clock: defaultClock,
-      ids: defaultIds,
-      // A plan approval is the only way out of plan mode, and the HOST decides
-      // what it grants. The model's requested mode is recorded, never obeyed —
-      // and the granted mode can never be plan itself, so a session cannot be
-      // escalated into the mode that blocks it.
-      planApproval: {
-        toolNames: [SUBMIT_PLAN_TOOL_NAME],
-        grantedMode:
+    };
+    const service = await CodingAgentApp.buildService(app);
+    return new CodingAgentApp(options, store, pack, tools, service, profiles);
+  }
+
+  /** One service over the store: the tool lane (or the Rust provider lane,
+   * when no provider was injected) plus the Rust coding-pack authority.
+   * Recreated by `recover()` — every registered callback and descriptor is
+   * re-registered here, so a fresh service is indistinguishable from the
+   * one `open()` built. */
+  private static async buildService(app: {
+    options: CodingAgentOptions;
+    store: NativeStore;
+    tools: readonly AiTool[];
+    profiles: ProfileRegistry;
+  }): Promise<NativeSessionService> {
+    const { options, store, tools, profiles } = app;
+    const profile = profiles.resolve(options.profileId);
+    const wantedMode = options.mode ?? profile?.permissionMode ?? "ask";
+    if (NATIVE_MODES[wantedMode] !== true)
+      throw new Error(
+        `profile "${options.profileId}" has unsupported permissionMode "${wantedMode}"`,
+      );
+    const configuredMode: NativeMode = wantedMode as NativeMode;
+    const provider = options.providerFactory
+      ? options.providerFactory({
+          baseUrl: options.baseUrl,
+          defaultModel: options.model,
+          ...(options.apiKeyEnv === undefined
+            ? {}
+            : {
+                apiKey:
+                  options.apiKeyEnv === undefined
+                    ? undefined
+                    : (process.env[options.apiKeyEnv] ?? undefined),
+              }),
+        })
+      : undefined;
+    let providerConfig:
+      | {
+          protocol: "chat-completions";
+          providerId: string;
+          connectionId: string;
+          model: string;
+        }
+      | undefined;
+    if (provider === undefined) {
+      if (options.baseUrl === undefined)
+        throw new Error(
+          "without a providerFactory, baseUrl is required (the Rust provider lane calls it directly)",
+        );
+      const apiKey =
+        options.apiKeyEnv === undefined
+          ? null
+          : (process.env[options.apiKeyEnv] ?? null);
+      const connectionId =
+        await NativeSessionService.registerProviderConnection(
+          options.baseUrl,
+          apiKey,
+        );
+      providerConfig = {
+        protocol: "chat-completions",
+        providerId: "local",
+        connectionId,
+        model: options.model,
+      };
+    }
+    const service = await store.createService({
+      jsToolAuthority: {
+        configuredMode,
+        planToolNames: [SUBMIT_PLAN_TOOL_NAME],
+        // A plan approval is the only way out of plan mode, and the HOST
+        // decides what it grants. The model's requested mode is recorded,
+        // never obeyed — and the granted mode can never be plan itself, so
+        // a session cannot be escalated into the mode that blocks it.
+        planGrantMode:
           options.mode === undefined || options.mode === "plan"
             ? "auto_edit"
             : options.mode,
       },
+      ...(providerConfig === undefined ? {} : { providerConfig }),
     });
-    const registry = new ExecutorRegistry();
-    registry.register(new ChatTurnExecutor(turnRunner));
-    return new CodingAgentApp(
-      options,
-      store,
-      taskRunner,
-      service,
-      profiles,
-      registry,
-      null,
+    if (provider !== undefined) {
+      const client = provider;
+      service.setProvider((request) => finalResult(client, request));
+    }
+    const sessionId = options.sessionId;
+    await Promise.all(
+      tools.map((tool) =>
+        service.registerTool(
+          tool.definition as unknown as ToolDefinitionJson,
+          (input, request) => {
+            const ctx: AiToolExecutionContext = {
+              runId: request.runId,
+              chatId: sessionId,
+              bindings: [],
+              limits: {
+                profile: "medium",
+                maxBytes: 256 * 1024,
+                maxItems: 1024,
+              },
+              ...(request.toolCallId === null
+                ? {}
+                : { toolCallId: request.toolCallId }),
+            };
+            return tool.execute(ctx, input);
+          },
+        ),
+      ),
     );
+    return service;
   }
 
-  async ensureSession(): Promise<AgentSessionState> {
-    const existing = await this.store.conversations.getChat(
-      this.options.sessionId,
+  async ensureSession(): Promise<NativeSessionState> {
+    const existing = await this.store.callStore<Record<string, unknown> | null>(
+      "conversations.getChat",
+      { chatId: this.options.sessionId },
     );
     if (existing !== null) {
-      const { descriptor } = await this.service.getState(
-        this.options.sessionId,
-      );
+      const state = await this.live().getState(this.options.sessionId);
       const effort = this.options.reasoningEffort;
+      const descriptor = (state as unknown as NativeSessionState).descriptor;
       if (effort === undefined || descriptor.reasoningEffort === effort)
-        return this.service.getState(this.options.sessionId);
-      return this.service.setModel(this.options.sessionId, {
+        return state as unknown as NativeSessionState;
+      return (await this.live().setModel(this.options.sessionId, {
         model: descriptor.model ?? this.options.model,
         reasoningEffort: effort,
-      });
+      })) as unknown as NativeSessionState;
     }
-    const created = await this.service.createSession({
+    const created = (await this.live().createSession({
       sessionId: this.options.sessionId,
-      profile: { id: this.options.profileId },
-      providerId: this.options.providerId ?? "local",
+      profileId: this.options.profileId,
       model: this.options.model,
       workspace: { root: resolve(this.options.repo), trusted: true },
-      context: { policy: "transcript" },
       ...(this.options.mode === undefined
         ? {}
         : { executionMode: this.options.mode }),
-    });
+    })) as unknown as NativeSessionState;
     const effort = this.options.reasoningEffort;
     // createSession has no effort field; setModel is the one place it is set.
     return effort === undefined
       ? created
-      : this.service.setModel(this.options.sessionId, {
+      : ((await this.live().setModel(this.options.sessionId, {
           model: this.options.model,
           reasoningEffort: effort,
-        });
-  }
-
-  async startWorker(): Promise<void> {
-    if (this.worker) return;
-    // A manual-recovery runner refuses to claim until it has reconciled boot:
-    // anything left queued by a previous process is parked `interrupted`
-    // rather than silently restarted.
-    await this.recover();
-    this.worker = await this.taskRunner.startWorker(
-      createDispatchingWorker(this.registry, {
-        store: this.store,
-        clock: defaultClock,
-      }),
-      { concurrency: 1, ownerId: `coding-agent-${process.pid}` },
-    );
-  }
-
-  async stopWorker(): Promise<void> {
-    await this.worker?.stop();
-    this.worker = null;
+        })) as unknown as NativeSessionState);
   }
 
   /**
-   * Park work a previous process left behind as `interrupted`. This never
-   * restarts it — `resumeTurn` does, on explicit intent — and a resumed turn
-   * never re-runs a tool whose outcome the log cannot decide (see side-effects).
-   * A killed process's lease must expire first, so repeat until it is parked.
+   * The native service starts its worker at construction and crash-reconciles
+   * before that worker can claim anything; starting the app therefore means
+   * giving a dead process's work one reconciliation pass.
+   */
+  async startWorker(): Promise<void> {
+    await this.recover();
+  }
+
+  async stopWorker(): Promise<void> {
+    // The worker lives and dies with the service; `close()` is the shutdown.
+  }
+
+  /**
+   * Park work a previous process left behind as `interrupted`. The native
+   * runtime reconciles only at service construction, so a reconciliation pass
+   * here is a fresh service over the same store — the same code path a new
+   * process runs, with the same policy (manual: park, never restart). A turn
+   * this process itself started is live local work and is left alone; a
+   * resumed turn never re-runs a tool whose outcome the log cannot decide
+   * (durable receipts keep the uncertainty).
    */
   async recover(): Promise<void> {
-    await this.taskRunner.recover();
+    if (this.closing || this.service === null) return;
+    const state = await this.state();
+    const active = state.activeTurn;
+    if (active === null || active.status !== "running") return;
+    if (this.localTurns.has(active.turnId)) return; // live work of this process
+    const previous = this.service;
+    this.service = null;
+    await previous.close();
+    this.service = await CodingAgentApp.buildService({
+      options: this.options,
+      store: this.store,
+      tools: this.tools,
+      profiles: this.profiles,
+    });
   }
 
   /**
@@ -358,60 +519,78 @@ export class CodingAgentApp {
    * than losing it, so every input needs an id — mint one when the caller has
    * no opinion, and the queue stays deduplicated and idempotent on retry.
    */
-  async send(text: string, inputId?: string) {
-    return this.service.send(this.options.sessionId, {
+  async send(
+    text: string,
+    inputId?: string,
+  ): Promise<
+    { kind: "turn"; turnId: string } | { kind: "queued"; input: unknown }
+  > {
+    const result = await this.live().send(this.options.sessionId, {
       content: text,
-      inputId: inputId ?? `input-${defaultIds.messageId()}`,
-      whenBusy: "follow_up",
+      inputId: inputId ?? `input-${crypto.randomUUID()}`,
+      whenBusy: "queue",
     });
+    if (result.kind === "turn") this.localTurns.add(result.turnId);
+    return result;
   }
 
   async followUp(text: string, inputId: string) {
-    return this.service.followUp(this.options.sessionId, {
+    return this.live().followUp(this.options.sessionId, {
       inputId,
       content: text,
     });
   }
 
   async steer(text: string, inputId: string) {
-    return this.service.steer(this.options.sessionId, {
+    return this.live().steer(this.options.sessionId, {
       inputId,
       content: text,
     });
   }
 
-  async state(): Promise<AgentSessionState> {
-    return this.service.getState(this.options.sessionId);
+  async state(): Promise<NativeSessionState> {
+    return (await this.live().getState(
+      this.options.sessionId,
+    )) as unknown as NativeSessionState;
   }
 
-  async status(turnId: string): Promise<TaskStatus | undefined> {
-    return (await this.store.tasks.getTask(turnId))?.status;
+  async status(turnId: string): Promise<TurnStatus | undefined> {
+    const task = await this.store.callStore<{ status?: TurnStatus } | null>(
+      "tasks.getTask",
+      { taskId: turnId },
+    );
+    return task?.status;
   }
 
   /** The approval this session is parked on, if any. */
   async pendingApproval(): Promise<PendingApproval | undefined> {
     const state = await this.state();
-    const request: AgentInputRecord | undefined = state.waiting;
-    if (request === undefined) return undefined;
-    const content = request.content as { prompt?: unknown };
+    const request = state.waiting;
+    if (request === null || request === undefined) return undefined;
+    const content = request.content as Record<string, unknown> | undefined;
+    const approval = state.waitingApproval ?? null;
     return {
       requestId: request.inputId,
       // Stable, so a retry of the same decision is the same answer, and a
       // DIFFERENT decision is refused rather than silently overriding a human.
       answerId: `ans:${request.inputId}`,
-      toolName: state.waitingApproval?.toolName ?? "tool",
-      ...(state.waitingApproval === undefined
+      toolName: approval?.toolName ?? "tool",
+      ...(approval?.argsSha256 === undefined
         ? {}
-        : { argsSha256: state.waitingApproval.argsSha256 }),
+        : { argsSha256: approval.argsSha256 }),
       prompt:
         typeof content?.prompt === "string"
           ? content.prompt
-          : (state.waitingApproval?.prompt ?? ""),
-      ...(state.waitingPlan === undefined
+          : (approval?.prompt ?? ""),
+      ...(state.waitingPlan === null || state.waitingPlan === undefined
         ? {}
         : {
             plan: {
-              planDigest: state.waitingPlan.planDigest,
+              planDigest:
+                state.waitingPlan.planDigest ??
+                (typeof content?.argsSha256 === "string"
+                  ? content.argsSha256
+                  : ""),
               ...(state.waitingPlan.plan === undefined
                 ? {}
                 : { plan: state.waitingPlan.plan }),
@@ -429,22 +608,23 @@ export class CodingAgentApp {
     note?: string,
   ): Promise<void> {
     if (decision === "approve")
-      await this.service.approve(approval.requestId, approval.answerId, note);
-    else await this.service.deny(approval.requestId, approval.answerId, note);
+      await this.live().approve(approval.requestId, approval.answerId, note);
+    else await this.live().deny(approval.requestId, approval.answerId, note);
   }
 
   /** The durable execution mode the session is in, after any plan approval. */
   async executionMode(): Promise<string | undefined> {
-    return (await this.service.getExecution(this.options.sessionId))?.mode;
+    const execution = await this.live().getExecution(this.options.sessionId);
+    return execution?.mode as string | undefined;
   }
 
   async setExecutionMode(mode: string): Promise<void> {
-    await this.service.setExecutionMode(this.options.sessionId, mode);
+    await this.live().setExecutionMode(this.options.sessionId, mode);
   }
 
   /** Park a running turn `interrupted`; `resumeTurn` continues it. */
   async interrupt(turnId: string): Promise<void> {
-    await this.service.interrupt(this.options.sessionId, turnId);
+    await this.live().interrupt(this.options.sessionId, turnId);
   }
 
   /** The session's interrupted turn, if it has one. */
@@ -454,30 +634,35 @@ export class CodingAgentApp {
   }
 
   async resumeTurn(turnId: string): Promise<void> {
-    await this.service.resume(this.options.sessionId, turnId);
+    await this.live().resume(this.options.sessionId, turnId);
+    this.localTurns.add(turnId);
   }
 
   async turns(): Promise<AgentTurnSummary[]> {
-    return this.service.listTurns(this.options.sessionId);
+    return (await this.live().listTurns(
+      this.options.sessionId,
+    )) as unknown as AgentTurnSummary[];
   }
 
   async usage(): Promise<AgentSessionUsage> {
-    return this.service.getUsage(this.options.sessionId);
+    return (await this.live().getUsage(
+      this.options.sessionId,
+    )) as unknown as AgentSessionUsage;
   }
 
-  async exportSession(): Promise<AgentSessionExport> {
-    return this.service.exportSession(this.options.sessionId);
+  async exportSession(): Promise<Record<string, unknown>> {
+    return await this.live().exportSession(this.options.sessionId);
   }
 
   /** Takes effect on the NEXT turn; a turn already running keeps its request. */
   async setModel(
     model: string,
     reasoningEffort?: SessionReasoningEffort | null,
-  ): Promise<AgentSessionState> {
-    return this.service.setModel(this.options.sessionId, {
+  ): Promise<NativeSessionState> {
+    return (await this.live().setModel(this.options.sessionId, {
       model,
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-    });
+    })) as unknown as NativeSessionState;
   }
 
   /** Every agent session in the database, newest first. */
@@ -485,16 +670,24 @@ export class CodingAgentApp {
     const listings: SessionListing[] = [];
     let before: string | undefined;
     for (;;) {
-      const page = await this.store.conversations.listChats({
-        limit: 100,
-        includeArchived: true,
-        ...(before === undefined ? {} : { before }),
+      const page = await this.store.callStore<
+        {
+          id: string;
+          metadata?: Record<string, unknown>;
+          updatedAt: number;
+        }[]
+      >("conversations.listChats", {
+        opts: {
+          limit: 100,
+          includeArchived: true,
+          ...(before === undefined ? {} : { before }),
+        },
       });
       if (page.length === 0) break;
       for (const chat of page) {
         const descriptor = readSessionDescriptor(chat.metadata);
         if (descriptor === undefined) continue;
-        const turns = await this.service.listTurns(chat.id);
+        const turns = await this.turnsFor(chat.id);
         const last = turns[turns.length - 1];
         listings.push({
           sessionId: chat.id,
@@ -504,19 +697,28 @@ export class CodingAgentApp {
             : { model: descriptor.model }),
           ...(descriptor.reasoningEffort === undefined
             ? {}
-            : { reasoningEffort: descriptor.reasoningEffort }),
+            : {
+                reasoningEffort:
+                  descriptor.reasoningEffort as SessionReasoningEffort,
+              }),
           turns: turns.length,
           ...(last === undefined ? {} : { lastTurnStatus: last.status }),
         });
       }
       if (page.length < 100) break;
-      before = page[page.length - 1]!.updatedAt;
+      before = String(page[page.length - 1]?.updatedAt);
     }
     return listings;
   }
 
+  private async turnsFor(sessionId: string): Promise<AgentTurnSummary[]> {
+    return (await this.live().listTurns(
+      sessionId,
+    )) as unknown as AgentTurnSummary[];
+  }
+
   async cancel(turnId: string): Promise<void> {
-    await this.service.cancel(this.options.sessionId, turnId);
+    await this.live().cancel(this.options.sessionId, turnId);
   }
 
   /**
@@ -528,17 +730,24 @@ export class CodingAgentApp {
   async transcript(): Promise<
     { role: string; content: string; toolName?: string }[]
   > {
-    const messages = await this.store.conversations.listMessages(
-      this.options.sessionId,
-    );
+    const messages = await this.store.callStore<
+      {
+        role: string;
+        content: unknown;
+        active?: boolean;
+        metadata?: Record<string, unknown>;
+      }[]
+    >("conversations.listMessages", { chatId: this.options.sessionId });
     return messages
       .filter(
-        (m) => !(m.role === "assistant" && m.metadata["internal"] === true),
+        (m) =>
+          m.active !== false &&
+          !(m.role === "assistant" && m.metadata?.["internal"] === true),
       )
       .map((m) => ({
         role: m.role,
         content: typeof m.content === "string" ? m.content : "",
-        ...(typeof m.metadata["toolName"] === "string"
+        ...(typeof m.metadata?.["toolName"] === "string"
           ? { toolName: m.metadata["toolName"] as string }
           : {}),
       }));
@@ -549,15 +758,14 @@ export class CodingAgentApp {
     turnId: string,
     afterSeq: number,
   ): Promise<{ events: AiRunEvent[]; nextSeq: number }> {
-    const all = (await this.store.tasks.listEvents(
-      turnId,
-    )) as unknown as TaskEventEnvelope[];
-    const events = all.filter(
-      (e) => e.seq > afterSeq,
-    ) as unknown as AiRunEvent[];
+    const all = await this.store.callStore<
+      { seq: number; event: AiRunEvent }[]
+    >("tasks.listEvents", { taskId: turnId });
+    const events = all.filter((e) => e.seq > afterSeq).map((e) => e.event);
+    const last = all[all.length - 1];
     return {
       events,
-      nextSeq: events.length === 0 ? afterSeq : events[events.length - 1]!.seq,
+      nextSeq: last === undefined ? afterSeq : Math.max(afterSeq, last.seq),
     };
   }
 
@@ -571,7 +779,7 @@ export class CodingAgentApp {
       timeoutMs?: number;
       pollMs?: number;
     } = {},
-  ): Promise<TaskStatus> {
+  ): Promise<TurnStatus> {
     const deadline = Date.now() + (options.timeoutMs ?? 10 * 60_000);
     const seen = new Set<string>();
     let afterSeq = -1;
@@ -585,7 +793,7 @@ export class CodingAgentApp {
       }
       const status = await this.status(turnId);
       if (status === undefined) throw new Error(`unknown turn ${turnId}`);
-      if (TERMINAL.has(status)) return status;
+      if (TERMINAL[status] === true) return status;
       if (status === "waiting_approval") {
         const approval = await this.pendingApproval();
         if (approval !== undefined) {
@@ -601,8 +809,50 @@ export class CodingAgentApp {
     }
   }
 
+  /**
+   * Quitting: a running turn of THIS process is interrupted durably first —
+   * the runtime parks it at a safe boundary (the reconciliation heartbeat
+   * lands within ~10s) — and only then does the service close. A turn left
+   * running by a dead process is never touched here; it stays `running`
+   * until a later `recover()` parks it.
+   */
   async close(): Promise<void> {
-    await this.stopWorker();
-    this.store.close();
+    if (this.closing) return;
+    this.closing = true;
+    const service = this.service;
+    this.service = null;
+    if (service !== null) {
+      try {
+        const active = (await service
+          .getState(this.options.sessionId)
+          .catch(() => null)) as NativeSessionState | null;
+        const running =
+          active?.activeTurn?.status === "running" ? active.activeTurn : null;
+        if (running !== null && this.localTurns.has(running.turnId)) {
+          await service.interrupt(this.options.sessionId, running.turnId);
+          const until = Date.now() + 15_000;
+          while (Date.now() < until) {
+            const st = (await service
+              .getState(this.options.sessionId)
+              .catch(() => null)) as NativeSessionState | null;
+            if (st?.activeTurn?.status !== "running") break;
+            await new Promise((r) => setTimeout(r, 100));
+          }
+        }
+      } catch {
+        // Best-effort: the durable interrupt is recorded; the park needs no
+        // live process, and the next open reconciles it.
+      }
+      await service.close();
+    }
+    try {
+      // Close tool admission and settle commands this process owns; anything
+      // a dead process left behind is reconciled by the next pack's startup
+      // sweep, not here.
+      await this.pack.dispose?.();
+    } catch {
+      // Best-effort: teardown must not lose the closed store.
+    }
+    await this.store.close();
   }
 }

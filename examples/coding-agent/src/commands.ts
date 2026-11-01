@@ -129,7 +129,7 @@ export async function handleCommand(
     }
     case "/cancel": {
       const active = (await app.state()).activeTurn;
-      if (active === undefined) console.log("nothing to cancel");
+      if (active === null) console.log("nothing to cancel");
       else {
         await app.cancel(active.turnId);
         console.log(`cancelled ${active.turnId}`);
@@ -138,7 +138,7 @@ export async function handleCommand(
     }
     case "/interrupt": {
       const active = (await app.state()).activeTurn;
-      if (active === undefined) console.log("nothing to interrupt");
+      if (active === null) console.log("nothing to interrupt");
       else {
         await app.interrupt(active.turnId);
         console.log(`interrupted ${active.turnId}; /resume continues it`);
