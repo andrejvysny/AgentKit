@@ -40,7 +40,13 @@ jobs:
       # rust/tests/support/http-server.ts stays as a local-dev fallback.
       - run: bun run build:fixture
 
-      - run: bun test
+      # Full-run suites (coding-agent acceptance, durable execution) drive
+      # real native runs with approval waits; bun 1.3.14 on CI runners
+      # exceeded the 5s per-test default on them (external review at
+      # 24b3d17: "plan mode blocks writes…" died at 5001ms with the run's
+      # budget error surfacing beside it). Same convention the mixed-runtime
+      # gates in rust.yml already use.
+      - run: bun test --timeout 60000
 
       - run: bun run build
 
@@ -133,6 +139,21 @@ jobs:
 
       - run: bun run build
 
+      # The core dist's runChat executes on the Rust runtime through
+      # @agentkit/native, so the Node consumer needs the platform addon just
+      # like the `bun` job does; without it the smoke dies at the core-dist
+      # section with "the native binding failed to load" (external review at
+      # 24b3d17: every Node lane failed exactly that way). The cargo cache
+      # is shared with the `bun` job.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build native binding
+        run: bun run --cwd packages/native build:native
+
       # SQLite has separate runtime-specific entrypoints and native tests.
       # This portable import boundary also runs on Node 20; better-sqlite3
       # 13 requires Node >=22 and is never loaded by this smoke.
@@ -211,6 +232,21 @@ jobs:
       - run: bun run build:umbrella
 
       - run: bun run smoke:umbrella
+
+      # The qualification consumers below execute runChat on the Rust
+      # runtime, so the platform addon must exist: qualify-package.mjs
+      # installs the staged `@agentkit/native-<target>` package into every
+      # consumer (the umbrella tarball itself never contains `*.node`).
+      # Without the built binding the node-host exercise fails with
+      # "the native binding failed to load" (external review at 24b3d17).
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build native binding
+        run: bun run --cwd packages/native build:native
 
       - name: qualify exact umbrella tarball
         run: |
