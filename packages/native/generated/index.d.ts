@@ -47,6 +47,29 @@ export declare class NativeStore {
 }
 
 export declare class SessionService {
+  /**
+   * Start the Rust REST v1 + SSE server on this service's host and
+   * store. `optionsJson`: `{host?, port?, basePath?, maxBodyBytes?,
+   * maxQueryBytes?, actorId?, defaultModel?, bearerToken}` —
+   * `bearerToken` is REQUIRED and at least 32 bytes (the backend's own
+   * floor); invalid values fail with `invalid_input`, an unusable
+   * address with `service_unavailable`. Defaults: `127.0.0.1`, ephemeral
+   * port, no base path, 1 MiB body / 16 KiB query caps. Returns
+   * `{port, baseUrl}` as JSON text (the wrapper parses it). Fails with
+   * `invalid_input` if a server already runs on this service, and
+   * `closed` after `close()`. Every request is authenticated by the
+   * backend's bearer check; a REST-submitted turn is executed by this
+   * service's worker like any other durable task.
+   */
+  startHttpServer(optionsJson: string): Promise<string>
+  /**
+   * Stop the desktop server: the listener closes immediately (follow-up
+   * connections are refused), in-flight requests drain up to the
+   * service's close deadline, and the accept loop is force-stopped
+   * after. Idempotent — stopping a service that never started, or was
+   * already stopped or closed, is a no-op success.
+   */
+  stopHttpServer(): Promise<void>
   setExecutionMode(sessionId: string, mode: string): Promise<string>
   listApprovalGrants(sessionId: string): Promise<string>
   revokeApprovalGrant(sessionId: string, grantId: string): Promise<string>
@@ -134,7 +157,9 @@ export declare class SessionService {
    *
    * SHUTDOWN SCOPE — what `close()` does and does not promise:
    * * It stops the runtime: no new dispatch, no new runs, worker drained
-   *   (or `closeUncertain` records the unproven drain).
+   *   (or `closeUncertain` records the unproven drain). A running desktop
+   *   HTTP server is stopped before Closing begins, so no REST/SSE
+   *   request is admitted into the shutdown window.
    * * It does NOT quiesce external effects a dispatched JS callback
    *   already started. A callback handed to JS before Closing may
    *   continue acting after `close()` resolves; the runtime only

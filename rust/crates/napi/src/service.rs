@@ -32,6 +32,8 @@ use crate::jsbridge::JsBridge;
 use crate::provider::JsProvider;
 use crate::tool::JsToolContributor;
 
+#[path = "http_server.rs"]
+mod http_server;
 #[path = "service_management.rs"]
 mod management;
 
@@ -46,6 +48,7 @@ struct Core {
     contributor: Arc<JsToolContributor>,
     worker: Option<WorkerHandle>,
     subscriptions: Mutex<Vec<Arc<Subscription>>>,
+    http: Option<http_server::HttpServer>,
 }
 
 #[napi(js_name = "SessionService")]
@@ -185,6 +188,7 @@ impl SessionService {
                 contributor,
                 worker: Some(worker),
                 subscriptions: Mutex::new(Vec::new()),
+                http: None,
             })),
             bridge,
             gate: Arc::new(CloseGate {
@@ -510,7 +514,9 @@ impl SessionService {
     ///
     /// SHUTDOWN SCOPE — what `close()` does and does not promise:
     /// * It stops the runtime: no new dispatch, no new runs, worker drained
-    ///   (or `closeUncertain` records the unproven drain).
+    ///   (or `closeUncertain` records the unproven drain). A running desktop
+    ///   HTTP server is stopped before Closing begins, so no REST/SSE
+    ///   request is admitted into the shutdown window.
     /// * It does NOT quiesce external effects a dispatched JS callback
     ///   already started. A callback handed to JS before Closing may
     ///   continue acting after `close()` resolves; the runtime only
@@ -547,8 +553,17 @@ impl SessionService {
     }
 
     async fn shutdown_once(&self) -> Result<()> {
+        // Stop the desktop HTTP listener FIRST: with the handle taken under
+        // the same lock that gates `startHttpServer`, no REST/SSE request
+        // can be admitted (or re-admitted) once Closing begins. The accept
+        // loop is awaited outside the lock so draining never blocks a
+        // concurrent service method.
+        let mut core = self.core.lock().await.take();
+        let http = core.as_mut().and_then(|core| core.http.take());
+        if let Some(server) = http {
+            server.shutdown(self.close_timeout).await;
+        }
         self.bridge.start_closing();
-        let core = self.core.lock().await.take();
         if let Some(mut core) = core {
             for subscription in core.subscriptions.lock().await.drain(..) {
                 subscription.cancel();

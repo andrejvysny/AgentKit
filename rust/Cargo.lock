@@ -167,7 +167,9 @@ dependencies = [
  "agentkit-core",
  "agentkit-host",
  "agentkit-store",
+ "agentkit-transport-http",
  "async-trait",
+ "axum",
  "futures",
  "napi",
  "napi-derive",
@@ -176,6 +178,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 
