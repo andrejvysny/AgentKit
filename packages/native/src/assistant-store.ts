@@ -482,19 +482,22 @@ async function settleApply(
   const operationId = current["operationId"];
   if (typeof operationId !== "string")
     refuse(`Proposal ${proposalId} has no apply-claim operation id.`);
-  const operations = Array.isArray(current["operations"]) ? current["operations"] : [];
   const receipt = record(await call<unknown>("proposals.getOutcome", { operationId }));
   const recorded = receipt !== null && "outcome" in receipt ? record(receipt.outcome) : null;
-  const outcome =
-    recorded ??
-    (to === "failed"
-      ? {
-          status: "failed",
-          appliedOps: 0,
-          failedOps: operations.map((_op, index) => ({ opIndex: index, error: "apply failed" })),
-        }
-      : { status: "applied", appliedOps: operations.length, failedOps: [] });
-  const body: Json = { proposalId, operationId, outcome };
+  if (recorded === null) {
+    // No outcome was ever recorded: this is the port's plain status CAS,
+    // exactly the TypeScript baseline behavior. Completing instead would
+    // INSERT a receipt row from a shape the apply never produced — a status
+    // request must never manufacture appliedOps evidence. A later
+    // `recordOutcome` still stands on its own, as in the baseline.
+    const body: Json = { proposalId, from: ["applying"], to, patch: {} };
+    if (patch?.appliedAt !== undefined)
+      body["now"] = toEpoch(patch.appliedAt, "patch.appliedAt");
+    else withNow(body, clock);
+    await call("proposals.transition", body);
+    return call("proposals.get", { proposalId });
+  }
+  const body: Json = { proposalId, operationId, outcome: recorded };
   if (patch?.appliedAt !== undefined) body["now"] = toEpoch(patch.appliedAt, "patch.appliedAt");
   else withNow(body, clock);
   await call("proposals.complete", body);
