@@ -191,6 +191,29 @@ standalone tool-dispatch entry point — evidence in the module header);
 OAuth, elicitation, config persistence and the secret resolver remain
 open (deny-all: `secretRefs` fails connect).
 
+Backend surface ledger after the consumer migration (2026-11-01). What
+each TypeScript backend package is NOW:
+
+| Package | Production role | Note |
+| --- | --- | --- |
+| `core` | runtimes | `runChat`/`runAgentLoop` execute on Rust only; the TS loop engine is deleted. |
+| `host` | frozen library | Zero production consumers. `TurnRunner`/`ConversationService`/`TaskService` remain as frozen exports (removal is a breaking API change requiring approval); the package's own suites continue to pin their frozen behavior. |
+| `transport-http` | frozen library | Production REST/SSE = binding `startHttpServer` (Rust engine). The 223-suite TS server remains the behavioral authority the Rust route table is proven against — the client/react lane proof is that proof. |
+| `adapters-memory` / `adapters-sqlite` | frozen library | Production storage = Rust `SqliteStore` via `NativeStore`/`NativeAssistantStore` (shared conformance passed). TS adapters stay for frozen consumers. |
+| `runner-local` | frozen library | The queue/worker/lease engine lives in Rust; TS runner stays exported frozen. |
+| `mcp-client` / `mcp-server` | frozen library + feature holdout | Production MCP = binding (server hosting + client manager). The TS packages remain the ONLY implementation of OAuth, elicitation, rich content projection and the config/connection persistence layer — features the binding documents as open, not as parity. |
+| `contracts` | shared DTO/validation authority | Client-side and wire-level; not backend logic. |
+| `scripts/live`, `scripts/qualification` | developer tools | Compositions migrated to `@agentkit/native`; no script composes the TS backend stack anymore. |
+
+Production backend paths — both examples, the client/react test lanes,
+session services, REST/SSE, MCP, storage, provider transports — run on
+Rust. The frozen TS backend libraries persist under the API-freeze
+constraint, exercised by their own suites. No example or script composes
+the TS backend stack anymore; `examples/coding-agent` still imports
+`@agentkit/host` for pure profile-registry policy helpers (`defaultProfileRegistry`,
+`REASONING_EFFORTS`, `readSessionDescriptor`) — no execution or storage
+runs through them.
+
 Working-tree results on macOS arm64 with Bun 1.4.0:
 
 | Suite | Passed | Failed | Skipped | Evidence scope |
