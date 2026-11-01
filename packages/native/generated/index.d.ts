@@ -41,18 +41,39 @@ export declare class NativeStore {
    * re-registered (disconnect + reconnect under the same alias mints a new
    * registration), and a call whose handle names a superseded registration
    * is refused with `mcp_authority_revoked` — a descriptor from generation
-   * N never authorizes generation N+1's callback. The arguments are
+   * N never authorizes generation N+1's callback. Dispatch is additionally
+   * PINNED to the transport the descriptor was listed from (crate
+   * `ToolBinding`): after an automatic reconnect the stale descriptor is
+   * refused with `mcp_authority_revoked` instead of executing the new
+   * generation's handler, and the pin is re-checked wire-last, after any
+   * reconnect, secret resolution, or backoff, immediately before the
+   * request is written. The arguments are
    * validated LOCALLY against the descriptor's recorded input schema before
    * dispatch (invalid arguments never reach the server,
    * `mcp_invalid_arguments`; a schema that could not be compiled fails
    * closed the same way).
+   * `cancellationKey` is the abort handle the JS tool lane mints for one
+   * originating invocation: while the key is registered, `mcpCancelCall`
+   * tears the in-flight call down (pre-dispatch it is never written to the
+   * wire — connect, reconnect, backoff and the wire-last guard all observe
+   * the token — and mid-flight it aborts like any crate cancellation,
+   * which keeps its ambiguous-delivery semantics).
    * Returns the host tool-result contract as JSON text (`{ok, data,
    * modelData, summary, status, warnings, truncated, limits}`). Call
    * it from the `registerTool` run function so the durable guard and
    * authority layers keep judging the call — this host method is for
    * the JS tool lane, not a bypass around those checks.
    */
-  mcpCallTool(alias: string, toolName: string, argsJson: string, handle?: string | undefined | null): Promise<string>
+  mcpCallTool(alias: string, toolName: string, argsJson: string, handle?: string | undefined | null, cancellationKey?: string | undefined | null): Promise<string>
+  /**
+   * Tear down one in-flight `mcpCallTool` by the cancellation key the JS
+   * lane minted: this is the binding half of the originating invocation's
+   * AbortSignal. Pre-dispatch the request is never written (connect,
+   * reconnect, backoff and the wire-last guard all observe the token);
+   * after the request left, the call aborts like any crate cancellation.
+   * Cancelling an unknown or already-settled key is a no-op success.
+   */
+  mcpCancelCall(cancellationKey: string): Promise<void>
   /**
    * Disconnect one MCP server: its tool handles are revoked
    * immediately, its transport closed, and its declaration dropped.
@@ -106,11 +127,22 @@ export declare class SessionService {
   /**
    * Start the Rust REST v1 + SSE server on this service's host and
    * store. `optionsJson`: `{host?, port?, basePath?, maxBodyBytes?,
-   * maxQueryBytes?, actorId?, defaultModel?, bearerToken}` —
+   * maxQueryBytes?, actorId?, defaultModel?, bearerToken, cors?,
+   * providerSecrets?}` —
    * `bearerToken` is REQUIRED and at least 32 bytes (the backend's own
    * floor); invalid values fail with `invalid_input`, an unusable
    * address with `service_unavailable`. Defaults: `127.0.0.1`, ephemeral
-   * port, no base path, 1 MiB body / 16 KiB query caps. Returns
+   * port, no base path, 1 MiB body / 16 KiB query caps.
+   * `cors` (`{origins: "*"|[string], allowHeaders?, exposeHeaders?,
+   * maxAgeSeconds?}`) pins the retired TypeScript transport's CORS
+   * semantics: matched origins decorate every response (including
+   * problems and SSE) and OPTIONS preflights answer 204; an unmatched
+   * origin preflight gets the ordinary 405, an unmatched path 404.
+   * Omitted, no response ever carries a CORS header.
+   * `providerSecrets: "memory"` stores provider credentials in a
+   * volatile vault so `createProvider`/`updateProvider` accept
+   * `apiKey`/`extraHeaders`; omitted, those writes answer 501 like the
+   * TypeScript transport without a `SecretStore` port. Returns
    * `{port, baseUrl}` as JSON text (the wrapper parses it). Fails with
    * `invalid_input` if a server already runs on this service, and
    * `closed` after `close()`. Every request is authenticated by the
@@ -187,6 +219,30 @@ export declare class SessionService {
    * inputSchema, outputSchema?, timeoutMs?}`.
    */
   registerTool(definitionJson: string): Promise<void>
+  /**
+   * Register the RUST coding toolpack as a first-class contributor on
+   * this service's executor lane: `read_file`, `list_dir`, `find_files`,
+   * `code_search`, `repo_map`, `git_inspect`, `edit_file`, `write_file`,
+   * `run_command`, `run_tests`, and `submit_plan` — the crate's own
+   * descriptors, executed by Rust, governed by the crate's own
+   * permission + high-risk guards over the binding's durable authority,
+   * with the crate's fingerprint-v4 standing approvals for the shell
+   * tools. Nothing on this path crosses into JS: no callback, no TS
+   * pack, no fallback.
+   *
+   * `optionsJson`: `{workspaceRoot (REQUIRED, absolute), sandbox?
+   * ("required"|"off", default "required"), network?, testCommands?,
+   * allowGitWrites?, allowSensitive?, configuredMode?
+   * ("read_only"|"ask"|"auto_edit"|"full_auto"|"plan", default "ask" —
+   * the mode used until the session's durable execution state says
+   * otherwise), role? ("implementer"|"reviewer"|"supervisor"),
+   * planToolNames? (default ["submit_plan"]), identity? (default the
+   * root; part of the standing-approval key envelope), coordinationDir?
+   * (default the per-uid shared lock dir), coordinationWaitMs?}`.
+   * One-shot: a second registration is refused; the descriptor set of a
+   * service is immutable once the worker can claim turns.
+   */
+  registerCodingTools(optionsJson: string): Promise<void>
   createSession(inputJson: string): Promise<string>
   send(sessionId: string, inputJson: string): Promise<string>
   followUp(sessionId: string, inputJson: string): Promise<string>
@@ -297,6 +353,16 @@ export declare class SubscriptionHandle {
  */
 export declare function bindingSmoke(): string
 
+/**
+ * Synchronous liveness claim for one routed provider/tool callback: the
+ * router asks this BEFORE entering user code. True exactly once, only
+ * while Rust still considers the call live (not settled, rejected,
+ * cancelled, abandoned by the executor, or drained by close); on false the
+ * router must settle nothing and must never run the user function — the
+ * host has already given up on this invocation.
+ */
+export declare function claimCall(callId: string): boolean
+
 export declare function endRunProvider(callId: string): boolean
 
 export declare function isRunCallbackActive(callId: string): boolean
@@ -309,8 +375,21 @@ export declare function pushRunProviderEvent(callId: string, eventJson: string):
  * `/models`), and `apiKey` — when present — is presented as
  * `Authorization: Bearer`. The key crosses the boundary exactly here and
  * never again: only the returned connection id may appear in options JSON.
+ *
+ * Without `optionsJson` the id is a process-local random: correct for a
+ * scratch lane, but a Responses continuation bound to it dies with the
+ * process. For a lane whose continuation must survive restarts, pass
+ * `{connectionKey, storePath}` — the durable LOGICAL identity door
+ * (P1-E): the id is derived from the key alone (never from the secret),
+ * the store persists the credential fingerprint + generation, and the
+ * credential-restoration rules hold: same key + same credential on every
+ * restart → the same id AND generation (the continuation keeps working);
+ * same key + a different credential → a rotation (new generation under
+ * the same identity, stored scopes restamped, continuation continues);
+ * a wrong credential is the provider's verdict — an auth error at
+ * request time, never a silent identity change.
  */
-export declare function registerProviderConnection(baseUrl: string, apiKey?: string | undefined | null): Promise<string>
+export declare function registerProviderConnection(baseUrl: string, apiKey?: string | undefined | null, optionsJson?: string | undefined | null): Promise<string>
 
 export declare function reserveRunProviderRequest(callId: string): Promise<void>
 

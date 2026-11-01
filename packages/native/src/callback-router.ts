@@ -1,4 +1,4 @@
-import { resolveCall } from "./loader.js";
+import { claimCall, resolveCall } from "./loader.js";
 import type {
   ProviderFunction,
   ProviderRequest,
@@ -65,7 +65,19 @@ export class CallbackRouter {
     this.provider = provider;
   }
 
+  /** Holds the callbacks Rust ACCEPTED for this service: `registerTool` on
+   * the service calls the Rust contributor first and only reaches this
+   * method when Rust accepted the definition, so a name is registered at
+   * most once on both sides of the boundary. The dispatch key is the same
+   * name Rust gates and advertises; an overwrite here would put a callback
+   * behind the address that the descriptor/gate never authorized, so it is
+   * refused outright. */
   registerTool(definition: ToolDefinitionJson, run: ToolRunFunction): void {
+    if (this.tools.has(definition.name)) {
+      throw new Error(
+        `tool ${definition.name} is already registered in this session service`,
+      );
+    }
     this.tools.set(definition.name, { definition, run });
   }
 
@@ -99,6 +111,18 @@ export class CallbackRouter {
         controller.abort();
       }
       return;
+    }
+    // Liveness gate, answered synchronously by the Rust bridge: every
+    // give-up path (executor timeout abandonment, host cancellation, close
+    // drain, an already-settled call) removes the pending entry on the Rust
+    // side, so a failed claim means this envelope is STALE — the host
+    // already settled the call. Settle nothing (Rust did) and, above all,
+    // NEVER enter user code. An envelope queued behind a blocked JS thread
+    // must not run a callback the runtime abandoned. The per-call
+    // AbortController below remains a mid-execution stop signal only; it
+    // is not the liveness gate.
+    if (envelope.kind === "provider" || envelope.kind === "tool") {
+      if (!claimCall(callId)) return;
     }
     try {
       if (envelope.kind === "provider") {

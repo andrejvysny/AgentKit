@@ -313,6 +313,14 @@ async function bindScriptEntrypoints(
           script: bare,
           ...(await scriptRunner(dir, bare, env)),
         });
+      // P1-D: `NODE_OPTIONS` startup selectors — inherited, assigned
+      // on the script line, or behind an `env` wrapper — select files
+      // the launched node preloads; each is direct input identity.
+      for (const word of nodeOptionStartupFiles(
+        shellWords(command),
+        env.NODE_OPTIONS,
+      ))
+        await bindDirectFile(root, resolve(dir, word), state);
     }
   }
 }
@@ -394,6 +402,170 @@ async function bindExplicitConfigs(
   }
 }
 
+// ---------------------------------------------------------------------------
+// NODE_OPTIONS startup selectors (external review P1-D) — mirrored exactly
+// by `node_option_startup_files` in the Rust port.
+// ---------------------------------------------------------------------------
+
+const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const WRAPPER_WORD = /^(?:env|command|exec)$/;
+const NODE_BUN_NAME = /^(?:node(?:js)?|bun)$/;
+
+/**
+ * The exact ASCII whitespace set used to split a `NODE_OPTIONS` value on
+ * both sides of the differential. Deliberately NOT JS `/\s/`: U+00A0 etc.
+ * must not become separators on one side only.
+ */
+function asciiWordSplit(value: string): string[] {
+  return value.split(/[ \t\n\r\f]+/).filter((word) => word !== "");
+}
+
+/**
+ * A strict abbreviation of `--require`/`--import`. Node accepts unambiguous
+ * long-option prefixes, so an abbreviated selector would make the launched
+ * process read a file this parser did not bind: refuse instead.
+ */
+function selectorAbbreviation(token: string): boolean {
+  return (
+    (token.startsWith("--requir") && !token.startsWith("--require")) ||
+    (token.startsWith("--impor") &&
+      token !== "--import" &&
+      !token.startsWith("--import="))
+  );
+}
+
+/**
+ * Startup-file selectors Node honors in `NODE_OPTIONS` that this parser
+ * does not enumerate (`--loader`, `--experimental-loader`, CLI-only `-r`).
+ * A standing approval must never authorize a process whose preloaded file
+ * it cannot name, so these are refusals, not ignored tokens.
+ */
+function unsupportedSelector(token: string): boolean {
+  return (
+    token === "-r" ||
+    token === "--loader" ||
+    token.startsWith("--loader=") ||
+    token === "--experimental-loader" ||
+    token.startsWith("--experimental-loader=")
+  );
+}
+
+/**
+ * A selector target must be a literal path this side can resolve exactly
+ * the way the launcher will: absolute or explicitly relative. A bare
+ * specifier resolves through module-resolution candidates (NODE_PATH,
+ * ancestor `node_modules`) the fingerprint cannot enumerate, and any shell
+ * metacharacter means the value is not literal at all. Both are refusals.
+ */
+function selectorPath(candidate: string): string {
+  if (
+    candidate === "" ||
+    candidate.startsWith("-") ||
+    /[$`;&|<>]/.test(candidate)
+  )
+    throw new Error("NODE_OPTIONS startup selector is not a literal file");
+  if (
+    !candidate.startsWith("/") &&
+    !candidate.startsWith("./") &&
+    !candidate.startsWith("../")
+  )
+    throw new Error("NODE_OPTIONS startup selector is not a literal path");
+  return candidate;
+}
+
+/**
+ * Pull the `--require=<path>` / `--require <path>` / `--import=<path>` /
+ * `--import <path>` startup files out of one `NODE_OPTIONS` value.
+ */
+function parseNodeOptions(value: string): string[] {
+  const words = asciiWordSplit(value);
+  const files: string[] = [];
+  for (let index = 0; index < words.length; ) {
+    const token = words[index]!;
+    if (token === "--require" || token === "--import") {
+      const candidate = words[index + 1];
+      if (candidate === undefined)
+        throw new Error("NODE_OPTIONS startup selector is missing its file");
+      files.push(selectorPath(candidate));
+      index += 2;
+      continue;
+    }
+    const equal = token.indexOf("=");
+    const head = equal === -1 ? token : token.slice(0, equal);
+    if (equal !== -1 && (head === "--require" || head === "--import")) {
+      files.push(selectorPath(token.slice(equal + 1)));
+      index += 1;
+      continue;
+    }
+    if (unsupportedSelector(token) || selectorAbbreviation(token))
+      throw new Error("unsupported NODE_OPTIONS startup selector");
+    index += 1;
+  }
+  return files;
+}
+
+/**
+ * The startup files the EFFECTIVE `NODE_OPTIONS` selects for the node
+ * process this command line launches, across the supported forms: an
+ * inherited value, a leading `NODE_OPTIONS=value` assignment, and an `env`
+ * wrapper (assignments before or after `env`). `words` is the command
+ * already split; `inherited` is the effective-environment value.
+ *
+ * Anything the walk cannot confidently attribute to the launched process —
+ * a second assignment before the entry, a `NODE_OPTIONS` reassignment after
+ * the interpreter, `env` option flags, unparsed selector forms — throws:
+ * the caller maps it to "ask again", so a standing approval never
+ * authorizes a startup file it did not bind.
+ */
+export function nodeOptionStartupFiles(
+  words: string[],
+  inherited: string | undefined,
+): string[] {
+  let index = 0;
+  let assigned: string | undefined;
+  while (index < words.length) {
+    const word = words[index]!;
+    if (ASSIGNMENT_WORD.test(word)) {
+      const equal = word.indexOf("=");
+      if (word.slice(0, equal) === "NODE_OPTIONS") {
+        if (assigned !== undefined)
+          throw new Error(
+            "NODE_OPTIONS is assigned twice before the launched process",
+          );
+        assigned = word.slice(equal + 1);
+      }
+      index += 1;
+      continue;
+    }
+    if (WRAPPER_WORD.test(word)) {
+      const next = words[index + 1];
+      if (
+        word === "env" &&
+        next !== undefined &&
+        next.startsWith("-") &&
+        next !== "--"
+      )
+        throw new Error(
+          "env wrapper flags make NODE_OPTIONS attribution ambiguous",
+        );
+      index += 1;
+      // `env --` ends option parsing; the command words follow.
+      if (words[index] === "--") index += 1;
+      continue;
+    }
+    break;
+  }
+  const entry = executableName(words[index] ?? "");
+  if (!NODE_BUN_NAME.test(entry)) return [];
+  for (const word of words.slice(index + 1))
+    if (ASSIGNMENT_WORD.test(word) && word.startsWith("NODE_OPTIONS="))
+      throw new Error(
+        "NODE_OPTIONS is reassigned after the launched interpreter",
+      );
+  const effective = assigned ?? inherited;
+  return effective === undefined ? [] : parseNodeOptions(effective);
+}
+
 /**
  * The fingerprint token stream: JS `trim()` then a greedy U+0020-run split
  * (`/ +/`), so repeated spaces are one separator and an all-whitespace
@@ -440,6 +612,8 @@ export async function commandFingerprint(
   await bindMetadata(dirs, state);
   await bindScriptEntrypoints(root, dirs, tokens, env, executables, state);
   await bindExplicitConfigs(root, cwd, tokens, env, state);
+  for (const word of nodeOptionStartupFiles(tokens, env.NODE_OPTIONS))
+    await bindDirectFile(root, resolve(cwd, word), state);
   return createHash("sha256")
     .update(
       JSON.stringify({

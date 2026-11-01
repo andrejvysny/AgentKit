@@ -310,18 +310,19 @@ test.skipIf(!nativeBackendAvailable)(
     ).toBe(false);
     await call("deleteMcpServer", client.deleteMcpServer({ serverId: mcp.id }));
     expect(await call("listTools", client.listTools())).toEqual([]);
+    await assertManagedServiceUnavailable("connectionAction");
+    covered.add("connectionAction");
     for (const operation of [
       "listConnections",
       "saveConnection",
       "deleteConnection",
-      "connectionAction",
       "listPromptTemplates",
       "publishPromptTemplate",
       "deletePromptTemplate",
       "renderPromptTemplate",
       "listSkills",
     ] as const) {
-      await assertManagedServiceUnavailable(operation);
+      await assertManagedServiceLive(operation);
       covered.add(operation);
     }
     expect([...covered].sort()).toEqual(
@@ -354,4 +355,35 @@ async function assertManagedServiceUnavailable(
   expect(response.status, operation).toBe(501);
   const problem: unknown = await response.json();
   expect(problem).toMatchObject({ status: 501, code: "not_implemented" });
+}
+
+async function assertManagedServiceLive(operation: RestOperation): Promise<void> {
+  // Delivered managed-content surface: authenticated traffic must reach the
+  // real service — never the 501 stub. Per-route response contracts are
+  // pinned in packages/native/tests/managed-content.test.ts; this lane pins
+  // the boundary: auth is enforced and the route is implemented.
+  const route = REST_ROUTES[operation];
+  const path = route.path.replace(/:[A-Za-z]+/g, "unconfigured");
+  const input: RequestInit = {
+    method: route.method,
+    ...(route.method === "GET" || route.method === "DELETE"
+      ? {}
+      : { body: "{}" }),
+  };
+  const unauthorized = await fetch(`${server.baseUrl}${path}`, input);
+  expect(unauthorized.status, `${operation} requires authentication`).toBe(401);
+  const response = await fetch(`${server.baseUrl}${path}`, {
+    ...input,
+    headers: {
+      authorization: `Bearer ${server.token}`,
+      "content-type": "application/json",
+    },
+  });
+  expect(response.status, operation).not.toBe(501);
+  expect(response.status, operation).not.toBe(401);
+  expect(response.status, operation).toBeLessThan(500);
+  if (route.method === "GET") {
+    expect(response.status, operation).toBe(200);
+    expect(Array.isArray(await response.json()), operation).toBe(true);
+  }
 }

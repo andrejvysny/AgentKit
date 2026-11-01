@@ -152,7 +152,7 @@ describe("edit_file", () => {
     put(
       h.root,
       "c.txt",
-      Array.from({ length: n }, (_, i) => `T${i}=0`).join("\n") + "\n",
+      `${Array.from({ length: n }, (_, i) => `T${i}=0`).join("\n")}\n`,
     );
     const results = await Promise.all(
       Array.from({ length: n }, (_, i) =>
@@ -164,7 +164,7 @@ describe("edit_file", () => {
     );
     expect(results.every((r) => r.ok)).toBe(true);
     expect(read(h.root, "c.txt")).toBe(
-      Array.from({ length: n }, (_, i) => `T${i}=1`).join("\n") + "\n",
+      `${Array.from({ length: n }, (_, i) => `T${i}=1`).join("\n")}\n`,
     );
     expect(readdirSync(h.root).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
@@ -229,8 +229,7 @@ describe("edit_file", () => {
 
   test("the diff of a far-apart double edit has two hunks", async () => {
     const h = await harness();
-    const body =
-      Array.from({ length: 40 }, (_, i) => `l${i}`).join("\n") + "\n";
+    const body = `${Array.from({ length: 40 }, (_, i) => `l${i}`).join("\n")}\n`;
     put(h.root, "d.txt", body);
     const r = await h.run("edit_file", {
       path: "d.txt",

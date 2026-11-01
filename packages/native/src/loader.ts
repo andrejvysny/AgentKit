@@ -58,6 +58,14 @@ export function resolveCall(
   return loadedBinding().resolveCall(callId, payload, error);
 }
 
+/** Synchronous liveness claim for one routed callback: true exactly once,
+ * only while Rust still considers the call live. The router MUST gate every
+ * entry into user code on this answer — a false means the host already
+ * settled the call (timeout/cancel/close) and the envelope is stale. */
+export function claimCall(callId: string): boolean {
+  return loadedBinding().claimCall(callId);
+}
+
 export function endRunProvider(callId: string): boolean {
   return loadedBinding().endRunProvider(callId);
 }

@@ -85,7 +85,11 @@ import type {
   TaskEventEnvelope,
 } from "@agentkit/contracts";
 import type { NativeStore as RawNativeStore } from "../generated/index.js";
-import { createNativeStorePort, NativeAgentError, type NativeStore } from "./index.js";
+import {
+  createNativeStorePort,
+  NativeAgentError,
+  type NativeStore,
+} from "./index.js";
 import type { NativeStorePort } from "./store-transaction.js";
 
 /** The clock the conformance harness injects through `createTuned`: every
@@ -134,15 +138,15 @@ function iso(value: unknown): string | undefined {
  * unparsable value is refused here with the port's `invalid_timestamp` —
  * storing it would poison every later comparison. */
 function toEpoch(value: Date | string | number, field: string): number {
-  const millis = value instanceof Date ? value.getTime() : new Date(value).getTime();
+  const millis =
+    value instanceof Date ? value.getTime() : new Date(value).getTime();
   if (Number.isNaN(millis)) {
-    throw new NativeAgentError("invalid_timestamp", `${field} is not an instant: ${String(value)}`);
+    throw new NativeAgentError(
+      "invalid_timestamp",
+      `${field} is not an instant: ${String(value)}`,
+    );
   }
   return millis;
-}
-
-function maybeEpoch(value: Date | string | number | undefined, field: string): number | undefined {
-  return value === undefined ? undefined : toEpoch(value, field);
 }
 
 /** The optional `now` every time-taking binding op accepts; absent means the
@@ -155,7 +159,10 @@ function withNow(input: Json, clock?: NativeAssistantStoreClock): Json {
 /** Re-label a coded error the engine reported, when the port has a more
  * precise code for the same refusal. Only `invalid_input` messages are
  * consulted; every other error is re-thrown untouched. */
-function reclassify(error: unknown, markers: readonly (readonly [string, string])[]): never {
+function reclassify(
+  error: unknown,
+  markers: readonly (readonly [string, string])[],
+): never {
   if (error instanceof NativeAgentError && error.code === "invalid_input") {
     for (const [marker, code] of markers) {
       if (error.message.includes(marker)) {
@@ -172,7 +179,11 @@ function reclassify(error: unknown, markers: readonly (readonly [string, string]
 
 function projectChat(value: unknown): ChatRecord {
   const source = record(value);
-  if (source === null) throw new NativeAgentError("internal_error", "chat record is not an object");
+  if (source === null)
+    throw new NativeAgentError(
+      "internal_error",
+      "chat record is not an object",
+    );
   const out: Json = {};
   copy(source, out, "id");
   copy(source, out, "title");
@@ -188,7 +199,10 @@ function projectChat(value: unknown): ChatRecord {
 function projectMessage(value: unknown): MessageRecord {
   const source = record(value);
   if (source === null)
-    throw new NativeAgentError("internal_error", "message record is not an object");
+    throw new NativeAgentError(
+      "internal_error",
+      "message record is not an object",
+    );
   const out: Json = {};
   for (const key of [
     "id",
@@ -221,7 +235,10 @@ function projectMessages(value: unknown): MessageRecord[] {
 function projectTask(value: unknown): TaskRecord {
   const source = record(value);
   if (source === null)
-    throw new NativeAgentError("internal_error", "task record is not an object");
+    throw new NativeAgentError(
+      "internal_error",
+      "task record is not an object",
+    );
   const out: Json = {};
   for (const key of [
     "taskId",
@@ -256,7 +273,10 @@ function projectTask(value: unknown): TaskRecord {
 function projectAttempt(value: unknown): AttemptRecord {
   const source = record(value);
   if (source === null)
-    throw new NativeAgentError("internal_error", "attempt record is not an object");
+    throw new NativeAgentError(
+      "internal_error",
+      "attempt record is not an object",
+    );
   const out: Json = {};
   for (const key of [
     "attemptId",
@@ -277,9 +297,16 @@ function projectAttempt(value: unknown): AttemptRecord {
 
 function projectLease(value: unknown): Lease {
   const source = record(value);
-  if (source === null) throw new NativeAgentError("internal_error", "lease is not an object");
+  if (source === null)
+    throw new NativeAgentError("internal_error", "lease is not an object");
   const out: Json = {};
-  for (const key of ["taskId", "attemptId", "ownerId", "leaseToken", "fencingToken"] as const) {
+  for (const key of [
+    "taskId",
+    "attemptId",
+    "ownerId",
+    "leaseToken",
+    "fencingToken",
+  ] as const) {
     copy(source, out, key);
   }
   const expires = iso(source["expiresAt"]);
@@ -290,9 +317,19 @@ function projectLease(value: unknown): Lease {
 function projectOutbox(value: unknown): OutboxRecord {
   const source = record(value);
   if (source === null)
-    throw new NativeAgentError("internal_error", "outbox record is not an object");
+    throw new NativeAgentError(
+      "internal_error",
+      "outbox record is not an object",
+    );
   const out: Json = {};
-  for (const key of ["id", "topic", "runId", "payload", "attempts", "lastError"] as const) {
+  for (const key of [
+    "id",
+    "topic",
+    "runId",
+    "payload",
+    "attempts",
+    "lastError",
+  ] as const) {
     copy(source, out, key);
   }
   for (const key of ["createdAt", "availableAt", "publishedAt"] as const) {
@@ -305,7 +342,10 @@ function projectOutbox(value: unknown): OutboxRecord {
 function projectProposal(value: unknown): ProposalRecord {
   const source = record(value);
   if (source === null)
-    throw new NativeAgentError("internal_error", "proposal record is not an object");
+    throw new NativeAgentError(
+      "internal_error",
+      "proposal record is not an object",
+    );
   const out: Json = {};
   for (const key of [
     "id",
@@ -328,7 +368,12 @@ function projectProposal(value: unknown): ProposalRecord {
   ] as const) {
     copy(source, out, key);
   }
-  for (const key of ["createdAt", "decidedAt", "claimedAt", "appliedAt"] as const) {
+  for (const key of [
+    "createdAt",
+    "decidedAt",
+    "claimedAt",
+    "appliedAt",
+  ] as const) {
     const stamp = iso(source[key]);
     if (stamp !== undefined) out[key] = stamp;
   }
@@ -345,7 +390,13 @@ function projectOutcome(value: unknown): ApplyOutcome | null {
   const out: Json = {};
   // The engine's receipt carries its own claim fields; the port's outcome is
   // the apply verdict plus the caller's optional result/revision strings.
-  for (const key of ["status", "appliedOps", "failedOps", "resultJson", "revision"] as const) {
+  for (const key of [
+    "status",
+    "appliedOps",
+    "failedOps",
+    "resultJson",
+    "revision",
+  ] as const) {
     copy(source, out, key);
   }
   return out as unknown as ApplyOutcome;
@@ -382,7 +433,10 @@ function projectInput(value: unknown): AgentInputRecord | undefined {
 function projectContinuation(value: unknown): ProviderContinuationRecord {
   const source = record(value);
   if (source === null)
-    throw new NativeAgentError("internal_error", "continuation record is not an object");
+    throw new NativeAgentError(
+      "internal_error",
+      "continuation record is not an object",
+    );
   const out: Json = {};
   for (const key of ["runId", "anchorMessageId", "state"] as const) {
     copy(source, out, key);
@@ -409,11 +463,14 @@ function projectSettings(value: unknown): AssistantSettings {
  * shape rules are the port's and must refuse with `invalid_input`. */
 function validateAgentInput(input: CreateAgentInput): void {
   const bad = (message: string): never => {
-    throw new NativeAgentError("invalid_input", message, { inputId: input.inputId });
+    throw new NativeAgentError("invalid_input", message, {
+      inputId: input.inputId,
+    });
   };
   for (const field of ["inputId", "sessionId", "contentHash"] as const) {
     const value: unknown = input[field];
-    if (typeof value !== "string" || value === "") bad(`${field} must be a non-empty string.`);
+    if (typeof value !== "string" || value === "")
+      bad(`${field} must be a non-empty string.`);
   }
   if (!["steer", "follow_up", "human_request"].includes(input.kind))
     bad(`Unknown input kind: ${input.kind}.`);
@@ -425,20 +482,24 @@ function validateAgentInput(input: CreateAgentInput): void {
   if (input.kind === "human_request") {
     for (const field of ["attemptId", "toolCallId"] as const) {
       const value = input[field];
-      if (typeof value !== "string" || value === "") bad(`${field} is required for human_request.`);
+      if (typeof value !== "string" || value === "")
+        bad(`${field} is required for human_request.`);
     }
   } else if (
     input.attemptId !== undefined ||
     input.toolCallId !== undefined ||
     input.expiresAt !== undefined
   ) {
-    bad("attemptId, toolCallId and expiresAt are only valid for human_request.");
+    bad(
+      "attemptId, toolCallId and expiresAt are only valid for human_request.",
+    );
   }
   if (input.targetTaskId !== undefined && input.targetTaskId === "")
     bad("targetTaskId must be non-empty when present.");
   if (
     input.expiresAt !== undefined &&
-    (typeof input.expiresAt !== "string" || Number.isNaN(new Date(input.expiresAt).getTime()))
+    (typeof input.expiresAt !== "string" ||
+      Number.isNaN(new Date(input.expiresAt).getTime()))
   )
     bad("expiresAt must be a valid ISO timestamp.");
   if (JSON.stringify(input.content) === undefined)
@@ -447,7 +508,10 @@ function validateAgentInput(input: CreateAgentInput): void {
 
 /** Statuses that release an `actionId` reservation; every other status keeps
  * its key claimed (see `ACTION_ID_RELEASING_STATUSES` in the port). */
-const RELEASED_ACTION_STATUSES: readonly ProposalStatus[] = ["rejected", "invalidated"];
+const RELEASED_ACTION_STATUSES: readonly ProposalStatus[] = [
+  "rejected",
+  "invalidated",
+];
 
 /**
  * The port's `transition(…, "applied" | "failed")` on the engine's
@@ -456,7 +520,7 @@ const RELEASED_ACTION_STATUSES: readonly ProposalStatus[] = ["rejected", "invali
  * produced), and `complete_proposal` landing the stamp.
  */
 async function settleApply(
-  call: <T,>(operation: string, input?: unknown) => Promise<T>,
+  call: <T>(operation: string, input?: unknown) => Promise<T>,
   proposalId: string,
   from: readonly ProposalStatus[],
   to: "applied" | "failed",
@@ -465,7 +529,11 @@ async function settleApply(
 ): Promise<unknown> {
   const current = record(await call<unknown>("proposals.get", { proposalId }));
   if (current === null)
-    throw new NativeAgentError("not_found", `Proposal not found: ${proposalId}`, { proposalId });
+    throw new NativeAgentError(
+      "not_found",
+      `Proposal not found: ${proposalId}`,
+      { proposalId },
+    );
   const status = current["status"] as ProposalStatus | undefined;
   const refuse = (why: string): never => {
     throw new NativeAgentError("invalid_proposal_transition", why, {
@@ -476,31 +544,61 @@ async function settleApply(
     });
   };
   if (status === undefined || !from.includes(status))
-    refuse(`Proposal ${proposalId} is ${String(status)}, expected one of [${from.join(", ")}].`);
+    refuse(
+      `Proposal ${proposalId} is ${String(status)}, expected one of [${from.join(", ")}].`,
+    );
   if (status !== "applying")
-    refuse(`Proposal ${proposalId} is ${String(status)}; apply needs an applying proposal.`);
+    refuse(
+      `Proposal ${proposalId} is ${String(status)}; apply needs an applying proposal.`,
+    );
   const operationId = current["operationId"];
   if (typeof operationId !== "string")
     refuse(`Proposal ${proposalId} has no apply-claim operation id.`);
-  const receipt = record(await call<unknown>("proposals.getOutcome", { operationId }));
-  const recorded = receipt !== null && "outcome" in receipt ? record(receipt.outcome) : null;
+  const receipt = record(
+    await call<unknown>("proposals.getOutcome", { operationId }),
+  );
+  const recorded =
+    receipt !== null && "outcome" in receipt ? record(receipt.outcome) : null;
+  // The port's patch lands with the terminal stamp — `reason` especially:
+  // "failed" without a reason is not actionable by the UI or the model.
+  // `operationId` is apply-claim-only; stamps ride as `now` below.
+  const forwarded: Json = {};
+  if (patch?.reason !== undefined) forwarded["reason"] = patch.reason;
+  if (patch?.decision !== undefined) forwarded["decision"] = patch.decision;
   if (recorded === null) {
     // No outcome was ever recorded: this is the port's plain status CAS,
     // exactly the TypeScript baseline behavior. Completing instead would
     // INSERT a receipt row from a shape the apply never produced — a status
     // request must never manufacture appliedOps evidence. A later
     // `recordOutcome` still stands on its own, as in the baseline.
-    const body: Json = { proposalId, from: ["applying"], to, patch: {} };
+    const body: Json = { proposalId, from: ["applying"], to, patch: forwarded };
     if (patch?.appliedAt !== undefined)
       body["now"] = toEpoch(patch.appliedAt, "patch.appliedAt");
+    else if (patch?.decidedAt !== undefined)
+      body["now"] = toEpoch(patch.decidedAt, "patch.decidedAt");
     else withNow(body, clock);
     await call("proposals.transition", body);
     return call("proposals.get", { proposalId });
   }
-  const body: Json = { proposalId, operationId, outcome: recorded };
-  if (patch?.appliedAt !== undefined) body["now"] = toEpoch(patch.appliedAt, "patch.appliedAt");
+  // The receipt-bound terminal apply. `from` rides to the write so the
+  // engine re-checks the expected state INSIDE its transaction: a competing
+  // terminal request that raced past the read above is refused
+  // (`invalid_proposal_transition`) instead of landing a second stamp —
+  // the same refusal the reference adapters make synchronously.
+  const body: Json = {
+    proposalId,
+    operationId,
+    outcome: recorded,
+    from: ["applying"],
+    to,
+    patch: forwarded,
+  };
+  if (patch?.appliedAt !== undefined)
+    body["now"] = toEpoch(patch.appliedAt, "patch.appliedAt");
+  else if (patch?.decidedAt !== undefined)
+    body["now"] = toEpoch(patch.decidedAt, "patch.decidedAt");
   else withNow(body, clock);
-  await call("proposals.complete", body);
+  await call("proposals.finalize", body);
   return call("proposals.get", { proposalId });
 }
 
@@ -513,7 +611,8 @@ async function settleApply(
 function projectEvent(value: unknown): TaskEventEnvelope {
   const source = record(value);
   if (source === null) return {} as TaskEventEnvelope;
-  const envelope = "event" in source ? (record(source["event"]) ?? source) : source;
+  const envelope =
+    "event" in source ? (record(source["event"]) ?? source) : source;
   return envelope as unknown as TaskEventEnvelope;
 }
 
@@ -567,12 +666,14 @@ function buildPorts(
   port: NativeStorePort,
   clock?: NativeAssistantStoreClock,
 ): Omit<AssistantStore, "transaction"> {
-  const call = async <T,>(operation: string, input?: unknown): Promise<T> =>
+  const call = async <T>(operation: string, input?: unknown): Promise<T> =>
     port.callStore<T>(operation, input ?? {});
 
   const conversations: ConversationStore = {
     createChat: async (input: CreateChatInput): Promise<ChatRecord> =>
-      projectChat(await call("conversations.createChat", withNow({ input }, clock))),
+      projectChat(
+        await call("conversations.createChat", withNow({ input }, clock)),
+      ),
     getChat: async (chatId: string): Promise<ChatRecord | null> => {
       const value = await call<unknown>("conversations.getChat", { chatId });
       return value === null ? null : projectChat(value);
@@ -581,8 +682,16 @@ function buildPorts(
       const chats = await call<unknown[]>("conversations.listChats", { opts });
       return chats.map(projectChat);
     },
-    updateChat: async (chatId: string, patch: UpdateChatPatch): Promise<ChatRecord> =>
-      projectChat(await call("conversations.updateChat", withNow({ chatId, patch }, clock))),
+    updateChat: async (
+      chatId: string,
+      patch: UpdateChatPatch,
+    ): Promise<ChatRecord> =>
+      projectChat(
+        await call(
+          "conversations.updateChat",
+          withNow({ chatId, patch }, clock),
+        ),
+      ),
     deleteChat: async (chatId: string): Promise<void> => {
       await call("conversations.deleteChat", { chatId });
     },
@@ -617,44 +726,69 @@ function buildPorts(
       projectMessage(
         await call(
           "conversations.updateMessage",
-          withNow(fence === undefined ? { messageId, patch } : { messageId, patch, fence }, clock),
+          withNow(
+            fence === undefined
+              ? { messageId, patch }
+              : { messageId, patch, fence },
+            clock,
+          ),
         ),
       ),
     listMessages: async (chatId: string, opts?: ListMessagesOptions) => {
-      if (opts?.afterOrderKey !== undefined && opts?.beforeOrderKey !== undefined) {
+      if (
+        opts?.afterOrderKey !== undefined &&
+        opts?.beforeOrderKey !== undefined
+      ) {
         throw new NativeAgentError(
           "invalid_cursor",
           "listMessages accepts at most one of afterOrderKey / beforeOrderKey.",
         );
       }
-      return projectMessages(await call("conversations.listMessages", { chatId, opts }));
+      return projectMessages(
+        await call("conversations.listMessages", { chatId, opts }),
+      );
     },
     getMessage: async (messageId: string): Promise<MessageRecord | null> => {
-      const value = await call<unknown>("conversations.getMessage", { messageId });
+      const value = await call<unknown>("conversations.getMessage", {
+        messageId,
+      });
       return value === null ? null : projectMessage(value);
     },
     listTree: async (chatId: string, options?: { includeArchived?: boolean }) =>
-      projectMessages(await call("conversations.listTree", { chatId, options })),
+      projectMessages(
+        await call("conversations.listTree", { chatId, options }),
+      ),
     archiveBranch: async (messageId: string) => {
       try {
         return (
-          (await call<{ archivedCount: number }>("conversations.archiveBranch", { messageId })) ?? {
+          (await call<{ archivedCount: number }>(
+            "conversations.archiveBranch",
+            { messageId },
+          )) ?? {
             archivedCount: 0,
           }
         );
       } catch (error) {
-        throw reclassify(error, [["active_branch_archive", "active_branch_archive"]]);
+        throw reclassify(error, [
+          ["active_branch_archive", "active_branch_archive"],
+        ]);
       }
     },
     lastMessageOfRun: async (chatId: string, runId: string) => {
-      const value = await call<unknown>("conversations.lastMessageOfRun", { chatId, runId });
+      const value = await call<unknown>("conversations.lastMessageOfRun", {
+        chatId,
+        runId,
+      });
       return value === null ? null : projectMessage(value);
     },
     listSiblings: async (messageId: string) =>
       projectMessages(await call("conversations.listSiblings", { messageId })),
     activatePath: async (messageId: string) =>
       projectMessages(await call("conversations.activatePath", { messageId })),
-    forkChat: async (chatId: string, fromMessageId: string): Promise<ForkChatResult> => {
+    forkChat: async (
+      chatId: string,
+      fromMessageId: string,
+    ): Promise<ForkChatResult> => {
       let value: Json;
       try {
         value = await call<Json>(
@@ -669,12 +803,22 @@ function buildPorts(
         messages: projectMessages(value["messages"]),
       };
     },
-    importConversation: async (input: ImportConversationInput): Promise<ChatRecord> =>
-      projectChat(await call("conversations.importConversation", withNow({ input }, clock))),
+    importConversation: async (
+      input: ImportConversationInput,
+    ): Promise<ChatRecord> =>
+      projectChat(
+        await call(
+          "conversations.importConversation",
+          withNow({ input }, clock),
+        ),
+      ),
     searchMessages: async (query: string, opts?: SearchMessagesOptions) => {
       const needle = query.trim().toLowerCase();
       if (needle.length === 0) return [];
-      const rows = await call<unknown[]>("conversations.searchMessages", { query, opts });
+      const rows = await call<unknown[]>("conversations.searchMessages", {
+        query,
+        opts,
+      });
       const hits: MessageSearchHit[] = [];
       for (const row of rows) {
         const source = record(row);
@@ -682,7 +826,8 @@ function buildPorts(
         if (message === null) continue;
         const chatId = message["chatId"];
         const messageId = message["id"];
-        if (typeof chatId !== "string" || typeof messageId !== "string") continue;
+        if (typeof chatId !== "string" || typeof messageId !== "string")
+          continue;
         const text = searchTextOf(message["content"]);
         const at = text.toLowerCase().indexOf(needle);
         hits.push({
@@ -703,7 +848,9 @@ function buildPorts(
         toEpoch(input.availableAt, "availableAt");
       }
       try {
-        return projectTask(await call("tasks.createTask", withNow({ input }, clock)));
+        return projectTask(
+          await call("tasks.createTask", withNow({ input }, clock)),
+        );
       } catch (error) {
         throw reclassify(error, [["unknown dependency", "unknown_dependency"]]);
       }
@@ -713,16 +860,29 @@ function buildPorts(
       return value === null ? null : projectTask(value);
     },
     interruptQueued: async (before: string) =>
-      await call<number>("tasks.interruptQueued", { before: toEpoch(before, "before") }),
-    interruptTask: async (taskId: string, reason: string, opts?: FencedWriteOptions) =>
+      await call<number>("tasks.interruptQueued", {
+        before: toEpoch(before, "before"),
+      }),
+    interruptTask: async (
+      taskId: string,
+      reason: string,
+      opts?: FencedWriteOptions,
+    ) =>
       await call<boolean>(
         "tasks.interruptTask",
-        withNow(opts === undefined ? { taskId, reason } : { taskId, reason, opts }, clock),
+        withNow(
+          opts === undefined ? { taskId, reason } : { taskId, reason, opts },
+          clock,
+        ),
       ),
     listChildren: async (taskId: string) =>
-      (await call<unknown[]>("tasks.listChildren", { taskId })).map(projectTask),
+      (await call<unknown[]>("tasks.listChildren", { taskId })).map(
+        projectTask,
+      ),
     listByScope: async (scopeId: string) =>
-      (await call<unknown[]>("tasks.listByScope", { scopeId })).map(projectTask),
+      (await call<unknown[]>("tasks.listByScope", { scopeId })).map(
+        projectTask,
+      ),
     deleteByScope: async (scopeId: string) =>
       await call<number>("tasks.deleteByScope", { scopeId }),
     transitionTask: async (
@@ -736,26 +896,38 @@ function buildPorts(
         await call(
           "tasks.transitionTask",
           withNow(
-            { taskId, from, to, ...(patch ? { patch } : {}), ...(opts ? { opts } : {}) },
+            {
+              taskId,
+              from,
+              to,
+              ...(patch ? { patch } : {}),
+              ...(opts ? { opts } : {}),
+            },
             clock,
           ),
         ),
       ),
     createAttempt: async (input: CreateAttemptInput) =>
-      projectAttempt(await call("tasks.createAttempt", withNow({ input }, clock))),
+      projectAttempt(
+        await call("tasks.createAttempt", withNow({ input }, clock)),
+      ),
     endAttempt: async (input: EndAttemptInput) =>
       projectAttempt(await call("tasks.endAttempt", withNow({ input }, clock))),
     acquireLease: async (input) =>
       projectLease(await call("tasks.acquireLease", withNow({ input }, clock))),
     renewLease: async (leaseToken: string, ttlMs: number) =>
-      projectLease(await call("tasks.renewLease", withNow({ leaseToken, ttlMs }, clock))),
+      projectLease(
+        await call("tasks.renewLease", withNow({ leaseToken, ttlMs }, clock)),
+      ),
     releaseLease: async (leaseToken: string) => {
       await call("tasks.releaseLease", { leaseToken });
     },
     expireStaleLeases: async (now: Date) =>
-      (await call<unknown[]>("tasks.expireStaleLeases", { now: toEpoch(now, "now") })).map(
-        projectLease,
-      ),
+      (
+        await call<unknown[]>("tasks.expireStaleLeases", {
+          now: toEpoch(now, "now"),
+        })
+      ).map(projectLease),
     appendEvents: async (
       taskId: string,
       events: TaskEventEnvelope[],
@@ -766,36 +938,57 @@ function buildPorts(
       // `seq_conflict`. The SQLite primary keys would reject too, but only
       // with an opaque constraint error, so the check lives here the same way
       // the reference adapters do it.
-      const stored = (await call<unknown[]>("tasks.listEvents", { taskId })).map(projectEvent);
+      const stored = (
+        await call<unknown[]>("tasks.listEvents", { taskId })
+      ).map(projectEvent);
       let maxSeq = Number.NEGATIVE_INFINITY;
       const seen = new Set<string>();
       for (const entry of stored) {
-        if (typeof entry.seq === "number" && entry.seq > maxSeq) maxSeq = entry.seq;
+        if (typeof entry.seq === "number" && entry.seq > maxSeq)
+          maxSeq = entry.seq;
         if (typeof entry.eventId === "string") seen.add(entry.eventId);
       }
       for (const event of events) {
         const entry = record(event);
         const seq = entry?.["seq"];
         if (typeof seq !== "number" || !(seq > maxSeq)) {
-          throw new NativeAgentError("seq_conflict", `event seq must be greater than ${maxSeq}.`);
+          throw new NativeAgentError(
+            "seq_conflict",
+            `event seq must be greater than ${maxSeq}.`,
+          );
         }
         const eventId = entry?.["eventId"];
         if (typeof eventId === "string" && seen.has(eventId)) {
-          throw new NativeAgentError("seq_conflict", `event ${eventId} is already in the log.`);
+          throw new NativeAgentError(
+            "seq_conflict",
+            `event ${eventId} is already in the log.`,
+          );
         }
         maxSeq = seq;
         if (typeof eventId === "string") seen.add(eventId);
       }
-      await call("tasks.appendEvents", withNow({ taskId, events, opts }, clock));
+      await call(
+        "tasks.appendEvents",
+        withNow({ taskId, events, opts }, clock),
+      );
     },
     listEvents: async (taskId: string, opts?: ListEventsOptions) =>
-      (await call<unknown[]>("tasks.listEvents", { taskId, opts })).map(projectEvent),
+      (await call<unknown[]>("tasks.listEvents", { taskId, opts })).map(
+        projectEvent,
+      ),
     updateProgress: async (
       taskId: string,
       progress: Record<string, unknown>,
       opts: UpdateProgressOptions,
-    ) => projectTask(await call("tasks.updateProgress", withNow({ taskId, progress, opts }, clock))),
-    nextSeq: async (taskId: string) => await call<number>("tasks.nextSeq", { taskId }),
+    ) =>
+      projectTask(
+        await call(
+          "tasks.updateProgress",
+          withNow({ taskId, progress, opts }, clock),
+        ),
+      ),
+    nextSeq: async (taskId: string) =>
+      await call<number>("tasks.nextSeq", { taskId }),
     claimNext: async (input: ClaimNextInput): Promise<ClaimedTask | null> => {
       // "An empty kinds list means no kind is acceptable" (port contract) —
       // the engine's claim treats an empty filter as no filter, so this is
@@ -816,11 +1009,18 @@ function buildPorts(
         lease: projectLease(claimed["lease"]),
       };
     },
-    markDeadLettered: async (taskId: string, reason: string, opts?: FencedWriteOptions) =>
+    markDeadLettered: async (
+      taskId: string,
+      reason: string,
+      opts?: FencedWriteOptions,
+    ) =>
       projectTask(
         await call(
           "tasks.markDeadLettered",
-          withNow(opts === undefined ? { taskId, reason } : { taskId, reason, opts }, clock),
+          withNow(
+            opts === undefined ? { taskId, reason } : { taskId, reason, opts },
+            clock,
+          ),
         ),
       ),
   };
@@ -836,28 +1036,44 @@ function buildPorts(
           actionId: input.actionId,
         });
         const held = record(holder);
-        if (held !== null && !RELEASED_ACTION_STATUSES.includes(held["status"] as ProposalStatus)) {
+        if (
+          held !== null &&
+          !RELEASED_ACTION_STATUSES.includes(held["status"] as ProposalStatus)
+        ) {
           throw new NativeAgentError(
             "duplicate_action_id",
             `action_id ${input.actionId} already used in scope ${input.scopeKey}.`,
-            { scopeKey: input.scopeKey, actionId: input.actionId, holderId: held["id"] },
+            {
+              scopeKey: input.scopeKey,
+              actionId: input.actionId,
+              holderId: held["id"],
+            },
           );
         }
       }
-      return projectProposal(await call("proposals.create", withNow({ input }, clock)));
+      return projectProposal(
+        await call("proposals.create", withNow({ input }, clock)),
+      );
     },
     get: async (proposalId: string) => {
       const value = await call<unknown>("proposals.get", { proposalId });
       return value === null ? null : projectProposal(value);
     },
     getByActionId: async (scopeKey: string, actionId: string) => {
-      const value = await call<unknown>("proposals.getByActionId", { scopeKey, actionId });
+      const value = await call<unknown>("proposals.getByActionId", {
+        scopeKey,
+        actionId,
+      });
       return value === null ? null : projectProposal(value);
     },
     listByChat: async (chatId: string, opts?: ListProposalsOptions) =>
-      (await call<unknown[]>("proposals.listByChat", { chatId, opts })).map(projectProposal),
+      (await call<unknown[]>("proposals.listByChat", { chatId, opts })).map(
+        projectProposal,
+      ),
     listByStatus: async (status: ProposalStatus, opts?: { limit?: number }) =>
-      (await call<unknown[]>("proposals.listByStatus", { status, opts })).map(projectProposal),
+      (await call<unknown[]>("proposals.listByStatus", { status, opts })).map(
+        projectProposal,
+      ),
     transition: async (
       proposalId: string,
       from: ProposalStatus[],
@@ -886,13 +1102,22 @@ function buildPorts(
       return projectProposal(await call("proposals.transition", body));
     },
     recordOutcome: async (operationId: string, outcome: ApplyOutcome) => {
-      const stored = await call<unknown>("proposals.recordOutcome", withNow({ operationId, outcome }, clock));
+      const stored = await call<unknown>(
+        "proposals.recordOutcome",
+        withNow({ operationId, outcome }, clock),
+      );
       return projectOutcome(stored) as ApplyOutcome;
     },
     getOutcome: async (operationId: string) =>
       projectOutcome(await call("proposals.getOutcome", { operationId })),
-    invalidatePendingForRevision: async (scopeKey: string, newRevision: string) =>
-      await call<number>("proposals.invalidatePendingForRevision", { scopeKey, newRevision }),
+    invalidatePendingForRevision: async (
+      scopeKey: string,
+      newRevision: string,
+    ) =>
+      await call<number>("proposals.invalidatePendingForRevision", {
+        scopeKey,
+        newRevision,
+      }),
     deleteByChat: async (chatId: string) =>
       await call<number>("proposals.deleteByChat", { chatId }),
   };
@@ -924,7 +1149,10 @@ function buildPorts(
       projectInput(
         await call(
           "inputs.transitionInput",
-          withNow({ inputId, from: [...from], to, ...(patch ? { patch } : {}) }, clock),
+          withNow(
+            { inputId, from: [...from], to, ...(patch ? { patch } : {}) },
+            clock,
+          ),
         ),
       ) as AgentInputRecord,
     deleteSessionInputs: async (sessionId: string) =>
@@ -938,15 +1166,19 @@ function buildPorts(
       await call("summaries.save", record);
     },
     listSummaries: async (sessionId: string) =>
-      (await call<ContextSummaryRecord[]>("summaries.list", { sessionId })) ?? [],
+      (await call<ContextSummaryRecord[]>("summaries.list", { sessionId })) ??
+      [],
     deleteSessionSummaries: async (sessionId: string) =>
       await call<number>("summaries.deleteSession", { sessionId }),
   };
 
   const providers: ProviderStore = {
-    listProviders: async () => (await call<AiProviderConfig[]>("providers.list")) ?? [],
+    listProviders: async () =>
+      (await call<AiProviderConfig[]>("providers.list")) ?? [],
     getProvider: async (providerId: string) => {
-      const value = await call<AiProviderConfig | null>("providers.get", { providerId });
+      const value = await call<AiProviderConfig | null>("providers.get", {
+        providerId,
+      });
       return value === null ? null : value;
     },
     upsertProvider: async (config: AiProviderConfig) =>
@@ -955,7 +1187,8 @@ function buildPorts(
       await call("providers.delete", { providerId });
     },
     listModels: async (providerId: string) =>
-      (await call<AiProviderModel[]>("providers.listModels", { providerId })) ?? [],
+      (await call<AiProviderModel[]>("providers.listModels", { providerId })) ??
+      [],
     replaceModels: async (providerId: string, models: AiProviderModel[]) => {
       await call("providers.replaceModels", { providerId, models });
     },
@@ -969,7 +1202,8 @@ function buildPorts(
   };
 
   const settings: SettingsStore = {
-    getSettings: async () => projectSettings(await call("settings.getSettings")),
+    getSettings: async () =>
+      projectSettings(await call("settings.getSettings")),
     updateSettings: async (patch) =>
       projectSettings(await call("settings.updateSettings", { patch })),
   };
@@ -991,26 +1225,53 @@ function buildPorts(
       await call("outbox.markPublished", { id, at: toEpoch(at, "at") });
     },
     markFailed: async (id: string, error: string, retryAt: Date) => {
-      await call("outbox.markFailed", { id, error, retryAt: toEpoch(retryAt, "retryAt") });
+      await call("outbox.markFailed", {
+        id,
+        error,
+        retryAt: toEpoch(retryAt, "retryAt"),
+      });
     },
-    prune: async (before: Date) => await call<number>("outbox.prune", { before: toEpoch(before, "before") }),
+    prune: async (before: Date) =>
+      await call<number>("outbox.prune", { before: toEpoch(before, "before") }),
   };
 
   const continuations: ProviderContinuationStore = {
-    bindRun: async (runId: string, scope: ProviderContinuationScope, fence: RunWriteFence) => {
+    bindRun: async (
+      runId: string,
+      scope: ProviderContinuationScope,
+      fence: RunWriteFence,
+    ) => {
       try {
-        await call("continuations.bindRun", withNow({ runId, scope, fence }, clock));
+        await call(
+          "continuations.bindRun",
+          withNow({ runId, scope, fence }, clock),
+        );
       } catch (error) {
-        throw reclassify(error, [["provider_continuation_state_missing", "provider_continuation_state_missing"]]);
+        throw reclassify(error, [
+          [
+            "provider_continuation_state_missing",
+            "provider_continuation_state_missing",
+          ],
+        ]);
       }
     },
     getRunScope: async (runId: string) =>
-      (await call<ProviderContinuationScope | null>("continuations.getRunScope", { runId })) ?? null,
+      (await call<ProviderContinuationScope | null>(
+        "continuations.getRunScope",
+        { runId },
+      )) ?? null,
     put: async (input: ProviderContinuationRecord, fence: RunWriteFence) => {
       try {
-        return projectContinuation(await call("continuations.put", withNow({ input, fence }, clock)));
+        return projectContinuation(
+          await call("continuations.put", withNow({ input, fence }, clock)),
+        );
       } catch (error) {
-        throw reclassify(error, [["provider_continuation_state_missing", "provider_continuation_state_missing"]]);
+        throw reclassify(error, [
+          [
+            "provider_continuation_state_missing",
+            "provider_continuation_state_missing",
+          ],
+        ]);
       }
     },
     getByRun: async (runId: string) => {
@@ -1018,21 +1279,37 @@ function buildPorts(
         const value = await call<unknown>("continuations.getByRun", { runId });
         return value === null ? null : projectContinuation(value);
       } catch (error) {
-        throw reclassify(error, [["provider_continuation_state_missing", "provider_continuation_state_missing"]]);
+        throw reclassify(error, [
+          [
+            "provider_continuation_state_missing",
+            "provider_continuation_state_missing",
+          ],
+        ]);
       }
     },
-    findByAnchors: async (chatId: string, anchorMessageIds: readonly string[]) =>
-      (await call<unknown[]>("continuations.findByAnchors", {
-        chatId,
-        anchorMessageIds: [...anchorMessageIds],
-      })).map(projectContinuation),
+    findByAnchors: async (
+      chatId: string,
+      anchorMessageIds: readonly string[],
+    ) =>
+      (
+        await call<unknown[]>("continuations.findByAnchors", {
+          chatId,
+          anchorMessageIds: [...anchorMessageIds],
+        })
+      ).map(projectContinuation),
   };
 
   const toolExecutions: ToolExecutionStore = {
     admit: async (input: ToolExecutionAdmission, fence: RunWriteFence) =>
-      await call<boolean>("toolExecutions.admit", withNow({ input, fence }, clock)),
+      await call<boolean>(
+        "toolExecutions.admit",
+        withNow({ input, fence }, clock),
+      ),
     complete: async (executionId: string, result, fence: RunWriteFence) => {
-      await call("toolExecutions.complete", withNow({ executionId, result, fence }, clock));
+      await call(
+        "toolExecutions.complete",
+        withNow({ executionId, result, fence }, clock),
+      );
     },
     listByRun: async (runId: string) => {
       const rows = await call<unknown[]>("toolExecutions.listByRun", { runId });
@@ -1059,7 +1336,18 @@ function buildPorts(
     },
   };
 
-  return { conversations, tasks, proposals, inputs, summaries, providers, settings, outbox, continuations, toolExecutions };
+  return {
+    conversations,
+    tasks,
+    proposals,
+    inputs,
+    summaries,
+    providers,
+    settings,
+    outbox,
+    continuations,
+    toolExecutions,
+  };
 }
 
 /**
@@ -1091,7 +1379,9 @@ export class NativeAssistantStore implements AssistantStore {
     const port =
       options.port ??
       options.store ??
-      (options.raw !== undefined ? createNativeStorePort(options.raw) : undefined);
+      (options.raw !== undefined
+        ? createNativeStorePort(options.raw)
+        : undefined);
     if (port === undefined) {
       throw new NativeAgentError(
         "invalid_input",

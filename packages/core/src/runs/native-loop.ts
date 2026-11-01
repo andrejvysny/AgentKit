@@ -466,8 +466,39 @@ async function dispatchHook(
     const value: unknown = await (fn as (value: unknown) => unknown)(
       Object.freeze(context),
     );
-    native.resolveCall(id, JSON.stringify({ value: value ?? null }), null);
+    native.resolveCall(id, serializeHookValue(value), null);
   } catch (error) {
     native.resolveCall(id, null, errorMessageOf(error));
+  }
+}
+
+/**
+ * Carry a hook's return value across the JSON boundary WITHOUT collapsing
+ * the distinctions the frozen gate table (`runToolGate` in loop-hooks.ts)
+ * reads. Plain `JSON.stringify({value})` cannot: `undefined`, `null` and
+ * `NaN` all stringify to `null`, yet the frozen loop treats `undefined` as
+ * "no opinion" (allow) and `null`/`NaN` as garbage (deny). The envelope
+ * keeps them apart: `defined:false` means literally `undefined`; every
+ * other value crosses as JSON (`NaN`/`Infinity` become `null` — still
+ * garbage to the gate, which is the frozen outcome) with `defined:true`.
+ * A value `JSON.stringify` cannot encode (a cycle, a BigInt) is reduced to
+ * the plain string `action`/`reason` fields the gate actually reads —
+ * everything else about an unreadable verdict denies with the fixed gate
+ * sentence, exactly as a malformed decision does in the frozen loop.
+ */
+function serializeHookValue(value: unknown): string {
+  if (value === undefined) return '{"value":null,"defined":false}';
+  try {
+    return JSON.stringify({ value: value ?? null, defined: true });
+  } catch {
+    const decision: Record<string, unknown> = {};
+    if (typeof value === "object" && value !== null) {
+      const record = value as Record<string, unknown>;
+      if ("action" in record && typeof record.action === "string")
+        decision.action = record.action;
+      if ("reason" in record && typeof record.reason === "string")
+        decision.reason = record.reason;
+    }
+    return JSON.stringify({ value: decision, defined: true });
   }
 }

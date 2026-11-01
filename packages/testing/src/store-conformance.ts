@@ -16,7 +16,11 @@
 // imported class — the same code-not-message discipline host's own error
 // vocabulary asks every OTHER consumer to follow.
 import type { TaskEventEnvelope } from "@agentkit/contracts";
-import type { CreateProposalInput, CreateTaskInput } from "@agentkit/host";
+import type {
+  AssistantStore,
+  CreateProposalInput,
+  CreateTaskInput,
+} from "@agentkit/host";
 import {
   createConformanceClock,
   expectRejects,
@@ -1737,6 +1741,174 @@ export function describeAssistantStoreConformance(
         );
         const found = await store.proposals.getByActionId(scope, "act-recent");
         expect(found?.id).toBe(second.id);
+      } finally {
+        close?.();
+      }
+    });
+
+    // ——— Competing terminal transitions (external review, section 3) ———
+    // Two terminal requests for the same apply may not both land: whatever
+    // order they arrive in, exactly one transition sees the expected state
+    // and the other is refused with the port's stable transition code,
+    // identically on every adapter. An adapter that checks the expected
+    // state on a separate read from the write (read … await … write) fails
+    // this: the loser writes anyway because the winner had not stamped yet.
+
+    const toApplying = async (
+      store: AssistantStore,
+      id: string,
+      operationId: string,
+    ) => {
+      await store.proposals.transition(id, ["pending"], "approved");
+      await store.proposals.transition(id, ["approved"], "applying", {
+        operationId,
+      });
+    };
+
+    const settledCode = (outcome: PromiseSettledResult<unknown>): string =>
+      outcome.status === "fulfilled"
+        ? "ok"
+        : typeof outcome.reason === "object" &&
+            outcome.reason !== null &&
+            "code" in outcome.reason
+          ? String(outcome.reason.code)
+          : String(outcome.reason);
+
+    it("refuses a second competing terminal transition with the stable code (receipt present)", async () => {
+      const { store, close } = await create();
+      try {
+        const scope = uniqueId("scope");
+        const applied = await store.proposals.create(
+          makeProposalInput({ scopeKey: scope, operations: [{ op: 1 }] }),
+        );
+        await toApplying(store, applied.id, uniqueId("op"));
+        await store.proposals.recordOutcome(
+          // The receipt the winner's stamp derives from.
+          (await store.proposals.get(applied.id))!.operationId!,
+          { status: "applied", appliedOps: 1, failedOps: [] },
+        );
+        const receipt = await store.proposals.getOutcome(
+          (await store.proposals.get(applied.id))!.operationId!,
+        );
+        const [first, second] = await Promise.allSettled([
+          store.proposals.transition(applied.id, ["applying"], "applied", {}),
+          store.proposals.transition(applied.id, ["applying"], "failed", {
+            reason: "late rival",
+          }),
+        ]);
+        expect(settledCode(first)).toBe("ok");
+        expect(settledCode(second)).toBe("invalid_proposal_transition");
+        const final = await store.proposals.get(applied.id);
+        expect(final?.status).toBe("applied");
+        // The loser wrote nothing: neither a stamp nor a reason.
+        expect(final?.reason).toBeUndefined();
+        // The committed receipt is untouched by the refused rival.
+        expect(
+          await store.proposals.getOutcome(
+            (await store.proposals.get(applied.id))!.operationId!,
+          ),
+        ).toEqual(receipt);
+
+        // Sequential mirror with the opposite winner: same refusal codes.
+        const failed = await store.proposals.create(
+          makeProposalInput({ scopeKey: scope, operations: [{ op: 1 }] }),
+        );
+        const failedOp = uniqueId("op");
+        await toApplying(store, failed.id, failedOp);
+        await store.proposals.recordOutcome(failedOp, {
+          status: "failed",
+          appliedOps: 0,
+          failedOps: [{ opIndex: 0, error: "boom" }],
+        });
+        const won = await store.proposals.transition(
+          failed.id,
+          ["applying"],
+          "failed",
+          { reason: "applier said so" },
+        );
+        expect(won.status).toBe("failed");
+        await expectRejectsWithCode(
+          store.proposals.transition(failed.id, ["applying"], "applied", {}),
+          "invalid_proposal_transition",
+          expect,
+        );
+        expect((await store.proposals.get(failed.id))?.status).toBe("failed");
+      } finally {
+        close?.();
+      }
+    });
+
+    it("the terminal transition's patch.reason survives on the record", async () => {
+      const { store, close } = await create();
+      try {
+        const scope = uniqueId("scope");
+        // With the committed receipt the stamp derives from, the patch's
+        // reason still lands — "failed" without a reason is not actionable.
+        const withReceipt = await store.proposals.create(
+          makeProposalInput({ scopeKey: scope, operations: [{ op: 1 }] }),
+        );
+        const withReceiptOp = uniqueId("op");
+        await toApplying(store, withReceipt.id, withReceiptOp);
+        await store.proposals.recordOutcome(withReceiptOp, {
+          status: "failed",
+          appliedOps: 0,
+          failedOps: [{ opIndex: 0, error: "boom" }],
+        });
+        await store.proposals.transition(
+          withReceipt.id,
+          ["applying"],
+          "failed",
+          { reason: "applier said so" },
+        );
+        expect((await store.proposals.get(withReceipt.id))?.reason).toBe(
+          "applier said so",
+        );
+
+        // Without a receipt the plain status CAS carries the patch too.
+        const plain = await store.proposals.create(
+          makeProposalInput({ scopeKey: scope, operations: [{ op: 1 }] }),
+        );
+        await toApplying(store, plain.id, uniqueId("op"));
+        await store.proposals.transition(plain.id, ["applying"], "failed", {
+          reason: "verifier refused",
+        });
+        const record = await store.proposals.get(plain.id);
+        expect(record?.status).toBe("failed");
+        expect(record?.reason).toBe("verifier refused");
+      } finally {
+        close?.();
+      }
+    });
+
+    it("racing duplicate actionId creates refuse exactly one and never add a second row", async () => {
+      const { store, close } = await create();
+      try {
+        const scope = uniqueId("scope");
+        const [first, second] = await Promise.allSettled([
+          store.proposals.create(
+            makeProposalInput({ scopeKey: scope, actionId: "act-race" }),
+          ),
+          store.proposals.create(
+            makeProposalInput({ scopeKey: scope, actionId: "act-race" }),
+          ),
+        ]);
+        // Exactly one create may succeed; the loser's refusal is the port's
+        // public code — never an opaque internal error. And nothing beyond
+        // the single row was produced: no duplicate effect, no ghost record.
+        const outcomes = [settledCode(first), settledCode(second)];
+        expect(outcomes.filter((outcome) => outcome === "ok")).toHaveLength(1);
+        expect(
+          outcomes.filter((outcome) => outcome === "duplicate_action_id"),
+        ).toHaveLength(1);
+        const fulfilled = <T>(result: PromiseSettledResult<T>): T => {
+          if (result.status !== "fulfilled") throw result.reason;
+          return result.value;
+        };
+        const winner = fulfilled(first.status === "fulfilled" ? first : second);
+        expect(
+          (await store.proposals.getByActionId(scope, "act-race"))?.id,
+        ).toBe(winner.id);
+        expect(await store.proposals.listByChat("chat-1")).toHaveLength(1);
       } finally {
         close?.();
       }

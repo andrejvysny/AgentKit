@@ -174,7 +174,10 @@ export interface NativeMcpServerStatus {
 /** Structural view of the session-service register lane (satisfied by
  * `NativeSessionService`) so this module stays import-free of the class. */
 export interface McpToolRegistrar {
-  registerTool(definition: ToolDefinitionJson, run: ToolRunFunction): Promise<void>;
+  registerTool(
+    definition: ToolDefinitionJson,
+    run: ToolRunFunction,
+  ): Promise<void>;
 }
 
 /** Structural view of the store's client lane (satisfied by
@@ -187,6 +190,10 @@ export interface McpToolCaller {
     toolName: string,
     args: unknown,
     handle?: string,
+    /** Aborts the remote call with the originating invocation (the tool ctx
+     * `signal`): a queued call is never written, an in-flight call is torn
+     * down. Omit only from host code that owns no invocation lifecycle. */
+    signal?: AbortSignal,
   ): Promise<ToolResultJson>;
 }
 
@@ -194,9 +201,12 @@ export interface McpToolCaller {
  * Register every descriptor of a connected MCP server through the
  * EXISTING `registerTool` path — the authority lane. Each registered
  * tool's execution invokes `mcpCallTool` for the descriptor's
- * `remoteName` WITH THAT DESCRIPTOR'S OWN HANDLE, so the Rust
+ * `remoteName` WITH THAT DESCRIPTOR'S OWN HANDLE and the invocation's
+ * abort `signal` (the tool ctx `signal` threaded through), so the Rust
  * `BindingAuthority` + `JsToolGuard` chain (plan mode, approvals, effect
- * taxonomy) judges the call exactly as it judges any other JS tool, and a
+ * taxonomy) judges the call exactly as it judges any other JS tool, a
+ * cancelled invocation tears the remote call down instead of dispatching
+ * after the run settled, and a
  * callback from a superseded registration of the same alias can never be
  * reached by a descriptor the host authorized earlier. The effect on the
  * descriptor came from the host `readOnly` config alone. Returns the
@@ -219,7 +229,14 @@ export async function registerMcpTools(
         description: tool.description,
         inputSchema: tool.inputSchema,
       },
-      (input: unknown) => store.mcpCallTool(connection.alias, remoteName, input, handle),
+      (input: unknown, request) =>
+        store.mcpCallTool(
+          connection.alias,
+          remoteName,
+          input,
+          handle,
+          request?.signal,
+        ),
     );
   }
   return connection.tools;

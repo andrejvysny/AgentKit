@@ -516,3 +516,156 @@ describe("package script executable binding", () => {
     expect(await key("bun test")).toEqual(first);
   });
 });
+
+describe("NODE_OPTIONS startup selector binding (external review P1-D)", () => {
+  function selectorTree(script: string) {
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { test: script } }),
+    );
+    writeFileSync(join(root, "scripts", "cli.js"), "console.log('cli');\n");
+    writeFileSync(join(root, "bootstrap.cjs"), "module.exports = 'v1';\n");
+  }
+
+  test.each([
+    ["inherited", "node scripts/cli.js", "--require=./bootstrap.cjs"],
+    [
+      "assignment",
+      "NODE_OPTIONS=--require=./bootstrap.cjs node scripts/cli.js",
+      undefined,
+    ],
+    [
+      "env wrapper",
+      "NODE_OPTIONS=--require=./bootstrap.cjs env node scripts/cli.js",
+      undefined,
+    ],
+    [
+      "explicit CLI control",
+      "node --require ./bootstrap.cjs scripts/cli.js",
+      undefined,
+    ],
+  ] as [string, string, string | undefined][])(
+    "%s: editing the selected startup file with a constant selector invalidates",
+    async (_label, script, inherited) => {
+      selectorTree(script);
+      if (inherited !== undefined) environment.NODE_OPTIONS = inherited;
+      else delete environment.NODE_OPTIONS;
+      const first = await key("bun test");
+      expect(first).not.toBeNull();
+      expect(await key("bun test")).toEqual(first);
+      writeFileSync(
+        join(root, "bootstrap.cjs"),
+        "module.exports = 'MUTATED';\n",
+      );
+      const mutated = await key("bun test");
+      expect(mutated).not.toBeNull();
+      expect(mutated?.digest).not.toBe(first?.digest);
+      writeFileSync(join(root, "bootstrap.cjs"), "module.exports = 'v1';\n");
+      expect(await key("bun test")).toEqual(first);
+    },
+  );
+
+  test("assignment and inherited values are both bound", async () => {
+    selectorTree("NODE_OPTIONS=--require=./assigned.cjs node scripts/cli.js");
+    writeFileSync(join(root, "assigned.cjs"), "1;\n");
+    writeFileSync(join(root, "inherited.cjs"), "1;\n");
+    writeFileSync(join(root, "unselected.cjs"), "1;\n");
+    environment.NODE_OPTIONS = "--require=./inherited.cjs";
+    const first = await key("bun test");
+    expect(first).not.toBeNull();
+    writeFileSync(join(root, "inherited.cjs"), "MUTATED;\n");
+    expect((await key("bun test"))?.digest).not.toBe(first?.digest);
+    writeFileSync(join(root, "inherited.cjs"), "1;\n");
+    writeFileSync(join(root, "assigned.cjs"), "MUTATED;\n");
+    expect((await key("bun test"))?.digest).not.toBe(first?.digest);
+    writeFileSync(join(root, "assigned.cjs"), "1;\n");
+    writeFileSync(join(root, "unselected.cjs"), "MUTATED;\n");
+    expect(await key("bun test")).toEqual(first);
+  });
+
+  test.each([
+    ["absent selector file", "node scripts/cli.js", "--require=./never-ak.cjs"],
+    ["empty equals target", "node scripts/cli.js", "--require="],
+    ["dangling selector", "node scripts/cli.js", "--require"],
+    [
+      "flag as selector value",
+      "node scripts/cli.js",
+      "--require --require=./bootstrap.cjs",
+    ],
+    ["bare module specifier", "node scripts/cli.js", "--require=bootstrap.cjs"],
+    [
+      "directory as selector target",
+      "node scripts/cli.js",
+      "--require=./cfgdir",
+    ],
+    ["unsupported loader selector", "node scripts/cli.js", "--loader=./x.mjs"],
+    [
+      "unsupported experimental-loader",
+      "node scripts/cli.js",
+      "--experimental-loader=./x.mjs",
+    ],
+    [
+      "CLI-only -r in NODE_OPTIONS",
+      "node scripts/cli.js",
+      "-r ./bootstrap.cjs",
+    ],
+    [
+      "abbreviated --require prefix",
+      "node scripts/cli.js",
+      "--requir=./bootstrap.cjs",
+    ],
+    [
+      "abbreviated --import prefix",
+      "node scripts/cli.js",
+      "--impor=./bootstrap.cjs",
+    ],
+    [
+      "nonliteral selector value",
+      "node scripts/cli.js",
+      "--require=./$(evil).cjs",
+    ],
+    [
+      "mid-command reassignment",
+      "node scripts/cli.js NODE_OPTIONS=--require=./evil.cjs",
+      undefined,
+    ],
+    [
+      "duplicate assignment before the entry",
+      "NODE_OPTIONS=--require=./bootstrap.cjs NODE_OPTIONS=--import=./bootstrap.cjs node scripts/cli.js",
+      undefined,
+    ],
+    [
+      "env wrapper option flags",
+      "env -i NODE_OPTIONS=--require=./bootstrap.cjs node scripts/cli.js",
+      undefined,
+    ],
+  ] as [string, string, string | undefined][])(
+    "%s: declines standing approval instead of authorizing an unbound preload",
+    async (_label, script, inherited) => {
+      selectorTree(script);
+      mkdirSync(join(root, "cfgdir"), { recursive: true });
+      if (inherited !== undefined) environment.NODE_OPTIONS = inherited;
+      else delete environment.NODE_OPTIONS;
+      expect(await key("bun test")).toBeNull();
+    },
+  );
+
+  test("unreadable selector target declines standing approval", async () => {
+    selectorTree("node scripts/cli.js");
+    environment.NODE_OPTIONS = "--require=./bootstrap.cjs";
+    expect(await key("bun test")).not.toBeNull();
+    chmodSync(join(root, "bootstrap.cjs"), 0o000);
+    try {
+      // Running as root can still read mode-000 files; only assert refusal
+      // when the read genuinely fails (matches the Rust gate).
+      const readable = await Bun.file(join(root, "bootstrap.cjs"))
+        .text()
+        .then(() => true)
+        .catch(() => false);
+      if (readable) return;
+      expect(await key("bun test")).toBeNull();
+    } finally {
+      chmodSync(join(root, "bootstrap.cjs"), 0o644);
+    }
+  });
+});
