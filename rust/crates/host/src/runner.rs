@@ -82,6 +82,11 @@ pub struct AgentHost {
     pub(crate) runtime: SharedRuntime,
     executors: Arc<HashMap<String, Arc<dyn TaskExecutor>>>,
     active: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Per-active-task cancel wakes. A `session.cancel` writes the durable
+    /// `cancel_requested` flag and then pokes this map so the in-flight
+    /// attempt runs its lease-heartbeat check immediately instead of waiting
+    /// for the next tick; the heartbeat remains the cross-process fallback.
+    watches: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
     options: HostOptions,
     owner_id: String,
     wake: Arc<tokio::sync::Notify>,
@@ -94,16 +99,30 @@ pub struct AgentHost {
 #[derive(Clone)]
 pub struct WakeHandle {
     notify: Arc<tokio::sync::Notify>,
+    watches: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
 }
 
 impl WakeHandle {
-    pub(crate) fn new(notify: Arc<tokio::sync::Notify>) -> Self {
-        Self { notify }
+    pub(crate) fn new(
+        notify: Arc<tokio::sync::Notify>,
+        watches: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
+    ) -> Self {
+        Self { notify, watches }
     }
     /// Best-effort rouse; the worker also polls, so a lost wake only costs
     /// one poll interval, never a stranded task.
     pub fn wake(&self) {
         self.notify.notify_one();
+    }
+    /// Best-effort rouse of the ACTIVE attempt for `task_id`: its next
+    /// poll runs the heartbeat check (which reads `cancel_requested` /
+    /// `interrupt_requested`) instead of waiting for the tick. The durable
+    /// flag was already written by the caller; a lost wake here only costs
+    /// one heartbeat interval, never a missed cancellation.
+    pub async fn wake_active(&self, task_id: &str) {
+        if let Some(notify) = self.watches.lock().await.get(task_id) {
+            notify.notify_one();
+        }
     }
 }
 
@@ -147,6 +166,7 @@ impl AgentHost {
             options,
             executors: Arc::new(executors),
             active: Arc::new(Mutex::new(HashMap::new())),
+            watches: Arc::new(Mutex::new(HashMap::new())),
             wake: Arc::new(tokio::sync::Notify::new()),
             flush_planner: Arc::new(Mutex::new(None)),
         })
@@ -163,7 +183,7 @@ impl AgentHost {
     /// The handle the durable session service uses to rouse workers without
     /// owning the host.
     pub fn wake_handle(&self) -> WakeHandle {
-        WakeHandle::new(self.wake.clone())
+        WakeHandle::new(self.wake.clone(), self.watches.clone())
     }
 
     /// Rouse an idle worker now; correctness never depends on this because
@@ -349,12 +369,17 @@ impl AgentHost {
             .lock()
             .await
             .insert(context.task.task_id.clone(), context.cancellation.clone());
+        self.watches.lock().await.insert(
+            context.task.task_id.clone(),
+            Arc::new(tokio::sync::Notify::new()),
+        );
         Ok(Some(context))
     }
 
     async fn run_claimed(&self, context: ExecutionContext) -> HostResult<()> {
         let result = self.execute_and_settle(context.clone()).await;
         self.active.lock().await.remove(&context.task.task_id);
+        self.watches.lock().await.remove(&context.task.task_id);
         result
     }
 
@@ -402,10 +427,29 @@ impl AgentHost {
         let mut heartbeat = tokio::time::interval(Duration::from_millis(
             (self.options.lease_ttl_ms / 3) as u64,
         ));
+        let watch = self
+            .watches
+            .lock()
+            .await
+            .get(&context.task.task_id)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(tokio::sync::Notify::new()));
         let outcome = loop {
             tokio::select! {
                 result = &mut execution => break result,
                 _ = heartbeat.tick() => {
+                    let renewal = self.heartbeat(&context);
+                    tokio::pin!(renewal);
+                    tokio::select! {
+                        result = &mut execution => break result,
+                        result = &mut renewal => result?,
+                    }
+                },
+                // A `session.cancel`/`interrupt` pokes this watch right after
+                // writing the durable flag; run the same check now instead of
+                // waiting for the tick. `notify_one` stores its permit, so a
+                // wake landing between iterations is never lost.
+                _ = watch.notified() => {
                     let renewal = self.heartbeat(&context);
                     tokio::pin!(renewal);
                     tokio::select! {

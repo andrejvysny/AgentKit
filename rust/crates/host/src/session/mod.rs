@@ -783,6 +783,13 @@ impl AgentSessionService {
         if was_parked {
             self.cancel_requests(session_id, turn_id).await?;
         }
+        // Promptness, not correctness: the durable flag above is what the
+        // worker settles on. Rouse an idle worker (queued targets) and the
+        // in-flight attempt (heartbeat check now instead of next tick).
+        if let Some(wake) = &self.deps.wake {
+            wake.wake();
+            wake.wake_active(turn_id).await;
+        }
         Ok(())
     }
 
