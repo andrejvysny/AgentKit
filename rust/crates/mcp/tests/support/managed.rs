@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use agentkit_core::{ToolContext, ToolLimits};
+use agentkit_core::{CoreError, DispatchFence, DispatchGuard, ToolContext, ToolLimits};
 use agentkit_mcp::*;
 use async_trait::async_trait;
 use serde_json::json;
@@ -13,6 +13,25 @@ use std::{
 };
 use tokio::sync::{Barrier, Notify};
 use tokio_util::sync::CancellationToken;
+
+/// A host that attests the exact invocation. `RemoteTool::execute` fails
+/// closed without a guard, so the shared context carries an allowing one;
+/// tests that need refusals replace `dispatch_guard` themselves.
+#[derive(Debug, Default)]
+pub struct Allow;
+#[async_trait]
+impl DispatchGuard for Allow {
+    async fn check(&self) -> Result<(), CoreError> {
+        Ok(())
+    }
+    fn fence(&self) -> DispatchFence {
+        DispatchFence {
+            task_id: "task".into(),
+            attempt_id: "attempt".into(),
+            fencing_token: 1,
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Secrets {
@@ -194,7 +213,7 @@ pub fn context() -> ToolContext {
         limits: ToolLimits::default(),
         cancellation: CancellationToken::new(),
         metadata: serde_json::Map::new(),
-        dispatch_guard: None,
+        dispatch_guard: Some(Arc::new(Allow)),
     }
 }
 pub fn token() -> CancellationToken {

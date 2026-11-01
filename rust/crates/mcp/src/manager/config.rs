@@ -31,6 +31,11 @@ pub struct ServerConfig {
     pub enabled: bool,
     #[serde(default)]
     pub tool_aliases: BTreeMap<String, String>,
+    /// Host-side read-only allowance. Remote tool annotations are descriptive
+    /// only and never raise the contributed `effect`; only this trusted flag
+    /// (default false) marks the server's tools as reads.
+    #[serde(default)]
+    pub read_only: bool,
     #[serde(default)]
     pub resilience: Resilience,
 }

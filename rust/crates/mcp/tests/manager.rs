@@ -305,7 +305,8 @@ async fn default_manager_runs_real_stdio_with_curated_inherited_path() {
         env: Default::default(),
     };
     let manager = McpClientManager::new(vec![declaration], Arc::new(Secrets::default())).unwrap();
-    assert_eq!(manager.list_tools("docs", token()).await.unwrap().len(), 2);
+    // Two pages: [first, echo-secret, fail-secret] then [write].
+    assert_eq!(manager.list_tools("docs", token()).await.unwrap().len(), 4);
     manager.dispose().await.unwrap();
 }
 

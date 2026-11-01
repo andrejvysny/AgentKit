@@ -16,10 +16,12 @@ let Server;
 let StdioServerTransport;
 let CallToolRequestSchema;
 let ListToolsRequestSchema;
+let McpError;
+let ErrorCode;
 try {
   ({ Server } = await import("mcp-sdk-v1/server/index.js"));
   ({ StdioServerTransport } = await import("mcp-sdk-v1/server/stdio.js"));
-  ({ CallToolRequestSchema, ListToolsRequestSchema } = await import(
+  ({ CallToolRequestSchema, ListToolsRequestSchema, McpError, ErrorCode } = await import(
     "mcp-sdk-v1/types.js"
   ));
 } catch (error) {
@@ -63,6 +65,12 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) =>
                 properties: { large: { type: "boolean" } },
               },
             },
+            // Server-echoed secret probes for the client-side redaction gate:
+            // the client must scrub the resolved secret it substituted into
+            // this process's environment out of both result text and the
+            // JSON-RPC error message.
+            { name: "echo-secret", inputSchema: { type: "object" } },
+            { name: "fail-secret", inputSchema: { type: "object" } },
           ],
           nextCursor: "next",
         },
@@ -81,6 +89,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ],
       structuredContent: { kind: "echo" },
     };
+  }
+  if (request.params.name === "echo-secret") {
+    return {
+      content: [{ type: "text", text: `echo ${process.env.SECRET}` }],
+    };
+  }
+  if (request.params.name === "fail-secret") {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `upstream rejected ${process.env.SECRET}`,
+    );
   }
   appendFileSync(process.env.MARKER, "once\n");
   process.exit(0);

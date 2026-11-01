@@ -171,7 +171,9 @@ impl McpClientManager {
         let mut names = BTreeSet::new();
         for alias in connections.connected.clone() {
             let session = self.session(&alias)?;
-            let set = McpToolSet::new(&alias, session.config.tool_aliases.clone(), session)?;
+            let read_only = session.config.read_only;
+            let set = McpToolSet::new(&alias, session.config.tool_aliases.clone(), session)?
+                .with_read_only(read_only);
             match set.contribute(cancellation.clone()).await {
                 Ok(listed) => {
                     for tool in listed {

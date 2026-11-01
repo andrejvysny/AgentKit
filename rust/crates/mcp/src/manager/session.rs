@@ -3,6 +3,7 @@ use super::{
 };
 use crate::{McpClientError, model};
 use async_trait::async_trait;
+use serde_json::Value;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
@@ -13,6 +14,9 @@ use tokio_util::sync::CancellationToken;
 
 struct State {
     client: Option<Arc<dyn McpConnection>>,
+    /// Resolved secret values for the CURRENT connection, kept only to redact
+    /// server-echoed content. Cleared whenever the connection is torn down.
+    material: Arc<SecretMaterial>,
     generation: u64,
     secret_generation: Option<u64>,
     opened_at: Option<u64>,
@@ -29,7 +33,98 @@ pub(super) struct Session {
     state: Mutex<State>,
     lifecycle: AsyncMutex<()>,
 }
-type Connected = (Arc<dyn McpConnection>, u64, CancellationToken);
+type Connected = (
+    Arc<dyn McpConnection>,
+    u64,
+    CancellationToken,
+    Arc<SecretMaterial>,
+);
+
+/// Resolved secret material for ONE connection, mirroring the TypeScript
+/// `createSecretMaterial` discipline: whatever value we substituted INTO a
+/// transport config, we substitute back OUT of anything the server echoes.
+/// Redaction is a bounded case-sensitive replace per secret (longest value
+/// first so a token containing a shorter one leaves no readable suffix) —
+/// no regexes, O(secrets x text length).
+#[derive(Default)]
+pub(super) struct SecretMaterial {
+    values: Vec<String>,
+}
+
+const REDACTION: &str = "[redacted]";
+
+impl SecretMaterial {
+    fn new<'a>(resolved: impl IntoIterator<Item = &'a String>) -> Self {
+        let mut values: Vec<String> = resolved
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .collect();
+        values.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        values.dedup();
+        Self { values }
+    }
+    fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+    fn redact(&self, text: &str) -> String {
+        if self.is_empty() {
+            return text.to_owned();
+        }
+        let mut out = text.to_owned();
+        for value in &self.values {
+            out = out.replace(value.as_str(), REDACTION);
+        }
+        out
+    }
+    fn redact_error(&self, error: McpClientError) -> McpClientError {
+        match error {
+            McpClientError::Remote(message) if !self.is_empty() => {
+                McpClientError::Remote(self.redact(&message))
+            }
+            error => error,
+        }
+    }
+}
+
+fn redact_json(value: &mut Value, material: &SecretMaterial) {
+    match value {
+        Value::String(text) => *text = material.redact(text),
+        Value::Array(items) => {
+            for item in items {
+                redact_json(item, material);
+            }
+        }
+        Value::Object(entries) => {
+            for (_, item) in entries {
+                redact_json(item, material);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn redact_call(result: &mut model::CallToolResult, material: &SecretMaterial) {
+    if material.is_empty() {
+        return;
+    }
+    for block in &mut result.content {
+        match block {
+            model::ContentBlock::Text(text) => text.text = material.redact(&text.text),
+            model::ContentBlock::Resource(embedded) => {
+                if let model::ResourceContents::TextResourceContents { text, .. } =
+                    &mut embedded.resource
+                {
+                    *text = material.redact(text);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(structured) = &mut result.structured_content {
+        redact_json(structured, material);
+    }
+}
 
 struct PendingClient(Option<Arc<dyn McpConnection>>);
 impl PendingClient {
@@ -66,6 +161,7 @@ impl Session {
             lifecycle: AsyncMutex::new(()),
             state: Mutex::new(State {
                 client: None,
+                material: Arc::new(SecretMaterial::default()),
                 generation: 0,
                 secret_generation: None,
                 opened_at: None,
@@ -101,7 +197,12 @@ impl Session {
         self.teardown().await
     }
     async fn teardown(&self) -> Result<(), McpClientError> {
-        let client = self.state.lock().unwrap().client.take();
+        let client = {
+            let mut state = self.state.lock().unwrap();
+            let client = state.client.take();
+            state.material = Arc::new(SecretMaterial::default());
+            client
+        };
         if let Some(client) = client {
             tokio::time::timeout(Duration::from_secs(5), client.close())
                 .await
@@ -164,10 +265,14 @@ impl Session {
             state.opened_at = None;
             return None;
         }
-        state
-            .client
-            .as_ref()
-            .map(|client| (client.clone(), state.generation, state.lifetime.clone()))
+        state.client.as_ref().map(|client| {
+            (
+                client.clone(),
+                state.generation,
+                state.lifetime.clone(),
+                state.material.clone(),
+            )
+        })
     }
     fn assert_circuit(&self) -> Result<(), McpClientError> {
         let mut state = self.state.lock().unwrap();
@@ -196,13 +301,16 @@ impl Session {
                 )
                 .await;
             match result {
-                Ok(client) => match self.install(client.clone(), secret_generation) {
-                    Ok(connected) => return Ok(connected),
-                    Err(error) => {
-                        let _ = tokio::time::timeout(Duration::from_secs(5), client.close()).await;
-                        return Err(error);
+                Ok((client, material)) => {
+                    match self.install(client.clone(), material.clone(), secret_generation) {
+                        Ok(connected) => return Ok(connected),
+                        Err(error) => {
+                            let _ =
+                                tokio::time::timeout(Duration::from_secs(5), client.close()).await;
+                            return Err(error);
+                        }
                     }
-                },
+                }
                 Err(error)
                     if matches!(
                         error,
@@ -232,6 +340,7 @@ impl Session {
     fn install(
         &self,
         client: Arc<dyn McpConnection>,
+        material: Arc<SecretMaterial>,
         secret_generation: u64,
     ) -> Result<Connected, McpClientError> {
         let mut state = self.state.lock().unwrap();
@@ -243,9 +352,13 @@ impl Session {
         state.secret_generation = Some(secret_generation);
         state.opened_at = None;
         state.client = Some(client.clone());
-        Ok((client, state.generation, state.lifetime.clone()))
+        state.material = material.clone();
+        Ok((client, state.generation, state.lifetime.clone(), material))
     }
-    async fn open_once(&self, generation: u64) -> Result<Arc<dyn McpConnection>, McpClientError> {
+    async fn open_once(
+        &self,
+        generation: u64,
+    ) -> Result<(Arc<dyn McpConnection>, Arc<SecretMaterial>), McpClientError> {
         let mut values = BTreeMap::new();
         for (placeholder, reference) in &self.config.secret_refs {
             values.insert(
@@ -259,6 +372,7 @@ impl Session {
         if self.secrets.generation(&self.config.secret_refs).await? != generation {
             return Err(McpClientError::Closed);
         }
+        let material = Arc::new(SecretMaterial::new(values.values()));
         let mut transport = self.config.transport.clone();
         let record = match &mut transport {
             TransportConfig::Stdio { env, .. } => env,
@@ -285,7 +399,10 @@ impl Session {
             pending.close().await;
             return Err(current.err().unwrap_or(McpClientError::Closed));
         }
-        Ok(pending.0.take().expect("unclaimed MCP connection"))
+        Ok((
+            pending.0.take().expect("unclaimed MCP connection"),
+            material,
+        ))
     }
     async fn bounded<T>(
         &self,
@@ -327,7 +444,7 @@ impl Session {
         cancellation: &CancellationToken,
         guard: Option<Arc<dyn agentkit_core::DispatchGuard>>,
     ) -> Result<Response, McpClientError> {
-        let (client, _, lifetime) = connected;
+        let (client, _, lifetime, material) = connected;
         let operation = async {
             match name {
                 Some(name) => client
@@ -347,6 +464,17 @@ impl Session {
             self.config.resilience.request_timeout_ms,
         )
         .await
+        .map(|response| match (name, response) {
+            // Anything the server echoes back may have absorbed a value we
+            // substituted into this connection's config; scrub it before the
+            // response leaves the session.
+            (Some(_), Response::Call(mut result)) => {
+                redact_call(&mut result, material);
+                Response::Call(result)
+            }
+            (_, response) => response,
+        })
+        .map_err(|error| material.redact_error(error))
     }
     async fn retry_after(
         &self,
@@ -356,7 +484,7 @@ impl Session {
         connected: &Connected,
         cancellation: &CancellationToken,
     ) -> Result<(), McpClientError> {
-        let (_, generation, lifetime) = connected;
+        let (_, generation, lifetime, _) = connected;
         if error == McpClientError::Closed && lifetime.is_cancelled() {
             return Err(McpClientError::Cancelled);
         }
