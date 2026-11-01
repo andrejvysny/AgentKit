@@ -31,9 +31,12 @@ The compatibility decision for the memory adapter's public live Maps remains
 open. Responses-provider compaction preserves private continuation state, emits a
 warning, and retains the request rather than rebasing that state.
 Native coding command standing approvals are live: `coding_standing_approval_key`
-issues the version-2 key only when the full identity — resolved executable,
-package-script entry points, flag-named configuration, and the relevant
-environment — fingerprints cleanly through the ported
+issues the version-4 key only when the full identity — resolved executable,
+package-script entry points, flag-named configuration, the files selected as
+startup inputs by the EFFECTIVE `NODE_OPTIONS` (inherited, `VAR=value`
+assignment, or `env` wrapper; unparseable or ambiguous selector shapes refuse
+to key), and the relevant environment — fingerprints cleanly through the
+ported
 `command_fingerprint`; any refusal, bound violation, or ambiguity yields no
 key and the call re-asks. Digest equality with the TypeScript authority is
 qualified by the gated differential suite
@@ -41,6 +44,8 @@ qualified by the gated differential suite
 shared collation fixture (`rust/fixtures/coding-fingerprint/env-order.json`),
 whose order is pinned against both runtimes' `localeCompare`. Eligible
 commands therefore reuse a remembered grant when the identity is unchanged;
+editing a `NODE_OPTIONS`-selected startup file invalidates the grant (external
+review P1-D; the v3-to-v4 bump retires every grant minted before that binding);
 high-risk commands still require fresh approval even in `full_auto`.
 
 The TypeScript and native compactors now bind ordered tool calls into a
@@ -57,13 +62,27 @@ keys held only in the Rust connection registry
 content deltas, reasoning deltas, and usage details (including
 `cachedPromptTokens`/`reasoningTokens`) through the durable subscription
 pump, performs the encrypted-reasoning continuation with verbatim replay of
-the private item, and fails closed on revoked or rotated connections. The
-JS `setProvider` callback lane is unchanged (single synthesized chunk).
-Verification: `packages/native/tests/provider-lane.test.ts` (four suites
+the private item, and fails closed on revoked connections. Connections carry
+a durable non-secret logical identity — `registerProviderConnection(url,
+key, { connectionKey })` derives `{providerId, connectionKey}` and the store
+binds that identity plus a generation, so a Responses continuation survives
+a real application restart (credential rotation is a new generation under
+the same logical identity; wrong credentials for the logical identity are an
+authentication error; a foreign connection or changed scope stays
+rejected). Service-level `temperature`/`maxTokens` are applied as
+*defaults before context admission* (`apply_request_defaults`), never after:
+the admitted request is the transmitted request, and out-of-range/
+non-finite `maxTokens` is rejected at `createService` construction.
+The JS `setProvider` callback lane is unchanged (single synthesized chunk).
+Verification: `packages/native/tests/provider-lane.test.ts` (five suites
 against a loopback `Bun.serve` OpenAI-compatible mock, wire-level request
-capture) plus pinned core contract tests in
-`rust/crates/core/tests/providers.rs` and `ConfiguredProvider` override
-semantics in `rust/crates/napi/src/provider_connection.rs`; three earlier
+capture, including admission-event/budget/wire triple agreement for the
+output cap) plus the two-process restart tests in
+`packages/native/tests/provider-continuity.test.ts` and
+`scripts/qualification/responses-smoke.mjs` (real two-process phase),
+core contract tests in `rust/crates/core/tests/providers.rs` and
+`ConfiguredProvider` default semantics in
+`rust/crates/napi/src/provider_connection.rs`; three earlier
 preset gaps closed with tests on the way (Responses usage details,
 Responses reasoning-delta emission, chat `network_error`/`empty_body`/
 `service_unavailable` classification with the retryable flag). No live
@@ -122,6 +141,76 @@ tests for option validation. This makes the REST surface reachable from
 Rust; `packages/transport-http` remains the implementation for consumers
 on the TypeScript host stack, and the TS-server replacement (AGENTKIT-56)
 stays open until that stack's consumers move onto the native path.
+
+Server-option closure round (2026-11-01, external review §5). Two surfaces
+the engine had behind its frozen option bag are now wired rather than
+documented away. **CORS** is a real `startHttpServer` option: the napi
+layer strictly parses `cors: {origins: "*"|[string], allowHeaders?,
+exposeHeaders?, maxAgeSeconds?}` into
+`agentkit_transport_http::CorsConfig` (`rust/crates/transport-http/src/cors.rs`),
+and the handler answers exactly the retired TypeScript transport's matrix
+(`packages/transport-http/src/cors.ts` + `handler.ts`): unconfigured means
+byte-for-byte untouched and OPTIONS still 405s; configured puts
+`Vary: Origin` on EVERY exit (route bodies, problem envelopes, the
+backend's 401, SSE), echoes the matched origin (+ expose list), and
+answers matched-origin `OPTIONS` with 204 + that path's real method set,
+allow-headers defaults and max-age — while an unmatched-origin preflight
+falls through to the ordinary 405 and an unmatched path 404s, still
+decorated. Pinned by 5 unit + 6 socket-level tests
+(`rust/crates/transport-http/tests/cors.rs`) and the binding-level matrix
+in `packages/native/tests/http-server.test.ts`; malformed `cors`/
+`providerSecrets` values fail `startHttpServer` with `invalid_input`
+rather than being ignored. **Provider-management credential writes** are
+wired through `DesktopBackend::with_provider_secrets`
+(`rust/crates/host/src/http/mod.rs`): the decision recorded here is that
+the binding's only vault option is `providerSecrets: "memory"` — a
+volatile in-process `MemorySecretStore`, mirroring the desktop example's
+own `MemorySecretStore` consumer — because durable credential storage is
+a host-side port decision (OS keychain lives in `agentkit-connections`
+behind its feature gate, and no shipped composition asked the binding for
+one). Omitted, `createProvider`/`updateProvider` with `apiKey`/
+`extraHeaders` answer 501 `not_implemented` exactly like the TypeScript
+transport without a `SecretStore` — no silent accept-and-drop. Network
+stays `UnavailableNetwork` on this path, so the probe routes still require
+a real `ProviderOperations` port via `with_provider_operations`; starting
+the server never opens an egress path on its own. Evidence: full provider
+CRUD over REST with key rotation, duplicate-409, secret-ref stability and
+no plaintext echo in `packages/native/tests/http-server.test.ts`.
+
+Managed-integrations recipe (2026-11-01, external review §5; DELIVERED).
+The shipped composition executes no TypeScript backend: `main.ts`/
+`node-main.mjs` bind only the native host (`wiring.ts`), `node-host.mjs`
+is a native composition, and the qualification smokes (`responses-smoke.mjs`,
+`responses-openpcb-smoke.mjs`, `migration-seed.mjs`) construct only
+`NativeStore`/`NativeSessionService` plus node:http mocks. The OPT-IN
+`src/managed-integrations.ts` recipe (no shipped entry point or hot path
+imports it; nothing in `wiring.ts`/REST/MCP depends on it) is now the
+binding-backed recipe this entry always demanded: prompt templates
+(publish/list/get/remove/render, tombstones included), store-managed
+skills (content-hashed revisions, frontmatter-subset validation, catalog
+order), non-secret connection configuration (create/update CAS, normalized
+alias uniqueness, immutable account identity, `***` redaction, deny-all
+`secretRefs` → `mcp_secret_missing`) and run-content assembly
+(resolve/recordResource/listResources with the reference's unavailable-
+skill tolerance) all run in `agentkit-store::managed_content` through the
+napi port arms (`rust/crates/napi/src/store_managed_content.rs`) behind
+the typed wrapper `NativeManagedContent` (`packages/native/src/
+managed-content.ts`, `packages/native/tests/managed-content.test.ts`). The
+TypeScript `ConnectionService`, `PromptTemplateService`, `SkillService`
+and `createRunContentProvider` imports are gone from the recipe; the
+desktop backend's nine managed-content routes are served by the same
+engine (`rust/crates/host/src/http/managed_content.rs`), no longer by
+`management.rs`'s "Native managed content services are not configured."
+stub. The ONE honest gap remains the MCP-OAuth lifecycle leg, verbatim:
+`ConnectionService`'s OAuth leg needs MCP OAuth, which the Rust MCP client
+does not have at all (`docs/rust/native-binding-milestone.md` "Open gaps":
+no OAuth, deny-all `secretRefs`). The wrapper therefore exposes
+`connect`/`reconnect`/`test`/`disconnect`/`action` as the reduction they
+are: each crosses the port surface and is refused `not_implemented`, and
+the REST `connectionAction` answers 501 (`connect`/`test →
+not_implemented` is the binding's documented answer, never a silent
+success); there is no OAuth transport factory or secret vault to hand to,
+because the binding honors none.
 
 MCP client dispatch authority (2026-11-01). The Rust MCP client no
 longer trusts the remote `readOnlyHint`: tool effect comes only from the
@@ -194,6 +283,76 @@ plan-mode guard or durable execution receipt (the engine has no
 standalone tool-dispatch entry point — evidence in the module header);
 OAuth, elicitation, config persistence and the secret resolver remain
 open (deny-all: `secretRefs` fails connect).
+
+Invocation authority for JS tools (2026-11-01), two reproduced defects
+closed at the public binding boundary:
+
+- Atomic registration identity. A tool NAME is now a unique registration
+  across BOTH registries: `JsToolContributor::register` rejects a second
+  registration of a known name (stable `invalid_input`, not just
+  name+version duplicates) and the JS router accepts a callback only after
+  Rust accepted the definition and refuses overwrites, so descriptor,
+  write gate, schema validator and dispatched callback always denote the
+  one accepted registration. Before the fix, registering `probe` v1-read
+  then v2-write under `writesEnabled:false` executed the WRITE callback
+  behind the advertised READ descriptor (`packages/native/tests/tool-identity.test.ts`
+  pins both orders with real SDK clients and harmless counters).
+- Expired queued callbacks never enter user code. The bridge gained a
+  synchronous `claimCall(callId)` liveness primitive (pending-table
+  authority; false after settle, cancel, executor-timeout abandonment, or
+  close drain), and `CallbackRouter.handle` claims every tool/provider
+  envelope synchronously before dispatch — a failed claim settles nothing
+  and enters nothing. The per-call AbortController remains a
+  mid-execution stop signal only. Before the fix a tool envelope queued
+  behind a blocked JS thread ran its callback long after the executor had
+  abandoned the call at the timeout
+  (`packages/native/tests/invocation-liveness.test.ts`: blocked-loop
+  witness with the provider mock in a separate Bun process, plus the
+  unblocked control; the mid-execution abort witnesses in
+  `cancellation.test.ts` stay green).
+
+MCP invocation cancellation, generation-bound dispatch and catalogue
+uniqueness (2026-11-01, external review P1-C + section-3), three reproduced
+defects closed at the public binding boundary:
+
+- A cancelled invocation never dispatches the remote call. Before the fix the
+  `registerMcpTools` run function ignored the tool ctx `signal` and the NAPI
+  `mcpCallTool` dispatched with a FRESH (never-cancelled) cancellation token:
+  a cancelled run settled durably and its queued `tools/call` still reached
+  the remote at the end of the reconnect window (reproduced: the fixture's
+  marker log gained `echo` after the turn had settled cancelled). The signal
+  now threads through the binding — `mcpCallTool` mints a per-call
+  cancellation key and `mcpCancelCall` cancels the crate token that the
+  manager call runs on, so connect, reconnect, backoff and the wire-last
+  dispatch check all observe the abort, and an already-aborted signal refuses
+  with `mcp_request_aborted` before the wire. Cancel-after-send keeps the
+  crate's ambiguous-delivery semantics (its uncertain-effects tests are
+  unchanged). Pinned with the delayed-init fixture and printed marker counts
+  in `packages/native/tests/mcp.test.ts`.
+- Dispatch is generation-bound on the public lane too. Descriptors now mint
+  with the `(registration, generation)` of the transport they were listed
+  from (crate `ToolBinding`, exposed via `McpClientManager::binding`), and
+  `mcpCallTool` dispatches through `call_tool_bound` — the bound path whose
+  pin is re-checked wire-last after any reconnect, secret resolution or
+  backoff. DOCUMENTED CONTRACT: a descriptor is addressable only while that
+  exact transport is live; after an automatic reconnect (or any transport
+  loss) the stale descriptor FAILS — deterministically `mcp_not_connected`
+  once the teardown is noticed, `mcp_authority_revoked` against a replaced
+  generation — and can never execute the replacement generation's handler;
+  the host refreshes with `mcpDisconnect` + `mcpConnect`. Pinned against a
+  fixture whose catalogue changes on reconnect (counter witnesses: the new
+  generation's handler executes only for the current registration) plus the
+  manager-level bound-lane case in `rust/crates/mcp/tests/generation.rs`.
+- Cross-namespace name ambiguity is refused before publishing. A remote tool
+  literally named `mcp__<alias>__<other>` used to shadow the OTHER tool's
+  advertised descriptor name — the ORIGINAL-first resolver advertised one
+  handler and dispatched the other (reproduced: calling `mcp__names__echo`
+  ran the foreign tool). The connect gate now requires every query string the
+  resolver can receive (remote name, descriptor name, alias target) to denote
+  exactly one entry per alias; an ambiguous catalogue is refused whole with
+  `mcp_invalid_config`, nothing partially publishes and no registration is
+  consumed (healthy catalogue byte-identical before/after; counter witnesses
+  for both names).
 
 Engine fixes on the consumer path (2026-11-01), found while running
 real compositions against the binding, not while reading code:
@@ -560,3 +719,41 @@ This additional evidence does not change the historical phase 1 inventory above.
 Unresolved questions: which intentionally corrected baseline defects should
 require an explicit compatibility note in the public Rust API? Which provider
 and MCP integrations must pass live qualification before a Rust release?
+
+## Provider/config parity tranche (1 November 2026, head 24b3d17)
+
+Four reproduced provider/config parity defects, fixed with public-boundary
+tests (native binding + wire capture) per the external review:
+
+1. **Stored model catalogue ignored.** `ContextBudget::resolve` read only the
+   HTTP management plane's `http.provider-catalog` copy, so a model row
+   persisted through `providers.replaceModels` (compat settings namespace)
+   admitted against the 32,768 fallback. The resolver now consults the
+   persisted provider-store rows first, then the management copy; the
+   descriptor override still wins. Pinned by `packages/native/tests/
+   provider-config-parity.test.ts` (64-token entry admits against 64,
+   rejects oversized, wire carries the admitted cap; descriptor and
+   fallback controls) and host `context_budget` unit tests.
+2. **`toolCalling` config not enforced on the native lane.** The host
+   executor now mirrors the TypeScript turn-runner: `off` stages no tools,
+   `auto` (default) follows the recorded provider capabilities
+   (`providers.saveCapabilities` `toolCalling: false` → no tools), `on`
+   stages regardless of the probe. With no tools staged the wire carries no
+   `tools` field and a provider-emitted function call resolves as a
+   `tool_missing` failure — never an execution. Pinned by wire-capture
+   binding tests (all three modes) and a host `tool_gate` unit test.
+3. **Account-backed JS provider lane stamped with an implicit output cap.**
+   `createService` accepts `providerAuthKind: "chatgpt-account"` for the JS
+   callback lane (rejected alongside `providerConfig`, whose Rust lane is
+   API-key shaped). An account-backed lane never injects the 16,384 implicit
+   cap (`allows_implicit_output_limit`, TS `bounded-context-client` parity)
+   and the bridge payload omits options the adapter does not declare. The
+   API-key lane is byte-unchanged (control test still sees `maxOutputTokens`
+   16,384 on the callback and stamps it on the wire).
+4. **Revocation misclassified as `network_error`.** The chat-completions lane
+   collapsed every transport refusal — including a revoked connection's
+   structured `connection_changed` — into `network_error`. Only genuine
+   transport failures (`transport_error`) are classified `network_error`;
+   structured verdicts propagate verbatim. Pinned by core
+   `provider_transport_verdicts` tests and a binding revocation test
+   (run fails with `connection_changed`, zero HTTP).

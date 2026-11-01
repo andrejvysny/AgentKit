@@ -172,12 +172,13 @@ inventory tests alone did not catch them.
 | --- | --- | --- |
 | `startHttpServer` / `stopHttpServer` | Rust REST v1 + SSE (`agentkit-transport-http` over `DesktopBackend`) served from the service's own host/store; full client (157) and react (76) suites pass against the Rust engine with the suites unmodified; exact `problem+json` envelopes, idempotency replay/mismatch, close-before-shutdown-window. | CORS and provider-write routes are unwired in the binding (secret/catalogue ports); no live-provider qualification through this lane. |
 | `startMcpServer` / `stopMcpServer` | Crate streamable-HTTP MCP server over the service's registered JS tools; official SDK client proves initialize/list/call, bearer refusal, session binding, writes gating; stop revokes leases before drop. | Remote calls carry no run-scoped plan-mode/ask guard or durable receipt (documented reduction); no OAuth/elicitation. |
-| `mcpConnect` / `mcpCallTool` / `mcpDisconnect` / `mcpListServers` | Crate client manager on the binding runtime (stdio + streamable HTTP); host-decided effect via config `readOnly`, local schema validation fail-closed, server-echoed secrets redacted, approval parking with zero remote calls until granted; children reaped on close. | Configs in-memory; `secretRefs` fail closed (deny-all resolver); no OAuth or elicitation. |
+| `mcpConnect` / `mcpCallTool` / `mcpDisconnect` / `mcpListServers` | Crate client manager on the binding runtime (stdio + streamable HTTP); host-decided effect via config `readOnly`, local schema validation fail-closed, server-echoed secrets redacted, approval parking with zero remote calls until granted; children reaped on close. Dispatch is BOUND: every descriptor is minted with the `(registration, generation)` of the transport it was listed from and executes only on it — a descriptor retained across a reconnect fails (`mcp_not_connected`/`mcp_authority_revoked`, deterministic) and NEVER executes the replacement generation's handler (refresh = `mcpDisconnect` + `mcpConnect`), re-checked wire-last after any reconnect/secret-resolution/backoff. The originating invocation's abort signal threads through the binding (`mcpCancelCall`): a cancelled/aborted call never dispatches — verified zero remote calls across a 2.5s reconnect window with a delayed-init server — while cancel-after-send keeps the crate's ambiguous-delivery semantics. Catalogues whose three resolver domains (remote name, descriptor name, alias target) collide across entries are refused whole at connect (`mcp_invalid_config`, nothing partially publishes). | Configs in-memory; `secretRefs` fail closed (deny-all resolver); no OAuth or elicitation. |
 | `callStore` (67 ops) + `NativeAssistantStore` | Complete `AssistantStore` surface through thin transaction-compatible arms; the frozen aggregate passes the SHARED adapter conformance drivers (assistant-store/agent-input/context-summary) with `atomicTransactions`/`search` earned; commit/rollback tested per namespace. | Priority aging remains a TS store-layer feature the Rust claim path lacks (two conformance cases skip by name); `now` injection is binding-level. |
 | `startProviderConnection` + `providerConfig` | Rust provider lane (chat-completions + responses) with key-only-in-Rust registry, streamed deltas/reasoning/usage, continuation replay, revoked-connection refusal; loopback wire tests both protocols. | Live-provider qualification is a release gate; Responses omits non-numeric usage fields where TS would fail `malformed_usage`. |
 | `subscribeTurn` | Durable replay-and-live pump; used by every lane proof above; cursor documented exclusive (seq starts at 0). | None beyond general stream qualification. |
 | JS tool guard on non-session chats; proposal apply finalization | The guard answers ABSENCE (configured mode) for a chat that is not a session — a REST-minted chat runs its registered write tools under `full_auto` (binding test drives the whole lane: REST create/submit, Rust responses lane, tool executes once); `complete_proposal` finalizes an `Applying` proposal behind a pre-recorded receipt, receipt-first-outcome authoritative. Pinned in `packages/native/tests/authority.test.ts`, `crates/host/tests/execution_authority.rs`, `crates/store/tests/proposals.rs` and the bridge-free `responses-smoke` assertions. | Ask/approval parking on REST-minted chats is unqualified (approvals bind session scope — by design); plan-approval flows are proven only on session chats. |
 | Cancellation propagation to JS callbacks | `service.cancel` writes the durable flag, rouses the worker AND the active attempt (`wake_active`), the bridge delivers `{"kind":"cancel","callId"}` on host-cancel (and drop), and the router aborts the per-call `AbortController` so `ProviderRequest.signal`/`ToolCallRequest.signal` fire in user code — measured 4 ms; a cancelled coding-pack run kills its whole process group, a tool that ignores the signal cannot fake success (late settle after terminal is ignored). Pinned in `packages/native/tests/cancellation.test.ts`. | Ask/approval-parked turns and compaction pauses follow the same durable flags but their wake latency is not separately timed; Node-lane cancellation rides the same bridge. |
+| `callStore` managed-content namespaces (`promptTemplates`/`skills`/`connections`/`runContent`, 16 arms) + `NativeManagedContent` | Typed wrapper over the Rust engine ports (`packages/native/src/managed-content.ts` → `rust/crates/napi/src/store_managed_content.rs` → `agentkit-store::managed_content`): template publish/list/get/render/remove with tombstones and revision immutability; skill catalog with publish order, content-hash revisions and frontmatter-subset validation; connection save with create/update CAS (`invalid_state`), normalized cross-account alias uniqueness, immutable account identity, `***` redaction and deny-all `secretRefs` (`mcp_secret_missing`); run-content resolve (connector gate, `tolerateUnavailable` reporting), recordResource/listResources path containment; malformed wires refused client-side with the binding's own codes before the FFI; all arms transaction-compatible (commit/rollback witnessed); reopen stability on a fresh `NativeStore.open` of the same file; HTTP lane publishes 201/deletes 204 on the same engine. Pinned in `packages/native/tests/managed-content.test.ts` plus the engine's 147 tests and the HTTP lane's `crates/host/tests/managed_content_http.rs`. | MCP OAuth remains the documented reduction: `connect`/`reconnect`/`test`/`disconnect`/`action` and REST `connectionAction` answer `not_implemented`/501 (`docs/rust/native-binding-milestone.md` "Open gaps"); rich remote MCP tool-content delivery remains the separate integration gap. |
 
 ## Validation record and limits
 
@@ -433,9 +434,12 @@ were re-qualified locally with Node v22.20.0 installed.
 - Shipped: `providerConfig` on `createService` selects the Rust provider
   lane over the core chat-completions/responses presets;
   `registerProviderConnection`/`revokeProviderConnection` keep API keys in
-  Rust memory only; `ConfiguredProvider` applies service-level
-  temperature/maxTokens as overrides (regression-pinned: the host's default
-  16 384 output budget no longer silently wins); both presets now emit
+  Rust memory only; `ConfiguredProvider` supplies service-level
+  temperature/maxTokens as *defaults applied before context admission*
+  (regression-pinned: the admitted request is the transmitted request —
+  the wire cap is min(context cap, configured maxTokens), out-of-range or
+  non-finite `maxTokens` is rejected at `createService`, and no layer after
+  admission may override token limits); both presets now emit
   `run.message.reasoning-delta` (the Responses preset additionally gained
   cached/reasoning usage details and transport
   `network_error`/`empty_body`/`service_unavailable` classification with
@@ -455,6 +459,53 @@ were re-qualified locally with Node v22.20.0 installed.
   clippy clean on touched crates, rustfmt clean, API freeze 31 reports
   pass. No live provider contacted; live-provider and live keychain
   qualification remain separate release gates (gate 5).
+
+### Provider durability & admission consistency record (2026-11-01, P1-E/P1-F)
+
+- P1-E fixed: connection identities are durable logical identities derived
+  from caller-supplied non-secret material (`providerId` +
+  `providerConfig`-side `connectionKey` registration option), not
+  process-local random ids; the stored continuation binds
+  `{logical identity, generation}`, so a Responses continuation completes in
+  a second, fully separate application process against the same on-disk
+  store. Credential rotation = new generation under the same logical
+  identity (continuation continues); wrong credentials for the logical
+  identity fail as an authentication error and the same key re-registered
+  restores the continuation; revoked-then-re-registered keeps the identity.
+  The scope check was not weakened: a different `providerId` still rejects
+  earlier (`provider_binding_mismatch`, host binding gate) and a foreign or
+  keyless connection on the same `providerId` still rejects with
+  `provider_continuation_scope_mismatch` before any provider request.
+  Evidence: `packages/native/tests/provider-continuity.test.ts` (five
+  binding-boundary suites, provider mock in a separate Bun process with
+  request/encryption line counters) and the genuine two-process phase of
+  `scripts/qualification/responses-smoke.mjs` (positional store path;
+  exit 0, three total provider requests across both processes, private
+  continuation reopened, no public leak). Pre-fix witness: phase 2 failed
+  `unclassified: provider_continuation_scope_mismatch` before transport
+  with zero second-process requests, because the connection id was a fresh
+  `conn_{uuid}` per process.
+- P1-F fixed: `ConfiguredProvider` applies `temperature`/`maxTokens` via
+  `ChatProvider::apply_request_defaults` BEFORE `ContextBudget::admit`;
+  the admitted clamp is final, and `providerConfig.maxTokens` is validated
+  at `createService` construction (positive safe integer ≤ 2^53−1, stable
+  `invalid_input` otherwise) — the chosen earlier layer, documented in
+  `provider_connection.rs`. Evidence: the captured-wire suite in
+  `packages/native/tests/provider-lane.test.ts` asserts admission event,
+  budget accounting and the actual wire body agree for no override (16/16),
+  in-range override (min(cap, maxTokens)), 1024-over-cap (cap wins,
+  wire = 16), and 9 007 199 254 740 991 / negative / 0 / null `maxTokens`
+  rejected at construction. Pre-fix witness: admission reported
+  `maxOutputTokens: 16` while the wire carried `max_tokens: 1024`, and
+  `18014398509481984` transmitted unvalidated.
+- Replay-cursor note: `subscribeTurn`'s `afterSeq` is exclusive and run
+  events start at seq 0 — the passing `run.context.admitted` event owns
+  seq 0, so full-replay subscribers must omit the cursor (the new suites
+  pin this; `project-instructions.test.ts` already did).
+- Gates at this record: `agentkit-napi` unit 74/74, `agentkit-store` all
+  suites green, `agentkit-host` continuation pins 2/2 + matrix 10/10
+  (`--features http`), native `provider-lane` + `provider-continuity`
+  11 pass / 0 fail, `responses-smoke.mjs /tmp/pp.sqlite` exit 0.
 
 ### CI gate inventory additions (2026-11-01)
 
@@ -501,6 +552,82 @@ were re-qualified locally with Node v22.20.0 installed.
   Bun and Node (`check-native-package.mjs` full lifecycle; verified
   2026-11-01 with the gate's skip-build knob while an in-flight `agentkit-napi`
   edit occupied the release build).
+
+### Store & HTTP boundary record (2026-11-01, external review §3 store/HTTP rows)
+
+- Proposal terminal-transition parity (store) — FIXED. With a durable
+  execution receipt present, the SECOND competing terminal transition is
+  refused by expected-state comparison with the stable public port codes
+  the memory store enforces (`invalid_proposal_transition`; first terminal
+  wins, the rival's patch is never applied and never re-executes the
+  external operation — the reviewer probe did not show duplicate execution
+  and the pinned behavior keeps it that way), the winning transition's
+  `reason` field survives later patches, and a second live
+  `(scopeKey, actionId)` create surfaces `duplicate_action_id`, never
+  `internal_error`. Same expectations both lanes:
+  `rust/crates/store/tests/proposals.rs` (14 tests) and the shared driver
+  `packages/testing/src/store-conformance.ts` over BOTH
+  `MemoryAssistantStore` and `SqliteAssistantStore`. Receipt FINALIZATION
+  rules (first-write-wins, `complete_proposal`) are unchanged — refusal
+  parity only.
+- Desktop HTTP facade validation — FIXED. The `examples/desktop-host`
+  composition mounts the native server instead of re-implementing parsing,
+  so malformed JSON, an array body, invalid titles and a 1.1 MiB body all
+  return `400`/`413` through the facade exactly as through the direct
+  native server (pre-fix witness: every one returned `201` through the
+  facade while the direct server rejected it). Permanent fixture:
+  `examples/desktop-host/tests/http-validation.test.ts` (3 suites, 26
+  assertions); valid traffic through the same composition still completes
+  with `run.completed` and ends on the `agentkit.stream.settled` SSE
+  terminator.
+- IPv6 listen — FIXED. The native listen path binds bracketed IPv6
+  literals by ADDRESS instead of handing `[::1]` to the resolver as a
+  hostname (root cause: `ToSocketAddrs` for `(str, u16)` treats the
+  bracketed form as a name and dies with "Name or service not known"), and
+  the advertised `baseUrl` is fetchable — an already-bracketed host is no
+  longer double-wrapped. Evidence: `agentkit-napi` lib test
+  `binds_ipv6_literals_by_address_not_by_name` (binds `::1`:0, bare and
+  bracketed, asserts `is_ipv6 && is_loopback` and one raw HTTP round trip;
+  passes here with no skip taken, `127.0.0.1` control in-test) and
+  `packages/native/tests/http-server.test.ts` "startHttpServer binds the
+  IPv6 loopback…" through the binding (401 problem+json anonymous, 200
+  list with the bearer token, both spellings; skips only on
+  EADDRNOTAVAIL/address-family OS errors, printing the cause).
+- Live compaction recipe — FIXED. `scripts/live/compaction-session.ts`
+  passes `context: { policy: "transcript", windowTokens, reserveTokens,
+  keepRecentTokens }`; the token knobs were honored, but ANY `context.policy`
+  (or `toolResultElision`) was refused at task staging with `501
+  not_implemented` "Session context assembly overrides are not configured on
+  the native executor" (`session/mod.rs::turn_payload_base`), so the recipe
+  died BEFORE its first provider request (witness: the binding threw
+  `NativeAgentError code: "not_implemented"` at `send`). The native lane now
+  honors the frozen contract: the staged `sessionContext` snapshot is the
+  single source for the budget and the new assembly resolution
+  (`chat_context.rs::resolve_context_assembly`), `policy` drives
+  `chat_history.rs::HistoryPolicy` — `transcript` (the frozen default,
+  `turn-runner.ts:1729`) replays each prior run's own records (internal tool
+  calls, results, `{"steering":true}` placements), `final_answers` drops them
+  exactly as anchored-history does, and values outside the enumeration stay
+  refused by the descriptor grammar (create/configure `invalid_input`; a
+  malformed snapshot fails with the stable `session_context_invalid`).
+  `tool_result_elision.rs` ports `context/tool-result-elision.ts` — default
+  on, 2 turns kept, 6000 maxChars, 2000 head, 1000 tail, the frozen marker —
+  applied to the assembled view BEFORE compaction, with the binding-exposed
+  `keepRecentTurns`/`maxChars` overrides honored (head/tail are not binding
+  knobs in either lane). Evidence: `stale_tool_results_elide_to_head_and_tail_before_compaction`
+  (elided cut byte-pinned to the TS helper's output by sha256),
+  `final_answers_policy_drops_prior_run_records_as_frozen` and
+  `transcript_policy_replays_prior_run_calls_results_and_steering` (shapes
+  pinned to `context-transcript.test.ts`),
+  `the_live_compaction_recipe_config_admits_and_compacts` (the recipe's exact
+  config: `run.context.admitted` carries window 24000/reserve 4000 from the
+  descriptor, oversized history emits `run.context.compacted` reason
+  `threshold`), plus `session_runtime.rs`/`session_config.rs` staging
+  coverage; and the recipe itself now gets PAST staging — against an
+  unreachable provider it fails at the transport with
+  `failedCode: "network_error"` (after), where it previously never reached
+  the store as a task (before), and against the live local model its turns
+  run to completion with the recipe config.
 
 ## Remaining release gates
 
