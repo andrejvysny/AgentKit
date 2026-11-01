@@ -2,6 +2,64 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**Managed content is native end to end.** The store port grew the whole
+managed-content surface — `promptTemplates.publish|list|get|remove|render`,
+`skills.publish|list|get|remove`, `connections.list|get|save|remove` and
+`runContent.resolve|recordResource|listResources` execute in
+`agentkit-store::managed_content` (template tombstones and revision
+immutability, content-hashed skill revisions with frontmatter-subset
+validation and publish-order catalogs, connection create/update CAS with
+normalized cross-account alias uniqueness, immutable account identity,
+`***` credential redaction on every read and the deny-all `secretRefs`
+refusal `mcp_secret_missing`), and the desktop backend now serves the nine
+previously-stubbed managed-content routes from the same engine instead of
+answering "Native managed content services are not configured."
+(`crates/host/tests/managed_content_http.rs`). The TypeScript half landed
+with it: `NativeManagedContent` (`packages/native/src/managed-content.ts`)
+is the typed wrapper over the port path — strict wire shape refused
+client-side with the binding's own stable codes, before the FFI — and the
+`examples/desktop-host` managed-integrations recipe is now that wrapper:
+the `ConnectionService`, `PromptTemplateService`, `SkillService` and
+`createRunContentProvider` imports are gone. MCP OAuth remains the one
+documented gap: `connect`/`reconnect`/`test`/`disconnect`/`action` reach
+the port and are refused `not_implemented` (REST `connectionAction` is
+501), never a fake success. Evidence: 147 engine tests, the binding's
+port tests, `packages/native/tests/managed-content.test.ts` (tombstones,
+CAS refusal, redaction, deny-all, catalog order, connector gate,
+unavailable tolerance, transaction commit/rollback, reopen on a fresh
+`NativeStore.open`, HTTP 201/204 pass-through) and the example suite.
+
+**Session context assembly options are honored, not refused.** The native
+executor no longer refuses `context.policy` and `context.toolResultElision`
+at task staging with `501 not_implemented` — the live compaction recipe
+(`scripts/live/compaction-session.ts`) now gets past staging to its first
+provider request. `policy` drives anchored-history replay exactly as the
+frozen TypeScript lane: `transcript` (the default) replays each prior turn's
+own run records — tool calls, results, steering — and `final_answers` drops
+them, keeping only the visible user/assistant answers; values outside the
+enumeration stay refused by the descriptor grammar. Tool-result elision
+(ADR 0017) is ported whole — default on, newest 2 turns kept, results over
+6000 characters cut to 2000-head + 1000-tail with the frozen marker — and is
+applied to the assembled provider view before compaction, honoring the
+binding's `keepRecentTurns`/`maxChars` overrides (head/tail are fixed in both
+lanes). Evidence: `rust/crates/host` `session_runtime.rs` witnesses for the
+recipe's exact config (admission carries the resolved budget, oversized
+history emits `run.context.compacted`), elision byte-pinned to the frozen TS
+helper's output, and policy shapes pinned to `context-transcript.test.ts`.
+
+**Packed `@agentkit/native` declarations are self-contained.** The shipped
+declarations imported `@agentkit/host` (a devDependency) — invisible inside
+the workspace, `TS2307` for every clean install of the tarball with
+`skipLibCheck` off. `scripts/prepack-bundle-types.mjs` (wired into the
+package's `build` and `prepack`) now rolls `dist/index.d.ts` up with
+api-extractor, inlining the reachable `@agentkit/host` port surface and the
+`@sinclair/typebox` schema types it drags in, and fails the pack if any
+bare specifier or non-runtime workspace import survives; `check-native-package.mjs`
+gained a third consumer mode that compiles
+`rust/scripts/native-package-typed-consumer.ts` against the INSTALLED package
+with strict `tsc`, NodeNext resolution and `skipLibCheck` off, so CI holds
+the exact scenario external review reported.
+
 **Backend runs on Rust by default composition.** The binding grew the whole
 remaining backend surface and every production composition moved onto it.
 `service.startHttpServer()` serves REST v1 + SSE from the Rust
