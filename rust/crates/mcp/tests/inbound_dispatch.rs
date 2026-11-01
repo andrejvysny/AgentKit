@@ -60,7 +60,10 @@ async fn catalogue_cancellation_in_same_poll_prevents_backend_effect() {
         0,
         "cancelled catalogue must not dispatch a write"
     );
-    assert!(matches!(result, Err(McpClientError::Request)));
+    assert!(
+        matches!(result, Err(McpClientError::Remote(_))),
+        "the cancelled catalogue must deny with the server's own refusal: {result:?}"
+    );
     client.close().await.unwrap();
     server.close().await;
     task.abort();

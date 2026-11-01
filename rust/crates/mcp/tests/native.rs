@@ -100,7 +100,10 @@ async fn deadline_cancels_backend_scope_and_session_remains_usable() {
             CancellationToken::new(),
         )
         .await;
-    assert!(matches!(failed, Err(McpClientError::Request)));
+    assert!(
+        matches!(failed, Err(McpClientError::Remote(_))),
+        "a peer JSON-RPC error must surface its (redactable) message: {failed:?}"
+    );
     assert!(
         host.scopes
             .lock()
@@ -220,12 +223,13 @@ async fn native_http_client_lists_calls_and_closes_with_actor_revocation() {
         .await
         .unwrap();
     assert_eq!(invalid.is_error, Some(true));
-    assert_eq!(
-        client
-            .call_tool("write", JsonObject::new(), CancellationToken::new())
-            .await
-            .unwrap_err(),
-        McpClientError::Request
+    let refused = client
+        .call_tool("write", JsonObject::new(), CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, McpClientError::Remote(message) if message == "Unknown tool"),
+        "the server's JSON-RPC error message must travel on: {refused:?}"
     );
     client.close().await.unwrap();
     assert!(!host.revoked.lock().unwrap().is_empty());
@@ -303,7 +307,9 @@ async fn sdk_stdio_pagination_and_ambiguous_delivery_never_retry_writes() {
             .iter()
             .map(|tool| tool.name.as_ref())
             .collect::<Vec<_>>(),
-        ["first", "write"]
+        // The fixture's first page also carries the secret-echo probes added
+        // for the client-side redaction gate.
+        ["first", "echo-secret", "fail-secret", "write"]
     );
     let failure = client
         .call_tool("write", JsonObject::new(), CancellationToken::new())

@@ -59,6 +59,14 @@ pub enum McpClientError {
     ReconnectExhausted,
     #[error("MCP dispatch authority revoked")]
     Authority,
+    #[error("MCP tool arguments failed local schema validation")]
+    InvalidArguments,
+    /// The peer's JSON-RPC error `message`, verbatim. Client error paths that
+    /// surface this text to the host MUST redact resolved secret material
+    /// first (see the manager session redactor); the message is server-echoed
+    /// content and may contain any value the transport carried upstream.
+    #[error("MCP remote error: {0}")]
+    Remote(String),
 }
 
 impl McpClientError {
@@ -73,6 +81,7 @@ impl McpClientError {
             Self::SecretMissing => "mcp_secret_missing",
             Self::ReconnectExhausted => "mcp_reconnect_exhausted",
             Self::Authority => "mcp_authority_revoked",
+            Self::InvalidArguments => "mcp_invalid_arguments",
             _ => "mcp_remote_error",
         }
     }
@@ -303,6 +312,9 @@ fn classify_request(error: rmcp::service::ServiceError) -> McpClientError {
         }
         ServiceError::Timeout { .. } => McpClientError::Timeout,
         ServiceError::Cancelled { .. } => McpClientError::Cancelled,
+        // The peer's own message travels on for the host; the manager session
+        // redacts resolved secrets out of it before anything surfaces.
+        ServiceError::McpError(error) => McpClientError::Remote(error.message.into_owned()),
         _ => McpClientError::Request,
     }
 }

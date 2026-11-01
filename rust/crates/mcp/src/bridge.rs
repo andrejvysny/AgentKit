@@ -22,12 +22,28 @@ pub struct McpToolSet {
     alias: String,
     aliases: BTreeMap<String, String>,
     client: Arc<dyn McpConnection>,
+    read_only: bool,
 }
 impl McpToolSet {
     pub fn new(
         alias: &str,
         aliases: BTreeMap<String, String>,
         client: Arc<dyn McpConnection>,
+    ) -> Result<Self, BridgeError> {
+        Self::with_read_only_inner(alias, aliases, client, false)
+    }
+    /// Host-side attestation that this server's tools are read-only. Remote
+    /// annotations never influence `effect`; only this flag does.
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+    fn with_read_only_inner(
+        alias: &str,
+        aliases: BTreeMap<String, String>,
+        client: Arc<dyn McpConnection>,
+        read_only: bool,
     ) -> Result<Self, BridgeError> {
         let alias = alias.trim();
         if !server_alias(alias) {
@@ -51,6 +67,7 @@ impl McpToolSet {
             alias: alias.into(),
             aliases: normalized,
             client,
+            read_only,
         })
     }
     /// Validate the complete batch before returning any tool to a host registry.
@@ -101,15 +118,15 @@ impl McpToolSet {
             .map(String::as_str)
             .unwrap_or(original);
         let canonical = format!("mcp.{}.{effective}", self.alias);
+        // Remote annotations are DESCRIPTIVE ONLY: whatever `readOnlyHint` the
+        // server claims, the contributed effect comes solely from the host's
+        // own `readOnly` allowance for this server (AGENTKIT-56). The
+        // annotation text may be surfaced as informational metadata but never
+        // decides `effect`/`capability`.
         let definition = ToolDefinition {
             name: canonical.replace('.', "__"),
             version: "1.0.0".into(),
-            effect: if tool
-                .annotations
-                .as_ref()
-                .and_then(|annotations| annotations.read_only_hint)
-                == Some(true)
-            {
+            effect: if self.read_only {
                 "read".into()
             } else {
                 "write".into()
@@ -123,8 +140,14 @@ impl McpToolSet {
             output_schema: None,
             timeout_ms: None,
         };
+        // Pre-compile the recorded input schema so every dispatch is gated
+        // locally (the server side validates identically in handler.rs). A
+        // schema the contracts compiler rejects cannot validate anything, so
+        // the tool fails closed at execute instead of dispatching unchecked.
+        let validator = agentkit_contracts::compile_tool_schema(&definition.input_schema).ok();
         Ok(RemoteTool {
             definition,
+            validator,
             client: self.client.clone(),
             original: original.into(),
             alias: self.alias.clone(),
@@ -134,6 +157,7 @@ impl McpToolSet {
 
 struct RemoteTool {
     definition: ToolDefinition,
+    validator: Option<agentkit_contracts::SchemaValidator>,
     client: Arc<dyn McpConnection>,
     original: String,
     alias: String,
@@ -145,6 +169,23 @@ impl Tool for RemoteTool {
     }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
         let arguments = input.as_object().cloned().unwrap_or_default();
+        // Mirrors the frozen TS contributor order: validate the exact
+        // arguments against the tool schema first, then require an exact
+        // invocation authorization decision. Nothing leaves this process
+        // unless both gates pass.
+        let candidate = Value::Object(arguments.clone());
+        let valid = self
+            .validator
+            .as_ref()
+            .is_some_and(|validator| validator.is_valid(&candidate));
+        if !valid {
+            return Ok(self.failure(context, McpClientError::InvalidArguments));
+        }
+        // Missing guard fails closed: the client cannot attest authority on
+        // its own, only the host's DispatchGuard can (core::DispatchGuard).
+        if context.dispatch_guard.is_none() {
+            return Ok(self.failure(context, McpClientError::Authority));
+        }
         match self
             .client
             .call_tool_guarded(
