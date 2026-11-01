@@ -334,3 +334,75 @@ async fn operation_claim_is_unique_and_policy_decision_requires_identity() {
         ProposalStatus::Approved
     );
 }
+
+#[tokio::test]
+async fn delete_by_chat_removes_only_that_chat_and_cascades_receipts() {
+    let store = SqliteStore::memory(4).unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store
+        .create_chat("other", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store.create_proposal(proposal("first")).await.unwrap();
+    let mut foreign = proposal("foreign");
+    foreign.chat_id = "other".into();
+    foreign.id = "foreign".into();
+    foreign.scope_key = "other-scope".into();
+    foreign.action_id = None;
+    store.create_proposal(foreign).await.unwrap();
+    applying(&store, "first", "operation").await;
+    store
+        .record_outcome("operation", outcome(), 1002)
+        .await
+        .unwrap();
+
+    assert_eq!(store.delete_proposals_by_chat("chat").await.unwrap(), 1);
+    assert!(store.get_proposal("first").await.unwrap().is_none());
+    // The committed receipt row cascaded with its proposal.
+    assert!(store.receipt("operation").await.unwrap().is_none());
+    // The other chat's proposal is untouched.
+    assert!(store.get_proposal("foreign").await.unwrap().is_some());
+    // Deleting an empty scope removes nothing and answers zero.
+    assert_eq!(store.delete_proposals_by_chat("chat").await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn record_outcome_is_idempotent_and_requires_the_claimed_operation() {
+    let store = SqliteStore::memory(4).unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store.create_proposal(proposal("first")).await.unwrap();
+    applying(&store, "first", "operation").await;
+
+    let first = store
+        .record_outcome("operation", outcome(), 1002)
+        .await
+        .unwrap();
+    assert_eq!(first.proposal_id, "first");
+    // A replay cannot restate the evidence: the first outcome stands.
+    let mut restated = outcome();
+    restated.status = "failed".into();
+    restated.applied_ops = 0;
+    let replayed = store
+        .record_outcome("operation", restated, 1003)
+        .await
+        .unwrap();
+    assert_eq!(replayed, first);
+
+    // The port records an outcome by operation id ALONE: an id no proposal
+    // carries is still the caller's idempotency key and its receipt stands
+    // (proposal_id NULL, the record JSON authoritative). The old
+    // "requires the claimed operation" refusal contradicted the shared
+    // conformance suite, which records outcomes for free-floating ids.
+    let unclaimed = store
+        .record_outcome("never-claimed", outcome(), 1004)
+        .await
+        .unwrap();
+    assert!(unclaimed.proposal_id.is_empty());
+    assert_eq!(unclaimed.operation_id, "never-claimed");
+}

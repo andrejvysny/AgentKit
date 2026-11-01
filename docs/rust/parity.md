@@ -119,6 +119,50 @@ Rust; `packages/transport-http` remains the implementation for consumers
 on the TypeScript host stack, and the TS-server replacement (AGENTKIT-56)
 stays open until that stack's consumers move onto the native path.
 
+MCP client dispatch authority (2026-11-01). The Rust MCP client no
+longer trusts the remote `readOnlyHint`: tool effect comes only from the
+host's `ServerConfig.readOnly` (additive, default false), arguments are
+validated against the recorded schema **locally before dispatch**
+(uncompilable advertised schemas fail closed), and the execute path
+requires a `DispatchGuard` — a missing guard refuses as
+`mcp_authority_revoked` rather than dispatching unguarded, matching the
+TS contributor's validate → authorize → dispatch order. Resolved secret
+material is now scrubbed (`[redacted]`, bounded, no regexes) from
+tool-result text, embedded resources, structured content and the
+JSON-RPC peer error message, which previously was dropped entirely.
+Pinned by `rust/crates/mcp/tests/authority.rs` (6 cases, incl. an
+end-to-end Bun stdio-wire redaction check). Remaining client-surface
+gaps before the MCP binding can claim the acceptance bar: OAuth,
+elicitation/server→client requests, rich model content projection,
+config/connection persistence ports, and an outcome-uncertain error
+class — each listed, none silently dropped.
+
+Native assistant store (2026-11-01, AGENTKIT-55 backbone). The napi
+binding now exposes every `AssistantStore` sub-port operation — 67 ops
+across `conversations`(17)/`tasks`(21)/`proposals`(9)/`inputs`(5)/
+`settings`(2)/`outbox`(5)/`continuations`(5)/`toolExecutions`(3), each
+a thin parse → engine-call → serialize arm, every one transaction-
+compatible through the same `ports::execute` the transaction handle
+uses (commit-visibility AND rollback-leaves-no-trace tested per
+namespace). On top of it `NativeAssistantStore`
+(`packages/native/src/assistant-store.ts`) implements the frozen
+`AssistantStore` aggregate — typed against `@agentkit/host`'s ports,
+`transaction(fn)` running every sub-port call on the open transaction
+view — and PASSES the same shared conformance drivers the TypeScript
+adapters pass: `assistant-store` + `agent-input` + `context-summary`,
+capabilities `{atomicTransactions: true, search: true}` earned,
+injected clock and gate timeout honored. Engine changes that required:
+store schema v5 (`receipts.proposal_id` nullable + copy/replace
+migration so free-floating outcome receipts are storable per the
+authoritative driver; accepted-version list repaired to include 4),
+`delete_proposals_by_chat`, a port-shaped `tasks/ports.rs` claim/
+lease/attempt API, and `archived`/`explicit-root` fields on messages
+the branch ports require. One OPEN DEFECT, not papered over: priority
+AGING is a TS-store-layer feature the Rust claim path lacks
+(`tasks.rs` sorts `(priority, enqueued_at)` only) — the two aging
+conformance cases skip by name until the engine grows claim-aging
+params. Native suite: 187 pass / 2 named skips / 0 fail.
+
 Working-tree results on macOS arm64 with Bun 1.4.0:
 
 | Suite | Passed | Failed | Skipped | Evidence scope |

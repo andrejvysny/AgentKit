@@ -43,9 +43,27 @@ pub struct MessageInput {
     )]
     pub tool_calls: Option<Value>,
     pub model_result_json: Option<String>,
-    #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
+    #[serde(
+        default = "empty_metadata",
+        deserialize_with = "agentkit_contracts::deserialize_preserving"
+    )]
     pub metadata: Value,
+    #[serde(default = "activate_default")]
     pub activate: bool,
+    /// The TypeScript port distinguishes an absent `parentMessageId` (append to
+    /// the active leaf) from an explicit `null` (create another root). JSON
+    /// erases that difference, so the binding sets this flag for the explicit
+    /// root case and `append` then ignores the active leaf.
+    #[serde(default)]
+    pub explicit_root: bool,
+}
+
+fn empty_metadata() -> Value {
+    Value::Object(Default::default())
+}
+
+fn activate_default() -> bool {
+    true
 }
 
 impl Default for MessageInput {
@@ -62,6 +80,7 @@ impl Default for MessageInput {
             model_result_json: None,
             metadata: serde_json::json!({}),
             activate: true,
+            explicit_root: false,
         }
     }
 }
@@ -89,6 +108,10 @@ pub struct MessageRecord {
     pub depth: u32,
     pub branch_index: u32,
     pub active: bool,
+    /// Archived messages remain readable by id for audit but never replay:
+    /// `archive_branch` marks a whole branch and the listing ports hide them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
     pub created_at: ConversationTimestamp,
 }
 
@@ -160,19 +183,27 @@ pub(crate) fn append(db: &Connection, input: MessageInput, now: i64) -> Result<M
         .into_iter()
         .filter(|m| m.chat_id == chat.id)
         .collect();
-    let parent_id = input.parent_message_id.or_else(|| {
-        messages
-            .iter()
-            .filter(|m| m.active)
-            .max_by_key(|m| m.depth)
-            .map(|m| m.id.clone())
-    });
+    let parent_id = if input.explicit_root {
+        None
+    } else {
+        input.parent_message_id.or_else(|| {
+            messages
+                .iter()
+                .filter(|m| m.active)
+                .max_by_key(|m| m.depth)
+                .map(|m| m.id.clone())
+        })
+    };
     let parent = parent_id
         .as_ref()
         .map(|id| {
             messages
                 .iter()
                 .find(|m| m.id == *id)
+                // An archived parent does not exist for appends: reviving a
+                // retired branch through a new child is refused like a
+                // missing one.
+                .filter(|m| !m.archived)
                 .ok_or_else(|| StoreError::NotFound(id.clone()))
         })
         .transpose()?;
@@ -201,6 +232,7 @@ pub(crate) fn append(db: &Connection, input: MessageInput, now: i64) -> Result<M
             .max()
             .unwrap_or(0),
         active,
+        archived: false,
         created_at: ConversationTimestamp::from_epoch_millis(now)?,
     };
     if get::<MessageRecord>(db, "messages", "id", &message.id)?.is_some() {
@@ -229,17 +261,27 @@ pub(crate) fn append(db: &Connection, input: MessageInput, now: i64) -> Result<M
 
 pub(crate) fn activate(db: &Connection, message_id: &str) -> Result<Vec<MessageRecord>> {
     let target: MessageRecord = required(db, "messages", "id", message_id)?;
+    if target.archived {
+        // An archived branch is not revivable: to the tree it does not exist.
+        return Err(StoreError::NotFound(message_id.to_owned()));
+    }
     let mut messages: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
         .into_iter()
         .filter(|m| m.chat_id == target.chat_id)
         .collect();
     let mut leaf = target;
-    while let Some(child) = messages
-        .iter()
-        .filter(|m| m.parent_message_id.as_deref() == Some(&leaf.id))
-        .min_by_key(|m| m.branch_index)
-    {
-        leaf = child.clone();
+    while let Some(child) = {
+        let kids: Vec<&MessageRecord> = messages
+            .iter()
+            .filter(|m| m.parent_message_id.as_deref() == Some(&leaf.id) && !m.archived)
+            .collect();
+        kids.iter()
+            .find(|m| m.active)
+            .or_else(|| kids.iter().min_by_key(|m| m.branch_index))
+            .copied()
+            .cloned()
+    } {
+        leaf = child;
     }
     let mut path = Vec::new();
     let mut cursor = Some(leaf.id);
@@ -387,6 +429,18 @@ impl SqliteStore {
             .await
     }
 
+    /// The newest message a run wrote in this chat, or `None` when the run
+    /// never persisted one. Answers the placeholder seed for a turn.
+    pub async fn last_message_of_run(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+    ) -> Result<Option<MessageRecord>> {
+        let (chat_id, run_id) = (chat_id.to_owned(), run_id.to_owned());
+        self.call(move |db| crate::session_ops::last_message_of_run(db, &chat_id, &run_id))
+            .await
+    }
+
     pub async fn messages(
         &self,
         chat_id: &str,
@@ -394,7 +448,9 @@ impl SqliteStore {
     ) -> Result<Vec<MessageRecord>> {
         let chat_id = chat_id.to_owned();
         self.call(move |db| {
-            let _: ChatRecord = required(db, "chats", "id", &chat_id)?;
+            // A chat that is gone (or never was) lists no messages; the
+            // reference adapters answer with the empty listing, and callers
+            // legitimately read trees of chats that were just deleted.
             let mut messages: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
                 .into_iter()
                 .filter(|m| m.chat_id == chat_id && (include_inactive || m.active))
@@ -430,6 +486,7 @@ impl SqliteStore {
             let mut hits = Vec::new();
             for message in all::<MessageRecord>(db, "messages")? {
                 if chat_id.as_ref().is_some_and(|id| *id != message.chat_id)
+                    || message.archived
                     || message.metadata.get("internal") == Some(&Value::Bool(true))
                     || message.metadata.get("placeholder") == Some(&Value::Bool(true))
                 {

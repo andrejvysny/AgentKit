@@ -139,7 +139,10 @@ impl SqliteStore {
             if !["low", "medium", "high", "destructive"].contains(&proposal.risk.as_str()) {
                 return Err(StoreError::InvalidInput("invalid risk level".into()));
             }
-            let _: ChatRecord = required(db, "chats", "id", &proposal.chat_id)?;
+            // The port treats `chatId` as a free-form association, not a
+            // foreign key: callers legitimately record proposals for chats
+            // they do not own (and the reference adapters persist them
+            // untouched), so no chat-row existence check here.
             db.execute(
                 "INSERT INTO proposals VALUES(?,?,?,?,?,?)",
                 params![
@@ -329,6 +332,81 @@ impl SqliteStore {
         let operation_id = operation_id.to_owned();
         self.call(move |db| get(db, "receipts", "operation_id", &operation_id))
             .await
+    }
+
+    pub async fn record_outcome(
+        &self,
+        operation_id: &str,
+        outcome: ApplyOutcome,
+        now: i64,
+    ) -> Result<ReceiptRecord> {
+        let operation_id = operation_id.to_owned();
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            // Idempotent on operation id: the first committed outcome is the
+            // one that happened; a later call is answered from the evidence.
+            if let Some(receipt) =
+                get::<ReceiptRecord>(&transaction, "receipts", "operation_id", &operation_id)?
+            {
+                return Ok(receipt);
+            }
+            // The port records an outcome by operation id alone; a proposal
+            // carrying the id supplies its identity, but a receipt stands on
+            // its own when none does (the caller's idempotency key, not the
+            // row, is what dedups).
+            let proposal_id = all::<ProposalRecord>(&transaction, "proposals")?
+                .into_iter()
+                .filter(|proposal| proposal.operation_id.as_deref() == Some(&operation_id))
+                .max_by_key(|proposal| proposal.created_at)
+                .map(|proposal| proposal.id)
+                .unwrap_or_default();
+            let receipt = ReceiptRecord {
+                proposal_id,
+                operation_id,
+                outcome,
+                created_at: now,
+            };
+            transaction.execute(
+                "INSERT INTO receipts VALUES(?,?,?)",
+                params![
+                    receipt.operation_id,
+                    // An outcome recorded without a proposal (the port's
+                    // free-floating idempotency key) keeps the column NULL:
+                    // the FK stays honest, the record JSON stays authoritative.
+                    if receipt.proposal_id.is_empty() {
+                        None
+                    } else {
+                        Some(receipt.proposal_id.as_str())
+                    },
+                    json(&transaction, &receipt)?
+                ],
+            )?;
+            transaction.commit()?;
+            Ok(receipt)
+        })
+        .await
+    }
+
+    /// Delete every proposal of one chat — with its committed receipts (the
+    /// receipt rows cascade with the proposal) — and return how many
+    /// PROPOSALS were removed. Mirrors the chat-delete cascade expectations
+    /// so a chat teardown and this scoped delete leave the same state.
+    pub async fn delete_proposals_by_chat(&self, chat_id: &str) -> Result<usize> {
+        let chat_id = chat_id.to_owned();
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            let mut removed = 0;
+            for proposal in all::<ProposalRecord>(&transaction, "proposals")?
+                .into_iter()
+                .filter(|proposal| proposal.chat_id == chat_id)
+            {
+                transaction.execute("DELETE FROM proposals WHERE id=?", [proposal.id])?;
+                removed += 1;
+            }
+            transaction.commit()?;
+            Ok(removed)
+        })
+        .await
     }
 
     pub async fn invalidate_pending(&self, scope: &str, revision: &str) -> Result<usize> {

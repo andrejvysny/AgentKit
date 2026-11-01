@@ -6,7 +6,7 @@
 //! failures collapse to `internal_error` with a redacted message.
 
 use napi::{Status, bindgen_prelude::Error};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// The contract file itself, checked by the Rust tests so the two languages
 /// can never drift.
@@ -66,7 +66,38 @@ pub fn internal(context: &str) -> Error {
 /// New variants land in `internal_error` (with the origin in details) rather
 /// than silently minting a public code.
 pub fn store(error: agentkit_store::StoreError) -> Error {
+    store_mapped(error, None, None)
+}
+
+/// Port-surface mapping: the `AssistantStore` ports have their own code for
+/// transition legality and for a duplicate key, and those differ per
+/// namespace (`invalid_task_transition` for tasks, `input_transition_invalid`
+/// for agent inputs, `duplicate_task` for task ids, …). Each port arm passes
+/// the two codes its namespace promises; every other variant maps exactly as
+/// [`store`] does.
+pub fn store_port(
+    error: agentkit_store::StoreError,
+    invalid_transition: &str,
+    duplicate: &str,
+) -> Error {
+    store_mapped(error, Some(invalid_transition), Some(duplicate))
+}
+
+fn store_mapped(
+    error: agentkit_store::StoreError,
+    invalid_transition: Option<&str>,
+    duplicate: Option<&str>,
+) -> Error {
     use agentkit_store::StoreError as E;
+    if let E::InvalidImport { reason } = &error {
+        // The port contract asks the refusal to say WHICH import rule broke;
+        // the reason rides in `details` so an importer can act on it.
+        return stable(
+            "invalid_import",
+            error.to_string(),
+            Some(json!({ "reason": reason })),
+        );
+    }
     let (code, message) = match &error {
         E::AlreadyOwned => ("already_owned", error.to_string()),
         E::ForeignDatabase => ("foreign_database", error.to_string()),
@@ -75,8 +106,13 @@ pub fn store(error: agentkit_store::StoreError) -> Error {
         E::UnsupportedVersion(_) => ("unsupported_version", error.to_string()),
         E::InvalidInput(_) => ("invalid_input", error.to_string()),
         E::NotFound(_) => ("not_found", error.to_string()),
-        E::Duplicate(_) => ("input_conflict", error.to_string()),
+        E::Duplicate(_) => (duplicate.unwrap_or("input_conflict"), error.to_string()),
         E::ScopeBusy(_) => ("chat_busy", error.to_string()),
+        E::LeaseLost(_) => ("lease_lost", error.to_string()),
+        E::InvalidTransition(_) => (
+            invalid_transition.unwrap_or("unknown-store-error"),
+            error.to_string(),
+        ),
         E::TransactionGateTimeout => ("transaction_gate_timeout", error.to_string()),
         E::TransactionScopeExpired => ("transaction_scope_expired", error.to_string()),
         _ => ("unknown-store-error", error.to_string()),

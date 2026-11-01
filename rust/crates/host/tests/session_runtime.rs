@@ -2914,7 +2914,14 @@ async fn deferred_compaction_summarizes_then_runs_and_preserves_canonical_histor
         .find(|message| message.role == "user")
         .unwrap();
     f.store
-        .update_message(&first.id, Some(json!("edited question")), None, None, 1000)
+        .update_message(
+            &first.id,
+            Some(json!("edited question")),
+            None,
+            None,
+            None,
+            1000,
+        )
         .await
         .unwrap();
     f.service
@@ -3297,6 +3304,7 @@ async fn compaction_rejects_changed_descriptor_and_newer_marker() {
                 .update_message(
                     &message.id,
                     Some(json!("edited while summarizing")),
+                    None,
                     None,
                     None,
                     1000,

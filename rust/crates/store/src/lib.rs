@@ -31,6 +31,7 @@ pub use session_ops::*;
 pub use settings_commit::{SettingWrite, SettingsCommit};
 pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};
 pub use transaction::StoreTransaction;
+pub use util::id;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {

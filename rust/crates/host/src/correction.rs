@@ -307,6 +307,7 @@ impl ChatSession {
                 &self.anchor,
                 Some("".into()),
                 None,
+                None,
                 Some(self.context.fence.clone()),
                 self.context.runtime.now_ms(),
             )
@@ -510,6 +511,7 @@ impl ChatSession {
                 &self.anchor,
                 Some(pass.content.clone().into()),
                 Some(metadata),
+                None,
                 Some(self.context.fence.clone()),
                 self.context.runtime.now_ms(),
             )

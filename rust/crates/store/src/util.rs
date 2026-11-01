@@ -50,7 +50,7 @@ pub(crate) fn json<T: Serialize + agentkit_contracts::JsonDeserialize>(
     Ok(serialized)
 }
 
-pub(crate) fn id() -> String {
+pub fn id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
@@ -77,9 +77,9 @@ pub(crate) fn safe_integer(value: &serde_json::Value) -> Option<u64> {
 }
 
 pub(crate) fn checked_expiry(now: i64, ttl: i64) -> Result<i64> {
-    if ttl <= 0 {
+    if ttl < 0 {
         return Err(StoreError::InvalidInput(
-            "lease TTL must be positive".into(),
+            "lease TTL must not be negative".into(),
         ));
     }
     now.checked_add(ttl)

@@ -230,6 +230,7 @@ async fn seed_crashed_run(
                 model_result_json: None,
                 metadata: json!({}),
                 activate: true,
+                explicit_root: false,
             },
             None,
             now_ms(),

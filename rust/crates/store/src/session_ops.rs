@@ -572,7 +572,7 @@ struct AppendAnswer {
     response_hash: String,
 }
 
-fn last_message_of_run(
+pub(crate) fn last_message_of_run(
     db: &Connection,
     chat_id: &str,
     run_id: &str,

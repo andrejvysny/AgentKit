@@ -216,6 +216,51 @@ impl SqliteStore {
         self.call(|db| all(db, "outbox")).await
     }
 
+    /// Port-shaped publish: settle a record as published at `at` regardless of
+    /// any in-flight claim window. The claim-token paths (`publish_outbox`)
+    /// remain the guarded lane for claim-aware publishers; this one matches
+    /// the reference adapter's `markPublished`, which stamps the instant the
+    /// caller delivered. A missing record is `NotFound`, never silence.
+    pub async fn mark_outbox_published(&self, record_id: &str, at: i64) -> Result<()> {
+        let record_id = record_id.to_owned();
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            let mut record: OutboxRecord = required(&transaction, "outbox", "id", &record_id)?;
+            record.published_at = Some(at);
+            save(&transaction, &record)?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Port-shaped failure: record the error and reschedule the record for
+    /// its next delivery at `retry_at`. A missing record is `NotFound`.
+    pub async fn mark_outbox_failed(
+        &self,
+        record_id: &str,
+        error: String,
+        retry_at: i64,
+    ) -> Result<()> {
+        let (record_id, error) = (record_id.to_owned(), error);
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            let mut record: OutboxRecord = required(&transaction, "outbox", "id", &record_id)?;
+            record.last_error = Some(error);
+            record.available_at = retry_at;
+            // The port's markFailed has no claim token: it releases whatever
+            // claim window the delivery opened, so the record becomes
+            // re-claimable at `retry_at` rather than after the window.
+            record.claim_token = None;
+            record.claim_owner = None;
+            record.claim_until = None;
+            save(&transaction, &record)?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn prune_outbox(&self, before: i64, max_attempts: u32) -> Result<usize> {
         self.call(move |db| {
             if max_attempts == 0 {
