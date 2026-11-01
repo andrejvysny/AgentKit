@@ -2,6 +2,34 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**Backend runs on Rust by default composition.** The binding grew the whole
+remaining backend surface and every production composition moved onto it.
+`service.startHttpServer()` serves REST v1 + SSE from the Rust
+`agentkit-transport-http` engine (the unchanged client and react suites
+pass against it unmodified); `registerProviderConnection` + `providerConfig`
+install the Rust provider lane (chat-completions and responses protocols,
+API keys never enter JavaScript, continuation replay and revoked-connection
+refusal included); `NativeStore` + `NativeAssistantStore` expose the Rust
+store's complete `AssistantStore` surface through `callStore` and pass the
+shared adapter conformance drivers; `startMcpServer` hosts the crate's
+streamable-HTTP MCP server over registered JS tools and
+`mcpConnect`/`mcpCallTool` run the crate's client manager with host-decided
+effect and deny-all secret resolution. Both examples, the qualification
+smokes and the live scripts compose `@agentkit/native` only; the TypeScript
+backend packages remain frozen, API-compatible libraries with zero
+production consumers (`docs/rust/parity.md` keeps the per-package ledger).
+
+**Two engine fixes on the consumer path.** `complete_proposal` finalizes an
+`Applying` proposal behind a pre-existing receipt — the store port records
+the outcome before requesting the terminal transition, and the old early
+return skipped the stamp, so host `ProposalService.apply` over the native
+store never left `applying`; the receipt stays first-committed-wins and the
+stamp lands from the receipt's outcome. And a chat that is not a session now
+answers the permission guard with ABSENCE (configured-mode fallback) instead
+of a guard error, so REST-minted chats run their registered JS tools — a
+non-session chat had been refused "guard error" on every tool call;
+malformed session state stays fail-closed.
+
 **Native TS binding, first slice.** `rust/crates/napi` (`agentkit-napi`, napi-rs 3.x) and the workspace
 package `@agentkit/native` expose the Rust runtime to Node/Bun over JSON mirrors of the serde wire shapes:
 `NativeStore` (actor-per-instance, `already_owned`/`recovery_unreadable` fail closed) and
