@@ -44,6 +44,8 @@ export class CallbackRouter {
   private provider: ProviderFunction | null = null;
   private tools = new Map<string, RegisteredTool>();
   private closed = false;
+  /** Per-call abort controllers for dispatched provider/tool callbacks. */
+  private controllers = new Map<string, AbortController>();
   /**
    * Dispatched callbacks whose user function has not settled yet. The
    * Rust bridge CANNOT carry this count: `Closing` drains its pending map
@@ -70,6 +72,8 @@ export class CallbackRouter {
   close(): void {
     this.closed = true;
     this.provider = null;
+    for (const controller of this.controllers.values()) controller.abort();
+    this.controllers.clear();
     this.tools.clear();
   }
 
@@ -83,6 +87,19 @@ export class CallbackRouter {
       resolveCall(callId, null, "the binding closed before the callback ran");
       return;
     }
+    // Host-side give-up notifications (the bridge settled the pending call
+    // without this callback's answer). They are NOT settles: the entry is
+    // already gone on the Rust side. Their one job is to abort the user
+    // function's signal so consumer-owned effects (spawned processes,
+    // network) stop instead of running on unobserved.
+    if (envelope.kind === "cancel" || envelope.kind === "discard") {
+      const controller = this.controllers.get(callId);
+      if (controller !== undefined) {
+        this.controllers.delete(callId);
+        controller.abort();
+      }
+      return;
+    }
     try {
       if (envelope.kind === "provider") {
         const provider = this.provider;
@@ -94,8 +111,11 @@ export class CallbackRouter {
           );
           return;
         }
+        const request = envelope.request as ProviderRequest;
         const outcome = await this.dispatchUser(async () => {
-          const result = await provider(envelope.request as ProviderRequest);
+          const result = await this.withAbort(callId, (signal) =>
+            provider({ ...request, signal }),
+          );
           resolveCall(callId, JSON.stringify(result ?? {}), null);
         });
         return outcome;
@@ -108,7 +128,9 @@ export class CallbackRouter {
           return;
         }
         await this.dispatchUser(async () => {
-          const outcome = await tool.run(request.input, request);
+          const outcome = await this.withAbort(callId, (signal) =>
+            tool.run(request.input, { ...request, signal }),
+          );
           resolveCall(callId, JSON.stringify(outcome ?? {}), null);
         });
         return;
@@ -120,6 +142,22 @@ export class CallbackRouter {
         null,
         error instanceof Error ? error.message : String(error),
       );
+    }
+  }
+
+  /** Registers the per-call abort controller before the user function is
+   * entered, so a cancel/discard notification racing dispatch still finds
+   * (and removes) the entry. */
+  private async withAbort<T>(
+    callId: string,
+    run: (signal: AbortSignal) => T | Promise<T>,
+  ): Promise<T> {
+    const controller = new AbortController();
+    this.controllers.set(callId, controller);
+    try {
+      return await run(controller.signal);
+    } finally {
+      this.controllers.delete(callId);
     }
   }
 
