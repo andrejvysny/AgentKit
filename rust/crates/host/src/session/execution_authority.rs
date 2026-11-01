@@ -142,7 +142,7 @@ impl CodingPermissionAuthority for SessionExecutionAuthority {
             Err(error) => {
                 return Err(HostError::Execution(format!(
                     "Cannot read the session's execution state; the plan stays unjudged. ({error:?})"
-                )))
+                )));
             }
         };
         let Some(state) = state else {
