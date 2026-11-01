@@ -156,6 +156,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let mut config = Config::default();
     config.streaming.poll_interval = std::time::Duration::from_millis(2);
+    // Match the TypeScript harness's `streaming` block: a reconnect must be
+    // immediate enough that a test severing a stream ~100 times finishes
+    // inside its budget, and the heartbeat must not interleave test frames.
+    config.streaming.retry_hint = std::time::Duration::from_millis(10);
+    config.streaming.heartbeat_interval = std::time::Duration::from_secs(60);
     let read_hook = std::env::var("AGENTKIT_TEST_PROVIDER_URL").ok().map(|url| {
         (
             format!("{}/events-read", url.trim_end_matches("/provider")),
