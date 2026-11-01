@@ -61,8 +61,11 @@ impl NativeStore {
     /// durable session service + background worker, with crash recovery run
     /// before the worker claims any work. `onEvent` receives every
     /// provider/tool callback as a JSON envelope. `optionsJson` configures
-    /// the shutdown deadline and the JS-tool Rust authority (see
-    /// `SessionService::build`); an unsupported value fails the call.
+    /// the shutdown deadline, the JS-tool Rust authority, and optionally
+    /// the Rust-native provider lane (`providerConfig`, whose connection
+    /// must already be registered via `registerProviderConnection` — API
+    /// keys never travel in `optionsJson`); an unsupported value fails the
+    /// call. See `SessionService::build`.
     #[napi]
     pub async fn create_service(
         &self,

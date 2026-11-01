@@ -54,9 +54,24 @@ impl ChatCompletionsProvider {
             }
             let response = tokio::select! {biased;
                 _=cancellation.cancelled()=>return Err(CoreError::new("cancelled","aborted")),
-                response=self.transport.request(&self.identity,"chat/completions",Some(body.clone()),cancellation.clone())=>response?,
+                response=self.transport.request(&self.identity,"chat/completions",Some(body.clone()),cancellation.clone())=>response,
+            };
+            // The request never produced a response (DNS, refused connection,
+            // TLS, a fetch double that threw): distinct from a provider that
+            // answered with an error status.
+            let response = match response {
+                Ok(response) => response,
+                Err(_) if cancellation.is_cancelled() => {
+                    return Err(CoreError::new("cancelled", "aborted"))
+                }
+                Err(error) => return Err(CoreError::new("network_error", &error.message)),
             };
             if response.status().is_success() {
+                // A response without a body can never carry an SSE stream; the
+                // event contract distinguishes it from a stream that ends empty.
+                if response.content_length() == Some(0) {
+                    return Err(CoreError::new("empty_body", "Provider returned empty body"));
+                }
                 return Ok(response);
             }
             let status = response.status().as_u16();
@@ -282,12 +297,20 @@ impl ChatState {
             self.content.push_str(content);
             events.push(ProviderEvent::Delta(content.into()));
         }
+        // Reasoning models emit chain-of-thought into a separate field; stream it
+        // incrementally (do NOT merge into the visible answer) so consumers can
+        // follow the thinking while it arrives.
         if let Some(reasoning) = delta
             .get("reasoning_content")
             .or_else(|| delta.get("reasoning"))
             .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
         {
             self.reasoning.push_str(reasoning);
+            events.push(ProviderEvent::Event {
+                kind: "run.message.reasoning-delta".into(),
+                data: json!({"delta": reasoning}),
+            });
         }
         if let Some(calls) = delta["tool_calls"].as_array() {
             for call in calls {
@@ -390,6 +413,37 @@ pub(crate) fn usage_data(
         ("total_tokens", "totalTokens"),
     ] {
         if let Some(value) = usage.get(source) {
+            if value
+                .as_u64()
+                .filter(|value| *value <= 9007199254740991)
+                .is_none()
+            {
+                return Err(CoreError::responses("malformed_usage"));
+            }
+            data[target] = value.clone();
+        }
+    }
+    // Servers send `null` for details they do not track; the event contract is
+    // a number or absent, never null — non-numeric values are omitted exactly
+    // as the TypeScript client does.
+    for (details, key, target) in [
+        (
+            "prompt_tokens_details",
+            "cached_tokens",
+            "cachedPromptTokens",
+        ),
+        (
+            "completion_tokens_details",
+            "reasoning_tokens",
+            "reasoningTokens",
+        ),
+    ] {
+        if let Some(value) = usage
+            .get(details)
+            .and_then(Value::as_object)
+            .and_then(|details| details.get(key))
+            .filter(|value| value.is_number())
+        {
             if value
                 .as_u64()
                 .filter(|value| *value <= 9007199254740991)

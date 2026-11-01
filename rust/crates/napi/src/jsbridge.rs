@@ -98,6 +98,18 @@ impl JsBridge {
         }
     }
 
+    /// The Rust provider lane's revocable-state probe: true while new JS
+    /// dispatches are accepted. Once `close()` enters `Closing`, this flips
+    /// to false and the transport stops issuing provider HTTP — the same
+    /// fence a new callback would hit.
+    pub(crate) fn is_open(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .state
+            == BridgeState::Open
+    }
+
     pub(crate) fn deliver_message(&self, text: String) -> napi::Status {
         let inner = self
             .inner

@@ -415,6 +415,34 @@ were re-qualified locally with Node v22.20.0 installed.
   recorded by the CI native matrix jobs at push, not claimed here; no release
   prebuilds, no npm publication, Node 20 untested.
 
+### Rust provider lane validation record (2026-11-01, Linux x86_64, Rust 1.97.0, Bun 1.4.4)
+
+- Shipped: `providerConfig` on `createService` selects the Rust provider
+  lane over the core chat-completions/responses presets;
+  `registerProviderConnection`/`revokeProviderConnection` keep API keys in
+  Rust memory only; `ConfiguredProvider` applies service-level
+  temperature/maxTokens as overrides (regression-pinned: the host's default
+  16 384 output budget no longer silently wins); both presets now emit
+  `run.message.reasoning-delta` (the Responses preset additionally gained
+  cached/reasoning usage details and transport
+  `network_error`/`empty_body`/`service_unavailable` classification with
+  the retryable flag, all pinned in `rust/crates/core/tests/providers.rs`).
+- E2E: `packages/native/tests/provider-lane.test.ts` — four suites against
+  a loopback `Bun.serve` OpenAI-compatible mock with request capture:
+  three-wire-deltas → three `run.message.delta` events on the Rust lane
+  versus one synthesized chunk on the JS lane; reasoning delta; usage
+  details; exact wire shape (Bearer, `stream_options.include_usage`,
+  `store:false` + encrypted-content include); encrypted-reasoning
+  continuation replayed verbatim across two requests; revoked connection →
+  next turn fails, no request fires on the retired key; no-slot/no-lane
+  service settles `failed` honestly.
+- Gates at this record: `agentkit-core` all targets (providers suite 19/19
+  including the new reasoning test), `agentkit-napi` unit 21/21, native
+  package suite 35 pass / 0 fail across 8 files, `tsc` clean, biome clean,
+  clippy clean on touched crates, rustfmt clean, API freeze 31 reports
+  pass. No live provider contacted; live-provider and live keychain
+  qualification remain separate release gates (gate 5).
+
 ## Remaining release gates
 
 1. Preserve the recorded local gates, approved unpaired-surrogate exception and

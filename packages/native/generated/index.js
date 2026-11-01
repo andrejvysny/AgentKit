@@ -773,7 +773,7 @@ if (
   }
 }
 
-const { NativeRunHandle, NativeStore, SessionService, StoreTransactionHandle, SubscriptionHandle, bindingSmoke, endRunProvider, isRunCallbackActive, pushRunProviderEvent, reserveRunProviderRequest, resolveCall } = nativeBinding
+const { NativeRunHandle, NativeStore, SessionService, StoreTransactionHandle, SubscriptionHandle, bindingSmoke, endRunProvider, isRunCallbackActive, pushRunProviderEvent, registerProviderConnection, reserveRunProviderRequest, resolveCall, revokeProviderConnection } = nativeBinding
 export { NativeRunHandle }
 export { NativeStore }
 export { SessionService }
@@ -783,6 +783,8 @@ export { bindingSmoke }
 export { endRunProvider }
 export { isRunCallbackActive }
 export { pushRunProviderEvent }
+export { registerProviderConnection }
 export { reserveRunProviderRequest }
 export { resolveCall }
+export { revokeProviderConnection }
 export const __napiBindingTarget = __napiLoadedBindingTarget
