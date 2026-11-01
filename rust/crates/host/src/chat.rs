@@ -182,6 +182,18 @@ impl TaskExecutor for ChatExecutor {
             approvals,
         )
         .await?;
+        // Project instructions (ADR 0017 part 1): the session workspace's
+        // AGENTS.md / CLAUDE.md text is appended to the resolved system
+        // prompt after context resolution and before provider dispatch,
+        // with every read refusal/truncation surfaced as a `run.warning`
+        // event (TS turn-runner parity).
+        let system_prompt = crate::project_instructions::augment_system_prompt(
+            &self.options,
+            &context,
+            chat_id,
+            resolved.system_prompt.clone(),
+        )
+        .await?;
         // Read the history AFTER the resume pass wrote its records: an
         // approval-mismatch refusal appended moments ago must be visible to
         // the model in this same attempt, not only after a restart.
@@ -203,7 +215,7 @@ impl TaskExecutor for ChatExecutor {
             records,
             self.options.history_limit,
             &anchor,
-            resolved.system_prompt.clone(),
+            system_prompt.clone(),
             // Unanswered persisted calls reconcile against durable receipts,
             // never against an assumed absence (ADR 0020). Receipts are read
             // per chat: the calls being reconciled were recorded under the
@@ -350,7 +362,7 @@ impl TaskExecutor for ChatExecutor {
             registry,
             sink,
             anchor,
-            system_prompt: resolved.system_prompt,
+            system_prompt,
         };
         session.execute().await
     }

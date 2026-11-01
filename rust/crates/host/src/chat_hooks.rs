@@ -17,6 +17,14 @@ pub struct ChatExecutorOptions {
     pub correction: Option<super::correction::CorrectionConfig>,
     pub tool_contributors: Vec<Arc<dyn ToolContributor>>,
     pub tool_guards: Vec<Arc<dyn ToolGuard>>,
+    /// Session workspace `AGENTS.md` / `CLAUDE.md` injection (ADR 0017 part
+    /// 1); absent, the feature is off, mirroring the TS host's
+    /// `deps.projectInstructions`. The binding wires
+    /// [`crate::FileProjectInstructions`].
+    pub project_instructions: Option<Arc<dyn crate::ProjectInstructionsSource>>,
+    /// The TS host's `untrustedProjectInstructions: "skip"`: an untrusted
+    /// workspace skips loading entirely instead of injecting labelled text.
+    pub skip_untrusted_project_instructions: bool,
     /// Exact-call remembering for approvable refusals (the coding pack's
     /// shell policy wires this); absent, every approvable call asks.
     pub standing: Option<Arc<dyn crate::governance::StandingApprovalPolicy>>,
@@ -41,6 +49,8 @@ impl Default for ChatExecutorOptions {
             correction: None,
             tool_contributors: vec![],
             tool_guards: vec![],
+            project_instructions: None,
+            skip_untrusted_project_instructions: false,
             standing: None,
             actor: Value::Null,
             actor_id: None,

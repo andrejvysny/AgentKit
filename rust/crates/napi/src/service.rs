@@ -147,6 +147,12 @@ impl SessionService {
                 ChatExecutorOptions {
                     tool_contributors: vec![Arc::clone(&contributor) as Arc<dyn ToolContributor>],
                     tool_guards: vec![Arc::new(guard) as Arc<dyn ToolGuard>],
+                    // Sessions whose descriptor carries a workspace get the
+                    // AGENTS.md/CLAUDE.md system block exactly as the
+                    // TypeScript authority injects it; descriptor-less
+                    // sessions stay untouched. Refusals (symlink, escape)
+                    // degrade to a run warning, never a lost turn.
+                    project_instructions: Some(Arc::new(agentkit_host::FileProjectInstructions)),
                     ..Default::default()
                 },
             ),

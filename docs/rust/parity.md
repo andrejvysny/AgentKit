@@ -72,6 +72,35 @@ One documented deviation: the Responses lane omits non-numeric usage
 detail fields where the TypeScript `tokenCount` guard would fail with
 `malformed_usage`.
 
+Host-facade hardening round (2026-11-01). The session engine now matches
+the TypeScript authority on `answer_stale` (replayed answers to settled
+requests settle `answer_stale` without touching turn state; ten cases
+pinned in `rust/crates/host/tests/answer_stale.rs`), and plain duplicate
+store records surface as `input_conflict` on the session surface — the
+same code the binding's store mapping already used; the non-contract
+`duplicate` bucket is gone (`session/mod.rs` From-arm). Project
+instructions (ADR 0017 part 1) are ported: `FileProjectInstructions`
+reads `AGENTS.md`/`CLAUDE.md` with the TS security model (canonicalized
+root, `O_NOFOLLOW`+`O_NONBLOCK` with dev/ino identity, FIFO refusal,
+65 536-byte cap, digest titles, trailing-U+FFFD strip matching lossy
+UTF-8), `ChatExecutor` appends the block to the resolved system prompt
+per pass and emits one durable `run.warning
+{code:"project_instructions_unavailable"}` per skipped/truncated file,
+and the binding wires the FS source unconditionally — sessions whose
+descriptor carries a workspace receive the injection; descriptor-less
+sessions stay untouched. Evidence: the port matrix
+(`rust/crates/host/tests/project_instructions.rs`), an end-to-end host
+test proving the warning is durable and the symlinked target never
+reaches the provider (`rust/crates/host/tests/project_instructions_session.rs`),
+and two binding suites with wire-level capture through the mock provider
+(`packages/native/tests/project-instructions.test.ts`). The binding also
+gained `deleteChat`/`archiveChat`/`unarchiveChat` over the store engine
+plus a read-only `chats.get`/`chats.list` port (see the milestone
+document). One consumer-visible boundary surfaced while qualifying the
+warning: `subscribeTurn`'s `afterSeq` is an exclusive cursor and
+sequences start at 0, so `afterSeq: 0` silently drops the first event;
+the wrapper now documents it.
+
 Working-tree results on macOS arm64 with Bun 1.4.0:
 
 | Suite | Passed | Failed | Skipped | Evidence scope |

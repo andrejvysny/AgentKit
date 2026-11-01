@@ -105,6 +105,40 @@ async fn summaries(store: &SqliteStore, operation: &str, input: Value) -> Result
     }
 }
 
+async fn chats(store: &SqliteStore, operation: &str, input: Value) -> Result<Value> {
+    match operation {
+        "get" => Ok(store
+            .get_chat(text(&input, "chatId")?)
+            .await
+            .map_err(errors::store)?
+            .and_then(|chat| serde_json::to_value(chat).ok())
+            .unwrap_or(Value::Null)),
+        "list" => {
+            let include_archived = match input.get("includeArchived") {
+                None | Some(Value::Null) => false,
+                Some(Value::Bool(value)) => *value,
+                _ => {
+                    return Err(errors::invalid("includeArchived must be a boolean"));
+                }
+            };
+            Ok(Value::Array(
+                store
+                    .list_chats(include_archived)
+                    .await
+                    .map_err(errors::store)?
+                    .into_iter()
+                    .filter_map(|chat| serde_json::to_value(chat).ok())
+                    .collect(),
+            ))
+        }
+        _ => Err(errors::stable(
+            "not_implemented",
+            "Unsupported chat store operation",
+            None,
+        )),
+    }
+}
+
 #[napi]
 impl NativeStore {
     /// Internal JSON port used by the compatibility facade. Rust owns validation,
@@ -130,6 +164,7 @@ pub(super) async fn execute(
     let value = match namespace {
         "providers" => providers(&store, method, input).await?,
         "summaries" => summaries(&store, method, input).await?,
+        "chats" => chats(&store, method, input).await?,
         _ => {
             return Err(errors::stable(
                 "not_implemented",

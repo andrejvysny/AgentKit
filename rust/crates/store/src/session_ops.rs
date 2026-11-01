@@ -500,6 +500,42 @@ fn stale(request_id: &str, reason: &str) -> StoreError {
     ))
 }
 
+/// The message of a stale-answer refusal (`Request <id> can no longer be
+/// answered: <reason>.`) — the only `InvalidTransition` text this module's
+/// answer settlement raises, for the races only the store can observe. The
+/// session layer surfaces it under the TypeScript `answer_stale` code with
+/// this message verbatim; every other `InvalidTransition` stays a generic
+/// invalid-state failure.
+pub fn answer_stale_reason(error: &StoreError) -> Option<&str> {
+    match error {
+        StoreError::InvalidTransition(message)
+            if message.contains(" can no longer be answered: ") =>
+        {
+            Some(message)
+        }
+        _ => None,
+    }
+}
+
+/// The session layer's pre-transaction mirror of the settlement's first
+/// write-free act: an approval answer must read `{ decision, note?,
+/// remember? }` before any stale gate speaks for the request, exactly as
+/// TypeScript's `readDecision` precedes them in the answer transaction.
+pub fn check_approval_answer_shape(content: &Value, response: &Value) -> Result<()> {
+    if is_approval_request(content) {
+        read_decision(response).map(|_| ())
+    } else {
+        Ok(())
+    }
+}
+
+/// The epoch-millis instant a request's `expiresAt` wire text names (UTC
+/// when it carries no offset). The session layer's expiry gate shares the
+/// store's parser so both boundaries read the field identically.
+pub fn parse_answer_expiry(value: &str) -> Option<i64> {
+    parse_iso_millis(value)
+}
+
 fn append_answer(db: &Connection, input: &AppendAnswer, now: i64) -> Result<()> {
     let envelope = &input.envelope_json;
     let message = MessageInput {

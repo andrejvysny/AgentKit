@@ -32,6 +32,9 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 regex = "=1.13.1"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 rusqlite = { version = "0.38", features = ["bundled"] }
 tempfile = "3"

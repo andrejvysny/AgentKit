@@ -84,10 +84,11 @@ impl From<agentkit_store::StoreError> for SessionError {
             E::Duplicate(message) => {
                 let code = if message.starts_with("answer_conflict") {
                     "answer_conflict"
-                } else if message.starts_with("input_conflict") {
-                    "input_conflict"
                 } else {
-                    "duplicate"
+                    // Plain duplicate records are input conflicts on this
+                    // surface — the same code the binding's store mapping
+                    // uses; "duplicate" is not part of the stable contract.
+                    "input_conflict"
                 };
                 Self::new(code, message)
             }
@@ -284,6 +285,29 @@ pub struct AgentSessionService {
 fn sha256_hex(text: &str) -> String {
     let digest = Sha256::digest(text.as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// A stale-answer refusal carrying the TypeScript `AnswerStaleError` text
+/// verbatim: `Request <id> can no longer be answered: <reason>.` (`reason`
+/// rides in the message because `SessionError` carries code+message only,
+/// exactly as the native binding surfaces it).
+fn answer_stale(request_id: &str, reason: &str) -> SessionError {
+    SessionError::new(
+        "answer_stale",
+        format!("Request {request_id} can no longer be answered: {reason}."),
+    )
+}
+
+/// A store refusal from the answer settlement: the stale-shaped
+/// `InvalidTransition` the store raises for the races only it can observe
+/// ("a concurrent answer or cancel won") crosses as `answer_stale` with the
+/// store's message verbatim; every other store error keeps the generic
+/// mapping.
+fn answer_store_error(error: agentkit_store::StoreError) -> SessionError {
+    match agentkit_store::answer_stale_reason(&error) {
+        Some(message) => SessionError::new("answer_stale", message.to_owned()),
+        None => SessionError::from(error),
+    }
 }
 
 /// Queueing intent for one input: its stable identity and what should
@@ -842,6 +866,31 @@ impl AgentSessionService {
             &serde_json::to_string(&input.response)
                 .map_err(|error| SessionError::invalid_input(error.to_string()))?,
         );
+        // The TypeScript authority's transaction reads the answer's SHAPE
+        // before any stale gate speaks (its `readDecision` runs first), so a
+        // malformed approval answer to a cancelled request is
+        // `invalid_input`, never `answer_stale`.
+        agentkit_store::check_approval_answer_shape(&request.content, &input.response)
+            .map_err(SessionError::from)?;
+        // `assertRememberEligible` is the other pre-transaction refusal: a
+        // PENDING approval that promises to remember an unofferable call is
+        // refused up front, before the stale gates classify it.
+        if request.status == AgentInputStatus::Pending
+            && agentkit_store::is_approval_request(&request.content)
+            && input.response.get("remember") == Some(&Value::Bool(true))
+            && agentkit_store::read_standing_key(&request.content).is_none()
+        {
+            return Err(SessionError::invalid_input(
+                "This call is not eligible for a standing approval.",
+            ));
+        }
+        // TS: `if (taskId === undefined) throw stale("it names no turn")` —
+        // BEFORE the answered-replay branches, so an answered record that
+        // names no turn is stale, never a replay.
+        let task_id = request
+            .target_task_id
+            .clone()
+            .ok_or_else(|| answer_stale(&input.request_id, "it names no turn"))?;
         // An already-answered request is an observation replay (or a
         // conflict the store refuses). It must not consult the plan-approval
         // policy: a one-shot decision would be spent twice, and a replay
@@ -860,7 +909,8 @@ impl AgentSessionService {
                     policy_denial: None,
                     granted_mode: None,
                 })
-                .await?;
+                .await
+                .map_err(answer_store_error)?;
             if outcome.enqueue.is_some() {
                 self.wake();
             }
@@ -912,6 +962,35 @@ impl AgentSessionService {
                 }
             }
         }
+        // Session-layer stale gates, in the TypeScript transaction's order:
+        // cancelled, then the turn's parkable state, then expiry. The store
+        // re-checks all three inside its transaction (it stays authoritative
+        // for persistence); these refuse before settlement so the code and
+        // message match the TypeScript authority, and the races that only
+        // the store can observe cross as `answer_stale` via
+        // `answer_store_error`.
+        if request.status == AgentInputStatus::Cancelled {
+            return Err(answer_stale(&input.request_id, "it was cancelled"));
+        }
+        let task = self
+            .store()
+            .get_task(&task_id)
+            .await
+            .map_err(SessionError::from)?;
+        if !matches!(&task, Some(task) if task.status == TaskStatus::WaitingApproval) {
+            return Err(answer_stale(
+                &input.request_id,
+                "its turn is no longer waiting",
+            ));
+        }
+        if request
+            .expires_at
+            .as_deref()
+            .and_then(agentkit_store::parse_answer_expiry)
+            .is_some_and(|expires| expires <= self.now_ms())
+        {
+            return Err(answer_stale(&input.request_id, "it expired"));
+        }
         let outcome = self
             .store()
             .answer_human_request(AnswerHumanRequest {
@@ -925,7 +1004,8 @@ impl AgentSessionService {
                 policy_denial,
                 granted_mode,
             })
-            .await?;
+            .await
+            .map_err(answer_store_error)?;
         if outcome.enqueue.is_some() {
             self.wake();
         }

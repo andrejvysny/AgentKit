@@ -1,6 +1,8 @@
 //! Session management methods exposed without duplicating host policy.
 use super::{SessionService, parse_object, session_state_json};
 use crate::errors;
+use agentkit_host::{Runtime, SystemRuntime};
+use agentkit_store::SqliteStore;
 use napi::bindgen_prelude::*;
 use serde_json::Value;
 
@@ -155,6 +157,62 @@ impl SessionService {
             .map_err(errors::session)?;
         Ok(session_state_json(&state))
     }
+
+    /// Delete the chat scope behind a session, straight through the store
+    /// engine: an unknown chat fails `not_found`, and while any task in the
+    /// scope is non-terminal the engine refuses atomically with `chat_busy`
+    /// (never a delete that silently cancels live work). The binding adds no
+    /// policy of its own.
+    #[napi]
+    pub async fn delete_chat(&self, session_id: String) -> Result<()> {
+        let guard = self.core.lock().await;
+        let core = guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        delete_chat(core.host.store(), &session_id).await
+    }
+
+    /// Hide the chat from the default listing; a named pass-through over the
+    /// store's `archived` field, answering with the updated record JSON.
+    #[napi]
+    pub async fn archive_chat(&self, session_id: String) -> Result<String> {
+        let guard = self.core.lock().await;
+        let core = guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        set_chat_archived(core.host.store(), &session_id, true).await
+    }
+
+    /// The inverse of `archiveChat`: un-hide the chat, answering with the
+    /// updated record JSON. An unknown chat fails `not_found`.
+    #[napi]
+    pub async fn unarchive_chat(&self, session_id: String) -> Result<String> {
+        let guard = self.core.lock().await;
+        let core = guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        set_chat_archived(core.host.store(), &session_id, false).await
+    }
+}
+
+/// The engine half of `delete_chat`, testable without a Node host: only the
+/// store's own refusal (unknown chat, busy scope) crosses as an error.
+pub(super) async fn delete_chat(store: &SqliteStore, chat_id: &str) -> Result<()> {
+    store.delete_chat(chat_id).await.map_err(errors::store)
+}
+
+/// The engine half of `archive_chat`/`unarchive_chat`: one field on the
+/// chat record, updated by the store; the returned record serializes verbatim.
+pub(super) async fn set_chat_archived(
+    store: &SqliteStore,
+    chat_id: &str,
+    archived: bool,
+) -> Result<String> {
+    let chat = store
+        .update_chat(chat_id, None, None, Some(archived), SystemRuntime.now_ms())
+        .await
+        .map_err(errors::store)?;
+    serde_json::to_string(&chat).map_err(|error| errors::internal(&error.to_string()))
 }
 
 fn optional_string<'a>(input: &'a Value, key: &str) -> Result<Option<&'a str>> {
@@ -162,5 +220,128 @@ fn optional_string<'a>(input: &'a Value, key: &str) -> Result<Option<&'a str>> {
         None => Ok(None),
         Some(Value::String(value)) => Ok(Some(value)),
         _ => Err(errors::invalid(format!("{key} must be a string"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{delete_chat, set_chat_archived};
+    use agentkit_store::{SqliteStore, SubmitTask};
+    use serde_json::{Value, json};
+
+    const NOW: i64 = 1_760_000_000_000;
+
+    fn store() -> SqliteStore {
+        SqliteStore::memory(16).expect("in-memory store")
+    }
+
+    fn code(error: napi::Error) -> String {
+        serde_json::from_str::<Value>(&error.reason).expect("error payload is JSON")["code"]
+            .as_str()
+            .expect("payload carries a code")
+            .to_owned()
+    }
+
+    fn submit_input(task_id: &str, scope_id: &str) -> SubmitTask {
+        SubmitTask {
+            task_id: task_id.to_owned(),
+            kind: "chat_turn".to_owned(),
+            scope_id: scope_id.to_owned(),
+            payload: json!({}),
+            priority: 0,
+            now: NOW,
+            available_at: None,
+            depends_on: vec![],
+            parent_task_id: None,
+            exclusive_scope: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn archive_and_unarchive_persist_the_flag_and_reject_unknown_chats() {
+        let store = store();
+        store
+            .create_chat("c1", None, json!({}), NOW)
+            .await
+            .expect("chat created");
+        let archived: Value =
+            serde_json::from_str(&set_chat_archived(&store, "c1", true).await.unwrap())
+                .expect("record JSON");
+        assert_eq!(archived["id"], "c1");
+        assert_eq!(archived["archived"], true);
+        assert!(
+            store.get_chat("c1").await.unwrap().expect("chat").archived,
+            "the flag is persisted in the record"
+        );
+        assert!(
+            store.list_chats(false).await.unwrap().is_empty(),
+            "the default listing excludes archived chats"
+        );
+        assert_eq!(
+            store.list_chats(true).await.unwrap().len(),
+            1,
+            "the archived listing includes it"
+        );
+        let restored: Value =
+            serde_json::from_str(&set_chat_archived(&store, "c1", false).await.unwrap())
+                .expect("record JSON");
+        assert_eq!(restored["archived"], false);
+        assert_eq!(
+            code(
+                set_chat_archived(&store, "missing", true)
+                    .await
+                    .unwrap_err()
+            ),
+            "not_found"
+        );
+        assert_eq!(
+            code(
+                set_chat_archived(&store, "missing", false)
+                    .await
+                    .unwrap_err()
+            ),
+            "not_found"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_removes_the_scope_refusing_busy_and_unknown_chats() {
+        let store = store();
+        store
+            .create_chat("c1", None, json!({}), NOW)
+            .await
+            .expect("chat created");
+        store
+            .submit(submit_input("t1", "c1"))
+            .await
+            .expect("task queued");
+        assert_eq!(
+            code(delete_chat(&store, "c1").await.unwrap_err()),
+            "chat_busy",
+            "live work in the scope is never silently deleted"
+        );
+        store
+            .cancel_task("t1", NOW)
+            .await
+            .expect("queued task cancels");
+        delete_chat(&store, "c1")
+            .await
+            .expect("delete settles then succeeds");
+        assert!(
+            store.get_chat("c1").await.unwrap().is_none(),
+            "the chat is gone"
+        );
+        assert!(
+            store.get_task("t1").await.unwrap().is_none(),
+            "the scope's tasks are deleted with it"
+        );
+        store
+            .create_chat("c1", None, json!({}), NOW)
+            .await
+            .expect("the same id recreates a fresh aggregate, not the deleted one");
+        assert_eq!(
+            code(delete_chat(&store, "missing").await.unwrap_err()),
+            "not_found"
+        );
     }
 }
