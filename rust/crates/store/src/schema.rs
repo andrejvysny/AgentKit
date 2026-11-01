@@ -397,3 +397,7 @@ CREATE TABLE settings(namespace TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT
 CREATE TABLE run_bindings(run_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE, chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE, scope TEXT NOT NULL, state_required INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE continuations(run_id TEXT PRIMARY KEY REFERENCES run_bindings(run_id) ON DELETE CASCADE, anchor_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE, record TEXT NOT NULL);
 "#;
+
+#[cfg(test)]
+#[path = "schema_tests.rs"]
+mod tests;
