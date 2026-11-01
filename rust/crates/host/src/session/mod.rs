@@ -6,10 +6,13 @@
 //! conversion is a single actor job, so there is no check-then-write window
 //! for a concurrent submit to lose a race in. The service holds no provider
 //! client. Descriptor settings the native dispatch path cannot honor —
-//! selected Skills (content selection), provider reasoning effort, context
-//! unsupported context policies — are REFUSED before any turn effect with
-//! `not_implemented` (never silently omitted), mirroring the HTTP boundary's
-//! 501 for `contentSelection`.
+//! selected Skills (content selection) and provider reasoning effort —
+//! are REFUSED before any turn effect with `not_implemented` (never
+//! silently omitted), mirroring the HTTP boundary's 501 for
+//! `contentSelection`. Context assembly options (`policy`,
+//! `toolResultElision`, the token budgets) are NOT refused: the executor
+//! honors them (`chat_context.rs`, `chat_history.rs`,
+//! `tool_result_elision.rs`).
 
 mod descriptor;
 mod execution_authority;
@@ -1508,13 +1511,13 @@ impl AgentSessionService {
     /// REFUSES, before any turn effect, descriptor settings the native
     /// dispatch path cannot honor: selected Skills (content selection — the
     /// executor never resolves it, so dispatching would silently omit the
-    /// selected instructions), provider reasoning effort (the provider
-    /// request carries no effort field; it would vanish), and context
-    /// assembly overrides (policy, token budgets, tool-result elision — the
-    /// executor assembles history from its own options). This mirrors the
+    /// selected instructions) and provider reasoning effort (the provider
+    /// request carries no effort field; it would vanish). This mirrors the
     /// HTTP boundary's refusal of `contentSelection` (`http/turns.rs`:
     /// `501 not_implemented`, "Native prompt templates and skills are not
-    /// configured.") in code and message shape.
+    /// configured.") in code and message shape. Context options are not
+    /// refused: the `sessionContext` snapshot staged here is what the
+    /// executor's assembly (policy, elision) and budget read.
     fn turn_payload(
         &self,
         session_id: &str,
@@ -1553,14 +1556,6 @@ impl AgentSessionService {
             return Err(SessionError::new(
                 "not_implemented",
                 "Provider reasoning effort is not configured on the native executor.",
-            ));
-        }
-        if descriptor["context"].get("policy").is_some()
-            || descriptor["context"].get("toolResultElision").is_some()
-        {
-            return Err(SessionError::new(
-                "not_implemented",
-                "Session context assembly overrides are not configured on the native executor.",
             ));
         }
         let mut payload = Map::new();

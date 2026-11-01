@@ -19,7 +19,10 @@ pub(crate) struct ResponsesState {
     pub usage: Option<Value>,
     /// Per-part reasoning text keyed `item_id:summary|content:index`
     /// (mirrors `ResponsesReasoning` in the TypeScript reference client).
-    reasoning_parts: BTreeMap<String, String>,
+    /// A Vec, not a map: the frozen reference concatenates with `Map`
+    /// ITERATION ORDER (first appearance), so the pairing must preserve
+    /// arrival order exactly.
+    reasoning_parts: Vec<(String, String)>,
     reasoning_pending: String,
 }
 pub(crate) struct ResponsesResult {
@@ -27,8 +30,31 @@ pub(crate) struct ResponsesResult {
     pub content: String,
     pub calls: Vec<ToolCall>,
     pub usage: Option<Value>,
+    /// The frozen `reasoningContent`: every reasoning part the stream
+    /// revealed, terminal-reconciled (final text must extend the streamed
+    /// prefix or the run fails `stream_output_mismatch`; reasoning that
+    /// only the terminal response carries is preserved too).
+    pub reasoning: String,
 }
 impl ResponsesState {
+    fn reasoning_part(&self, key: &str) -> Option<&str> {
+        self.reasoning_parts
+            .iter()
+            .find(|(part_key, _)| part_key == key)
+            .map(|(_, text)| text.as_str())
+    }
+    /// `Map.set` semantics: update in place (keeping the original insertion
+    /// slot) or append for a first-time key.
+    fn set_reasoning_part(&mut self, key: String, text: String) {
+        match self
+            .reasoning_parts
+            .iter_mut()
+            .find(|(part_key, _)| part_key == &key)
+        {
+            Some(entry) => entry.1 = text,
+            None => self.reasoning_parts.push((key, text)),
+        }
+    }
     pub fn accept(&mut self, event: Value) -> Result<Option<String>, CoreError> {
         self.bytes += bounded(&event)?.len();
         if self.bytes > 16 * 1024 * 1024 {
@@ -227,27 +253,29 @@ impl ResponsesState {
             let text = string(&event["part"]["text"])?;
             self.commit_reasoning(key, text.to_owned())?;
         } else if kind.ends_with(".delta") {
-            let delta = string(&event["delta"])?;
-            let entry = self.reasoning_parts.entry(key).or_default();
-            entry.push_str(delta);
-            self.reasoning_pending.push_str(delta);
+            let delta = string(&event["delta"])?.to_owned();
+            match self
+                .reasoning_parts
+                .iter_mut()
+                .find(|(part_key, _)| part_key == &key)
+            {
+                Some(entry) => entry.1.push_str(&delta),
+                None => self.reasoning_parts.push((key, delta.clone())),
+            }
+            self.reasoning_pending.push_str(&delta);
         } else {
-            let text = string(&event["text"])?;
-            self.commit_reasoning(key, text.to_owned())?;
+            let text = string(&event["text"])?.to_owned();
+            self.commit_reasoning(key, text)?;
         }
         Ok(())
     }
     fn commit_reasoning(&mut self, key: String, text: String) -> Result<(), CoreError> {
-        let before = self
-            .reasoning_parts
-            .get(&key)
-            .map(String::as_str)
-            .unwrap_or("");
-        if !text.starts_with(before) {
+        let before = self.reasoning_part(&key).unwrap_or("").to_owned();
+        if !text.starts_with(&before) {
             return err("stream_output_mismatch");
         }
         self.reasoning_pending.push_str(&text[before.len()..]);
-        self.reasoning_parts.insert(key, text);
+        self.set_reasoning_part(key, text);
         Ok(())
     }
     /// Drains reasoning text accumulated since the last take; the stream
@@ -260,9 +288,10 @@ impl ResponsesState {
             Some(std::mem::take(&mut self.reasoning_pending))
         }
     }
-    pub fn finish(self, tools: &[ToolDefinition]) -> Result<ResponsesResult, CoreError> {
+    pub fn finish(mut self, tools: &[ToolDefinition]) -> Result<ResponsesResult, CoreError> {
         let terminal = self
             .terminal
+            .take()
             .ok_or_else(|| CoreError::responses("stream_incomplete"))?;
         let output = terminal["output"]
             .as_array()
@@ -316,10 +345,44 @@ impl ResponsesState {
         if !content.starts_with(&self.emitted) {
             return err("stream_output_mismatch");
         }
+        // Frozen `ResponsesReasoning.finish` runs LAST (after every other
+        // terminal check): each reasoning item's final summary/content
+        // parts must EXTEND the streamed prefix for their key — a conflict
+        // is `stream_output_mismatch` — and terminal-only reasoning (no
+        // streamed delta for that part) is preserved, not dropped. The
+        // public `reasoningContent` is the parts joined in first-appearance
+        // order.
+        for item in output {
+            if item["type"] != "reasoning" {
+                continue;
+            }
+            let id = nonempty(&item["id"])?.to_owned();
+            for channel in ["summary", "content"] {
+                let Some(parts) = item[channel].as_array() else {
+                    continue;
+                };
+                for (index, value) in parts.iter().enumerate() {
+                    let Some(text) = value.get("text").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let key = format!("{id}:{channel}:{index}");
+                    if !text.starts_with(self.reasoning_part(&key).unwrap_or("")) {
+                        return err("stream_output_mismatch");
+                    }
+                    self.set_reasoning_part(key, text.to_owned());
+                }
+            }
+        }
+        let reasoning = self
+            .reasoning_parts
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<String>();
         Ok(ResponsesResult {
             output: output.clone(),
             content,
             calls,
+            reasoning,
             usage: terminal
                 .get("usage")
                 .filter(|usage| !usage.is_null())

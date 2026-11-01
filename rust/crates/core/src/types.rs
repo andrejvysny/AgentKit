@@ -122,6 +122,12 @@ pub struct ToolResult {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// Model-visible attachments (image/audio/text parts). Preserved into
+    /// the model-facing envelope verbatim (under the byte budget) so live
+    /// requests and replayed stores both expand them at request time —
+    /// the frozen `buildEnvelope`/`expandToolResultContent` pair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_content: Option<Vec<Value>>,
 }
 
 impl ToolResult {
@@ -279,6 +285,13 @@ pub trait ChatProvider: Send + Sync {
     fn allows_implicit_output_limit(&self) -> bool {
         true
     }
+    /// Fill provider-declared request defaults (sampling parameters, output
+    /// cap) onto a request BEFORE context admission. Admission clamps what
+    /// is here, so a provider option can only ever lower the budget, never
+    /// raise it — the admitted request is the transmitted request, and no
+    /// later layer may override token limits. An absent field gets the
+    /// provider's default; a value the request already carries is kept.
+    fn apply_request_defaults(&self, _input: &mut ChatRequest) {}
     /// After cancellation, polling may report billing but must never dispatch work.
     fn supports_usage_cleanup(&self) -> bool {
         false

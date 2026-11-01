@@ -124,8 +124,9 @@ async fn seed(path: &Path) {
     drop(store);
 }
 
-/// Drop the database down to a genuine v1 or v2 shape: the receipts and
-/// session-input tables disappear and `user_version` goes back.
+/// Drop the database down to a genuine v1 or v2 shape: the receipts,
+/// session-input, and (schema v6) provider-connection tables disappear and
+/// `user_version` goes back.
 fn downgrade(path: &Path, version: i64) {
     assert!(version == 1 || version == 2);
     let db = Connection::open(path).unwrap();
@@ -145,6 +146,11 @@ fn downgrade(path: &Path, version: i64) {
         "BEGIN;
          DROP TABLE IF EXISTS tool_executions;
          DROP TABLE IF EXISTS agent_inputs;
+         DROP TABLE IF EXISTS provider_connections;
+         DROP TABLE IF EXISTS prompt_templates;
+         DROP TABLE IF EXISTS connector_connections;
+         DROP TABLE IF EXISTS managed_skills;
+         DROP TABLE IF EXISTS run_content_records;
          DELETE FROM counters WHERE name='input_order';
          COMMIT;",
     )

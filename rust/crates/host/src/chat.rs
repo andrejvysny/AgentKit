@@ -18,6 +18,8 @@ mod compaction_request;
 mod compaction_runner;
 #[path = "chat_context.rs"]
 mod context_budget;
+#[path = "tool_result_elision.rs"]
+mod elision;
 #[path = "chat_hooks.rs"]
 mod hooks;
 pub use hooks::{AttachmentBudgets, ChatExecutorOptions, ChatHookTimeouts};
@@ -45,6 +47,36 @@ impl ChatExecutor {
     pub fn with_provider_factory(mut self, factory: Arc<dyn ChatProviderFactory>) -> Self {
         self.options.provider_factory = Some(factory);
         self
+    }
+    /// Whether this turn may be handed tools at all. Mirrors the TypeScript
+    /// turn-runner: the persisted settings document (`http`/`settings`)
+    /// carries `toolCalling` ("auto" | "on" | "off"; absent = "auto"), and
+    /// "auto" defers to the provider's recorded capabilities
+    /// (`providers.saveCapabilities` document) — staged unless that document
+    /// says `toolCalling: false` outright.
+    async fn stage_tools(&self, context: &ExecutionContext, provider_id: &str) -> HostResult<bool> {
+        let mode = context
+            .store
+            .get_setting("http", "settings")
+            .await?
+            .and_then(|settings| {
+                settings["toolCalling"]
+                    .as_str()
+                    .map(|value| value.to_owned())
+            })
+            .unwrap_or_default();
+        if mode == "off" {
+            return Ok(false);
+        }
+        if mode == "on" {
+            return Ok(true);
+        }
+        Ok(context
+            .store
+            .get_setting(agentkit_store::PROVIDER_CAPABILITIES_NAMESPACE, provider_id)
+            .await?
+            .and_then(|capabilities| capabilities["toolCalling"].as_bool())
+            .unwrap_or(true))
     }
     async fn provider(&self, context: &ExecutionContext) -> HostResult<Arc<dyn ChatProvider>> {
         if let Some(factory) = &self.options.provider_factory {
@@ -173,15 +205,28 @@ impl TaskExecutor for ChatExecutor {
         } else {
             (std::collections::HashMap::new(), vec![])
         };
-        let registry = hooks::stage_registry(
-            &self.options,
-            &context,
-            chat_id,
-            self.tools.clone(),
-            &resolved.bindings,
-            approvals,
-        )
-        .await?;
+        // `AssistantSettings.toolCalling` gate (TS reference turn-runner.ts):
+        // "off" stages no tools at all; "auto" (the default) follows the
+        // provider's recorded capability — a provider saved as
+        // `toolCalling: false` gets no tools, because handing them over is
+        // the exact request shape that fails; "on" stages regardless of the
+        // probe. With no tools staged the wire carries no `tools` field and
+        // a provider-emitted call resolves as a `tool_missing` failure
+        // (frozen loop behavior) — the tool is never executed.
+        let stage_tools = self.stage_tools(&context, provider.id()).await?;
+        let registry = if stage_tools {
+            hooks::stage_registry(
+                &self.options,
+                &context,
+                chat_id,
+                self.tools.clone(),
+                &resolved.bindings,
+                approvals,
+            )
+            .await?
+        } else {
+            Arc::new(ToolRegistry::new())
+        };
         // Project instructions (ADR 0017 part 1): the session workspace's
         // AGENTS.md / CLAUDE.md text is appended to the resolved system
         // prompt after context resolution and before provider dispatch,
@@ -198,6 +243,11 @@ impl TaskExecutor for ChatExecutor {
         // approval-mismatch refusal appended moments ago must be visible to
         // the model in this same attempt, not only after a restart.
         let records = context.store.messages(chat_id, true).await?;
+        // What the provider-facing history is built from (ADR 0017 part 1):
+        // the session's anchored-history policy and its tool-result elision,
+        // both from the turn's staged context snapshot. A non-session chat
+        // assembles exactly as it always did.
+        let assembly = context_budget::resolve_context_assembly(&context, chat_id).await?;
         let receipts = context
             .store
             .list_executions_by_chat(chat_id.to_owned())
@@ -211,7 +261,7 @@ impl TaskExecutor for ChatExecutor {
             .map_err(|_| HostError::Execution("context snapshot failed".into()))?;
         let receipt_snapshot = serde_json::to_value(&receipts)
             .map_err(|_| HostError::Execution("receipt snapshot failed".into()))?;
-        let entries = history::assemble_with_ids(
+        let mut entries = history::assemble_with_ids(
             records,
             self.options.history_limit,
             &anchor,
@@ -222,7 +272,19 @@ impl TaskExecutor for ChatExecutor {
             // run that owned them, not the run replaying history.
             &receipts,
             &context.task.task_id,
+            assembly.policy,
         );
+        // Frozen order (turn-runner.ts:1758): stale tool results are elided in
+        // the assembled view BEFORE summaries/compaction see them, so the
+        // summary is written over the same bytes the provider gets. The
+        // provider-continuation lane replays its durable branch untouched, so
+        // assembly stays exactly as the continuation recorded it.
+        if session
+            && continuation.is_none()
+            && let Some(options) = assembly.elision
+        {
+            elision::elide_stale_tool_results(&mut entries, &options);
+        }
         let runtime: Arc<dyn agentkit_core::Runtime> =
             Arc::new(CoreRuntime(context.runtime.clone()));
         let budget = crate::restore_execution_budget(
@@ -472,6 +534,113 @@ impl AgentHost {
         ];
         self.store.submit_turn(task, messages).await?;
         Ok(self.run_handle(&input.task_id))
+    }
+}
+
+#[cfg(test)]
+mod tool_gate_tests {
+    use super::*;
+    use agentkit_core::{ChatRequest, ProviderStream};
+    use agentkit_store::{ClaimInput, SqliteStore, SubmitTask};
+    use tokio_util::sync::CancellationToken;
+
+    struct Clock;
+    impl crate::Runtime for Clock {
+        fn now_ms(&self) -> i64 {
+            1000
+        }
+        fn id(&self) -> String {
+            "test".into()
+        }
+    }
+    struct Noop;
+    #[async_trait]
+    impl ChatProvider for Noop {
+        fn id(&self) -> &str {
+            "noop"
+        }
+        fn stream_chat(&self, _: ChatRequest, _: CancellationToken) -> ProviderStream {
+            Box::pin(futures::stream::empty())
+        }
+    }
+
+    async fn executor_context(store: SqliteStore) -> ExecutionContext {
+        store
+            .submit(SubmitTask {
+                task_id: "run".into(),
+                kind: "chat.turn".into(),
+                scope_id: "chat".into(),
+                payload: json!({}),
+                priority: 0,
+                now: 1000,
+                available_at: None,
+                depends_on: vec![],
+                parent_task_id: None,
+                exclusive_scope: false,
+            })
+            .await
+            .unwrap();
+        let claimed = store
+            .claim(ClaimInput {
+                owner_id: "worker".into(),
+                now: 1000,
+                ttl_ms: 60_000,
+                kinds: vec![],
+                busy_scopes: vec![],
+                max_attempts: 3,
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        ExecutionContext {
+            task: claimed.task,
+            attempt_id: claimed.lease.attempt_id.clone(),
+            cancellation: CancellationToken::new(),
+            interruption: CancellationToken::new(),
+            suspension: Arc::new(Mutex::new(None)),
+            store,
+            fence: claimed.lease.fence(),
+            runtime: Arc::new(Clock),
+            event_gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_calling_setting_and_recorded_capabilities_gate_staging() {
+        let store = SqliteStore::memory(2).unwrap();
+        let context = executor_context(store.clone()).await;
+        let executor = ChatExecutor::new(Arc::new(Noop), Arc::new(ToolRegistry::new()));
+        // No settings document, no capability record: tools stage.
+        assert!(executor.stage_tools(&context, "p").await.unwrap());
+        // "auto" (absent) follows the recorded probe: `toolCalling: false`
+        // stages nothing — handing tools over is the exact request shape
+        // that fails a chat-only provider.
+        store
+            .save_provider_capabilities(
+                "p",
+                json!({"streaming": true, "toolCalling": false, "modelList": true}),
+            )
+            .await
+            .unwrap();
+        assert!(!executor.stage_tools(&context, "p").await.unwrap());
+        // "on" overrides a wrong probe — the whole reason the knob exists.
+        store
+            .set_setting("http", "settings", json!({"toolCalling": "on"}))
+            .await
+            .unwrap();
+        assert!(executor.stage_tools(&context, "p").await.unwrap());
+        // "off" stages nothing for ANY provider, probe or no probe.
+        store
+            .set_setting("http", "settings", json!({"toolCalling": "off"}))
+            .await
+            .unwrap();
+        assert!(!executor.stage_tools(&context, "other").await.unwrap());
+        // "auto" again: an unrecorded provider stages (absence never disables).
+        store
+            .set_setting("http", "settings", json!({"toolCalling": "auto"}))
+            .await
+            .unwrap();
+        assert!(executor.stage_tools(&context, "other").await.unwrap());
     }
 }
 

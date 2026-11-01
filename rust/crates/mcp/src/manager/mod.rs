@@ -162,6 +162,42 @@ impl McpClientManager {
             .to_owned();
         session.call_tool(&original, arguments, cancellation).await
     }
+    /// The `(registration, generation)` of the live transport behind an
+    /// alias, or `None` when the alias is unknown or has no transport. A
+    /// host-side descriptor cache captures this alongside its listing so it
+    /// can dispatch through [`Self::call_tool_bound`] later.
+    pub fn binding(&self, alias: &str) -> Option<ToolBinding> {
+        let session = self.session(alias).ok()?;
+        session.binding()
+    }
+    /// [`Self::call_tool`] pinned to one transport generation: the call
+    /// only ever reaches the session AND the connection `binding` names.
+    /// A descriptor listed from generation N dispatches on generation N —
+    /// never on a reconnect's replacement (that fails `Authority` at the
+    /// session pin and again at the wire-last bound guard), exactly like
+    /// the contributed-tool lane pins its handles (see `bridge::RemoteTool`).
+    pub async fn call_tool_bound(
+        &self,
+        canonical_id: &str,
+        binding: ToolBinding,
+        arguments: model::JsonObject,
+        cancellation: CancellationToken,
+    ) -> Result<model::CallToolResult, McpClientError> {
+        let rest = canonical_id
+            .strip_prefix("mcp.")
+            .ok_or(McpClientError::Configuration)?;
+        let (alias, effective) = rest.split_once('.').ok_or(McpClientError::Configuration)?;
+        if !crate::bridge::tool_name(effective) {
+            return Err(McpClientError::Configuration);
+        }
+        let session = self.session(alias)?;
+        let original = crate::bridge::resolve_original(&session.config.tool_aliases, effective)
+            .ok_or(McpClientError::Configuration)?
+            .to_owned();
+        session
+            .call_tool_bound(binding, &original, arguments, cancellation, None)
+            .await
+    }
     pub async fn contribute(
         &self,
         cancellation: CancellationToken,

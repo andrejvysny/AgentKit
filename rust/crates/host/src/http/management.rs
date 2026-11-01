@@ -114,9 +114,7 @@ impl DesktopBackend {
             | "publishPromptTemplate"
             | "deletePromptTemplate"
             | "renderPromptTemplate"
-            | "listSkills" => Err(optional(
-                "Native managed content services are not configured.",
-            )),
+            | "listSkills" => self.managed_content(input).await,
             _ => Err(Problem::host(
                 "internal_error",
                 "Unknown operation dispatch",

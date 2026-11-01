@@ -250,7 +250,7 @@ pub fn read_file_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let description = format!(
         "Read text files in the workspace: one file with path, or up to {MAX_READ_PATHS} with \
          paths (each under a \"==> path <==\" header; the output cap is shared; a file that fails \
-         is reported inline). Output lines are numbered \"<n>\t<line>\". Returns at most {} lines \
+         is reported inline). Output lines are numbered \"<n>\\t<line>\". Returns at most {} lines \
          per file and {} in total, and ends with a continuation notice (offset=N) when more \
          remains. offset is 1-based. The result data carries sha256 (of the whole file) and \
          totalLines: pass that sha256 as edit_file's expectedSha256. {NATIVE_HINT}",

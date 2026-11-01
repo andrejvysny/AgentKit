@@ -185,6 +185,10 @@ impl ChatProvider for PreparedProvider {
         Box::pin(futures::stream::once(async move {
             let (messages,warnings)=resolve_attachments(&provider.options,&provider.context,&provider.chat_id,input.messages).await.map_err(core_error)?;
             input.messages=messages;
+            // Provider-declared defaults land BEFORE admission so the
+            // budget clamp is the final word on the output cap: the
+            // admitted request is the transmitted request (P1-F).
+            provider.inner.apply_request_defaults(&mut input);
             let admission = provider.budget.as_ref().map(|budget| budget.admit(&mut input, provider.context.runtime.id(), provider.inner.allows_implicit_output_limit())).transpose()?;
             if let Some(usage)=&provider.options.usage {
                 let estimate=input.messages.iter().map(|message|message_text(&message.content).encode_utf16().count()).sum::<usize>().div_ceil(4);

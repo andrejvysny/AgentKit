@@ -74,6 +74,17 @@ pub fn resolve_call(call_id: String, payload: Option<String>, error: Option<Stri
     jsbridge::resolve(&call_id, payload, error)
 }
 
+/// Synchronous liveness claim for one routed provider/tool callback: the
+/// router asks this BEFORE entering user code. True exactly once, only
+/// while Rust still considers the call live (not settled, rejected,
+/// cancelled, abandoned by the executor, or drained by close); on false the
+/// router must settle nothing and must never run the user function — the
+/// host has already given up on this invocation.
+#[napi]
+pub fn claim_call(call_id: String) -> bool {
+    jsbridge::claim(&call_id)
+}
+
 /// Load-time identity probe: proves the addon, its runtime, and the error
 /// contract are all present before any session call is attempted.
 #[napi]

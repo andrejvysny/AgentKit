@@ -13,6 +13,9 @@ mod tool_execution;
 mod types;
 
 pub use budget::{BudgetCheckpoint, BudgetLimits, BudgetSnapshot, ExecutionBudget};
+// The event type names the public `RunHandle`/`RunEventSink` surfaces; hosts
+// (and this crate's own tests) need it without a parallel contracts import.
+pub use agentkit_contracts::AiRunEvent;
 pub use dispatch::{DispatchFence, DispatchGuard};
 pub use provider_retry::{RetryHooks, RetryPolicy, RetryProvider};
 pub use registry::{RegistryError, ToolRegistry};

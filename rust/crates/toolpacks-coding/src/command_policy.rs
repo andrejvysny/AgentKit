@@ -609,17 +609,21 @@ pub struct StandingApprovalKey {
 }
 
 /// Identity version of the standing-approval key envelope. The TypeScript
-/// baseline minted `v: 2` keys; the Rust port issues `v: 3` because findings
+/// baseline minted `v: 2` keys; the Rust port issued `v: 3` because findings
 /// in the port's own key material were repaired — the tokenizer split (JS
 /// `/\s/` set, greedy `split(/ +/)` runs), the ASCII-only `\w` for bindable
-/// direct files, and the lossy-decoded fallback environment. Those fixes
-/// change digest inputs, so every identity the unsafe path ever persisted
-/// must be unable to authorize again: the version lives INSIDE the hashed
-/// envelope, so a bump makes all older digests inert without touching the
-/// persisted grant shape (the store keeps validating `{version:1,
-/// grants:[{digest…}]}` unchanged, and stale rows simply never match —
-/// the same fail-closed mechanism the `v: 1`-key regression test pins).
-const STANDING_KEY_VERSION: u32 = 3;
+/// direct files, and the lossy-decoded fallback environment. `v: 4` adds the
+/// external-review P1-D fix: files selected as startup inputs by the
+/// EFFECTIVE `NODE_OPTIONS` (inherited, `VAR=value` assignment, or `env`
+/// wrapper) are now bound as direct inputs and ambiguous selector shapes
+/// refuse to key. Those changes alter the digest inputs, so every identity
+/// the unsafe path ever persisted must be unable to authorize again: the
+/// version lives INSIDE the hashed envelope, so a bump makes all older
+/// digests inert without touching the persisted grant shape (the store keeps
+/// validating `{version:1, grants:[{digest…}]}` unchanged, and stale rows
+/// simply never match — the same fail-closed mechanism the `v: 1`-key and
+/// `v: 2`-key regression tests pin).
+const STANDING_KEY_VERSION: u32 = 4;
 
 /// Port of the TS `keyFor` body behind
 /// `createCodingStandingApprovals`: the command must be eligible, the
@@ -673,7 +677,7 @@ pub async fn coding_standing_approval_key(
         .unwrap_or_else(crate::exec_tools::process_env);
     let fingerprint = command_fingerprint(&root, &cwd, &args.command, &environment).ok()??;
     // `JSON.stringify` of the key envelope, in TS field order (see
-    // `STANDING_KEY_VERSION` for why this is v3, not the baseline's v2).
+    // `STANDING_KEY_VERSION` for why this is v4, not the baseline's v2).
     let digest_input = format!(
         "{{\"v\":{STANDING_KEY_VERSION},\"fingerprint\":{},\"chatId\":{},\"tool\":{},\"identity\":{},\"root\":{},\"cwd\":{},\"command\":{},\"context\":{}}}",
         json_quote(&fingerprint),
@@ -1250,6 +1254,12 @@ mod tests {
 
         // An ENV_NAMES value appearing after the approval — e.g. the
         // `NODE_OPTIONS='--require ./evil.js'` scenario — re-keys the call.
+        // P1-D: the selected startup file is now DIRECT input identity too,
+        // so editing it (not just the value string) re-keys, and a selector
+        // pointing at a file that cannot be bound refuses to key at all.
+        tokio::fs::write(std::path::Path::new(&root).join("evil.js"), "x\n")
+            .await
+            .unwrap();
         let mut with_options = environment.clone();
         with_options.insert("NODE_OPTIONS".to_owned(), "--require ./evil.js".to_owned());
         let mutated = digest_of(&root, &with_options).await;
@@ -1261,6 +1271,42 @@ mod tests {
             digest_of(&root, &with_options).await,
             mutated,
             "and stable thereafter"
+        );
+        tokio::fs::write(
+            std::path::Path::new(&root).join("evil.js"),
+            "console.log('mutated')\n",
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            digest_of(&root, &with_options).await,
+            mutated,
+            "editing the NODE_OPTIONS-selected startup file re-keys"
+        );
+        let mut dangling = environment.clone();
+        dangling.insert(
+            "NODE_OPTIONS".to_owned(),
+            "--require ./never-created-ak.js".to_owned(),
+        );
+        let unbindable = coding_standing_approval_key(
+            crate::guard::CODING_NAMESPACE,
+            Some("chat-1"),
+            "run_command",
+            &ShellArgs {
+                command: "bun test".into(),
+                cwd: None,
+            },
+            &StandingApprovalWorkspace {
+                root: root.clone(),
+                identity: "test".into(),
+                context: None,
+                environment: Some(dangling),
+            },
+        )
+        .await;
+        assert_eq!(
+            unbindable, None,
+            "a NODE_OPTIONS selector whose file cannot be bound fails closed (re-ask)"
         );
 
         // The executable replaced (different size => different identity) also
@@ -1277,10 +1323,10 @@ mod tests {
     }
 
     /// Finding 4: the identity version lives inside the hashed envelope, so
-    /// every digest the unsafe (v2) path persisted is structurally unable to
-    /// match a v3 key — stale rows in the store are inert, no migration or
-    /// schema change needed. This pins the exact envelope bytes for both
-    /// versions.
+    /// every digest the unsafe paths persisted (v2, and the pre-P1-D v3) is
+    /// structurally unable to match a current-version key — stale rows in
+    /// the store are inert, no migration or schema change needed. This pins
+    /// the exact envelope bytes for every version.
     #[tokio::test]
     async fn standing_key_version_never_resurrects_unsafe_saved_identities() {
         let (root, environment) = standing_fixture("version").await;
@@ -1334,7 +1380,13 @@ mod tests {
             hex_sha256(envelope(STANDING_KEY_VERSION).as_bytes()),
             "the envelope is hashed verbatim at the minted version"
         );
-        assert_eq!(STANDING_KEY_VERSION, 3);
+        assert_eq!(STANDING_KEY_VERSION, 4);
+        assert_ne!(
+            key.digest,
+            hex_sha256(envelope(3).as_bytes()),
+            "an identity saved by the unsafe v3 path (NODE_OPTIONS startup \
+             selectors unbound) can never authorize again"
+        );
         assert_ne!(
             key.digest,
             hex_sha256(envelope(2).as_bytes()),

@@ -352,6 +352,9 @@ pub(super) async fn execute(
         "outbox" => super::outbox::execute(&store, method, input).await?,
         "continuations" => super::continuations::execute(&store, method, input).await?,
         "toolExecutions" => super::tool_executions::execute(&store, method, input).await?,
+        "promptTemplates" | "skills" | "connections" | "runContent" => {
+            super::managed_content::execute(&store, namespace, method, input).await?
+        }
         _ => {
             return Err(errors::stable(
                 "not_implemented",

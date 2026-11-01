@@ -21,6 +21,8 @@ mod continuations;
 mod conversations;
 #[path = "store_inputs.rs"]
 mod inputs;
+#[path = "store_managed_content.rs"]
+mod managed_content;
 #[path = "mcp_client.rs"]
 mod mcp_client;
 #[path = "store_outbox.rs"]

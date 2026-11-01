@@ -81,6 +81,16 @@ struct ServerOptions {
     actor_id: String,
     default_model: String,
     bearer_token: String,
+    /// Cross-origin policy mirrored from the TypeScript transport's
+    /// `CorsConfig`: absent (default) answers plain HTTP with no CORS
+    /// headers and OPTIONS with 405 — no browser was ever expected.
+    cors: Option<agentkit_transport_http::CorsConfig>,
+    /// `"memory"` wires a volatile credential vault so the provider
+    /// management routes' `apiKey`/`extraHeaders` writes really store
+    /// secrets (mirroring the desktop example's `MemorySecretStore`);
+    /// omitted keeps those writes 501 exactly like the TypeScript
+    /// transport without a `SecretStore` port.
+    provider_secrets: Option<String>,
 }
 
 pub(super) fn optional_u64(object: &Value, key: &str) -> Result<Option<u64>> {
@@ -127,6 +137,103 @@ pub(super) fn optional_text(
     }
 }
 
+/// Strictly parse `cors` into the transport's `CorsConfig`. Every accepted
+/// shape changes observable behavior; anything malformed fails the call.
+fn parse_cors(object: &Value) -> Result<Option<agentkit_transport_http::CorsConfig>> {
+    use agentkit_transport_http::{CorsConfig, CorsOrigins};
+    match object.get("cors") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(map)) => {
+            for key in map.keys() {
+                if !["origins", "allowHeaders", "exposeHeaders", "maxAgeSeconds"]
+                    .contains(&key.as_str())
+                {
+                    return Err(errors::invalid(format!(
+                        "cors.{key} is not a supported option"
+                    )));
+                }
+            }
+            let origins = match map.get("origins") {
+                Some(Value::String(text)) if text == "*" => CorsOrigins::Any,
+                Some(Value::String(_)) => {
+                    return Err(errors::invalid(
+                        "cors.origins must be \"*\" or an array of origin strings",
+                    ));
+                }
+                Some(Value::Array(items)) => {
+                    if items.is_empty() {
+                        return Err(errors::invalid(
+                            "cors.origins must not be empty; omit cors to disable it",
+                        ));
+                    }
+                    let mut list = Vec::with_capacity(items.len());
+                    for item in items {
+                        let Some(text) = item.as_str() else {
+                            return Err(errors::invalid("cors.origins entries must be strings"));
+                        };
+                        if text.trim().is_empty() {
+                            return Err(errors::invalid(
+                                "cors.origins entries must be non-empty origin strings",
+                            ));
+                        }
+                        list.push(text.to_owned());
+                    }
+                    CorsOrigins::List(list)
+                }
+                _ => {
+                    return Err(errors::invalid(
+                        "cors.origins is required: \"*\" or an array of origin strings",
+                    ));
+                }
+            };
+            let string_list = |key: &str| -> Result<Option<Vec<String>>> {
+                match map.get(key) {
+                    None | Some(Value::Null) => Ok(None),
+                    Some(Value::Array(items)) => {
+                        let mut list = Vec::with_capacity(items.len());
+                        for item in items {
+                            let Some(text) = item.as_str() else {
+                                return Err(errors::invalid(format!(
+                                    "cors.{key} entries must be strings"
+                                )));
+                            };
+                            if text.trim().is_empty() {
+                                return Err(errors::invalid(format!(
+                                    "cors.{key} entries must be non-empty"
+                                )));
+                            }
+                            list.push(text.to_owned());
+                        }
+                        Ok(Some(list))
+                    }
+                    Some(_) => Err(errors::invalid(format!(
+                        "cors.{key} must be an array of strings when present"
+                    ))),
+                }
+            };
+            let max_age_seconds = match map.get("maxAgeSeconds") {
+                None | Some(Value::Null) => None,
+                Some(value) => {
+                    let seconds = value.as_u64().ok_or_else(|| {
+                        errors::invalid("cors.maxAgeSeconds must be a non-negative integer")
+                    })?;
+                    if seconds > u64::from(u32::MAX) {
+                        return Err(errors::invalid("cors.maxAgeSeconds is out of range"));
+                    }
+                    Some(seconds as u32)
+                }
+            };
+            Ok(Some(CorsConfig {
+                origins,
+                allow_headers: string_list("allowHeaders")?,
+                expose_headers: string_list("exposeHeaders")?,
+                max_age_seconds,
+            }))
+        }
+        Some(_) => Err(errors::invalid("cors must be an object when present")),
+    }
+}
+
 fn parse_server_options(text: &str) -> Result<ServerOptions> {
     let object = parse_object(text, "HTTP server options")?;
     let bearer_token = match object.get("bearerToken") {
@@ -170,6 +277,21 @@ fn parse_server_options(text: &str) -> Result<ServerOptions> {
         default_model: optional_text(&object, "defaultModel", false)?
             .unwrap_or_else(|| DEFAULT_MODEL.to_owned()),
         bearer_token,
+        cors: parse_cors(&object)?,
+        provider_secrets: match object.get("providerSecrets") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(mode)) if mode == "memory" => Some(mode.to_owned()),
+            Some(Value::String(mode)) => {
+                return Err(errors::invalid(format!(
+                    "providerSecrets must be \"memory\" (volatile vault) or omitted (provider credential writes stay 501); got {mode:?}"
+                )));
+            }
+            Some(_) => {
+                return Err(errors::invalid(
+                    "providerSecrets must be a string when present",
+                ));
+            }
+        },
     })
 }
 
@@ -186,38 +308,73 @@ fn normalize_base_path(path: &str) -> String {
 
 /// Bracket IPv6 literals so the advertised URL is fetchable as-is.
 pub(super) fn url_host(host: &str) -> String {
-    if host.contains(':') {
-        format!("[{host}]")
+    // A caller may hand over the host exactly as copied from a URL — the
+    // bracketed literal `[::1]` — and the advertised baseUrl must stay
+    // fetchable, never double-wrapped into `[[::1]]`.
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    if bare.contains(':') {
+        format!("[{bare}]")
     } else {
-        host.to_owned()
+        bare.to_owned()
     }
 }
 
 /// Bind a socket before touching the store: an unusable address/port fails
 /// with `service_unavailable` and no durable trace. Shared with the MCP
 /// server listener, which binds the same way over the same host.
+///
+/// `host` may be an IPv4 literal, a bare IPv6 literal (`::1`), a bracketed
+/// IPv6 literal (`[::1]` — how callers copy it out of a URL), or a host
+/// name. The literal forms are parsed as SOCKET ADDRESSES, never handed to
+/// the resolver: `("[::1]", port)` as a `ToSocketAddrs` pair asks DNS for a
+/// host literally named `[::1]` — brackets are `SocketAddr` syntax, never
+/// hostname syntax — and a perfectly valid IPv6 bind dies with "failed to
+/// lookup address information".
 pub(super) async fn bind_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener> {
-    let bind_host = url_host(host);
-    tokio::net::TcpListener::bind((bind_host.as_str(), port))
-        .await
-        .map_err(|error| {
-            errors::stable(
-                "service_unavailable",
-                format!("unable to listen on {bind_host}:{port}"),
-                Some(json!({ "cause": error.to_string() })),
-            )
-        })
+    let literal = match (host.starts_with('['), host.ends_with(']')) {
+        (true, true) => host.to_owned(),
+        _ if host.contains(':') => format!("[{host}]"),
+        _ => host.to_owned(),
+    };
+    // Not a literal at all (`localhost`, an mDNS name): that one IS the
+    // resolver's job, brackets or no.
+    let bound = match format!("{literal}:{port}").parse::<std::net::SocketAddr>() {
+        Ok(address) => tokio::net::TcpListener::bind(address).await,
+        Err(_) => tokio::net::TcpListener::bind((host, port)).await,
+    }
+    .map_err(|error| {
+        errors::stable(
+            "service_unavailable",
+            format!("unable to listen on {literal}:{port}"),
+            Some(json!({ "cause": error.to_string() })),
+        )
+    })?;
+    Ok(bound)
 }
 
 #[napi]
 impl SessionService {
     /// Start the Rust REST v1 + SSE server on this service's host and
     /// store. `optionsJson`: `{host?, port?, basePath?, maxBodyBytes?,
-    /// maxQueryBytes?, actorId?, defaultModel?, bearerToken}` —
+    /// maxQueryBytes?, actorId?, defaultModel?, bearerToken, cors?,
+    /// providerSecrets?}` —
     /// `bearerToken` is REQUIRED and at least 32 bytes (the backend's own
     /// floor); invalid values fail with `invalid_input`, an unusable
     /// address with `service_unavailable`. Defaults: `127.0.0.1`, ephemeral
-    /// port, no base path, 1 MiB body / 16 KiB query caps. Returns
+    /// port, no base path, 1 MiB body / 16 KiB query caps.
+    /// `cors` (`{origins: "*"|[string], allowHeaders?, exposeHeaders?,
+    /// maxAgeSeconds?}`) pins the retired TypeScript transport's CORS
+    /// semantics: matched origins decorate every response (including
+    /// problems and SSE) and OPTIONS preflights answer 204; an unmatched
+    /// origin preflight gets the ordinary 405, an unmatched path 404.
+    /// Omitted, no response ever carries a CORS header.
+    /// `providerSecrets: "memory"` stores provider credentials in a
+    /// volatile vault so `createProvider`/`updateProvider` accept
+    /// `apiKey`/`extraHeaders`; omitted, those writes answer 501 like the
+    /// TypeScript transport without a `SecretStore` port. Returns
     /// `{port, baseUrl}` as JSON text (the wrapper parses it). Fails with
     /// `invalid_input` if a server already runs on this service, and
     /// `closed` after `close()`. Every request is authenticated by the
@@ -248,7 +405,7 @@ impl SessionService {
                 "an HTTP server is already running on this service; call stopHttpServer() first",
             ));
         }
-        let backend = DesktopBackend::open(
+        let mut backend = DesktopBackend::open(
             core.host.clone(),
             Actor {
                 id: options.actor_id,
@@ -259,11 +416,17 @@ impl SessionService {
         )
         .await
         .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
+        if options.provider_secrets.as_deref() == Some("memory") {
+            backend = backend.with_provider_secrets(Arc::new(
+                agentkit_connections::MemorySecretStore::default(),
+            ));
+        }
         let router = Arc::new(backend).into_router(Config {
             base_path: options.base_path.clone(),
             max_body_bytes: options.max_body_bytes,
             max_query_bytes: options.max_query_bytes,
             streaming: StreamOptions::default(),
+            cors: options.cors.clone(),
         });
         let token = CancellationToken::new();
         let serve_token = token.clone();
@@ -378,5 +541,66 @@ mod tests {
         assert_eq!(normalize_base_path(""), "");
         assert_eq!(url_host("127.0.0.1"), "127.0.0.1");
         assert_eq!(url_host("::1"), "[::1]");
+        // Already-bracketed input (copied out of a URL) must not double-wrap;
+        // the literal text passes through untouched, only the wrapper is owned.
+        assert_eq!(url_host("[::1]"), "[::1]");
+        assert_eq!(url_host("[0:0:0:0:0:0:0:1]"), "[0:0:0:0:0:0:0:1]");
+    }
+
+    /// A real IPv6 listener: bind `::1` (bare and bracketed), then drive one
+    /// raw HTTP request through `[::1]:port`. IPv4 binds as the control in
+    /// the same test. If the sandbox has no IPv6 loopback the bind itself
+    /// fails — the test skips, printing the OS's own reason.
+    #[tokio::test]
+    async fn binds_ipv6_literals_by_address_not_by_name() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // IPv4 control: a bind failure here is a real failure, never a skip.
+        let four = bind_listener("127.0.0.1", 0)
+            .await
+            .expect("IPv4 loopback must bind");
+        assert!(four.local_addr().unwrap().ip().is_loopback());
+
+        for host in ["::1", "[::1]"] {
+            let listener = match bind_listener(host, 0).await {
+                Ok(listener) => listener,
+                Err(error) => {
+                    eprintln!(
+                        "SKIPPING IPv6 bind for {host:?}: the sandbox has no IPv6 loopback \
+                         (bind failed with: {})",
+                        error,
+                    );
+                    return;
+                }
+            };
+            let address = listener.local_addr().unwrap();
+            assert!(
+                address.ip().is_ipv6() && address.ip().is_loopback(),
+                "{host:?} must bind the IPv6 loopback, got {address}"
+            );
+            // Actual request through `[::1]:port` — minimal answering
+            // listener, raw client, so the round trip needs no HTTP crate.
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let mut probe = [0_u8; 1024];
+                let _ = socket.read(&mut probe).await.expect("read request");
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 4\r\n\r\npong")
+                    .await
+                    .expect("write response");
+            });
+            let mut client = tokio::net::TcpStream::connect(address)
+                .await
+                .unwrap_or_else(|error| panic!("connect to {address}: {error}"));
+            client
+                .write_all(b"GET /v1/ping HTTP/1.1\r\nhost: [::1]\r\n\r\n")
+                .await
+                .unwrap();
+            let mut answer = String::new();
+            client.read_to_string(&mut answer).await.unwrap();
+            assert!(answer.starts_with("HTTP/1.1 200 OK"), "got {answer:?}");
+            assert!(answer.ends_with("pong"), "got {answer:?}");
+            server.await.expect("server task");
+        }
     }
 }

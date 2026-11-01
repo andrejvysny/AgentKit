@@ -42,7 +42,11 @@ impl RunHooks for Hooks {
             )
             .await
             .map_err(|e| CoreError::new("hook_failed", &e))?;
-        Ok(value.get("value").cloned().unwrap_or(Value::Null))
+        // Pass the verdict envelope through verbatim: the core gate reads
+        // `{"value": …, "defined": …}` so `undefined` stays distinguishable
+        // from `null`/`NaN` across the JSON bridge (the frozen table maps
+        // them to opposite outcomes). Anything unrecognizable denies.
+        Ok(value)
     }
 }
 impl Hooks {

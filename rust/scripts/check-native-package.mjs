@@ -322,6 +322,28 @@ try {
     });
   }
 
+  // The strict typed consumer against the SAME installed tree: the packed
+  // declarations must compile with skipLibCheck OFF, `types: []`, strict,
+  // NodeNext resolution (external review P2: `dist/assistant-store.d.ts`
+  // imported `@agentkit/host`, a devDependency — TS2307 for every clean
+  // install; the workspace masked it).
+  process.stdout.write(
+    "check-native-package: strict typed consumer (tsc --strict, NodeNext, " +
+      "skipLibCheck off, types: []) against the installed package…\n",
+  );
+  cpSync(
+    join(repoRoot, "rust", "scripts", "native-package-typed-consumer.ts"),
+    join(consumerDirectory, "native-package-typed-consumer.ts"),
+  );
+  const tscEntry = join(repoRoot, "node_modules", "typescript", "bin", "tsc");
+  if (!existsSync(tscEntry))
+    fail(`workspace typescript compiler missing: ${tscEntry}`);
+  run(nodeBinary, ["consumer.mjs", "types", tscEntry], {
+    cwd: consumerDirectory,
+    env: toolchainFreeEnvironment,
+    timeout: 180_000,
+  });
+
   // The package can be imported without an addon; first use must fail loudly.
   rmSync(
     join(

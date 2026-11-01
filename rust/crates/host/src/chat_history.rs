@@ -116,6 +116,33 @@ pub(super) async fn prepare_continuation(
         },
     }))
 }
+/// What replays for the turns BEFORE the one being answered
+/// (`packages/host/src/turn/anchored-history.ts`, ADR 0017 part 1).
+/// `Transcript` (the frozen session default, `turn-runner.ts`
+/// `session.context?.policy ?? "transcript"`) replays each prior turn's own run
+/// records — tool calls, results and steering — alongside its final answer;
+/// `FinalAnswers` keeps only the visible user/assistant answers of prior turns.
+/// The run being answered always keeps its own records under both policies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HistoryPolicy {
+    Transcript,
+    FinalAnswers,
+}
+
+/// Whether this record is one of a run's own records — the `internal` rule
+/// frozen in `anchored-history.ts` (`metadata["internal"] === true ||
+/// role === "tool" || role === "system" || metadata["correctionPass"] !==
+/// undefined`), extended with the native steering marker (the TS steering
+/// projection carries `{internal: true, steering: true}`; the native placement
+/// at `session_run.rs` marks `{steering: true}`).
+fn own_run_record(record: &MessageRecord) -> bool {
+    record.role == "tool"
+        || record.role == "system"
+        || record.metadata.get("internal") == Some(&Value::Bool(true))
+        || record.metadata.get("steering") == Some(&Value::Bool(true))
+        || record.metadata.get("correctionPass").is_some()
+}
+
 #[cfg(test)]
 pub(super) fn assemble(
     records: Vec<MessageRecord>,
@@ -124,11 +151,20 @@ pub(super) fn assemble(
     system_prompt: Option<String>,
     receipts: &[agentkit_store::ExecutionReceiptRecord],
     run_id: &str,
+    policy: HistoryPolicy,
 ) -> Vec<ChatMessage> {
-    assemble_with_ids(records, limit, anchor, system_prompt, receipts, run_id)
-        .into_iter()
-        .map(|(message, _)| message)
-        .collect()
+    assemble_with_ids(
+        records,
+        limit,
+        anchor,
+        system_prompt,
+        receipts,
+        run_id,
+        policy,
+    )
+    .into_iter()
+    .map(|(message, _)| message)
+    .collect()
 }
 
 pub(super) fn assemble_with_ids(
@@ -138,9 +174,10 @@ pub(super) fn assemble_with_ids(
     system_prompt: Option<String>,
     receipts: &[agentkit_store::ExecutionReceiptRecord],
     run_id: &str,
+    policy: HistoryPolicy,
 ) -> Vec<(ChatMessage, Option<String>)> {
     let ordered = order_messages_for_provider(records);
-    let eligible = eligible_records(&ordered, anchor, run_id);
+    let eligible = eligible_records(&ordered, anchor, run_id, policy);
     let start = history_start(&eligible, limit);
     let mut messages = vec![];
     if let Some(prompt) = system_prompt.filter(|prompt| !prompt.is_empty()) {
@@ -160,12 +197,23 @@ fn eligible_records<'a>(
     ordered: &'a [MessageRecord],
     anchor: &str,
     run_id: &str,
+    policy: HistoryPolicy,
 ) -> Vec<&'a MessageRecord> {
     ordered
         .iter()
         .filter(|record| {
             record.active
                 || (record.run_id.as_deref() == Some(run_id) && record.metadata["internal"] == true)
+        })
+        // `final_answers` drops every PRIOR run's own records (tool calls,
+        // results, steering, banners, correction write-backs): what replays
+        // for turns before this one is the final answers alone. The run being
+        // answered keeps its own records either way — the frozen anchored
+        // history always replays the anchor's run records (`own`).
+        .filter(|record| {
+            policy == HistoryPolicy::Transcript
+                || record.run_id.as_deref() == Some(run_id)
+                || !own_run_record(record)
         })
         .filter(|record| {
             record.id != anchor
@@ -624,6 +672,8 @@ mod tests {
             model_data: None,
             summary: None,
             status: None,
+
+            model_content: None,
         })
         .unwrap()
     }
@@ -633,7 +683,15 @@ mod tests {
         receipts: &[ExecutionReceiptRecord],
         run: &str,
     ) -> Vec<ChatMessage> {
-        assemble(records, 32, "anchor", None, receipts, run)
+        assemble(
+            records,
+            32,
+            "anchor",
+            None,
+            receipts,
+            run,
+            HistoryPolicy::Transcript,
+        )
     }
 
     #[test]
@@ -827,7 +885,15 @@ mod tests {
                 false,
             ));
         }
-        let messages = assemble(records, 4, "anchor", None, &[], "runNew");
+        let messages = assemble(
+            records,
+            4,
+            "anchor",
+            None,
+            &[],
+            "runNew",
+            HistoryPolicy::Transcript,
+        );
         let visible: Vec<&str> = messages
             .iter()
             .filter(|m| m.role != "system")
@@ -852,7 +918,15 @@ mod tests {
         // The limit wants only the last two records (t1, u2); the group
         // rule pulls the declaring assistant in rather than orphaning the
         // tool result or synthesizing a replacement.
-        let messages = assemble(records, 2, "anchor", None, &[], "runNew");
+        let messages = assemble(
+            records,
+            2,
+            "anchor",
+            None,
+            &[],
+            "runNew",
+            HistoryPolicy::Transcript,
+        );
         assert!(messages.iter().any(|m| m.role == "assistant"));
         let tool = messages
             .iter()

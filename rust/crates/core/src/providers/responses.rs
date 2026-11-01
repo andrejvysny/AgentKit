@@ -94,7 +94,13 @@ impl ResponsesProvider {
             if result.content.len()>emitted.len() {yield ProviderEvent::Delta(result.content[emitted.len()..].into());}
             if let Some(usage)=&result.usage {yield ProviderEvent::Usage(response_usage(usage,&input.model,&call_id,true)?);}
             for call in &result.calls {yield ProviderEvent::ToolRequested(call.clone());}
-            yield ProviderEvent::Completed {content:result.content,finish_reason:if result.calls.is_empty() {"stop".into()} else {"tool_calls".into()},tool_calls:result.calls};
+            // Frozen `completionEvents` shape: `reasoningContent` rides on
+            // the completed event ONLY when non-empty — the terminal
+            // reconciliation preserved it (streamed prefix or terminal-only).
+            let mut data=json!({"content":result.content,"toolCallCount":result.calls.len(),"toolCalls":result.calls});
+            if !result.reasoning.is_empty() {data["reasoningContent"]=result.reasoning.into();}
+            data["finishReason"]=(if result.calls.is_empty() {"stop"} else {"tool_calls"}).into();
+            yield ProviderEvent::Event {kind:"run.message.completed".into(),data};
         })
     }
     async fn persist(

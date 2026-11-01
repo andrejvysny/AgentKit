@@ -1,12 +1,15 @@
 //! D2 + D4: session configuration boundaries.
 //!
-//! - Content selection (the descriptor's Skills), context assembly overrides
-//!   and provider reasoning effort are REFUSED at session submit before any
-//!   turn effect, with the same `not_implemented` code and message shape the
-//!   HTTP boundary uses for `contentSelection` (`http/turns.rs` 501:
+//! - Content selection (the descriptor's Skills) and provider reasoning
+//!   effort are REFUSED at session submit before any turn effect, with the
+//!   same `not_implemented` code and message shape the HTTP boundary uses for
+//!   `contentSelection` (`http/turns.rs` 501:
 //!   `{"code":"not_implemented","detail":"Native prompt templates and skills
 //!   are not configured."}`) — native execution must never dispatch a
 //!   prompt-only request that silently omits what the session selected.
+//!   Context assembly options (`policy`, `toolResultElision`, token budgets)
+//!   are NOT refused: staging carries the `sessionContext` snapshot and the
+//!   executor honors it.
 //! - `compact` is refused for the same reason (no consumer of
 //!   `compactRequestedAt`).
 //! - `set_model` patches `reasoningEffort` three-state: omitted preserves,
@@ -243,32 +246,44 @@ async fn empty_skills_keep_the_payload_unchanged() {
 }
 
 #[tokio::test]
-async fn submit_refuses_unsupported_context_policy() {
+async fn submit_stages_context_assembly_overrides() {
+    // `policy` and `toolResultElision` are no longer refused at staging:
+    // the executor honors them (`chat_context.rs::resolve_context_assembly`,
+    // `chat_history.rs::HistoryPolicy`, `tool_result_elision.rs`). What the
+    // descriptor grammar admits, staging must carry verbatim.
     let fixture = fixture();
+    let context = json!({
+        "policy": "final_answers",
+        "windowTokens": 8192,
+        "toolResultElision": {"keepRecentTurns": 3, "maxChars": 500}
+    });
     let input = CreateSessionInput {
-        context: Some(json!({"policy": "final_answers", "windowTokens": 8192})),
+        context: Some(context.clone()),
         ..create_input()
     };
     fixture.service.create_session(&input).await.unwrap();
-    let error = fixture
+    let result = fixture
         .service
         .send("s1", &send_input(json!("hello"), "in-1", WhenBusy::Reject))
         .await
-        .expect_err("context overrides dispatched");
-    assert_eq!(error.code, "not_implemented");
-    assert!(
-        error.message.contains("context assembly"),
-        "unclear refusal: {}",
-        error.message
-    );
-    assert!(
-        fixture
-            .store
-            .list_tasks(Some("s1".into()))
-            .await
-            .unwrap()
-            .is_empty()
-    );
+        .unwrap();
+    let task = fixture
+        .store
+        .get_task(turn_id(&result))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.payload["sessionContext"], context);
+    // Values OUTSIDE the contract's enumeration stay refused — at the
+    // descriptor door, with the stable validation error (`session_descriptors.rs`
+    // pins the grammar; the executor re-validates the snapshot with
+    // `session_context_invalid`).
+    let error = fixture
+        .service
+        .configure("s1", None, Some(json!({"policy": "everything"})), None)
+        .await
+        .expect_err("invented policy accepted");
+    assert_eq!(error.code, "invalid_input");
 }
 
 #[tokio::test]

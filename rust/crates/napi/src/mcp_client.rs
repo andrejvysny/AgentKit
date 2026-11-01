@@ -20,13 +20,13 @@
 //! Configs live in memory only, on this store handle; a process restart
 //! re-declares them.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use agentkit_core::{ToolLimits, ToolResult};
 use agentkit_mcp::model::{CallToolResult, Tool as RemoteTool};
 use agentkit_mcp::{
-    McpClientError, McpClientManager, McpSecretResolver, ServerConfig, TransportConfig,
+    McpClientError, McpClientManager, McpSecretResolver, ServerConfig, ToolBinding, TransportConfig,
 };
 use async_trait::async_trait;
 use napi::bindgen_prelude::*;
@@ -52,6 +52,16 @@ pub(crate) struct Registry {
     /// never goes down — not even on `mcpDisconnect` — so a descriptor from a
     /// superseded registration can never be passed off as the current one.
     registrations: HashMap<String, u64>,
+    /// In-flight `mcpCallTool` invocations by the cancellation key the JS
+    /// lane minted. `mcpCancelCall` tears one down (abort of the originating
+    /// invocation); `mcpCallTool` registers the token before any await that
+    /// can dispatch and removes it when the call settles.
+    pending: HashMap<String, CancellationToken>,
+    /// Cancellation keys whose cancel arrived BEFORE the call registered its
+    /// token (the napi future had not been polled yet). Registration consumes
+    /// the tombstone into an already-cancelled token, so an abort that wins
+    /// the race still denies the dispatch — the key never dispatches.
+    cancelled: HashSet<String>,
 }
 
 /// One projected remote tool. Projection mirrors the crate's own
@@ -67,6 +77,13 @@ pub(crate) struct CachedTool {
     /// The registration that minted this descriptor, in the form handed to JS
     /// as `descriptor.handle` and required back by `mcpCallTool`.
     handle: String,
+    /// The exact transport this descriptor was LISTED from. Dispatch is
+    /// pinned to it (crate `ToolBinding`): a descriptor from generation N
+    /// never executes a reconnect's generation N+1 handler — that fails
+    /// `mcp_authority_revoked` at the session pin and again at the
+    /// wire-last bound guard. `None` only for a server that had no live
+    /// transport at projection time, which `mcpConnect` refuses outright.
+    binding: Option<ToolBinding>,
 }
 
 /// Resolve the addressable name a caller used for one alias's cached tools.
@@ -198,7 +215,43 @@ fn project_tool(
         descriptor: definition,
         validator,
         handle: handle_for(alias, registration),
+        // Stamped by `mcpConnect` from the session's live transport right
+        // after the listing that produced this entry.
+        binding: None,
     })
+}
+
+/// The cross-namespace addressability gate (external review section-3 row):
+/// `mcpCallTool` resolves a name per alias as ORIGINAL → descriptor name →
+/// EFFECTIVE. If one query string is claimed by TWO entries of the same
+/// alias — e.g. a remote tool literally named `mcp__<alias>__echo` beside a
+/// tool `echo` whose advertised descriptor name is exactly that — the
+/// precedence order would advertise one handler and dispatch another. Such
+/// a catalogue is refused at connect, before any descriptor is handed out,
+/// so no advertised name can ever reach a foreign handler.
+fn catalogue_is_addressable(entries: &[CachedTool]) -> bool {
+    let mut claimed: HashMap<&str, usize> = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let descriptor = entry
+            .descriptor
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        for query in [
+            entry.original.as_str(),
+            descriptor,
+            entry.effective.as_str(),
+        ] {
+            match claimed.get(query) {
+                Some(seen) if *seen != index => return false,
+                Some(_) => {}
+                None => {
+                    claimed.insert(query, index);
+                }
+            }
+        }
+    }
+    true
 }
 
 /// The host tool-result contract for one remote call — the same shape a
@@ -264,6 +317,8 @@ fn outcome(canonical: &str, alias: &str, original: &str, result: CallToolResult)
         warnings,
         truncated: false,
         limits: ToolLimits::default(),
+
+        model_content: None,
     })
     .unwrap_or_else(|_| json!({"ok":false,"data":{"errorCode":"internal_error"}}))
 }
@@ -305,6 +360,8 @@ impl NativeStore {
                 configs: BTreeMap::new(),
                 tools: HashMap::new(),
                 registrations: HashMap::new(),
+                pending: HashMap::new(),
+                cancelled: HashSet::new(),
             });
         }
         let registry = state
@@ -356,9 +413,17 @@ impl NativeStore {
                 .await?;
             manager.connect(&alias, cancellation.clone()).await?;
             let listed = manager.list_tools(&alias, cancellation).await?;
+            // Capture the transport the listing just answered on: every
+            // descriptor minted here is pinned to it (W1d — bound dispatch
+            // across automatic reconnects). A session that lost its
+            // transport between the listing and this read is refused here;
+            // an unbound descriptor would silently dispatch on whichever
+            // transport the session happens to hold at call time.
+            let binding = manager.binding(&alias).ok_or(McpClientError::Closed)?;
             let mut projected = Vec::new();
             for tool in listed {
-                let entry = project_tool(&alias, &config, tool, registration)?;
+                let mut entry = project_tool(&alias, &config, tool, registration)?;
+                entry.binding = Some(binding);
                 let name = entry
                     .descriptor
                     .get("name")
@@ -373,6 +438,12 @@ impl NativeStore {
                 names.push(name);
                 canonicals.push(entry.canonical.clone());
                 projected.push(entry);
+            }
+            // Cross-namespace ambiguity (an advertised name that is another
+            // tool's ORIGINAL) is refused here, before a single descriptor of
+            // this registration leaves the lock.
+            if !catalogue_is_addressable(&projected) {
+                return Err(McpClientError::Configuration);
             }
             Ok::<_, McpClientError>(projected)
         }
@@ -410,11 +481,23 @@ impl NativeStore {
     /// re-registered (disconnect + reconnect under the same alias mints a new
     /// registration), and a call whose handle names a superseded registration
     /// is refused with `mcp_authority_revoked` — a descriptor from generation
-    /// N never authorizes generation N+1's callback. The arguments are
+    /// N never authorizes generation N+1's callback. Dispatch is additionally
+    /// PINNED to the transport the descriptor was listed from (crate
+    /// `ToolBinding`): after an automatic reconnect the stale descriptor is
+    /// refused with `mcp_authority_revoked` instead of executing the new
+    /// generation's handler, and the pin is re-checked wire-last, after any
+    /// reconnect, secret resolution, or backoff, immediately before the
+    /// request is written. The arguments are
     /// validated LOCALLY against the descriptor's recorded input schema before
     /// dispatch (invalid arguments never reach the server,
     /// `mcp_invalid_arguments`; a schema that could not be compiled fails
     /// closed the same way).
+    /// `cancellationKey` is the abort handle the JS tool lane mints for one
+    /// originating invocation: while the key is registered, `mcpCancelCall`
+    /// tears the in-flight call down (pre-dispatch it is never written to the
+    /// wire — connect, reconnect, backoff and the wire-last guard all observe
+    /// the token — and mid-flight it aborts like any crate cancellation,
+    /// which keeps its ambiguous-delivery semantics).
     /// Returns the host tool-result contract as JSON text (`{ok, data,
     /// modelData, summary, status, warnings, truncated, limits}`). Call
     /// it from the `registerTool` run function so the durable guard and
@@ -427,6 +510,51 @@ impl NativeStore {
         tool_name: String,
         args_json: String,
         handle: Option<String>,
+        cancellation_key: Option<String>,
+    ) -> Result<String> {
+        // Register the abort handle FIRST — before any fallible parse — so
+        // an `mcpCancelCall` that wins the race can only land as a tombstone
+        // this registration consumes, never as a cancel that misses the call.
+        let token = {
+            let mut state = self.mcp.lock().await;
+            match (state.as_mut(), cancellation_key.as_deref()) {
+                (Some(registry), Some(key)) => {
+                    let token = CancellationToken::new();
+                    if registry.cancelled.remove(key) {
+                        token.cancel();
+                    }
+                    registry.pending.insert(key.to_owned(), token.clone());
+                    token
+                }
+                _ => CancellationToken::new(),
+            }
+        };
+        let dispatched = Self::dispatch_mcp_call(
+            self,
+            &alias,
+            &tool_name,
+            &args_json,
+            handle.as_deref(),
+            token,
+        )
+        .await;
+        if let Some(key) = cancellation_key.as_deref() {
+            let mut state = self.mcp.lock().await;
+            if let Some(registry) = state.as_mut() {
+                registry.pending.remove(key);
+            }
+        }
+        dispatched
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_mcp_call(
+        &self,
+        alias: &str,
+        tool_name: &str,
+        args_json: &str,
+        handle: Option<&str>,
+        token: CancellationToken,
     ) -> Result<String> {
         let arguments: Value = match args_json.trim() {
             "" | "null" => json!({}),
@@ -439,16 +567,16 @@ impl NativeStore {
         // Snapshot under the lock, dispatch WITHOUT it: a slow remote
         // must never serialize other calls or block disconnects behind
         // this binding's own mutex.
-        let (manager, canonical, original, valid, admitted) = {
+        let (manager, canonical, original, valid, admitted, binding) = {
             let state = self.mcp.lock().await;
             let registry = state
                 .as_ref()
                 .ok_or_else(|| errors::stable("not_found", "no MCP server is connected", None))?;
             let entries = registry
                 .tools
-                .get(&alias)
+                .get(alias)
                 .ok_or_else(|| errors::stable("not_found", "unknown MCP server alias", None))?;
-            let entry = resolve_entry(entries, &tool_name).ok_or_else(|| {
+            let entry = resolve_entry(entries, tool_name).ok_or_else(|| {
                 errors::stable(
                     "not_found",
                     format!("MCP server {alias} exposes no tool {tool_name}"),
@@ -460,8 +588,8 @@ impl NativeStore {
             // one that minted it. Names alone cannot settle that — after a
             // reconnect under the same alias, the superseded descriptor and the
             // current one share name, capability and remoteName.
-            let registration = registry.registrations.get(&alias).copied().unwrap_or(0);
-            let admitted = match handle.as_deref() {
+            let registration = registry.registrations.get(alias).copied().unwrap_or(0);
+            let admitted = match handle {
                 Some(presented) => presented == entry.handle,
                 // An alias registered exactly once has no earlier generation to
                 // be confused with, so the legacy three-argument call is exact.
@@ -473,12 +601,19 @@ impl NativeStore {
                 .validator
                 .as_ref()
                 .is_some_and(|validator| validator.is_valid(&Value::Object(arguments.clone())));
+            // Every descriptor mints with its listing's transport; an entry
+            // without one could only come from a projection that never
+            // published. Fail closed rather than dispatch unbound.
+            let binding = entry
+                .binding
+                .ok_or_else(|| errors::internal("MCP descriptor carries no transport binding"))?;
             (
                 Arc::clone(&registry.manager),
                 entry.canonical.clone(),
                 entry.original.clone(),
                 valid,
                 admitted,
+                binding,
             )
         };
         if !admitted {
@@ -495,18 +630,38 @@ impl NativeStore {
         if !valid {
             return Err(errors::stable(
                 "mcp_invalid_arguments",
-                format!(
-                    "MCP tool {}.{} was refused by local schema validation",
-                    alias, original
-                ),
+                format!("MCP tool {alias}.{original} was refused by local schema validation",),
                 None,
             ));
         }
         let result = manager
-            .call_tool(&canonical, arguments, CancellationToken::new())
+            .call_tool_bound(&canonical, binding, arguments, token)
             .await
             .map_err(map_client)?;
-        Ok(outcome(&canonical, &alias, &original, result).to_string())
+        Ok(outcome(&canonical, alias, &original, result).to_string())
+    }
+
+    /// Tear down one in-flight `mcpCallTool` by the cancellation key the JS
+    /// lane minted: this is the binding half of the originating invocation's
+    /// AbortSignal. Pre-dispatch the request is never written (connect,
+    /// reconnect, backoff and the wire-last guard all observe the token);
+    /// after the request left, the call aborts like any crate cancellation.
+    /// Cancelling an unknown or already-settled key is a no-op success.
+    #[napi]
+    pub async fn mcp_cancel_call(&self, cancellation_key: String) -> Result<()> {
+        let mut state = self.mcp.lock().await;
+        if let Some(registry) = state.as_mut() {
+            match registry.pending.remove(&cancellation_key) {
+                Some(token) => token.cancel(),
+                // The call's future has not registered yet (or already
+                // settled): remember the abort so registration — if it is
+                // still coming — starts out cancelled.
+                None => {
+                    registry.cancelled.insert(cancellation_key);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Disconnect one MCP server: its tool handles are revoked
@@ -709,6 +864,7 @@ mod tests {
             canonical,
             validator: None,
             handle: handle.into(),
+            binding: None,
         }
     }
 
@@ -812,5 +968,42 @@ mod tests {
         assert_eq!(value["ok"], json!(false));
         assert_eq!(value["status"], json!(null));
         assert_eq!(value["data"]["isError"], json!(true));
+    }
+
+    /// The W1e gate: a remote name that is another tool's advertised
+    /// descriptor name makes one query string denote two handlers, and the
+    /// ORIGINAL-first resolver would advertise one and run the other. The
+    /// catalogue is refused while it is still unpublished.
+    #[test]
+    fn cross_namespace_ambiguity_is_refused_before_the_catalogue_publishes() {
+        let schema =
+            json!({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]});
+        let names = alias_config(json!({}));
+        let echo =
+            project_tool("names", &names, remote("echo", &schema, None), 1).expect("echo projects");
+        let note = project_tool("names", &names, remote("write_note", &schema, None), 1)
+            .expect("write_note projects");
+        assert!(
+            catalogue_is_addressable(&[echo, note]),
+            "a healthy catalogue addresses every query to exactly one entry"
+        );
+
+        let echo = project_tool("names", &names, remote("echo", &schema, None), 1).unwrap();
+        let shadow = project_tool(
+            "names",
+            &names,
+            remote("mcp__names__echo", &schema, None),
+            1,
+        )
+        .expect("the foreign name is itself a legal identity");
+        assert_eq!(
+            echo.descriptor["name"],
+            shadow.original.as_str(),
+            "the repro is real: echo's advertised name IS the shadow's remote name"
+        );
+        assert!(
+            !catalogue_is_addressable(&[echo, shadow]),
+            "one query string denoting two handlers must refuse the whole catalogue"
+        );
     }
 }

@@ -22,6 +22,11 @@ impl SqliteStore {
     ) -> Result<()> {
         let (run_id, chat_id) = (run_id.to_owned(), chat_id.to_owned());
         self.call(move |db| {
+            let mut scope = scope;
+            // A keyed (logical) connection binds its generation to what the
+            // store persisted — the credential-restoration rule; keyless
+            // ids pass through untouched and keep the strict check.
+            crate::provider_connections::normalize_generation(db, &mut scope)?;
             super::continuation_validation::scope(&scope)?;
             if scope["chatId"] != chat_id {
                 return Err(StoreError::InvalidInput(
@@ -99,6 +104,16 @@ impl SqliteStore {
         now: i64,
     ) -> Result<ProviderContinuationRecord> {
         self.call(move |db| {
+            let mut record = record;
+            // Same credential-restoration normalization as `bind_run`: a
+            // late save from a pre-rotation connection object re-fences
+            // onto the persisted generation instead of orphaning state;
+            // keyless ids are untouched.
+            if let Value::Object(state) = &mut record.state
+                && let Some(scope) = state.get_mut("scope")
+            {
+                crate::provider_connections::normalize_generation(db, scope)?;
+            }
             let transaction = crate::transaction::atomic(db)?;
             crate::tasks::fence(&transaction, &proof, now)?;
             if proof.task_id != record.run_id {

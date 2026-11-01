@@ -168,6 +168,8 @@ fn receipt_refusal(
         truncated: false,
         limits: context.limits.clone(),
         status: None,
+
+        model_content: None,
     }
 }
 

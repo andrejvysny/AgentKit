@@ -96,6 +96,11 @@ fn map_result(value: &Value) -> ToolResult {
             .get("status")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        model_content: value
+            .get("modelContent")
+            .and_then(Value::as_array)
+            .cloned()
+            .filter(|parts| !parts.is_empty()),
     }
 }
 
@@ -113,8 +118,17 @@ impl JsToolContributor {
     }
 
     /// Parse and register one JS tool definition. Rejects anything the
-    /// executor could mis-execute: duplicate names, non-object schemas,
+    /// executor could mis-execute: a re-registered name, non-object schemas,
     /// effects outside the read/write taxonomy.
+    ///
+    /// A tool NAME is a unique registration identity: every lane that
+    /// resolves a call — the descriptor, the write gate, the schema
+    /// validator, and the JS router's single callback entry — keys by name,
+    /// so accepting a second registration under a known name (even under a
+    /// new version) would put two callbacks behind one address and let the
+    /// gate judge one while the other runs. A rejected registration leaves
+    /// both registries untouched: the JS side registers the callback only
+    /// after this call accepts.
     pub(crate) fn register(&self, definition_json: &str) -> std::result::Result<(), String> {
         let parsed: Value = serde_json::from_str(definition_json)
             .map_err(|error| format!("the tool definition is not valid JSON: {error}"))?;
@@ -123,13 +137,10 @@ impl JsToolContributor {
             .definitions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if definitions
-            .iter()
-            .any(|seen| seen.name == definition.name && seen.version == definition.version)
-        {
+        if definitions.iter().any(|seen| seen.name == definition.name) {
             return Err(format!(
-                "tool {}@{} is already registered",
-                definition.name, definition.version
+                "tool {} is already registered; a tool name is a unique identity and is not re-registered",
+                definition.name
             ));
         }
         definitions.push(definition);
@@ -178,9 +189,12 @@ impl JsToolContributor {
     }
 }
 
-/// The resolver `call_tool` uses: the FIRST definition registered under a
-/// name wins (a duplicate under a new version is a redefinition, and the
-/// router only ever reaches the live registration under that name).
+/// The resolver `call_tool` uses: the definition registered under a name.
+/// [`JsToolContributor::register`] enforces one registration per name, so
+/// this resolves at most one entry; the first-match form is kept as a
+/// defensive belt — if the registration gate were ever bypassed, the
+/// resolver and the advertised catalogue below still agree on exactly one
+/// callback per name, and `advertised` never shows what cannot execute.
 fn resolve_first<'a>(definitions: &'a [ToolDefinition], name: &str) -> Option<&'a ToolDefinition> {
     definitions
         .iter()
@@ -189,9 +203,10 @@ fn resolve_first<'a>(definitions: &'a [ToolDefinition], name: &str) -> Option<&'
 
 /// The catalogue a remote client may be shown: one entry per name, holding
 /// exactly what [`resolve_first`] — and therefore `call_tool` — will execute.
-/// Deriving it from the resolver's own rule is the point: advertising every
-/// registered definition would let `t@1.0.0` and `t@2.0.0` both appear while
-/// only the first is addressable, i.e. show one callback and serve another.
+/// Deriving it from the resolver's own rule is the point: with
+/// [`JsToolContributor::register`] enforcing name uniqueness this is the
+/// identity map, and if that gate were ever bypassed it still guarantees a
+/// remote client is never shown one callback while being served another.
 fn advertised(definitions: &[ToolDefinition]) -> Vec<ToolDefinition> {
     let mut seen: Vec<&str> = Vec::new();
     definitions

@@ -22,11 +22,24 @@ use crate::jsbridge::{JsBridge, PendingKind};
 
 pub(crate) struct JsProvider {
     bridge: Arc<JsBridge>,
+    /// The callback wraps an account-backed client (declared through
+    /// `providerAuthKind`). Such adapters REJECT `temperature`/
+    /// `maxOutputTokens` before any HTTP (`unsupported_parameter` in the TS
+    /// reference `responses-request.ts`), so the lane must not inject an
+    /// implicit output cap nor send options the adapter never declared.
+    account_backed: bool,
 }
 
 impl JsProvider {
     pub(crate) fn new(bridge: Arc<JsBridge>) -> Self {
-        Self { bridge }
+        Self {
+            bridge,
+            account_backed: false,
+        }
+    }
+    pub(crate) fn with_account_backed(mut self, account_backed: bool) -> Self {
+        self.account_backed = account_backed;
+        self
     }
 }
 
@@ -35,11 +48,21 @@ impl ChatProvider for JsProvider {
         "js"
     }
 
+    /// TS parity (`bounded-context-client.ts`): a `chatgpt-account` client
+    /// runs WITHOUT an enforced output ceiling unless the request itself
+    /// carries one; the host may not stamp an implicit cap.
+    fn allows_implicit_output_limit(&self) -> bool {
+        !self.account_backed
+    }
+
     fn stream_chat(&self, input: ChatRequest, cancellation: CancellationToken) -> ProviderStream {
         let bridge = Arc::clone(&self.bridge);
+        let account_backed = self.account_backed;
         Box::pin(
-            stream::once(async move { deliver(&bridge, input, &cancellation).await })
-                .flat_map(stream::iter),
+            stream::once(
+                async move { deliver(&bridge, input, &cancellation, account_backed).await },
+            )
+            .flat_map(stream::iter),
         )
     }
 }
@@ -52,6 +75,7 @@ async fn deliver(
     bridge: &Arc<JsBridge>,
     request: ChatRequest,
     cancellation: &CancellationToken,
+    account_backed: bool,
 ) -> Vec<Result<ProviderEvent, CoreError>> {
     let call_id = uuid::Uuid::new_v4().to_string();
     let messages = match serde_json::to_value(&request.messages) {
@@ -72,14 +96,25 @@ async fn deliver(
             );
         }
     };
-    let payload = json!({
+    let mut payload = json!({
         "runId": request.run_id,
         "model": request.model,
         "messages": messages,
         "tools": tools,
-        "temperature": request.temperature,
-        "maxOutputTokens": request.max_output_tokens,
     });
+    // The lane sends only what the adapter declared. An account-backed
+    // callback rejects declared-but-absent options (a `null` reads as a
+    // present parameter), so undeclared sampling/output parameters are
+    // omitted outright; explicitly carried values still travel and the
+    // adapter's verdict rules (the TS reference rejects them with
+    // `unsupported_parameter` at request build). The API-key lane keeps
+    // its verbatim payload.
+    if !account_backed || request.temperature.is_some() {
+        payload["temperature"] = request.temperature.into();
+    }
+    if !account_backed || request.max_output_tokens.is_some() {
+        payload["maxOutputTokens"] = request.max_output_tokens.into();
+    }
     let result = match Arc::clone(bridge)
         .request(PendingKind::Provider, &call_id, &payload, cancellation)
         .await

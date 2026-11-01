@@ -317,6 +317,8 @@ impl RemoteTool {
             warnings,
             truncated,
             limits: context.limits,
+
+            model_content: None,
         }
     }
     fn failure(&self, context: ToolContext, error: McpClientError) -> ToolResult {
@@ -337,6 +339,8 @@ impl RemoteTool {
             warnings: vec![message],
             truncated,
             limits: context.limits,
+
+            model_content: None,
         }
     }
 }
