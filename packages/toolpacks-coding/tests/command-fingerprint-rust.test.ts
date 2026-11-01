@@ -28,6 +28,8 @@ type Case = {
   files: Record<string, { contents: string; mode?: number }>;
   command: string;
   cwd?: string;
+  /** Extra effective-environment entries (e.g. `NODE_OPTIONS`). */
+  env?: Record<string, string>;
   /** Expected outcome class; digest equality is checked for "digest". */
   expect: "digest" | "null" | "error";
 };
@@ -136,6 +138,116 @@ const CASES: Case[] = [
     command: "bun test",
     expect: "error",
   },
+  {
+    name: "inherited NODE_OPTIONS binds the selected startup file",
+    files: {
+      "bin/bun": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "bin/node": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "package.json": {
+        contents: JSON.stringify({
+          name: "t",
+          scripts: { test: "node cli.js" },
+        }),
+      },
+      "cli.js": { contents: "1\n" },
+      "bootstrap.cjs": { contents: "module.exports = 1\n" },
+    },
+    command: "bun test",
+    env: { NODE_OPTIONS: "--require=./bootstrap.cjs" },
+    expect: "digest",
+  },
+  {
+    name: "assigned NODE_OPTIONS on the script line binds the selected file",
+    files: {
+      "bin/bun": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "bin/node": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "package.json": {
+        contents: JSON.stringify({
+          name: "t",
+          scripts: {
+            test: 'NODE_OPTIONS="--require=./bootstrap.cjs --import=./bootstrap.cjs" node cli.js',
+          },
+        }),
+      },
+      "cli.js": { contents: "1\n" },
+      "bootstrap.cjs": { contents: "module.exports = 1\n" },
+    },
+    command: "bun test",
+    expect: "digest",
+  },
+  {
+    name: "env-wrapped NODE_OPTIONS binds the selected startup file",
+    files: {
+      "bin/bun": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "bin/node": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "package.json": {
+        contents: JSON.stringify({
+          name: "t",
+          scripts: {
+            test: "NODE_OPTIONS=--require ./bootstrap.cjs env node cli.js",
+          },
+        }),
+      },
+      "cli.js": { contents: "1\n" },
+      "bootstrap.cjs": { contents: "module.exports = 1\n" },
+    },
+    command: "bun test",
+    expect: "digest",
+  },
+  {
+    name: "an unparsable NODE_OPTIONS loader selector is a refusal",
+    files: {
+      "bin/bun": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "bin/node": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "package.json": {
+        contents: JSON.stringify({
+          name: "t",
+          scripts: { test: "node cli.js" },
+        }),
+      },
+      "cli.js": { contents: "1\n" },
+      "x.mjs": { contents: "1\n" },
+    },
+    command: "bun test",
+    env: { NODE_OPTIONS: "--loader=./x.mjs" },
+    expect: "error",
+  },
+  {
+    name: "a NODE_OPTIONS selector with an unresolvable bare specifier is a refusal",
+    files: {
+      "bin/bun": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "bin/node": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "package.json": {
+        contents: JSON.stringify({
+          name: "t",
+          scripts: { test: "node cli.js" },
+        }),
+      },
+      "cli.js": { contents: "1\n" },
+      "bootstrap.cjs": { contents: "1\n" },
+    },
+    command: "bun test",
+    env: { NODE_OPTIONS: "--require=bootstrap.cjs" },
+    expect: "error",
+  },
+  {
+    name: "a mid-command NODE_OPTIONS reassignment is a refusal",
+    files: {
+      "bin/bun": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "bin/node": { contents: "#!/bin/sh\nexit 0\n", mode: 0o755 },
+      "package.json": {
+        contents: JSON.stringify({
+          name: "t",
+          scripts: {
+            test: "node cli.js NODE_OPTIONS=--require=./evil.cjs",
+          },
+        }),
+      },
+      "cli.js": { contents: "1\n" },
+    },
+    command: "bun test",
+    expect: "error",
+  },
 ];
 
 async function rustOutcome(
@@ -216,7 +328,7 @@ describe("rust command fingerprint differential", () => {
             if (file.mode !== undefined) chmodSync(path, file.mode);
           }
           const cwdPath = join(rootPath, testCase.cwd ?? ".");
-          const environment = { PATH: join(rootPath, "bin") };
+          const environment = { PATH: join(rootPath, "bin"), ...testCase.env };
           const expected = {
             root: rootPath,
             cwd: cwdPath,

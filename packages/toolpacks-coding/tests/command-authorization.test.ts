@@ -308,3 +308,200 @@ test.each(["vitest run", "PATH=./tools vitest run", "npx tsc --noEmit"])(
     }
   },
 );
+
+// External review P1-D, TypeScript live path: approve a `bun test` whose
+// package script selects a startup file through `NODE_OPTIONS` (inherited,
+// literal assignment, or `env` wrapper — plus the explicit CLI control),
+// then mutate ONLY that file with the command and environment constant. The
+// next call must request a NEW approval with zero new executions and zero
+// new receipts; re-granting the fresh key executes again (counter is live).
+describe("standing approval dies when the NODE_OPTIONS-selected startup file mutates (P1-D)", () => {
+  const FORMS: [string, string, string | undefined][] = [
+    ["inherited", "node cli.js", "--require=./bootstrap.cjs"],
+    [
+      "assignment",
+      "NODE_OPTIONS=--require=./bootstrap.cjs node cli.js",
+      undefined,
+    ],
+    [
+      "env wrapper",
+      "NODE_OPTIONS=--require=./bootstrap.cjs env node cli.js",
+      undefined,
+    ],
+    [
+      "explicit CLI control",
+      "node --require ./bootstrap.cjs cli.js",
+      undefined,
+    ],
+  ];
+
+  for (const [label, script, inherited] of FORMS) {
+    test(`${label}: constant selector, mutated file re-asks with zero effect`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "approval-node-options-"));
+      try {
+        const bin = join(root, "bin");
+        mkdirSync(bin);
+        for (const name of ["bun", "node"])
+          writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n", {
+            mode: 0o755,
+          });
+        writeFileSync(
+          join(root, "package.json"),
+          JSON.stringify({ scripts: { test: script } }),
+        );
+        writeFileSync(join(root, "cli.js"), "console.log('cli');\n");
+        writeFileSync(join(root, "bootstrap.cjs"), "module.exports = 'v1';\n");
+        const environment: NodeJS.ProcessEnv = { PATH: bin, HOME: root };
+        if (inherited !== undefined) environment.NODE_OPTIONS = inherited;
+        const policy = createCodingStandingApprovals({
+          resolve: async () => ({ root, identity: "test", environment }),
+        });
+        const store = new MemoryAssistantStore();
+        await store.conversations.createChat({ id: "s1" });
+        await store.tasks.createTask({
+          taskId: "r1",
+          scopeId: "s1",
+          kind: "test",
+          payload: {},
+        });
+        const claim = (await store.tasks.claimNext({
+          ownerId: "worker",
+          now: new Date(),
+          scopesBusy: [],
+        }))!;
+        let executed = 0;
+        const tool: AiTool = {
+          definition: {
+            name: "run_command",
+            version: "1",
+            effect: "write",
+            capability: "process.exec",
+            description: "inert",
+            inputSchema: {},
+          },
+          async execute(ctx) {
+            executed++;
+            return {
+              ok: true,
+              data: {},
+              sources: [],
+              warnings: [],
+              truncated: false,
+              limits: ctx.limits,
+            };
+          },
+        };
+        const staged = await stageRegistry({
+          contributors: [
+            { namespace: "coding", contribute: async () => [tool] },
+          ],
+          ctx: {
+            bindings: [],
+            limits,
+            chatId: "s1",
+            scopeId: "s1",
+            runId: "r1",
+          },
+          hasPrimaryBinding: true,
+          guards: [createCodingPermissionGuard({ mode: "ask" })],
+          standing: { policy, store },
+          durable: {
+            store,
+            ctx: {
+              task: claim.task,
+              attemptId: claim.attempt.attemptId,
+              leaseToken: claim.lease.leaseToken,
+              signal: new AbortController().signal,
+            },
+          },
+        });
+        const args = { command: "bun test" };
+        const key = await policy.keyFor(
+          {
+            bindings: [],
+            namespace: "coding",
+            chatId: "s1",
+            tool: tool.definition,
+            arguments: args,
+          },
+          [{ reason: "approval_required: run_command" }],
+        );
+        expect(key).not.toBeNull();
+        await store.conversations.updateChat("s1", {
+          metadata: {
+            [STANDING_APPROVALS_METADATA_KEY]: {
+              version: 1,
+              grants: [
+                {
+                  grantId: "grant:1",
+                  digest: key!.digest,
+                  label: key!.label,
+                  toolName: "run_command",
+                  sourceRequestId: "request",
+                  answerId: "answer",
+                  grantedAt: new Date().toISOString(),
+                },
+              ],
+            },
+          },
+        });
+        const suspended: unknown[] = [];
+        const call = (id: string) =>
+          staged.registry.get("run_command")!.execute(
+            {
+              runId: "r1",
+              scopeId: "s1",
+              chatId: "s1",
+              toolCallId: id,
+              bindings: [],
+              limits,
+              suspend: (request) => {
+                suspended.push(request);
+              },
+            },
+            args,
+          );
+        expect((await call("first")).ok).toBe(true);
+        expect(executed).toBe(1);
+        expect(await store.toolExecutions.listByRun("r1")).toHaveLength(1);
+
+        writeFileSync(
+          join(root, "bootstrap.cjs"),
+          "module.exports = 'MUTATED';\n",
+        );
+        expect((await call("second")).ok).toBe(false);
+        expect(executed).toBe(1);
+        expect(suspended).toHaveLength(1);
+        const fresh = (suspended[0] as { standing: { digest: string } })
+          .standing;
+        expect(fresh.digest).not.toBe(key!.digest);
+        expect(await store.toolExecutions.listByRun("r1")).toHaveLength(1);
+
+        // The fresh key authorizes the mutated content once the human grants it.
+        await store.conversations.updateChat("s1", {
+          metadata: {
+            [STANDING_APPROVALS_METADATA_KEY]: {
+              version: 1,
+              grants: [
+                {
+                  grantId: "grant:2",
+                  digest: fresh.digest,
+                  label: "bun test",
+                  toolName: "run_command",
+                  sourceRequestId: "request",
+                  answerId: "answer",
+                  grantedAt: new Date().toISOString(),
+                },
+              ],
+            },
+          },
+        });
+        expect((await call("third")).ok).toBe(true);
+        expect(executed).toBe(2);
+        expect(await store.toolExecutions.listByRun("r1")).toHaveLength(2);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+});

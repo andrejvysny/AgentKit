@@ -134,6 +134,16 @@ export interface NativeServiceOptions {
    * the options may be logged or persisted freely. When absent, the JS
    * `setProvider` callback slot serves turns exactly as before. */
   providerConfig?: NativeProviderConfig;
+  /** Declares the JS callback lane's parameter capabilities (mirrors
+   * `providerAuthKind` in `rust/crates/napi/src/service.rs`).
+   * `"chatgpt-account"` means the callback wraps an account-backed client
+   * that rejects sampling/output parameters: context admission then never
+   * injects an implicit output cap, and the bridge payload omits options
+   * the adapter does not declare — exactly what the TypeScript lane does
+   * for a `chatgpt-account` client. Default `"api-key"` (unchanged
+   * behavior). Valid only without `providerConfig`, whose Rust lane is
+   * always API-key shaped. */
+  providerAuthKind?: "api-key" | "chatgpt-account";
 }
 
 /** Construction-time selection of the Rust provider lane (mirrors
@@ -145,6 +155,68 @@ export interface NativeProviderConfig {
   model: string;
   temperature?: number;
   maxTokens?: number;
+}
+
+/** Registration options for the NATIVE coding toolpack (mirrors
+ * `optionsJson` on `registerCodingTools` in
+ * `rust/crates/napi/src/coding_lane.rs`). An unsupported value fails
+ * registration with `invalid_input`, never a silently ignored policy. */
+export interface NativeCodingToolsOptions {
+  /** The one root every native tool is confined to. REQUIRED, absolute. */
+  workspaceRoot: string;
+  /** Execution backend for shell/test commands. Default `"required"`:
+   * commands run only inside the platform sandbox, and hosts without one
+   * refuse (`shell_isolation_unavailable`); `"off"` runs unsandboxed — an
+   * explicit opt-in for trusted hosts and CI, never the default. */
+  sandbox?: "required" | "off";
+  /** Default false: the sandbox denies network. */
+  network?: boolean;
+  /** Exact command strings `run_tests` may run, e.g. `["bun test"]`. */
+  testCommands?: readonly string[];
+  /** Default false: the sandbox denies writes under `<root>/.git`. */
+  allowGitWrites?: boolean;
+  /** Default false: credential-like paths are refused for read and write. */
+  allowSensitive?: boolean;
+  /** Mode applied until the SESSION's durable execution state says
+   * otherwise (the mode is a fact in the database, never binding memory).
+   * Default `"ask"` — fail closed, like the JS authority's default. */
+  configuredMode?: "read_only" | "ask" | "auto_edit" | "full_auto" | "plan";
+  /** Role ceiling; a ceiling NO mode lifts. Default `"implementer"`. */
+  role?: "implementer" | "reviewer" | "supervisor";
+  /** Tool names whose approvable refusal is a PLAN approval. Default
+   * `["submit_plan"]`. */
+  planToolNames?: readonly string[];
+  /** The workspace identity inside the standing-approval key envelope:
+   * two different checkouts mounted at the same path keep independent
+   * approvals. Default: `workspaceRoot`. */
+  identity?: string;
+  /** Lock-dir coordination directory. Default the per-uid shared
+   * `/tmp/agentkit-workspace-locks-<uid>` (TS parity: durable shell
+   * ownership and cross-process crash recovery are on disk). */
+  coordinationDir?: string;
+  /** Longest a mutation/command waits for a foreign lease before
+   * `workspace_busy`. Default `min(20000, floor(toolTimeoutMs * 0.66))`. */
+  coordinationWaitMs?: number;
+}
+
+/** Registration options for a DURABLE provider connection (mirrors
+ * `optionsJson` on `registerProviderConnection` in
+ * `rust/crates/napi/src/provider_connection.rs`). Without these, the
+ * connection id is a process-local random and a Responses continuation
+ * bound to it dies with the process. With them, the id is the store's
+ * logical connection identity: the same `connectionKey` + same
+ * credentials resolve to the same id and generation in every process
+ * (credential restoration), and a changed credential rotates the
+ * generation under the same identity while the continuation continues.
+ * `connectionKey` is non-secret caller material — NEVER pass the API key
+ * or anything derived from it. */
+export interface NativeProviderConnectionOptions {
+  /** Stable caller-chosen name identifying THIS logical connection
+   * (e.g. include the provider id). Non-empty, ≤ 512 characters. */
+  connectionKey: string;
+  /** Path of the file-backed store that persists the connection state —
+   * the same file `NativeStore.open` owns. */
+  storePath: string;
 }
 
 /** Options for `NativeSessionService.startHttpServer` (mirrors
@@ -172,6 +244,40 @@ export interface NativeHttpServerOptions {
   /** REQUIRED shared secret; clients must present it as
    * `Authorization: Bearer <token>`. At least 32 bytes. */
   bearerToken: string;
+  /** Cross-origin policy for browser callers, mirroring the retired
+   * TypeScript transport's `CorsConfig` exactly. OFF by default: with no
+   * `cors` no response ever carries a CORS header and `OPTIONS` answers
+   * 405. When set, `Vary: Origin` rides EVERY response (including
+   * problems and SSE), a matched `Origin` also gets
+   * `Access-Control-Allow-Origin` (the list echoes the origin; `"*"`
+   * echoes a literal `*`), and a matched-origin `OPTIONS` preflight
+   * answers 204 with that path's real method set. An unmatched origin
+   * is served normally — the browser, not the server, does the
+   * blocking. */
+  cors?: NativeHttpCorsOptions;
+  /** `"memory"` wires a VOLATILE in-process credential vault so the
+   * provider-management routes' `apiKey`/`extraHeaders` writes really
+   * store secrets (mirroring the desktop example's `MemorySecretStore`;
+   * secrets die with the process — durable vaults are a host-side port
+   * decision). Omitted, those writes answer 501 exactly like the
+   * TypeScript transport running without a `SecretStore`. */
+  providerSecrets?: "memory";
+}
+
+/** `cors` member of {@link NativeHttpServerOptions}. */
+export interface NativeHttpCorsOptions {
+  /** Origins allowed to READ responses: `"*"` for any, or an exact-match
+   * list of origin strings (scheme + host + port, no path, no trailing
+   * slash). Non-empty; omit `cors` entirely to stay closed. */
+  origins: readonly string[] | "*";
+  /** Preflight `Access-Control-Allow-Headers`. Default: `Content-Type`,
+   * `Idempotency-Key`, `Last-Event-ID`, `Authorization`. */
+  allowHeaders?: readonly string[];
+  /** Response headers browsers may read. Omitted by default: the bodies
+   * carry everything a client needs. */
+  exposeHeaders?: readonly string[];
+  /** Preflight cache lifetime; omitted sends no `Max-Age`. */
+  maxAgeSeconds?: number;
 }
 
 /** Where a started desktop server actually listens (an ephemeral port is
@@ -241,6 +347,22 @@ export class NativeStore {
     if (this.closed) {
       throw new NativeAgentError("closed", "the native store is closed");
     }
+    // P1-F: the JS wrapper is the earliest layer that sees
+    // `providerConfig.maxTokens` (NaN would silently become `null` under
+    // `JSON.stringify`), so it refuses anything the request budget cannot
+    // represent, with the same stable message the Rust parser carries.
+    // Service construction — not admission, not the wire — is where an
+    // unusable cap dies; the admitted request is the transmitted request.
+    const configuredTokens = options?.providerConfig?.maxTokens;
+    if (
+      configuredTokens !== undefined &&
+      !(Number.isSafeInteger(configuredTokens) && configuredTokens > 0)
+    ) {
+      throw new NativeAgentError(
+        "invalid_input",
+        "providerConfig.maxTokens must be a positive safe integer",
+      );
+    }
     const router = new CallbackRouter();
     const raw = await lift(() =>
       this.raw.createService(
@@ -275,9 +397,7 @@ export class NativeStore {
   ): Promise<NativeMcpConnection> {
     if (this.closed)
       throw new NativeAgentError("closed", "the native store is closed");
-    const text = await lift(() =>
-      this.raw.mcpConnect(JSON.stringify(config)),
-    );
+    const text = await lift(() => this.raw.mcpConnect(JSON.stringify(config)));
     return JSON.parse(text) as NativeMcpConnection;
   }
 
@@ -293,25 +413,59 @@ export class NativeStore {
    * judge the call; direct use from host code is a host decision, not a
    * bypass of the engine lane.
    *
-   * `handle` is the descriptor's registration handle
+   * `handle` is the descriptor's `handle` field
    * (`descriptor.handle`, e.g. `"fix#2"`). Pass it: once an alias has been
    * re-registered, a call whose handle is missing or comes from a
    * superseded registration is refused with `mcp_authority_revoked`
    * before the transport is touched, so a stale descriptor can never
-   * execute the replacement server's callback.
+   * execute the replacement server's callback. Dispatch is additionally
+   * pinned to the transport generation the descriptor was listed from:
+   * after an automatic reconnect a stale descriptor fails
+   * `mcp_authority_revoked`/`mcp_not_connected` instead of executing the
+   * new generation's handler — reconnect (`mcpDisconnect` + `mcpConnect`)
+   * to publish a fresh descriptor set.
+   *
+   * `signal` is the originating invocation's abort handle (the tool ctx
+   * `signal`): passing it lets the binding tear the in-flight call down —
+   * a queued call is never written to the wire, and an already-aborted
+   * signal never dispatches at all (`mcp_request_aborted`).
    */
   async mcpCallTool(
     alias: string,
     toolName: string,
     args: unknown,
     handle?: string,
+    signal?: AbortSignal,
   ): Promise<ToolResultJson> {
     if (this.closed)
       throw new NativeAgentError("closed", "the native store is closed");
-    const text = await lift(() =>
-      this.raw.mcpCallTool(alias, toolName, JSON.stringify(args ?? {}), handle),
-    );
-    return JSON.parse(text) as ToolResultJson;
+    if (signal?.aborted)
+      throw new NativeAgentError(
+        "mcp_request_aborted",
+        `MCP tool ${alias}.${toolName} was cancelled before dispatch`,
+      );
+    const cancellationKey = signal ? crypto.randomUUID() : undefined;
+    let onAbort: (() => void) | undefined;
+    if (signal && cancellationKey) {
+      onAbort = () => {
+        void this.raw.mcpCancelCall(cancellationKey).catch(() => undefined);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    try {
+      const text = await lift(() =>
+        this.raw.mcpCallTool(
+          alias,
+          toolName,
+          JSON.stringify(args ?? {}),
+          handle,
+          cancellationKey,
+        ),
+      );
+      return JSON.parse(text) as ToolResultJson;
+    } finally {
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+    }
   }
 
   /** Disconnect one MCP server: handles revoked immediately, transport
@@ -369,6 +523,23 @@ export type {
   NativeAssistantStoreOptions,
   NativeAssistantStoreClock,
 } from "./assistant-store.js";
+
+export { NativeManagedContent } from "./managed-content.js";
+export type {
+  ManagedConnectionDraft,
+  ManagedSkillEntry,
+  NativeConnections,
+  NativeManagedContentOptions,
+  NativePromptTemplates,
+  NativeRunContent,
+  NativeSkills,
+  RedactedConnectionRecord,
+  RenderedPromptTemplate,
+  RunContentBlock,
+  RunContentResolution,
+  RunContentResourceRecord,
+  UnavailableRunSkill,
+} from "./managed-content.js";
 
 // ---------------------------------------------------------------------------
 // Session service
@@ -474,13 +645,23 @@ export class NativeSessionService extends NativeSessionManagement {
   /** Register a provider connection for the Rust provider lane: the base
    * URL of an OpenAI-compatible server plus its API key (presented as
    * `Authorization: Bearer`). The key crosses into Rust here and never
-   * again — `createService` receives only the returned connection id. */
+   * again — `createService` receives only the returned connection id.
+   * Pass `options` with a stable `connectionKey` and the store's
+   * `storePath` to register a DURABLE logical connection whose Responses
+   * continuation survives a real process restart (see
+   * `NativeProviderConnectionOptions`); without them the id is a
+   * process-local random. */
   static async registerProviderConnection(
     baseUrl: string,
     apiKey?: string | null,
+    options?: NativeProviderConnectionOptions,
   ): Promise<string> {
     return lift(async () =>
-      (await loadBinding()).registerProviderConnection(baseUrl, apiKey ?? null),
+      (await loadBinding()).registerProviderConnection(
+        baseUrl,
+        apiKey ?? null,
+        options === undefined ? null : JSON.stringify(options),
+      ),
     );
   }
 
@@ -523,12 +704,34 @@ export class NativeSessionService extends NativeSessionManagement {
     this.router.setProvider(provider);
   }
 
+  /** Register a JS-executed tool. A tool NAME is a unique registration
+   * identity, enforced atomically across both registries: Rust accepts the
+   * definition first, and the router receives the callback ONLY after that
+   * acceptance. A second registration of a known name therefore REJECTS
+   * (stable `invalid_input` error) and leaves the previously accepted
+   * descriptor, gate, and callback untouched — name, advertised descriptor,
+   * authority gate, and dispatched callback always denote one registration. */
   async registerTool(
     definition: ToolDefinitionJson,
     run: ToolRunFunction,
   ): Promise<void> {
     await lift(() => this.raw.registerTool(JSON.stringify(definition)));
     this.router.registerTool(definition, run);
+  }
+
+  /** Register the NATIVE coding toolpack: the Rust-owned `read_file`,
+   * `list_dir`, `find_files`, `code_search`, `repo_map`, `git_inspect`,
+   * `edit_file`, `write_file`, `run_command`, `run_tests`, and
+   * `submit_plan` on the SAME executor lane as JS tools. Descriptors,
+   * execution, permission (the shared decision matrix over the session's
+   * durable mode), high-risk fresh-approval, and fingerprint-v4 standing
+   * approvals are ALL Rust-side: no callback, no TS pack, no fallback
+   * crosses into JS on this path. One-shot per service — the descriptor
+   * set is immutable once the worker can claim turns; a second call
+   * rejects with `invalid_input`. (mirrors `registerCodingTools` in
+   * `rust/crates/napi/src/coding_lane.rs`) */
+  async registerCodingTools(options: NativeCodingToolsOptions): Promise<void> {
+    await lift(() => this.raw.registerCodingTools(JSON.stringify(options)));
   }
 
   async send(
