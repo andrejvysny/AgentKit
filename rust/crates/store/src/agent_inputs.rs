@@ -461,7 +461,7 @@ pub(crate) fn kind_text(kind: AgentInputKind) -> &'static str {
     }
 }
 
-fn status_text(status: AgentInputStatus) -> &'static str {
+pub(crate) fn status_text(status: AgentInputStatus) -> &'static str {
     match status {
         AgentInputStatus::Pending => "pending",
         AgentInputStatus::Applied => "applied",

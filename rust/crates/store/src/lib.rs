@@ -17,6 +17,8 @@ mod settings_commit;
 mod tasks;
 mod timestamp;
 mod transaction;
+#[cfg(feature = "ts-import")]
+mod ts_import;
 mod util;
 
 pub use actor::SqliteStore;
@@ -35,6 +37,8 @@ pub use session_ops::*;
 pub use settings_commit::{SettingWrite, SettingsCommit};
 pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};
 pub use transaction::StoreTransaction;
+#[cfg(feature = "ts-import")]
+pub use ts_import::*;
 pub use util::id;
 
 #[derive(Debug, thiserror::Error)]

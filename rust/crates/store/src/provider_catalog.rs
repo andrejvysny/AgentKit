@@ -18,7 +18,7 @@ fn parse(text: &str, kind: &str) -> Result<Value> {
 fn required_strings(value: &Value, fields: &[&str]) -> bool {
     value.is_object() && fields.iter().all(|field| value[*field].is_string())
 }
-fn provider(value: &Value) -> bool {
+pub(crate) fn provider(value: &Value) -> bool {
     required_strings(value, &["id", "label", "kind", "baseUrl", "defaultModel"])
         && value["enabled"].is_boolean()
         && value.get("apiKey").is_none_or(Value::is_string)
@@ -29,7 +29,7 @@ fn provider(value: &Value) -> bool {
                 .is_some_and(|items| items.values().all(Value::is_string))
         })
 }
-fn model(value: &Value) -> bool {
+pub(crate) fn model(value: &Value) -> bool {
     required_strings(value, &["providerId", "modelId", "fetchedAt"])
         && value
             .get("displayName")
@@ -41,7 +41,7 @@ fn model(value: &Value) -> bool {
             .get("supportsToolCalling")
             .is_none_or(Value::is_boolean)
 }
-fn capabilities(value: &Value) -> bool {
+pub(crate) fn capabilities(value: &Value) -> bool {
     value.is_object()
         && ["streaming", "toolCalling", "modelList"]
             .iter()
