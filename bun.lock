@@ -16,11 +16,10 @@
       "name": "@agentkit/example-coding-agent",
       "version": "0.1.0-dev",
       "dependencies": {
-        "@agentkit/adapters-sqlite": "workspace:*",
         "@agentkit/contracts": "workspace:*",
         "@agentkit/core": "workspace:*",
         "@agentkit/host": "workspace:*",
-        "@agentkit/runner-local": "workspace:*",
+        "@agentkit/native": "workspace:*",
         "@agentkit/toolpacks-coding": "workspace:*",
       },
       "devDependencies": {
@@ -34,14 +33,11 @@
       "version": "0.1.0-dev",
       "dependencies": {
         "@agentkit/adapters-memory": "workspace:*",
-        "@agentkit/adapters-sqlite": "workspace:*",
         "@agentkit/contracts": "workspace:*",
         "@agentkit/core": "workspace:*",
         "@agentkit/host": "workspace:*",
         "@agentkit/mcp-client": "workspace:*",
-        "@agentkit/mcp-server": "workspace:*",
-        "@agentkit/runner-local": "workspace:*",
-        "@agentkit/transport-http": "workspace:*",
+        "@agentkit/native": "workspace:*",
       },
       "devDependencies": {
         "@agentkit/testing": "workspace:*",
