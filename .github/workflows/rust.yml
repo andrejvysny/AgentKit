@@ -40,6 +40,26 @@ jobs:
         working-directory: rust
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
         working-directory: rust
+      # The binding binary is a build artifact; the qualification run must
+      # produce it and then never let a suite silently skip (see the
+      # AGENTKIT_REQUIRE_NATIVE fail-closed check in packages/native/tests).
+      # It is built HERE — before `cargo test --workspace` — because the
+      # client route tests inside that run drive the TypeScript harness
+      # through Bun, and the harness loads the native backend (external
+      # review at 24b3d17: a route test failed only because the addon was
+      # built later in this job and passed when prebuilt locally).
+      - name: Build native binding
+        run: bun run --cwd packages/native build:native
+      - name: Generated loader and d.ts are up to date
+        # If the committed loader/d.ts drifted from what the Rust source
+        # exports, the freshly built files differ from the checkout.
+        run: git diff --exit-code -- packages/native/generated
+      # The mixed-runtime client/interop suites prebuild the Rust
+      # `http_fixture` binary the same way (rust/tests/support/http-server.ts
+      # lazy-builds it); doing it here keeps a cold cargo build out of the
+      # parallel test processes below.
+      - name: Build the http fixture
+        run: bun run build:fixture
       - run: cargo test --workspace --all-features --locked
         working-directory: rust
       # Named reviewable gates for the shared TS↔Rust fingerprint fixtures,
@@ -68,20 +88,23 @@ jobs:
         env:
           AGENTKIT_RUN_RUST_CONFORMANCE: "1"
           AGENTKIT_RUN_RUST_RUNNER_CONFORMANCE: "1"
+      - name: Command fingerprint TS↔Rust differential (required, never skipped here)
+        # The fifteen-case standing-approval differential: the TypeScript
+        # authority (packages/toolpacks-coding/src/command-fingerprint.ts)
+        # and the Rust implementation (`cargo run -p agentkit-toolpacks-coding
+        # --example fingerprint_cli`) must agree case by case on the same
+        # tree. The suite self-skips unless AGENTKIT_RUN_RUST_CONFORMANCE=1
+        # is set — a plain `bun test` never runs it, so the gate lives HERE,
+        # explicitly enabled, and the workflow structure test refuses its
+        # removal or an added `if:`.
+        run: bun test --timeout 120000 packages/toolpacks-coding/tests/command-fingerprint-rust.test.ts
+        env:
+          AGENTKIT_RUN_RUST_CONFORMANCE: "1"
       - name: Existing client and React behavior against Rust
         run: bun test --timeout 60000 packages/client/tests packages/react/tests
         env:
           AGENTKIT_TEST_BACKEND: rust
       - run: bun run typecheck
-      # The binding binary is a build artifact; the qualification run must
-      # produce it and then never let a suite silently skip (see the
-      # AGENTKIT_REQUIRE_NATIVE fail-closed check in packages/native/tests).
-      - name: Build native binding
-        run: bun run --cwd packages/native build:native
-      - name: Generated loader and d.ts are up to date
-        # If the committed loader/d.ts drifted from what the Rust source
-        # exports, the freshly built files differ from the checkout.
-        run: git diff --exit-code -- packages/native/generated
       - name: Core public API runs on Rust
         run: bun test packages/core
         env:
@@ -157,6 +180,16 @@ jobs:
       # --ignore-scripts keeps native install scripts (better-sqlite3) out of
       # this job's critical path.
       - run: bun install --frozen-lockfile --ignore-scripts
+      # The addon is a build artifact of THIS job, and the binding suites
+      # below (`bun test packages/native`, the core/native gate, the packed
+      # and umbrella checks) only pass fail-closed under
+      # AGENTKIT_REQUIRE_NATIVE once the binary exists. Build it before any
+      # test step so a missing artifact is a build failure, never a
+      # half-run suite — the same ordering the `native` job uses.
+      - name: Build Windows native addon
+        run: bun run --cwd packages/native build:native
+      - name: Generated Windows binding is current
+        run: git diff --exit-code -- packages/native/generated
       # Workspace-wide pure-native suite. The client interop tests
       # (all_routes, interoperability, typescript_boundaries) spawn Bun
       # against the TypeScript service harness and belong to the mixed-runtime
@@ -177,10 +210,6 @@ jobs:
         # passing vacuously.
         run: cargo test -p agentkit-mcp --test bridge --test native --test security --test shapes --test manager --all-features --locked
         working-directory: rust
-      - name: Build Windows native addon
-        run: bun run --cwd packages/native build:native
-      - name: Generated Windows binding is current
-        run: git diff --exit-code -- packages/native/generated
       - name: Windows binding lifecycle and store transactions
         run: bun test packages/native
         env:
