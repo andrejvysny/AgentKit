@@ -422,7 +422,10 @@ async fn recorded_outcome_then_complete_finalizes_an_applying_proposal() {
         .unwrap();
     store.create_proposal(proposal("first")).await.unwrap();
     applying(&store, "first", "operation").await;
-    store.record_outcome("operation", outcome(), 1002).await.unwrap();
+    store
+        .record_outcome("operation", outcome(), 1002)
+        .await
+        .unwrap();
 
     let receipt = store
         .complete_proposal("first", "operation", outcome(), 1003)
@@ -464,7 +467,10 @@ async fn pre_recorded_failed_outcome_completes_failed_regardless_of_the_replayed
     failed.status = "failed".into();
     failed.applied_ops = 0;
     failed.failed_ops = vec![json!({"opIndex": 0, "error": "apply failed"})];
-    store.record_outcome("operation", failed, 1002).await.unwrap();
+    store
+        .record_outcome("operation", failed, 1002)
+        .await
+        .unwrap();
 
     // The completion argument claims "applied"; the committed receipt says
     // otherwise and the receipt is authoritative.
@@ -476,4 +482,3 @@ async fn pre_recorded_failed_outcome_completes_failed_regardless_of_the_replayed
     assert_eq!(done.status, ProposalStatus::Failed);
     assert_eq!(done.applied_at, Some(1003));
 }
-
