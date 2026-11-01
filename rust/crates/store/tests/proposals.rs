@@ -406,3 +406,74 @@ async fn record_outcome_is_idempotent_and_requires_the_claimed_operation() {
     assert!(unclaimed.proposal_id.is_empty());
     assert_eq!(unclaimed.operation_id, "never-claimed");
 }
+
+#[tokio::test]
+async fn recorded_outcome_then_complete_finalizes_an_applying_proposal() {
+    // The port's apply order is recordOutcome(operation) FIRST — which
+    // inserts the receipt — and the terminal completion second. The receipt
+    // stays the byte-identical first committed outcome, but the Applying
+    // proposal must still finalize: the early return used to skip the stamp
+    // and left every such apply durably "applying" (host ProposalService
+    // applies over the native port were stuck).
+    let store = SqliteStore::memory(4).unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store.create_proposal(proposal("first")).await.unwrap();
+    applying(&store, "first", "operation").await;
+    store.record_outcome("operation", outcome(), 1002).await.unwrap();
+
+    let receipt = store
+        .complete_proposal("first", "operation", outcome(), 1003)
+        .await
+        .unwrap();
+    assert_eq!(receipt.created_at, 1002, "first committed outcome wins");
+    let done = store.get_proposal("first").await.unwrap().unwrap();
+    assert_eq!(done.status, ProposalStatus::Applied);
+    assert_eq!(done.applied_at, Some(1003));
+
+    // Replay stays idempotent: the receipt is untouched and an already
+    // terminal proposal is not re-stamped.
+    let replay = store
+        .complete_proposal("first", "operation", outcome(), 1004)
+        .await
+        .unwrap();
+    assert_eq!(replay.created_at, 1002);
+    assert_eq!(
+        store
+            .get_proposal("first")
+            .await
+            .unwrap()
+            .unwrap()
+            .applied_at,
+        Some(1003)
+    );
+}
+
+#[tokio::test]
+async fn pre_recorded_failed_outcome_completes_failed_regardless_of_the_replayed_argument() {
+    let store = SqliteStore::memory(4).unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store.create_proposal(proposal("first")).await.unwrap();
+    applying(&store, "first", "operation").await;
+    let mut failed = outcome();
+    failed.status = "failed".into();
+    failed.applied_ops = 0;
+    failed.failed_ops = vec![json!({"opIndex": 0, "error": "apply failed"})];
+    store.record_outcome("operation", failed, 1002).await.unwrap();
+
+    // The completion argument claims "applied"; the committed receipt says
+    // otherwise and the receipt is authoritative.
+    store
+        .complete_proposal("first", "operation", outcome(), 1003)
+        .await
+        .unwrap();
+    let done = store.get_proposal("first").await.unwrap().unwrap();
+    assert_eq!(done.status, ProposalStatus::Failed);
+    assert_eq!(done.applied_at, Some(1003));
+}
+

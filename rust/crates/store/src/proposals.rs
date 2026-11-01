@@ -293,6 +293,22 @@ impl SqliteStore {
                         "receipt belongs to another proposal".into(),
                     ));
                 }
+                // The receipt is the committed outcome and stays byte-identical
+                // ("first committed outcome wins"). But a receipt can exist
+                // while the stamp has not landed — the port's apply records the
+                // outcome BEFORE requesting the terminal transition — so an
+                // Applying proposal is still finalized here, idempotently,
+                // from the RECEIPT's outcome (never the replayed argument).
+                if proposal.status == ProposalStatus::Applying {
+                    proposal.status = if receipt.outcome.status == "failed" {
+                        ProposalStatus::Failed
+                    } else {
+                        ProposalStatus::Applied
+                    };
+                    proposal.applied_at = Some(now);
+                    save(&transaction, &proposal)?;
+                }
+                transaction.commit()?;
                 return Ok(receipt);
             }
             if proposal.status != ProposalStatus::Applying {
