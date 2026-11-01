@@ -82,6 +82,10 @@ same code the binding's store mapping already used; the non-contract
 instructions (ADR 0017 part 1) are ported: `FileProjectInstructions`
 reads `AGENTS.md`/`CLAUDE.md` with the TS security model (canonicalized
 root, `O_NOFOLLOW`+`O_NONBLOCK` with dev/ino identity, FIFO refusal,
+Windows: reparse-point refusal plus the opened handle's
+volume-serial/file-index identity — the `dev`/`ino` equivalent, since
+`O_NOFOLLOW` does not exist there; other non-POSIX targets hard-refuse,
+never an unchecked read,
 65 536-byte cap, digest titles, trailing-U+FFFD strip matching lossy
 UTF-8), `ChatExecutor` appends the block to the resolved system prompt
 per pass and emits one durable `run.warning
@@ -191,7 +195,7 @@ standalone tool-dispatch entry point — evidence in the module header);
 OAuth, elicitation, config persistence and the secret resolver remain
 open (deny-all: `secretRefs` fails connect).
 
-Engine fixes on the consumer path (2026-11-01), both found while running
+Engine fixes on the consumer path (2026-11-01), found while running
 real compositions against the binding, not while reading code:
 
 - `complete_proposal` finalized nothing behind a pre-existing receipt.
@@ -213,6 +217,18 @@ real compositions against the binding, not while reading code:
   session with no execution state; malformed state on a real session
   stays a hard error (`crates/host/tests/execution_authority.rs`,
   `packages/native/tests/authority.test.ts`).
+- Host cancellation never reached JS callbacks. The bridge's
+  `request()` cancellation branch removed the pending entry before the
+  drop-guard ran, so the `{"kind":"cancel","callId"}` notification — the
+  only event the router aborts on — was sent on close/drop but never on
+  `service.cancel`: the durable turn terminalized while user callbacks
+  ran on, oblivious, and a spawned coding process survived its run. The
+  branch now sends the notification itself; `session.cancel` also rouses
+  the active attempt (`wake_active`) instead of waiting a heartbeat
+  tick, and the router registers the per-call `AbortController` before
+  entering user code (`packages/native/tests/cancellation.test.ts`,
+  measured 4 ms abort latency). The provider-abort e2e that had been
+  passing before did so via socket-close coincidence, not the contract.
 
 Backend surface ledger after the consumer migration (2026-11-01). What
 each TypeScript backend package is NOW:
