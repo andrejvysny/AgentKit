@@ -18,6 +18,7 @@ mod authority_tests;
 mod errors;
 mod jsbridge;
 mod provider;
+mod provider_connection;
 mod run;
 mod run_budget;
 mod run_hooks;

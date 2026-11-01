@@ -71,9 +71,10 @@ generator's `ToTs`/TS codegen is deliberately NOT used for wire types):
   `detach()` releases the event-loop reference so a live handle cannot
   keep the process alive. Closing releases the store clone, then
   `store.close()` releases the file lock.
-- Provider functions deliver the final chat result as one chunk —
-  provider streaming deltas stay backlog item 1, and this boundary is
-  labeled, not hidden.
+- Provider functions (the JS `setProvider` callback lane) deliver the final
+  chat result as one chunk — labeled, not hidden. The Rust-native provider
+  lane (added 2026-11-01, see "Rust-native provider lane") streams every
+  provider delta verbatim instead.
 
 Validation for this slice (x86_64-linux, Bun 1.4.4 and Node v22.20.0):
 the vertical slice (accept → tool → approval park → answer → resume →
@@ -109,7 +110,9 @@ crate — which no longer pulls the Unix-only coding pack at all, since
 the shared authority is portable (`agentkit-core`/`agentkit-host`).
 
 Open gaps versus the design above, all named, none silent: streaming
-deltas and the provider-completion vs durable-settled lane (backlog 1);
+deltas and the provider-completion vs durable-settled lane are CLOSED on
+the Rust provider lane (2026-11-01); the JS callback lane remains
+single-chunk by design;
 `AbortSignal` mapping on promise APIs; Node 20 (CI covers Node 24 on the
 matrix, local gate covers Node 22; 20 is untested); the crash-kill child
 test; conformance harness reuse through the public API; prebuilt
@@ -176,7 +179,9 @@ test-written first, covering:
 3. `subscribe(afterSeq)` async iterator over DURABLE committed events only
    (store events after number — `subscribe_after_number` already exists);
    provider-side streaming deltas are a later addition and must be labeled
-   provider-completion, not durable settlement. The iterator distinguishes
+   provider-completion, not durable settlement (implemented 2026-11-01 on
+   the Rust provider lane, which forwards each provider delta verbatim).
+   The iterator distinguishes
    the two exactly as `RunUpdate` vs. terminal `TaskRecord` do in Rust.
 4. Approval round trip: park (`run.waiting`), `answerHumanRequest`
    single-use semantics (`answer_conflict` on reuse), resume, receipt
@@ -206,7 +211,8 @@ test-written first, covering:
   Overflow NEVER blocks the runtime: the subscription terminates with
   `subscription_overflow` and the client resubscribes with `afterSeq`
   (durable cursor — nothing is lost that a resubscribe cannot recover).
-- The provider-delta path (when added later) gets its own bounded lane and
+- The provider-delta path (shipped 2026-11-01 on the Rust provider lane)
+  gets its own bounded lane and
   the same rule; committed events are re-read from the store, not trusted
   from the lane.
 
@@ -240,6 +246,47 @@ test-written first, covering:
   admission, quarantine, and guard layers wrap contributed callbacks
   exactly as they wrap Rust tools.
 
+## Rust-native provider lane
+
+- When `createService` options carry `providerConfig`
+  (`{protocol: "chat-completions" | "responses", providerId, connectionId,
+  model, temperature?, maxTokens?}`), provider HTTP/SSE executes in Rust
+  via the core `ChatCompletionsProvider`/`ResponsesProvider` presets over a
+  binding-local `TrustedTransport` (`rust/crates/napi/src/provider_connection.rs`);
+  the JS `setProvider` slot serves turns only when no lane is configured.
+  Sessions created through the TS wrapper inherit the lane's
+  `providerId`/`model` so the host's task↔provider binding check admits
+  their turns.
+- Credentials never enter `optionsJson`: keys arrive only through
+  `registerProviderConnection(baseUrl, apiKey)` (a dedicated function
+  argument) and stay inside Rust's connection registry; options carry the
+  returned connection id alone. Revocation takes effect at the next
+  request (`connection_changed`), and the transport's `check_current()`
+  consults the same bridge lifecycle fence that rejects new JS dispatches
+  once `close()` begins. URL joining and header rules mirror the TS
+  reference client (`packages/core/src/providers/openai-compatible.ts`).
+- `providerConfig.temperature`/`maxTokens` are service-level overrides:
+  when present they replace whatever the host put on the request (the host
+  stamps a default 16 384 output budget); when absent the request fields
+  pass through unchanged. Pinned by `ConfiguredProvider` unit tests.
+- Lane verification (x86_64-linux, Bun 1.4.4): `packages/native/tests/
+  provider-lane.test.ts` drives both protocols against a loopback
+  OpenAI-compatible `Bun.serve` mock — per-delta streaming (three deltas
+  on the wire arrive as three `run.message.delta` events, unlike the
+  single synthesized chunk of the JS lane), `run.message.reasoning-delta`,
+  usage details (`cachedPromptTokens`/`reasoningTokens`), wire fidelity
+  (Bearer header, `stream_options.include_usage`, `store:false` +
+  `include:["reasoning.encrypted_content"]`), the durable reasoning
+  continuation (two requests; the encrypted item replayed verbatim), and
+  connection revocation (the next turn fails honestly). Core-side
+  behavior is pinned in `rust/crates/core/tests/providers.rs`
+  (reasoning-delta emission, snapshot `.done` frames add no duplicate
+  suffix, responses usage details).
+- Honest deviation on the Responses lane: non-numeric usage-detail fields
+  are OMITTED, where the TypeScript `tokenCount` guard would fail the
+  request with `malformed_usage`; a malformed *number* (non-integer,
+  negative, above 2^53−1) still fails `malformed_usage` in both.
+
 ## Conformance tests
 
 - A `packages/native/tests/*.test.ts` suite runs the vertical slice plus
@@ -256,8 +303,10 @@ test-written first, covering:
 
 ## Out of scope for the first slice (ordered backlog)
 
-1. Provider streaming deltas through the binding (separate lane +
-   provider-completion vs. durable-settled labeling).
+1. ~~Provider streaming deltas through the binding~~ — DONE 2026-11-01:
+   the Rust provider lane forwards every delta (content, reasoning, usage
+   details) through the subscription pump; the JS callback lane keeps its
+   documented single-chunk provider-completion semantics.
 2. Native context compaction (ADR 0017 part 2 — `compact` stays refused
    until a native turn consumes/clears the marker).
 3. Provider configuration/reasoning/output-reserve parity and selected

@@ -49,6 +49,29 @@ than claiming unseen coverage, and retain observed summarizer usage on failure.
 Earlier summary hashes do not validate against the corrected algorithm. The
 summary prompt revision remains unchanged.
 
+The native binding now carries a Rust-native provider lane (2026-11-01):
+`createService({ providerConfig })` runs provider HTTP/SSE inside Rust over
+the core `ChatCompletionsProvider`/`ResponsesProvider` presets, with API
+keys held only in the Rust connection registry
+(`registerProviderConnection`/`revokeProviderConnection`). The lane streams
+content deltas, reasoning deltas, and usage details (including
+`cachedPromptTokens`/`reasoningTokens`) through the durable subscription
+pump, performs the encrypted-reasoning continuation with verbatim replay of
+the private item, and fails closed on revoked or rotated connections. The
+JS `setProvider` callback lane is unchanged (single synthesized chunk).
+Verification: `packages/native/tests/provider-lane.test.ts` (four suites
+against a loopback `Bun.serve` OpenAI-compatible mock, wire-level request
+capture) plus pinned core contract tests in
+`rust/crates/core/tests/providers.rs` and `ConfiguredProvider` override
+semantics in `rust/crates/napi/src/provider_connection.rs`; three earlier
+preset gaps closed with tests on the way (Responses usage details,
+Responses reasoning-delta emission, chat `network_error`/`empty_body`/
+`service_unavailable` classification with the retryable flag). No live
+provider was contacted; live-provider qualification remains a release gate.
+One documented deviation: the Responses lane omits non-numeric usage
+detail fields where the TypeScript `tokenCount` guard would fail with
+`malformed_usage`.
+
 Working-tree results on macOS arm64 with Bun 1.4.0:
 
 | Suite | Passed | Failed | Skipped | Evidence scope |

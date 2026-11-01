@@ -119,6 +119,23 @@ export interface NativeServiceOptions {
      * `ask`. */
     planGrantMode?: "read_only" | "ask" | "auto_edit" | "full_auto";
   };
+  /** Selects the Rust-native provider lane: provider HTTP/SSE executes in
+   * Rust over the connection registered by `registerProviderConnection`.
+   * The API key is NOT part of this object — only the connection id is, so
+   * the options may be logged or persisted freely. When absent, the JS
+   * `setProvider` callback slot serves turns exactly as before. */
+  providerConfig?: NativeProviderConfig;
+}
+
+/** Construction-time selection of the Rust provider lane (mirrors
+ * `providerConfig` in `rust/crates/napi/src/service.rs`). */
+export interface NativeProviderConfig {
+  protocol: "chat-completions" | "responses";
+  providerId: string;
+  connectionId: string;
+  model: string;
+  temperature?: number;
+  maxTokens?: number;
 }
 
 export class NativeStore {
@@ -192,7 +209,7 @@ export class NativeStore {
         options === undefined ? null : JSON.stringify(options),
       ),
     );
-    return new NativeSessionService(raw, router, this);
+    return new NativeSessionService(raw, router, this, options?.providerConfig);
   }
 
   /** Flush and release file ownership. Idempotent. */
@@ -285,16 +302,69 @@ export class NativeSessionService extends NativeSessionManagement {
   /** Kept alive while the service exists: the store clone the worker and
    * session service run on must not be collected under the service. */
   readonly store: NativeStore;
+  /** The Rust provider lane this service was built with, if any. Kept only
+   * so `createSession` can stamp the lane's providerId/model — the Rust
+   * executor enforces task↔provider binding, so a session on the Rust lane
+   * must carry the configured provider id. */
+  private readonly providerConfig?: NativeProviderConfig;
   private closing: Promise<void> | null = null;
 
   constructor(
     raw: RawSessionService,
     router: CallbackRouter,
     store: NativeStore,
+    providerConfig?: NativeProviderConfig,
   ) {
     super(raw, lift);
     this.router = router;
     this.store = store;
+    this.providerConfig = providerConfig;
+  }
+
+  /** Register a provider connection for the Rust provider lane: the base
+   * URL of an OpenAI-compatible server plus its API key (presented as
+   * `Authorization: Bearer`). The key crosses into Rust here and never
+   * again — `createService` receives only the returned connection id. */
+  static async registerProviderConnection(
+    baseUrl: string,
+    apiKey?: string | null,
+  ): Promise<string> {
+    return lift(async () =>
+      (await loadBinding()).registerProviderConnection(baseUrl, apiKey ?? null),
+    );
+  }
+
+  /** Revoke a registered connection. Returns false for an unknown or
+   * already-revoked id; in-flight runs on that lane fail their next
+   * provider request instead of firing with a retired key. */
+  static async revokeProviderConnection(
+    connectionId: string,
+  ): Promise<boolean> {
+    return lift(async () =>
+      (await loadBinding()).revokeProviderConnection(connectionId),
+    );
+  }
+
+  async createSession(
+    input: CreateSessionInputJson,
+    options?: NativeCallOptions,
+  ): Promise<Record<string, unknown>> {
+    // Marshaling only: on the Rust provider lane the executor refuses tasks
+    // whose providerId differs from the installed provider, so a session
+    // created without one inherits the lane's provider and model. An
+    // explicit caller value is never overridden.
+    const marshaled = this.providerConfig
+      ? {
+          ...input,
+          providerId: input.providerId ?? this.providerConfig.providerId,
+          model: input.model ?? this.providerConfig.model,
+        }
+      : input;
+    const text = await waitFor(
+      () => lift(() => this.raw.createSession(JSON.stringify(marshaled))),
+      options,
+    );
+    return JSON.parse(text) as Record<string, unknown>;
   }
 
   setProvider(provider: ProviderFunction | null): void {
@@ -309,17 +379,6 @@ export class NativeSessionService extends NativeSessionManagement {
   ): Promise<void> {
     await lift(() => this.raw.registerTool(JSON.stringify(definition)));
     this.router.registerTool(definition, run);
-  }
-
-  async createSession(
-    input: CreateSessionInputJson,
-    options?: NativeCallOptions,
-  ): Promise<Record<string, unknown>> {
-    const text = await waitFor(
-      () => lift(() => this.raw.createSession(JSON.stringify(input))),
-      options,
-    );
-    return JSON.parse(text) as Record<string, unknown>;
   }
 
   async send(

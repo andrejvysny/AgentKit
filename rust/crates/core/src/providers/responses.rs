@@ -55,7 +55,8 @@ impl ResponsesProvider {
                         if frame.done {continue;}
                         let value=agentkit_contracts::parse_javascript_json(&frame.data).map_err(|_|CoreError::responses("malformed_response"));
                         match value.and_then(|value|state.accept(value)) {
-                            Ok(delta)=>{yield ProviderEvent::Activity;if let Some(delta)=delta {emitted.push_str(&delta);yield ProviderEvent::Delta(delta);}}
+                            Ok(delta)=>{yield ProviderEvent::Activity;if let Some(delta)=delta {emitted.push_str(&delta);yield ProviderEvent::Delta(delta);}
+                                if let Some(reasoning)=state.take_reasoning_delta() {yield ProviderEvent::Event{kind:"run.message.reasoning-delta".into(),data:json!({"delta":reasoning})};}}
                             Err(error)=>{failure=Some(error);break;}
                         }
                     },
@@ -68,7 +69,8 @@ impl ResponsesProvider {
                     if let Err(error)=provider.transport.check_current() {failure=Some(error);break;}
                     let value=agentkit_contracts::parse_javascript_json(&frame.data).map_err(|_|CoreError::responses("malformed_response"));
                     match value.and_then(|value|state.accept(value)) {
-                        Ok(delta)=>{yield ProviderEvent::Activity;if let Some(delta)=delta {emitted.push_str(&delta);yield ProviderEvent::Delta(delta);}}
+                        Ok(delta)=>{yield ProviderEvent::Activity;if let Some(delta)=delta {emitted.push_str(&delta);yield ProviderEvent::Delta(delta);}
+                            if let Some(reasoning)=state.take_reasoning_delta() {yield ProviderEvent::Event{kind:"run.message.reasoning-delta".into(),data:json!({"delta":reasoning})};}}
                         Err(error)=>{failure=Some(error);break;}
                     }
                 }},Err(error)=>failure=Some(error),
@@ -195,6 +197,8 @@ fn response_usage(
         ("input_tokens", "prompt_tokens"),
         ("output_tokens", "completion_tokens"),
         ("total_tokens", "total_tokens"),
+        ("input_tokens_details", "prompt_tokens_details"),
+        ("output_tokens_details", "completion_tokens_details"),
     ] {
         if let Some(value) = usage.get(source) {
             mapped[target] = value.clone();

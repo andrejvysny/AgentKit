@@ -96,6 +96,20 @@ pub fn invalid(message: impl Into<String>) -> Error {
     stable("invalid_input", message, None)
 }
 
+/// A provider-configuration refusal: the connection a service was told to
+/// use does not exist or is unusable. Construction fails with this code,
+/// never a silently degraded JS-lane fallback.
+pub fn connection(message: impl Into<String>) -> Error {
+    stable("invalid_connection", message, None)
+}
+
+/// Map a core provider error: codes inside the contract cross verbatim
+/// (e.g. `invalid_connection` from a preset constructor); everything else
+/// is redacted to `internal_error` with the origin preserved in details.
+pub fn core(error: agentkit_core::CoreError) -> Error {
+    stable(&error.code, error.message, None)
+}
+
 pub fn closed(context: &str) -> Error {
     stable("closed", context, None)
 }

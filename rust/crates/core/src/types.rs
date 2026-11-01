@@ -199,7 +199,12 @@ impl CoreError {
         }
     }
     pub fn responses(code: &str) -> Self {
-        Self::new(code, &format!("Responses provider failed: {code}"))
+        // Mirrors the TypeScript diagnostic contract
+        // (responses-errors.ts): `service_unavailable` is the only error
+        // carrying `retryable: true`.
+        let mut error = Self::new(code, &format!("Responses provider failed: {code}"));
+        error.retryable = code == "service_unavailable";
+        error
     }
 }
 

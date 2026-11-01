@@ -37,8 +37,11 @@ export declare class NativeStore {
    * durable session service + background worker, with crash recovery run
    * before the worker claims any work. `onEvent` receives every
    * provider/tool callback as a JSON envelope. `optionsJson` configures
-   * the shutdown deadline and the JS-tool Rust authority (see
-   * `SessionService::build`); an unsupported value fails the call.
+   * the shutdown deadline, the JS-tool Rust authority, and optionally
+   * the Rust-native provider lane (`providerConfig`, whose connection
+   * must already be registered via `registerProviderConnection` — API
+   * keys never travel in `optionsJson`); an unsupported value fails the
+   * call. See `SessionService::build`.
    */
   createService(onEvent: ((err: Error | null, arg: string) => any), optionsJson?: string | undefined | null): Promise<SessionService>
 }
@@ -173,6 +176,15 @@ export declare function isRunCallbackActive(callId: string): boolean
 
 export declare function pushRunProviderEvent(callId: string, eventJson: string): Promise<boolean>
 
+/**
+ * Register a provider connection: `baseUrl` addresses the OpenAI-compatible
+ * server (the transport appends `/chat/completions`, `/responses`, or
+ * `/models`), and `apiKey` — when present — is presented as
+ * `Authorization: Bearer`. The key crosses the boundary exactly here and
+ * never again: only the returned connection id may appear in options JSON.
+ */
+export declare function registerProviderConnection(baseUrl: string, apiKey?: string | undefined | null): Promise<string>
+
 export declare function reserveRunProviderRequest(callId: string): Promise<void>
 
 /**
@@ -182,3 +194,10 @@ export declare function reserveRunProviderRequest(callId: string): Promise<void>
  * resolve is ignored, never an exception, and never a double-settle.
  */
 export declare function resolveCall(callId: string, payload?: string | undefined | null, error?: string | undefined | null): boolean
+
+/**
+ * Revoke a connection. Returns false for an unknown or already-revoked id.
+ * A run in flight observes the revocation as `connection_changed` at its
+ * next request; no further HTTP leaves for that connection afterwards.
+ */
+export declare function revokeProviderConnection(connectionId: string): Promise<boolean>

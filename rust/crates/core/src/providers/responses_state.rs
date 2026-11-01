@@ -17,6 +17,10 @@ pub(crate) struct ResponsesState {
     emitted: String,
     bytes: usize,
     pub usage: Option<Value>,
+    /// Per-part reasoning text keyed `item_id:summary|content:index`
+    /// (mirrors `ResponsesReasoning` in the TypeScript reference client).
+    reasoning_parts: BTreeMap<String, String>,
+    reasoning_pending: String,
 }
 pub(crate) struct ResponsesResult {
     pub output: Vec<Value>,
@@ -201,24 +205,60 @@ impl ResponsesState {
         if item.item["type"] != "reasoning" || item.done {
             return err("output_item_mismatch");
         }
-        index(if kind.contains("summary") {
+        let part_index = index(if kind.contains("summary") {
             &event["summary_index"]
         } else {
             &event["content_index"]
         })?;
+        let key = format!(
+            "{}:{}:{}",
+            string(&event["item_id"])?,
+            if kind.contains("summary") {
+                "summary"
+            } else {
+                "content"
+            },
+            part_index
+        );
         if kind.contains("_part.") {
             if event["part"]["type"] != "summary_text" {
                 return err("malformed_response");
             }
-            string(&event["part"]["text"])?;
+            let text = string(&event["part"]["text"])?;
+            self.commit_reasoning(key, text.to_owned())?;
+        } else if kind.ends_with(".delta") {
+            let delta = string(&event["delta"])?;
+            let entry = self.reasoning_parts.entry(key).or_default();
+            entry.push_str(delta);
+            self.reasoning_pending.push_str(delta);
         } else {
-            string(if kind.ends_with(".delta") {
-                &event["delta"]
-            } else {
-                &event["text"]
-            })?;
+            let text = string(&event["text"])?;
+            self.commit_reasoning(key, text.to_owned())?;
         }
         Ok(())
+    }
+    fn commit_reasoning(&mut self, key: String, text: String) -> Result<(), CoreError> {
+        let before = self
+            .reasoning_parts
+            .get(&key)
+            .map(String::as_str)
+            .unwrap_or("");
+        if !text.starts_with(before) {
+            return err("stream_output_mismatch");
+        }
+        self.reasoning_pending.push_str(&text[before.len()..]);
+        self.reasoning_parts.insert(key, text);
+        Ok(())
+    }
+    /// Drains reasoning text accumulated since the last take; the stream
+    /// layer emits it as one `run.message.reasoning-delta` per SSE frame,
+    /// matching the TypeScript reference client.
+    pub fn take_reasoning_delta(&mut self) -> Option<String> {
+        if self.reasoning_pending.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.reasoning_pending))
+        }
     }
     pub fn finish(self, tools: &[ToolDefinition]) -> Result<ResponsesResult, CoreError> {
         let terminal = self

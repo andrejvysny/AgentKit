@@ -77,7 +77,12 @@ impl SessionService {
     /// modifying work. Exposed on the JS side as `NativeStore.createService`.
     ///
     /// `optionsJson` (optional): `{closeTimeoutMs?, jsToolAuthority?:
-    /// {configuredMode?, planToolNames?, planGrantMode?}}`. JS write tools
+    /// {configuredMode?, planToolNames?, planGrantMode?}, providerConfig?:
+    /// {protocol, providerId, connectionId, model, temperature?,
+    /// maxTokens?}}`. With `providerConfig`, provider HTTP/SSE executes in
+    /// Rust over a connection registered via `registerProviderConnection`
+    /// (keys never appear in `optionsJson`); without it, the JS callback
+    /// provider slot serves turns as before. JS write tools
     /// are governed by the Rust coding-pack authority (plan mode blocks
     /// them; ask mode asks per call; only plan-tool approval escalates,
     /// durably) — an unsupported configuration is refused at construction,
@@ -97,16 +102,54 @@ impl SessionService {
             options.configured_mode,
             options.plan.clone(),
         );
+        let provider: Arc<dyn agentkit_core::ChatProvider> = match &options.provider {
+            None => Arc::new(JsProvider::new(Arc::clone(&bridge))),
+            Some(lane) => {
+                // The same fence the callback bridge enforces: once `close()`
+                // has begun, no new provider request may leave the process.
+                let fence_bridge = Arc::clone(&bridge);
+                let fence: crate::provider_connection::Fence = Arc::new(move || {
+                    if fence_bridge.is_open() {
+                        Ok(())
+                    } else {
+                        Err(agentkit_core::CoreError::new(
+                            "cancelled",
+                            "the binding is closing",
+                        ))
+                    }
+                });
+                let transport = crate::provider_connection::BindingTransport::connect(
+                    &lane.provider_id,
+                    lane.protocol.as_str(),
+                    &lane.connection_id,
+                    fence,
+                )
+                .await?;
+                let preset: Arc<dyn agentkit_core::ChatProvider> = match lane.protocol {
+                    ProviderProtocol::ChatCompletions => Arc::new(
+                        agentkit_core::providers::ChatCompletionsProvider::new(transport)
+                            .map_err(errors::core)?,
+                    ),
+                    ProviderProtocol::Responses => Arc::new(
+                        agentkit_core::providers::ResponsesProvider::new(transport)
+                            .map_err(errors::core)?,
+                    ),
+                };
+                Arc::new(crate::provider_connection::ConfiguredProvider::new(
+                    preset,
+                    lane.temperature,
+                    lane.max_tokens,
+                ))
+            }
+        };
         let executor: Arc<dyn TaskExecutor> = Arc::new(
-            ChatExecutor::new(
-                Arc::new(JsProvider::new(Arc::clone(&bridge))),
-                Arc::new(ToolRegistry::new()),
-            )
-            .with_options(ChatExecutorOptions {
-                tool_contributors: vec![Arc::clone(&contributor) as Arc<dyn ToolContributor>],
-                tool_guards: vec![Arc::new(guard) as Arc<dyn ToolGuard>],
-                ..Default::default()
-            }),
+            ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
+                ChatExecutorOptions {
+                    tool_contributors: vec![Arc::clone(&contributor) as Arc<dyn ToolContributor>],
+                    tool_guards: vec![Arc::new(guard) as Arc<dyn ToolGuard>],
+                    ..Default::default()
+                },
+            ),
         );
         let host = AgentHost::new(
             store_handle.clone(),
@@ -733,6 +776,39 @@ struct ServiceOptions {
     close_timeout: Duration,
     configured_mode: CodingMode,
     plan: PlanConfiguration,
+    provider: Option<ProviderLane>,
+}
+
+/// The Rust-native provider lane selected by `providerConfig`. A
+/// construction-time-only value: when present, the binding installs the core
+/// preset (`chat-completions` or `responses`) over a registered connection
+/// instead of the JS callback provider. Credentials are NOT part of this —
+/// they live only in the connection registry, keyed by `connection_id`.
+struct ProviderLane {
+    protocol: ProviderProtocol,
+    provider_id: String,
+    connection_id: String,
+    /// Validated here; consumed by the TS wrapper as the session's default
+    /// model (tasks carry the session's durable model from there).
+    #[allow(dead_code)]
+    model: String,
+    temperature: Option<f64>,
+    max_tokens: Option<u64>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProviderProtocol {
+    ChatCompletions,
+    Responses,
+}
+
+impl ProviderProtocol {
+    fn as_str(self) -> &'static str {
+        match self {
+            ProviderProtocol::ChatCompletions => "chat-completions",
+            ProviderProtocol::Responses => "responses",
+        }
+    }
 }
 
 impl Default for ServiceOptions {
@@ -744,6 +820,7 @@ impl Default for ServiceOptions {
                 tool_names: vec!["submit_plan".to_owned()],
                 granted_mode: CodingMode::Ask,
             },
+            provider: None,
         }
     }
 }
@@ -803,7 +880,87 @@ fn parse_service_options(text: Option<&str>) -> Result<ServiceOptions> {
             options.plan.tool_names = parsed;
         }
     }
+    if let Some(value) = object.get("providerConfig") {
+        options.provider = Some(parse_provider_config(value)?);
+    }
     Ok(options)
+}
+
+/// Parse `providerConfig`: `{protocol, providerId, connectionId, model,
+/// temperature?, maxTokens?}`. Every field must be well-formed — a
+/// half-configured Rust lane fails construction (`invalid_input`, or
+/// `invalid_connection` for empty ids), never silently falling back to the
+/// JS provider as if the configuration had been accepted.
+fn parse_provider_config(value: &Value) -> Result<ProviderLane> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| errors::invalid("providerConfig must be an object when present"))?;
+    let protocol = match object.get("protocol") {
+        Some(Value::String(text)) if text == "chat-completions" => {
+            ProviderProtocol::ChatCompletions
+        }
+        Some(Value::String(text)) if text == "responses" => ProviderProtocol::Responses,
+        Some(Value::String(text)) => {
+            return Err(errors::invalid(format!(
+                "unknown providerConfig.protocol \"{text}\" (expected \"chat-completions\" or \"responses\")"
+            )));
+        }
+        _ => {
+            return Err(errors::invalid(
+                "providerConfig.protocol must be \"chat-completions\" or \"responses\"",
+            ));
+        }
+    };
+    let required = |key: &str| -> Result<String> {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| errors::invalid(format!("providerConfig.{key} must be a string")))
+    };
+    let provider_id = required("providerId")?;
+    if provider_id.is_empty() {
+        return Err(errors::connection(
+            "providerConfig.providerId must be non-empty",
+        ));
+    }
+    let connection_id = required("connectionId")?;
+    if connection_id.is_empty() {
+        return Err(errors::connection(
+            "providerConfig.connectionId must be non-empty",
+        ));
+    }
+    // The lane's model is the default the TS wrapper stamps onto sessions on
+    // this lane; the request itself carries the session's durable model.
+    let model = required("model")?;
+    if model.is_empty() {
+        return Err(errors::invalid("providerConfig.model must be non-empty"));
+    }
+    let temperature = match object.get("temperature") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| {
+                    errors::invalid("providerConfig.temperature must be a finite number")
+                })?,
+        ),
+    };
+    let max_tokens = match object.get("maxTokens") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_u64().filter(|value| *value > 0).ok_or_else(|| {
+            errors::invalid("providerConfig.maxTokens must be a positive integer")
+        })?),
+    };
+    Ok(ProviderLane {
+        protocol,
+        provider_id,
+        connection_id,
+        model,
+        temperature,
+        max_tokens,
+    })
 }
 
 fn parse_mode(value: &Value, key: &str) -> Result<CodingMode> {
