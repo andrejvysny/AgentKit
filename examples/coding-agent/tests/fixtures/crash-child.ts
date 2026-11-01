@@ -4,18 +4,17 @@
  * flight, so the mutating call is genuinely unsettled: the side effect happened,
  * the result never got recorded, and no in-process cleanup runs.
  *
- * argv: <repo> <dbPath> <leaseTtlMs>
+ * argv: <repo> <dbPath>
  */
 import { MockProviderClient } from "@agentkit/testing";
 import { CodingAgentApp } from "../../src/app.js";
 import { CRASH_COMMAND } from "./crash-command.js";
 
-const [repo = "", dbPath = "", leaseTtl = "1500"] = process.argv.slice(2);
+const [repo = "", dbPath = ""] = process.argv.slice(2);
 console.error(
-  `[child] repo=${repo} db=${dbPath} leaseTtl=${leaseTtl} argv=${JSON.stringify(process.argv)}`,
+  `[child] repo=${repo} db=${dbPath} argv=${JSON.stringify(process.argv)}`,
 );
-if (!repo || !dbPath)
-  throw new Error("usage: crash-child <repo> <db> [leaseTtl]");
+if (!repo || !dbPath) throw new Error("usage: crash-child <repo> <db>");
 
 const mock = new MockProviderClient();
 mock.setScript([
@@ -40,12 +39,10 @@ const app = await CodingAgentApp.open({
   sessionId: "crash",
   profileId: "coding",
   model: "mock-model",
-  baseUrl: "http://127.0.0.1:1",
   mode: "full_auto",
   // Deliberate: this fixture must really execute its command so the host can
   // die mid-mutation; sandbox isolation is not what the crash test qualifies.
   sandbox: "off",
-  leaseTtlMs: Number(leaseTtl ?? 1_500),
   providerFactory: () => mock as never,
 });
 await app.ensureSession();

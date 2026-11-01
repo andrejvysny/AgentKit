@@ -73,7 +73,7 @@ function usage(message?: string): never {
       "  --repo <path>        repository to work in (required, absolute)",
       "  --task <text>        one instruction; otherwise an interactive session",
       "  --profile <id>       agent profile (default: coding)",
-      "  --mode <mode>        " + MODES.join(" | "),
+      `  --mode <mode>        ${MODES.join(" | ")}`,
       "  --model <id>         model id at --base-url",
       "  --base-url <url>     OpenAI-compatible endpoint (default: http://127.0.0.1:8000/v1)",
       "  --api-key-env <VAR>  environment variable holding the API key",
@@ -345,7 +345,7 @@ async function main(): Promise<void> {
     // Crashed leases become `interrupted` first; a clean quit already left it so.
     await app.recover();
     const active = (await app.state()).activeTurn;
-    if (active === undefined) return;
+    if (active === null) return;
     if (active.status === "running") {
       console.log(
         `turn ${active.turnId} still holds a live lease (another process, or one that has not expired yet); retry shortly`,
