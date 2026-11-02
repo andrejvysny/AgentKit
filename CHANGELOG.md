@@ -2,6 +2,24 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**Native apply settles are submission-ordered.** `NativeAssistantStore`'s
+apply-path terminal `transition` (`settleApply`) reads the proposal and its
+receipt before the engine's receipt-bound finalize; two competing terminal
+requests on the same proposal could interleave their reads, after which the
+winner was whichever `finalize` reached the store actor's mailbox first —
+under load, napi completion scheduling beat call order and the
+"first-submitted terminal wins, rival refused with
+`invalid_proposal_transition`" conformance case flipped. The reference
+adapters cannot exhibit this (their single write gate makes submission
+order equal execution order). The binding now chains same-proposal settles
+through a self-clearing per-proposal queue, restoring the gate semantics:
+the second request observes the first's committed status and is refused
+deterministically. Surfaced by the full-suite run under
+`AGENTKIT_REQUIRE_NATIVE=1`; pinned by the shared conformance case, 10/10
+repeat runs clean.
+
+**The native npm stack is publishable; the registry lane is built, gated, and awaiting first approval.** The Rust backend's TypeScript surface — the `@agentkit/native` wrapper and the platform addon packages — leaves `private`/`0.1.0-dev` behind as a publication story: all six packages carry publish-ready manifests (`publishConfig.access: public`), the platform matrix is completed to the five triples the binding declares (`native-linux-x64-gnu`, `native-linux-arm64-gnu`, `native-darwin-arm64`, `native-darwin-x64`, `native-win32-x64-msvc`), and the whole stack releases at ONE lockstep version. `rust/scripts/native-platform-targets.mjs` is the single source of truth for triple → package → loader-key; `packages/native/tests/distribution.test.ts` pins every manifest, pin, os/cpu/libc gate, and the committed loader's embedded version against it (a triple without its package now fails the binding suite instead of shipping a consumer-facing "native binding failed to load"). `scripts/release/native-lockstep.mjs` (invoked by `snapshot-release.mjs`) bumps wrapper, platforms, every pin — wrapper→platforms, umbrella→platforms, `@agentkit/core`→wrapper — the loader's version strings, and the `bun.lock` entries atomically, failing closed on any partial bump. `rust/scripts/build-native-release-artifact.mjs` builds one triple's addon with cargo (never relabelling a host build), verifies the compiled container against the triple (ELF/Mach-O/PE machine identity), stages it into its platform package, and packs wrapper + platform tarballs with a sha256 manifest; `rust/scripts/check-native-artifact.mjs` installs them offline in an isolated consumer and drives the full acceptance lifecycle under bun and node when the runner can execute the triple — structural-only and explicitly labelled when it cannot (M2.1 A4). `.github/workflows/native-release.yml` runs that chain per triple from one digest-frozen snapshot of a default-branch commit, and its gated `publish` job (environment with required reviewers, `dry_run` default `true`, npm provenance, verified digests only, never a rebuild) publishes platforms → wrapper → umbrella through `scripts/release/native-publish.mjs`, skipping already-published exact versions so a retry completes a partial run without replacing registry content. Workflow structure is pinned by `scripts/tests/native-release-workflow.test.ts` (matrix mirrors the table; no input interpolation in `run:` scripts; token only on the execute step), the verifier by `scripts/tests/native-publish.test.ts` (eight failure modes), and the snapshot lockstep by the projection test. `agentkit`'s subpath table and the root README now document `agentkit/native`; the npm scope-ownership decision and the first approved dispatch remain maintainer actions (`DEVELOPING.md` "Publishing the npm native stack").
+
 **Task admission refuses kinds with no executor.** `AgentHost::submit` and
 every session admission that creates a turn (submit, queue-or-stage, flush
 promotion, and the settle-time promotion batch) now refuse a task kind with

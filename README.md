@@ -10,27 +10,36 @@ breakdown and an ASCII diagram.
 
 **Status:** pre-release, 0.x. APIs may change without notice.
 
-> **Not published to npm.** The `@agentkit` npm scope is not yet
-> verified/owned — do not publish any package under this scope until scope
-> ownership is confirmed. Every package's `package.json` has a
-> `publishConfig` ready for that day; none of them are on the registry
-> today.
+> **Not published to npm (yet).** The `@agentkit` npm scope is not yet
+> verified/owned — nothing under this scope may be published until scope
+> ownership is confirmed by the project owner. The publish mechanism is
+> complete and CI-gated: `.github/workflows/native-release.yml` +
+> `scripts/release/native-publish.mjs` build, verify, and — only under an
+> approved `agentkit-native-publication` environment dispatch — publish
+> `agentkit`, `@agentkit/native`, and the five prebuilt platform packages as
+> one lockstep version. See
+> [`DEVELOPING.md`](DEVELOPING.md)'s "Publishing the npm native stack".
 
 ## Installing
 
-Consumers install AgentKit as **one package**, `agentkit`, via a GitHub tag
-— no npm registry publish required:
+Consumers install AgentKit as **one package**, `agentkit`, with subpath
+imports. Today that means an exact qualified release tarball (produced and
+verified per [`DEVELOPING.md`](DEVELOPING.md)); the registry lane becomes
+the default channel the moment the gated npm publish runs for the first
+time:
 
-```jsonc
-"dependencies": {
-  // Tag cut per DEVELOPING.md's release ritual.
-  "agentkit": "github:andrejvysny/AgentKit#v0.5.0"
-}
+```sh
+npm install /absolute/path/agentkit-VERSION.tgz   # qualified artifact (current)
+# npm install agentkit                            # once the approved npm lane has published
 ```
 
 `npm install` / `bun install` then works with subpath imports
-(`agentkit/core`, `agentkit/host`, `agentkit/adapters-sqlite`, …) backed by
-a committed `dist/` — no build step for the consumer. See
+(`agentkit/core`, `agentkit/host`, `agentkit/adapters-sqlite`, `agentkit/native`, …) backed by
+a committed `dist/` — no build step for the consumer. `agentkit/native` runs
+the whole backend on the Rust runtime through the Node-API binding and pulls
+the prebuilt addon for your platform (`linux-x64-gnu`, `linux-arm64-gnu`,
+`darwin-arm64`, `darwin-x64`, `win32-x64-msvc`) via os/cpu/libc-gated
+optional dependencies — installation never builds Rust code. See
 [`packages/agentkit/README.md`](packages/agentkit/README.md) for the full
 subpath table and [`DEVELOPING.md`](DEVELOPING.md) for local-iteration
 workflows and the release ritual.
@@ -51,6 +60,8 @@ workflows and the release ritual.
 | [`packages/mcp-client`](packages/mcp-client) — `@agentkit/mcp-client` | Optional adapter: bridges MCP servers' tools into a run as a `ToolSetContributor`, on the official `@modelcontextprotocol/sdk`. | 0.1.0-dev |
 | [`packages/transport-http`](packages/transport-http) — `@agentkit/transport-http` | Optional adapter: fetch-standard REST v1 + SSE handler serving `packages/contracts/src/rest.ts`, zero framework dependencies. | 0.1.0-dev |
 | [`packages/mcp-server`](packages/mcp-server) — `@agentkit/mcp-server` | Optional adapter: exposes the host's `ToolCatalog` **as** an MCP server over streamable HTTP — constant-time bearer auth, DNS-rebinding guard, per-session scope, write-tool filtering. | 0.1.0-dev |
+| [`packages/native`](packages/native) — `@agentkit/native` | Thin Node-API binding over the Rust backend (`rust/crates/*`): durable store, sessions, governance, providers, MCP, HTTP — all in Rust, no logic mirrored in TypeScript. | publishable; npm lane gated |
+| [`packages/native-*`](packages/native-linux-x64-gnu) — `@agentkit/native-<platform>` | Prebuilt per-platform addons (`linux-x64-gnu`, `linux-arm64-gnu`, `darwin-arm64`, `darwin-x64`, `win32-x64-msvc`), pulled in automatically as optional dependencies; installation never builds Rust. | publishable; npm lane gated |
 
 ## Layers
 
@@ -84,7 +95,12 @@ Every package is **ESM-only** (`"type": "module"`, no CJS build) and requires
 **Node ≥20 or Bun ≥1.3** — declared as `engines` in each `package.json`. Bun
 is the primary runtime; `@agentkit/contracts` and `@agentkit/core` are also
 tested under plain Node (see `node-smoke` below), but the rest of the
-toolchain (tests, `bun run ci`) is Bun-only.
+toolchain (tests, `bun run ci`) is Bun-only. The backend itself — chat loop,
+durable store, host orchestration, providers, MCP, coding toolpack — runs on
+**Rust** through `@agentkit/native` (Node-API 9; Node ≥22, Bun ≥1.4; see
+[`docs/rust/parity.md`](docs/rust/parity.md) for the per-slice status and
+[`docs/rust/acceptance.md`](docs/rust/acceptance.md) for the verification
+ledger); there is no TypeScript backend fallback.
 
 ## Documentation
 
