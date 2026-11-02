@@ -3,7 +3,6 @@
   "version": "0.1.0-dev",
   "description": "AgentKit native runtime for Linux x64 glibc",
   "license": "MIT",
-  "private": true,
   "os": [
     "linux"
   ],
@@ -24,5 +23,13 @@
   ],
   "scripts": {
     "prepack": "node -e \"require('node:fs').accessSync(require('./package.json').main)\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andrejvysny/AgentKit.git",
+    "directory": "packages/native-linux-x64-gnu"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -91,6 +91,8 @@
       },
       "optionalDependencies": {
         "@agentkit/native-darwin-arm64": "0.1.0-dev",
+        "@agentkit/native-darwin-x64": "0.1.0-dev",
+        "@agentkit/native-linux-arm64-gnu": "0.1.0-dev",
         "@agentkit/native-linux-x64-gnu": "0.1.0-dev",
         "@agentkit/native-win32-x64-msvc": "0.1.0-dev",
       },
@@ -210,12 +212,22 @@
       },
       "optionalDependencies": {
         "@agentkit/native-darwin-arm64": "0.1.0-dev",
+        "@agentkit/native-darwin-x64": "0.1.0-dev",
+        "@agentkit/native-linux-arm64-gnu": "0.1.0-dev",
         "@agentkit/native-linux-x64-gnu": "0.1.0-dev",
         "@agentkit/native-win32-x64-msvc": "0.1.0-dev",
       },
     },
     "packages/native-darwin-arm64": {
       "name": "@agentkit/native-darwin-arm64",
+      "version": "0.1.0-dev",
+    },
+    "packages/native-darwin-x64": {
+      "name": "@agentkit/native-darwin-x64",
+      "version": "0.1.0-dev",
+    },
+    "packages/native-linux-arm64-gnu": {
+      "name": "@agentkit/native-linux-arm64-gnu",
       "version": "0.1.0-dev",
     },
     "packages/native-linux-x64-gnu": {
@@ -342,6 +354,10 @@
     "@agentkit/native": ["@agentkit/native@workspace:packages/native"],
 
     "@agentkit/native-darwin-arm64": ["@agentkit/native-darwin-arm64@workspace:packages/native-darwin-arm64"],
+
+    "@agentkit/native-darwin-x64": ["@agentkit/native-darwin-x64@workspace:packages/native-darwin-x64"],
+
+    "@agentkit/native-linux-arm64-gnu": ["@agentkit/native-linux-arm64-gnu@workspace:packages/native-linux-arm64-gnu"],
 
     "@agentkit/native-linux-x64-gnu": ["@agentkit/native-linux-x64-gnu@workspace:packages/native-linux-x64-gnu"],
 
