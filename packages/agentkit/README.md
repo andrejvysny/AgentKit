@@ -2,7 +2,7 @@
 
 The single installable package for AgentKit: every `@agentkit/*` package
 (`contracts`, `client`, `react`, `core`, `host`, `testing`, `mcp-client`,
-`transport-http`, `mcp-server`, `adapters-memory`, `adapters-sqlite`,
+`transport-http`, `adapters-memory`, `adapters-sqlite`,
 `runner-local`), built and exposed as subpath imports of one `agentkit` package.
 No `@agentkit/*` scope, no internal dependency wiring for a consumer to get
 right — one install, one version, explicit runtime entry points.
@@ -56,14 +56,12 @@ Subpaths, each resolving to that package's public barrel:
 | `agentkit/testing`             | Mocks, fixtures, golden run-event traces, conformance suites. |
 | `agentkit/mcp-client`          | MCP servers bridged into a run as a `ToolSetContributor`. |
 | `agentkit/transport-http`      | Fetch-standard REST v1 + SSE handler.                   |
-| `agentkit/mcp-server`          | The host's tools exposed AS an MCP server over streamable HTTP. |
 | `agentkit/adapters-memory`      | Map-backed `AssistantStore` for tests and local dev.    |
 | `agentkit/adapters-sqlite`      | Durable `bun:sqlite` `AssistantStore`. **Bun only.**     |
 | `agentkit/adapters-sqlite-node` | Durable `better-sqlite3` storage: `NodeSqliteAssistantStore` and `NodeSqliteMcpServerConfigStore`. Node >=22; explicit optional native peer. |
 | `agentkit/runner-local`         | Single-process `TaskRunner`.                            |
 | `agentkit/runner-local/filesystem` | `FileSkillSource`: skills loaded from a trusted directory. |
-| `agentkit/toolpacks-coding`      | Coding toolpack: sandboxed command execution, file tools, standing approvals, fingerprints. |
-| `agentkit/native`                | The Rust runtime through the Node-API binding: `NativeStore`, session service, REST/SSE + MCP servers from Rust, JS tool/provider callbacks. Loads the prebuilt platform addon for your os/cpu. |
+| `agentkit/native`                | The Rust runtime through the Node-API binding: `NativeStore`, session service, REST/SSE + MCP servers from Rust, JS tool/provider callbacks, coding tools (`registerCodingTools`). Loads the prebuilt platform addon for your os/cpu. |
 
 ```ts
 import { runChat } from "agentkit/core";

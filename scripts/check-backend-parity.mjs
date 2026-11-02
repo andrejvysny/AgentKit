@@ -15,13 +15,7 @@ const suites = [
   ["adapters-memory", "TypeScript adapter; not native qualification", 55],
   ["adapters-sqlite", "TypeScript adapter; not native qualification", 55],
   ["runner-local", "TypeScript runner with native loop", 55],
-  [
-    "toolpacks-coding",
-    "TypeScript coding facade; not native qualification",
-    56,
-  ],
   ["mcp-client", "TypeScript MCP facade; not native qualification", 56],
-  ["mcp-server", "TypeScript MCP facade; not native qualification", 56],
   ["transport-http", "TypeScript server; not native qualification", 56],
 ];
 for (const name of selected) {

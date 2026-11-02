@@ -4,7 +4,5 @@
 // shape keeps the zero-types build tsconfig honest without pulling
 // @types/node into the public dependency story.
 declare module "node:module" {
-  export function createRequire(
-    filename: string,
-  ): (id: string) => unknown;
+  export function createRequire(filename: string): (id: string) => unknown;
 }

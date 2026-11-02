@@ -48,11 +48,11 @@
  *    already writes AGENTS.md into the workspace root and the session carries
  *    a workspace descriptor, so the engine's FS project-instructions source
  *    reads it natively — the same approach coding-session.ts uses.
- *  - KEPT in JS: the coding tool pack. `createCodingToolPack` is the product
- *    surface under test (it is what compaction must keep usable across four
- *    turns), so it stays a real JS contribution: the pack's tools are bridged
- *    onto the binding's JS tool lane via `service.registerTool`, the exact
- *    examples/coding-agent/src/app.ts recipe.
+ *  - The coding tools run on the native coding lane: `service
+ *    .registerCodingTools` keeps the pack's descriptors, guards, sandbox,
+ *    leases and standing approvals in Rust (the examples/coding-agent
+ *    recipe) — compaction must keep that lane usable across four turns,
+ *    which is exactly what this script exercises.
  *  - TurnRunner `maxToolIterations: 30` has NO JS surface on the binding:
  *    session turns run under the engine's internal per-run cap
  *    (`ChatExecutorOptions::max_tool_iterations`,
@@ -65,17 +65,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AiRunEvent } from "@agentkit/contracts";
-import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
 import {
   NativeAssistantStore,
   NativeSessionService,
   NativeStore,
-  type ToolDefinitionJson,
 } from "@agentkit/native";
-import {
-  createCodingToolPack,
-  type CodingToolPack,
-} from "@agentkit/toolpacks-coding";
 
 const BASE_URL =
   process.env["AGENTKIT_LIVE_BASE_URL"] ?? "http://127.0.0.1:8000/v1";
@@ -143,44 +137,21 @@ async function waitTerminal(
 // (the exact composition of scripts/live/coding-session.ts)
 // ---------------------------------------------------------------------------
 
-/** The coding pack's tools, contributed once and bridged onto the binding's
- * JS tool lane — the exact recipe of examples/coding-agent/src/app.ts. */
-async function contributeCodingTools(
-  root: string,
-): Promise<{ pack: CodingToolPack; tools: readonly AiTool[] }> {
-  const pack = createCodingToolPack({
-    workspace: { root },
-    testCommands: ["bun test"],
-  });
-  const tools = await pack.contribute({
-    bindings: [],
-    limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
-  });
-  return { pack, tools };
-}
-
+/** The coding tools are the Rust pack's: descriptors, bodies, guards,
+ * sandbox, leases and standing approvals all execute in Rust on the same
+ * executor lane — the exact recipe of `examples/coding-agent/src/app.ts`.
+ * `sandbox: "off"` preserves this script's historical unsandboxed local-run
+ * behavior (the native default is `"required"`). */
 async function registerCodingTools(
   service: NativeSessionService,
-  tools: readonly AiTool[],
+  root: string,
 ): Promise<void> {
-  for (const tool of tools) {
-    await service.registerTool(
-      tool.definition as unknown as ToolDefinitionJson,
-      (input, request) => {
-        const ctx: AiToolExecutionContext = {
-          runId: request.runId,
-          chatId: SESSION_ID,
-          bindings: [],
-          limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
-          ...(request.toolCallId === null
-            ? {}
-            : { toolCallId: request.toolCallId }),
-          ...(request.signal ? { signal: request.signal } : {}),
-        };
-        return tool.execute(ctx, input);
-      },
-    );
-  }
+  await service.registerCodingTools({
+    workspaceRoot: root,
+    sandbox: "off",
+    testCommands: ["bun test"],
+    configuredMode: "full_auto",
+  });
 }
 
 /** `NativeStore.open` + the `AssistantStore` port for reads; then the service
@@ -198,12 +169,10 @@ async function openNativeNode(
   store: NativeStore;
   port: NativeAssistantStore;
   service: NativeSessionService;
-  pack: CodingToolPack;
   connectionId: string;
 }> {
   const store = await NativeStore.open(dbPath);
   const port = new NativeAssistantStore({ store });
-  const { pack, tools } = await contributeCodingTools(root);
   const connectionId = await NativeSessionService.registerProviderConnection(
     BASE_URL,
     null,
@@ -217,8 +186,8 @@ async function openNativeNode(
       model: MODEL,
     },
   });
-  await registerCodingTools(service, tools);
-  return { store, port, service, pack, connectionId };
+  await registerCodingTools(service, root);
+  return { store, port, service, connectionId };
 }
 
 /** A module with enough documentation prose that reading it costs real tokens. */
@@ -412,7 +381,7 @@ async function main(): Promise<void> {
   const pre = await sh(["bun", "test"], root);
   check("fixture: bun test fails before the agent starts", pre.code !== 0);
 
-  const { store, port, service, pack, connectionId } = await openNativeNode(
+  const { store, port, service, connectionId } = await openNativeNode(
     dbPath,
     root,
   );
@@ -499,9 +468,9 @@ async function main(): Promise<void> {
     `\n${failed.length === 0 ? "ALL PASS" : `${failed.length} FAIL`}: ${checks.length - failed.length}/${checks.length} checks passed`,
   );
   console.log(`\n${markdown(result)}`);
-  // The old trailing `store.close?.()`: the pack settles its own commands,
-  // the store actor is released, and the provider connection is revoked.
-  await pack.dispose?.();
+  // The old trailing `store.close?.()`: `close()` drains the Rust worker
+  // (running coding commands included), the store actor is released, and
+  // the provider connection is revoked.
   await store.close();
   await NativeSessionService.revokeProviderConnection(connectionId);
   process.exit(failed.length === 0 ? 0 : 1);

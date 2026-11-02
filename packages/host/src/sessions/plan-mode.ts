@@ -186,7 +186,7 @@ export interface PlanRequest {
 export interface PlanApprovalPolicy {
   /**
    * Tool names whose approvable refusal is a PLAN approval rather than a
-   * per-call one — `["submit_plan"]` for `@agentkit/toolpacks-coding`.
+   * per-call one — `["submit_plan"]` for the coding lane.
    */
   toolNames: readonly string[];
   /**

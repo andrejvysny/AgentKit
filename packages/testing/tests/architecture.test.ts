@@ -41,10 +41,6 @@ const EXECUTE_SITES: Record<string, string> = {
     "task dispatch to a TaskExecutor (not a tool)",
   "runner-local/src/single-process-task-runner.ts":
     "runner dispatch to a TaskWorker (not a tool)",
-  "mcp-server/src/tool-source.ts":
-    "inbound MCP serving surface (no model loop)",
-  "mcp-server/src/server.ts":
-    "MCP tools/call routed to the tool source (no model loop)",
   "core/src/runs/native-loop.ts":
     "JavaScript tool callback after Rust schema, budget, and timeout admission",
 };

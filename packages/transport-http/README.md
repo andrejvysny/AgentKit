@@ -226,11 +226,12 @@ configure MCP servers" as equal to "can log in to the host". The alias grammar
 they stop a malformed row from bricking host wiring at construction time — not a
 sandbox.
 
-One more composition hazard, if you also serve `@agentkit/mcp-server`: its
-`Origin` check is **off by default**, and CORS here with `origins: "*"`
-(`Authorization` is in the default allow-headers) makes tool execution reachable
-from any web page the browser happens to be on. Turn the MCP server's origin
-check on, or do not use `"*"`.
+One more composition hazard, if you also serve the native MCP server
+(`@agentkit/native`'s `startMcpServer`): its `Origin` check is configured
+per server, and CORS here with `origins: "*"` (`Authorization` is in the
+default allow-headers) makes tool execution reachable from any web page the
+browser happens to be on. Configure the MCP server's origin allowlist
+alongside, or do not use `"*"`.
 
 Spend control is the *other* port and lives elsewhere: `UsageAuthorizer` is
 enforced by `TurnRunner` per provider pass, not by this adapter. Its refusal

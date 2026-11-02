@@ -100,7 +100,7 @@ export function mergeProfileSkills(
   return { ...selection, skills };
 }
 
-/** The tool names `@agentkit/toolpacks-coding` contributes. */
+/** The tool names the native coding lane (`registerCodingTools`) contributes. */
 export const CODING_TOOL_NAMES: readonly string[] = Object.freeze([
   "read_file",
   "list_dir",

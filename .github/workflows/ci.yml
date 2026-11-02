@@ -171,8 +171,7 @@ jobs:
         run: |
           for d in packages/contracts packages/client packages/react packages/core \
                    packages/host packages/adapters-memory packages/runner-local \
-                   packages/toolpacks-coding \
-                   packages/mcp-client packages/transport-http packages/mcp-server \
+                   packages/mcp-client packages/transport-http \
                    packages/testing; do
             test -d "$d/dist" || { echo "missing $d/dist"; exit 1; }
           done
@@ -184,10 +183,8 @@ jobs:
             packages/host/dist \
             packages/adapters-memory/dist \
             packages/runner-local/dist \
-            packages/toolpacks-coding/dist \
             packages/mcp-client/dist \
             packages/transport-http/dist \
-            packages/mcp-server/dist \
             packages/testing/dist
 
       - run: node scripts/node-smoke.mjs

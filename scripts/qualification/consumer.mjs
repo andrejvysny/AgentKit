@@ -16,7 +16,6 @@ const paths = [
   "client",
   "react",
   "mcp-client",
-  "mcp-server",
   "adapters-memory",
   "testing",
 ];
