@@ -1590,6 +1590,7 @@ mod tests {
     }
 
     /// Inject the clock: make the file look `ms` milliseconds older.
+    #[cfg(unix)]
     fn set_mtime_ago(path: &str, ms: i64) {
         let c_path = std::ffi::CString::new(path).expect("path");
         let stamp = libc::timespec {
@@ -1900,6 +1901,7 @@ mod tests {
         assert!(errors.lock().expect("errors").is_empty());
     }
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_corrupt_lock_is_unknown_until_the_grace_expires() {
         let dir = temp_dir("corrupt-dir");
@@ -2317,6 +2319,7 @@ mod tests {
     /// died mid-run (admit → effect, no completion) keeps the workspace
     /// blocked for a SECOND coordinator instance over the same durable dir
     /// while its process group is alive; positive group-exit lifts it.
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_crashed_command_owner_blocks_the_workspace_until_its_group_dies() {
         use std::os::unix::process::CommandExt;

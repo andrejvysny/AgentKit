@@ -17,6 +17,10 @@
 //!
 //! Every subprocess is reaped by a Drop guard even when an assertion fails,
 //! and every wait is bounded so a regression fails instead of hanging.
+//!
+//! Unix-only mechanism: the survivor is a `sleep` process and liveness is
+//! probed with `libc::kill(pid, 0)`.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

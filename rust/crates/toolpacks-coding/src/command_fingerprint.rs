@@ -1306,6 +1306,7 @@ mod tests {
             let path = root.join(name);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, contents).unwrap();
+            #[cfg_attr(not(unix), allow(unused_variables))]
             if let Some(mode) = mode {
                 #[cfg(unix)]
                 {

@@ -1972,6 +1972,7 @@ mod tests {
     /// reopened-process perspective — must block every later modifying
     /// acquire while the command's process group is still alive, and let
     /// work through only on positive group-exit evidence.
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_crashed_command_owner_blocks_the_workspace_until_its_group_dies() {
         use std::os::unix::process::CommandExt;
