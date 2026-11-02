@@ -5,15 +5,15 @@
  * call is settled as cancelled AND the JS side must be told (the bridge
  * delivers `{"kind":"cancel","callId":...}`). The router must turn that into
  * an abort on the signal it hands the user function, so consumer-owned
- * effects (the TS coding pack's spawned process groups) receive cancellation
- * and stop. Before this contract existed the user promise kept running
+ * effects (here: a spawned detached process group, the same shape the
+ * retired TS coding pack produced) receive cancellation and stop. Before
+ * this contract existed the user promise kept running
  * unobserved after the native side had already given up on it.
  */
 import { expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCodingToolPack } from "@agentkit/toolpacks-coding";
 import { NativeSessionService, NativeStore } from "../src/index.js";
 import { available } from "./helpers/binding.js";
 
@@ -342,7 +342,6 @@ nativeTest(
 nativeTest(
   "a coding-owned process receives cancellation and stops",
   async () => {
-    const workspace = mkdtempSync(join(tmpdir(), "agentkit-cancel-ws-"));
     // Per-run marker: a constant marker lets a survivor of a previous run
     // (or a parallel test) satisfy the pgrep witnesses and race the cancel
     // before this run's dispatch.
@@ -360,36 +359,59 @@ nativeTest(
       { kind: "content", text: "done" },
     ]);
     const { store, service } = await openService(provider);
-    const pack = createCodingToolPack({
-      workspace: { root: workspace },
-      testCommands: [],
-      sandbox: "off",
-    });
     try {
-      const tools = await pack.contribute({
-        bindings: [],
-        limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
-      });
-      const runCommand = tools.find(
-        (tool) => tool.definition.name === "run_command",
-      );
-      if (!runCommand) throw new Error("run_command missing from pack");
+      // A consumer-owned tool whose effect is a REAL spawned process group
+      // (detached, like the retired TS pack's run_command spawned): the
+      // contract under test is the bridge abort reaching user code and the
+      // group dying — the process-group mechanics are the pack's and stay
+      // pinned in the crate (`abort_kills_and_reports`).
       await service.registerTool(
-        runCommand.definition as never,
-        (input, request) =>
-          runCommand.execute(
-            {
-              runId: request.runId,
-              bindings: [],
-              limits: {
-                profile: "medium",
-                maxBytes: 256 * 1024,
-                maxItems: 1024,
-              },
-              ...(request.signal ? { signal: request.signal } : {}),
-            } as never,
-            input,
-          ),
+        {
+          name: "run_command",
+          description: "runs a shell command in its own detached process group",
+          inputSchema: {
+            type: "object",
+            properties: {
+              command: { type: "string" },
+              timeoutSec: { type: "number" },
+            },
+            required: ["command"],
+          },
+        },
+        (input, request) => {
+          const { promise, resolve } =
+            Promise.withResolvers<Record<string, unknown>>();
+          const command = String(
+            (input as Record<string, unknown>).command ?? "true",
+          );
+          const child = Bun.spawn(["/bin/sh", "-c", command], {
+            detached: true,
+            stdin: "ignore",
+            stdout: "ignore",
+            stderr: "ignore",
+          });
+          let settled = false;
+          const settle = (data: string) => {
+            if (settled) return;
+            settled = true;
+            try {
+              process.kill(-child.pid, "SIGKILL");
+            } catch {
+              // already gone
+            }
+            resolve({ data });
+          };
+          const signal = request.signal;
+          if (signal) {
+            if (signal.aborted) settle("killed");
+            else
+              signal.addEventListener("abort", () => settle("killed"), {
+                once: true,
+              });
+          }
+          void child.exited.then(() => settle("exited"));
+          return promise;
+        },
       );
       const session = await service.createSession({ profileId: "coding" });
       const sessionId = String(session.id ?? session.sessionId);

@@ -45,12 +45,7 @@
  *      about the module graph and the constructor's eager validation.
  *   7. The transport-http dist serves `GET /v1/version` through a real
  *      `Request`/`Response` round trip against stub deps.
- *   8. The mcp-server dist serves its OWN fetch handler: an unauthenticated
- *      POST is refused 401 and a rebound `Host` is refused 403, both before
- *      the MCP SDK is asked to do anything. It is also the second package
- *      whose module graph drags in the MCP SDK under Node's resolver — this
- *      time the SERVER half of it.
- *   9. The testing dist loads and a golden trace round-trips through it —
+ *   8. The testing dist loads and a golden trace round-trips through it —
  *      this is the JSON-import path that needs `with { type: "json" }" to
  *      even load under Node (see `packages/testing/src/golden/golden.ts`).
  *
@@ -104,10 +99,8 @@ const CORE_ENTRY = publishedEntry("core");
 const HOST_ENTRY = publishedEntry("host");
 const ADAPTERS_MEMORY_ENTRY = publishedEntry("adapters-memory");
 const RUNNER_LOCAL_ENTRY = publishedEntry("runner-local");
-const TOOLPACKS_CODING_ENTRY = publishedEntry("toolpacks-coding");
 const MCP_CLIENT_ENTRY = publishedEntry("mcp-client");
 const TRANSPORT_HTTP_ENTRY = publishedEntry("transport-http");
-const MCP_SERVER_ENTRY = publishedEntry("mcp-server");
 const TESTING_ENTRY = publishedEntry("testing");
 
 // Apply the published mapping to every workspace specifier the dists import at
@@ -120,10 +113,8 @@ const WORKSPACE_ENTRIES = {
   "@agentkit/host": HOST_ENTRY,
   "@agentkit/adapters-memory": ADAPTERS_MEMORY_ENTRY,
   "@agentkit/runner-local": RUNNER_LOCAL_ENTRY,
-  "@agentkit/toolpacks-coding": TOOLPACKS_CODING_ENTRY,
   "@agentkit/mcp-client": MCP_CLIENT_ENTRY,
   "@agentkit/transport-http": TRANSPORT_HTTP_ENTRY,
-  "@agentkit/mcp-server": MCP_SERVER_ENTRY,
   "@agentkit/testing": TESTING_ENTRY,
 };
 
@@ -536,60 +527,6 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-// 5b. toolpacks-coding dist: the pack builds and one tool runs under Node
-// ---------------------------------------------------------------------------
-
-const toolpacks = await import(TOOLPACKS_CODING_ENTRY);
-console.log("toolpacks-coding dist");
-const codingDir = (await import("node:fs")).mkdtempSync(
-  (await import("node:path")).join(
-    (await import("node:os")).tmpdir(),
-    "coding-smoke-",
-  ),
-);
-(await import("node:fs")).writeFileSync(
-  (await import("node:path")).join(codingDir, "hello.txt"),
-  "alpha\nbeta\n",
-);
-const codingPack = toolpacks.createCodingToolPack({
-  workspace: { root: codingDir },
-  sandbox: "off",
-});
-const codingTools = await codingPack.contribute({
-  bindings: [],
-  limits: { profile: "small", maxBytes: 16384 },
-});
-check(
-  codingPack.namespace === "coding" &&
-    codingTools.length === toolpacks.CODING_TOOL_NAMES.length,
-  "the coding pack contributes every tool under namespace coding",
-);
-const codingRead = await codingTools
-  .find((t) => t.definition.name === "read_file")
-  .execute(
-    {
-      runId: "smoke",
-      bindings: [],
-      limits: { profile: "small", maxBytes: 16384 },
-    },
-    { path: "hello.txt" },
-  );
-check(
-  codingRead.ok && String(codingRead.modelData).includes("2\tbeta"),
-  "read_file returns numbered lines",
-);
-const codingGuard = toolpacks.createCodingPermissionGuard({
-  mode: "read_only",
-});
-const codingVerdict = await codingGuard.canExecute({
-  namespace: "coding",
-  bindings: [],
-  tool: codingTools.find((t) => t.definition.name === "edit_file").definition,
-});
-check(codingVerdict.allowed === false, "the read_only guard refuses edit_file");
-await codingPack.dispose();
-
-// ---------------------------------------------------------------------------
 // 6. MCP client dist: the module graph resolves under Node, a manager builds
 // ---------------------------------------------------------------------------
 
@@ -675,170 +612,6 @@ check(
 // The negative half: routing is real, not a handler that answers everything.
 const missing = await handler(new Request("http://x/v1/nope"));
 check(missing.status === 404, `an unrouted path answered ${missing.status}`);
-
-// ---------------------------------------------------------------------------
-// 8. MCP server dist: the security gates answer before the SDK is involved
-// ---------------------------------------------------------------------------
-
-const mcpServer = await import(MCP_SERVER_ENTRY);
-console.log("mcp-server dist");
-check(
-  typeof mcpServer.createMcpServerHandler === "function",
-  "exports createMcpServerHandler",
-);
-check(
-  typeof mcpServer.createStagedToolSource === "function",
-  "exports createStagedToolSource",
-);
-
-const MCP_TOKEN = "node-smoke-token";
-const mcpServerHandler = mcpServer.createMcpServerHandler({
-  tools: {
-    catalog: {
-      async listTools() {
-        return [];
-      },
-    },
-    async execute() {
-      throw new Error("unreachable");
-    },
-  },
-  auth: { bearerToken: MCP_TOKEN },
-});
-const mcpUnauthorized = await mcpServerHandler.fetch(
-  new Request("http://localhost/mcp", {
-    method: "POST",
-    headers: { host: "localhost" },
-    body: "{}",
-  }),
-);
-check(
-  mcpUnauthorized.status === 401,
-  `an unauthenticated POST answered ${mcpUnauthorized.status}`,
-);
-const mcpRebound = await mcpServerHandler.fetch(
-  new Request("http://localhost/mcp", {
-    method: "POST",
-    headers: { host: "evil.com", authorization: `Bearer ${MCP_TOKEN}` },
-    body: "{}",
-  }),
-);
-check(
-  mcpRebound.status === 403,
-  `a rebound Host answered ${mcpRebound.status}`,
-);
-await mcpServerHandler.dispose();
-
-// Exercise published MCP packages over a real Node HTTP server in both eras.
-const { createServer } = await import("node:http");
-const nodeMcp = mcpServer.createMcpServerHandler({
-  auth: { bearerToken: MCP_TOKEN },
-  tools: {
-    catalog: {
-      async listTools() {
-        return [
-          {
-            namespace: "node",
-            definition: {
-              name: "echo",
-              version: "1",
-              effect: "read",
-              capability: "echo",
-              description: "Echo",
-              inputSchema: { type: "object" },
-            },
-          },
-        ];
-      },
-    },
-    async execute(_name, args) {
-      return {
-        ok: true,
-        status: "ok",
-        data: args,
-        warnings: [],
-        truncated: false,
-      };
-    },
-  },
-});
-const nodeHttp = createServer(async (request, response) => {
-  const abort = new AbortController();
-  response.on("close", () => {
-    if (!response.writableEnded) abort.abort();
-  });
-  try {
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    const body = Buffer.concat(chunks);
-    const incoming = new Request(
-      `http://${request.headers.host}${request.url}`,
-      {
-        method: request.method,
-        headers: request.headers,
-        signal: abort.signal,
-        ...(body.length ? { body } : {}),
-      },
-    );
-    const result = await nodeMcp.fetch(incoming);
-    response.writeHead(result.status, Object.fromEntries(result.headers));
-    if (result.body)
-      for await (const chunk of result.body) response.write(chunk);
-    response.end();
-  } catch (error) {
-    response.destroy(error);
-  }
-});
-await new Promise((resolve) => nodeHttp.listen(0, "127.0.0.1", resolve));
-const nodeUrl = new URL(`http://127.0.0.1:${nodeHttp.address().port}/mcp`);
-const nodeManager = new mcp.McpClientManager({ secrets: nullSecrets }, [
-  {
-    alias: "node",
-    transport: {
-      kind: "http",
-      url: nodeUrl.href,
-      headers: { Authorization: `Bearer ${MCP_TOKEN}` },
-    },
-  },
-]);
-const { Client: LegacyMcpClient } = await import("mcp-sdk-v1/client/index.js");
-const { StreamableHTTPClientTransport: LegacyMcpTransport } = await import(
-  "mcp-sdk-v1/client/streamableHttp.js"
-);
-const oldMcp = new LegacyMcpClient({ name: "node-legacy", version: "1" });
-try {
-  check(
-    (await nodeManager.listTools("node")).length === 1,
-    "Node HTTP modern catalog round trip",
-  );
-  check(
-    (
-      await nodeManager.callTool("mcp.node.echo", { node: "modern" })
-    ).text.includes("modern"),
-    "Node HTTP modern call round trip",
-  );
-  await oldMcp.connect(
-    new LegacyMcpTransport(nodeUrl, {
-      requestInit: { headers: { Authorization: `Bearer ${MCP_TOKEN}` } },
-    }),
-  );
-  check(
-    (await oldMcp.listTools()).tools.length === 1,
-    "Node HTTP SDK1 catalog round trip",
-  );
-  check(
-    (
-      await oldMcp.callTool({ name: "echo", arguments: { node: "legacy" } })
-    ).content[0].text.includes("legacy"),
-    "Node HTTP SDK1 call round trip",
-  );
-} finally {
-  await nodeManager.dispose();
-  await oldMcp.close();
-  await nodeMcp.dispose();
-  nodeHttp.closeAllConnections();
-  await new Promise((resolve) => nodeHttp.close(resolve));
-}
 
 // ---------------------------------------------------------------------------
 // 9. Testing dist: a golden trace loads and validates — this is the exact

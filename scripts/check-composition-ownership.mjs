@@ -38,9 +38,7 @@ const BACKEND = new Set([
   "@agentkit/adapters-memory",
   "@agentkit/adapters-sqlite",
   "@agentkit/runner-local",
-  "@agentkit/toolpacks-coding",
   "@agentkit/mcp-client",
-  "@agentkit/mcp-server",
   "@agentkit/transport-http",
 ]);
 const UMBRELLA = "agentkit/";
@@ -204,10 +202,37 @@ export function parseImports(source) {
   return found;
 }
 
+/** Hard-banned engine symbols named in an import/export clause. These are
+ * tombstones: refused wherever they appear, including specs of packages
+ * that no longer ship — the names must never execute in a composition. */
+function bannedSymbolsIn(record) {
+  if (record.typeOnly || record.clause === null) return [];
+  if (!record.clause.startsWith("{")) return [];
+  return record.clause
+    .replace(/^\{|\}$/g, "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "" && !/^type\s+/.test(s))
+    .map((raw) =>
+      raw
+        .replace(/^\{\s*/, "")
+        .split(/\s+as\s+/)[0]
+        .trim(),
+    )
+    .filter((symbol) => HARD_BANNED.has(symbol));
+}
+
 /** Classify one import record against the rules. Returns an array of
  * violation strings (empty = clean). `reasonFor(spec)` resolves the
  * allowlist entry for this file. */
 function checkImport(record, reasonFor) {
+  const banned = bannedSymbolsIn(record);
+  if (banned.length > 0) {
+    return banned.map(
+      (symbol) =>
+        `hard-banned backend execution symbol \`${symbol}\` imported from \`${record.spec}\``,
+    );
+  }
   const backend = normalizeSpecifier(record.spec);
   if (!backend) return [];
   if (record.kind === "export") {
@@ -243,12 +268,6 @@ function checkImport(record, reasonFor) {
       .replace(/^\{\s*/, "")
       .split(/\s+as\s+/)[0]
       .trim();
-    if (HARD_BANNED.has(symbol)) {
-      violations.push(
-        `hard-banned backend execution symbol \`${symbol}\` imported from \`${record.spec}\``,
-      );
-      continue;
-    }
     const allowed = reasonFor(backend);
     if (!allowed || !allowed.symbols.includes(symbol)) {
       violations.push(
@@ -265,6 +284,19 @@ export function scanSource(fileRel, source) {
   const fileAllow = ALLOWLIST[fileRel] ?? {};
   const namespaceAllowed = NAMESPACE_ALLOW[fileRel];
   for (const record of parseImports(source)) {
+    const banned = bannedSymbolsIn(record);
+    if (banned.length > 0) {
+      // Tombstone: flagged before the BACKEND prefilter, so the engine
+      // names stay refused even after their package no longer ships.
+      for (const symbol of banned) {
+        findings.push({
+          file: fileRel,
+          spec: record.spec,
+          violation: `hard-banned backend execution symbol \`${symbol}\` imported from \`${record.spec}\``,
+        });
+      }
+      continue;
+    }
     const backend = normalizeSpecifier(record.spec);
     if (!backend) continue;
     if (

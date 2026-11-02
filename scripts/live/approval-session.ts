@@ -70,17 +70,11 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AiRunEvent } from "@agentkit/contracts";
-import type { AiTool } from "@agentkit/core";
 import {
   NativeAssistantStore,
   NativeSessionService,
   NativeStore,
-  type ToolDefinitionJson,
 } from "@agentkit/native";
-import {
-  createCodingToolPack,
-  type CodingToolPack,
-} from "@agentkit/toolpacks-coding";
 
 const BASE_URL =
   process.env["AGENTKIT_LIVE_BASE_URL"] ?? "http://127.0.0.1:8000/v1";
@@ -120,7 +114,7 @@ const READ_TOOLS = new Set([
   "git_inspect",
 ]);
 
-/** The descriptors `createCodingToolPack` contributes (the exact set the
+/** The descriptors the native coding lane contributes (the exact set the
  * retired `defaultProfileRegistry` listed under profile `coding`). */
 const ALL_CODING_TOOL_NAMES = [
   "read_file",
@@ -244,55 +238,15 @@ interface Node {
   stop(): Promise<void>;
 }
 
-/** The coding pack's tools, contributed once per node; only the allowed
- * descriptors are bridged onto the binding's JS tool lane (host-side
- * pruning — the only role ceiling the native authority needs the host to
- * enforce, see the header). */
-async function contributeCodingTools(
-  root: string,
-): Promise<{ pack: CodingToolPack; tools: readonly AiTool[] }> {
-  const pack = createCodingToolPack({
-    workspace: { root },
-    testCommands: ["bun test"],
-  });
-  const tools = await pack.contribute({
-    bindings: [],
-    limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
-  });
-  return { pack, tools };
-}
-
-async function registerCodingTools(
-  service: NativeSessionService,
-  tools: readonly AiTool[],
-): Promise<void> {
-  for (const tool of tools) {
-    await service.registerTool(
-      tool.definition as unknown as ToolDefinitionJson,
-      (input, request) => {
-        return tool.execute(
-          {
-            runId: request.runId,
-            bindings: [],
-            limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
-            ...(request.toolCallId === null
-              ? {}
-              : { toolCallId: request.toolCallId }),
-            ...(request.signal ? { signal: request.signal } : {}),
-          },
-          input,
-        );
-      },
-    );
-  }
-}
-
 /** The service over a fresh store on `dbPath`: Rust worker + session
  * service, the Rust provider lane (a connection over the base URL — this
  * local vLLM needs no key, and the key never reaches the database either
- * way), and the ask-mode JS-tool authority the retired
- * `createCodingPermissionGuard` + `planApproval` carried, plan escalation
- * included. Constructing it crash-reconciles and starts the worker. */
+ * way), and the coding tools registered through the native lane. The role
+ * ceiling that the retired host-side JS bridge enforced by registering only
+ * the allowed descriptors is now the native `role` option — the same
+ * ceiling the `coding/reviewer` / `coding/supervisor` profiles carried
+ * (`packages/host/src/profiles/agent-profile.ts`). Constructing the service
+ * crash-reconciles and starts the worker. */
 async function openNativeNode(
   dbPath: string,
   root: string,
@@ -300,16 +254,12 @@ async function openNativeNode(
 ): Promise<Node> {
   const store = await NativeStore.open(dbPath);
   const port = new NativeAssistantStore({ store });
-  const { pack, tools } = await contributeCodingTools(root);
-  const allowed = tools.filter((tool) =>
-    toolNames.includes(tool.definition.name),
-  );
-  if (allowed.length !== toolNames.length) {
-    const missing = toolNames.filter(
-      (name) => !allowed.some((tool) => tool.definition.name === name),
-    );
-    throw new Error(`coding pack is missing tools: ${missing.join(",")}`);
-  }
+  const role =
+    toolNames === SUPERVISOR_TOOL_NAMES
+      ? ("supervisor" as const)
+      : toolNames === REVIEWER_TOOL_NAMES
+        ? ("reviewer" as const)
+        : ("implementer" as const);
   const connectionId = await NativeSessionService.registerProviderConnection(
     BASE_URL,
     null,
@@ -327,16 +277,22 @@ async function openNativeNode(
       model: MODEL,
     },
   });
-  await registerCodingTools(service, allowed);
+  await service.registerCodingTools({
+    workspaceRoot: root,
+    sandbox: "off",
+    testCommands: ["bun test"],
+    configuredMode: "ask",
+    role,
+    planToolNames: ["submit_plan"],
+  });
   return {
     store,
     port,
     service,
     async stop() {
-      // close() drains the Rust worker; the pack then settles its own
-      // commands, and the store actor is released last.
+      // close() drains the Rust worker (running coding commands included);
+      // the store actor is released last.
       await service.close();
-      await pack.dispose?.();
       await store.close();
       await NativeSessionService.revokeProviderConnection(connectionId);
     },

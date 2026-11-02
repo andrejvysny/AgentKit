@@ -82,11 +82,9 @@ const SUBPATHS = [
   "testing",
   "mcp-client",
   "transport-http",
-  "mcp-server",
   "adapters-memory",
   "adapters-sqlite",
   "runner-local",
-  "toolpacks-coding",
   "native",
 ];
 

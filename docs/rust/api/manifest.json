@@ -63,11 +63,6 @@
     },
     {
       "name": "agentkit",
-      "subpath": "./mcp-server",
-      "report": "agentkit--mcp-server"
-    },
-    {
-      "name": "agentkit",
       "subpath": "./adapters-memory",
       "report": "agentkit--adapters-memory"
     },
@@ -90,11 +85,6 @@
       "name": "agentkit",
       "subpath": "./runner-local/filesystem",
       "report": "agentkit--runner-local--filesystem"
-    },
-    {
-      "name": "agentkit",
-      "subpath": "./toolpacks-coding",
-      "report": "agentkit--toolpacks-coding"
     },
     {
       "name": "agentkit",
@@ -127,11 +117,6 @@
       "report": "mcp-client"
     },
     {
-      "name": "@agentkit/mcp-server",
-      "subpath": ".",
-      "report": "mcp-server"
-    },
-    {
       "name": "@agentkit/native",
       "subpath": ".",
       "report": "native"
@@ -155,11 +140,6 @@
       "name": "@agentkit/testing",
       "subpath": ".",
       "report": "testing"
-    },
-    {
-      "name": "@agentkit/toolpacks-coding",
-      "subpath": ".",
-      "report": "toolpacks-coding"
     },
     {
       "name": "@agentkit/transport-http",

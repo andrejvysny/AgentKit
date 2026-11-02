@@ -70,15 +70,17 @@ jobs:
       # rust/fixtures/coding-fingerprint/tokenizer.json and
       # rust/fixtures/coding-fingerprint/env-order.json (command_fingerprint
       # include_str! / ENV_ORDER, exercised via environment collation and the
-      # full bound-input digest). The TypeScript side of the same fixtures is
-      # pinned by packages/toolpacks-coding/tests/
-      # command-fingerprint-collation.test.ts and the `contracts` job's
+      # full bound-input digest). The TypeScript originals were frozen at the
+      # toolpacks-coding deletion: `frozen_material_matches_the_typescript_authority`
+      # asserts the crate's digests against
+      # rust/fixtures/coding-fingerprint/fingerprint-material.json, and the
+      # contracts fixtures via the `contracts` job's
       # `bun scripts/export-rust-fixtures.ts --check`.
       - name: Shared locale-fingerprint conformance (host governance fixture)
         run: cargo test -p agentkit-host --test governance --all-features --locked -- native_write_fingerprint_is_versioned_locale_free_and_excludes_action_id
         working-directory: rust
-      - name: Shared coding-fingerprint conformance (tokenizer + env collation + bound digest)
-        run: cargo test -p agentkit-toolpacks-coding --lib --all-features --locked -- command_fingerprint::tests::tokenizer_agrees_with_the_typescript_baseline command_fingerprint::tests::environment_is_restricted_sorted_and_bounded command_fingerprint::tests::fingerprint_is_stable_and_reacts_to_every_bound_input
+      - name: Shared coding-fingerprint conformance (tokenizer + env collation + bound digest + frozen TS material)
+        run: cargo test -p agentkit-toolpacks-coding --lib --all-features --locked -- command_fingerprint::tests::tokenizer_agrees_with_the_typescript_baseline command_fingerprint::tests::environment_is_restricted_sorted_and_bounded command_fingerprint::tests::fingerprint_is_stable_and_reacts_to_every_bound_input command_fingerprint::tests::frozen_material_matches_the_typescript_authority
         working-directory: rust
       - name: Command cancellation and process-group timeout teardown
         run: "cargo test -p agentkit-toolpacks-coding --lib exec_tools::tests:: --all-features --locked -- --ignored"
@@ -88,18 +90,6 @@ jobs:
         env:
           AGENTKIT_RUN_RUST_CONFORMANCE: "1"
           AGENTKIT_RUN_RUST_RUNNER_CONFORMANCE: "1"
-      - name: Command fingerprint TS↔Rust differential (required, never skipped here)
-        # The fifteen-case standing-approval differential: the TypeScript
-        # authority (packages/toolpacks-coding/src/command-fingerprint.ts)
-        # and the Rust implementation (`cargo run -p agentkit-toolpacks-coding
-        # --example fingerprint_cli`) must agree case by case on the same
-        # tree. The suite self-skips unless AGENTKIT_RUN_RUST_CONFORMANCE=1
-        # is set — a plain `bun test` never runs it, so the gate lives HERE,
-        # explicitly enabled, and the workflow structure test refuses its
-        # removal or an added `if:`.
-        run: bun test --timeout 120000 packages/toolpacks-coding/tests/command-fingerprint-rust.test.ts
-        env:
-          AGENTKIT_RUN_RUST_CONFORMANCE: "1"
       - name: Existing client and React behavior against Rust
         run: bun test --timeout 60000 packages/client/tests packages/react/tests
         env:

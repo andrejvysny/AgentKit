@@ -234,16 +234,18 @@ describe("Rust native workflow qualification", () => {
     expect(fixture).toBeLessThan(workspaceTest);
   });
 
-  it("runs the command-fingerprint TS↔Rust differential as a required, explicitly enabled step", () => {
-    // The 15-case differential self-skips unless
-    // AGENTKIT_RUN_RUST_CONFORMANCE=1; it must therefore be its own named
-    // step with the variable set — never folded into the plain `bun test`.
-    const differential = (rust.jobs.native?.steps ?? []).find((step) =>
-      (step.run ?? "").includes("command-fingerprint-rust.test.ts"),
+  it("runs the frozen fingerprint-material gate as a required named step", () => {
+    // The TS↔Rust command-fingerprint differential was frozen into
+    // `rust/fixtures/coding-fingerprint/fingerprint-material.json`; its
+    // gate is now the Rust fixture test, which must stay an explicitly
+    // named filter (never silently dropped from the conformance step).
+    const conformance = (rust.jobs.native?.steps ?? []).find((step) =>
+      (step.name ?? "").includes("coding-fingerprint conformance"),
     );
-    expect(differential).toBeDefined();
-    expect(differential?.env?.AGENTKIT_RUN_RUST_CONFORMANCE).toBe("1");
-    expect(differential?.if).toBeUndefined();
+    expect(conformance).toBeDefined();
+    expect(conformance?.run ?? "").toContain(
+      "frozen_material_matches_the_typescript_authority",
+    );
   });
 });
 

@@ -61,14 +61,6 @@ function assertDurableExecutionPreserved(directory: string): void {
     "packages/adapters-sqlite/src/sqlite/migrations.ts",
     "packages/core/src/runs/agent-loop.ts",
     "packages/host/src/context/compactor.ts",
-    "packages/toolpacks-coding/src/command-fingerprint.ts",
-    "packages/toolpacks-coding/src/command-risk.ts",
-    "packages/toolpacks-coding/src/command-script-inputs.ts",
-    "packages/toolpacks-coding/src/context.ts",
-    "packages/toolpacks-coding/src/coordination-claim.ts",
-    "packages/toolpacks-coding/src/process-identity.ts",
-    "packages/toolpacks-coding/src/process-teardown.ts",
-    "packages/toolpacks-coding/src/process-owned.ts",
   ])
     expect(read(directory, path)).toBe(read(fixtureRoot, path));
   expect(

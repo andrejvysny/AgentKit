@@ -61,17 +61,11 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AiRunEvent } from "@agentkit/contracts";
-import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
 import {
   NativeAssistantStore,
   NativeSessionService,
   NativeStore,
-  type ToolDefinitionJson,
 } from "@agentkit/native";
-import {
-  createCodingToolPack,
-  type CodingToolPack,
-} from "@agentkit/toolpacks-coding";
 
 const BASE_URL =
   process.env["AGENTKIT_LIVE_BASE_URL"] ?? "http://127.0.0.1:8000/v1";
@@ -117,44 +111,23 @@ interface Node {
   stop(): Promise<void>;
 }
 
-/** The coding pack's tools, contributed once and bridged onto the binding's
- * JS tool lane — the exact recipe of examples/coding-agent/src/app.ts. */
-async function contributeCodingTools(
-  root: string,
-): Promise<{ pack: CodingToolPack; tools: readonly AiTool[] }> {
-  const pack = createCodingToolPack({
-    workspace: { root },
-    testCommands: ["bun test"],
-  });
-  const tools = await pack.contribute({
-    bindings: [],
-    limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
-  });
-  return { pack, tools };
-}
-
+/** The coding tools are the Rust pack's: descriptors, bodies, guards,
+ * sandbox, leases and standing approvals all execute in Rust on the same
+ * executor lane — the exact recipe of `examples/coding-agent/src/app.ts`.
+ * `sandbox: "off"` preserves this script's historical unsandboxed local-run
+ * behavior (the native default is `"required"`); `configuredMode:
+ * "full_auto"` matches the durable-mode-less automation the retired JS
+ * bridge ran under. */
 async function registerCodingTools(
   service: NativeSessionService,
-  tools: readonly AiTool[],
+  root: string,
 ): Promise<void> {
-  for (const tool of tools) {
-    await service.registerTool(
-      tool.definition as unknown as ToolDefinitionJson,
-      (input, request) => {
-        const ctx: AiToolExecutionContext = {
-          runId: request.runId,
-          chatId: SESSION_ID,
-          bindings: [],
-          limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
-          ...(request.toolCallId === null
-            ? {}
-            : { toolCallId: request.toolCallId }),
-          ...(request.signal ? { signal: request.signal } : {}),
-        };
-        return tool.execute(ctx, input);
-      },
-    );
-  }
+  await service.registerCodingTools({
+    workspaceRoot: root,
+    sandbox: "off",
+    testCommands: ["bun test"],
+    configuredMode: "full_auto",
+  });
 }
 
 async function openNativeStore(
@@ -172,12 +145,7 @@ async function openNativeStore(
 async function attachNativeService(
   store: NativeStore,
   root: string,
-): Promise<{
-  service: NativeSessionService;
-  pack: CodingToolPack;
-  connectionId: string;
-}> {
-  const { pack, tools } = await contributeCodingTools(root);
+): Promise<{ service: NativeSessionService; connectionId: string }> {
   const connectionId = await NativeSessionService.registerProviderConnection(
     BASE_URL,
     null,
@@ -191,15 +159,14 @@ async function attachNativeService(
       model: MODEL,
     },
   });
-  await registerCodingTools(service, tools);
-  return { service, pack, connectionId };
+  await registerCodingTools(service, root);
+  return { service, connectionId };
 }
 
 function makeNode(
   store: NativeStore,
   port: NativeAssistantStore,
   service: NativeSessionService,
-  pack: CodingToolPack,
   connectionId: string,
 ): Node {
   return {
@@ -207,10 +174,9 @@ function makeNode(
     port,
     service,
     async stop() {
-      // close() drains the Rust worker; the pack then settles its own
-      // commands, and the store actor is released last.
+      // close() drains the Rust worker (running coding commands included);
+      // the store actor is released last.
       await service.close();
-      await pack.dispose?.();
       await store.close();
       await NativeSessionService.revokeProviderConnection(connectionId);
     },
@@ -219,11 +185,8 @@ function makeNode(
 
 async function openNativeNode(dbPath: string, root: string): Promise<Node> {
   const { store, port } = await openNativeStore(dbPath);
-  const { service, pack, connectionId } = await attachNativeService(
-    store,
-    root,
-  );
-  return makeNode(store, port, service, pack, connectionId);
+  const { service, connectionId } = await attachNativeService(store, root);
+  return makeNode(store, port, service, connectionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -713,7 +676,6 @@ async function main(): Promise<void> {
     reopened.store,
     reopened.port,
     revived.service,
-    revived.pack,
     revived.connectionId,
   );
   const status3 = await waitTerminal(node.port, turn3Id);

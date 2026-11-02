@@ -28,10 +28,6 @@ import {
 import { CodingAgentApp, type PendingApproval } from "../src/app.js";
 import { exportTo } from "../src/commands.js";
 import { CRASH_COMMAND } from "./fixtures/crash-command.js";
-import {
-  createLockDirWorkspaceCoordinator,
-  defaultWorkspaceCoordinationDir,
-} from "@agentkit/toolpacks-coding";
 
 const SOURCE_BUG =
   "export function sum(a: number, b: number): number {\n  return a - b;\n}\n";
@@ -559,32 +555,20 @@ describe("coding agent — the acceptance run", () => {
       expect(readFileSync(marker, "utf8")).toBe("ran\n");
     }
 
-    // Authorization and process ownership are independent. Workspace admission
-    // remains blocked until the user explicitly requests verified recovery.
-    const workspace = createLockDirWorkspaceCoordinator({
-      dir: defaultWorkspaceCoordinationDir(),
-      pollMs: 10,
-    });
-    await expect(
-      workspace.acquireWorkspace({
-        root: h.repo,
-        holder: {
-          runId: "competing",
-          tool: "write_file",
-          label: "competing writer",
-        },
-        maxWaitMs: 75,
-      }),
-    ).rejects.toMatchObject({ code: "workspace_busy" });
-    // Recovery is the NATIVE owner's act, not a TS-side clearance. The
-    // crate's coordinator refuses admission while a crashed run's marked
-    // processes are unverified, and reclaims the dead owner's marker only
-    // after positive disappearance evidence (execution_recovery and
-    // coordination_durability qualify that rule in the crate). The witness
-    // here is the observable outcome: the contender stays out until the
-    // approved native re-run lands its verified recovery, and only then
-    // does the workspace admit outsiders again — no TS pack executes or
-    // resolves anything on this path.
+    // Authorization and process ownership are independent.
+    // (The retired TS witness here instantiated the pack's lock-dir
+    // coordinator as an outside contender and asserted `workspace_busy`
+    // until recovery cleared the claim. With the pack native, that
+    // witness maps to the crate's own suites, which qualify the identical
+    // on-disk protocol with stronger fault injection:
+    // `tests/execution_ownership.rs` (crashed owner blocks admission),
+    // `tests/quarantine_race.rs` (busy surfaces at cap expiry) and
+    // `tests/coordination_durability.rs` / `tests/execution_recovery.rs`
+    // (claim reclaim only after positive disappearance evidence). The
+    // acceptance-level invariant kept here is the observable outcome:
+    // recovery is the NATIVE owner's act — the settled execution completes
+    // only through native verified recovery, and no JS side clears
+    // anything.)
     expect((await revived.app.pendingApproval())?.requestId).toBe(
       pending?.requestId,
     );
@@ -610,18 +594,10 @@ describe("coding agent — the acceptance run", () => {
     // Exactly one new execution follows both verified process recovery and
     // fresh authorization. The provider never proposes a replacement call.
     expect(readFileSync(marker, "utf8")).toBe("ran\nran\n");
-    // The settled execution completed through native verified recovery, so
-    // the outside contender is admitted — the crashed ownership is gone.
-    const admitted = await workspace.acquireWorkspace({
-      root: h.repo,
-      holder: {
-        runId: "competing",
-        tool: "write_file",
-        label: "competing writer",
-      },
-      maxWaitMs: 10_000,
-    });
-    await admitted.release();
+    // (The retired TS witness then re-acquired the workspace as the outside
+    // contender to witness that recovery cleared the crashed claim; the
+    // crate's `execution_ownership` / `coordination_durability` suites
+    // assert that transition directly against the same on-disk protocol.)
     await revived.app.close();
   }, 180_000);
 });

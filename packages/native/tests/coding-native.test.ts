@@ -7,9 +7,10 @@
  *
  * Contract checked here:
  *  1. descriptor parity: the descriptors the provider actually receives
- *     from the native lane match the TS pack's, descriptor-by-descriptor
- *     (names, descriptions, input schemas) — the TS pack is the differential
- *     oracle, imported here for exactly that;
+ *     from the native lane match the frozen TS authority,
+ *     descriptor-by-descriptor (names, descriptions, input schemas) —
+ *     `fixtures/coding-descriptors.json`, frozen from the TypeScript pack
+ *     at its deletion, is the differential oracle;
  *  2. behavior: writes and reads through the native tools are the crate's
  *     real files, with the crate's real results;
  *  3. approval lifecycle through the binding: first bash command → durable
@@ -25,9 +26,10 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-// Differential oracle ONLY (contract item 1): the frozen TS pack stays for
-// exactly this comparison — no native path imports it.
-import { createCodingToolPack } from "@agentkit/toolpacks-coding";
+// Differential oracle ONLY (contract item 1): the frozen descriptor fixture
+// (TS authority, frozen 2026-11-02 at the toolpacks-coding deletion) stays
+// for exactly this comparison — no native path imports the retired pack.
+import descriptors from "./fixtures/coding-descriptors.json";
 import { NativeSessionService, NativeStore } from "../src/index.js";
 import { available } from "./helpers/binding.js";
 
@@ -268,11 +270,12 @@ function counterWorkspace(options: { counter: string }): string {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Descriptor parity: provider-visible descriptors, TS pack vs native lane.
+// 1. Descriptor parity: provider-visible descriptors vs the frozen TS
+//    authority (`fixtures/coding-descriptors.json`, frozen 2026-11-02).
 // ---------------------------------------------------------------------------
 
 nativeTest(
-  "the native lane advertises the TS pack's descriptors, descriptor-by-descriptor",
+  "the native lane advertises the frozen pack descriptors, descriptor-by-descriptor",
   async () => {
     const workspace = mkdtempSync(join(tmpdir(), "agentkit-coding-native-d-"));
     const { provider, store, service, sessionId } = await openNativeCoding({
@@ -310,15 +313,16 @@ nativeTest(
         ]),
       );
 
-      const pack = createCodingToolPack({
-        workspace: { root: workspace },
-        testCommands: ["bun test"],
-        sandbox: "off",
-      });
-      const tsTools = await pack.contribute({
-        bindings: [],
-        limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
-      });
+      // The frozen authority, re-shaped to the pack's tool envelope so the
+      // comparison below is the differential exactly as it ran against TS.
+      const tsTools = descriptors.tools.map((tool) => ({
+        definition: {
+          name: tool.name,
+          effect: tool.effect,
+          description: tool.description ?? undefined,
+          inputSchema: tool.inputSchema,
+        },
+      }));
 
       // The same SET of tools — nothing more, nothing less.
       expect(new Set(native.keys())).toEqual(
