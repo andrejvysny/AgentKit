@@ -245,10 +245,31 @@ fn to_call_result(result: &ToolResult) -> CallToolResult {
         "summary": result.summary,
         "status": result.status,
     });
-    let text = serde_json::to_string(&payload).unwrap_or_else(|_| "{\"ok\":false}".to_owned());
+    let text = serde_json::to_string(&payload);
+    project_call_result(text, payload, result.ok)
+}
+
+/// Fold the (attempted) payload serialization onto the wire shape. A payload
+/// that refuses to serialize is an unusable tool outcome: it stays an error
+/// result and the wire carries only `tool_result_unserializable` — never a
+/// fabricated success, never the half-written payload (the frozen projection
+/// lane's unserializable case; a success here would advertise content the
+/// transport cannot deliver).
+fn project_call_result(
+    text: std::result::Result<String, serde_json::Error>,
+    payload: Value,
+    ok: bool,
+) -> CallToolResult {
+    let (text, payload, ok) = match text {
+        Ok(text) => (text, payload, ok),
+        Err(_) => {
+            let detail = json!({"errorCode": "tool_result_unserializable"});
+            (detail.to_string(), detail, false)
+        }
+    };
     let mut call = CallToolResult::success(vec![ContentBlock::text(text)]);
     call.structured_content = Some(payload);
-    call.is_error = if result.ok { None } else { Some(true) };
+    call.is_error = if ok { None } else { Some(true) };
     call
 }
 
@@ -634,5 +655,96 @@ mod tests {
         }
         assert!(parse("[]").is_err());
         assert!(parse("nonsense").is_err());
+    }
+
+    fn tool_result(ok: bool) -> ToolResult {
+        ToolResult {
+            ok,
+            data: Some(json!({"appliedCount": 1, "note": "partial lane"})),
+            sources: vec![json!({"kind": "file", "path": "src/app.ts"})],
+            warnings: vec!["one warning".to_owned()],
+            truncated: false,
+            limits: ToolLimits::default(),
+            model_data: None,
+            summary: Some("applied one edit".to_owned()),
+            status: Some(if ok { "ok" } else { "partial" }.to_owned()),
+            model_content: None,
+        }
+    }
+
+    fn text_block(call: &CallToolResult, index: usize) -> String {
+        call.content[index]
+            .as_text()
+            .expect("text content block")
+            .text
+            .clone()
+    }
+
+    #[test]
+    fn to_call_result_carries_a_failed_tool_payload_as_an_error_result() {
+        // The native sibling of the frozen failed-envelope case: ok:false
+        // surfaces as isError:true and the full result payload survives —
+        // as structuredContent and as the one mirrored JSON text block.
+        let call = to_call_result(&tool_result(false));
+        assert_eq!(call.is_error, Some(true), "ok:false is isError");
+        let structured = call
+            .structured_content
+            .clone()
+            .expect("the payload travels as structured content");
+        assert_eq!(structured["ok"], json!(false));
+        assert_eq!(
+            structured["data"],
+            json!({"appliedCount": 1, "note": "partial lane"})
+        );
+        assert_eq!(structured["status"], json!("partial"));
+        assert_eq!(structured["warnings"], json!(["one warning"]));
+        let text: Value =
+            serde_json::from_str(&text_block(&call, 0)).expect("text block is payload JSON");
+        assert_eq!(
+            text, structured,
+            "the text block mirrors the structured content"
+        );
+    }
+
+    #[test]
+    fn to_call_result_keeps_a_successful_tool_unflagged() {
+        let call = to_call_result(&tool_result(true));
+        assert_eq!(call.is_error, None, "ok:true is not an error result");
+        let structured = call.structured_content.expect("payload survives");
+        assert_eq!(structured["ok"], json!(true));
+        assert_eq!(structured["status"], json!("ok"));
+    }
+
+    #[test]
+    fn an_unserializable_tool_payload_stays_an_error_result() {
+        // Ports the frozen projection lane's unserializable case: a result
+        // whose payload refuses to serialize is an unusable outcome — it
+        // must never masquerade as success, and the wire carries only the
+        // code, never the half-written payload.
+        // A real serde_json failure: a map with non-string keys cannot be
+        // written as JSON, which is exactly the unusable-payload condition.
+        let mut broken = std::collections::BTreeMap::new();
+        broken.insert((1u8, 2u8), 3u8);
+        let failure =
+            serde_json::to_string(&broken).expect_err("non-string map keys never serialize");
+        let call = project_call_result(Err(failure), json!({"half": "written"}), true);
+        assert_eq!(
+            call.is_error,
+            Some(true),
+            "an unusable outcome is never a fabricated success"
+        );
+        assert_eq!(call.content.len(), 1);
+        let text: Value =
+            serde_json::from_str(&text_block(&call, 0)).expect("refusal text is JSON");
+        assert_eq!(
+            text,
+            json!({"errorCode": "tool_result_unserializable"}),
+            "the wire carries the code, not the broken payload"
+        );
+        assert_eq!(
+            call.structured_content,
+            Some(json!({"errorCode": "tool_result_unserializable"})),
+            "the structured content is the code, not the half-written payload"
+        );
     }
 }

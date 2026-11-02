@@ -39,10 +39,12 @@ to key), and the relevant environment — fingerprints cleanly through the
 ported
 `command_fingerprint`; any refusal, bound violation, or ambiguity yields no
 key and the call re-asks. Digest equality with the TypeScript authority is
-qualified by the gated differential suite
-(`packages/toolpacks-coding/tests/command-fingerprint-rust.test.ts`) and the
-shared collation fixture (`rust/fixtures/coding-fingerprint/env-order.json`),
-whose order is pinned against both runtimes' `localeCompare`. Eligible
+qualified by the frozen fixtures exported from the TypeScript implementation
+before its deletion (`rust/fixtures/coding-fingerprint/` — fingerprint
+material, environment-variable collation order, and tokenizer vectors),
+asserted in `command_fingerprint.rs`/`command_policy.rs`; the collation order
+(`env-order.json`) was pinned against the TypeScript runtime's `localeCompare`
+at export time. Eligible
 commands therefore reuse a remembered grant when the identity is unchanged;
 editing a `NODE_OPTIONS`-selected startup file invalidates the grant (external
 review P1-D; the v3-to-v4 bump retires every grant minted before that binding);
@@ -399,10 +401,9 @@ each TypeScript backend package is NOW:
 | `transport-http` | frozen library | Production REST/SSE = binding `startHttpServer` (Rust engine). The 223-suite TS server remains the behavioral authority the Rust route table is proven against — the client/react lane proof is that proof. |
 | `adapters-memory` / `adapters-sqlite` | frozen library | Production storage = Rust `SqliteStore` via `NativeStore`/`NativeAssistantStore` (shared conformance passed). TS adapters stay for frozen consumers. |
 | `runner-local` | frozen library | The queue/worker/lease engine lives in Rust; TS runner stays exported frozen. |
-| `mcp-client` / `mcp-server` | frozen library + feature holdout | Production MCP = binding (server hosting + client manager). The TS packages remain the ONLY implementation of OAuth, elicitation, rich content projection and the config/connection persistence layer — features the binding documents as open, not as parity. |
+| `mcp-client` | frozen library + feature holdout | Production MCP = binding: server hosting is Rust `agentkit-mcp` via `startMcpServer` (`packages/mcp-server` is deleted), client management is native. The TS `mcp-client` remains the ONLY implementation of OAuth, elicitation, rich content projection and the config/connection persistence layer — features the binding documents as open, not as parity. |
 | `contracts` | shared DTO/validation authority | Client-side and wire-level; not backend logic. |
-| `toolpacks-coding` | frozen library + differential asset | Production coding tools = Rust pack via `registerCodingTools` (`rust/crates/napi/src/coding_lane.rs`, pinned by `packages/native/tests/coding-native.test.ts` and the native authorization suite). The TS pack remains the fingerprint/authorization DIFFERENTIAL authority (the required TS↔Rust differential) and runs deliberately in `scripts/live/*` observation drivers. |
-| `scripts/live`, `scripts/qualification` | developer tools | App-shaped compositions (both examples, the smoke drivers) run on `@agentkit/native`. The TS coding pack still runs deliberately in `scripts/live/{coding,compaction,approval}-session.ts` — it IS the product surface under observation there, which is why the scanner's roots exclude `scripts/live` — and the TS proposal engine drives the native store in `proposals-smoke.mjs` as a contract witness; the qualification drivers are allowlisted with reasons in `scripts/check-composition-ownership.mjs`. |
+| `scripts/live`, `scripts/qualification` | developer tools | App-shaped compositions (both examples, the smoke drivers) run on `@agentkit/native`, coding tools included (`registerCodingTools`); the qualification drivers are allowlisted with reasons in `scripts/check-composition-ownership.mjs`, and the TS proposal engine drives the native store in `proposals-smoke.mjs` as a contract witness. |
 
 Production backend paths — both examples, the client/react test lanes,
 session services, REST/SSE, MCP, storage, provider transports — run on
@@ -514,6 +515,18 @@ normalization rule. These traces do not cover all 13 event variants: verificatio
 and host recovery/correction behavior need separate acceptance tests.
 
 ## Implemented TypeScript inventory and Rust acceptance matrix
+
+> **Superseded as a status tracker.** The Rust column below is frozen at the
+> phase 1 freeze (`3657782`, contract version 0.7.0) exactly as accepted then;
+> per its own rule it was never to be updated by parallel code. Since the
+> freeze the dated ledger at the top of this document records the actual
+> native acceptance — typed contracts/fixture conformance, the Rust provider
+> lanes, execution budgets, the durable store and 67-operation host
+> backbone, the native REST/SSE server over all 39 contract routes, the
+> native MCP server/client lanes, managed content, and the NAPI binding
+> suites. Read those dated entries and `docs/rust/acceptance.md` for current
+> status; treat an “Unimplemented” cell here as historical, not a claim about
+> the tree.
 
 The TypeScript column records source-backed implementation at the frozen SHA;
 it is not a claim that every optional integration is wired by every host. The
@@ -804,3 +817,88 @@ tests (native binding + wire capture) per the external review:
    without silently re-running the mutation` — deterministic on the loaded
    machine where it previously failed deterministically, and passing
    together with the rest of the acceptance file (15/15).
+
+## TypeScript deletion tranche (2 November 2026)
+
+The two packages whose Rust ports reached behavior parity are **deleted**:
+`packages/mcp-server` (`@agentkit/mcp-server`) and
+`packages/toolpacks-coding` (`@agentkit/toolpacks-coding`). Behavior parity
+is the bar, not API parity: both were breaking removals, the public API
+reports were regenerated, and every consumer moved to the native bindings.
+No stubs, no delegating shims.
+
+1. **`@agentkit/mcp-server` → `startMcpServer` (native).** The Rust MCP
+   server (`rust/crates/mcp`) is now the sole implementation: constant-time
+   bearer auth, Host/Origin rebinding guards, per-principal session scope
+   and caps, prompts/resources extensions, admission refusals, and request
+   cancellation. The TS suite's coverage was ported before deletion
+   (per-case mapping: [mcp-server-test-map.md](mcp-server-test-map.md)): guard
+   units and HTTP-boundary cases into `rust/crates/mcp/tests/security.rs`,
+   batch/concurrency/chunked-body limits into `tests/limits.rs`, TTL reap /
+   capacity / DELETE-tombstone / eviction semantics into `tests/sessions.rs`,
+   request cancellation into `tests/cancellation.rs` (per-request scope token
+   cancelled and drained so a backend selecting on `scope.cancellation`
+   settles on its own arm), result redaction and capability gating into
+   `tests/results.rs`, and the SDK1 live-interop / protocol-freeze /
+   actor-identity / 401-challenge pins into
+   `packages/native/tests/mcp-server-compat.test.ts`. Documented drop: the
+   TS `auto` (stateless) transport mode — the native lane is sessionful
+   only. Deviation found while porting (recorded, not pinned): a `DELETE`
+   that races an in-flight `tools/call` revokes the session correctly
+   (caller's callbacks abort, later requests 404 forever) but the abandoned
+   request's own response is never delivered — the caller's promise hangs.
+   The TS server never exercised this ordering; if a consumer needs it,
+   the response arm needs an explicit cancellation terminal.
+2. **`@agentkit/toolpacks-coding` → `registerCodingTools` (native).** The
+   crate (`rust/crates/toolpacks-coding`) is the sole coding lane: the
+   eleven tools, permission guard with role ceilings and plan-mode finals,
+   coordinators, mutation queue, bounded process execution with
+   process-group teardown, sandbox profile generation, command policy with
+   fingerprint-v4 standing approvals, and `submit_plan`. All 27 TS test
+   files were mapped (per-case mapping:
+   [toolpacks-coding-test-map.md](toolpacks-coding-test-map.md)) to crate tests under `rust/crates/toolpacks-coding/`,
+   binding tests in `packages/native/tests/`, or new ports. The
+   fingerprint differential survives as frozen fixtures:
+   `rust/fixtures/coding-fingerprint/{fingerprint-material,tokenizer,
+   env-order}.json` asserted by `command_fingerprint::tests` (CI step in
+   `.github/workflows/rust.yml`), and the model-facing descriptor contract
+   as `packages/native/tests/fixtures/coding-descriptors.json` (frozen TS
+   authority, asserted descriptor-by-descriptor by
+   `packages/native/tests/coding-native.test.ts`). The bridge-cancellation
+   contract test (`packages/native/tests/cancellation.test.ts`) now spawns
+   its own detached process group instead of importing the pack.
+   Consumers retargeted: `examples/coding-agent` (deps, app, acceptance),
+   `scripts/live/{coding,approval,compaction}-session.ts`.
+3. **Pre-deletion hardening (the deletion makes Rust the sole
+   implementation).** PID-reuse-safe kills (`git_tool.rs`, `process.rs`:
+   owned `tokio::process::Child` handles via `start_kill`, no bare
+   `libc::kill(pid)` on reaped pids). The driver's non-reaping exit probe
+   is `waitid(P_PID, WNOWAIT|WEXITED|WNOHANG)` — the `WNOHANG` is
+   load-bearing (without it `waitid` blocks the driver task inside the
+   syscall until the child exits, so timeouts and cancellation never
+   reach the poll loop; caught by the binding-level cancellation suite
+   with a long-lived `tail -f` group, and by the 120 s
+   `explicit_cancellation_reports_aborted_and_kills_the_group`
+   integration test). Teardown liveness predicates exclude the driver's
+   own deliberately-held zombie leader once the pump has seen its exit,
+   so a clean SIGTERM teardown reports no escalation.
+   Lock-poison recovery in
+   `mcp/src/manager/session.rs` and `core/src/budget.rs`
+   (`unwrap_or_else(PoisonError::into_inner)`, matching `jsbridge.rs`);
+   `napi/src/errors.rs` redacts unknown/internal codes with a `OnceLock`
+   parse of `error-codes.json` — raw messages never cross to JS;
+   `napi/src/run.rs` terminal wire strings come from an explicit match;
+   all `#[ignore]` tests rationaled; provider stream macros hand-formatted;
+   the coding-lane coordination dir gained an owner/mode check with a
+   non-Unix path fix.
+4. **Ledger and gates follow the deletion.** The composition scanner keeps
+   `createCodingToolPack` et al as HARD_BANNED **tombstones** — refused
+   before the BACKEND prefilter, so the engine names stay dead even though
+   their package no longer ships. `PROVENANCE.md` retargets the
+   MIT-attribution table to the Rust port paths that carry the headers now.
+   Umbrella subpaths, published exports, node/pack/umbrella smokes, CI dist
+   lists, API reports (`bun run update:api`), and qualification lanes were
+   cut in the same change; the one-shot freeze tool
+   (`scripts/export-coding-fingerprint-fixtures.ts`, port-local and never a
+   CI gate) retired with its TS authority, leaving the fixtures frozen at
+   the freeze commit.

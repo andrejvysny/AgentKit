@@ -25,9 +25,6 @@ packages/mcp-client            @agentkit/mcp-client (optional adapter)
 packages/transport-http        @agentkit/transport-http (optional adapter)
   fetch-standard REST v1 + SSE handler serving contracts' REST surface
 
-packages/mcp-server            @agentkit/mcp-server (optional adapter)
-  exposes a host's ToolCatalog AS an MCP server over streamable HTTP
-
 packages/client                @agentkit/client (optional adapter)
   the other end of that surface: typed REST v1 + SSE client, auto-resuming
   run streams, derived run phases; depends on contracts alone
@@ -200,15 +197,16 @@ skip any of them and write the equivalent itself:
   + SSE) over any host that implements the port catalog below. See
   [`packages/transport-http/README.md`](../packages/transport-http/README.md)
   and [ADR 0005](adr/0005-http-transport.md).
-- **`@agentkit/mcp-server`** ([`packages/mcp-server/`](../packages/mcp-server))
-  — the inverse direction from `mcp-client`: exposes a host's `ToolCatalog`
-  ([ADR 0011](adr/0011-tool-governance.md)) **as** an MCP server over
-  streamable HTTP, so an external MCP client (an IDE, another agent) can
-  drive this host's tools. Constant-time bearer auth, a DNS-rebinding
-  Host/Origin guard, sessions keyed on a server-minted id bound to the
-  opening principal, write-tool filtering on both `tools/list` and
-  `tools/call`. See [`packages/mcp-server/README.md`](../packages/mcp-server/README.md)
-  and [ADR 0013](adr/0013-serving-surfaces.md).
+- **`@agentkit/native`** ([`packages/native/`](../packages/native)) —
+  the inverse direction from `mcp-client`: the Rust backend exposes a
+  host's `ToolCatalog` ([ADR 0011](adr/0011-tool-governance.md)) **as** an
+  MCP server over streamable HTTP via `startMcpServer`, so an external MCP
+  client (an IDE, another agent) can drive this host's tools. Constant-time
+  bearer auth, a DNS-rebinding Host/Origin guard, sessions keyed on a
+  server-minted id bound to the opening principal, write-tool filtering on
+  both `tools/list` and `tools/call` — all enforced engine-side
+  (`rust/crates/mcp`). See [ADR 0013](adr/0013-serving-surfaces.md) and
+  [`docs/rust/parity.md`](rust/parity.md).
 - **`@agentkit/client`** ([`packages/client/`](../packages/client)) —
   `createAgentKitClient`, the calling end of that same surface: one typed
   method per `REST_ROUTES` operation, `streamRun` as an async iterable that

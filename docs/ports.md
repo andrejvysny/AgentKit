@@ -1111,15 +1111,15 @@ It does not call `ContextProvider.refresh`: listing is a read, and
 re-validating every binding because a UI opened a tool picker would make an
 enumeration as expensive as a turn.
 
-**Second consumer**: `@agentkit/mcp-server` projects this catalogue straight
-onto MCP `tools/list` — an `AiToolDefinition`'s `name`/`description`/
-`inputSchema` cross verbatim, and `effect: "write"` is the marker its
-`writesEnabled` filter reads. The definitions-only rule is why that package,
-not this one, owns `createStagedToolSource`: an MCP `tools/call` needs an
-executable, and opening that second call path is a decision an optional
-adapter makes visibly in a host's wiring, not something the host package
-hands out. See
-[`packages/mcp-server/README.md`](../packages/mcp-server/README.md).
+**Second consumer**: the Rust backend's MCP server (`rust/crates/mcp`,
+exposed as `startMcpServer` on `@agentkit/native`) projects this catalogue
+straight onto MCP `tools/list` — an `AiToolDefinition`'s
+`name`/`description`/`inputSchema` cross verbatim, and `effect: "write"` is
+the marker its `writesEnabled` filter reads. The definitions-only rule is
+why that engine, not this package, owns `createStagedToolSource`: an MCP
+`tools/call` needs an executable, and opening that second call path is a
+decision a host makes visibly in its wiring, not something the host package
+hands out. See [`docs/rust/parity.md`](rust/parity.md).
 
 ## Secrets, authorization, usage
 

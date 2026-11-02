@@ -144,6 +144,7 @@ dependencies = [
  "axum",
  "futures",
  "http",
+ "http-body-util",
  "reqwest",
  "rmcp",
  "serde",
