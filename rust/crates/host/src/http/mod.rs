@@ -322,6 +322,7 @@ fn host_error(error: HostError) -> Problem {
     match error {
         HostError::Store(error) => store_error(error),
         HostError::UnknownKind(kind) => Problem::host("executor_not_found", kind),
+        HostError::NoExecutorForKind(kind) => Problem::host("no_executor_for_kind", kind),
         _ => Problem::host("internal_error", error.to_string()),
     }
 }

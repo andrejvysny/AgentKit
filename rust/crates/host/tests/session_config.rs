@@ -17,12 +17,20 @@
 //!   payload snapshot it was submitted with.
 
 use agentkit_host::{
-    AgentSendResult, AgentSessionService, AgentSessionServiceDeps, CONTENT_UNSUPPORTED_MESSAGE,
-    CreateSessionInput, SendInput, SharedRuntime, SystemRuntime, WhenBusy,
+    AgentHost, AgentSendResult, AgentSessionService, AgentSessionServiceDeps,
+    CONTENT_UNSUPPORTED_MESSAGE, CreateSessionInput, ExecutionContext, HostOptions, HostResult,
+    SendInput, SharedRuntime, SystemRuntime, TaskExecutor, WhenBusy,
 };
 use agentkit_store::SqliteStore;
+use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 struct Fixture {
     store: SqliteStore,
@@ -509,4 +517,126 @@ async fn running_turn_keeps_its_snapshot_later_turns_see_the_patch() {
         .expect_err("later turn ignored the patched effort");
     assert_eq!(error.code, "not_implemented");
     assert!(error.message.contains("reasoning effort"));
+}
+
+// ---------------------------------------------------------------------------
+// Admission — session turns are created as tasks of the descriptor's turn
+// kind. With the host's admission gate bound (`with_gate`), every admission
+// that would create a task — turn submit, queue-or-stage, flush promotion —
+// refuses a kind with no registered `TaskExecutor` with the stable
+// `no_executor_for_kind` code BEFORE the store transaction begins, so a
+// refused admission lands zero rows. Whole admissions are rejected, never
+// admitted-except-the-missing-one: the store admits an input with its task
+// and messages atomically, so there is no partial batch to keep or drop.
+// ---------------------------------------------------------------------------
+
+struct CountingTurn(Arc<AtomicUsize>);
+
+#[async_trait]
+impl TaskExecutor for CountingTurn {
+    async fn execute(&self, _context: ExecutionContext) -> HostResult<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+fn host_for(store: &SqliteStore, runtime: &SharedRuntime, kinds: &[&str]) -> AgentHost {
+    let executors: HashMap<String, Arc<dyn TaskExecutor>> = kinds
+        .iter()
+        .map(|kind| {
+            (
+                (*kind).to_owned(),
+                Arc::new(CountingTurn(Arc::new(AtomicUsize::new(0)))) as Arc<dyn TaskExecutor>,
+            )
+        })
+        .collect();
+    AgentHost::new(
+        store.clone(),
+        executors,
+        runtime.clone(),
+        HostOptions::default(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn admission_refuses_a_turn_kind_with_no_executor_before_landing_rows() {
+    let store = SqliteStore::memory(64).unwrap();
+    let runtime = Arc::new(SystemRuntime) as SharedRuntime;
+    let host = host_for(&store, &runtime, &["other.kind"]);
+    let service = AgentSessionService::new(AgentSessionServiceDeps {
+        store: store.clone(),
+        runtime: runtime.clone(),
+        plan_approval: None,
+        wake: None,
+    })
+    .with_gate(host.admission_gate());
+    service.create_session(&create_input()).await.unwrap();
+
+    let error = service
+        .send("s1", &send_input(json!("hello"), "in-0", WhenBusy::Reject))
+        .await
+        .expect_err("chat.turn has no executor here");
+    assert_eq!(error.code, "no_executor_for_kind");
+    assert!(error.message.contains("chat.turn"));
+    assert!(
+        store
+            .list_tasks(Some("s1".into()))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.messages("s1", true).await.unwrap().is_empty());
+
+    // Busy session (an admitted turn the gated host will never claim): the
+    // batch-shaped queue admission refuses input+task+messages together.
+    let ungated = AgentSessionService::new(AgentSessionServiceDeps {
+        store: store.clone(),
+        runtime: runtime.clone(),
+        plan_approval: None,
+        wake: None,
+    });
+    ungated
+        .send("s1", &send_input(json!("first"), "in-0", WhenBusy::Reject))
+        .await
+        .unwrap();
+    let queued = service
+        .send("s1", &send_input(json!("later"), "in-1", WhenBusy::Queue))
+        .await
+        .expect_err("the queue path is gated too");
+    assert_eq!(queued.code, "no_executor_for_kind");
+    assert_eq!(
+        store.list_tasks(Some("s1".into())).await.unwrap().len(),
+        1,
+        "only the admitted turn exists; the refused batch left no task"
+    );
+    assert!(
+        service.get_state("s1").await.unwrap().pending.is_empty(),
+        "the refused batch left no queued input either"
+    );
+    assert_eq!(
+        service
+            .flush_queue("s1")
+            .await
+            .expect_err("promotion is an admission too")
+            .code,
+        "no_executor_for_kind"
+    );
+
+    // The refusal is per-registry, not a verdict on the kind: a host that
+    // registers chat.turn claims and runs exactly what the gated host
+    // refused to admit.
+    let turns = Arc::new(AtomicUsize::new(0));
+    let runner = AgentHost::new(
+        store.clone(),
+        HashMap::from([(
+            "chat.turn".to_owned(),
+            Arc::new(CountingTurn(turns.clone())) as Arc<dyn TaskExecutor>,
+        )]),
+        runtime,
+        HostOptions::default(),
+    )
+    .unwrap();
+    assert!(runner.run_once().await.unwrap());
+    assert_eq!(turns.load(Ordering::SeqCst), 1);
 }

@@ -417,6 +417,7 @@ impl TaskExecutor for ChatExecutor {
             ..RunOptions::default()
         };
         let session = correction::ChatSession {
+            answer_committed: false,
             context: context.clone(),
             options: self.options.clone(),
             base: options,

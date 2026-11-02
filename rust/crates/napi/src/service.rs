@@ -212,7 +212,8 @@ impl SessionService {
             runtime,
             plan_approval: Some(Arc::new(BindingPlanPolicy::new(options.plan.clone()))),
             wake: Some(host.wake_handle()),
-        });
+        })
+        .with_gate(host.admission_gate());
         host.set_session_flush_planner(Arc::new(service.clone()))
             .await;
         // Bound before the worker exists: a run can never query an unbound

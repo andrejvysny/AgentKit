@@ -450,6 +450,10 @@ impl Fixture {
                     args_sha256: args_sha256(
                         &serde_json::from_str::<Value>(arguments_json).unwrap(),
                     ),
+                    ts_args_sha256: Some(ts_args_sha256(
+                        &serde_json::from_str::<Value>(arguments_json).unwrap(),
+                    )),
+                    args_hash_provenance: agentkit_store::ArgsHashProvenance::Canonical,
                     context_sha256: "0".repeat(64),
                     attempt_id: "1".into(),
                     approval_request_id: None,

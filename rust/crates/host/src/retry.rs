@@ -76,6 +76,7 @@ fn host_code(code: &str) -> Option<ExecutionErrorKind> {
         | "duplicate_action_id"
         | "duplicate_task"
         | "executor_not_found"
+        | "no_executor_for_kind"
         | "invalid_task_payload"
         | "unknown_dependency"
         | "revision_conflict"
@@ -130,6 +131,7 @@ fn classify_host_error(error: &HostError) -> Option<ExecutionErrorClassification
     use agentkit_store::StoreError;
     let code = match error {
         HostError::UnknownKind(_) => "executor_not_found",
+        HostError::NoExecutorForKind(_) => "no_executor_for_kind",
         HostError::Store(StoreError::LeaseLost(_)) => "lease_lost",
         HostError::Store(StoreError::InvalidTransition(_)) => "invalid_task_transition",
         HostError::Store(StoreError::NotFound(_)) => "not_found",

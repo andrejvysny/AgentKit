@@ -32,6 +32,16 @@ pub(super) struct ChatSession {
     pub sink: Arc<DurableEvents>,
     pub anchor: String,
     pub system_prompt: Option<String>,
+    /// Set the instant a pass streams its `run.completed` terminal event.
+    /// The core loop appends the final answer's messages and that event to
+    /// the durable sink in ONE transaction (`sink.append_messages`), and the
+    /// same event object flows through the event stream, so seeing it here
+    /// is the authoritative witness that this attempt committed a final
+    /// answer — no post-hoc bounded event scan can disagree, and no
+    /// successful completion can be mistaken for an interrupt (the runner
+    /// only parks while the task row is still `running`, which a committed
+    /// and settled attempt never is).
+    pub answer_committed: bool,
 }
 struct Pass {
     terminal: Terminal,
@@ -56,21 +66,11 @@ impl ChatSession {
                     // The loop stopped at a safe boundary on a durable
                     // interrupt: no final answer is owed, the anchor stays
                     // a placeholder, and the runner parks this attempt. If
-                    // the final answer already committed (the interrupt
-                    // raced the finish), keep finalizing instead.
-                    let landed = self
-                        .context
-                        .store
-                        .events(&self.context.task.task_id, None, 1000)
-                        .await
-                        .map_err(|error| HostError::Execution(error.to_string()))?
-                        .iter()
-                        .any(|event| {
-                            event.event["type"] == "run.completed"
-                                && event.event["attemptId"]
-                                    == Value::String(self.context.attempt_id.clone())
-                        });
-                    if !landed {
+                    // the final answer already committed — witnessed
+                    // authoritatively by the terminal event flowing through
+                    // the event stream, atomically with the answer's own
+                    // messages — keep finalizing instead.
+                    if !self.answer_committed {
                         return Ok(());
                     }
                 }
@@ -235,6 +235,11 @@ impl ChatSession {
                     if let Some(id) = event["data"]["toolCallId"].as_str() {
                         calls.insert(id.to_owned());
                     }
+                }
+                Some("run.completed") => {
+                    // Authoritative: appended atomically with the answer's
+                    // messages (see `answer_committed`).
+                    self.answer_committed = true;
                 }
                 Some("run.failed") => {
                     failure = Some(ExecutionFailure {
