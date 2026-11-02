@@ -12,7 +12,10 @@
 //! What is copied is everything the Rust store can represent losslessly:
 //! chats, the message tree (parents first, so the self-referencing foreign key
 //! holds), tasks with their attempts, events and leases, run bindings and
-//! provider continuations, proposals with their apply receipts, the outbox, the
+//! provider continuations, proposals with their apply receipts, the durable
+//! tool-execution receipts — uncertain `admitted` effects included, so the
+//! execution guard still refuses to repeat a crash-uncertain mutation after
+//! the upgrade —, the outbox, the
 //! provider catalogue, the MCP and assistant settings, and the durable agent
 //! session inputs and context summaries that both ports spell identically. The
 //! shared `fence` and `input_order` counters are pushed past everything the
@@ -34,6 +37,7 @@ use crate::{
     Lease, MessageRecord, OutboxRecord, ProposalRecord, ProposalStatus, ProviderContinuationRecord,
     ReceiptRecord, Result, SqliteStore, StoreError, TaskRecord, TaskStatus,
     context_summaries::CONTEXT_SUMMARIES_NAMESPACE,
+    execution_receipts::{ExecutionReceiptRecord, read_execution_receipt},
     provider_catalog::{
         PROVIDER_CAPABILITIES_NAMESPACE, PROVIDER_MODELS_NAMESPACE, PROVIDERS_NAMESPACE,
         capabilities, model, provider,
@@ -57,6 +61,22 @@ pub const MCP_SERVERS_NAMESPACE: &str = "agentkit.compat.mcp-servers";
 pub const ASSISTANT_SETTINGS_NAMESPACE: &str = "agentkit.compat.settings";
 /// The only key [`ASSISTANT_SETTINGS_NAMESPACE`] ever holds.
 pub const ASSISTANT_SETTINGS_KEY: &str = "assistant";
+/// The production assistant-settings document: the namespace/key every
+/// runtime reader consumes — `ChatExecutor::stage_tools` (the `toolCalling`
+/// staging gate), the HTTP turn lane (default provider/model), the
+/// `DesktopBackend` management lane and the napi settings port. Mirroring
+/// the compatibility record here is what makes an imported
+/// `toolCalling: "off"` reach the executor instead of dying in storage.
+/// The literals must match `crates/napi/src/store_settings.rs` and
+/// `crates/host/src/http/management.rs`, which hardcode them.
+pub const SETTINGS_NAMESPACE: &str = "http";
+/// The only key [`SETTINGS_NAMESPACE`] holds the settings document under.
+pub const SETTINGS_KEY: &str = "settings";
+/// The namespace `McpConfigRepository` reads: ONE JSON array of
+/// `McpServerDto`-shaped records, keyed by the application id. The store
+/// crate cannot name the host's constructor argument, so promotion takes it
+/// through [`ImportOptions::promote_mcp_application_id`].
+pub const MCP_CONFIG_NAMESPACE: &str = "mcp-config";
 
 /// The oldest TypeScript schema this importer reads (`MIN_SUPPORTED_SCHEMA_VERSION`).
 const MIN_TS_VERSION: i64 = 8;
@@ -75,6 +95,17 @@ pub struct ImportOptions {
     pub copy_outbox: bool,
     /// Copy `proposals` and their `proposal_outcomes` (as receipts).
     pub copy_proposals: bool,
+    /// Mirror the imported assistant settings into the production settings
+    /// document ([`SETTINGS_NAMESPACE`]/[`SETTINGS_KEY`]) that the runtime
+    /// readers actually consult — tool-staging policy first among them. The
+    /// mirror never overwrites a settings document that already exists.
+    pub promote_settings: bool,
+    /// Aggregate the imported MCP servers into the single
+    /// [`MCP_CONFIG_NAMESPACE`] array document `McpConfigRepository` reads,
+    /// keyed by this application id. Promotion refuses to overwrite a live
+    /// non-empty document, and quarantines (with a warning) any server the
+    /// production reader could not accept.
+    pub promote_mcp_application_id: Option<String>,
     /// Stop at the first unmappable row and roll the whole import back. When
     /// false, each bad row becomes a warning and the rest of the database is
     /// still imported.
@@ -90,6 +121,8 @@ impl Default for ImportOptions {
             copy_mcp_servers: true,
             copy_outbox: true,
             copy_proposals: true,
+            promote_settings: true,
+            promote_mcp_application_id: None,
             abort_on_error: true,
             dry_run: false,
         }
@@ -115,10 +148,21 @@ pub struct ImportReport {
     pub providers: usize,
     /// MCP server configs inserted into the compatibility namespace.
     pub mcp_servers: usize,
+    /// 1 when the compatibility settings document was mirrored into the
+    /// production settings document (0 when a production document already
+    /// existed and was left alone).
+    pub promoted_settings: usize,
+    /// Servers carried into the production `mcp-config` document; servers the
+    /// production reader could not accept are excluded and warned.
+    pub promoted_mcp_servers: usize,
     /// Outbox records inserted or refreshed.
     pub outbox: usize,
     /// Apply receipts inserted or refreshed.
     pub receipts: usize,
+    /// Durable tool-execution receipts inserted or refreshed — including
+    /// `admitted` ones, whose missing result is the honest record of an
+    /// uncertain effect the execution guard must keep blocking.
+    pub executions: usize,
     /// Durable agent-session inputs inserted or refreshed.
     pub agent_inputs: usize,
     /// Derived context summaries inserted or refreshed.
@@ -399,6 +443,13 @@ impl<'a> Importer<'a> {
                 "payload",
             ],
         )?;
+        // One consistent snapshot for every scan: a read transaction held on
+        // the source until this connection drops. Without it each table SELECT
+        // is its own read transaction, so a still-running legacy writer could
+        // move the database between two table scans and the import would mix
+        // two generations of rows. A writer that blocks the snapshot for more
+        // than the busy timeout makes the import fail closed.
+        source.execute_batch("BEGIN")?;
         Ok(Self {
             db,
             source,
@@ -416,6 +467,7 @@ impl<'a> Importer<'a> {
         self.import_events()?;
         self.import_leases()?;
         self.import_bindings()?;
+        self.import_executions()?;
         if self.opts.copy_proposals {
             self.import_proposals()?;
             self.import_outcomes()?;
@@ -493,7 +545,13 @@ impl<'a> Importer<'a> {
     /// Every row of one source table, columns keyed by name.
     fn rows(&self, table: &str) -> Result<Vec<Row>> {
         // Every caller passes a literal table name from this module.
-        let mut statement = self.source.prepare(&format!("SELECT * FROM {table}"))?;
+        self.rows_sql(&format!("SELECT * FROM {table}"))
+    }
+
+    /// `rows` over an explicit statement; the table name in `sql` is a
+    /// literal from this module.
+    fn rows_sql(&self, sql: &str) -> Result<Vec<Row>> {
+        let mut statement = self.source.prepare(sql)?;
         let names: Vec<String> = statement
             .column_names()
             .iter()
@@ -683,6 +741,51 @@ impl<'a> Importer<'a> {
             Ok(())
         })
     }
+
+    /// One settings row, inserted only when the namespace/key is still free:
+    /// a promotion must never overwrite configuration a live deployment
+    /// already owns. Returns whether the row was written.
+    fn setting_if_absent(&mut self, namespace: &str, key: &str, value: &Value) -> Result<bool> {
+        let text = json(self.db, value)?;
+        let kind = format!("{namespace} {key}");
+        let written = self.attempt(&kind, key, |db| {
+            db.execute(
+                "INSERT INTO settings(namespace,key,value) VALUES(?,?,?) ON CONFLICT(namespace,key) DO NOTHING",
+                params![namespace, key, text],
+            )?;
+            Ok(())
+        })?;
+        if !written {
+            return Ok(false);
+        }
+        Ok(self.db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM settings WHERE namespace=? AND key=? AND value=?)",
+            params![namespace, key, text],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// One settings row as parsed JSON. The destination's settings table only
+    /// ever holds documents this importer or the store itself wrote, so a
+    /// value that does not parse is corruption, not absence.
+    fn setting_value(&self, namespace: &str, key: &str) -> Result<Option<Value>> {
+        let text = self
+            .db
+            .query_row(
+                "SELECT value FROM settings WHERE namespace=? AND key=?",
+                params![namespace, key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(text) = text else {
+            return Ok(None);
+        };
+        serde_json::from_str(&text).map(Some).map_err(|error| {
+            StoreError::InvalidImport {
+                reason: format!("the destination settings row {namespace}/{key} is not JSON ({error})"),
+            }
+        })
+    }
 }
 
 impl<'a> Importer<'a> {
@@ -742,12 +845,13 @@ impl<'a> Importer<'a> {
                     progress = true;
                     continue;
                 };
-                let chat_ready = Row::text(&row, "chat_id")
-                    .filter(|chat| self.exists("chats", "id", chat).unwrap_or(false))
-                    .is_some();
+                let chat_ready = match Row::text(&row, "chat_id") {
+                    None => false,
+                    Some(chat) => self.exists("chats", "id", &chat)?,
+                };
                 let parent_ready = match Row::text(&row, "parent_message_id") {
                     None => true,
-                    Some(parent) => self.exists("messages", "id", &parent).unwrap_or(false),
+                    Some(parent) => self.exists("messages", "id", &parent)?,
                 };
                 if !chat_ready || !parent_ready {
                     deferred.push(row);
@@ -774,9 +878,10 @@ impl<'a> Importer<'a> {
                     Row::text(&row, "chat_id").unwrap_or_default()
                 ),
             };
-            if self.skip::<()>(reason).is_err() {
-                return Ok(());
-            }
+            // Strict mode must abort here, never commit an import that
+            // silently dropped a message: `skip` answers `Err` precisely
+            // when `abort_on_error` demands the whole import be refused.
+            self.skip::<()>(reason)?;
         }
         Ok(())
     }
@@ -1271,6 +1376,149 @@ impl<'a> Importer<'a> {
 }
 
 impl<'a> Importer<'a> {
+    /// `tool_executions` rows ARE importable, and dropping them is unsafe:
+    /// the execution guard replays completed results and refuses reissue of
+    /// an `admitted`-without-result effect — protection that must survive the
+    /// upgrade or a crash-uncertain mutation can be executed twice. The only
+    /// field the TypeScript record lacks is `chatId`; it is re-derived from
+    /// what the import itself wrote (the run's binding, else the unique chat
+    /// whose messages carry this run), and a receipt whose chat cannot be
+    /// proven is quarantined: strict mode refuses the whole import, tolerant
+    /// mode refuses the row with a loud warning, so the barrier is never
+    /// silently weakened. Rows are scanned in rowid order and written in the
+    /// same order, because the guard's replay barrier treats the NEWEST
+    /// receipt for a tool call as the one that counts.
+    fn import_executions(&mut self) -> Result<()> {
+        if !self.table_exists("tool_executions")? {
+            return Ok(());
+        }
+        for row in self.rows_sql(
+            "SELECT execution_id, run_id, approval_request_id, record \
+             FROM tool_executions ORDER BY rowid",
+        )? {
+            let Some(execution_id) = Row::text(&row, "execution_id") else {
+                self.report
+                    .warnings
+                    .push("tool_executions: a row has no execution_id".into());
+                continue;
+            };
+            let Some(run_id) = Row::text(&row, "run_id") else {
+                self.ignore(format!("execution {execution_id}: run_id is not there"))?;
+                continue;
+            };
+            if !self.exists("tasks", "id", &run_id)? {
+                self.ignore(format!(
+                    "execution {execution_id}: its run {run_id} was not imported"
+                ))?;
+                continue;
+            }
+            let Some(mut record) =
+                self.json_column("tool_execution", &execution_id, &row, "record")?
+            else {
+                continue;
+            };
+            let Value::Object(fields) = &mut record else {
+                self.ignore(format!("execution {execution_id}: record is not an object"))?;
+                continue;
+            };
+            let chat_id = match self.chat_of_run(&run_id)? {
+                Some(chat) => {
+                    if let Some(stored) = fields.get("chatId")
+                        && stored.as_str() != Some(chat.as_str())
+                    {
+                        self.report.warnings.push(format!(
+                            "tool_execution {execution_id}: its record claims chat \
+                             {stored} but the run provably belongs to {chat}; the \
+                             proven chat was kept"
+                        ));
+                    }
+                    chat
+                }
+                None => {
+                    self.ignore(format!(
+                        "execution {execution_id}: run {run_id} binds to no single \
+                         chat, so the chat-scoped uncertainty barrier cannot be \
+                         rebuilt for this receipt"
+                    ))?;
+                    continue;
+                }
+            };
+            fields.insert("chatId".into(), Value::String(chat_id));
+            let parsed = match serde_json::from_value::<ExecutionReceiptRecord>(record) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    self.ignore(format!(
+                        "execution {execution_id}: the record is not an execution \
+                         receipt ({error})"
+                    ))?;
+                    continue;
+                }
+            };
+            // The destination's own anti-corruption validator gates the write:
+            // a receipt that would make a later recovery read fail closed must
+            // never enter the store at all.
+            if let Err(error) = read_execution_receipt(
+                serde_json::to_value(&parsed).map_err(|error| StoreError::InvalidImport {
+                    reason: format!("execution {execution_id}: cannot re-encode ({error})"),
+                })?,
+                &execution_id,
+                &run_id,
+                Some(Row::text(&row, "approval_request_id").as_deref()),
+            ) {
+                self.ignore(format!(
+                    "execution {execution_id}: {error}"
+                ))?;
+                continue;
+            }
+            let approval_request_id = Row::text(&row, "approval_request_id");
+            let text = json(self.db, &parsed)?;
+            if self.attempt("execution", &execution_id, |db| {
+                db.execute(
+                    "INSERT INTO tool_executions(execution_id,run_id,approval_request_id,record) \
+                     VALUES(?,?,?,?) ON CONFLICT(execution_id) DO UPDATE SET \
+                     run_id=excluded.run_id, approval_request_id=excluded.approval_request_id, \
+                     record=excluded.record",
+                    params![execution_id, run_id, approval_request_id, text],
+                )?;
+                Ok(())
+            })? {
+                self.report.executions += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// The one chat a run belongs to: its imported provider binding first,
+    /// else the unique chat whose imported messages carry this run — the
+    /// same two sources the Rust v3 receipt backfill resolves through.
+    /// Ambiguity (two chats) is answered as no chat: never a guess.
+    fn chat_of_run(&self, run_id: &str) -> Result<Option<String>> {
+        let bound = self
+            .db
+            .query_row(
+                "SELECT chat_id FROM run_bindings WHERE run_id=?",
+                [run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if let Some(chat) = bound.filter(|chat| !chat.is_empty()) {
+            return Ok(Some(chat));
+        }
+        let mut statement = self.db.prepare(
+            "SELECT DISTINCT chat_id FROM messages WHERE json_extract(record,'$.runId')=?1",
+        )?;
+        let chats: Vec<String> = statement
+            .query_map([run_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(if chats.len() == 1 {
+            chats.into_iter().next()
+        } else {
+            None
+        })
+    }
+}
+
+impl<'a> Importer<'a> {
     fn import_proposals(&mut self) -> Result<()> {
         if !self.table_exists("proposals")? {
             return Ok(());
@@ -1740,6 +1988,7 @@ impl<'a> Importer<'a> {
         if !self.table_exists("mcp_servers")? {
             return Ok(());
         }
+        let mut servers = Vec::new();
         for row in self.rows("mcp_servers")? {
             let Some(id) = Row::text(&row, "id") else {
                 self.report
@@ -1792,9 +2041,78 @@ impl<'a> Importer<'a> {
             if record.len() < 5 {
                 continue;
             }
-            if self.setting(MCP_SERVERS_NAMESPACE, &id, &Value::Object(record))? {
+            let value = Value::Object(record);
+            if self.setting(MCP_SERVERS_NAMESPACE, &id, &value)? {
                 self.report.mcp_servers += 1;
+                servers.push(value);
             }
+        }
+        if let Some(application_id) = self.opts.promote_mcp_application_id.clone() {
+            self.promote_mcp_servers(&application_id, servers)?;
+        }
+        Ok(())
+    }
+
+    /// Aggregate the imported per-server compatibility records into the ONE
+    /// `McpConfigRepository` document the production reader consults
+    /// (namespace `mcp-config`, key = application id). `McpConfigRepository`
+    /// reads a JSON array; per-key rows are invisible to it, so without this
+    /// promotion an imported deployment starts with zero MCP servers while
+    /// its storage shows them "copied". A live non-empty document is never
+    /// overwritten; a server the production validator (`parse_record`: the
+    /// `McpServerDto` shape plus the alias pattern) could not accept is
+    /// excluded with a warning instead of poisoning the live document.
+    fn promote_mcp_servers(&mut self, application_id: &str, servers: Vec<Value>) -> Result<()> {
+        if application_id.is_empty() {
+            self.report.warnings.push(
+                "mcp-config: the promotion application id is empty; production \
+                 promotion was skipped"
+                    .into(),
+            );
+            return Ok(());
+        }
+        let mut accepted = Vec::new();
+        for server in servers {
+            match production_mcp_record(&server) {
+                Ok(shaped) => accepted.push(shaped),
+                Err(reason) => self.report.warnings.push(format!(
+                    "mcp server {}: excluded from the production mcp-config document \
+                     ({reason}); it remains under the compatibility namespace",
+                    server["id"].as_str().unwrap_or_default()
+                )),
+            }
+        }
+        if accepted.is_empty() {
+            return Ok(());
+        }
+        accepted.sort_by(|left, right| {
+            (left["createdAt"].as_str().unwrap_or_default(), left["id"].as_str().unwrap_or_default())
+                .cmp(&(
+                    right["createdAt"].as_str().unwrap_or_default(),
+                    right["id"].as_str().unwrap_or_default(),
+                ))
+        });
+        let count = accepted.len();
+        let document = Value::Array(accepted);
+        let promoted = match self.setting_value(MCP_CONFIG_NAMESPACE, application_id)? {
+            Some(existing) => {
+                if existing.as_array().is_some_and(|items| !items.is_empty()) {
+                    self.report.warnings.push(format!(
+                        "mcp-config/{application_id}: a live configuration document \
+                         already exists; imported servers were kept only under the \
+                         compatibility namespace"
+                    ));
+                    false
+                } else {
+                    // An empty or malformed document carries nothing to lose;
+                    // replace it with the imported servers.
+                    self.setting(MCP_CONFIG_NAMESPACE, application_id, &document)?
+                }
+            }
+            None => self.setting_if_absent(MCP_CONFIG_NAMESPACE, application_id, &document)?,
+        };
+        if promoted {
+            self.report.promoted_mcp_servers += count;
         }
         Ok(())
     }
@@ -1842,11 +2160,48 @@ impl<'a> Importer<'a> {
                 .filter(Value::is_object)
                 .unwrap_or_else(|| Value::Object(Map::new()));
             record.insert("metadata".into(), metadata);
-            self.setting(
+            if self.setting(
                 ASSISTANT_SETTINGS_NAMESPACE,
                 ASSISTANT_SETTINGS_KEY,
-                &Value::Object(record),
-            )?;
+                &Value::Object(record.clone()),
+            )? && self.opts.promote_settings
+            {
+                // The runtime policy gate (`ChatExecutor::stage_tools`) and
+                // the turn lane read ONLY the production document; a settings
+                // row that lives just in the compatibility namespace has no
+                // effect on any executor. Copy the wire-identical whitelist
+                // fields and insert-if-absent, so an already-configured
+                // deployment keeps its own document.
+                let mut document = Map::new();
+                for field in [
+                    "defaultProviderId",
+                    "defaultModel",
+                    "contextSizePreference",
+                    "writePolicyMode",
+                    "allowRawToolData",
+                    "maxToolIterations",
+                    "toolCalling",
+                    "metadata",
+                ] {
+                    if let Some(value) = record.get(field) {
+                        document.insert(field.to_owned(), value.clone());
+                    }
+                }
+                if self.setting_if_absent(
+                    SETTINGS_NAMESPACE,
+                    SETTINGS_KEY,
+                    &Value::Object(document),
+                )? {
+                    self.report.promoted_settings += 1;
+                } else {
+                    self.report.warnings.push(
+                        "assistant settings: the production settings document already \
+                         exists; the imported document was kept only under the \
+                         compatibility namespace and the live document still wins"
+                            .into(),
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -2042,11 +2397,6 @@ impl<'a> Importer<'a> {
     /// named here, with how many rows it holds.
     fn report_unimported(&mut self) -> Result<()> {
         const UNREPRESENTED: &[(&str, &str)] = &[
-            (
-                "tool_executions",
-                "durable execution receipts, whose Rust record binds a chat the TypeScript \
-                 row does not store",
-            ),
             ("prompt_templates", "managed prompt templates"),
             ("connector_connections", "managed connector connections"),
         ];
@@ -2104,6 +2454,68 @@ fn require_table(source: &Connection, table: &str, columns: &[&str]) -> Result<(
         }
     }
     Ok(())
+}
+
+/// The `McpServerDto` shape `McpConfigRepository` accepts, validated the way
+/// its `parse_record` gate does: the nine carried keys, non-empty `id`,
+/// `createdAt` and `updatedAt` strings, an object `transport`, string-map
+/// optionals, a boolean `enabled`, and the alias pattern
+/// `^[a-z][a-z0-9-]*$` that `create` enforces. Anything else is refused with
+/// the reason, so a record that would be rejected on the next live commit
+/// never enters the production document.
+fn production_mcp_record(record: &Value) -> std::result::Result<Value, String> {
+    let fields = record.as_object().ok_or("record is not an object")?;
+    let text = |name: &str| -> std::result::Result<String, String> {
+        fields
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("{name} is not a non-empty string"))
+    };
+    let id = text("id")?;
+    let alias = text("alias")?;
+    if !mcp_alias_allowed(&alias) {
+        return Err(format!(
+            "alias {alias:?} is outside the ^[a-z][a-z0-9-]*$ pattern the \
+             production reader enforces"
+        ));
+    }
+    if !fields.get("transport").is_some_and(Value::is_object) {
+        return Err("transport is not an object".into());
+    }
+    let created_at = text("createdAt")?;
+    let updated_at = text("updatedAt")?;
+    let mut shaped = Map::new();
+    shaped.insert("id".into(), Value::String(id));
+    shaped.insert("alias".into(), Value::String(alias));
+    shaped.insert("transport".into(), fields["transport"].clone());
+    for name in ["secretRefs", "toolAliases", "resilience"] {
+        match fields.get(name) {
+            None | Some(Value::Null) => continue,
+            Some(Value::Object(entries)) if entries.values().all(Value::is_string) => {
+                shaped.insert(name.into(), fields[name].clone());
+            }
+            Some(_) => return Err(format!("{name} is not a string-to-string object")),
+        }
+    }
+    match fields.get("enabled") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(enabled)) => {
+            shaped.insert("enabled".into(), Value::Bool(*enabled));
+        }
+        Some(_) => return Err("enabled is not a boolean".into()),
+    }
+    shaped.insert("createdAt".into(), Value::String(created_at));
+    shaped.insert("updatedAt".into(), Value::String(updated_at));
+    Ok(Value::Object(shaped))
+}
+
+/// `^[a-z][a-z0-9-]*$` without pulling a regex dependency into the store.
+fn mcp_alias_allowed(alias: &str) -> bool {
+    let mut characters = alias.chars();
+    matches!(characters.next(), Some(first) if first.is_ascii_lowercase())
+        && characters.all(|character| character.is_ascii_lowercase() || matches!(character, '0'..='9' | '-'))
 }
 
 /// The least the envelope needs, rebuilt from the shredded columns when a

@@ -478,34 +478,106 @@ impl SqliteStore {
         chat_id: Option<String>,
         limit: usize,
     ) -> Result<Vec<MessageSearchHit>> {
-        let query = query.trim().to_lowercase();
+        let query = query.to_owned();
         self.call(move |db| {
-            if query.is_empty() || !query.chars().any(char::is_alphanumeric) {
+            let candidates: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
+                .into_iter()
+                .filter(|message| {
+                    chat_id.as_ref().is_none_or(|id| *id == message.chat_id)
+                        && !message.archived
+                        && message.metadata.get("internal") != Some(&Value::Bool(true))
+                        && message.metadata.get("placeholder") != Some(&Value::Bool(true))
+                })
+                .collect();
+            let Some(match_query) = to_fts_query(&query) else {
+                return Ok(Vec::new());
+            };
+            if candidates.is_empty() || limit == 0 {
                 return Ok(Vec::new());
             }
-            let mut hits = Vec::new();
-            for message in all::<MessageRecord>(db, "messages")? {
-                if chat_id.as_ref().is_some_and(|id| *id != message.chat_id)
-                    || message.archived
-                    || message.metadata.get("internal") == Some(&Value::Bool(true))
-                    || message.metadata.get("placeholder") == Some(&Value::Bool(true))
-                {
-                    continue;
-                }
-                let score = search_text(&message.content)
-                    .to_lowercase()
-                    .matches(&query)
-                    .count();
-                if score > 0 {
-                    hits.push(MessageSearchHit { message, score });
-                }
+            // The predicate IS FTS5, run over a per-call temporary index,
+            // because the compatibility contract is SQLite's own: the
+            // TypeScript adapters answered search with
+            // `message_search MATCH` under `unicode61 remove_diacritics 2`
+            // and bm25 ranking, and a hand-rolled predicate in Rust drifts
+            // (substring "serv" hitting "server" is a hit the old store never
+            // gave; "resume" missing "résumé" is a miss it never gave). The
+            // store still owns no durable FTS index — messages remain the
+            // single source of truth — this just consults SQLite's tokenizer
+            // and ranking over the records that are already in memory.
+            db.execute_batch(
+                "DROP TABLE IF EXISTS temp.search_probe;
+                 CREATE VIRTUAL TABLE temp.search_probe USING fts5(\
+                     body, tokenize='unicode61 remove_diacritics 2');",
+            )?;
+            for (index, message) in candidates.iter().enumerate() {
+                db.execute(
+                    "INSERT INTO temp.search_probe(rowid, body) VALUES(?,?)",
+                    params![index as i64 + 1, search_text(&message.content)],
+                )?;
             }
-            hits.sort_by_key(|hit| std::cmp::Reverse(hit.score));
-            hits.truncate(limit);
-            Ok(hits)
+            let ranked = db
+                .prepare(
+                    "SELECT rowid FROM temp.search_probe \
+                     WHERE search_probe MATCH ?1 ORDER BY bm25(search_probe), rowid LIMIT ?2",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map(params![match_query, limit as i64], |row| row.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<i64>>>()
+                });
+            db.execute_batch("DROP TABLE IF EXISTS temp.search_probe")?;
+            let tokens = query
+                .split_whitespace()
+                .map(|token| token.to_lowercase())
+                .collect::<Vec<_>>();
+            ranked?
+                .into_iter()
+                .map(|rowid| {
+                    let message = candidates
+                        .get(rowid as usize - 1)
+                        .ok_or_else(|| StoreError::InvalidInput(format!(
+                            "the search probe named message #{rowid} that no candidate holds"
+                        )))?
+                        .clone();
+                    let text = search_text(&message.content).to_lowercase();
+                    let score = tokens
+                        .iter()
+                        .map(|token| text.matches(token.as_str()).count())
+                        .sum();
+                    Ok(MessageSearchHit { message, score })
+                })
+                .collect()
         })
         .await
     }
+}
+
+/// The TypeScript `toFtsQuery`, verbatim in behaviour: FTS5's operator
+/// characters never reach the engine from a search box. Quotes, `*` and `^`
+/// are stripped (quotes FIRST, so nothing can break out of the quoting this
+/// adds), parentheses become spaces, and every whitespace token is re-emitted
+/// as a quoted phrase — juxtaposed phrases are FTS5's implicit AND, which is
+/// what a person typing several words means. `None` when nothing survives;
+/// callers answer with no hits.
+fn to_fts_query(query: &str) -> Option<String> {
+    let sanitized = query
+        .replace(['"', '*', '^'], "")
+        .replace(['(', ')'], " ");
+    let tokens = sanitized
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return None;
+    }
+    Some(
+        tokens
+            .iter()
+            .map(|token| format!("\"{token}\""))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 fn sort_chats(chats: Vec<ChatRecord>) -> Result<Vec<ChatRecord>> {
