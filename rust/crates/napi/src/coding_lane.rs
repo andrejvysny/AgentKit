@@ -549,4 +549,39 @@ mod tests {
         let dir = default_coordination_dir();
         assert!(dir.starts_with("/tmp/agentkit-workspace-locks-"), "{dir}");
     }
+
+    /// The sandboxed execution stack is Unix-only (roadmap M4): on a
+    /// platform without process groups, signals and the marker scan, a
+    /// bounded command must refuse with a visible error — never a fabricated
+    /// success. This runs in the `native-windows` job's `cargo test` set
+    /// (this crate is included there, the toolpack crate itself excluded),
+    /// pinning the refusal on the lane where it is the shipped behavior.
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn bounded_execution_refuses_windows_with_an_explicit_error() {
+        let run = agentkit_toolpacks_coding::process::run_bounded(
+            agentkit_toolpacks_coding::process::RunSpec {
+                file: "cmd.exe".to_owned(),
+                args: Vec::new(),
+                cwd: ".".to_owned(),
+                env: std::collections::HashMap::new(),
+                timeout_ms: 1_000,
+                cancellation: None,
+                scratch: std::env::temp_dir().to_string_lossy().into_owned(),
+                log_name: "refusal.log".to_owned(),
+                limits: agentkit_toolpacks_coding::limits::CodingLimits::default(),
+                execution_id: "1:windows-refusal".to_owned(),
+                pgid_slot: None,
+            },
+        )
+        .await;
+        assert_eq!(
+            run.spawn_error.as_deref(),
+            Some(agentkit_toolpacks_coding::process::UNSUPPORTED_PLATFORM_MESSAGE)
+        );
+        assert!(run.teardown.outcome().is_clean());
+        assert!(!run.truncated);
+        assert!(run.exit_code.is_none() && run.signal.is_none());
+        assert!(!run.timed_out && !run.aborted);
+    }
 }

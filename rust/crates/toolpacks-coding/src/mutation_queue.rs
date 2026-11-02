@@ -219,6 +219,7 @@ mod tests {
         assert!(joined.is_ok(), "different files must not block each other");
     }
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_symlink_alias_shares_the_queue() {
         let target = temp_file("alias-target");

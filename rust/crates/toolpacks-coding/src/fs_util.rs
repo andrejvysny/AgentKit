@@ -98,7 +98,10 @@ async fn open_nofollow(path: &str) -> io::Result<tokio::fs::File> {
     tokio::fs::File::open(path).await
 }
 
-fn map_open_error(error: io::Error, label: &str) -> CodingError {
+fn map_open_error(
+    error: io::Error,
+    #[cfg_attr(not(unix), allow(unused_variables))] label: &str,
+) -> CodingError {
     match errno(&error) {
         #[cfg(unix)]
         Some(libc::ENOENT) => CodingError::new("not_found", format!("{label} does not exist")),
@@ -154,6 +157,9 @@ pub async fn atomic_write<F>(
 where
     F: FnOnce() -> futures::future::BoxFuture<'static, Result<(), CodingError>>,
 {
+    // The metadata doubles as the Unix permission-preservation source; on
+    // other platforms the is_file() guard is all it contributes.
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let existing = match tokio::fs::metadata(path).await {
         Ok(metadata) => {
             if !metadata.is_file() {

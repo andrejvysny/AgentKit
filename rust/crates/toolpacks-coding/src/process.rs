@@ -879,24 +879,21 @@ fn join_path(dir: &str, name: &str) -> String {
 }
 
 async fn open_log(path: &str) -> Option<tokio::fs::File> {
-    tokio::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .await
-        .ok()
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    // Owner-only scratch log (the Unix permission model; unreachable on
+    // Windows — `platform_refusal` refuses the run before any log opens).
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path).await.ok()
 }
 
 async fn write_log(path: &str, buffer: &[u8]) -> std::io::Result<()> {
-    let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .await?;
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).await?;
     file.write_all(buffer).await?;
     file.flush().await
 }
@@ -918,7 +915,10 @@ fn describe_truncation(
     )
 }
 
-/// Node-style signal names from the raw terminating signal number.
+/// Node-style signal names from the raw terminating signal number. The
+/// only producer is the `#[cfg(unix)]` `ExitStatusExt::signal` read below:
+/// Windows children terminate by handle and report an exit code, so there
+/// is no terminating signal to name and `RunResult::signal` stays `None`.
 #[cfg(unix)]
 fn signal_name(sig: i32) -> String {
     let name = match sig {
@@ -949,13 +949,6 @@ fn signal_name(sig: i32) -> String {
         _ => return format!("SIG{sig}"),
     };
     name.to_string()
-}
-
-/// Windows terminates children by handle, not signal; a synthetic name
-/// keeps the run result shape identical without inventing a POSIX table.
-#[cfg(not(unix))]
-fn signal_name(sig: i32) -> String {
-    format!("SIG{sig}")
 }
 
 async fn read_out(
@@ -1001,6 +994,33 @@ fn failed_spawn(message: &str) -> RunResult {
     }
 }
 
+/// Sandboxed command execution is built on the Unix process model:
+/// process-group isolation at spawn, POSIX signals for teardown, and the
+/// `/proc` marker scan for the crash sweep. None of it exists on Windows
+/// — the named roadmap-M4 gap the `native-windows` CI job documents when
+/// it excludes this crate. The fail-closed probes above already refuse to
+/// fake cleanup; the equally fail-closed choice at the entry point is to
+/// refuse the run itself with a visible, tested error instead of spawning
+/// un-killable work whose lease could never be retired.
+pub const UNSUPPORTED_PLATFORM_MESSAGE: &str = "sandboxed command execution is not supported on \
+                                                this platform: process groups, signals and the \
+                                                crash-sweep marker scan are Unix-only (Windows \
+                                                backend is roadmap M4)";
+
+/// `Some` refusal outcome on platforms without the Unix process model,
+/// `None` where bounded execution genuinely runs. Every spawn entry point
+/// routes through [`run_bounded_with_discovery`], which consults this
+/// before touching `tokio::process`.
+#[cfg(unix)]
+fn platform_refusal() -> Option<RunResult> {
+    None
+}
+
+#[cfg(not(unix))]
+fn platform_refusal() -> Option<RunResult> {
+    Some(failed_spawn(UNSUPPORTED_PLATFORM_MESSAGE))
+}
+
 /// Run one process group to completion, timeout or abort, with the
 /// production marker-scan discovery view.
 pub async fn run_bounded(spec: RunSpec) -> RunResult {
@@ -1012,6 +1032,9 @@ pub async fn run_bounded(spec: RunSpec) -> RunResult {
 /// uncertainty path (live suspect, environ PermissionDenied, unsupported
 /// scan) can be regressed without prctl or racing the real scheduler.
 pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>) -> RunResult {
+    if let Some(refusal) = platform_refusal() {
+        return refusal;
+    }
     let tail = Arc::new(Mutex::new(Tail::new(
         spec.limits.clone(),
         spec.scratch.clone(),
@@ -1028,11 +1051,16 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
         .env_clear()
         .envs(&spec.env)
         .env(EXEC_ID_ENV, &exec_id)
-        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(false);
+    // The Unix process-group isolation this whole runner is built on does
+    // not exist on Windows — `platform_refusal` above has already refused
+    // the run there; the call stays cfg'd so the crate still compiles for
+    // the Windows target (the napi binding depends on it).
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return failed_spawn(&error.to_string()),
@@ -1066,6 +1094,9 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
     let mut timed_out = false;
     let mut aborted = false;
     let mut exit_code: Option<i32> = None;
+    // Only the `#[cfg(unix)]` exit-status read ever writes this (see
+    // `signal_name`); on other platforms it stays `None`.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut exit_signal: Option<String> = None;
     let mut exited = false;
     let mut settled = false;
@@ -2007,6 +2038,7 @@ mod tests {
         false
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn sweep_orphans_kills_a_marked_process_whose_owner_is_dead() {
         // A dead owner pid: far above any plausible live pid on this box.
@@ -2043,6 +2075,7 @@ mod tests {
         std::thread::sleep(Duration::from_secs(300));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn sweep_orphans_leaves_a_marked_process_whose_owner_is_alive() {
         let exec_id = format!("{}:live-test", process_id());
@@ -2108,6 +2141,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn terminate_reports_injected_suspects_and_never_kills_them() {
         // The kill policy, pinned: a suspect (environ-denied, plausibly
@@ -2161,6 +2195,26 @@ mod tests {
         assert!(
             matches!(&outcome, crate::process::CleanupOutcome::Uncertain(u) if u.scan_unsupported),
             "an unsupported scan is UNKNOWN, never Clean: {outcome:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_never_refuses_bounded_execution() {
+        assert!(platform_refusal().is_none());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn platforms_without_the_unix_process_model_refuse_bounded_execution() {
+        let refusal = platform_refusal().expect("non-Unix must refuse");
+        assert_eq!(
+            refusal.spawn_error.as_deref(),
+            Some(UNSUPPORTED_PLATFORM_MESSAGE)
+        );
+        assert!(
+            refusal.teardown.outcome().is_clean(),
+            "nothing spawned, so nothing can be left behind"
         );
     }
 }

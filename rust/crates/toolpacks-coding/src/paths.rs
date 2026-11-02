@@ -425,6 +425,7 @@ mod tests {
         assert_eq!(root_confined.relative_path, "");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn refuses_symlink_pointing_outside() {
         let root = temp_root("symroot").await;
@@ -441,6 +442,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn refuses_dangling_symlink() {
         let root = temp_root("dangling").await;
@@ -464,6 +466,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn symlink_to_sensitive_file_is_refused() {
         let root = temp_root("symenv").await;
