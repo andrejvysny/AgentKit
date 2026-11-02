@@ -14,10 +14,15 @@ import {
  * triple they built so a mislabelled artifact is impossible by
  * construction.
  */
-export function stageNativePlatform(repoRoot, staging, triple) {
+export function stageNativePlatform(repoRoot, staging, triple, options = {}) {
   const target = triple ? nativeTargetByTriple(triple) : hostNativeTarget();
   const binaryName = `agentkit-native.${target.key}.node`;
-  const binary = join(repoRoot, "packages", "native", "generated", binaryName);
+  // Release jobs pass the freshly built artifact directly (the release lane
+  // never writes into the working tree); the dev/gate path stages the
+  // addon that `build:native` already placed under generated/.
+  const binary = options.binaryFrom
+    ? resolve(options.binaryFrom)
+    : join(repoRoot, "packages", "native", "generated", binaryName);
   if (!existsSync(binary)) throw new Error(`native addon missing: ${binary}`);
   const destination = join(staging, "packages", target.package);
   if (existsSync(destination))

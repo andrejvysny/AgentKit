@@ -45,18 +45,37 @@ jobs:
   snapshot:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       snapshot_sha256: ${{ steps.freeze.outputs.sha256 }}
     steps:
+      - name: Fail fast on malformed release inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          EXPECTED_SHA: ${{ inputs.source_commit }}
+        run: |
+          case "$VERSION" in
+            ''|*[!0-9.]*|*..*) echo "version must be plain semver (digits and dots)" >&2; exit 1 ;;
+          esac
+          echo "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "source_commit is not a full SHA" >&2; exit 1; }
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_commit }}
       - name: Refuse a commit that is not on the default branch
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_SHA: ${{ inputs.source_commit }}
         run: |
+          # workflow_dispatch sets GITHUB_SHA to the DISPATCH ref, NOT the
+          # checked-out source_commit — bind HEAD to the input first, then
+          # prove that exact commit is an ancestor of the default branch.
+          echo "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "source_commit is not a full SHA" >&2; exit 1; fi
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" \
+            || { echo "checkout does not match source_commit" >&2; exit 1; }
           git fetch --no-tags origin "$DEFAULT_BRANCH"
-          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" \
+          git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH" \
             || { echo "source_commit is not on the default branch" >&2; exit 1; }
       - uses: oven-sh/setup-bun@v2
         with:
@@ -103,23 +122,35 @@ jobs:
             key: linux-x64-gnu
             os: ubuntu-latest
             rust_targets: x86_64-unknown-linux-gnu
+            cross: "false"
           - triple: aarch64-unknown-linux-gnu
             key: linux-arm64-gnu
             os: ubuntu-24.04-arm
             rust_targets: aarch64-unknown-linux-gnu
+            cross: "false"
           - triple: aarch64-apple-darwin
             key: darwin-arm64
             os: macos-latest
             rust_targets: aarch64-apple-darwin
+            cross: "false"
           - triple: x86_64-apple-darwin
             key: darwin-x64
             os: macos-latest
             rust_targets: x86_64-apple-darwin
+            cross: "true"
           - triple: x86_64-pc-windows-msvc
             key: win32-x64-msvc
             os: windows-latest
             rust_targets: x86_64-pc-windows-msvc
+            cross: "false"
     runs-on: ${{ matrix.os }}
+    # The win32 row would otherwise run these bash-formatted steps under
+    # PowerShell ($RUNNER_TEMP etc. silently vanish) and the complete-set
+    # requirement would block EVERY release on one dead row.
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 90
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -149,10 +180,17 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
       - name: Build the prebuilt platform artifact
         working-directory: ${{ runner.temp }}/snapshot
+        # --allow-cross only where the triple table says this row is a
+        # cross-compilation on its intended runner; a misrouted row then
+        # fails the builder's guard instead of quietly producing a host
+        # build relabelled as another triple.
+        env:
+          CROSS_FLAG: ${{ matrix.cross == 'true' && '--allow-cross' || '' }}
         run: |
+          mkdir -p "$RUNNER_TEMP/out"
           node rust/scripts/build-native-release-artifact.mjs \
             --target ${{ matrix.triple }} \
-            --out "$RUNNER_TEMP/out" --allow-cross
+            --out "$RUNNER_TEMP/out" $CROSS_FLAG
       - name: Verify the artifact (isolated offline install; acceptance lifecycle
           when the runner can execute the triple, structural-only otherwise)
         working-directory: ${{ runner.temp }}/snapshot
@@ -168,6 +206,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: agentkit-native-publication
     permissions:
       contents: read
@@ -176,6 +215,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_commit }}
+      - name: Refuse to run any code that is not the reviewed default-branch commit
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_SHA: ${{ inputs.source_commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          # This job executes source_commit's own scripts with NPM_TOKEN
+          # and id-token in scope; the code it runs must be provably the
+          # reviewed commit. Re-run the full binding here — the snapshot
+          # job's check happened in a different checkout.
+          case "$VERSION" in
+            ''|*[!0-9.]*|*..*) echo "version must be plain semver (digits and dots)" >&2; exit 1 ;;
+          esac
+          echo "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "source_commit is not a full SHA" >&2; exit 1; }
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" \
+            || { echo "checkout does not match source_commit" >&2; exit 1; }
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH" \
+            || { echo "source_commit is not on the default branch" >&2; exit 1; }
       - uses: actions/setup-node@v4
         with:
           node-version: "22.23.2"
