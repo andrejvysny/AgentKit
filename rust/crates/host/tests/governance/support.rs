@@ -141,10 +141,11 @@ pub struct Fixture {
 }
 
 pub async fn fixture(mode: WriteExecutionMode, revoke_policy_on_claim: bool) -> Fixture {
-    fixture_with_store(
+    build_fixture(
         mode,
         revoke_policy_on_claim,
         SqliteStore::memory(32).unwrap(),
+        None,
     )
     .await
 }
@@ -153,6 +154,28 @@ pub async fn fixture_with_store(
     mode: WriteExecutionMode,
     revoke_policy_on_claim: bool,
     store: SqliteStore,
+) -> Fixture {
+    build_fixture(mode, revoke_policy_on_claim, store, None).await
+}
+
+/// A fixture carrying a trusted INBOUND actor identity: the MCP-lane shape,
+/// where action keys are actor-pinned fingerprints and the actor never
+/// inherits chat-level auto-apply consent.
+pub async fn fixture_actor(mode: WriteExecutionMode, actor_id: &str) -> Fixture {
+    build_fixture(
+        mode,
+        false,
+        SqliteStore::memory(32).unwrap(),
+        Some(actor_id.into()),
+    )
+    .await
+}
+
+async fn build_fixture(
+    mode: WriteExecutionMode,
+    revoke_policy_on_claim: bool,
+    store: SqliteStore,
+    actor_id: Option<String>,
 ) -> Fixture {
     store.create_chat("chat", None, json!({}), 0).await.unwrap();
     let policy = Arc::new(SessionWritePolicy::new(WritePolicyMode::AutoAll));
@@ -177,7 +200,7 @@ pub async fn fixture_with_store(
         policy: policy.clone(),
         runtime,
         actor: json!({"id":"trusted-user"}),
-        actor_id: None,
+        actor_id,
         mode,
         policy_id: "session-write-policy".into(),
     });
