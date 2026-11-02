@@ -110,6 +110,196 @@ fn sort_into_btree(value: &Value) -> Value {
     }
 }
 
+// -- the TypeScript-compatible canonicalizer (N02) -------------------------
+
+/// Canonical JSON of the TypeScript reference
+/// (`packages/host/src/sessions/hash.ts`), reproduced byte-for-byte:
+/// `Object.entries(node).sort(([a],[b]) => a<b?-1:a>b?1:0)` into
+/// `Object.fromEntries` and then `JSON.stringify`. Three behaviours make it
+/// provably NOT the Rust canonicalizer above, and the receipt guard needs
+/// both hashes to see one identity:
+///
+/// 1. JavaScript object property order: integer-index keys (canonical
+///    decimal, `< 2^32-1`) come FIRST in ascending numeric order no matter
+///    how the object was built — so `{ "10": "a", "2": "b" }` stringifies
+///    as `{"2":"b","10":"a"}` while a `BTreeMap` is lexical. Verified
+///    against the real `hash.ts` under bun
+///    (`tests/fixtures/ts_receipts/generate.ts`).
+/// 2. The comparator is JavaScript `<` on strings: UTF-16 CODE-UNIT order,
+///    which differs from UTF-8 byte order whenever a non-BMP character
+///    (surrogate pair `D800..=DBFF`) compares against `U+E000..=U+FFFF`.
+/// 3. `JSON.stringify` number spelling: every JSON number is an IEEE-754
+///    double (no integer type), so `1.0` is `1`, `1e21` is `1e+21`,
+///    `1e-7` is `1e-7`, and non-finite values are `null`.
+pub fn ts_canonical_json(value: &Value) -> String {
+    let mut out = String::new();
+    ts_write(&mut out, value);
+    out
+}
+
+/// A JavaScript array index: canonical decimal integer below `2^32-1`
+/// (`ToIndex` semantics — no leading zeros, no sign, no exponent).
+fn array_index(key: &str) -> Option<u32> {
+    if key.is_empty() || !key.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    if key.len() > 1 && key.starts_with('0') {
+        return None;
+    }
+    // Values up to 4294967294 are indices; 4294967295 is just a string key.
+    key.parse::<u32>()
+        .ok()
+        .filter(|value| *value < 4_294_967_295)
+}
+
+/// JavaScript `<` on strings: lexicographic UTF-16 code-unit order.
+fn js_less(left: &str, right: &str) -> bool {
+    left.encode_utf16().cmp(right.encode_utf16()) == std::cmp::Ordering::Less
+}
+
+fn ts_write(out: &mut String, value: &Value) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(true) => out.push_str("true"),
+        Value::Bool(false) => out.push_str("false"),
+        Value::Number(number) => out.push_str(&js_number(number)),
+        Value::String(text) => ts_write_string(out, text),
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                ts_write(out, item);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            // Integer-index keys first, ascending numeric; then the
+            // remaining keys in the UTF-16 sorted order `hash.ts` inserts.
+            let mut indices: Vec<u32> = map.keys().filter_map(|key| array_index(key)).collect();
+            indices.sort_unstable();
+            let mut strings: Vec<&String> = map
+                .keys()
+                .filter(|key| array_index(key).is_none())
+                .collect();
+            strings.sort_by(|left, right| {
+                if js_less(left, right) {
+                    std::cmp::Ordering::Less
+                } else if js_less(right, left) {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            });
+            out.push('{');
+            let mut first = true;
+            for key in indices
+                .iter()
+                .map(|index| index.to_string())
+                .chain(strings.iter().map(|key| (*key).clone()))
+            {
+                let Some(item) = map.get(&key) else {
+                    continue;
+                };
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                ts_write_string(out, &key);
+                out.push(':');
+                ts_write(out, item);
+            }
+            out.push('}');
+        }
+    }
+}
+
+/// `JSON.stringify` string escaping: quotes and backslash escaped, the
+/// five short mnemonic controls, the remaining C0 controls as `\u00xx`
+/// (lowercase), everything else — DEL and all non-ASCII included — raw.
+fn ts_write_string(out: &mut String, text: &str) {
+    out.push('"');
+    for character in text.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            control if (control as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", control as u32));
+            }
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+}
+
+/// ECMAScript `Number::toString(x)`: JSON has no integer type, so every
+/// number formats as its double — shortest round-trip digits, fixed
+/// notation for exponents in `(-6, 21]`, otherwise `d.dddde±X`.
+fn js_number(number: &serde_json::Number) -> String {
+    let Some(value) = number.as_f64() else {
+        // serde_json only holds finite u64/i64/f64 after parsing; a
+        // non-finite float reaches JSON only as null, exactly as JS does.
+        return "null".into();
+    };
+    if !value.is_finite() {
+        return "null".into();
+    }
+    if value == 0.0 {
+        // Both zeroes stringify as "0" (JS `-0` included).
+        return "0".into();
+    }
+    // Rust's LowerExp is the shortest round-trip digits with a decimal
+    // exponent: `d[.ddd]eE`, i.e. `s = digits` (k of them) and the decimal
+    // point sits at `n = E + 1`, exactly the spec's s/n/k triple.
+    let spelled = format!("{value:e}");
+    let (mantissa, exponent) = spelled
+        .split_once('e')
+        .expect("LowerExp always carries an exponent");
+    let exponent: i32 = exponent.parse().expect("LowerExp exponent is an integer");
+    let negative = mantissa.starts_with('-');
+    let digits = mantissa.trim_start_matches(['-', '+']).replace('.', "");
+    let k = digits.len() as i32;
+    let n = exponent + 1;
+    let body = if k <= n && n <= 21 {
+        // Integer-valued within fixed notation: digits + trailing zeros.
+        format!("{}{}", digits, "0".repeat((n - k) as usize))
+    } else if n > 0 && n <= 21 {
+        // Digits with an embedded point after n digits.
+        let split = n as usize;
+        format!("{}.{}", &digits[..split], &digits[split..])
+    } else if n > -6 && n <= 0 {
+        // `0.` plus -n zeros plus the digits.
+        format!("0.{}{digits}", "0".repeat((-n) as usize))
+    } else {
+        // Exponential notation: `d[.ddd]e±X` with X = n−1, no leading zero.
+        let mantissa = if digits.len() > 1 {
+            format!("{}.{}", &digits[..1], &digits[1..])
+        } else {
+            digits.clone()
+        };
+        format!(
+            "{mantissa}e{}{}",
+            if n - 1 < 0 { '-' } else { '+' },
+            (n - 1).abs()
+        )
+    };
+    if negative { format!("-{body}") } else { body }
+}
+
+/// sha-256 through the TypeScript pipeline — the digest an imported
+/// `ts-canonical` receipt carries. The guard compares an invocation against
+/// BOTH this and [`args_sha256`] so one operation has one identity across
+/// the two ports.
+pub fn ts_args_sha256(input: &Value) -> String {
+    sha256_hex(&ts_canonical_json(input))
+}
+
 /// sha-256 of the canonical-JSON arguments.
 pub fn args_sha256(input: &Value) -> String {
     canonical_sha256(input)
@@ -237,6 +427,22 @@ impl DurableExecution {
             .list_executions(self.context.task.task_id.clone())
             .await
             .map_err(receipt_unreadable)?;
+        // Both canonicalizers, once per probe. An imported `ts-canonical`
+        // receipt hashed the SAME arguments through the TypeScript pipeline
+        // (integer-like keys first numerically — see `ts_canonical_json`),
+        // so it matches an invocation only through the TS hash; native
+        // receipts match through the native one. One operation, one
+        // identity, whichever port admitted it.
+        let args = args_sha256(input);
+        let ts_args = ts_args_sha256(input);
+        let args_match = |record: &agentkit_store::ExecutionReceiptRecord| {
+            agentkit_store::args_match(
+                record.args_hash_provenance,
+                &record.args_sha256,
+                &args,
+                Some(&ts_args),
+            )
+        };
         // An answer only reauthorizes the exact unresolved generation it
         // named: grant.uncertainty_generation must equal the pending
         // receipt's execution id. An unrelated (or stale) grant never
@@ -255,11 +461,10 @@ impl DurableExecution {
             .find(|r| r.tool_call_id == tool_call_id)
             && last.status == agentkit_store::ExecutionReceiptStatus::Completed
         {
-            let args = args_sha256(input);
             let context_sha =
                 execution_context_sha256(self, &contribution.contribution, tool, effect_context);
             if last.tool_name != tool.name
-                || last.args_sha256 != args
+                || !args_match(last)
                 || last.context_sha256 != context_sha
             {
                 return Err(CoreError::new(
@@ -284,11 +489,10 @@ impl DurableExecution {
         // 2. Uncertainty probe within this run: the human must explicitly
         //    reauthorize the unresolved generation (or the call proceeds
         //    when an answered grant already covers it).
-        let args = args_sha256(input);
         if let Some(previous) = receipts
             .iter()
             .rev()
-            .find(|r| r.tool_name == tool.name && r.args_sha256 == args)
+            .find(|r| r.tool_name == tool.name && args_match(r))
             .filter(|r| r.status == agentkit_store::ExecutionReceiptStatus::Admitted)
             && !covers(previous)
         {
@@ -318,7 +522,7 @@ impl DurableExecution {
             .filter(|r| r.run_id != self.context.task.task_id)
             .find(|r| {
                 r.tool_name == tool.name
-                    && r.args_sha256 == args
+                    && args_match(r)
                     && r.status == agentkit_store::ExecutionReceiptStatus::Admitted
             })
             && !covers(previous)
@@ -337,6 +541,40 @@ impl DurableExecution {
                     ),
                 ),
                 generation: previous.execution_id.clone(),
+            });
+        }
+        // 4. Durable uncertainty barriers: admitted effects whose receipt
+        //    could not be placed (the tolerant TypeScript import records
+        //    one instead of silently omitting the row) block the identical
+        //    reissue too, keyed by tool name plus best-known identity. A
+        //    barrier with no argument fingerprint blocks the tool by name;
+        //    only an answer naming the barrier's exact id opens it.
+        let barriers = self
+            .context
+            .store
+            .list_uncertainty_barriers(self.chat_id.clone(), self.context.task.task_id.clone())
+            .await
+            .map_err(receipt_unreadable)?;
+        if let Some(barrier) = barriers
+            .iter()
+            .rev()
+            .find(|barrier| barrier.blocks(&tool.name, &args, Some(&ts_args)))
+            && !self.approvals.get(&tool_call_id).is_some_and(|grant| {
+                grant.uncertainty_generation.as_deref() == Some(barrier.barrier_id.as_str())
+            })
+        {
+            return Ok(PreGuard::Uncertain {
+                refusal: receipt_refusal(
+                    context,
+                    "tool_result_uncertain",
+                    &format!(
+                        "{}; the unresolved evidence is a barrier: {}",
+                        uncertain_message(),
+                        barrier.reason
+                    ),
+                    Some(json!({"approvalGeneration": barrier.barrier_id})),
+                ),
+                generation: barrier.barrier_id.clone(),
             });
         }
         Ok(PreGuard::Proceed)
@@ -393,6 +631,11 @@ impl DurableExecution {
             tool_call_id,
             tool_name: tool.name.clone(),
             args_sha256: args_sha256(input),
+            // The same arguments under the TypeScript canonicalizer, so the
+            // store's pending-generation gate sees an imported
+            // `ts-canonical` receipt for this very operation too.
+            ts_args_sha256: Some(ts_args_sha256(input)),
+            args_hash_provenance: agentkit_store::ArgsHashProvenance::Canonical,
             context_sha256: current_context,
             attempt_id: self.context.attempt_id.clone(),
             approval_request_id: approval_request_id.clone(),

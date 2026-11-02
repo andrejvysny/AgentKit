@@ -19,6 +19,12 @@ fn version_one(path: &Path) {
         DROP TABLE connector_connections;
         DROP TABLE managed_skills;
         DROP TABLE run_content_records;
+        DROP TABLE uncertainty_barriers;
+        DROP TRIGGER messages_search_insert;
+        DROP TRIGGER messages_search_delete;
+        DROP TRIGGER messages_search_update;
+        DROP TABLE message_search;
+        DROP VIEW message_search_source;
         DELETE FROM counters WHERE name='input_order';
         PRAGMA user_version=1;
         COMMIT;").unwrap();

@@ -125,8 +125,10 @@ async fn seed(path: &Path) {
 }
 
 /// Drop the database down to a genuine v1 or v2 shape: the receipts,
-/// session-input, and (schema v6) provider-connection tables disappear and
-/// `user_version` goes back.
+/// session-input, (schema v6) provider-connection, (v8) uncertainty-barrier
+/// and (v9) message-search tables — with the search view and triggers —
+/// disappear and `user_version` goes back. The reopen's migrations must
+/// rebuild everything the current version adds.
 fn downgrade(path: &Path, version: i64) {
     assert!(version == 1 || version == 2);
     let db = Connection::open(path).unwrap();
@@ -151,6 +153,12 @@ fn downgrade(path: &Path, version: i64) {
          DROP TABLE IF EXISTS connector_connections;
          DROP TABLE IF EXISTS managed_skills;
          DROP TABLE IF EXISTS run_content_records;
+         DROP TABLE IF EXISTS uncertainty_barriers;
+         DROP TRIGGER IF EXISTS messages_search_insert;
+         DROP TRIGGER IF EXISTS messages_search_delete;
+         DROP TRIGGER IF EXISTS messages_search_update;
+         DROP VIEW IF EXISTS message_search_source;
+         DROP TABLE IF EXISTS message_search;
          DELETE FROM counters WHERE name='input_order';
          COMMIT;",
     )
@@ -288,6 +296,8 @@ async fn exercise_upgrade(version: i64) {
                 tool_call_id: "call-1".into(),
                 tool_name: "coding.run_command".into(),
                 args_sha256: sha256("{\"command\":\"make install\"}"),
+                ts_args_sha256: None,
+                args_hash_provenance: agentkit_store::ArgsHashProvenance::Canonical,
                 context_sha256: sha256("{\"real\":\"context\"}"),
                 attempt_id: "attempt-2".into(),
                 approval_request_id: None,

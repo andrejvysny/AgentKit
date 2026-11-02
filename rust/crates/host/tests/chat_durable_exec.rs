@@ -192,6 +192,8 @@ async fn seed_crashed_run(
                     tool_call_id: (*call).into(),
                     tool_name: "mutate".into(),
                     args_sha256: agentkit_host::args_sha256(&json!({})),
+                    ts_args_sha256: Some(agentkit_host::ts_args_sha256(&json!({}))),
+                    args_hash_provenance: agentkit_store::ArgsHashProvenance::Canonical,
                     context_sha256: "0".repeat(64),
                     attempt_id: "1".into(),
                     approval_request_id: None,

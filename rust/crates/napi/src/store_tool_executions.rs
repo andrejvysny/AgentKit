@@ -39,6 +39,20 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
                         tool_call_id: text(source, "toolCallId")?.to_owned(),
                         tool_name: text(source, "toolName")?.to_owned(),
                         args_sha256: text(source, "argsSha256")?.to_owned(),
+                        // The JS side may name the canonicalizer that
+                        // produced its hash; absent keeps today's identity.
+                        ts_args_sha256: None,
+                        args_hash_provenance: match opt_text(source, "argsHashProvenance")? {
+                            None | Some("canonical") => {
+                                agentkit_store::ArgsHashProvenance::Canonical
+                            }
+                            Some("ts-canonical") => agentkit_store::ArgsHashProvenance::TsCanonical,
+                            Some(other) => {
+                                return Err(errors::invalid(format!(
+                                    "unknown argsHashProvenance {other:?}"
+                                )));
+                            }
+                        },
                         context_sha256: text(source, "contextSha256")?.to_owned(),
                         attempt_id: text(source, "attemptId")?.to_owned(),
                         approval_request_id: opt_text(source, "approvalRequestId")?

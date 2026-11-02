@@ -44,3 +44,6 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32
 [dev-dependencies]
 rusqlite = { version = "0.38", features = ["bundled"] }
 tempfile = "3"
+# The imported-receipt acceptance tests drive the TypeScript importer
+# against bun-generated fixtures.
+agentkit-store = { path = "../store", version = "0.1.0", features = ["ts-import"] }

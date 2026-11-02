@@ -32,19 +32,22 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
                 None | Some(Value::Null) => json!({}),
                 _ => return Err(errors::invalid("patch must be an object")),
             };
-            let mut value = current(store).await?;
-            if let Some(patch) = patch.as_object() {
-                for key in PATCHABLE {
-                    if let Some(entry) = patch.get(key) {
-                        value[key] = entry.clone();
-                    }
-                }
-            }
+            // Read-merge-write inside one serialized store call: two
+            // concurrent patches can neither observe the same base nor
+            // clobber each other (the old read-then-set lost updates).
             store
-                .set_setting(NAMESPACE, KEY, value.clone())
+                .update_setting(NAMESPACE, KEY, defaults(), move |mut value| {
+                    if let Some(patch) = patch.as_object() {
+                        for key in PATCHABLE {
+                            if let Some(entry) = patch.get(key) {
+                                value[key] = entry.clone();
+                            }
+                        }
+                    }
+                    value
+                })
                 .await
-                .map_err(errors::store)?;
-            Ok(value)
+                .map_err(errors::store)
         }
         _ => Err(errors::stable(
             "not_implemented",

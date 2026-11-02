@@ -119,9 +119,17 @@ pub struct MessageRecord {
 #[serde(rename_all = "camelCase")]
 pub struct MessageSearchHit {
     pub message: MessageRecord,
+    /// bm25-derived relevance, HIGHER is better (SQLite's bm25 is a
+    /// "lower is better" rank, mirrored around zero; see `relevance_score`).
+    /// Hits arrive in rank order already — the order,
+    /// not this number, is the ranking contract.
     pub score: usize,
 }
 
+/// Update a message row. The persistent FTS5 `message_search` index is
+/// kept in step by the schema's UPDATE trigger — no write path maintains
+/// it by hand, which is what lets the TypeScript import's direct
+/// INSERT ... ON CONFLICT and the chat-deletion cascade stay indexed too.
 pub(crate) fn save_message(db: &Connection, message: &MessageRecord) -> Result<()> {
     db.execute(
         "UPDATE messages SET record=? WHERE id=?",
@@ -478,83 +486,83 @@ impl SqliteStore {
         chat_id: Option<String>,
         limit: usize,
     ) -> Result<Vec<MessageSearchHit>> {
-        let query = query.to_owned();
+        // Early exits with zero database round-trips: an empty or
+        // whitespace-only query (or one that sanitizes to nothing, `"***"`)
+        // has no hit to find and must NOT degrade into a corpus scan, and a
+        // zero limit can never return a hit. Neither even pays an actor job.
+        let Some(match_query) = to_fts_query(query) else {
+            return Ok(Vec::new());
+        };
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         self.call(move |db| {
-            let candidates: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
-                .into_iter()
-                .filter(|message| {
-                    chat_id.as_ref().is_none_or(|id| *id == message.chat_id)
-                        && !message.archived
-                        && message.metadata.get("internal") != Some(&Value::Bool(true))
-                        && message.metadata.get("placeholder") != Some(&Value::Bool(true))
-                })
-                .collect();
-            let Some(match_query) = to_fts_query(&query) else {
-                return Ok(Vec::new());
-            };
-            if candidates.is_empty() || limit == 0 {
-                return Ok(Vec::new());
-            }
-            // The predicate IS FTS5, run over a per-call temporary index,
-            // because the compatibility contract is SQLite's own: the
-            // TypeScript adapters answered search with
-            // `message_search MATCH` under `unicode61 remove_diacritics 2`
-            // and bm25 ranking, and a hand-rolled predicate in Rust drifts
-            // (substring "serv" hitting "server" is a hit the old store never
-            // gave; "resume" missing "résumé" is a miss it never gave). The
-            // store still owns no durable FTS index — messages remain the
-            // single source of truth — this just consults SQLite's tokenizer
-            // and ranking over the records that are already in memory.
-            db.execute_batch(
-                "DROP TABLE IF EXISTS temp.search_probe;
-                 CREATE VIRTUAL TABLE temp.search_probe USING fts5(\
-                     body, tokenize='unicode61 remove_diacritics 2');",
+            // The predicate IS the persistent FTS5 index: MATCH, the
+            // `unicode61 remove_diacritics 2` tokenizer and bm25 ranking
+            // are SQLite's own, exactly as the TypeScript adapters answered
+            // with `message_search MATCH`. A hand-rolled predicate drifts
+            // from the engine — LIKE-style substrings hit inside words the
+            // tokenizer never produces, and a raw-token re-count scores a
+            // diacritic-folded match at zero — so Rust only chooses the
+            // query (`to_fts_query`), never evaluates one.
+            //
+            // The chat/visibility constraints run HERE, at query time, as a
+            // filter over the join back to `messages` — where the adapter
+            // keeps them, because `placeholder` and `internal` are metadata
+            // keys rewritten AFTER indexing (a placeholder becomes a real
+            // answer the moment its run finishes); an index that had decided
+            // membership at insert time would keep every finished answer
+            // permanently unfindable. Inactive branches stay searchable —
+            // the tree ports' own contract — while archived, internal and
+            // placeholder records never surface. `json_type(...) IS NOT
+            // 'true'` is the exact counterpart of the old predicate's
+            // `!= Some(Value::Bool(true))`: only a JSON `true` hides.
+            //
+            // Ordering is (rank, rank_index, id): the bm25 rank, then the
+            // message's position in its chat, then its id — a TOTAL order
+            // (`order_key` is unique per chat, `id` globally), so equal-rank
+            // pages are stable across repeated calls and LIMIT pagination
+            // can neither skip nor repeat a hit.
+            let mut statement = db.prepare(
+                "SELECT messages.record, bm25(message_search) \
+                 FROM message_search \
+                 JOIN messages ON messages.rowid = message_search.rowid \
+                 WHERE message_search MATCH ?1 \
+                   AND (?2 IS NULL OR messages.chat_id = ?2) \
+                   AND json_type(messages.record, '$.archived') IS NOT 'true' \
+                   AND json_type(messages.record, '$.metadata.internal') IS NOT 'true' \
+                   AND json_type(messages.record, '$.metadata.placeholder') IS NOT 'true' \
+                 ORDER BY bm25(message_search), messages.order_key, messages.id \
+                 LIMIT ?3",
             )?;
-            for (index, message) in candidates.iter().enumerate() {
-                db.execute(
-                    "INSERT INTO temp.search_probe(rowid, body) VALUES(?,?)",
-                    params![index as i64 + 1, search_text(&message.content)],
-                )?;
-            }
-            let ranked = db
-                .prepare(
-                    "SELECT rowid FROM temp.search_probe \
-                     WHERE search_probe MATCH ?1 ORDER BY bm25(search_probe), rowid LIMIT ?2",
-                )
-                .and_then(|mut statement| {
-                    statement
-                        .query_map(params![match_query, limit as i64], |row| {
-                            row.get::<_, i64>(0)
-                        })?
-                        .collect::<rusqlite::Result<Vec<i64>>>()
-                });
-            db.execute_batch("DROP TABLE IF EXISTS temp.search_probe")?;
-            let tokens = query
-                .split_whitespace()
-                .map(|token| token.to_lowercase())
-                .collect::<Vec<_>>();
-            ranked?
-                .into_iter()
-                .map(|rowid| {
-                    let message = candidates
-                        .get(rowid as usize - 1)
-                        .ok_or_else(|| {
-                            StoreError::InvalidInput(format!(
-                                "the search probe named message #{rowid} that no candidate holds"
-                            ))
-                        })?
-                        .clone();
-                    let text = search_text(&message.content).to_lowercase();
-                    let score = tokens
-                        .iter()
-                        .map(|token| text.matches(token.as_str()).count())
-                        .sum();
-                    Ok(MessageSearchHit { message, score })
+            let rows = statement
+                .query_map(params![match_query, chat_id, limit as i64], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(statement);
+            rows.into_iter()
+                .map(|(record, rank)| {
+                    Ok(MessageSearchHit {
+                        message: serde_json::from_str(&record)?,
+                        score: relevance_score(rank),
+                    })
                 })
                 .collect()
         })
         .await
     }
+}
+
+/// The hit score, derived from SQLite's own bm25 rank rather than a re-count
+/// of the query's raw tokens: bm25 is a "lower is better" REAL mirrored here
+/// around zero at a fixed scale so a better hit scores higher. The ORDER BY
+/// in [`SqliteStore::search_messages`] is the ranking contract; this number
+/// is what bm25 said about the hit (the old substring re-count scored
+/// "resume" over "résumé" at zero and counted "(2)" as a token the index
+/// never held).
+fn relevance_score(rank: f64) -> usize {
+    (-rank * 1_000_000.0).round().clamp(0.0, usize::MAX as f64) as usize
 }
 
 /// The TypeScript `toFtsQuery`, verbatim in behaviour: FTS5's operator
@@ -589,21 +597,4 @@ fn sort_chats(chats: Vec<ChatRecord>) -> Result<Vec<ChatRecord>> {
         .collect::<Result<Vec<_>>>()?;
     keyed.sort_by(|(left, _), (right, _)| right.cmp(left));
     Ok(keyed.into_iter().map(|(_, chat)| chat).collect())
-}
-
-fn search_text(content: &Value) -> String {
-    if let Some(text) = content.as_str() {
-        return text.into();
-    }
-    content
-        .as_array()
-        .map(|parts| {
-            parts
-                .iter()
-                .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|p| p.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default()
 }
