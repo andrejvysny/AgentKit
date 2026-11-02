@@ -2,6 +2,35 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**The TS importer cannot commit a lossy migration.** External review proved
+three ways the strict importer preserved data on paper but not in fact: an
+unplaceable message (orphan or cycle) routed through the skip path whose
+strict-mode error was swallowed into `Ok(())`, letting an otherwise-valid
+import commit while silently omitting records the destination would then
+declare imported; `tool_executions` — the receipts that let the durable
+execution guard replay a completed effect and refuse re-admission of a
+crash-uncertain one, including on a new run in the same chat — was scanned
+by nobody and dropped, erasing exactly the evidence the barrier needs; and
+imported settings/MCP landed in `agentkit.compat.*` namespaces that only the
+importer and its tests read, so the imported `toolCalling: "off"` never
+reached the staging policy that reads `http/settings`, and per-server MCP
+records never aggregated into the `mcp-config` array the connector reads.
+Skip now propagates (`self.skip::<()>(reason)?`), readiness probes surface
+database errors instead of answering `false`, receipts migrate with
+execution identities, statuses, results and (where the chat cannot be
+proven from the import's own writes) strict refusal / tolerant quarantine
+with a warning, and promotion writes the production documents —
+never overwriting a live write. Evidence: `strict_import_refuses_an_orphan_only_database_and_leaves_it_untouched`,
+`strict_import_refuses_a_cycle_only_database_and_tolerant_names_it`,
+`uncertain_and_completed_executions_survive_the_import_as_barriers`
+(effect-replay contract, chat re-derivation, rowid recency), and the four
+promotion tests (`imported_settings_reach_the_production_settings_document`,
+`imported_mcp_servers_aggregate_into_the_production_config_document`, and
+their no-overwrite pairs) in `rust/crates/store/tests/import_ts.rs`.
+Packaging: the desktop example consumed `@agentkit/native`, which the
+published manifest never exported (qualification failed on the platform
+lane); the export is published as `agentkit/native` and consumed.
+
 **Crash recovery cannot strand a workspace behind unnameable evidence.**
 The native coding lane's approved re-execution after a mid-command SIGKILL
 could settle `completed` without ever running the command: reconciliation
