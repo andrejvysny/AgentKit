@@ -669,6 +669,39 @@ function buildPorts(
   const call = async <T>(operation: string, input?: unknown): Promise<T> =>
     port.callStore<T>(operation, input ?? {});
 
+  // Same-proposal apply settles run in SUBMISSION order, the way the
+  // reference adapters' single write gate serializes them. `settleApply`
+  // reads (get + getOutcome) before its engine write; two competing
+  // terminal requests whose reads interleave would otherwise let napi
+  // completion scheduling - not call order - decide which finalize lands
+  // first in the actor mailbox. A per-proposal chain makes the second
+  // request observe the first's committed status, exactly as it would on
+  // a gate-backed store. The chain self-clears so the map never grows.
+  const settleQueues = new Map<string, Promise<unknown>>();
+  const queueSettle = <T>(
+    proposalId: string,
+    task: () => Promise<T>,
+  ): Promise<T> => {
+    const tail = (settleQueues.get(proposalId) ?? Promise.resolve()).then(
+      task,
+      task,
+    );
+    const entry = tail.then(
+      (value) => {
+        if (settleQueues.get(proposalId) === entry)
+          settleQueues.delete(proposalId);
+        return value;
+      },
+      (error) => {
+        if (settleQueues.get(proposalId) === entry)
+          settleQueues.delete(proposalId);
+        throw error;
+      },
+    );
+    settleQueues.set(proposalId, entry);
+    return entry as Promise<T>;
+  };
+
   const conversations: ConversationStore = {
     createChat: async (input: CreateChatInput): Promise<ChatRecord> =>
       projectChat(
@@ -1086,8 +1119,10 @@ function buildPorts(
       // caller already recorded (or the operations-shaped default the apply
       // would have produced) and landing `appliedAt` as the engine stamp.
       if (to === "applied" || to === "failed") {
-        return projectProposal(
-          await settleApply(call, proposalId, from, to, patch, clock),
+        return queueSettle(proposalId, async () =>
+          projectProposal(
+            await settleApply(call, proposalId, from, to, patch, clock),
+          ),
         );
       }
       const body: Json = { proposalId, from, to, ...(patch ? { patch } : {}) };
