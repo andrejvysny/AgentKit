@@ -153,6 +153,65 @@ async fn search_includes_all_text_parts_and_inactive_branches_but_hides_private_
 }
 
 #[tokio::test]
+async fn search_answers_with_sqlite_fts5_semantics_not_substrings() {
+    // The old predicate was a lowercased substring scan and drifted from the
+    // FTS5 `MATCH` the TypeScript adapters answered with: substrings hit
+    // inside words, diacritics missed, and multi-word queries demanded a
+    // contiguous phrase. The store must answer the way SQLite's
+    // `unicode61 remove_diacritics 2` index over `toFtsQuery` does.
+    let store = SqliteStore::memory(4).unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    let mut diacritic = message("diacritic", "chat", None);
+    diacritic.content = json!("the résumé of the trip");
+    store.append_message(diacritic, None, 1000).await.unwrap();
+    let mut words = message("words", "chat", None);
+    words.content = json!("quartz in the room and a beacon on the wall");
+    store.append_message(words, None, 1000).await.unwrap();
+    let mut server = message("server", "chat", None);
+    server.content = json!("server side rendering");
+    store.append_message(server, None, 1000).await.unwrap();
+    let mut operators = message("operators", "chat", None);
+    operators.content = json!("The c++ and (2) files");
+    store.append_message(operators, None, 1000).await.unwrap();
+
+    // Diacritic folding: "resume" finds "résumé" — the substring scan missed it.
+    let hits = store.search_messages("resume", None, 10).await.unwrap();
+    assert_eq!(
+        hits.iter().map(|hit| hit.message.id.as_str()).collect::<Vec<_>>(),
+        ["diacritic"]
+    );
+    // Token matching, not substrings: "serv" must NOT hit "server".
+    assert!(store.search_messages("serv", None, 10).await.unwrap().is_empty());
+    // Whole-word token does.
+    let hits = store.search_messages("server", None, 10).await.unwrap();
+    assert_eq!(hits[0].message.id, "server");
+    // Multi-word is the implicit AND of tokens, not a contiguous phrase:
+    // the words are far apart in `words` and still match.
+    let hits = store
+        .search_messages("quartz beacon", None, 10)
+        .await
+        .unwrap();
+    assert_eq!(hits[0].message.id, "words");
+    // FTS5 operators are data, not syntax: `(2)` searches for the token 2.
+    let hits = store.search_messages("c++ (2)", None, 10).await.unwrap();
+    assert_eq!(hits[0].message.id, "operators");
+    // Nothing survives sanitizing → no hits, never an error.
+    assert!(store.search_messages("***", None, 10).await.unwrap().is_empty());
+    assert!(store.search_messages("   ", None, 10).await.unwrap().is_empty());
+    // The chat filter still applies.
+    assert!(
+        store
+            .search_messages("server", Some("missing-chat".into()), 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn deletion_refuses_live_scope_and_cleans_durable_owned_state() {
     let store = SqliteStore::memory(4).unwrap();
     store

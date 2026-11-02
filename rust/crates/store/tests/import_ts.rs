@@ -1044,3 +1044,474 @@ async fn session_inputs_and_context_summaries_round_trip_as_typed_records() {
         1
     );
 }
+
+/// The optional `tool_executions` table, column for column from the
+/// TypeScript adapter's `TOOL_EXECUTIONS_TABLE_SQL`.
+const TOOL_EXECUTIONS_TABLE: &str = "CREATE TABLE tool_executions (\
+  execution_id TEXT PRIMARY KEY, \
+  run_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE CASCADE, \
+  approval_request_id TEXT UNIQUE, record TEXT NOT NULL)";
+
+fn sha_hex(digit: char) -> String {
+    digit.to_string().repeat(64)
+}
+
+/// A TypeScript `ToolExecutionRecord` exactly as `tool-execution-store.ts`
+/// would have written it — note there is NO `chatId` field.
+fn execution_record(id: &str, run: &str, call: &str, tool: &str, status: &str, result: bool) -> String {
+    let mut record = json!({
+        "executionId": id,
+        "runId": run,
+        "toolCallId": call,
+        "toolName": tool,
+        "argsSha256": sha_hex('a'),
+        "contextSha256": sha_hex('b'),
+        "attemptId": "attempt-1",
+        "status": status,
+    });
+    if result {
+        record["result"] = json!({"content": "ok", "isError": false});
+    }
+    record.to_string()
+}
+
+fn seed_executions(path: &Path, rows: &[(&str, &str, &str, &str, &str, bool)]) {
+    let db = Connection::open(path).unwrap();
+    db.execute_batch(TOOL_EXECUTIONS_TABLE).unwrap();
+    for (id, run, call, tool, status, result) in rows {
+        db.execute(
+            "INSERT INTO tool_executions(execution_id,run_id,record) VALUES(?,?,?)",
+            rusqlite::params![id, run, execution_record(id, run, call, tool, status, *result)],
+        )
+        .unwrap();
+    }
+    drop(db);
+}
+
+#[tokio::test]
+async fn uncertain_and_completed_executions_survive_the_import_as_barriers() {
+    // The receipts that keep a crash-uncertain mutation from running twice
+    // must outlive the upgrade: an admitted-without-result effect stays
+    // blocked, and a completed one keeps its result for replay — including
+    // the chat the TypeScript record does not store, which the import must
+    // re-derive from the run's binding.
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    seed_executions(
+        &source,
+        &[
+            ("exec-uncertain", "run-1", "call-x", "write_file", "admitted", false),
+            ("exec-done", "run-1", "call-1", "read_file", "completed", true),
+        ],
+    );
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let report = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap();
+    assert_eq!(report.executions, 2, "{report:?}");
+
+    let run = store.list_executions("run-1".to_string()).await.unwrap();
+    assert_eq!(run.len(), 2);
+    assert_eq!(run[0].execution_id, "exec-uncertain");
+    assert_eq!(run[0].status, ExecutionReceiptStatus::Admitted);
+    assert_eq!(run[0].chat_id, "chat-1", "the chat is re-derived from the run binding");
+    assert_eq!(run[0].result, None, "uncertainty is admitted-without-result");
+    assert_eq!(run[1].status, ExecutionReceiptStatus::Completed);
+    assert_eq!(run[1].result, Some(json!({"content": "ok", "isError": false})));
+
+    // The cross-run same-chat guard reads exactly this set.
+    let chat = store.list_executions_by_chat("chat-1".to_string()).await.unwrap();
+    assert_eq!(chat.len(), 2);
+    assert!(chat.iter().any(|receipt| receipt.execution_id == "exec-uncertain"));
+
+    // Re-running the import refreshes rather than duplicates.
+    let again = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap();
+    assert_eq!(again.executions, 2);
+    assert_eq!(store.list_executions("run-1".to_string()).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn an_execution_whose_chat_cannot_be_proven_is_quarantined() {
+    // `dep-1` has no provider binding and no messages carrying the run, so
+    // the chat-scoped barrier cannot be rebuilt for its receipt: strict mode
+    // refuses the whole import; tolerant mode refuses the row loudly while
+    // importing the provable ones.
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    seed_executions(
+        &source,
+        &[
+            ("exec-uncertain", "run-1", "call-x", "write_file", "admitted", false),
+            ("exec-orphan", "dep-1", "call-y", "delete_dir", "admitted", false),
+        ],
+    );
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let error = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::InvalidImport { .. }), "{error}");
+    assert!(
+        store.list_chats(false).await.unwrap().is_empty(),
+        "the refused import leaves the destination untouched"
+    );
+
+    let report = store
+        .import_from_ts_schema(
+            &source,
+            &ImportOptions {
+                abort_on_error: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.executions, 1, "only the provable receipt is imported");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("exec-orphan")
+                && warning.contains("binds to no single chat")),
+        "{:?}",
+        report.warnings
+    );
+    assert!(store.list_executions("dep-1".to_string()).await.unwrap().is_empty());
+    assert_eq!(store.list_executions("run-1".to_string()).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_execution_column_or_record_mismatch_never_reaches_the_guard() {
+    // A receipt the destination's anti-corruption validator would reject on
+    // read (here: the record's executionId disagrees with the column) must be
+    // refused at import, because such a row would fail-closed every later
+    // recovery read.
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let db = Connection::open(&source).unwrap();
+    db.execute_batch(TOOL_EXECUTIONS_TABLE).unwrap();
+    db.execute(
+        "INSERT INTO tool_executions(execution_id,run_id,record) VALUES(?,?,?)",
+        rusqlite::params![
+            "exec-1",
+            "run-1",
+            execution_record("exec-OTHER", "run-1", "call-1", "write_file", "admitted", false)
+        ],
+    )
+    .unwrap();
+    // An unknown status vocabulary is refused as well.
+    db.execute(
+        "INSERT INTO tool_executions(execution_id,run_id,record) VALUES(?,?,?)",
+        rusqlite::params![
+            "exec-2",
+            "run-1",
+            execution_record("exec-2", "run-1", "call-2", "write_file", "running", false)
+        ],
+    )
+    .unwrap();
+    drop(db);
+
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let error = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::InvalidImport { .. }), "{error}");
+    assert!(store.list_executions("run-1".to_string()).await.unwrap().is_empty());
+
+    let report = store
+        .import_from_ts_schema(
+            &source,
+            &ImportOptions {
+                abort_on_error: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.executions, 0);
+    assert!(report.warnings.iter().any(|w| w.contains("exec-1")));
+    assert!(report.warnings.iter().any(|w| w.contains("exec-2")));
+    assert!(store.list_executions("run-1".to_string()).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn strict_import_refuses_an_orphan_only_database_and_leaves_it_untouched() {
+    // The R03 regression: a lone orphan used to satisfy `skip` and then have
+    // its error converted to success, committing an import with the orphan
+    // silently missing. Strict mode must refuse, and the transaction must
+    // roll every sibling row back with it.
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let raw = Connection::open(&source).unwrap();
+    raw.execute_batch(
+        "PRAGMA foreign_keys=OFF;
+INSERT INTO messages (id,chat_id,run_id,role,content,content_format,order_key,parent_message_id,
+    depth,branch_index,active,metadata,created_at)
+  VALUES ('orphan','chat-1',NULL,'user','dangling','text',9,'ghost',3,0,1,'{}','2026-06-06T00:00:00.000Z');",
+    )
+    .unwrap();
+    drop(raw);
+
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let error = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::InvalidImport { .. }), "{error}");
+    assert!(
+        error.to_string().contains("orphan"),
+        "the refusal names the orphan: {error}"
+    );
+    assert!(
+        store.list_chats(false).await.unwrap().is_empty(),
+        "a strict refusal leaves no partially imported history behind"
+    );
+    assert!(store.list_tasks(None).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn strict_import_refuses_a_cycle_only_database_and_tolerant_names_it() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let raw = Connection::open(&source).unwrap();
+    raw.execute_batch(
+        "PRAGMA foreign_keys=OFF;
+INSERT INTO messages (id,chat_id,run_id,role,content,content_format,order_key,parent_message_id,
+    depth,branch_index,active,metadata,created_at)
+  VALUES ('loop-a','chat-1',NULL,'user','a','text',7,'loop-b',3,0,1,'{}','2026-06-06T00:00:00.000Z'),
+         ('loop-b','chat-1',NULL,'assistant','b','text',8,'loop-a',4,0,1,'{}','2026-06-06T00:00:00.000Z');",
+    )
+    .unwrap();
+    drop(raw);
+
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let error = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::InvalidImport { .. }), "{error}");
+    assert!(
+        store.list_chats(false).await.unwrap().is_empty(),
+        "the cycle refuses the whole import"
+    );
+
+    let report = store
+        .import_from_ts_schema(
+            &source,
+            &ImportOptions {
+                abort_on_error: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.messages, 7, "the placed messages, and only those");
+    for member in ["loop-a", "loop-b"] {
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(member)),
+            "{member} is reported: {:?}",
+            report.warnings
+        );
+    }
+}
+
+#[tokio::test]
+async fn imported_settings_reach_the_production_settings_document() {
+    // The R05 regression: `toolCalling: "off"` written only to the
+    // compatibility namespace never reached `ChatExecutor::stage_tools`,
+    // which reads ("http","settings"). The promotion must carry the whole
+    // whitelist and must never overwrite a live document.
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let raw = Connection::open(&source).unwrap();
+    raw.execute(
+        "UPDATE settings SET tool_calling_mode='off' WHERE id=1",
+        [],
+    )
+    .unwrap();
+    drop(raw);
+
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let report = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap();
+    assert_eq!(report.promoted_settings, 1);
+    assert_eq!(
+        store
+            .get_setting(SETTINGS_NAMESPACE, SETTINGS_KEY)
+            .await
+            .unwrap(),
+        Some(json!({
+            "defaultProviderId": "openai",
+            "defaultModel": "gpt-5",
+            "contextSizePreference": "small",
+            "writePolicyMode": "auto_readonly_confirm_writes",
+            "allowRawToolData": false,
+            "maxToolIterations": 24,
+            "toolCalling": "off",
+            "metadata": {"theme": "dark"},
+        })),
+        "the executor's policy gate reads exactly this document"
+    );
+    // The compatibility copy is still there for auditing.
+    assert!(store
+        .get_setting(ASSISTANT_SETTINGS_NAMESPACE, ASSISTANT_SETTINGS_KEY)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn promotion_never_overwrites_a_live_settings_document() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let live = json!({"toolCalling": "on", "contextSizePreference": "large"});
+    store
+        .set_setting(SETTINGS_NAMESPACE, SETTINGS_KEY, live.clone())
+        .await
+        .unwrap();
+
+    let report = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap();
+    assert_eq!(report.promoted_settings, 0);
+    assert_eq!(
+        store
+            .get_setting(SETTINGS_NAMESPACE, SETTINGS_KEY)
+            .await
+            .unwrap(),
+        Some(live)
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("already exists")),
+        "{:?}",
+        report.warnings
+    );
+}
+
+#[tokio::test]
+async fn imported_mcp_servers_aggregate_into_the_production_config_document() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let raw = Connection::open(&source).unwrap();
+    // A second server whose alias the production validator could never accept.
+    raw.execute(
+        "INSERT INTO mcp_servers VALUES ('server-2','Bad Alias','{\"kind\":\"http\",\"url\":\"https://m.example\"}',NULL,1,NULL,NULL,'2026-06-06T00:00:00.000Z','2026-06-06T00:00:00.000Z')",
+        [],
+    )
+    .unwrap();
+    drop(raw);
+
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let report = store
+        .import_from_ts_schema(
+            &source,
+            &ImportOptions {
+                promote_mcp_application_id: Some("onemind".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.mcp_servers, 2, "both servers stay in the archive");
+    assert_eq!(report.promoted_mcp_servers, 1);
+    assert_eq!(
+        store.get_setting(MCP_CONFIG_NAMESPACE, "onemind").await.unwrap(),
+        Some(json!([{
+            "id": "server-1",
+            "alias": "fs",
+            "transport": {"kind": "stdio", "command": "npx"},
+            "secretRefs": {"TOKEN": "secret://x"},
+            "toolAliases": {"ls": "list"},
+            "createdAt": T0,
+            "updatedAt": T1,
+        }])),
+        "the array document McpConfigRepository::read deserializes"
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("server-2") && warning.contains("alias")),
+        "the excluded server is reported: {:?}",
+        report.warnings
+    );
+    // Without an application id, production is left alone entirely.
+    let other = SqliteStore::open(root.path().join("other.db"), 8).unwrap();
+    other
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap();
+    assert!(other
+        .get_setting(MCP_CONFIG_NAMESPACE, "onemind")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn mcp_promotion_never_overwrites_a_live_config_document() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let live = json!([{"id": "live-1", "alias": "live", "transport": {"kind": "http"}}]);
+    store
+        .set_setting(MCP_CONFIG_NAMESPACE, "onemind", live.clone())
+        .await
+        .unwrap();
+    let report = store
+        .import_from_ts_schema(
+            &source,
+            &ImportOptions {
+                promote_mcp_application_id: Some("onemind".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.promoted_mcp_servers, 0);
+    assert_eq!(
+        store.get_setting(MCP_CONFIG_NAMESPACE, "onemind").await.unwrap(),
+        Some(live)
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("live configuration document")),
+        "{:?}",
+        report.warnings
+    );
+}
