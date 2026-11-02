@@ -94,6 +94,30 @@ test("committed loader enforces the wrapper's version on every platform", () => 
   // Each shipped platform package is actually reachable by the loader.
   for (const target of NATIVE_PLATFORM_TARGETS)
     expect(loader).toContain(`@agentkit/native-${target.key}`);
+  // The generated loader's own checks are napi-rs opt-in (upstream shape,
+  // left byte-identical so `build:native` regenerates nothing); real
+  // enforcement lives in the WRAPPER loader below — pinned there, not here.
+});
+
+test("the wrapper's own version guard covers every triple in the table", () => {
+  // src/loader.ts is the enforcement layer: it verifies every installed
+  // platform package against the wrapper's version and THROWS. A sixth
+  // triple must extend the mirror list or the guard silently misses it.
+  const wrapperLoader = readFileSync(
+    join(packages, "native", "src", "loader.ts"),
+    "utf8",
+  );
+  for (const target of NATIVE_PLATFORM_TARGETS)
+    expect(wrapperLoader).toContain(`"${target.key}"`);
+  // A mismatch must be a THROWN load failure, never an ignored warning.
+  expect(wrapperLoader).toContain("native binding package version mismatch");
+  expect(wrapperLoader).toContain("throw new Error");
+  expect(wrapperLoader).not.toContain("console.warn");
+  // Exactly one documented escape hatch, matching the generated layer.
+  expect(
+    wrapperLoader.match(/NAPI_RS_ENFORCE_VERSION_CHECK/g)?.length,
+  ).toBeGreaterThanOrEqual(1);
+  expect(wrapperLoader).toContain('NAPI_RS_ENFORCE_VERSION_CHECK === "0"');
 });
 
 test("platform pack refuses a missing addon", () => {

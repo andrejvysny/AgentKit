@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -13,7 +14,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_PLATFORM_TARGETS } from "../../rust/scripts/native-platform-targets.mjs";
-import { verifyArtifacts } from "../release/native-publish.mjs";
+import {
+  publishArtifacts,
+  verifyArtifacts,
+} from "../release/native-publish.mjs";
 
 const VERSION = "9.9.9";
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
@@ -30,6 +34,34 @@ function pack(dir: string, destination: string): string {
   if (result.status !== 0) throw new Error(result.stderr || "npm pack failed");
   const name = result.stdout.trim().split("\n").pop()!;
   return join(destination, name);
+}
+
+/** Minimal honest container for a triple: the publish verifier reads the
+ * machine identity out of the packed bytes, so fixtures must carry the
+ * same headers a compiled addon would. */
+function containerBytes(target: {
+  os: string;
+  cpu: string;
+  triple: string;
+}): Buffer {
+  if (target.os === "linux") {
+    const b = Buffer.alloc(64);
+    b.write("ELF", 0, "latin1");
+    b.writeUInt16LE(target.cpu === "x64" ? 0x3e : 0xb7, 0x12);
+    return b;
+  }
+  if (target.os === "darwin") {
+    const b = Buffer.alloc(64);
+    b.writeUInt32LE(0xfeedfacf, 0);
+    b.writeUInt32LE(target.cpu === "x64" ? 0x01000007 : 0x0100000c, 4);
+    return b;
+  }
+  const b = Buffer.alloc(96);
+  b.write("MZ", 0, "ascii");
+  b.writeUInt32LE(64, 0x3c); // e_lfanew
+  b.write("PE\0\0", 64, "ascii");
+  b.writeUInt16LE(target.cpu === "x64" ? 0x8664 : 0xaa64, 68);
+  return b;
 }
 
 /** A complete, internally consistent artifact set: five self-consistent
@@ -57,12 +89,9 @@ function artifactSet(base: string): string {
         2,
       ),
     );
-    // Stand-in for the compiled addon: the publish verifier checks digests
-    // and manifest identity, not binary containers (that gate lives in
-    // check-native-artifact.mjs).
     writeFileSync(
       join(platformDir, `agentkit-native.${target.key}.node`),
-      "fake-addon",
+      containerBytes(target),
     );
   }
   const wrapperDir = join(src, "native");
@@ -75,6 +104,12 @@ function artifactSet(base: string): string {
         version: VERSION,
         main: "./dist/index.js",
         publishConfig: { access: "public" },
+        optionalDependencies: Object.fromEntries(
+          NATIVE_PLATFORM_TARGETS.map((t) => [
+            `@agentkit/native-${t.key}`,
+            VERSION,
+          ]),
+        ),
       },
       null,
       2,
@@ -102,6 +137,7 @@ function artifactSet(base: string): string {
             triple: target.triple,
             host: "test",
             commit: COMMIT,
+            cargoLockSha256: "a".repeat(64),
           },
           files: {
             wrapper: {
@@ -154,7 +190,7 @@ afterAll(() => {
 });
 
 function fresh(): string {
-  const base = mkdtempSync(scratch + "/set-");
+  const base = mkdtempSync(`${scratch}/set-`);
   directories.push(base);
   return artifactSet(base);
 }
@@ -303,5 +339,257 @@ describe("native publication artifact verification", () => {
     expect(() => verifyArtifacts(dir, VERSION, COMMIT)).toThrow(
       "still private",
     );
+  });
+
+  it("refuses a foreign-machine binary packed inside the right tarball", () => {
+    const dir = fresh();
+    // Self-consistent repack: correct digests everywhere, but the linux
+    // addon's bytes are a Mach-O. Only the in-tarball machine check can
+    // catch what a manifest-only verifier would publish.
+    const platformDir = join(dir, "foreign-platform");
+    mkdirSync(platformDir, { recursive: true });
+    const target = NATIVE_PLATFORM_TARGETS.find(
+      (t) => t.key === "linux-x64-gnu",
+    )!;
+    writeFileSync(
+      join(platformDir, "package.json"),
+      JSON.stringify({
+        name: `@agentkit/native-${target.key}`,
+        version: VERSION,
+        main: `agentkit-native.${target.key}.node`,
+        os: [target.os],
+        cpu: [target.cpu],
+        libc: ["glibc"],
+        publishConfig: { access: "public" },
+      }),
+    );
+    writeFileSync(
+      join(platformDir, `agentkit-native.${target.key}.node`),
+      containerBytes({ os: "darwin", cpu: "x64", triple: "x" }),
+    );
+    const packDir = join(dir, "foreign-pack");
+    mkdirSync(packDir, { recursive: true });
+    const tarball = pack(platformDir, packDir);
+    const manifestPath = join(dir, "artifact-manifest.linux-x64-gnu.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.files.platform = {
+      path: `foreign-pack/${tarball.slice(packDir.length + 1)}`,
+      sha256: sha256(tarball),
+      bytes: readFileSync(tarball).byteLength,
+      binary: `agentkit-native.${target.key}.node`,
+    };
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    expect(() => verifyArtifacts(dir, VERSION, COMMIT)).toThrow(
+      "not an ELF shared object",
+    );
+  });
+
+  it("refuses a manifest path that escapes the artifact directory", () => {
+    const dir = fresh();
+    const manifestPath = join(dir, "artifact-manifest.darwin-arm64.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.files.platform.path = "../../outside.tgz";
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    expect(() => verifyArtifacts(dir, VERSION, COMMIT)).toThrow(
+      "not the expected",
+    );
+  });
+
+  it("refuses build jobs that disagree on Cargo.lock", () => {
+    const dir = fresh();
+    const manifestPath = join(dir, "artifact-manifest.darwin-x64.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.builtFrom.cargoLockSha256 = "b".repeat(64);
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    expect(() => verifyArtifacts(dir, VERSION, COMMIT)).toThrow(
+      "different Cargo.lock",
+    );
+  });
+
+  it("refuses a platform tarball packed under the wrong package name", () => {
+    const dir = fresh();
+    const target = NATIVE_PLATFORM_TARGETS.find(
+      (t) => t.key === "win32-x64-msvc",
+    )!;
+    // Hand-built tarball so the FILE name matches the expected win32
+    // artifact while the packed package.json claims a different triple's
+    // package (npm pack would name the file after the claimed name and
+    // the basename gate would fire first).
+    const stage = join(dir, "renamed-stage");
+    mkdirSync(join(stage, "package"), { recursive: true });
+    writeFileSync(
+      join(stage, "package", "package.json"),
+      JSON.stringify({
+        name: "@agentkit/native-darwin-arm64",
+        version: VERSION,
+        main: `agentkit-native.${target.key}.node`,
+        os: [target.os],
+        cpu: [target.cpu],
+        publishConfig: { access: "public" },
+      }),
+    );
+    writeFileSync(
+      join(stage, "package", `agentkit-native.${target.key}.node`),
+      containerBytes(target),
+    );
+    const tarball = join(dir, `agentkit-native-${target.key}-${VERSION}.tgz`);
+    const packed = spawnSync("tar", ["-czf", tarball, "-C", stage, "package"], {
+      encoding: "utf8",
+    });
+    if (packed.status !== 0) throw new Error(`tar failed: ${packed.stderr}`);
+    const manifestPath = join(dir, "artifact-manifest.win32-x64-msvc.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.files.platform = {
+      path: `agentkit-native-${target.key}-${VERSION}.tgz`,
+      sha256: sha256(tarball),
+      bytes: readFileSync(tarball).byteLength,
+      binary: `agentkit-native.${target.key}.node`,
+    };
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    expect(() => verifyArtifacts(dir, VERSION, COMMIT)).toThrow(
+      "is package @agentkit/native-darwin-arm64",
+    );
+  });
+
+  it("refuses a wrapper that under-pins its own platform builds", () => {
+    const dir = fresh();
+    // Re-pack the wrapper WITHOUT one platform pin and update every
+    // manifest to its (consistent) digests: cross-job identity still
+    // holds, so only the packed-pin check can refuse it.
+    const wrapperDir = join(dir, "drift-wrapper");
+    mkdirSync(join(wrapperDir, "dist"), { recursive: true });
+    const pins = Object.fromEntries(
+      NATIVE_PLATFORM_TARGETS.filter((t) => t.key !== "darwin-x64").map((t) => [
+        `@agentkit/native-${t.key}`,
+        VERSION,
+      ]),
+    );
+    writeFileSync(
+      join(wrapperDir, "package.json"),
+      JSON.stringify({
+        name: "@agentkit/native",
+        version: VERSION,
+        main: "./dist/index.js",
+        publishConfig: { access: "public" },
+        optionalDependencies: pins,
+      }),
+    );
+    writeFileSync(join(wrapperDir, "dist", "index.js"), "export {};");
+    const packDir = join(dir, "drift-pack");
+    mkdirSync(packDir, { recursive: true });
+    const drifted = pack(wrapperDir, packDir);
+    for (const target of NATIVE_PLATFORM_TARGETS) {
+      const manifestPath = join(dir, `artifact-manifest.${target.key}.json`);
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      manifest.files.wrapper = {
+        path: `drift-pack/${drifted.slice(packDir.length + 1)}`,
+        sha256: sha256(drifted),
+        bytes: readFileSync(drifted).byteLength,
+      };
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    }
+    expect(() => verifyArtifacts(dir, VERSION, COMMIT)).toThrow(
+      "does not pin @agentkit/native-darwin-x64",
+    );
+  });
+});
+
+describe("native publication resume semantics", () => {
+  const savedPath = process.env.PATH;
+  let fakeBin: string;
+
+  beforeAll(() => {
+    fakeBin = mkdtempSync(join(tmpdir(), "agentkit-fake-npm-"));
+    writeFileSync(
+      join(fakeBin, "npm.js"),
+      `const fs = require("node:fs");
+const [,, cmd, target, third] = process.argv;
+if (cmd === "view") {
+  const registry = JSON.parse(process.env.FAKE_REGISTRY ?? "{}");
+  const integrity = registry[target];
+  if (integrity === undefined) { console.error("npm ERR! code E404"); process.exit(1); }
+  console.log(integrity); process.exit(0);
+}
+if (cmd === "publish") {
+  fs.appendFileSync(process.env.PUBLISH_MARKER ?? "/dev/null", process.argv[3] + "\\n");
+  process.exit(0);
+}
+process.exit(2);
+`,
+    );
+    writeFileSync(
+      join(fakeBin, "npm"),
+      '#!/bin/sh\nexec node "$(dirname "$0")/npm.js" "$@"\n',
+      { mode: 0o755 },
+    );
+  });
+
+  afterAll(() => {
+    process.env.PATH = savedPath;
+    rmSync(fakeBin, { recursive: true, force: true });
+  });
+
+  function withFakeNpm<T>(
+    dir: string,
+    registry: Record<string, string>,
+    run: () => T,
+  ): { result: T; published: string[] } {
+    const marker = join(dir, "published.log");
+    const previousToken = process.env.NPM_TOKEN;
+    process.env.PATH = `${fakeBin}:${savedPath}`;
+    process.env.NPM_TOKEN = "fake-token";
+    process.env.FAKE_REGISTRY = JSON.stringify(registry);
+    process.env.PUBLISH_MARKER = marker;
+    try {
+      const result = run();
+      return {
+        result,
+        published: existsSync(marker)
+          ? readFileSync(marker, "utf8").trim().split("\n").filter(Boolean)
+          : [],
+      };
+    } finally {
+      process.env.PATH = savedPath;
+      if (previousToken === undefined) delete process.env.NPM_TOKEN;
+      else process.env.NPM_TOKEN = previousToken;
+      delete process.env.FAKE_REGISTRY;
+      delete process.env.PUBLISH_MARKER;
+    }
+  }
+
+  it("skips only byte-identical registry content and publishes the rest", () => {
+    const dir = fresh();
+    const already = join(dir, "agentkit-native-linux-x64-gnu-9.9.9.tgz");
+    const integrity = `sha512-${createHash("sha512").update(readFileSync(already)).digest("base64")}`;
+    const { published } = withFakeNpm(
+      dir,
+      { "@agentkit/native-linux-x64-gnu@9.9.9": integrity },
+      () => publishArtifacts(dir, VERSION, COMMIT, true),
+    );
+    const names = published.map((p) => p.split("/").pop());
+    // A partial run resumes: the identical package is skipped, everything
+    // else still goes out, platforms before the wrapper before the umbrella.
+    expect(names).not.toContain("agentkit-native-linux-x64-gnu-9.9.9.tgz");
+    expect(names).toContain("agentkit-native-darwin-x64-9.9.9.tgz");
+    expect(names).toContain("agentkit-native-9.9.9.tgz");
+    expect(names).toContain("agentkit-9.9.9.tgz");
+    expect(names.indexOf("agentkit-native-9.9.9.tgz")).toBeGreaterThan(
+      names.indexOf("agentkit-native-win32-x64-msvc-9.9.9.tgz"),
+    );
+    expect(names.indexOf("agentkit-9.9.9.tgz")).toBe(names.length - 1);
+  });
+
+  it("refuses to skip when the registry holds different bytes for the version", () => {
+    const dir = fresh();
+    expect(() =>
+      withFakeNpm(
+        dir,
+        {
+          "@agentkit/native-linux-x64-gnu@9.9.9":
+            "sha512-WRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONG=",
+        },
+        () => publishArtifacts(dir, VERSION, COMMIT, true),
+      ),
+    ).toThrow("different bytes");
   });
 });

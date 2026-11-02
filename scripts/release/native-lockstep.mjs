@@ -77,11 +77,16 @@ export function bumpNativeStackVersions(output, version) {
   }
 
   // Umbrella: exact pins to each platform package (its own version is
-  // bumped by the caller).
+  // bumped by the caller). Pins must already exist — the bump updates,
+  // it never fabricates (a silently added pin hides a manifest drift).
   const umbrellaPath = "packages/agentkit/package.json";
   const umbrella = readJson(output, umbrellaPath);
-  for (const target of NATIVE_PLATFORM_TARGETS)
-    umbrella.optionalDependencies[`@agentkit/native-${target.key}`] = version;
+  for (const target of NATIVE_PLATFORM_TARGETS) {
+    const pin = `@agentkit/native-${target.key}`;
+    if (umbrella.optionalDependencies?.[pin] === undefined)
+      throw new Error(`native lockstep: umbrella lost its ${pin} pin`);
+    umbrella.optionalDependencies[pin] = version;
+  }
   writeJson(output, umbrellaPath, umbrella);
   changed.push(umbrellaPath);
 

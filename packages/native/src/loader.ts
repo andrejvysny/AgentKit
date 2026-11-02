@@ -1,5 +1,70 @@
 import type * as Generated from "../generated/index.js";
 
+/**
+ * The generated NAPI-RS loader's embedded version comparison is opt-in
+ * (`NAPI_RS_ENFORCE_VERSION_CHECK`), so by default a wrapper could load an
+ * addon package whose version differs from its own — a silent ABI-skew
+ * hazard in a partially-published or overridden install. The wrapper pins
+ * every platform package to an exact version; verify what actually
+ * resolved, unconditionally. The keys mirror
+ * `rust/scripts/native-platform-targets.mjs` (pinned by
+ * `tests/distribution.test.ts`). A package that does not resolve is not an
+ * error HERE: os/cpu gating legitimately keeps foreign packages out, and
+ * the addon import below turns a genuinely missing binding into the loud
+ * load failure.
+ *
+ * Node builtins are reached only LAZILY inside this function (invoked
+ * once the native binding is already loading, i.e. a Node-class runtime):
+ * the published wrapper keeps zero static Node dependencies so bundlers
+ * can still resolve the pure-TS import surface.
+ */
+async function assertAddonVersionsMatchWrapper(): Promise<void> {
+  // Same documented escape hatch as the generated loader's own checks
+  // (napi-rs convention): `NAPI_RS_ENFORCE_VERSION_CHECK=0` disables the
+  // version comparison for debugging a deliberately patched install.
+  // Anything else — unset, empty, "1", garbage — keeps it ON. `globalThis`
+  // is narrowed rather than cast: this package keeps ZERO Node types.
+  const global: unknown = globalThis;
+  if (
+    typeof global === "object" &&
+    global !== null &&
+    "process" in global &&
+    typeof global.process === "object" &&
+    global.process !== null &&
+    "env" in global.process &&
+    typeof global.process.env === "object" &&
+    global.process.env !== null &&
+    "NAPI_RS_ENFORCE_VERSION_CHECK" in global.process.env &&
+    global.process.env.NAPI_RS_ENFORCE_VERSION_CHECK === "0"
+  )
+    return;
+  const { createRequire } = await import("node:module");
+  const requireLocal = createRequire(import.meta.url);
+  const pkg = requireLocal("../package.json") as { version?: unknown };
+  if (typeof pkg.version !== "string")
+    throw new Error("native wrapper package.json carries no version");
+  for (const key of [
+    "linux-x64-gnu",
+    "linux-arm64-gnu",
+    "darwin-arm64",
+    "darwin-x64",
+    "win32-x64-msvc",
+  ]) {
+    let addon: { version?: unknown } | undefined;
+    try {
+      addon = requireLocal(`@agentkit/native-${key}/package.json`) as {
+        version?: unknown;
+      };
+    } catch {
+      continue;
+    }
+    if (addon.version !== pkg.version)
+      throw new Error(
+        `native binding package version mismatch: @agentkit/native-${key} is ${String(addon.version)}, wrapper is ${pkg.version}`,
+      );
+  }
+}
+
 export interface RawRunHandle {
   next(): Promise<string>;
   cancel(): void;
@@ -13,9 +78,10 @@ let loading: Promise<Binding> | undefined;
 
 export async function loadBinding(): Promise<Binding> {
   loading ??= import("../generated/index.js")
-    .then((module) => {
+    .then(async (module) => {
       if (module.bindingSmoke() !== "agentkit-native")
         throw new Error("unexpected native binding identity");
+      await assertAddonVersionsMatchWrapper();
       loaded = module;
       return loaded;
     })

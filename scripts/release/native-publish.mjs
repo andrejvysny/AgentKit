@@ -26,8 +26,9 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertBinaryBytesMatchTarget } from "../../rust/scripts/build-native-release-artifact.mjs";
 import { NATIVE_PLATFORM_TARGETS } from "../../rust/scripts/native-platform-targets.mjs";
 
 function fail(message) {
@@ -37,8 +38,23 @@ function fail(message) {
 const sha256 = (file) =>
   createHash("sha256").update(readFileSync(file)).digest("hex");
 
-function tarballManifest(dir, entry) {
-  const file = join(dir, entry.path);
+const sha512Base64 = (file) =>
+  createHash("sha512").update(readFileSync(file)).digest("base64");
+
+function tarballManifest(dir, entry, expectedBasename) {
+  const file = resolve(dir, entry.path);
+  // The manifest is JSON the build job wrote; a path that escapes the
+  // artifact directory (or names an unexpected tarball) is not an
+  // artifact, whatever digest it carries.
+  const inside = relative(resolve(dir), file);
+  if (
+    inside.startsWith("..") ||
+    isAbsolute(inside) ||
+    basename(file) !== expectedBasename
+  )
+    fail(
+      `artifact path ${entry.path} is not the expected ${expectedBasename} inside the artifact dir`,
+    );
   if (!existsSync(file)) fail(`artifact missing: ${file}`);
   if (sha256(file) !== entry.sha256) fail(`sha256 mismatch for ${file}`);
   if (readFileSync(file).byteLength !== entry.bytes)
@@ -46,17 +62,22 @@ function tarballManifest(dir, entry) {
   return { file, entry };
 }
 
+function tarMember(tarballPath, member, { encoding = "utf8" } = {}) {
+  const result = spawnSync("tar", ["-xzOf", tarballPath, member], {
+    encoding,
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if (result.status !== 0) fail(`cannot read ${member} from ${tarballPath}`);
+  return result.stdout;
+}
+
 function packedJson(tarballPath) {
-  const result = spawnSync(
-    "tar",
-    ["-xzOf", tarballPath, "package/package.json"],
-    {
-      encoding: "utf8",
-      maxBuffer: 16 * 1024 * 1024,
-    },
-  );
-  if (result.status !== 0) fail(`cannot read package.json from ${tarballPath}`);
-  return JSON.parse(result.stdout);
+  const stdout = tarMember(tarballPath, "package/package.json");
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    fail(`package.json in ${tarballPath} is not valid JSON`);
+  }
 }
 
 export function verifyArtifacts(artifactsDir, version, commit) {
@@ -72,6 +93,7 @@ export function verifyArtifacts(artifactsDir, version, commit) {
     umbrella: null,
   };
   let wrapperSha;
+  let cargoLock;
   for (const target of NATIVE_PLATFORM_TARGETS) {
     const manifestPath = join(
       artifactsDir,
@@ -96,15 +118,68 @@ export function verifyArtifacts(artifactsDir, version, commit) {
       fail(
         `artifact ${target.key} was built from ${manifest.builtFrom?.commit}, not the release commit ${commit}`,
       );
-    const platform = tarballManifest(artifactsDir, manifest.files.platform);
-    const wrapper = tarballManifest(artifactsDir, manifest.files.wrapper);
+    if (typeof manifest.builtFrom?.cargoLockSha256 !== "string")
+      fail(`artifact ${target.key} lacks Cargo.lock provenance`);
+    if (cargoLock && manifest.builtFrom.cargoLockSha256 !== cargoLock)
+      fail(
+        `artifact ${target.key} was built against a different Cargo.lock than the other triples — the snapshot is not one frozen source`,
+      );
+    cargoLock = manifest.builtFrom.cargoLockSha256;
+    const platform = tarballManifest(
+      artifactsDir,
+      manifest.files.platform,
+      `agentkit-native-${target.key}-${version}.tgz`,
+    );
+    const wrapper = tarballManifest(
+      artifactsDir,
+      manifest.files.wrapper,
+      `agentkit-native-${version}.tgz`,
+    );
+    // Everything the registry will serve, re-derived from the tarball
+    // bytes — never taken from the build job's own manifest claims.
     const platformManifest = packedJson(platform.file);
+    if (platformManifest.name !== `@agentkit/native-${target.key}`)
+      fail(
+        `platform tarball ${target.key} is package ${platformManifest.name}`,
+      );
     if (platformManifest.version !== version)
       fail(`platform tarball ${target.key} version drift`);
     if (platformManifest.private !== undefined)
       fail(`platform tarball ${target.key} is still private`);
     if (platformManifest.publishConfig?.access !== "public")
       fail(`platform tarball ${target.key} lacks publishConfig.access=public`);
+    if (JSON.stringify(platformManifest.os) !== JSON.stringify([target.os]))
+      fail(
+        `platform tarball ${target.key} os gate ${JSON.stringify(platformManifest.os)} != [${target.os}]`,
+      );
+    if (JSON.stringify(platformManifest.cpu) !== JSON.stringify([target.cpu]))
+      fail(
+        `platform tarball ${target.key} cpu gate ${JSON.stringify(platformManifest.cpu)} != [${target.cpu}]`,
+      );
+    if (
+      JSON.stringify(platformManifest.libc) !==
+      JSON.stringify(target.libc ? [target.libc] : undefined)
+    )
+      fail(
+        `platform tarball ${target.key} libc gate ${JSON.stringify(platformManifest.libc)} != ${String(target.libc)}`,
+      );
+    const addonMember = `package/agentkit-native.${target.key}.node`;
+    if (platformManifest.main !== `agentkit-native.${target.key}.node`)
+      fail(
+        `platform tarball ${target.key} main ${String(platformManifest.main)}`,
+      );
+    // The machine code inside the tarball must BE the claimed triple's —
+    // the publish gate never trusts a filename or the build job's word.
+    const packedBytes = tarMember(platform.file, addonMember, {
+      encoding: null,
+    });
+    if (!packedBytes || packedBytes.length === 0)
+      fail(`platform tarball ${target.key} does not contain ${addonMember}`);
+    assertBinaryBytesMatchTarget(
+      packedBytes,
+      target,
+      `${basename(platform.file)}:${addonMember}`,
+    );
     if (wrapperSha && wrapper.entry.sha256 !== wrapperSha)
       fail(
         `wrapper tarball is not byte-identical across build jobs (${target.key} differs) — nondeterministic build`,
@@ -141,28 +216,63 @@ export function verifyArtifacts(artifactsDir, version, commit) {
   if (JSON.stringify(umbrellaManifest).includes("workspace:"))
     fail("umbrella tarball contains a workspace: dependency range");
   const wrapperManifest = packedJson(plan.wrapper);
+  if (wrapperManifest.name !== "@agentkit/native")
+    fail(`wrapper tarball is ${wrapperManifest.name}`);
   if (wrapperManifest.version !== version)
     fail(
       `wrapper tarball is at ${wrapperManifest.version}, release is ${version}`,
     );
   if (wrapperManifest.publishConfig?.access !== "public")
     fail("wrapper tarball lacks publishConfig.access=public");
+  for (const target of NATIVE_PLATFORM_TARGETS)
+    if (
+      wrapperManifest.optionalDependencies?.[
+        `@agentkit/native-${target.key}`
+      ] !== version
+    )
+      fail(
+        `wrapper tarball does not pin @agentkit/native-${target.key} at ${version} — a released wrapper must resolve exactly its own platform builds`,
+      );
   plan.umbrella = umbrellaPath;
   return plan;
 }
 
-function npmViewExists(name, version) {
-  const result = spawnSync("npm", ["view", `${name}@${version}`, "version"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.status === 0) return true;
-  if (/E404|404/.test(`${result.stdout}${result.stderr}`)) return false;
-  fail(`npm view ${name}@${version} failed: ${result.stderr || result.stdout}`);
+function npmRegistryIntegrity(name, version) {
+  // --registry on the command line outranks every .npmrc (including a
+  // repo-committed project .npmrc), so no source commit can redirect the
+  // probe — or the publish below — to a lookalike registry.
+  const result = spawnSync(
+    "npm",
+    [
+      "view",
+      `${name}@${version}`,
+      "dist.integrity",
+      "--registry",
+      "https://registry.npmjs.org/",
+    ],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status !== 0) {
+    if (/E404|404/.test(`${result.stdout}${result.stderr}`)) return null;
+    fail(
+      `npm view ${name}@${version} failed: ${result.stderr || result.stdout}`,
+    );
+  }
+  return result.stdout.trim();
 }
 
 function npmPublish(file, { execute }) {
-  const args = ["publish", file, "--access", "public"];
+  const args = [
+    "publish",
+    file,
+    "--access",
+    "public",
+    "--registry",
+    "https://registry.npmjs.org/",
+  ];
   if (!execute) args.push("--dry-run");
   else args.push("--provenance");
   const result = spawnSync("npm", args, {
@@ -188,9 +298,9 @@ export function publishArtifacts(artifactsDir, version, commit, execute) {
     const npmrc = join(artifactsDir, "release.npmrc");
     // The ${NPM_TOKEN} placeholder is expanded by npm itself from the
     // process environment — never by this template and never into logs.
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: npm expands this placeholder at publish time
     writeFileSync(
       npmrc,
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: npm expands this placeholder at publish time
       "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\nregistry=https://registry.npmjs.org/\n",
       { mode: 0o600 },
     );
@@ -206,11 +316,22 @@ export function publishArtifacts(artifactsDir, version, commit, execute) {
   ];
   for (const target of targets) {
     const name = target.manifest.name;
-    if (execute && npmViewExists(name, version)) {
-      console.log(
-        `native-publish: ${name}@${version} already published — skipping (partial-run resume)`,
-      );
-      continue;
+    if (execute) {
+      const registryIntegrity = npmRegistryIntegrity(name, version);
+      if (registryIntegrity !== null) {
+        // Skip a completed publish only when the registry holds EXACTLY
+        // these verified bytes — an unpublish-and-replace of the same
+        // version must fail loudly, never resume past a substitution.
+        const local = `sha512-${sha512Base64(target.file)}`;
+        if (registryIntegrity !== local)
+          fail(
+            `${name}@${version} exists in the registry with different bytes (registry ${registryIntegrity}, verified artifact ${local}) — refusing to skip`,
+          );
+        console.log(
+          `native-publish: ${name}@${version} already published byte-identically — skipping (partial-run resume)`,
+        );
+        continue;
+      }
     }
     console.log(
       `native-publish: ${execute ? "publishing" : "dry-run"} ${name}@${version}`,
