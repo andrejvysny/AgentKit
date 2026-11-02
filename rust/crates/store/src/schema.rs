@@ -7,8 +7,11 @@ use std::{
 
 pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// The schema version this build creates and accepts; migrations land as
-/// `version < N` steps below.
-pub const SCHEMA_VERSION: i64 = 7;
+/// `version < N` steps below. Version 8 adds the durable uncertainty
+/// barriers a tolerant TypeScript import leaves for admitted effects whose
+/// receipt cannot be placed; version 9 adds the persistent FTS5 message
+/// index (with a one-time backfill of the messages already on disk).
+pub const SCHEMA_VERSION: i64 = 9;
 const VERSION: i64 = SCHEMA_VERSION;
 
 fn ownership(path: &Path) -> Result<Option<File>> {
@@ -112,6 +115,12 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<File>)> {
         if version < 7 {
             migrate_managed_content(&mut connection)?;
         }
+        if version < 8 {
+            migrate_barriers(&mut connection)?;
+        }
+        if version < 9 {
+            migrate_message_search(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -195,6 +204,12 @@ fn schema_sql(version: i64) -> String {
     if version >= 7 {
         sql.push_str(MANAGED_CONTENT_SCHEMA);
     }
+    if version >= 8 {
+        sql.push_str(BARRIERS_SCHEMA);
+    }
+    if version >= 9 {
+        sql.push_str(&message_search_schema());
+    }
     sql
 }
 
@@ -238,6 +253,136 @@ fn migrate_managed_content(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(MANAGED_CONTENT_SCHEMA)?;
     transaction.pragma_update(None, "user_version", 7)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Durable uncertainty barriers (ADR 0020), additive at schema version 8.
+/// When the tolerant TypeScript import cannot place an admitted-without-
+/// result receipt — its chat cannot be proven, its record is corrupt, its
+/// run was never imported — warning-plus-omission would silently delete
+/// the evidence that an external effect MIGHT have happened, and the
+/// identical mutation could run a second time. Instead the import writes
+/// one barrier row keyed by the tool name plus the best-known identity
+/// (source execution id, run, argument fingerprint under its provenance);
+/// the host guard and the store's admission gate treat every barrier as an
+/// unresolved uncertainty until a human reauthorizes its exact id. No
+/// foreign key: a barrier may legitimately outlive a run that was never
+/// imported.
+const BARRIERS_SCHEMA: &str = r#"
+CREATE TABLE uncertainty_barriers(barrier_id TEXT PRIMARY KEY, chat_id TEXT, run_id TEXT, tool_name TEXT NOT NULL, args_sha256 TEXT, args_hash_provenance TEXT NOT NULL DEFAULT 'canonical', reason TEXT NOT NULL);
+"#;
+
+fn migrate_barriers(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(BARRIERS_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 8)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// The searchable projection of one message row, as SQL — the mirror of
+/// the TypeScript adapters' `messageSearchText`, which read a `content`
+/// column while the Rust store keeps the whole record as JSON, so this
+/// reaches into `record` with json1: a string body as itself, a parts body
+/// as ALL of its `{"type":"text"}` parts joined by newlines (non-text
+/// parts contribute nothing; base64 image bytes are not prose), anything
+/// else as empty. ONE definition, spliced into the view and every trigger:
+/// an index and a delete trigger that disagree about a message's text
+/// would leave the index quietly wrong, detectable only by searching for a
+/// term that used to be there. `record` is the qualified row reference —
+/// `m.record`, `new.record`, `old.record`.
+fn message_search_text(record: &str) -> String {
+    format!(
+        r#"CASE json_type({record}, '$.content')
+             WHEN 'text' THEN json_extract({record}, '$.content')
+             WHEN 'array' THEN COALESCE((SELECT group_concat(
+                 CASE WHEN json_type(part.value, '$.text') = 'text'
+                      THEN json_extract(part.value, '$.text') END, char(10))
+               FROM json_each({record}, '$.content') AS part
+              WHERE json_extract(part.value, '$.type') = 'text'), '')
+             ELSE '' END"#
+    )
+}
+
+/// The persistent message search index — the TypeScript `message_search`
+/// FTS5 index's Rust counterpart, additive at schema version 9. Search
+/// used to rebuild a temporary FTS5 table from the whole message corpus on
+/// EVERY query — one read scan, deserialize, CREATE, INSERT loop, MATCH
+/// and DROP per request. The index now lives in the schema and is the
+/// authoritative search predicate: `search_messages` answers
+/// `message_search MATCH` under `unicode61 remove_diacritics 2` with bm25
+/// ranking, exactly as the TypeScript adapters did.
+///
+/// The layout is the TypeScript one, one-to-one: a VIEW computing the
+/// searchable text of every message, an EXTERNAL-CONTENT FTS5 table over
+/// it (the index holds terms and postings, never a second copy of the
+/// text), and THREE triggers, because with external content nothing
+/// maintains the index on its own. A `'delete'` command must carry the OLD
+/// text so FTS5 removes exactly the postings it inserted — which is why the
+/// projection is repeated in the trigger bodies rather than re-read through
+/// the view, whose row is already gone by then. Every message write — the
+/// store's append/update paths, the history import, the TypeScript import's
+/// direct INSERT ... ON CONFLICT, and the FK cascade of a chat deletion —
+/// flows through these triggers, so no writer can leave the index behind.
+///
+/// The corpus is EVERY message: visibility (`archived`, `metadata.internal`,
+/// `metadata.placeholder`) is decided at QUERY time, in the join back to
+/// `messages`, exactly where the TypeScript adapter keeps its filter —
+/// those metadata keys are rewritten after indexing (a placeholder becomes
+/// a real answer the moment its run finishes), and an index that had
+/// decided membership at insert time would keep every finished answer
+/// permanently unfindable.
+///
+/// THE INDEX IS KEYED BY `messages.rowid`, SO DO NOT VACUUM A LIVE STORE
+/// FILE: `messages` has a TEXT primary key, its rowid is SQLite's own, and
+/// VACUUM may renumber it without telling FTS5 — every posting would
+/// silently name a different message.
+fn message_search_schema() -> String {
+    let view = message_search_text("m.record");
+    let new = message_search_text("new.record");
+    let old = message_search_text("old.record");
+    format!(
+        r#"
+CREATE VIEW message_search_source AS
+SELECT m.rowid AS rowid, {view} AS body FROM messages AS m;
+CREATE VIRTUAL TABLE message_search USING fts5(
+  body,
+  content='message_search_source',
+  content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER messages_search_insert AFTER INSERT ON messages BEGIN
+  INSERT INTO message_search(rowid, body) VALUES (new.rowid, {new});
+END;
+CREATE TRIGGER messages_search_delete AFTER DELETE ON messages BEGIN
+  INSERT INTO message_search(message_search, rowid, body)
+    VALUES ('delete', old.rowid, {old});
+END;
+CREATE TRIGGER messages_search_update AFTER UPDATE ON messages BEGIN
+  INSERT INTO message_search(message_search, rowid, body)
+    VALUES ('delete', old.rowid, {old});
+  INSERT INTO message_search(rowid, body) VALUES (new.rowid, {new});
+END;
+-- Backfill, guarded so re-applying this DDL cannot double-index anything.
+-- The guard reads the %_docsize SHADOW table rather than message_search
+-- itself: scanning an external-content table without a MATCH iterates the
+-- CONTENT SOURCE, so `SELECT 1 FROM message_search` is non-empty whenever
+-- `messages` is — the guard would read "already populated" on a completely
+-- empty index and skip the backfill it exists to perform. On a fresh
+-- database this inserts nothing; it earns its place when a pre-v9 file
+-- (whose rows predate the index) is migrated.
+INSERT INTO message_search(rowid, body)
+  SELECT source.rowid, source.body FROM message_search_source AS source
+   WHERE NOT EXISTS (SELECT 1 FROM message_search_docsize);
+"#
+    )
+}
+
+fn migrate_message_search(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(&message_search_schema())?;
+    transaction.pragma_update(None, "user_version", 9)?;
     transaction.commit()?;
     Ok(())
 }
@@ -331,7 +476,7 @@ fn migrate_free_receipts(connection: &mut Connection) -> Result<()> {
 const LEGACY_CONTEXT_SHA256: &str =
     "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a";
 
-fn sha256_hex(text: &str) -> String {
+pub(crate) fn sha256_hex(text: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(text.as_bytes());
     digest

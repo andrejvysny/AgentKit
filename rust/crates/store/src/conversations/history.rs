@@ -140,6 +140,9 @@ impl SqliteStore {
                 }
                 transaction.execute("DELETE FROM tasks WHERE id=?", [task.task_id])?;
             }
+            // The messages go with the FK cascade; the schema's DELETE
+            // trigger retires their `message_search` postings row by row,
+            // in this same transaction.
             transaction.execute("DELETE FROM chats WHERE id=?", [chat_id])?;
             transaction.commit()?;
             Ok(())

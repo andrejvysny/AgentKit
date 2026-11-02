@@ -25,6 +25,8 @@ fn admission(id: &str) -> ExecutionReceiptAdmission {
         tool_call_id: "call".into(),
         tool_name: "write".into(),
         args_sha256: "a".repeat(64),
+        ts_args_sha256: None,
+        args_hash_provenance: agentkit_store::ArgsHashProvenance::Canonical,
         context_sha256: "b".repeat(64),
         attempt_id: "attempt".into(),
         approval_request_id: Some(id.into()),

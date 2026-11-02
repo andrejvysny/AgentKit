@@ -39,6 +39,11 @@ pub struct ExecutionReceiptRecord {
     pub tool_name: String,
     /// sha-256 hex of the canonical-JSON arguments.
     pub args_sha256: String,
+    /// Which canonicalizer produced `args_sha256`. Native admissions write
+    /// the native hash (the field is then omitted); imported rows carry
+    /// `ts-canonical` so the guard consults both hashers.
+    #[serde(default, skip_serializing_if = "ArgsHashProvenance::is_canonical")]
+    pub args_hash_provenance: ArgsHashProvenance,
     /// sha-256 hex of the host execution-context binding.
     pub context_sha256: String,
     pub attempt_id: String,
@@ -64,6 +69,41 @@ pub enum ExecutionReceiptStatus {
     Completed,
 }
 
+/// Which canonicalizer produced a receipt's `argsSha256`. The two ports do
+/// NOT agree on one canonical JSON: the TypeScript
+/// `packages/host/src/sessions/hash.ts` runs `Object.entries(...).sort()`
+/// through `Object.fromEntries` + `JSON.stringify`, and JavaScript reorders
+/// array-index keys (canonical decimal integers < 2^53 are object-property
+/// ordering law) numerically FIRST, then strings in the sorted insertion
+/// order — so `{ "10": "a", "2": "b" }` stringifies as `{"2":"b","10":"a"}`,
+/// while the Rust map (`BTreeMap`) serializes `{ "10": "a", "2": "b" }`
+/// lexically. An imported receipt therefore carries a hash the native
+/// canonicalizer can never reproduce from the same arguments; without this
+/// provenance dimension the cross-run uncertainty guard (which matches on
+/// tool name + `args_sha256`) would read an imported admitted effect as
+/// absence and let the identical mutation run a second time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArgsHashProvenance {
+    /// The native Rust canonicalizer (`durable_execution::args_sha256`).
+    /// Absent from the record JSON means exactly this — existing native
+    /// receipts keep their bytes.
+    #[default]
+    Canonical,
+    /// The TypeScript pipeline (`canonicalJson` → `sha256Hex`, verified
+    /// against the real `hash.ts` under bun). Only the importer stamps it.
+    TsCanonical,
+}
+
+impl ArgsHashProvenance {
+    /// The serde default is `canonical`, so the field is omitted from the
+    /// record JSON for native rows: the wire identity of a native receipt
+    /// never changes.
+    fn is_canonical(&self) -> bool {
+        *self == Self::Canonical
+    }
+}
+
 /// The insert payload for admission (`ToolExecutionAdmission` in TS):
 /// everything but status and result.
 #[derive(Clone, Debug)]
@@ -74,11 +114,84 @@ pub struct ExecutionReceiptAdmission {
     pub tool_call_id: String,
     pub tool_name: String,
     pub args_sha256: String,
+    /// The SAME arguments hashed through the TypeScript canonicalizer
+    /// (`durable_execution::ts_args_sha256`). Optional: an admission that
+    /// does not carry it simply cannot cross-match an imported
+    /// `ts-canonical` receipt in the pending-generation gate, so hosts that
+    /// may import TS databases must supply it.
+    pub ts_args_sha256: Option<String>,
+    /// Which canonicalizer produced `args_sha256`. Native admissions pass
+    /// `Canonical`; the napi port stamps `TsCanonical` when the JS side
+    /// says the hash came from the TypeScript pipeline.
+    pub args_hash_provenance: ArgsHashProvenance,
     pub context_sha256: String,
     pub attempt_id: String,
     pub approval_request_id: Option<String>,
     pub approval_generation: Option<String>,
     pub now: i64,
+}
+
+/// True when `stored` — recorded under `provenance` — names the same
+/// arguments as the native hash `args_sha256` (and, for an imported
+/// `ts-canonical` receipt, the TS-pipeline hash `ts_args_sha256` of the
+/// same values). This is the compatibility lookup the uncertainty guard
+/// and every store-side gate share.
+pub fn args_match(
+    provenance: ArgsHashProvenance,
+    stored: &str,
+    args_sha256: &str,
+    ts_args_sha256: Option<&str>,
+) -> bool {
+    stored == args_sha256
+        || (provenance == ArgsHashProvenance::TsCanonical
+            && ts_args_sha256.is_some_and(|hash| hash == stored))
+}
+
+/// A durable uncertainty barrier: the honest residue of an admitted effect
+/// whose completion is unknown AND whose receipt could not be placed
+/// (tolerant import refused it). Silent omission of such a row would let
+/// the identical mutation run twice, so the import records this placeholder
+/// keyed by tool name plus whatever best-known identity survives, and the
+/// host guard treats every barrier row as an unresolved uncertainty until
+/// a human reauthorizes its exact id.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UncertaintyBarrierRecord {
+    /// Deterministic id over the known identity, so a re-import is
+    /// insert-if-absent instead of a duplicate.
+    pub barrier_id: String,
+    /// The chat the blocked effect belonged to, when it could be proven.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<String>,
+    /// The run the blocked effect belonged to, when the row carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    pub tool_name: String,
+    /// The arguments fingerprint when the source record still carried one;
+    /// `None` blocks every reissue of the tool by name (best-known
+    /// identity — an unknown fingerprint is never guessed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args_sha256: Option<String>,
+    pub args_hash_provenance: ArgsHashProvenance,
+    /// Why the real receipt could not be placed; shown to the human when
+    /// the barrier refuses an execution.
+    pub reason: String,
+}
+
+impl UncertaintyBarrierRecord {
+    /// Does this barrier block an invocation of `tool_name` whose arguments
+    /// hash to `args_sha256` (native) / `ts_args_sha256` (TS pipeline)?
+    pub fn blocks(&self, tool_name: &str, args_sha256: &str, ts_args_sha256: Option<&str>) -> bool {
+        self.tool_name == tool_name
+            && self.args_sha256.as_deref().is_none_or(|stored| {
+                args_match(
+                    self.args_hash_provenance,
+                    stored,
+                    args_sha256,
+                    ts_args_sha256,
+                )
+            })
+    }
 }
 
 fn is_hex64(value: &str) -> bool {
@@ -185,6 +298,141 @@ fn select_run(db: &Connection, run_id: &str) -> Result<Vec<ExecutionReceiptRecor
     rows.map(|row| read_row(&row?)).collect()
 }
 
+/// Read one barrier row, refusing a malformed one as recovery evidence
+/// unreadable — a corrupt barrier must block, never read as absence.
+fn read_barrier(
+    row: &(
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        Option<String>,
+        String,
+        String,
+    ),
+) -> Result<UncertaintyBarrierRecord, StoreError> {
+    let unreadable = |reason: &str| {
+        StoreError::RecoveryUnreadable(format!(
+            "An uncertainty barrier is malformed ({reason}); mutations remain blocked."
+        ))
+    };
+    if row.3.is_empty() {
+        return Err(unreadable("toolName must be non-empty"));
+    }
+    if row.4.as_deref().is_some_and(|hash| !is_hex64(hash)) {
+        return Err(unreadable("argsSha256 must be 64 lowercase hex characters"));
+    }
+    let args_hash_provenance = match row.5.as_str() {
+        "canonical" => ArgsHashProvenance::Canonical,
+        "ts-canonical" => ArgsHashProvenance::TsCanonical,
+        other => return Err(unreadable(&format!("unknown argsHashProvenance {other:?}"))),
+    };
+    if row.0.is_empty() || row.6.is_empty() {
+        return Err(unreadable("barrierId and reason must be non-empty"));
+    }
+    Ok(UncertaintyBarrierRecord {
+        barrier_id: row.0.clone(),
+        chat_id: row.1.clone(),
+        run_id: row.2.clone(),
+        tool_name: row.3.clone(),
+        args_sha256: row.4.clone(),
+        args_hash_provenance,
+        reason: row.6.clone(),
+    })
+}
+
+const BARRIER_COLUMNS: &str =
+    "barrier_id, chat_id, run_id, tool_name, args_sha256, args_hash_provenance, reason";
+
+/// The barrier scan shared by the admission gate and the host guard: rows
+/// scoped to this chat (directly, or through the run's binding), to this
+/// very run, or carrying no attributable identity at all.
+fn select_barriers(
+    db: &Connection,
+    chat_id: &str,
+    run_id: &str,
+) -> Result<Vec<UncertaintyBarrierRecord>, StoreError> {
+    let mut statement = db.prepare(&format!(
+        "SELECT {BARRIER_COLUMNS} FROM uncertainty_barriers \
+         WHERE (chat_id IS NULL AND run_id IS NULL) \
+            OR chat_id = ?1 OR run_id = ?2 \
+            OR run_id IN (SELECT run_id FROM run_bindings WHERE chat_id = ?1) \
+         ORDER BY rowid"
+    ))?;
+    let rows = statement.query_map(params![chat_id, run_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+        ))
+    })?;
+    rows.map(|row| read_barrier(&row?)).collect()
+}
+
+/// Insert-if-absent. Re-imports of the same source row derive the same
+/// deterministic `barrier_id` and refresh provenance in place (never the
+/// reason of an existing row, which may name a stricter refusal).
+pub fn insert_barrier(
+    db: &Connection,
+    barrier: &UncertaintyBarrierRecord,
+) -> Result<bool, StoreError> {
+    if barrier.barrier_id.is_empty()
+        || barrier.tool_name.is_empty()
+        || barrier.reason.is_empty()
+        || barrier
+            .args_sha256
+            .as_deref()
+            .is_some_and(|hash| !is_hex64(hash))
+    {
+        return Err(StoreError::InvalidInput(
+            "an uncertainty barrier needs a barrier id, tool name, reason and a well-formed argument hash".into(),
+        ));
+    }
+    let changes = db.execute(
+        "INSERT INTO uncertainty_barriers(barrier_id,chat_id,run_id,tool_name,args_sha256,args_hash_provenance,reason) \
+         VALUES(?,?,?,?,?,?,?) ON CONFLICT(barrier_id) DO UPDATE SET \
+         chat_id=COALESCE(uncertainty_barriers.chat_id, excluded.chat_id), \
+         run_id=COALESCE(uncertainty_barriers.run_id, excluded.run_id), \
+         args_hash_provenance=excluded.args_hash_provenance",
+        params![
+            barrier.barrier_id,
+            barrier.chat_id,
+            barrier.run_id,
+            barrier.tool_name,
+            barrier.args_sha256,
+            match barrier.args_hash_provenance {
+                ArgsHashProvenance::Canonical => "canonical",
+                ArgsHashProvenance::TsCanonical => "ts-canonical",
+            },
+            barrier.reason,
+        ],
+    )?;
+    Ok(changes == 1)
+}
+
+/// The deterministic barrier id: sha-256 over the best-known identity of
+/// the unplaceable source row. Two imports of the same row derive the same
+/// id, so barriers are insert-if-absent across re-runs.
+pub fn barrier_id_of(
+    execution_id: Option<&str>,
+    run_id: Option<&str>,
+    tool_name: &str,
+    args_sha256: Option<&str>,
+) -> String {
+    let binding = serde_json::json!({
+        "executionId": execution_id,
+        "runId": run_id,
+        "toolName": tool_name,
+        "argsSha256": args_sha256,
+    });
+    let canonical = serde_json::to_string(&binding).unwrap_or_else(|_| "{}".into());
+    format!("barrier:{}", crate::schema::sha256_hex(&canonical))
+}
+
 fn validate_approval(
     db: &Connection,
     admission: &ExecutionReceiptAdmission,
@@ -268,19 +516,50 @@ impl SqliteStore {
                     "receipt hashes must be 64 lowercase hex characters".into(),
                 ));
             }
+            if admission
+                .ts_args_sha256
+                .as_deref()
+                .is_some_and(|hash| !is_hex64(hash))
+            {
+                return Err(StoreError::InvalidInput(
+                    "the TypeScript-pipeline argument hash must be 64 lowercase hex characters".into(),
+                ));
+            }
             validate_approval(&transaction, &admission)?;
+            // Uncertainty barriers: an unplaceable admitted effect blocks the
+            // identical reissue even though no receipt row carries it. Only
+            // an answer that names the barrier's exact id opens the gate.
+            if select_barriers(&transaction, &admission.chat_id, &admission.run_id)?
+                .iter()
+                .any(|barrier| {
+                    barrier.blocks(
+                        &admission.tool_name,
+                        &admission.args_sha256,
+                        admission.ts_args_sha256.as_deref(),
+                    ) && admission.approval_generation.as_deref()
+                        != Some(barrier.barrier_id.as_str())
+                })
+            {
+                transaction.commit()?;
+                return Ok(false);
+            }
             // Anti-corruption on the existing rows this decision reads.
             let existing = select_run(&transaction, &admission.run_id)?;
             // Pending generation gate: while any execution of this exact
             // operation is admitted-without-result, only that receipt's id
-            // (as a fresh approval generation) may admit again.
-            let previous = existing
-                .iter()
-                .rfind(|record| {
-                    record.tool_name == admission.tool_name
-                        && record.args_sha256 == admission.args_sha256
-                        && record.context_sha256 == admission.context_sha256
-                });
+            // (as a fresh approval generation) may admit again. An imported
+            // `ts-canonical` receipt names the same arguments under the TS
+            // pipeline hash, so it holds the gate too.
+            let previous = existing.iter().rfind(|record| {
+                record.tool_name == admission.tool_name
+                    && record.context_sha256 == admission.context_sha256
+                    && args_match(
+                        record.args_hash_provenance,
+                        &record.args_sha256,
+                        &admission.args_sha256,
+                        admission.ts_args_sha256.as_deref(),
+                    )
+            });
             if let Some(previous) = previous
                 && previous.status == ExecutionReceiptStatus::Admitted
                 && admission.approval_generation.as_deref() != Some(previous.execution_id.as_str())
@@ -295,6 +574,7 @@ impl SqliteStore {
                 tool_call_id: admission.tool_call_id.clone(),
                 tool_name: admission.tool_name.clone(),
                 args_sha256: admission.args_sha256.clone(),
+                args_hash_provenance: admission.args_hash_provenance,
                 context_sha256: admission.context_sha256.clone(),
                 attempt_id: admission.attempt_id.clone(),
                 approval_request_id: admission.approval_request_id.clone(),
@@ -421,5 +701,20 @@ impl SqliteStore {
             rows.map(|row| read_row(&row?)).collect()
         })
         .await
+    }
+
+    /// The uncertainty barriers this execution must respect: rows left by a
+    /// tolerant import for admitted effects whose receipt could not be
+    /// placed, scoped to this chat (directly or through the run binding),
+    /// to this run, or carrying no attributable identity at all. The host
+    /// guard treats every returned row as an unresolved uncertainty; a
+    /// malformed barrier row is a hard recovery error, never an absence.
+    pub async fn list_uncertainty_barriers(
+        &self,
+        chat_id: String,
+        run_id: String,
+    ) -> Result<Vec<UncertaintyBarrierRecord>, StoreError> {
+        self.call(move |db| select_barriers(db, &chat_id, &run_id))
+            .await
     }
 }

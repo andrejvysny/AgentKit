@@ -21,8 +21,9 @@
 //! shared `fence` and `input_order` counters are pushed past everything the
 //! source carried, so a fresh claim or input can never reuse an imported
 //! position. What is deliberately NOT copied is derived state — the FTS5
-//! `message_search` index and its shadow tables, which the Rust store serves
-//! from the message records themselves — and any table the Rust store has no
+//! `message_search` index and its shadow tables, which the Rust store's own
+//! INSERT/UPDATE triggers on `messages` rebuild from the imported records —
+//! and any table the Rust store has no
 //! representation for, which is reported in [`ImportReport::warnings`] rather
 //! than dropped silently.
 //!
@@ -155,14 +156,36 @@ pub struct ImportReport {
     /// Servers carried into the production `mcp-config` document; servers the
     /// production reader could not accept are excluded and warned.
     pub promoted_mcp_servers: usize,
+    /// 1 when a live production settings document existed and the import
+    /// left it untouched (the imported document lives only in the
+    /// compatibility namespace).
+    pub preserved_settings: usize,
+    /// Live `mcp-config` documents the import left untouched. A stored
+    /// array is a LIVE document whether it carries servers or is empty —
+    /// `[]` is the user deleting every server, so a reimport must not
+    /// resurrect them.
+    pub preserved_mcp_configs: usize,
+    /// MCP servers the production validator (`McpServerDtoSchema`) refused,
+    /// so they were excluded from the production document — a conflict
+    /// between what the archive carried and what the reader can serve.
+    pub conflicted_mcp_servers: usize,
     /// Outbox records inserted or refreshed.
     pub outbox: usize,
     /// Apply receipts inserted or refreshed.
     pub receipts: usize,
     /// Durable tool-execution receipts inserted or refreshed — including
     /// `admitted` ones, whose missing result is the honest record of an
-    /// uncertain effect the execution guard must keep blocking.
+    /// uncertain effect the execution guard must keep blocking. Each one
+    /// carries `ts-canonical` argument-hash provenance: the TypeScript
+    /// canonicalizer and the Rust one provably disagree on key order
+    /// (JavaScript puts integer-like keys first numerically), so the guard
+    /// cross-matches imported hashes through the TS pipeline.
     pub executions: usize,
+    /// Durable uncertainty barriers recorded for admitted-without-result
+    /// receipts that could NOT be placed (tolerant mode): warning plus
+    /// omission would silently delete evidence of a possibly-executed
+    /// external effect, so the barrier keeps the reissue blocked.
+    pub uncertainty_barriers: usize,
     /// Durable agent-session inputs inserted or refreshed.
     pub agent_inputs: usize,
     /// Derived context summaries inserted or refreshed.
@@ -956,6 +979,10 @@ impl<'a> Importer<'a> {
         let parent = record.parent_message_id.clone();
         let record = json(self.db, &record)?;
         self.attempt("message", id, |db| {
+            // The persistent FTS5 index needs no separate maintenance
+            // here: the schema's INSERT/UPDATE triggers on `messages`
+            // fire for this direct write inside the import transaction,
+            // so imported rows are searchable the moment they land.
             db.execute(
                 "INSERT INTO messages(id,chat_id,parent_id,order_key,record) VALUES(?,?,?,?,?)
                  ON CONFLICT(id) DO UPDATE SET chat_id=excluded.chat_id, parent_id=excluded.parent_id, order_key=excluded.order_key, record=excluded.record",
@@ -1386,10 +1413,18 @@ impl<'a> Importer<'a> {
     /// what the import itself wrote (the run's binding, else the unique chat
     /// whose messages carry this run), and a receipt whose chat cannot be
     /// proven is quarantined: strict mode refuses the whole import, tolerant
-    /// mode refuses the row with a loud warning, so the barrier is never
-    /// silently weakened. Rows are scanned in rowid order and written in the
-    /// same order, because the guard's replay barrier treats the NEWEST
-    /// receipt for a tool call as the one that counts.
+    /// mode records a durable uncertainty barrier (see
+    /// [`Importer::refuse_uncertain_execution`]) instead of silently
+    /// omitting the row. Writes are insert-if-absent with a provenance
+    /// refresh: re-importing the same receipt re-stamps
+    /// `argsHashProvenance = "ts-canonical"` — the TypeScript
+    /// `canonicalJson`/`JSON.stringify` pipeline orders integer-like keys
+    /// numerically first where the Rust map is lexical, so an imported hash
+    /// is only comparable through that provenance — and NEVER rolls back a
+    /// destination row the host has advanced (a completed receipt keeps its
+    /// result). Rows are scanned in rowid order and written in the same
+    /// order, because the guard's replay barrier treats the NEWEST receipt
+    /// for a tool call as the one that counts.
     fn import_executions(&mut self) -> Result<()> {
         if !self.table_exists("tool_executions")? {
             return Ok(());
@@ -1398,30 +1433,100 @@ impl<'a> Importer<'a> {
             "SELECT execution_id, run_id, approval_request_id, record \
              FROM tool_executions ORDER BY rowid",
         )? {
-            let Some(execution_id) = Row::text(&row, "execution_id") else {
-                self.report
-                    .warnings
-                    .push("tool_executions: a row has no execution_id".into());
+            let execution_id = Row::text(&row, "execution_id");
+            let run_id = Row::text(&row, "run_id");
+            // Best-effort field read first: even a row that cannot be
+            // PLACED must still be able to name its tool and arguments in a
+            // barrier.
+            let fields = self
+                .json_column(
+                    "tool_execution",
+                    execution_id.as_deref().unwrap_or("?"),
+                    &row,
+                    "record",
+                )?
+                .and_then(|value| value.as_object().cloned());
+            let tool_name = fields
+                .as_ref()
+                .and_then(|fields| fields.get("toolName"))
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned);
+            let args_sha256 = fields
+                .as_ref()
+                .and_then(|fields| fields.get("argsSha256"))
+                .and_then(Value::as_str)
+                .filter(|hash| {
+                    hash.len() == 64
+                        && hash
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                })
+                .map(str::to_owned);
+            // Uncertain = admitted without a durable result. Anything the
+            // record cannot prove completed (unknown status vocabularies
+            // included) counts as uncertain: an effect whose completion is
+            // unknown is never assumed absent.
+            let uncertain = match fields.as_ref().and_then(|fields| fields.get("status")) {
+                Some(Value::String(status)) if status == "completed" => !fields
+                    .as_ref()
+                    .and_then(|fields| fields.get("result"))
+                    .is_some_and(Value::is_object),
+                _ => true,
+            };
+            let seed_execution_id = execution_id.clone();
+            let seed_run_id = run_id.clone();
+            let seed = |reason: &str| -> Option<crate::UncertaintyBarrierRecord> {
+                if !uncertain {
+                    return None;
+                }
+                let tool = tool_name.clone()?;
+                Some(crate::UncertaintyBarrierRecord {
+                    barrier_id: crate::barrier_id_of(
+                        seed_execution_id.as_deref(),
+                        seed_run_id.as_deref(),
+                        &tool,
+                        args_sha256.as_deref(),
+                    ),
+                    chat_id: None,
+                    run_id: seed_run_id.clone(),
+                    tool_name: tool,
+                    args_sha256: args_sha256.clone(),
+                    args_hash_provenance: crate::ArgsHashProvenance::TsCanonical,
+                    reason: format!("{reason}; the effect stays blocked as an uncertainty barrier"),
+                })
+            };
+            let Some(execution_id) = execution_id else {
+                let reason = "tool_executions: a row has no execution_id";
+                if let Some(barrier) = seed(reason) {
+                    self.record_barrier(barrier)?;
+                }
+                self.report.warnings.push(reason.into());
                 continue;
             };
-            let Some(run_id) = Row::text(&row, "run_id") else {
-                self.ignore(format!("execution {execution_id}: run_id is not there"))?;
+            let Some(run_id) = run_id.clone() else {
+                self.refuse_uncertain_execution(
+                    &seed("the row has no run_id"),
+                    format!("execution {execution_id}: run_id is not there"),
+                )?;
                 continue;
             };
             if !self.exists("tasks", "id", &run_id)? {
-                self.ignore(format!(
-                    "execution {execution_id}: its run {run_id} was not imported"
-                ))?;
+                self.refuse_uncertain_execution(
+                    &seed("its run was not imported"),
+                    format!("execution {execution_id}: its run {run_id} was not imported"),
+                )?;
                 continue;
             }
-            let Some(mut record) =
-                self.json_column("tool_execution", &execution_id, &row, "record")?
-            else {
+            let Some(mut record) = fields.map(Value::Object) else {
+                self.refuse_uncertain_execution(
+                    &seed("its record is unreadable"),
+                    format!("execution {execution_id}: record is not an object"),
+                )?;
                 continue;
             };
             let Value::Object(fields) = &mut record else {
-                self.ignore(format!("execution {execution_id}: record is not an object"))?;
-                continue;
+                unreachable!("Value::into_object above");
             };
             let chat_id = match self.chat_of_run(&run_id)? {
                 Some(chat) => {
@@ -1437,25 +1542,42 @@ impl<'a> Importer<'a> {
                     chat
                 }
                 None => {
-                    self.ignore(format!(
-                        "execution {execution_id}: run {run_id} binds to no single \
-                         chat, so the chat-scoped uncertainty barrier cannot be \
-                         rebuilt for this receipt"
-                    ))?;
+                    // The chat-scoped barrier cannot be rebuilt, so the
+                    // row is unplaceable: keep the uncertainty durable
+                    // under the best-known identity instead of dropping it.
+                    let mut barrier = seed("the run binds to no single chat");
+                    if let Some(barrier) = barrier.as_mut() {
+                        barrier.run_id = Some(run_id.clone());
+                    }
+                    self.refuse_uncertain_execution(
+                        &barrier,
+                        format!(
+                            "execution {execution_id}: run {run_id} binds to no single \
+                             chat, so the chat-scoped uncertainty barrier cannot be \
+                             rebuilt for this receipt"
+                        ),
+                    )?;
                     continue;
                 }
             };
             fields.insert("chatId".into(), Value::String(chat_id));
-            let parsed = match serde_json::from_value::<ExecutionReceiptRecord>(record) {
+            let mut parsed = match serde_json::from_value::<ExecutionReceiptRecord>(record) {
                 Ok(parsed) => parsed,
                 Err(error) => {
-                    self.ignore(format!(
-                        "execution {execution_id}: the record is not an execution \
-                         receipt ({error})"
-                    ))?;
+                    self.refuse_uncertain_execution(
+                        &seed("its record is not an execution receipt"),
+                        format!(
+                            "execution {execution_id}: the record is not an execution \
+                             receipt ({error})"
+                        ),
+                    )?;
                     continue;
                 }
             };
+            // The TypeScript record was hashed by the TypeScript
+            // canonicalizer; stamp the provenance so the guard compares it
+            // through the TS pipeline, not the native one.
+            parsed.args_hash_provenance = crate::ArgsHashProvenance::TsCanonical;
             // The destination's own anti-corruption validator gates the write:
             // a receipt that would make a later recovery read fail closed must
             // never enter the store at all.
@@ -1467,11 +1589,60 @@ impl<'a> Importer<'a> {
                 &run_id,
                 Some(Row::text(&row, "approval_request_id").as_deref()),
             ) {
-                self.ignore(format!("execution {execution_id}: {error}"))?;
+                self.refuse_uncertain_execution(
+                    &seed("its record fails the receipt validator"),
+                    format!("execution {execution_id}: {error}"),
+                )?;
                 continue;
             }
             let approval_request_id = Row::text(&row, "approval_request_id");
             let text = json(self.db, &parsed)?;
+            // Insert-if-absent with a provenance refresh. An existing row
+            // this receipt only matches on the durable state (same status,
+            // same result, same tool/args/context hashes) is refreshed in
+            // place — that is how a re-import restamps provenance written
+            // by an older importer. A row the host ADVANCED (completed) or
+            // any sharper disagreement is kept verbatim with a loud warning:
+            // an import never rolls back a durable result.
+            let existing: Option<String> = self
+                .db
+                .query_row(
+                    "SELECT record FROM tool_executions WHERE execution_id=?",
+                    [&execution_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(existing) = existing {
+                let keep = match serde_json::from_str::<ExecutionReceiptRecord>(&existing) {
+                    Ok(existing) => {
+                        let same_receipt = existing.status == parsed.status
+                            && existing.result == parsed.result
+                            && existing.tool_name == parsed.tool_name
+                            && existing.args_sha256 == parsed.args_sha256
+                            && existing.context_sha256 == parsed.context_sha256
+                            && existing.run_id == parsed.run_id
+                            && existing.chat_id == parsed.chat_id;
+                        if !same_receipt {
+                            self.report.warnings.push(format!(
+                                "execution {execution_id}: the destination receipt has \
+                                 advanced past the imported row (or disagrees with it); \
+                                 the durable destination state was kept"
+                            ));
+                        }
+                        same_receipt
+                    }
+                    Err(error) => {
+                        self.report.warnings.push(format!(
+                            "execution {execution_id}: the destination receipt is \
+                             unreadable ({error}); the durable destination row was kept"
+                        ));
+                        false
+                    }
+                };
+                if !keep {
+                    continue;
+                }
+            }
             if self.attempt("execution", &execution_id, |db| {
                 db.execute(
                     "INSERT INTO tool_executions(execution_id,run_id,approval_request_id,record) \
@@ -1486,6 +1657,31 @@ impl<'a> Importer<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Record one durable uncertainty barrier (tolerant mode; in strict
+    /// mode the accompanying [`Importer::ignore`] aborts and the insert
+    /// rolls back with the whole import).
+    fn record_barrier(&mut self, barrier: crate::UncertaintyBarrierRecord) -> Result<()> {
+        if crate::execution_receipts::insert_barrier(self.db, &barrier)? {
+            self.report.uncertainty_barriers += 1;
+        }
+        Ok(())
+    }
+
+    /// A row that cannot be placed AND whose effect is uncertain
+    /// (admitted-without-result) leaves a barrier first, then takes the
+    /// ordinary refuse-or-warn path. Silent omission of uncertain evidence
+    /// is the failure mode this closes.
+    fn refuse_uncertain_execution(
+        &mut self,
+        barrier: &Option<crate::UncertaintyBarrierRecord>,
+        reason: String,
+    ) -> Result<()> {
+        if let Some(barrier) = barrier {
+            self.record_barrier(barrier.clone())?;
+        }
+        self.ignore(reason)
     }
 
     /// The one chat a run belongs to: its imported provider binding first,
@@ -2075,11 +2271,14 @@ impl<'a> Importer<'a> {
         for server in servers {
             match production_mcp_record(&server) {
                 Ok(shaped) => accepted.push(shaped),
-                Err(reason) => self.report.warnings.push(format!(
-                    "mcp server {}: excluded from the production mcp-config document \
-                     ({reason}); it remains under the compatibility namespace",
-                    server["id"].as_str().unwrap_or_default()
-                )),
+                Err(reason) => {
+                    self.report.conflicted_mcp_servers += 1;
+                    self.report.warnings.push(format!(
+                        "mcp server {}: excluded from the production mcp-config document \
+                         ({reason}); it remains under the compatibility namespace",
+                        server["id"].as_str().unwrap_or_default()
+                    ));
+                }
             }
         }
         if accepted.is_empty() {
@@ -2099,7 +2298,16 @@ impl<'a> Importer<'a> {
         let document = Value::Array(accepted);
         let promoted = match self.setting_value(MCP_CONFIG_NAMESPACE, application_id)? {
             Some(existing) => {
-                if existing.as_array().is_some_and(|items| !items.is_empty()) {
+                if existing.is_array() {
+                    // ANY stored array is a live document — including the
+                    // empty one. `[]` is the user deleting every server; a
+                    // reimport that "helpfully" repopulated it would undo
+                    // that decision, so the same no-overwrite rule guards
+                    // empty and non-empty alike. Only a document that is
+                    // not an array at all (unreadable by the production
+                    // reader, carrying nothing a user could lose) is
+                    // replaced with the imported servers.
+                    self.report.preserved_mcp_configs += 1;
                     self.report.warnings.push(format!(
                         "mcp-config/{application_id}: a live configuration document \
                          already exists; imported servers were kept only under the \
@@ -2107,8 +2315,6 @@ impl<'a> Importer<'a> {
                     ));
                     false
                 } else {
-                    // An empty or malformed document carries nothing to lose;
-                    // replace it with the imported servers.
                     self.setting(MCP_CONFIG_NAMESPACE, application_id, &document)?
                 }
             }
@@ -2197,6 +2403,7 @@ impl<'a> Importer<'a> {
                 )? {
                     self.report.promoted_settings += 1;
                 } else {
+                    self.report.preserved_settings += 1;
                     self.report.warnings.push(
                         "assistant settings: the production settings document already \
                          exists; the imported document was kept only under the \
@@ -2420,8 +2627,8 @@ impl<'a> Importer<'a> {
         }
         if self.table_exists("message_search")? {
             self.report.warnings.push(
-                "message_search: the FTS5 index is derived state and was not copied; the Rust \
-                 store answers search from the imported message records"
+                "message_search: the FTS5 index is derived state and was not copied; the \
+                 store's INSERT/UPDATE triggers on `messages` index the imported rows"
                     .into(),
             );
         }
@@ -2459,13 +2666,22 @@ fn require_table(source: &Connection, table: &str, columns: &[&str]) -> Result<(
     Ok(())
 }
 
-/// The `McpServerDto` shape `McpConfigRepository` accepts, validated the way
-/// its `parse_record` gate does: the nine carried keys, non-empty `id`,
-/// `createdAt` and `updatedAt` strings, an object `transport`, string-map
-/// optionals, a boolean `enabled`, and the alias pattern
-/// `^[a-z][a-z0-9-]*$` that `create` enforces. Anything else is refused with
-/// the reason, so a record that would be rejected on the next live commit
-/// never enters the production document.
+/// The `McpServerDto` shape `McpConfigRepository` accepts, validated through
+/// the real DTO contract — `packages/contracts/src/rest.ts`
+/// (`McpServerDtoSchema`, `McpTransportDtoSchema`), embedded verbatim in
+/// `agentkit-contracts`' schema bundle and consulted by the production
+/// reader itself (`mcp_configuration::parse_record` →
+/// `validate_schema("McpServerDtoSchema", …)`). Key points mirrored here:
+///
+/// * `transport` is a CLOSED union — `{kind:"stdio", command, args?, env?}`
+///   or `{kind:"http", url, headers?}`; an unknown kind, a stdio without
+///   `command` or an http without `url` is refused AT PROMOTION (with a
+///   warning) instead of smuggled in to fail the reader later.
+/// * `resilience` is `Record<string, unknown>` — ARBITRARY JSON values
+///   (a numeric `requestTimeoutMs`, a boolean `retryOnDisconnect`), not a
+///   string-to-string map.
+/// * `secretRefs`/`toolAliases` stay string-to-string; `enabled` is a
+///   boolean; `alias` obeys `^[a-z][a-z0-9-]*$`.
 fn production_mcp_record(record: &Value) -> std::result::Result<Value, String> {
     let fields = record.as_object().ok_or("record is not an object")?;
     let text = |name: &str| -> std::result::Result<String, String> {
@@ -2484,16 +2700,21 @@ fn production_mcp_record(record: &Value) -> std::result::Result<Value, String> {
              production reader enforces"
         ));
     }
-    if !fields.get("transport").is_some_and(Value::is_object) {
-        return Err("transport is not an object".into());
-    }
+    let transport = fields.get("transport").ok_or("transport is missing")?;
+    // The closed transport union, validated by the contract's own compiled
+    // schema (McpTransportDtoSchema in packages/contracts/src/rest.ts):
+    // stdio requires `command`, http requires `url`, and an unknown `kind`
+    // — or a malformed optional member (non-string args element, non-string
+    // env/header value) — never reaches the production document.
+    agentkit_contracts::validate_schema("McpTransportDtoSchema", transport)
+        .map_err(|error| format!("transport is outside the closed DTO union: {error}"))?;
     let created_at = text("createdAt")?;
     let updated_at = text("updatedAt")?;
     let mut shaped = Map::new();
     shaped.insert("id".into(), Value::String(id));
     shaped.insert("alias".into(), Value::String(alias));
-    shaped.insert("transport".into(), fields["transport"].clone());
-    for name in ["secretRefs", "toolAliases", "resilience"] {
+    shaped.insert("transport".into(), transport.clone());
+    for name in ["secretRefs", "toolAliases"] {
         match fields.get(name) {
             None | Some(Value::Null) => continue,
             Some(Value::Object(entries)) if entries.values().all(Value::is_string) => {
@@ -2501,6 +2722,17 @@ fn production_mcp_record(record: &Value) -> std::result::Result<Value, String> {
             }
             Some(_) => return Err(format!("{name} is not a string-to-string object")),
         }
+    }
+    // `resilience: Type.Optional(Type.Record(Type.String(), Type.Unknown()))`
+    // in `McpServerDtoSchema` — an open record of ARBITRARY JSON values
+    // (`requestTimeoutMs: 2500`, `retryOnDisconnect: true`, nested objects
+    // are all contract-legal; only a non-object is refused).
+    match fields.get("resilience") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(_)) => {
+            shaped.insert("resilience".into(), fields["resilience"].clone());
+        }
+        Some(_) => return Err("resilience is not an object".into()),
     }
     match fields.get("enabled") {
         None | Some(Value::Null) => {}
@@ -2511,7 +2743,12 @@ fn production_mcp_record(record: &Value) -> std::result::Result<Value, String> {
     }
     shaped.insert("createdAt".into(), Value::String(created_at));
     shaped.insert("updatedAt".into(), Value::String(updated_at));
-    Ok(Value::Object(shaped))
+    let shaped = Value::Object(shaped);
+    // Defence in depth: the assembled document passes the very gate the
+    // production reader applies to a live commit.
+    agentkit_contracts::validate_schema("McpServerDtoSchema", &shaped)
+        .map_err(|error| format!("the record is outside McpServerDtoSchema: {error}"))?;
+    Ok(shaped)
 }
 
 /// `^[a-z][a-z0-9-]*$` without pulling a regex dependency into the store.

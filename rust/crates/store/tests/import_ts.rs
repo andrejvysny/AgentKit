@@ -1077,7 +1077,17 @@ fn execution_record(
         "status": status,
     });
     if result {
-        record["result"] = json!({"content": "ok", "isError": false});
+        // The REAL `ToolResult` wire shape — this is what the host's replay
+        // path deserializes, so the fixture must be a value production
+        // could have written, not a `{content,isError}` stand-in.
+        record["result"] = json!({
+            "ok": true,
+            "data": {"content": "ok"},
+            "sources": [],
+            "warnings": [],
+            "truncated": false,
+            "limits": {"profile": "small", "maxBytes": 16384, "maxItems": 50},
+        });
     }
     record.to_string()
 }
@@ -1153,7 +1163,15 @@ async fn uncertain_and_completed_executions_survive_the_import_as_barriers() {
     assert_eq!(run[1].status, ExecutionReceiptStatus::Completed);
     assert_eq!(
         run[1].result,
-        Some(json!({"content": "ok", "isError": false}))
+        Some(json!({
+            "ok": true,
+            "data": {"content": "ok"},
+            "sources": [],
+            "warnings": [],
+            "truncated": false,
+            "limits": {"profile": "small", "maxBytes": 16384, "maxItems": 50},
+        })),
+        "the stored result is the ToolResult shape the host replays"
     );
 
     // The cross-run same-chat guard reads exactly this set.
@@ -1263,6 +1281,43 @@ async fn an_execution_whose_chat_cannot_be_proven_is_quarantined() {
             .len(),
         1
     );
+    // The unplaced uncertain receipt is NOT silently omitted: tolerant mode
+    // records a durable uncertainty barrier keyed by the best-known
+    // identity, so the identical effect stays blocked until a human opens
+    // this exact barrier id.
+    assert_eq!(
+        report.uncertainty_barriers, 1,
+        "warning plus omission would delete the evidence of a possibly-executed effect"
+    );
+    let barriers = store
+        .list_uncertainty_barriers("chat-1".to_string(), "dep-1".to_string())
+        .await
+        .unwrap();
+    assert_eq!(barriers.len(), 1, "{barriers:?}");
+    let barrier = &barriers[0];
+    assert_eq!(barrier.tool_name, "delete_dir");
+    assert_eq!(
+        barrier.args_hash_provenance,
+        agentkit_store::ArgsHashProvenance::TsCanonical
+    );
+    assert_eq!(barrier.run_id.as_deref(), Some("dep-1"));
+    assert!(
+        barrier
+            .args_sha256
+            .as_deref()
+            .is_some_and(|hash| hash.len() == 64),
+        "the best-known argument fingerprint survives: {:?}",
+        barrier.args_sha256
+    );
+    assert!(barrier.reason.contains("binds to no single chat"));
+    // The barrier speaks the compatibility language: an invocation whose
+    // TS-pipeline digest matches is blocked by name+identity.
+    assert!(barrier.blocks(
+        "delete_dir",
+        &"0".repeat(64),
+        barrier.args_sha256.as_deref(),
+    ));
+    assert!(!barrier.blocks("write_file", &"0".repeat(64), None));
 }
 
 #[tokio::test]
@@ -1495,6 +1550,7 @@ async fn promotion_never_overwrites_a_live_settings_document() {
         .await
         .unwrap();
     assert_eq!(report.promoted_settings, 0);
+    assert_eq!(report.preserved_settings, 1);
     assert_eq!(
         store
             .get_setting(SETTINGS_NAMESPACE, SETTINGS_KEY)
@@ -1616,5 +1672,225 @@ async fn mcp_promotion_never_overwrites_a_live_config_document() {
             .any(|warning| warning.contains("live configuration document")),
         "{:?}",
         report.warnings
+    );
+    assert_eq!(report.preserved_mcp_configs, 1);
+}
+
+/// `McpServerDtoSchema.resilience` is `Record<string, unknown>` — numeric
+/// `requestTimeoutMs` and boolean flags are contract-legal, so promotion
+/// must carry them untouched; and `McpTransportDtoSchema` is a CLOSED
+/// union (stdio requires `command`, http requires `url`), so malformed
+/// transports are refused AT PROMOTION with a warning and a conflict
+/// count instead of poisoning the live document for the reader.
+#[tokio::test]
+async fn resilience_values_promote_and_malformed_transports_are_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let raw = Connection::open(&source).unwrap();
+    for (id, alias, transport, resilience) in [
+        (
+            "server-3",
+            "net",
+            "{\"kind\":\"http\",\"url\":\"https://m.example\"}",
+            Some(
+                "{\"requestTimeoutMs\":2500,\"retryOnDisconnect\":true,\"backoff\":{\"base\":100}}",
+            ),
+        ),
+        ("server-4", "broken", "{\"kind\":\"http\"}", None),
+        ("server-5", "nostd", "{\"kind\":\"stdio\"}", None),
+        (
+            "server-6",
+            "weird",
+            "{\"kind\":\"grpc\",\"url\":\"https://m.example\"}",
+            None,
+        ),
+        (
+            "server-7",
+            "badres",
+            "{\"kind\":\"stdio\",\"command\":\"npx\"}",
+            Some("[1,2]"),
+        ),
+    ] {
+        raw.execute(
+            "INSERT INTO mcp_servers VALUES (?1,?2,?3,NULL,1,NULL,?4,'2026-06-06T00:00:00.000Z','2026-06-06T00:00:00.000Z')",
+            rusqlite::params![id, alias, transport, resilience],
+        )
+        .unwrap();
+    }
+    drop(raw);
+
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let report = store
+        .import_from_ts_schema(
+            &source,
+            &ImportOptions {
+                promote_mcp_application_id: Some("onemind".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let document = store
+        .get_setting(MCP_CONFIG_NAMESPACE, "onemind")
+        .await
+        .unwrap()
+        .expect("the live document exists");
+    let aliases: Vec<&str> = document
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["alias"].as_str().unwrap())
+        .collect();
+    assert_eq!(report.mcp_servers, 6, "the archive keeps every server");
+    // server-7's array `resilience` is dropped AT SHREDDING with a warning
+    // (an optional field the column reader cannot shape); the transport
+    // refusals below are what the promotion validator itself catches.
+    assert_eq!(
+        report.promoted_mcp_servers, 3,
+        "server-1, server-3, and server-7 (minus its malformed field); carried: {aliases:?}"
+    );
+    assert_eq!(
+        report.conflicted_mcp_servers, 3,
+        "no-url http, no-command stdio, and the unknown transport kind"
+    );
+    let server = document
+        .as_array()
+        .expect("array document")
+        .iter()
+        .find(|entry| entry["alias"] == json!("net"))
+        .expect("the numeric-resilience server promoted");
+    assert_eq!(
+        server["resilience"],
+        json!({"requestTimeoutMs": 2500, "retryOnDisconnect": true, "backoff": {"base": 100}}),
+        "arbitrary JSON values survive promotion exactly as the contract allows"
+    );
+    for (id, why) in [
+        ("server-4", "closed DTO union"),
+        ("server-5", "closed DTO union"),
+        ("server-6", "closed DTO union"),
+        ("server-7", "resilience"),
+    ] {
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(id) && warning.contains(why)),
+            "{id} was not refused with a {why}-shaped warning: {:?}",
+            report.warnings
+        );
+    }
+    // The reader's own gate accepts the promoted document; none of the
+    // transport-refused servers leaked into it.
+    assert_eq!(aliases, ["fs", "net", "badres"]);
+    let badres = document
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["alias"] == json!("badres"))
+        .expect("server-7 promoted without its malformed field");
+    assert!(
+        badres.get("resilience").is_none(),
+        "the unshapable optional field was dropped, not smuggled: {badres}"
+    );
+}
+
+/// The user deleted every MCP server: the live document is the EMPTY
+/// array, which is still a live decision. A reimport must not resurrect
+/// the servers — the same no-overwrite rule guards `[]` as any other
+/// array.
+#[tokio::test]
+async fn deleting_all_servers_stays_deleted_through_a_reimport() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let destination = root.path().join("agentkit.db");
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    store
+        .set_setting(MCP_CONFIG_NAMESPACE, "onemind", json!([]))
+        .await
+        .unwrap();
+    let report = store
+        .import_from_ts_schema(
+            &source,
+            &ImportOptions {
+                promote_mcp_application_id: Some("onemind".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.promoted_mcp_servers, 0);
+    assert_eq!(report.preserved_mcp_configs, 1);
+    assert_eq!(
+        store
+            .get_setting(MCP_CONFIG_NAMESPACE, "onemind")
+            .await
+            .unwrap(),
+        Some(json!([])),
+        "the delete-all decision is the user's, not the importer's"
+    );
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("live configuration document")),
+        "{:?}",
+        report.warnings
+    );
+}
+
+/// The durable search index is trigger-maintained state: the import's
+/// direct `INSERT INTO messages ... ON CONFLICT` flows through the store's
+/// INSERT trigger, so imported rows are searchable the moment they land —
+/// plain text bodies and parts bodies alike. The inactive branch import
+/// stays findable and the archived import stays hidden (query-time
+/// visibility filter), and the source's own contentless `message_search`
+/// is still reported as derived state that was deliberately not copied.
+#[tokio::test]
+async fn imported_messages_are_searchable_through_the_trigger_built_index() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    let destination = root.path().join("agentkit.db");
+    ts_database(&source);
+    let store = SqliteStore::open(&destination, 8).unwrap();
+    let report = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap();
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("message_search:")),
+        "{:?}",
+        report.warnings
+    );
+    let ids = |hits: Vec<MessageSearchHit>| -> Vec<String> {
+        hits.into_iter().map(|hit| hit.message.id).collect()
+    };
+    assert_eq!(
+        ids(store.search_messages("Hello", None, 10).await.unwrap()),
+        ["m1"],
+        "an imported text body is searchable"
+    );
+    assert_eq!(
+        ids(store.search_messages("Hi", None, 10).await.unwrap()),
+        ["m2"],
+        "an imported parts body is searchable through the projection"
+    );
+    assert_eq!(
+        ids(store.search_messages("Abandoned", None, 10).await.unwrap()),
+        ["m7"],
+        "an imported inactive branch stays searchable"
+    );
+    assert!(
+        store
+            .search_messages("Stale", None, 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "an imported archived message never surfaces"
     );
 }

@@ -333,6 +333,45 @@ impl SqliteStore {
         .await
     }
 
+    /// Atomic read-modify-write of a settings document. The merge closure
+    /// runs on the store worker between the read and the write inside one
+    /// serialized call, so two concurrent partial updates can neither observe
+    /// the same base nor clobber each other's patch (lost-update guard for
+    /// the settings lanes, which all merge into one document).
+    pub async fn update_setting<F>(
+        &self,
+        namespace: &str,
+        key: &str,
+        default: Value,
+        merge: F,
+    ) -> Result<Value>
+    where
+        F: FnOnce(Value) -> Value + Send + 'static,
+    {
+        let (namespace, key) = (namespace.to_owned(), key.to_owned());
+        self.call(move |db| {
+            let current: Option<String> = db
+                .query_row(
+                    "SELECT value FROM settings WHERE namespace=? AND key=?",
+                    params![namespace, key],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let base = current
+                .map(|value| agentkit_contracts::parse_javascript_json(&value))
+                .transpose()?
+                .unwrap_or(default);
+            let next = merge(base);
+            db.execute(
+                "INSERT INTO settings VALUES(?,?,?) \
+                 ON CONFLICT(namespace,key) DO UPDATE SET value=excluded.value",
+                params![namespace, key, json(db, &next)?],
+            )?;
+            Ok(next)
+        })
+        .await
+    }
+
     pub async fn delete_setting(&self, namespace: &str, key: &str) -> Result<bool> {
         let (namespace, key) = (namespace.to_owned(), key.to_owned());
         self.call(move |db| {

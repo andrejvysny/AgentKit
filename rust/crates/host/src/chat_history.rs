@@ -330,11 +330,22 @@ fn resolve_receipt(
     // Identity validation beyond the key: same tool, same canonical
     // arguments — hashed with the same JavaScript-semantic parser the
     // admission used, or `1.0`-style spellings would fake a conflict and
-    // downgrade a completed receipt to uncertain. Conflicting evidence is
+    // downgrade a completed receipt to uncertain. A `ts-canonical` receipt
+    // (imported from the TypeScript store) hashed those arguments through
+    // the TypeScript pipeline, so it also matches its TS-pipeline hash —
+    // otherwise an imported completed receipt would read as a conflict and
+    // its effect would look uncertain forever. Conflicting evidence is
     // uncertainty, not success.
     let arguments_match = agentkit_contracts::parse_javascript_json(&call.arguments_json)
         .ok()
-        .is_some_and(|arguments| crate::governance::args_sha256(&arguments) == record.args_sha256);
+        .is_some_and(|arguments| {
+            agentkit_store::args_match(
+                record.args_hash_provenance,
+                &record.args_sha256,
+                &crate::governance::args_sha256(&arguments),
+                Some(&crate::governance::ts_args_sha256(&arguments)),
+            )
+        });
     if record.tool_name != call.name || !arguments_match {
         return ReceiptDecision::Uncertain;
     }
@@ -652,6 +663,7 @@ mod tests {
             tool_call_id: call_id.into(),
             tool_name: tool.into(),
             args_sha256: crate::governance::args_sha256(args),
+            args_hash_provenance: agentkit_store::ArgsHashProvenance::Canonical,
             context_sha256: "a".repeat(64),
             attempt_id: "attempt-1".into(),
             approval_request_id: None,
