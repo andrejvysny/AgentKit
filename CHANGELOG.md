@@ -16,7 +16,14 @@ never claimed, failed, or dead-lettered — and never blocks the runnable
 kinds behind it. `AgentHost::admission_gate()` exposes the registry check
 to the session service (`AgentSessionService::with_gate`), wired at the
 native runtime; ungated wirings keep admitting freely for cross-pool
-deployment.
+deployment. The gate carries the immutable KIND SET, never the executor
+Arcs: the binding's authority hands the session service back to its own
+guards, so cloning the registry into the service's deps closed an Arc
+cycle (service → gate → executors → guard → authority → service) that
+outlived `close()` and kept the store actor's file-lock thread alive — a
+closed binding then refused every reopen with `already_owned`. Pinned by
+the binding suites that reopen after `service.close()`/`store.close()`
+(`smoke`, `management`, `authority`).
 
 **CI gates for the shipped surface were made honest and green.** Four lanes
 failed at the external review and are fixed without weakening anything.
