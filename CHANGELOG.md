@@ -2,6 +2,8 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**Breaking: `@agentkit/mcp-server` and `@agentkit/toolpacks-coding` are deleted; the Rust backend is their sole implementation.** Both TypeScript packages — the streamable-HTTP MCP-server facade and the coding toolpack — leave the workspace with the behavior-parity Rust ports now complete (`rust/crates/mcp`, `rust/crates/toolpacks-coding`, exposed through `@agentkit/native`). Consumers move to the native bindings: `startMcpServer` on the session service's store (bearer auth, Host/Origin guards, principal sessions, prompts/resources extensions, request cancellation — the full guard surface enforced engine-side) and `service.registerCodingTools` (the eleven `coding`-namespace tools, fingerprint-v4 standing approvals, process-group teardown). The `agentkit/mcp-server` and `agentkit/toolpacks-coding` umbrella subpaths, their published entry points, API reports and qualification lanes are removed; `@agentkit/native`'s MCP/coding surfaces are the replacement contract. The TypeScript suites are not lost: uncovered cases were ported to Rust (`rust/crates/mcp/tests/{security,limits,sessions,cancellation,results,…}.rs`, `packages/native/tests/mcp-server-compat.test.ts`) and the coding differential survives as frozen fixtures (`rust/fixtures/coding-fingerprint/*`, `packages/native/tests/fixtures/coding-descriptors.json`) asserted by the crates. No stubs, no delegating shims: deleted, hard.
+
 **Native apply settles are submission-ordered.** `NativeAssistantStore`'s
 apply-path terminal `transition` (`settleApply`) reads the proposal and its
 receipt before the engine's receipt-bound finalize; two competing terminal

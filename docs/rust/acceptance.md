@@ -66,7 +66,7 @@ after the final code change.
 | Unchanged TypeScript client/React against Rust | Focused evidence | TypeScript production files remain unchanged. The complete client/React tree passes on both backends: Rust-selected 223 tests / 3,134 assertions; TS default 223 tests / 3,096 assertions across 20 files, with zero failures. Original assertions are unchanged; setup timeout changes allow process startup. The fixture bridges custom provider callbacks, per-run contributors/native tools, actual SQLite reads/fault hooks, leases/late appends and native secret controls, without a shadow TS service/store. The 223 comprise 105 fixture-backed tests, 105 standalone tests and 13 added tests. Pure parser/phase/fetch-script tests remain JavaScript where no backend is involved. This clears the named browser behavior gate, not unrelated live provider or OS qualifications. |
 | MCP native protocol client/server and tool bridge | Focused evidence | Official `rmcp` stdio/streamable HTTP implementation; [native tests](../../rust/crates/mcp/tests/native.rs), [security tests](../../rust/crates/mcp/tests/security.rs), [bridge tests](../../rust/crates/mcp/tests/bridge.rs): initialize/list/call/close, five frozen protocol revisions, pagination/cursor bounds, ambiguous-write non-replay, native tool aliases/collision rejection, Host/Origin/auth/principal-bound sessions, request limits, deadlines and actor revocation. |
 | MCP resilience, staging and credential rotation | Focused evidence | The native [manager tests](../../rust/crates/mcp/tests/manager.rs) cover exponential connect backoff/hard circuit, missing-secret no-retry, partial contributions/aliases, shared read reconnect generation, credential revision rotation, stale tool-handle revocation, close versus pending connect, and timeout/cancellation with one effect and no call replay. The 45-test MCP suite also covers actual Bun stdio, loopback streamable HTTP credential rotation, hanging-child deadline cleanup and post-catalogue/post-semaphore cancellation/revocation guards, per-frame CR/LF/CRLF SSE limits and pre-I/O Last-Event-ID rejection. SDK marker/prefix collision shims cover JSON HTTP, SSE and real TS stdio errors/resources/prompts. The numeric HTTP test proves raw overflow reaches the callback and output becomes null. Real external authenticated services and OS credential providers remain unqualified. |
-| Coding tool pack | Focused evidence | [crates/toolpacks-coding](../../rust/crates/toolpacks-coding) ports `packages/toolpacks-coding`: the eleven `coding`-namespace tools, the permission guard with role ceilings and plan-mode finals, in-process and lock-dir coordinators (workspace lease release leaves a durable quarantine while command survivors live), version ledger, mutation queue, bounded process execution with marked-tree teardown, `sandbox-exec` profile generation, shell command policy with the fingerprint-bound standing-approval key, and `submit_plan`. 239 unit tests plus the [contributor test](../../rust/crates/toolpacks-coding/tests/contributor.rs) mirror the TypeScript suite's exact codes, messages, limits and schemas. The standing-approval digest is qualified against the TypeScript authority by a gated cross-language differential ([command-fingerprint-rust.test.ts](../../packages/toolpacks-coding/tests/command-fingerprint-rust.test.ts)), with the environment collation order pinned in a shared fixture. The host `ToolGuardContext` now carries per-call `arguments` (TypeScript `registry-staging` parity), proven by a [staging regression test](../../rust/crates/host/tests/governance/staging.rs), which lets the high-risk command guard judge the live command. The session's durable permission drives the pack end to end: [session_authority](../../rust/crates/toolpacks-coding/tests/session_authority.rs) proves plan mode refuses writes finally, escalation happens only through an approved plan (the grant flips the session mode durably), a per-call approval then lets the REAL write tool land the approved bytes under a completed receipt bound to that request. Remaining gate: live macOS `sandbox-exec` execution and teardown behavior (profiles are asserted as text; command execution is Linux-tested). |
+| Coding tool pack | Focused evidence | [crates/toolpacks-coding](../../rust/crates/toolpacks-coding) ports `packages/toolpacks-coding`: the eleven `coding`-namespace tools, the permission guard with role ceilings and plan-mode finals, in-process and lock-dir coordinators (workspace lease release leaves a durable quarantine while command survivors live), version ledger, mutation queue, bounded process execution with marked-tree teardown, `sandbox-exec` profile generation, shell command policy with the fingerprint-bound standing-approval key, and `submit_plan`. 260 unit tests plus the [contributor test](../../rust/crates/toolpacks-coding/tests/contributor.rs) mirror (file-for-file from the deleted TypeScript suite; full mapping in [parity.md](parity.md)) the exact codes, messages, limits and schemas. The standing-approval digest is qualified against the TypeScript authority by the frozen fixtures exported from it before deletion (`rust/fixtures/coding-fingerprint/`, asserted in `command_fingerprint.rs`/`command_policy.rs`), the environment collation order pinned in `env-order.json`. The host `ToolGuardContext` now carries per-call `arguments` (TypeScript `registry-staging` parity), proven by a [staging regression test](../../rust/crates/host/tests/governance/staging.rs), which lets the high-risk command guard judge the live command. The session's durable permission drives the pack end to end: [session_authority](../../rust/crates/toolpacks-coding/tests/session_authority.rs) proves plan mode refuses writes finally, escalation happens only through an approved plan (the grant flips the session mode durably), a per-call approval then lets the REAL write tool land the approved bytes under a completed receipt bound to that request. Remaining gate: live macOS `sandbox-exec` execution and teardown behavior (profiles are asserted as text; command execution is Linux-tested). |
 | Native egui application | Focused evidence | [example](../../rust/examples/egui-host) has real SQLite/runner ports, model selection, exact request approval, cancel, manual recovery/resume and local proposal receipts. Its headless test passes chat approval/denial and proposal replay. The final binary builds. Interactive offline macOS validation on 2026-10-23 exercised chat approval/completion, verification pass, proposal approval/apply, model selection, active-stream cancellation, persisted state after reopen, and explicit recovery/resume with fresh consent and completion on attempt two. Other operating systems and live adapters remain unqualified. The UI uses the toolkit-neutral `RunState` reducer and waits for durable settlement. |
 | Publication and consumer packaging | Partial | Contracts were packaged and extracted outside the workspace; the current property-engine version passed all 29 bundled tests from the standalone archive. The refreshed [ten-crate package gate](../../rust/scripts/check-packages.mjs) built actual archives and an isolated all-feature consumer using only extracted packages, then ran bundled contracts parity/schema tests; the 2026-10-28 run validated ten crate archives including `agentkit-toolpacks-coding`. Registry dependency resolution and publication were not exercised. No registry release or performance advantage is claimed. |
 | macOS/Linux/Windows CI | Not run | [workflow](../../.github/workflows/rust.yml) defines a three-OS native matrix plus contracts WASM. Only local macOS evidence exists. A checked-in workflow does not prove remote jobs passed. |
@@ -523,13 +523,13 @@ were re-qualified locally with Node v22.20.0 installed.
   command_fingerprint::tests::fingerprint_is_stable_and_reacts_to_every_bound_input`
   (3 tests; the latter two are the fixture's collation/digest consumers via
   `ENV_ORDER`). Verified 2026-11-01: both filters select exactly
-  1 and 3 tests respectively and pass. The TypeScript half of the same
-  fixtures stays pinned by `command-fingerprint-collation.test.ts`,
-  `packages/toolpacks-coding/tests/tokenizer-baseline-fixture.test.ts`
-  (every `tokenizer.json` case against the current TS implementation —
+  1 and 3 tests respectively and pass. Since the 2026-11-02 deletion the
+  fixtures are frozen at the freeze commit — the TypeScript half
+  (`command-fingerprint-collation.test.ts`,
+  `packages/toolpacks-coding/tests/tokenizer-baseline-fixture.test.ts`:
+  every `tokenizer.json` case against the then-current TS implementation —
   words, tokens, file bindings with exact refusal messages, the
-  `scriptExecutable` table), and the `contracts` job's fixture-export
-  `--check`.
+  `scriptExecutable` table) was recorded there and no longer runs.
 - Mixed-runtime fixture prebuild: root script `bun run build:fixture`
   (`cargo build --manifest-path rust/Cargo.toml -p agentkit-host --features
   http --example http_fixture --locked`) runs in the `ci.yml` `bun` and
@@ -628,6 +628,55 @@ were re-qualified locally with Node v22.20.0 installed.
   `failedCode: "network_error"` (after), where it previously never reached
   the store as a task (before), and against the live local model its turns
   run to completion with the recipe config.
+
+### TypeScript deletion tranche (2026-11-02)
+
+- `packages/mcp-server` and `packages/toolpacks-coding` are deleted; the Rust
+  ports are their sole implementations. The ledger, per-package consumer
+  migration and test-mapping summary live in
+  [parity.md — TypeScript deletion tranche](parity.md#typescript-deletion-tranche-2-november-2026).
+  Evidence replacement, per the no-deleted-tests rule: every deleted TS test
+  maps to a Rust crate test, a `packages/native` binding test, or a frozen
+  fixture — no case was dropped unmapped.
+- MCP server: the guard surface (Host/Origin, bearer, principal sessions,
+  bounds) is engine-side in `rust/crates/mcp` (`guards.rs`, `limits.rs`,
+  `security.rs`, `cancellation.rs` — the latter two hardened this tranche:
+  cancellation's queued legs now prove handler admission via an admissions
+  counter instead of a fixed sleep, and a new `limits.rs` case pins that an
+  oversized folded batch answer becomes a generic `-32603` frame keeping the
+  member id, never a silent drop). Consumer-visible behavior is pinned by
+  `packages/native/tests/mcp-server-compat.test.ts`.
+- Coding pack: the TS suite's cases were mapped to crate tests before
+  deletion (mapping table in the tranche ledger); the fingerprint
+  differential authority lives on as `rust/fixtures/coding-fingerprint/`
+  asserted by `frozen_material_matches_the_typescript_authority`, the
+  tokenizer/collation cases by the named rust.yml steps above. Binding
+  behavior (registration, authorization, cancellation teardown) is pinned by
+  `packages/native/tests/{coding-native,cancellation}.test.ts`.
+- Hardening landed with the deletions (the Rust side becomes sole
+  implementation): PID-reuse-safe kill (`start_kill`-style own-handle kill +
+  driver-owned reap with a signaled-before-reaped gate in `terminate`),
+  a non-blocking driver pump (`waitid` `WNOWAIT|WEXITED|WNOHANG` — without
+  `WNOHANG` the syscall blocks the driver task and neither timeout nor
+  cancellation ever reaches the poll loop; pinned by the binding
+  cancellation suite and the 120 s `explicit_cancellation_...` integration
+  test), zombie-leader-aware teardown liveness (`remaining`/`settled`
+  exclude the driver's own deliberately-held unreaped child, so a clean
+  SIGTERM teardown reports no escalation),
+  poison-recovering locks (mcp session/budget), error redaction at the NAPI
+  boundary with a once-parsed code table, explicit terminal wire strings,
+  reasoned `#[ignore]`s, coordination-dir ownership checks, and the
+  provider macro bodies hand-formatted for rustfmt visibility.
+- Gates after this tranche (Linux x86_64): workspace `cargo test
+  --all-features --locked` green — 136 test-result lines, zero failures,
+  7 reasoned ignores; root Bun suite 2,930 tests / 0 failures / 23,410
+  assertions; `packages/native` binding suite 292 tests / 0 failures;
+  `cargo fmt --all --check` and all-target/all-feature clippy with
+  `-D warnings`; both smokes, `check:native-package`, composition scanner,
+  parity checker, lint and typecheck; API reports regenerated for the
+  removed packages and the refreshed native wrapper surface
+  (`bun run update:api`, reviewed diff — only typebox internals moved from
+  import headers into the inlined flattened-d.ts report, no surface change).
 
 ## Remaining release gates
 
