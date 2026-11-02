@@ -780,11 +780,13 @@ impl<'a> Importer<'a> {
         let Some(text) = text else {
             return Ok(None);
         };
-        serde_json::from_str(&text).map(Some).map_err(|error| {
-            StoreError::InvalidImport {
-                reason: format!("the destination settings row {namespace}/{key} is not JSON ({error})"),
-            }
-        })
+        serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|error| StoreError::InvalidImport {
+                reason: format!(
+                    "the destination settings row {namespace}/{key} is not JSON ({error})"
+                ),
+            })
     }
 }
 
@@ -1465,9 +1467,7 @@ impl<'a> Importer<'a> {
                 &run_id,
                 Some(Row::text(&row, "approval_request_id").as_deref()),
             ) {
-                self.ignore(format!(
-                    "execution {execution_id}: {error}"
-                ))?;
+                self.ignore(format!("execution {execution_id}: {error}"))?;
                 continue;
             }
             let approval_request_id = Row::text(&row, "approval_request_id");
@@ -2086,7 +2086,10 @@ impl<'a> Importer<'a> {
             return Ok(());
         }
         accepted.sort_by(|left, right| {
-            (left["createdAt"].as_str().unwrap_or_default(), left["id"].as_str().unwrap_or_default())
+            (
+                left["createdAt"].as_str().unwrap_or_default(),
+                left["id"].as_str().unwrap_or_default(),
+            )
                 .cmp(&(
                     right["createdAt"].as_str().unwrap_or_default(),
                     right["id"].as_str().unwrap_or_default(),
@@ -2515,7 +2518,8 @@ fn production_mcp_record(record: &Value) -> std::result::Result<Value, String> {
 fn mcp_alias_allowed(alias: &str) -> bool {
     let mut characters = alias.chars();
     matches!(characters.next(), Some(first) if first.is_ascii_lowercase())
-        && characters.all(|character| character.is_ascii_lowercase() || matches!(character, '0'..='9' | '-'))
+        && characters
+            .all(|character| character.is_ascii_lowercase() || matches!(character, '0'..='9' | '-'))
 }
 
 /// The least the envelope needs, rebuilt from the shredded columns when a
