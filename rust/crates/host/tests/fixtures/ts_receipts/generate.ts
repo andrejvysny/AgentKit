@@ -25,7 +25,11 @@
 import { Database } from "bun:sqlite";
 import { rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { argsSha256Of, canonicalJson, sha256Hex } from "../../../../../../packages/host/src/sessions/hash.ts";
+import {
+  argsSha256Of,
+  canonicalJson,
+  sha256Hex,
+} from "../../../../../../packages/host/src/sessions/hash.ts";
 
 const here = dirname(import.meta.path);
 
@@ -46,7 +50,14 @@ const ARGS = {
   "01": "not-index",
   "-1": "negative",
   text: "write this",
-  nested: { "2": 2, "10": 10, "é": "e-acute", z: "z", "\u{1F600}": "emoji", "\uFFFE": "fffe" },
+  nested: {
+    "2": 2,
+    "10": 10,
+    é: "e-acute",
+    z: "z",
+    "\u{1F600}": "emoji",
+    "\uFFFE": "fffe",
+  },
   counts: { n: 1.0, big: 1e21, small: 1e-7, neg0: -0 },
   path: 'dir/file"x\nline\u0001',
 };
@@ -89,7 +100,7 @@ const SAMPLES: Array<Record<string, unknown>> = [
     "+1": "p",
     "0": "z",
   },
-  { "\u{1F600}": "emoji", "\uFFFE": "fffe", "é": "acute", z: "zed" },
+  { "\u{1F600}": "emoji", "\uFFFE": "fffe", é: "acute", z: "zed" },
   { arr: [{ "2": 1, b: 2, "10": 3 }], top: "x" },
   { empty: {}, list: [], t: true, n: null, s: 'q"\\\u0000\u001fdel\u007f' },
 ];
@@ -134,15 +145,22 @@ CREATE TABLE tool_executions (
   approval_request_id TEXT UNIQUE, record TEXT NOT NULL);
 `;
 
-function build(path: string, completed: boolean, argsSha256: string, contextSha256: string) {
+function build(
+  path: string,
+  completed: boolean,
+  argsSha256: string,
+  contextSha256: string,
+) {
   rmSync(path, { force: true });
   const db = new Database(path);
   db.exec(DDL);
   db.exec("PRAGMA user_version = 10;");
-  db.run(
-    "INSERT INTO chats(id,title,created_at,updated_at) VALUES(?,?,?,?)",
-    [CHAT, "imported", T0, T0],
-  );
+  db.run("INSERT INTO chats(id,title,created_at,updated_at) VALUES(?,?,?,?)", [
+    CHAT,
+    "imported",
+    T0,
+    T0,
+  ]);
   db.run(
     `INSERT INTO messages(id,chat_id,run_id,role,content,order_key,created_at)
      VALUES(?,?,?,?,?,?,?)`,
@@ -160,7 +178,11 @@ function build(path: string, completed: boolean, argsSha256: string, contextSha2
         "",
         2,
         JSON.stringify([
-          { id: "call-done", name: "mutate", argumentsJson: JSON.stringify(ARGS) },
+          {
+            id: "call-done",
+            name: "mutate",
+            argumentsJson: JSON.stringify(ARGS),
+          },
         ]),
         T0,
       ],
@@ -182,11 +204,10 @@ function build(path: string, completed: boolean, argsSha256: string, contextSha2
     status: completed ? "completed" : "admitted",
   };
   if (completed) record.result = RECORDED_RESULT;
-  db.run("INSERT INTO tool_executions(execution_id,run_id,record) VALUES(?,?,?)", [
-    record.executionId as string,
-    RUN,
-    JSON.stringify(record),
-  ]);
+  db.run(
+    "INSERT INTO tool_executions(execution_id,run_id,record) VALUES(?,?,?)",
+    [record.executionId as string, RUN, JSON.stringify(record)],
+  );
   db.close();
 }
 
