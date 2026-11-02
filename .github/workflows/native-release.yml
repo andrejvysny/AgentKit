@@ -1,0 +1,213 @@
+name: Native release build and npm publication
+
+# Manual release lane for the native npm stack: one pinned source commit is
+# projected through the same snapshot-release tooling as the GitHub-asset
+# flow (which keeps its own lane in publish.yml), then each prebuilt
+# platform triple is built and verified on its own runner, and — only after
+# the gated publish job — published to npm. Nothing here runs on push.
+#
+# Publish trust model (same as publish.yml): the environment must have
+# required reviewers; the verifier refuses a run that lacks them, never
+# rebuilds outside the snapshot job, and re-checks every artifact digest
+# before touching the registry. `dry_run` defaults to true: dispatching
+# verifies the full chain end-to-end without publishing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact release version (semver, no prerelease tag)
+        required: true
+      source_commit:
+        description: Expected full source commit SHA
+        required: true
+      track:
+        description: Snapshot track (must match the GitHub-release track)
+        type: choice
+        options: [responses, foundation]
+        default: responses
+        required: true
+      dry_run:
+        description: Verify everything but do not publish
+        type: choice
+        options: ["true", "false"]
+        default: "true"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentkit-native-publication-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    outputs:
+      snapshot_sha256: ${{ steps.freeze.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_commit }}
+      - name: Refuse a commit that is not on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" \
+            || { echo "source_commit is not on the default branch" >&2; exit 1; }
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Freeze the release snapshot (native stack bumped to the release version)
+        id: freeze
+        env:
+          VERSION: ${{ inputs.version }}
+          TRACK: ${{ inputs.track }}
+        run: |
+          node scripts/snapshot-release.mjs "$RUNNER_TEMP/snapshot" "$VERSION" "$TRACK"
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/native-snapshot.tar.gz" snapshot
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/native-snapshot.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Build inside the snapshot and pack the umbrella tarball
+        working-directory: ${{ runner.temp }}/snapshot
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+          bun run build:umbrella
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          npm pack ./packages/agentkit --pack-destination "$RUNNER_TEMP/artifacts"
+          test -f "$RUNNER_TEMP/artifacts/agentkit-$VERSION.tgz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-snapshot-${{ inputs.version }}
+          path: ${{ runner.temp }}/native-snapshot.tar.gz
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-umbrella-${{ inputs.version }}
+          path: ${{ runner.temp }}/artifacts/agentkit-${{ inputs.version }}.tgz
+          retention-days: 90
+
+  build:
+    needs: snapshot
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: x86_64-unknown-linux-gnu
+            key: linux-x64-gnu
+            os: ubuntu-latest
+            rust_targets: x86_64-unknown-linux-gnu
+          - triple: aarch64-unknown-linux-gnu
+            key: linux-arm64-gnu
+            os: ubuntu-24.04-arm
+            rust_targets: aarch64-unknown-linux-gnu
+          - triple: aarch64-apple-darwin
+            key: darwin-arm64
+            os: macos-latest
+            rust_targets: aarch64-apple-darwin
+          - triple: x86_64-apple-darwin
+            key: darwin-x64
+            os: macos-latest
+            rust_targets: x86_64-apple-darwin
+          - triple: x86_64-pc-windows-msvc
+            key: win32-x64-msvc
+            os: windows-latest
+            rust_targets: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-snapshot-${{ inputs.version }}
+          path: ${{ runner.temp }}/dl
+      - name: Unpack the frozen snapshot (digest-bound)
+        env:
+          SNAPSHOT_SHA256: ${{ needs.snapshot.outputs.snapshot_sha256 }}
+        run: |
+          echo "$SNAPSHOT_SHA256  $RUNNER_TEMP/dl/native-snapshot.tar.gz" | sha256sum -c -
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/dl/native-snapshot.tar.gz"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.0
+          targets: ${{ matrix.rust_targets }}
+      - name: Provision the x64-macOS cross toolchain
+        if: matrix.key == 'darwin-x64'
+        uses: ilammy/setup-nasm@v1
+      - name: Install workspace dependencies (no compiled devDeps needed)
+        working-directory: ${{ runner.temp }}/snapshot
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Build the prebuilt platform artifact
+        working-directory: ${{ runner.temp }}/snapshot
+        run: |
+          node rust/scripts/build-native-release-artifact.mjs \
+            --target ${{ matrix.triple }} \
+            --out "$RUNNER_TEMP/out" --allow-cross
+      - name: Verify the artifact (isolated offline install; acceptance lifecycle
+          when the runner can execute the triple, structural-only otherwise)
+        working-directory: ${{ runner.temp }}/snapshot
+        run: |
+          node rust/scripts/check-native-artifact.mjs \
+            --manifest "$RUNNER_TEMP/out/artifact-manifest.${{ matrix.key }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.key }}-${{ inputs.version }}
+          path: ${{ runner.temp }}/out
+          retention-days: 90
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: agentkit-native-publication
+    permissions:
+      contents: read
+      id-token: write # npm provenance attestation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.2"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*-${{ inputs.version }}
+          path: ${{ runner.temp }}/artifacts
+          merge-multiple: true
+      - name: Verify the complete artifact set against the release inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          node scripts/release/native-publish.mjs verify \
+            "$RUNNER_TEMP/artifacts" "$VERSION" \
+            --commit "$SOURCE_COMMIT"
+      - name: npm publish (platforms → wrapper → umbrella)
+        if: inputs.dry_run == 'false'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          node scripts/release/native-publish.mjs publish \
+            "$RUNNER_TEMP/artifacts" "$VERSION" \
+            --commit "$SOURCE_COMMIT" --execute
+      - name: npm publish --dry-run (default lane)
+        if: inputs.dry_run != 'false'
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          node scripts/release/native-publish.mjs publish \
+            "$RUNNER_TEMP/artifacts" "$VERSION" \
+            --commit "$SOURCE_COMMIT"

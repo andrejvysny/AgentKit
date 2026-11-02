@@ -12,6 +12,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { projectCandidateFixtures } from "./release/fixture-projection.mjs";
+import { bumpNativeStackVersions } from "./release/native-lockstep.mjs";
 import {
   foundationExclusions,
   projectFoundation,
@@ -136,6 +137,10 @@ rewrite("packages/agentkit/package.json", (text) => {
   manifest.version = version;
   return `${JSON.stringify(manifest, null, 2)}\n`;
 });
+// The native npm stack ships the same release version as the umbrella:
+// wrapper, platform packages, every pin, the embedded loader checks, and
+// the lock entries that keep the projection frozen-installable.
+bumpNativeStackVersions(output, version);
 rewrite("bun.lock", (text) =>
   replaceExactly(
     text,
