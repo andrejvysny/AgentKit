@@ -261,12 +261,128 @@ function resolveFromPackage(name) {
 // ---------------------------------------------------------------------------
 // 2. Roll the entry point up with api-extractor until nothing bare remains.
 // ---------------------------------------------------------------------------
-const workspacePackages = readdirSync(join(dirname(packageDirectory)))
-  .filter((name) =>
-    existsSync(join(dirname(packageDirectory), name, "dist", "index.d.ts")),
-  )
-  .map((name) => `@agentkit/${name}`)
-  .filter((name) => name !== ownName);
+
+/** Enumerate workspace `@agentkit/*` packages whose declarations are built.
+ * MUST be called AFTER `ensureBuilt` — discovering earlier freezes the alias
+ * map against a half-built workspace, and any package missing from `paths`
+ * then resolves through `node_modules` symlinks into the sibling's `exports`
+ * `types` condition, which in this monorepo points AT THE SOURCE
+ * (`./src/index.ts`). api-extractor would happily read TypeScript source
+ * into the rollup input set; see the source-.ts rejection below. */
+function discoverWorkspacePackages() {
+  return readdirSync(join(dirname(packageDirectory)))
+    .filter((name) =>
+      existsSync(join(dirname(packageDirectory), name, "dist", "index.d.ts")),
+    )
+    .map((name) => `@agentkit/${name}`)
+    .filter((name) => name !== ownName);
+}
+
+/** The `paths` alias map for one extractor pass: every built workspace
+ * sibling pinned to its emitted `dist/index.d.ts`. Names whose manifest
+ * says they are NOT `@agentkit/<name>` (the umbrella directory, say) get no
+ * alias — they are not resolvable under that specifier anyway. */
+function aliasMap() {
+  const entries = [];
+  for (const name of discoverWorkspacePackages()) {
+    const packagePath = findWorkspacePackage(name);
+    if (!packagePath) continue;
+    entries.push([name, [join(packagePath, "dist", "index.d.ts")]]);
+  }
+  return Object.fromEntries(entries);
+}
+
+/** Every file api-extractor is about to read, explicitly: the entry point
+ * plus every alias target. Anything that is not an existing `.d.ts` under
+ * the owning package's `dist/` is a stale-discovery or misconfigured-build
+ * bug whose fallback resolution is the sibling's TypeScript SOURCE — the
+ * exact failure that once made the packed rollup contain undeclared
+ * `Type`/`AiContentPartSchema` references (source-level names that tsc had
+ * never emitted). Reject, never paper over. */
+function assertDeclarationInputs(entryPath, paths) {
+  for (const file of [entryPath, ...Object.values(paths).flat()]) {
+    if (!existsSync(file))
+      fail(
+        `extractor input ${file} does not exist; a workspace dependency's ` +
+          "build did not emit it — refusing to let module resolution fall " +
+          "back to that package's TypeScript source",
+      );
+    if (file.endsWith(".d.ts")) continue;
+    fail(
+      `extractor input ${file} is not a declaration file; the rollup must ` +
+        "never read TypeScript source (.ts) — rebuild the dependency's dist",
+    );
+  }
+  // A workspace package imported by the inputs but ABSENT from the alias
+  // map resolves through `node_modules` into the package manifest's `types`
+  // condition — `./src/index.ts` in this monorepo. Source entering the
+  // extractor input set is the same regression class, so it is refused too.
+  for (const file of walkFiles(distDirectory, [".d.ts"])) {
+    for (const name of bareSpecifiersIn(readFileSync(file, "utf8"))) {
+      if (runtimeProvided.has(name) || !name.startsWith(WORKSPACE_SCOPE))
+        continue;
+      if (paths[name]) continue;
+      const packagePath = findWorkspacePackage(name);
+      if (packagePath)
+        fail(
+          `the extractor input set imports ${name} with no dist ` +
+            `declaration alias; module resolution would read ` +
+            `${join(packagePath, "src")} (TypeScript source) — build or ` +
+            "fix its tsconfig.build.json so dist/index.d.ts exists",
+        );
+    }
+  }
+}
+
+/** tsc over the finished rollup, standalone: strict, no `skipLibCheck`, no
+ * lib/module resolution beyond what the rollup itself declares. The packed
+ * consumer typechecks this exact text with `skipLibCheck` off
+ * (`rust/scripts/check-native-package.mjs`, `scripts/tests/
+ * packed-native-types.test.ts`); doing it here turns "the extractor emitted
+ * something broken" into a pack-time failure instead of a consumer bug. */
+function verifyRolledDeclarations(rollupPath) {
+  const tsc = typescriptCompiler();
+  if (!tsc)
+    fail(
+      "cannot resolve the workspace `typescript` compiler to verify the " +
+        "rolled-up declarations",
+    );
+  // A dedicated tsconfig with `types: []`: the check must cover exactly
+  // what the consumer reads — the rollup text — without ambient @types
+  // from the monorepo flattering or sabotaging it.
+  const tsconfigPath = join(distDirectory, ".index.rollup.tsconfig.json");
+  writeFileSync(
+    tsconfigPath,
+    `${JSON.stringify(
+      {
+        compilerOptions: {
+          target: "ES2022",
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          lib: ["ES2022", "DOM", "DOM.Iterable"],
+          strict: true,
+          skipLibCheck: false,
+          types: [],
+          noEmit: true,
+        },
+        files: [relative(distDirectory, rollupPath)],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const check = spawnSync(process.execPath, [tsc, "-p", tsconfigPath], {
+    cwd: packageDirectory,
+    stdio: "inherit",
+  });
+  rmSync(tsconfigPath, { force: true });
+  if (check.status !== 0)
+    fail(
+      `the rolled-up declarations do not typecheck standalone ` +
+        `(tsc status ${check.status}) — undeclared references or illegal ` +
+        "ambient initializers would break every strict consumer",
+    );
+}
 
 const declarationTexts = walkFiles(distDirectory, [".d.ts"]);
 const entryBare = new Set();
@@ -299,7 +415,12 @@ if (entryBare.size === 0) {
 }
 
 const bundled = new Set();
-for (const name of entryBare) {
+
+/** Pull `name` into the bundle, building its workspace dist first when
+ * needed. Runs BEFORE the alias map is computed (and is re-run for every
+ * leak), so discovery never freezes against an unbuilt dependency. */
+function requireBundled(name) {
+  if (bundled.has(name)) return;
   if (!name.startsWith(WORKSPACE_SCOPE)) {
     if (!resolveFromPackage(name))
       fail(
@@ -307,7 +428,7 @@ for (const name of entryBare) {
           "dependency of the package",
       );
     bundled.add(name);
-    continue;
+    return;
   }
   const packagePath = findWorkspacePackage(name);
   if (!packagePath)
@@ -320,11 +441,19 @@ for (const name of entryBare) {
   bundled.add(name);
 }
 
+for (const name of entryBare) requireBundled(name);
+
 const rollupTemp = join(distDirectory, ".index.rollup.d.ts");
 const { Extractor, ExtractorConfig } = await loadExtractor();
 let pass = 0;
 for (;;) {
   pass += 1;
+  // Recomputed every pass, AFTER `requireBundled` built whatever this pass
+  // needs: the alias map must pin each workspace package to its emitted
+  // `dist/index.d.ts`, never to a state where resolution could fall back
+  // into TypeScript source.
+  const paths = aliasMap();
+  assertDeclarationInputs(entryDeclarations, paths);
   const config = ExtractorConfig.prepare({
     configObject: {
       projectFolder: packageDirectory,
@@ -340,12 +469,7 @@ for (;;) {
             strict: true,
             skipLibCheck: true,
             types: [],
-            paths: Object.fromEntries(
-              workspacePackages.map((name) => {
-                const packagePath = findWorkspacePackage(name);
-                return [name, [join(packagePath ?? "?", "dist", "index.d.ts")]];
-              }),
-            ),
+            paths,
           },
           files: [entryDeclarations],
         },
@@ -369,9 +493,25 @@ for (;;) {
     configObjectFullPath: join(packageDirectory, "api-extractor.json"),
     packageJsonFullPath: join(packageDirectory, "package.json"),
   });
-  if (
-    !Extractor.invoke(config, { localBuild: true, showVerboseMessages: false })
-  )
+  // `Extractor.invoke` returns an ExtractorResult OBJECT, which is always
+  // truthy — the only failure signal is `.succeeded` — and it can also
+  // THROW outright (`InternalError: Unable to follow symbol …`) on broken
+  // inputs. Checking the object instead let a failed analysis ship a
+  // rollup with undeclared references (a consumer's `TS2304 Cannot find
+  // name` bug, silent at pack time). Both failure modes must abort pack.
+  let result;
+  let thrown;
+  try {
+    result = Extractor.invoke(config, {
+      localBuild: true,
+      showVerboseMessages: false,
+    });
+  } catch (error) {
+    thrown = error instanceof Error ? error.message : String(error);
+  }
+  if (thrown !== undefined)
+    fail(`api-extractor failed to roll up dist/index.d.ts (threw: ${thrown})`);
+  if (!result?.succeeded)
     fail("api-extractor failed to roll up dist/index.d.ts");
 
   const rolled = readFileSync(rollupTemp, "utf8");
@@ -404,6 +544,13 @@ for (;;) {
     );
   }
 }
+
+// The finished rollup must stand on its own: strict tsc with
+// `skipLibCheck` off, exactly like the installed-consumer qualification
+// (`rust/scripts/check-native-package.mjs`). A rollup that only "passes"
+// because nobody read it is how undeclared references and illegal ambient
+// initializers reached the packed tarball once already.
+verifyRolledDeclarations(rollupTemp);
 
 // ---------------------------------------------------------------------------
 // 3. Swap in the rollup; drop the dead per-module declarations it replaces.

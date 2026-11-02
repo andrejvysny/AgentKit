@@ -481,7 +481,9 @@ suite(
         // the tool, req 2 concluded the tool pass).
         const followUp = provider.requests[2];
         if (!followUp)
-          throw new Error(`expected 3 provider requests, saw ${provider.requests.length}`);
+          throw new Error(
+            `expected 3 provider requests, saw ${provider.requests.length}`,
+          );
         return JSON.stringify(followUp.body.messages ?? []);
       } finally {
         await service?.close().catch(() => undefined);

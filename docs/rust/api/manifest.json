@@ -97,6 +97,11 @@
       "report": "agentkit--toolpacks-coding"
     },
     {
+      "name": "agentkit",
+      "subpath": "./native",
+      "report": "agentkit--native"
+    },
+    {
       "name": "@agentkit/client",
       "subpath": ".",
       "report": "client"
