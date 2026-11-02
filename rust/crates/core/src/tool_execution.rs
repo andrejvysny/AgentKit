@@ -127,9 +127,7 @@ pub(crate) async fn execute(
                     Err(error)
                 } else {Err(CoreError::new("exec_failed",&format!("Tool {} timed out after {ms}ms",call.name)))}
             }
-            _ = context.cancellation.cancelled() => {
-                child.cancel(); Err(cancelled())
-            }
+            _ = context.cancellation.cancelled() => { child.cancel(); Err(cancelled()) }
         }
     } else {
         tokio::select! { biased;

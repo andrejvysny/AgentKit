@@ -468,7 +468,12 @@ const ACCESS_X_OK: libc::c_int = 1;
 fn stat_identity(path: &str) -> FpResult<Option<[String; 6]>> {
     let c_path = std::ffi::CString::new(path)
         .map_err(|_| FingerprintError::Message("path contains a NUL byte".to_owned()))?;
+    // SAFETY: `libc::stat` is a plain C data struct (integer fields plus
+    // timespecs); an all-zero bit pattern is a valid value for it.
     let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `stat` is a properly aligned writable local of the exact
+    // `libc::stat` layout, and `char_ptr(&c_path)` is a valid NUL-terminated
+    // C string owned by `c_path` for the duration of the call.
     let rc = unsafe { libc::stat(char_ptr(&c_path), &mut stat) };
     if rc != 0 {
         return Err(FingerprintError::Io(std::io::Error::last_os_error()));
@@ -613,6 +618,9 @@ fn executable(
             Ok(value) => value,
             Err(_) => return fail("path contains a NUL byte"),
         };
+        // SAFETY: `char_ptr(&c_path)` is a valid NUL-terminated C string
+        // owned by `c_path` for the duration of the call; `access` only
+        // reads the path, it does not retain the pointer.
         if unsafe { libc::access(char_ptr(&c_path), ACCESS_X_OK) } != 0 {
             let error = std::io::Error::last_os_error();
             if is_absent(&error) {
@@ -1234,6 +1242,20 @@ pub fn command_fingerprint(
     command: &str,
     environment: &HashMap<String, String>,
 ) -> FpResult<Option<String>> {
+    Ok(fingerprint_document(root, cwd, command, environment)?
+        .map(|document| hex_sha256(document.as_bytes())))
+}
+
+/// The exact digest preimage: TS `JSON.stringify({v, executables, files,
+/// environment})`, byte-built in the same field order. Frozen case-for-case
+/// against the TypeScript authority by
+/// `fixtures/coding-fingerprint/fingerprint-material.json`.
+pub(crate) fn fingerprint_document(
+    root: &str,
+    cwd: &str,
+    command: &str,
+    environment: &HashMap<String, String>,
+) -> FpResult<Option<String>> {
     let Some(dirs) = ancestors(root, cwd) else {
         return Ok(None);
     };
@@ -1287,7 +1309,7 @@ pub fn command_fingerprint(
             .collect::<Vec<_>>()
             .join(",")
     );
-    Ok(Some(hex_sha256(document.as_bytes())))
+    Ok(Some(document))
 }
 
 pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
@@ -2102,6 +2124,7 @@ mod tests {
 
         // An unreadable selector target is a refusal, not an absence.
         #[cfg(unix)]
+        // SAFETY: `geteuid` takes no arguments and touches no memory.
         if unsafe { libc::geteuid() } != 0 {
             use std::os::unix::fs::PermissionsExt;
             std::fs::write(root.join("package.json"), plain).unwrap();
@@ -2196,5 +2219,167 @@ mod tests {
             .unwrap()
             .expect("still resolves through the tail of PATH");
         assert_ne!(reparsed, approved, "a reordered PATH changes the key");
+    }
+
+    fn mask_strings(value: &mut serde_json::Value, root: &str, outside: Option<&str>) {
+        match value {
+            serde_json::Value::String(text) => {
+                if let Some(dir) = outside {
+                    *text = text.replace(dir, "<OUTSIDE>");
+                }
+                *text = text.replace(root, "<ROOT>");
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    mask_strings(item, root, outside);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for item in map.values_mut() {
+                    mask_strings(item, root, outside);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Same masking contract the generator applies (`dev`/`ino`/`mtimeNs`/
+    /// `ctimeNs` -> `V`, temporary trees -> `<ROOT>`/`<OUTSIDE>`).
+    fn mask_material(value: &mut serde_json::Value, root: &str, outside: Option<&str>) {
+        if let Some(executables) = value
+            .get_mut("executables")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for found in executables {
+                if let Some(identity) = found
+                    .get_mut("identity")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for index in [0usize, 1, 4, 5] {
+                        if let Some(slot) = identity.get_mut(index) {
+                            *slot = serde_json::Value::String("V".to_owned());
+                        }
+                    }
+                }
+            }
+        }
+        mask_strings(value, root, outside);
+    }
+
+    /// The deleted TypeScript<->Rust differential
+    /// (`packages/toolpacks-coding/tests/command-fingerprint-rust.test.ts`)
+    /// lives on as this frozen-fixture test: the TS authority's masked
+    /// digest preimage per case must equal the Rust hand-built preimage
+    /// under the same masking. The material is FROZEN at the freeze commit
+    /// (the one-shot exporter retired with the TS authority); regenerating
+    /// it means re-deriving the digests from that commit's TypeScript
+    /// implementation under review (port-owned; excluded from the manifest
+    /// drift check).
+    #[test]
+    fn frozen_material_matches_the_typescript_authority() {
+        let raw = include_str!("../../../fixtures/coding-fingerprint/fingerprint-material.json");
+        let fixture: serde_json::Value =
+            serde_json::from_str(raw).expect("fingerprint material fixture parses");
+        let cases = fixture["cases"].as_array().expect("cases array");
+        for (index, case) in cases.iter().enumerate() {
+            let name = case["name"].as_str().expect("case name");
+            let tag: String = name
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect();
+            let raw_root = std::env::temp_dir()
+                .join(format!("ak-fp-frozen-{index}-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&raw_root);
+            let mut files: Vec<(String, String, Option<u32>)> = Vec::new();
+            for (path, spec) in case["files"].as_object().expect("files object") {
+                files.push((
+                    path.clone(),
+                    spec["contents"].as_str().expect("file contents").to_owned(),
+                    spec["mode"].as_u64().map(|mode| mode as u32),
+                ));
+            }
+            let refs: Vec<(&str, &str, Option<u32>)> = files
+                .iter()
+                .map(|(path, contents, mode)| (path.as_str(), contents.as_str(), *mode))
+                .collect();
+            tree(&raw_root, &refs);
+            let outside = case
+                .get("outsideFiles")
+                .and_then(serde_json::Value::as_object)
+                .map(|entries| {
+                    let dir = std::env::temp_dir()
+                        .join(format!("ak-fp-frozen-out-{index}-{}", std::process::id()));
+                    let _ = std::fs::remove_dir_all(&dir);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    for (file, contents) in entries {
+                        std::fs::write(
+                            dir.join(file),
+                            contents.as_str().expect("outside contents"),
+                        )
+                        .unwrap();
+                    }
+                    dir
+                });
+            let root = std::fs::canonicalize(&raw_root).unwrap();
+            let outside = outside.map(|dir| std::fs::canonicalize(dir).unwrap());
+            let root_s = root.to_string_lossy().into_owned();
+            let outside_s = outside
+                .as_ref()
+                .map(|dir| dir.to_string_lossy().into_owned());
+            // Node `join(root, ".")` collapses to `root`; match that before
+            // `ancestors` sees it, or a CurDir component duplicates the tree.
+            let cwd = root
+                .join(case["cwd"].as_str().unwrap_or("."))
+                .canonicalize()
+                .expect("case cwd exists");
+            let command = case["command"]
+                .as_str()
+                .expect("command")
+                .replace("<OUTSIDE>", outside_s.as_deref().unwrap_or_default());
+            let mut environment = HashMap::new();
+            environment.insert(
+                "PATH".to_owned(),
+                root.join("bin").to_string_lossy().into_owned(),
+            );
+            if let Some(extra) = case["env"].as_object() {
+                for (key, value) in extra {
+                    environment.insert(
+                        key.clone(),
+                        value
+                            .as_str()
+                            .expect("env value")
+                            .replace("<OUTSIDE>", outside_s.as_deref().unwrap_or_default())
+                            .replace("<ROOT>", &root_s),
+                    );
+                }
+            }
+            let document =
+                fingerprint_document(&root_s, cwd.to_str().expect("cwd"), &command, &environment);
+            match case["expect"].as_str().expect("expect class") {
+                "digest" => {
+                    let document = document
+                        .unwrap_or_else(|error| panic!("{name}: unexpected refusal {error:?}"))
+                        .unwrap_or_else(|| panic!("{name}: expected a digest"));
+                    let mut value: serde_json::Value =
+                        serde_json::from_str(&document).expect("Rust preimage parses");
+                    mask_material(&mut value, &root_s, outside_s.as_deref());
+                    assert_eq!(value, case["material"], "frozen material for {name}");
+                }
+                "null" => {
+                    assert!(
+                        document.expect("no error").is_none(),
+                        "expected null for {name}"
+                    );
+                }
+                "error" => {
+                    assert!(document.is_err(), "expected refusal for {name}");
+                }
+                other => unreachable!("unknown expect class {other}"),
+            }
+            let _ = std::fs::remove_dir_all(&raw_root);
+            if let Some(dir) = &outside {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
     }
 }

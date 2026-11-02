@@ -212,7 +212,7 @@ pub(super) async fn set_chat_archived(
         .update_chat(chat_id, None, None, Some(archived), SystemRuntime.now_ms())
         .await
         .map_err(errors::store)?;
-    serde_json::to_string(&chat).map_err(|error| errors::internal(&error.to_string()))
+    serde_json::to_string(&chat).map_err(|_| errors::internal("chat serialization"))
 }
 
 fn optional_string<'a>(input: &'a Value, key: &str) -> Result<Option<&'a str>> {

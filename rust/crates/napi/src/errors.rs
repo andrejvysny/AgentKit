@@ -7,46 +7,85 @@
 
 use napi::{Status, bindgen_prelude::Error};
 use serde_json::{Value, json};
+use std::collections::HashSet;
+use std::sync::LazyLock;
 
 /// The contract file itself, checked by the Rust tests so the two languages
 /// can never drift.
 pub const ERROR_CODES_JSON: &str = include_str!("../error-codes.json");
 
-pub fn contract_codes() -> Vec<String> {
-    serde_json::from_str::<Value>(ERROR_CODES_JSON)
+/// The one message every redacted error crosses the boundary with. Raw
+/// runtime text never rides in `message` for an `internal_error` payload.
+pub const GENERIC_MESSAGE: &str = "an internal error occurred; inspect the native logs";
+
+/// The parsed contract: file order for reporting, a set for membership
+/// checks. [`CONTRACT`] parses `ERROR_CODES_JSON` exactly once per process;
+/// the file is `include_str!`-embedded and validated by the
+/// `contract_is_valid_and_deduplicated` test.
+struct Contract {
+    ordered: Vec<String>,
+    set: HashSet<String>,
+}
+
+static CONTRACT: LazyLock<Contract> = LazyLock::new(|| {
+    let ordered: Vec<String> = serde_json::from_str::<Value>(ERROR_CODES_JSON)
         .expect("the error-code contract must be valid JSON")
         .get("codes")
         .and_then(Value::as_array)
         .expect("the contract must carry a `codes` array")
         .iter()
         .map(|code| code.as_str().expect("codes are strings").to_owned())
-        .collect()
+        .collect();
+    Contract {
+        set: ordered.iter().cloned().collect(),
+        ordered,
+    }
+});
+
+pub fn contract_codes() -> Vec<String> {
+    CONTRACT.ordered.clone()
 }
 
 pub fn is_contract_code(code: &str) -> bool {
-    contract_codes().iter().any(|known| known == code)
+    CONTRACT.set.contains(code)
 }
 
-/// Build the stable error object. Codes outside the contract are redacted to
-/// `internal_error`; the real code travels only in `details.origin`.
+/// Build the stable error object. Codes outside the contract — and the
+/// contract's own `internal_error` — are redacted: the wire code is
+/// `internal_error` and the message is the fixed [`GENERIC_MESSAGE`], never
+/// the caller's text; for an unknown code the real code travels only in
+/// `details.origin`. Every other contract code crosses verbatim.
 pub fn stable(code: &str, message: impl Into<String>, details: Option<Value>) -> Error {
-    let message = message.into();
-    let (wire_code, wire_details) = if is_contract_code(code) {
-        (code.to_owned(), details)
-    } else {
-        let mut redacted = serde_json::Map::new();
-        redacted.insert("origin".to_owned(), Value::String(code.to_owned()));
-        let mut merged = match details {
-            Some(Value::Object(map)) => map,
-            _ => serde_json::Map::new(),
+    if is_contract_code(code) {
+        let wire_message = if code == "internal_error" {
+            // A contract code, but its message is caller-supplied runtime
+            // text (host failures, store fallbacks): it never crosses.
+            GENERIC_MESSAGE.to_owned()
+        } else {
+            message.into()
         };
-        merged.extend(redacted);
-        ("internal_error".to_owned(), Some(Value::Object(merged)))
+        return payload(code.to_owned(), wire_message, details);
+    }
+    let mut merged = match details {
+        Some(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
     };
+    merged.insert("origin".to_owned(), Value::String(code.to_owned()));
+    payload(
+        "internal_error".to_owned(),
+        GENERIC_MESSAGE.to_owned(),
+        Some(Value::Object(merged)),
+    )
+}
+
+/// Assemble the `{code, message, details?}` payload. Private: every error
+/// reaches JavaScript through [`stable`] (redacting) or [`internal`]
+/// (compile-time context only), never through a raw hand-built map.
+fn payload(code: String, message: String, details: Option<Value>) -> Error {
     let mut payload = serde_json::Map::new();
-    payload.insert("code".to_owned(), Value::String(wire_code));
+    payload.insert("code".to_owned(), Value::String(code));
     payload.insert("message".to_owned(), Value::String(message));
-    if let Some(details) = wire_details {
+    if let Some(details) = details {
         payload.insert("details".to_owned(), details);
     }
     // The JS wrapper parses this JSON from `Error.message`; a raw throw
@@ -54,9 +93,12 @@ pub fn stable(code: &str, message: impl Into<String>, details: Option<Value>) ->
     Error::new(Status::GenericFailure, Value::Object(payload).to_string())
 }
 
+/// A pure internal failure. `context` is a compile-time call-site literal —
+/// audited: no caller interpolates runtime data — so this message may keep
+/// its context and bypass the blanket redaction inside [`stable`].
 pub fn internal(context: &str) -> Error {
-    stable(
-        "internal_error",
+    payload(
+        "internal_error".to_owned(),
         format!("{context} failed; inspect the native logs"),
         None,
     )
@@ -191,10 +233,70 @@ mod tests {
         let error = stable("weird-debug-code", "raw internal detail", None);
         let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
         assert_eq!(payload["code"], "internal_error");
-        // The raw message stays visible to the caller but the unknown code
-        // only appears as an origin marker, never as the wire code.
-        assert_eq!(payload["message"], "raw internal detail");
+        // The raw message NEVER crosses for a non-contract code: only the
+        // fixed generic string does, and the unknown code survives solely
+        // as an origin marker, never as the wire code.
+        let message = payload["message"].as_str().expect("message is a string");
+        assert!(!message.contains("raw internal detail"));
+        assert_eq!(message, GENERIC_MESSAGE);
         assert_eq!(payload["details"]["origin"], "weird-debug-code");
+    }
+
+    #[test]
+    fn explicit_internal_error_messages_are_redacted() {
+        // Even a caller that names the contract code cannot smuggle raw
+        // runtime text across: the message is the fixed generic string.
+        let error = stable("internal_error", "raw secret", None);
+        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
+        assert_eq!(payload["code"], "internal_error");
+        let message = payload["message"].as_str().expect("message is a string");
+        assert!(!message.contains("raw secret"));
+        assert_eq!(message, GENERIC_MESSAGE);
+    }
+
+    #[test]
+    fn internal_keeps_its_compile_time_context() {
+        // `internal` bypasses the blanket redaction because every call site
+        // passes a compile-time literal (audited), so the context message
+        // stays observable.
+        let error = internal("run event serialization");
+        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
+        assert_eq!(payload["code"], "internal_error");
+        assert_eq!(
+            payload["message"],
+            "run event serialization failed; inspect the native logs"
+        );
+        assert!(payload.get("details").is_none());
+    }
+
+    #[test]
+    fn host_error_text_is_redacted_not_leaked() {
+        // `host` hands the Display text of a HostError to `stable` with the
+        // internal_error code; the redaction now keeps it native-only.
+        let error = host(agentkit_host::HostError::Execution(
+            "tcp connect to 10.0.0.7:8080 refused: token abc123".into(),
+        ));
+        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
+        assert_eq!(payload["code"], "internal_error");
+        let message = payload["message"].as_str().expect("message is a string");
+        assert_eq!(message, GENERIC_MESSAGE);
+        assert!(!error.reason.contains("10.0.0.7"));
+        assert!(!error.reason.contains("abc123"));
+    }
+
+    #[test]
+    fn store_unknown_fallback_keeps_origin_and_redacts_message() {
+        // Variants with no explicit arm land in `unknown-store-error`: not a
+        // contract code, so the wire code is internal_error with the origin
+        // preserved and the Display text withheld.
+        let error = store(agentkit_store::StoreError::SessionDescriptorChanged(
+            "raw descriptor diff leaked".into(),
+        ));
+        let payload: Value = serde_json::from_str(&error.reason).expect("payload is JSON");
+        assert_eq!(payload["code"], "internal_error");
+        assert_eq!(payload["details"]["origin"], "unknown-store-error");
+        assert_eq!(payload["message"], GENERIC_MESSAGE);
+        assert!(!error.reason.contains("raw descriptor diff leaked"));
     }
 
     #[test]

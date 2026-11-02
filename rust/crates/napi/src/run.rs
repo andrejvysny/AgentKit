@@ -206,7 +206,7 @@ impl NativeRunHandle {
         let mut handle = guard.take().expect("handle checked above");
         let result = (&mut handle.result)
             .await
-            .map_err(|e| errors::internal(&e.to_string()))?;
+            .map_err(|_| errors::internal("run result join"))?;
         let budget_failed = matches!(
             result.terminal,
             agentkit_core::Terminal::Failed | agentkit_core::Terminal::Cancelled
@@ -235,7 +235,7 @@ impl NativeRunHandle {
         let terminal = if result.suspended {
             "suspended".to_owned()
         } else {
-            format!("{:?}", result.terminal).to_lowercase()
+            terminal_wire(&result.terminal).to_owned()
         };
         if let Some(hooks) = &self.hooks {
             hooks
@@ -249,7 +249,9 @@ impl NativeRunHandle {
         self.force_close.cancel();
         self.cancellation.cancel();
         if self.bridge.start_closing() {
-            self.bridge.detach(&env).map_err(|e| errors::internal(&e))?;
+            self.bridge
+                .detach(&env)
+                .map_err(|_| errors::internal("bridge detach"))?;
             self.bridge.mark_closed();
         }
         Ok(())
@@ -485,4 +487,37 @@ fn lifecycle_hooks(value: &Value, bridge: &Arc<JsBridge>) -> Result<Option<Arc<L
         names,
         timeout_ms,
     })))
+}
+
+/// The wire name for a terminal outcome, spelled explicitly — Debug
+/// formatting must never become observable behavior on the boundary. The
+/// suspended case is decided by the caller before this mapping.
+fn terminal_wire(terminal: &agentkit_core::Terminal) -> &'static str {
+    match terminal {
+        agentkit_core::Terminal::Completed => "completed",
+        agentkit_core::Terminal::Failed => "failed",
+        agentkit_core::Terminal::Cancelled => "cancelled",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_wire_strings_are_the_explicit_match() {
+        // Byte-identical to what the settled hook and run result have
+        // always carried (`packages/native` asserts "completed", "failed",
+        // "cancelled" — e.g. hook-decision-table, run-deadline,
+        // final-settlement).
+        assert_eq!(
+            terminal_wire(&agentkit_core::Terminal::Completed),
+            "completed"
+        );
+        assert_eq!(terminal_wire(&agentkit_core::Terminal::Failed), "failed");
+        assert_eq!(
+            terminal_wire(&agentkit_core::Terminal::Cancelled),
+            "cancelled"
+        );
+    }
 }

@@ -438,9 +438,14 @@ async fn try_create(
     record.insert("createdAt".to_owned(), serde_json::Value::from(now_ms()));
     let temp = format!("{dir}/.tmp-{}", uuid::Uuid::new_v4());
     let written: Result<(), CodingError> = async {
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // TS parity (`writeFile(temp, ..., { flag: "wx", mode: 0o600 })`):
+        // a lock record names pid/nonce/tool — owner-only from the first
+        // byte, never a world-readable window between create and link.
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options
             .open(&temp)
             .await
             .map_err(|error| io_error(&error))?;
@@ -678,10 +683,21 @@ async fn open(
     on_error: &OnError,
 ) -> Result<(String, LockDir), CodingError> {
     let key = canonical_root_key(root).await;
-    let ws_dir = format!("{}/{}", dir, sha256(key.as_bytes()));
-    tokio::fs::create_dir_all(&ws_dir)
+    // Root first, then the hashed workspace directory — both created with
+    // the TS `mkdir(wsDir, { recursive: true, mode: 0o700 })` permissions
+    // (lock records name pids, nonces and tool labels; the shared /tmp
+    // namespace is user-scoped, so neither directory may be readable or
+    // writable by anybody else) and both proven owned by this user before
+    // any lock is read or written.
+    create_dir_private(dir)
         .await
         .map_err(|error| io_error(&error))?;
+    verify_private_dir(dir)?;
+    let ws_dir = format!("{}/{}", dir, sha256(key.as_bytes()));
+    create_dir_private(&ws_dir)
+        .await
+        .map_err(|error| io_error(&error))?;
+    verify_private_dir(&ws_dir)?;
     Ok((
         key,
         LockDir {
@@ -690,6 +706,54 @@ async fn open(
             on_error: Arc::clone(on_error),
         },
     ))
+}
+
+/// TS-parity creation of a coordinator directory: recursive, `0o700`.
+#[cfg(unix)]
+async fn create_dir_private(path: &str) -> std::io::Result<()> {
+    tokio::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+        .await
+}
+
+#[cfg(not(unix))]
+async fn create_dir_private(path: &str) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(path).await
+}
+
+/// The shared coordination directory usually lives under world-writable
+/// `/tmp`. Before use, prove the tree is ours: owned by the effective uid
+/// and not writable by group or other. An existing 0755/0700 directory
+/// (created by either implementation) passes; a planted, foreign-owned or
+/// opened-up one fails closed rather than reading or writing locks through
+/// a directory someone else controls.
+#[cfg(unix)]
+fn verify_private_dir(path: &str) -> Result<(), CodingError> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).map_err(|error| io_error(&error))?;
+    // SAFETY: `geteuid` takes no arguments, touches no memory, and is
+    // always successful.
+    if meta.uid() != unsafe { libc::geteuid() } {
+        return Err(CodingError::new(
+            "io_error",
+            format!("coordination directory {path} is not owned by the current user"),
+        ));
+    }
+    if meta.mode() & 0o002 != 0 {
+        return Err(CodingError::new(
+            "io_error",
+            format!("coordination directory {path} is writable by other users"),
+        ));
+    }
+    Ok(())
+}
+
+/// No POSIX ownership model to verify against here.
+#[cfg(not(unix))]
+fn verify_private_dir(_path: &str) -> Result<(), CodingError> {
+    Ok(())
 }
 
 struct LockDirCoordinator {

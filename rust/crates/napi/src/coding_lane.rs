@@ -442,10 +442,24 @@ fn lockdir_coordinator(dir: Option<&str>) -> Arc<dyn WorkspaceCoordinator> {
 
 fn default_coordination_dir() -> String {
     #[cfg(unix)]
-    let uid = unsafe { libc::getuid() }.to_string();
+    {
+        // SAFETY: `getuid` takes no arguments, touches no memory, and is
+        // always successful.
+        let uid = unsafe { libc::getuid() }.to_string();
+        format!("/tmp/agentkit-workspace-locks-{uid}")
+    }
     #[cfg(not(unix))]
-    let uid = "user".to_owned();
-    format!("/tmp/agentkit-workspace-locks-{uid}")
+    {
+        // TS hard-codes `/tmp` (`coordination-lockdir.ts`
+        // `defaultWorkspaceCoordinationDir`), which does not exist on
+        // Windows; the per-user temp directory is its intended equivalent
+        // ("one same-host namespace … scoped to the OS user") — the
+        // `?? "user"` fallback kept there is meaningless on this platform.
+        std::env::temp_dir()
+            .join("agentkit-workspace-locks-user")
+            .to_string_lossy()
+            .into_owned()
+    }
 }
 
 /// A pack-configuration refusal is the caller's bad input, not an internal

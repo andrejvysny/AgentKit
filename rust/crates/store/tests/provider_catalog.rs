@@ -100,7 +100,9 @@ async fn providers_survive_reopen_and_malformed_records_fail_closed() {
 }
 
 #[test]
-#[ignore]
+// Fixture, not a suite member: the reopen test spawns THIS binary with
+// `--ignored --exact ...::provider_reopen_child` as the second process.
+#[ignore = "second-process fixture spawned by providers_survive_reopen_and_malformed_records_fail_closed via `--ignored --exact` with AGENTKIT_PROVIDER_DB set; run standalone it panics: `called `Option::unwrap()` on a `None` value` (provider_catalog.rs:107, env unset)"]
 fn provider_reopen_child() {
     let path = std::env::var_os("AGENTKIT_PROVIDER_DB").unwrap();
     tokio::runtime::Builder::new_current_thread()
