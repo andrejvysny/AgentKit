@@ -8,17 +8,22 @@ TypeScript. The wire types are JSON mirrors of the Rust serde shapes
 (contract `0.7.0`, REST `v1`); the binding adds handles, promises, and one
 async iterator, nothing else.
 
-Status: **first slice** (see `docs/rust/native-binding-milestone.md`).
-Historical x86_64-linux evidence is recorded in the milestone. The current
-working tree has local macOS arm64 packed-consumer evidence under Node 22.23.3
-and Bun 1.4.0. The wider matrix and durable-session provider streaming remain
-open. Platform package staging exists; publication and full qualification remain
-open. The Rust core's unix process/lease
-code compiles for Windows with fail-closed fallbacks (signals become no-ops,
-liveness probes answer "alive", quarantines stay blocked) — Windows
-qualification is CI-policy, not local, until the runner records it.
-Until then this package is `private` in the workspace and is consumed
-through relative imports in tests, not npm.
+Status: **publishable** (see `docs/rust/native-binding-milestone.md`).
+The wrapper and all five platform packages (`linux-x64-gnu`,
+`linux-arm64-gnu`, `darwin-arm64`, `darwin-x64`, `win32-x64-msvc`) carry
+publish-ready manifests (`publishConfig.access: public`, no `private`), and
+the release lane (`.github/workflows/native-release.yml` +
+`scripts/release/native-publish.mjs`) builds, verifies, and — under a gated
+environment approval with dry-run default — publishes them to npm together
+with the `agentkit` umbrella. Until that first approved publication runs,
+nothing under the `@agentkit` scope is on the registry; the workspace
+consumes the wrapper through relative imports in tests. Historical
+x86_64-linux evidence is recorded in the milestone; the current working tree
+has local macOS arm64 packed-consumer evidence under Node 22.23.3 and Bun
+1.4.0. The Rust core's unix process/lease code compiles for Windows with
+fail-closed fallbacks (signals become no-ops, liveness probes answer
+"alive", quarantines stay blocked) — Windows qualification is CI-policy, not
+local, until the runner records it.
 
 ## Layout
 
@@ -37,12 +42,21 @@ never committed. Build it with:
 bun run --cwd packages/native build:native
 ```
 
-Distribution stages the built addon into its matching private platform package;
-the wrapper declares these packages as optional dependencies. For an existing
-temporary directory outside the repository, run
-`node rust/scripts/stage-native-platform.mjs /path/to/staging` before packing.
-An absent addon fails at first use, and package installation never builds Rust.
-The isolated packed-consumer gate qualifies only its current host platform.
+Distribution stages the built addon into its matching platform package
+(`node rust/scripts/stage-native-platform.mjs /path/to/staging [--target
+<triple>]` into an existing temporary directory outside the repository); the
+wrapper and the umbrella declare the five platform packages as exact-version
+optional dependencies, and `packages/native/tests/distribution.test.ts`
+pins the whole matrix (manifest shape, os/cpu/libc gating, loader version
+lockstep) against `rust/scripts/native-platform-targets.mjs`. Release
+builds go through `rust/scripts/build-native-release-artifact.mjs`
+(per-triple cargo + container-identity check + packed tarballs + sha256
+manifest) and `rust/scripts/check-native-artifact.mjs` (isolated offline
+install; full acceptance lifecycle when the runner can execute the triple,
+structural-only otherwise). An absent addon fails at first use, and package
+installation never builds Rust. The isolated packed-consumer gate
+(`node rust/scripts/check-native-package.mjs`) qualifies the current host
+platform.
 
 ## Gating
 
@@ -59,7 +73,7 @@ Every call takes and returns JSON mirrors of the Rust serde shapes; the
 working, tested versions of these calls live in `tests/smoke.test.ts`.
 
 ```ts
-import { NativeStore } from "../../packages/native/src/index.js"; // until the npm export story lands
+import { NativeStore } from "@agentkit/native"; // once the gated npm lane has published; in the workspace, import from packages/native
 
 const store = await NativeStore.open("/state/agentkit.sqlite"); // or NativeStore.inMemory()
 const service = await store.createService({ closeTimeoutMs: 5_000 });

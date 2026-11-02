@@ -3,7 +3,6 @@
   "version": "0.1.0-dev",
   "description": "AgentKit native runtime for Windows x64 MSVC",
   "license": "MIT",
-  "private": true,
   "os": [
     "win32"
   ],
@@ -21,5 +20,13 @@
   ],
   "scripts": {
     "prepack": "node -e \"require('node:fs').accessSync(require('./package.json').main)\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andrejvysny/AgentKit.git",
+    "directory": "packages/native-win32-x64-msvc"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
