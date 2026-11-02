@@ -131,14 +131,23 @@ impl WakeHandle {
 /// never inspect or extend the registry. `supports` answers exactly what
 /// the runner's claim filter enforces, so an admission that passes the gate
 /// is a task some worker of this host can eventually claim.
+///
+/// Carries the KIND SET, never the executor Arcs. The executor map is fixed
+/// at construction, so a name set is exactly what the claim filter and the
+/// `supports` check consult — but cloning the registry itself would make
+/// every gate holder keep the executor object graph alive. The binding's
+/// authority hands the session service back to its own guards, so holding
+/// executors here closed an Arc cycle (service → gate → executors → guard →
+/// authority → service) that outlived `close()` and pinned the store
+/// actor's file lock forever.
 #[derive(Clone)]
 pub struct AdmissionGate {
-    executors: Arc<HashMap<String, Arc<dyn TaskExecutor>>>,
+    kinds: Arc<HashSet<String>>,
 }
 
 impl AdmissionGate {
     pub fn supports(&self, kind: &str) -> bool {
-        self.executors.contains_key(kind)
+        self.kinds.contains(kind)
     }
 }
 
@@ -171,7 +180,7 @@ impl AgentHost {
     /// deliberately read-only: holders can judge a kind, never register one.
     pub fn admission_gate(&self) -> AdmissionGate {
         AdmissionGate {
-            executors: self.executors.clone(),
+            kinds: Arc::new(self.executors.keys().cloned().collect()),
         }
     }
 
