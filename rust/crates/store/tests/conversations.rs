@@ -180,11 +180,19 @@ async fn search_answers_with_sqlite_fts5_semantics_not_substrings() {
     // Diacritic folding: "resume" finds "résumé" — the substring scan missed it.
     let hits = store.search_messages("resume", None, 10).await.unwrap();
     assert_eq!(
-        hits.iter().map(|hit| hit.message.id.as_str()).collect::<Vec<_>>(),
+        hits.iter()
+            .map(|hit| hit.message.id.as_str())
+            .collect::<Vec<_>>(),
         ["diacritic"]
     );
     // Token matching, not substrings: "serv" must NOT hit "server".
-    assert!(store.search_messages("serv", None, 10).await.unwrap().is_empty());
+    assert!(
+        store
+            .search_messages("serv", None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     // Whole-word token does.
     let hits = store.search_messages("server", None, 10).await.unwrap();
     assert_eq!(hits[0].message.id, "server");
@@ -199,8 +207,20 @@ async fn search_answers_with_sqlite_fts5_semantics_not_substrings() {
     let hits = store.search_messages("c++ (2)", None, 10).await.unwrap();
     assert_eq!(hits[0].message.id, "operators");
     // Nothing survives sanitizing → no hits, never an error.
-    assert!(store.search_messages("***", None, 10).await.unwrap().is_empty());
-    assert!(store.search_messages("   ", None, 10).await.unwrap().is_empty());
+    assert!(
+        store
+            .search_messages("***", None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .search_messages("   ", None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     // The chat filter still applies.
     assert!(
         store

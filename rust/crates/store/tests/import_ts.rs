@@ -1058,7 +1058,14 @@ fn sha_hex(digit: char) -> String {
 
 /// A TypeScript `ToolExecutionRecord` exactly as `tool-execution-store.ts`
 /// would have written it — note there is NO `chatId` field.
-fn execution_record(id: &str, run: &str, call: &str, tool: &str, status: &str, result: bool) -> String {
+fn execution_record(
+    id: &str,
+    run: &str,
+    call: &str,
+    tool: &str,
+    status: &str,
+    result: bool,
+) -> String {
     let mut record = json!({
         "executionId": id,
         "runId": run,
@@ -1081,7 +1088,11 @@ fn seed_executions(path: &Path, rows: &[(&str, &str, &str, &str, &str, bool)]) {
     for (id, run, call, tool, status, result) in rows {
         db.execute(
             "INSERT INTO tool_executions(execution_id,run_id,record) VALUES(?,?,?)",
-            rusqlite::params![id, run, execution_record(id, run, call, tool, status, *result)],
+            rusqlite::params![
+                id,
+                run,
+                execution_record(id, run, call, tool, status, *result)
+            ],
         )
         .unwrap();
     }
@@ -1101,8 +1112,22 @@ async fn uncertain_and_completed_executions_survive_the_import_as_barriers() {
     seed_executions(
         &source,
         &[
-            ("exec-uncertain", "run-1", "call-x", "write_file", "admitted", false),
-            ("exec-done", "run-1", "call-1", "read_file", "completed", true),
+            (
+                "exec-uncertain",
+                "run-1",
+                "call-x",
+                "write_file",
+                "admitted",
+                false,
+            ),
+            (
+                "exec-done",
+                "run-1",
+                "call-1",
+                "read_file",
+                "completed",
+                true,
+            ),
         ],
     );
     let destination = root.path().join("agentkit.db");
@@ -1117,15 +1142,30 @@ async fn uncertain_and_completed_executions_survive_the_import_as_barriers() {
     assert_eq!(run.len(), 2);
     assert_eq!(run[0].execution_id, "exec-uncertain");
     assert_eq!(run[0].status, ExecutionReceiptStatus::Admitted);
-    assert_eq!(run[0].chat_id, "chat-1", "the chat is re-derived from the run binding");
-    assert_eq!(run[0].result, None, "uncertainty is admitted-without-result");
+    assert_eq!(
+        run[0].chat_id, "chat-1",
+        "the chat is re-derived from the run binding"
+    );
+    assert_eq!(
+        run[0].result, None,
+        "uncertainty is admitted-without-result"
+    );
     assert_eq!(run[1].status, ExecutionReceiptStatus::Completed);
-    assert_eq!(run[1].result, Some(json!({"content": "ok", "isError": false})));
+    assert_eq!(
+        run[1].result,
+        Some(json!({"content": "ok", "isError": false}))
+    );
 
     // The cross-run same-chat guard reads exactly this set.
-    let chat = store.list_executions_by_chat("chat-1".to_string()).await.unwrap();
+    let chat = store
+        .list_executions_by_chat("chat-1".to_string())
+        .await
+        .unwrap();
     assert_eq!(chat.len(), 2);
-    assert!(chat.iter().any(|receipt| receipt.execution_id == "exec-uncertain"));
+    assert!(
+        chat.iter()
+            .any(|receipt| receipt.execution_id == "exec-uncertain")
+    );
 
     // Re-running the import refreshes rather than duplicates.
     let again = store
@@ -1133,7 +1173,14 @@ async fn uncertain_and_completed_executions_survive_the_import_as_barriers() {
         .await
         .unwrap();
     assert_eq!(again.executions, 2);
-    assert_eq!(store.list_executions("run-1".to_string()).await.unwrap().len(), 2);
+    assert_eq!(
+        store
+            .list_executions("run-1".to_string())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -1148,8 +1195,22 @@ async fn an_execution_whose_chat_cannot_be_proven_is_quarantined() {
     seed_executions(
         &source,
         &[
-            ("exec-uncertain", "run-1", "call-x", "write_file", "admitted", false),
-            ("exec-orphan", "dep-1", "call-y", "delete_dir", "admitted", false),
+            (
+                "exec-uncertain",
+                "run-1",
+                "call-x",
+                "write_file",
+                "admitted",
+                false,
+            ),
+            (
+                "exec-orphan",
+                "dep-1",
+                "call-y",
+                "delete_dir",
+                "admitted",
+                false,
+            ),
         ],
     );
     let destination = root.path().join("agentkit.db");
@@ -1174,7 +1235,10 @@ async fn an_execution_whose_chat_cannot_be_proven_is_quarantined() {
         )
         .await
         .unwrap();
-    assert_eq!(report.executions, 1, "only the provable receipt is imported");
+    assert_eq!(
+        report.executions, 1,
+        "only the provable receipt is imported"
+    );
     assert!(
         report
             .warnings
@@ -1184,8 +1248,21 @@ async fn an_execution_whose_chat_cannot_be_proven_is_quarantined() {
         "{:?}",
         report.warnings
     );
-    assert!(store.list_executions("dep-1".to_string()).await.unwrap().is_empty());
-    assert_eq!(store.list_executions("run-1".to_string()).await.unwrap().len(), 1);
+    assert!(
+        store
+            .list_executions("dep-1".to_string())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .list_executions("run-1".to_string())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -1204,7 +1281,14 @@ async fn an_execution_column_or_record_mismatch_never_reaches_the_guard() {
         rusqlite::params![
             "exec-1",
             "run-1",
-            execution_record("exec-OTHER", "run-1", "call-1", "write_file", "admitted", false)
+            execution_record(
+                "exec-OTHER",
+                "run-1",
+                "call-1",
+                "write_file",
+                "admitted",
+                false
+            )
         ],
     )
     .unwrap();
@@ -1227,7 +1311,13 @@ async fn an_execution_column_or_record_mismatch_never_reaches_the_guard() {
         .await
         .unwrap_err();
     assert!(matches!(error, StoreError::InvalidImport { .. }), "{error}");
-    assert!(store.list_executions("run-1".to_string()).await.unwrap().is_empty());
+    assert!(
+        store
+            .list_executions("run-1".to_string())
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let report = store
         .import_from_ts_schema(
@@ -1242,7 +1332,13 @@ async fn an_execution_column_or_record_mismatch_never_reaches_the_guard() {
     assert_eq!(report.executions, 0);
     assert!(report.warnings.iter().any(|w| w.contains("exec-1")));
     assert!(report.warnings.iter().any(|w| w.contains("exec-2")));
-    assert!(store.list_executions("run-1".to_string()).await.unwrap().is_empty());
+    assert!(
+        store
+            .list_executions("run-1".to_string())
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -1343,11 +1439,8 @@ async fn imported_settings_reach_the_production_settings_document() {
     let source = root.path().join("ts.db");
     ts_database(&source);
     let raw = Connection::open(&source).unwrap();
-    raw.execute(
-        "UPDATE settings SET tool_calling_mode='off' WHERE id=1",
-        [],
-    )
-    .unwrap();
+    raw.execute("UPDATE settings SET tool_calling_mode='off' WHERE id=1", [])
+        .unwrap();
     drop(raw);
 
     let destination = root.path().join("agentkit.db");
@@ -1375,11 +1468,13 @@ async fn imported_settings_reach_the_production_settings_document() {
         "the executor's policy gate reads exactly this document"
     );
     // The compatibility copy is still there for auditing.
-    assert!(store
-        .get_setting(ASSISTANT_SETTINGS_NAMESPACE, ASSISTANT_SETTINGS_KEY)
-        .await
-        .unwrap()
-        .is_some());
+    assert!(
+        store
+            .get_setting(ASSISTANT_SETTINGS_NAMESPACE, ASSISTANT_SETTINGS_KEY)
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -1446,7 +1541,10 @@ async fn imported_mcp_servers_aggregate_into_the_production_config_document() {
     assert_eq!(report.mcp_servers, 2, "both servers stay in the archive");
     assert_eq!(report.promoted_mcp_servers, 1);
     assert_eq!(
-        store.get_setting(MCP_CONFIG_NAMESPACE, "onemind").await.unwrap(),
+        store
+            .get_setting(MCP_CONFIG_NAMESPACE, "onemind")
+            .await
+            .unwrap(),
         Some(json!([{
             "id": "server-1",
             "alias": "fs",
@@ -1472,11 +1570,13 @@ async fn imported_mcp_servers_aggregate_into_the_production_config_document() {
         .import_from_ts_schema(&source, &options())
         .await
         .unwrap();
-    assert!(other
-        .get_setting(MCP_CONFIG_NAMESPACE, "onemind")
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        other
+            .get_setting(MCP_CONFIG_NAMESPACE, "onemind")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -1503,7 +1603,10 @@ async fn mcp_promotion_never_overwrites_a_live_config_document() {
         .unwrap();
     assert_eq!(report.promoted_mcp_servers, 0);
     assert_eq!(
-        store.get_setting(MCP_CONFIG_NAMESPACE, "onemind").await.unwrap(),
+        store
+            .get_setting(MCP_CONFIG_NAMESPACE, "onemind")
+            .await
+            .unwrap(),
         Some(live)
     );
     assert!(

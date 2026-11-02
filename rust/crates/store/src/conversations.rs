@@ -523,7 +523,9 @@ impl SqliteStore {
                 )
                 .and_then(|mut statement| {
                     statement
-                        .query_map(params![match_query, limit as i64], |row| row.get::<_, i64>(0))?
+                        .query_map(params![match_query, limit as i64], |row| {
+                            row.get::<_, i64>(0)
+                        })?
                         .collect::<rusqlite::Result<Vec<i64>>>()
                 });
             db.execute_batch("DROP TABLE IF EXISTS temp.search_probe")?;
@@ -536,9 +538,11 @@ impl SqliteStore {
                 .map(|rowid| {
                     let message = candidates
                         .get(rowid as usize - 1)
-                        .ok_or_else(|| StoreError::InvalidInput(format!(
-                            "the search probe named message #{rowid} that no candidate holds"
-                        )))?
+                        .ok_or_else(|| {
+                            StoreError::InvalidInput(format!(
+                                "the search probe named message #{rowid} that no candidate holds"
+                            ))
+                        })?
                         .clone();
                     let text = search_text(&message.content).to_lowercase();
                     let score = tokens
@@ -561,9 +565,7 @@ impl SqliteStore {
 /// what a person typing several words means. `None` when nothing survives;
 /// callers answer with no hits.
 fn to_fts_query(query: &str) -> Option<String> {
-    let sanitized = query
-        .replace(['"', '*', '^'], "")
-        .replace(['(', ')'], " ");
+    let sanitized = query.replace(['"', '*', '^'], "").replace(['(', ')'], " ");
     let tokens = sanitized
         .split_whitespace()
         .filter(|token| !token.is_empty())
