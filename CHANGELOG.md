@@ -2,6 +2,85 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**Task admission refuses kinds with no executor.** `AgentHost::submit` and
+every session admission that creates a turn (submit, queue-or-stage, flush
+promotion, and the settle-time promotion batch) now refuse a task kind with
+no registered `TaskExecutor` with the stable `no_executor_for_kind` code
+BEFORE any row lands — whole admissions are rejected, never
+admitted-except-the-missing-one (the store admits a task with its messages
+and input receipt atomically, so no partial batch exists to split; the
+TypeScript reference defers this to claim-time `ExecutorNotFoundError` and
+has no batch-admission API to copy). The runner's claim query filters to
+the registry's kinds, so a queued task of a dead kind is stepped over —
+never claimed, failed, or dead-lettered — and never blocks the runnable
+kinds behind it. `AgentHost::admission_gate()` exposes the registry check
+to the session service (`AgentSessionService::with_gate`), wired at the
+native runtime; ungated wirings keep admitting freely for cross-pool
+deployment.
+
+**CI gates for the shipped surface were made honest and green.** Four lanes
+failed at the external review and are fixed without weakening anything.
+Public-API inventory: `agentkit/native` is the reviewed 32nd frozen surface
+— `docs/rust/api/manifest.json` gained the `agentkit/native → agentkit--native`
+entry and the report was generated from the real built umbrella dist, so
+`bun run check:api` passes while the gate still rejects unintended drift
+(`AGENTKIT_CHECK_API_GATE=1 bun test scripts/tests/public-api.test.ts`).
+Declaration bundling (`scripts/prepack-bundle-types.mjs`): the workspace
+dependency graph is now built BEFORE discovery, the alias map is recomputed
+per pass after `ensureBuilt`, any TypeScript source entering the
+api-extractor input set is rejected (the fallback that produced the
+undeclared `Type`/`AiContentPartSchema` rollup), the extractor's
+`ExtractorResult.succeeded` — not the always-truthy result object, and not
+an outright `InternalError` throw — decides failure, and the finished
+rollup must typecheck standalone under strict `tsc` with `skipLibCheck`
+off, mirroring the installed-consumer qualification
+(`node rust/scripts/check-native-package.mjs`, `scripts/tests/
+packed-native-types.test.ts`). Pinned by `scripts/tests/
+prepack-bundle-types.test.ts` (one case per defect). Windows qualification:
+`cargo clippy --target x86_64-pc-windows-msvc --all-targets --all-features
+--locked --workspace --exclude agentkit-rust --exclude
+agentkit-toolpacks-coding -- -D warnings` is green — the Unix-only
+`OpenOptions::mode`, `Command::process_group` and POSIX-signal teardown
+calls in the coding pack are cfg-gated, the Unix-only test machinery
+(marker scans, `utimensat`, symlink fixtures, `sleep` survivors) is
+`#[cfg(unix)]`-gated, and sandboxed command execution on Windows refuses
+with an explicit `UNSUPPORTED_PLATFORM_MESSAGE` (roadmap M4) instead of
+faking success, asserted by
+`coding_lane::tests::bounded_execution_refuses_windows_with_an_explicit_error`
+and the toolpack refusal tests. Lint/format: the `provider-lane` formatter
+violation is fixed; `bun run lint` is clean.
+
+**Message search is SQLite's FTS5, not an imitation of it.** The Rust store's
+search predicate diverged from the engine the TypeScript adapters answered
+with: the score was a hand-rolled substring re-count of the raw query tokens
+(`"resume"` scored its `MATCH`-found "résumé" hit at zero), ties broke on
+internal rowid order so equal-rank pages were not stable, an empty query
+scanned the whole message table before answering nothing, and there was no
+durable index at all — every query rebuilt a temporary FTS5 table. Schema
+version 9 adds the adapter's layout one-to-one: a `message_search_source`
+VIEW projecting each message's searchable body, an external-content FTS5
+`message_search` (`unicode61 remove_diacritics 2`) keyed by `messages.rowid`,
+three INSERT/UPDATE/DELETE triggers (so the TypeScript import's direct
+`INSERT ... ON CONFLICT` and the chat-deletion cascade stay indexed with no
+caller discipline), and a guarded backfill for pre-v9 files. `search_messages`
+now answers `message_search MATCH` ranked by bm25, ordered by
+(rank, order_key, id) — a total order, so LIMIT pagination is stable — with
+the chat/`archived`/`internal`/`placeholder` constraints as a query-time
+filter over the join, and empty/whitespace queries and zero limits exit
+before any database round-trip. Evidence:
+`search_tokenization_matches_hand_computed_fts5` (the `LIKE '%serv%'`
+substring class, diacritic folding on both sides, operator characters as
+data, one CJK run per token),
+`search_ranks_by_bm25_not_substring_counts`,
+`search_orders_equal_scores_by_rank_index_then_id`,
+`search_applies_visibility_constraints_at_query_time` (placeholder→answer
+findability), and
+`search_triggers_cover_deletes_rowid_reuse_and_direct_inserts`
+(rowid-reuse safety, raw-INSERT trigger coverage) in
+`rust/crates/store/tests/conversations.rs`, plus
+`imported_messages_are_searchable_through_the_trigger_built_index` in
+`import_ts.rs`.
+
 **The TS importer cannot commit a lossy migration.** External review proved
 three ways the strict importer preserved data on paper but not in fact: an
 unplaceable message (orphan or cycle) routed through the skip path whose
