@@ -79,6 +79,10 @@
     "./toolpacks-coding": {
       "types": "./dist/toolpacks-coding/index.d.ts",
       "import": "./dist/toolpacks-coding/index.js"
+    },
+    "./native": {
+      "types": "./dist/native/index.d.ts",
+      "import": "./dist/native/index.js"
     }
   },
   "repository": {

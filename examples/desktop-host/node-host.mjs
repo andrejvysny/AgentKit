@@ -24,7 +24,7 @@ import {
   NativeAssistantStore,
   NativeSessionService,
   NativeStore,
-} from "@agentkit/native";
+} from "agentkit/native";
 import { createAgentKitClient } from "agentkit/client";
 
 /** 32 bytes: the floor the Rust HTTP backend enforces on `bearerToken`. */
