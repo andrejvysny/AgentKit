@@ -278,6 +278,7 @@ async fn run_shell(
             limits: env.limits.clone(),
             execution_id,
             pgid_slot: None,
+            reaped_slot: None,
         },
         lease,
         Arc::clone(&env.coordinator),
@@ -793,9 +794,9 @@ mod tests {
         assert_eq!(env.get("FOO").map(String::as_str), Some("1"));
     }
 
-    #[test]
-    fn kill_process_tree_on_a_dead_pid_does_not_panic() {
-        crate::process::kill_process_tree(2_000_000_000);
+    #[tokio::test]
+    async fn kill_process_tree_on_a_dead_pid_does_not_panic() {
+        crate::process::kill_process_tree(2_000_000_000).await;
     }
 
     #[tokio::test]

@@ -39,13 +39,18 @@ const POLL_MS: u64 = 20;
 // macOS hides the environment of Apple-signed sleep; this executable remains
 // observable by the independent marker oracle while the real tool owns it.
 #[test]
-#[ignore]
+// Fixture, not a suite member: ownership tests spawn THIS binary with
+// `--ignored --exact fixture_short` to get a short-lived marked process.
+#[ignore = "fixture spawned via `--ignored --exact`; sleeps 6s by design"]
 fn fixture_short() {
     std::thread::sleep(Duration::from_secs(6));
 }
 
 #[test]
-#[ignore]
+// Fixture, not a suite member: ownership tests spawn THIS binary with
+// `--ignored --exact fixture_long` to get a process that outlives the
+// harness window and must be torn down with its group.
+#[ignore = "fixture spawned via `--ignored --exact`; sleeps 120s by design"]
 fn fixture_long() {
     std::thread::sleep(Duration::from_secs(120));
 }

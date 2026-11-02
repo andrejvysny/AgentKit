@@ -15,6 +15,7 @@ use agentkit_core::{Tool, ToolContext};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio::io::AsyncReadExt;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::args::{as_record, opt_bool, opt_int, opt_string, req_string};
@@ -257,10 +258,16 @@ fn git_env() -> Vec<(String, String)> {
 
 /// Read a stream up to `max_bytes`; past the cap, kill the child the way
 /// `execFile`'s `maxBuffer` does and report the overflow.
+///
+/// The kill goes through the child's own handle (`start_kill`), never a bare
+/// `kill(pid)`: once the parent reaps, the pid number is recyclable and a raw
+/// signal could hit an unrelated process. `start_kill` is a no-op after the
+/// child has been waited, and hits our (possibly already-dead) child while it
+/// is still unreaped.
 async fn read_capped<R: AsyncReadExt + Unpin>(
     mut stream: R,
     max_bytes: usize,
-    pid: i32,
+    child: &AsyncMutex<tokio::process::Child>,
 ) -> (Vec<u8>, bool) {
     let mut collected: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 16384];
@@ -270,15 +277,7 @@ async fn read_capped<R: AsyncReadExt + Unpin>(
             Ok(read) => {
                 collected.extend_from_slice(&chunk[..read]);
                 if collected.len() > max_bytes {
-                    // Windows cannot signal by pid; the child is left to
-                    // finish (git output is bounded in practice; the git
-                    // pack is not Windows-qualified — see milestone backlog).
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(pid, libc::SIGKILL)
-                    };
-                    #[cfg(not(unix))]
-                    let _ = pid;
+                    let _ = child.lock().await.start_kill();
                     return (collected, true);
                 }
             }
@@ -290,10 +289,10 @@ async fn read_capped<R: AsyncReadExt + Unpin>(
 async fn read_opt<S: AsyncReadExt + Unpin>(
     stream: Option<S>,
     max_bytes: usize,
-    pid: i32,
+    child: &AsyncMutex<tokio::process::Child>,
 ) -> (Vec<u8>, bool) {
     match stream {
-        Some(stream) => read_capped(stream, max_bytes, pid).await,
+        Some(stream) => read_capped(stream, max_bytes, child).await,
         None => (vec![], false),
     }
 }
@@ -329,26 +328,42 @@ async fn run_git(
         }
         Ok(child) => child,
     };
-    let pid = child.id().unwrap_or(0) as i32;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let work = async move {
-        let ((out, out_capped), (err, err_capped)) = futures::future::join(
-            read_opt(stdout, max_bytes, pid),
-            read_opt(stderr, max_bytes, pid),
-        )
-        .await;
-        let status = child.wait().await.ok();
-        (out, out_capped, err, err_capped, status)
+    // The child handle is shared, not a recycled pid number: every kill this
+    // function issues goes through `start_kill`, which only ever signals our
+    // own child while it is still unreaped (after a `wait` it is a no-op, so
+    // a recycled pid can never be hit).
+    let child = Arc::new(AsyncMutex::new(child));
+    let work = {
+        let child = Arc::clone(&child);
+        async move {
+            let ((out, out_capped), (err, err_capped)) = futures::future::join(
+                read_opt(stdout, max_bytes, &child),
+                read_opt(stderr, max_bytes, &child),
+            )
+            .await;
+            // Poll for the exit rather than awaiting `wait()` under the
+            // lock: a lock held across `wait()` could starve the
+            // timeout/overflow kills — and those kills are precisely what
+            // frees `wait()` (the classic tokio Child mutex hazard). The
+            // lock is only ever held for a nonblocking `try_wait`.
+            let status = loop {
+                let status = child.lock().await.try_wait().ok().flatten();
+                if status.is_some() {
+                    break status;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            };
+            (out, out_capped, err, err_capped, status)
+        }
     };
-    let timed_out = async {
-        tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(pid, libc::SIGKILL)
-        };
-        #[cfg(not(unix))]
-        let _ = pid;
+    let timed_out = {
+        let child = Arc::clone(&child);
+        async move {
+            tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
+            let _ = child.lock().await.start_kill();
+        }
     };
     let aborted = async {
         match &cancellation {

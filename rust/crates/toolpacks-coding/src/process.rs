@@ -18,7 +18,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -58,22 +58,43 @@ mod sig {
     pub(super) const SIGKILL: i32 = 9;
 }
 
-/// Kill `pid` and every process in its group.
-#[cfg(unix)]
-pub fn kill_process_tree(pid: i32) {
-    // group may be gone, or never was one
-    unsafe { libc::kill(-pid, libc::SIGSTOP) };
-    if unsafe { libc::kill(-pid, libc::SIGKILL) } != 0 {
-        // already dead
-        unsafe { libc::kill(pid, libc::SIGKILL) };
-    }
+/// Compatibility helper; a numeric PID alone never authorizes signaling a
+/// group (TS `killProcessTree`). The leader must be observably present with
+/// a stable start-time identity, and every signal is decided from a fresh
+/// identity-checked discovery, so a recycled pid contributes nothing. The
+/// tree is found by parentage (this path has no execution marker to scan),
+/// and — because no un-reaped child backs the group number — no blanket
+/// `kill(-pgid)` is ever issued here; leader and descendants are signalled
+/// individually. On platforms without identity observation nothing is
+/// signalled at all, matching the TS `unknown` fail-closed.
+pub async fn kill_process_tree(pid: i32) {
+    let Some(identity) = crate::process_tree::observe_start_identity(pid).await else {
+        return;
+    };
+    let find: FindFn = Arc::new(move || {
+        let identity = identity.clone();
+        Box::pin(async move {
+            // Re-verify the identity every discovery round: signals may
+            // only target the process whose existence was proven.
+            if crate::process_tree::observe_start_identity(pid)
+                .await
+                .as_deref()
+                != Some(identity.as_str())
+            {
+                return Some(Discovery::default());
+            }
+            let mut marked = vec![pid];
+            marked.extend(crate::process_tree::descendant_pids(pid).await);
+            Some(Discovery {
+                marked,
+                suspects: vec![],
+            })
+        })
+    });
+    // No group handle: the caller holds no un-reaped child, so only
+    // individually proven pids are ever signalled.
+    terminate(None, find, 0).await;
 }
-
-/// Windows has no process groups and no `kill`: nothing can be signalled
-/// here. Callers observe survivors/UNKNOWN through the liveness probes
-/// (which answer "alive" on this platform) and quarantine accordingly.
-#[cfg(not(unix))]
-pub fn kill_process_tree(_pid: i32) {}
 
 /// One bounded command run.
 pub struct RunSpec {
@@ -96,6 +117,15 @@ pub struct RunSpec {
     /// the child has spawned so a concurrent host shutdown can signal the
     /// group. Construct as `None`.
     pub pgid_slot: Option<Arc<AtomicI64>>,
+    /// Set by [`spawn_owned_execution`]; flips true the moment the driver
+    /// reaps the child. While it reads false the pid (which is also the
+    /// process-group id, from `process_group(0)`) cannot be recycled by the
+    /// kernel, and that is what authorizes blanket `kill(-pgid)` group
+    /// signals: the un-reaped child IS the process-group handle. After the
+    /// flip the number is recyclable and only individually discovered
+    /// marked pids may be signalled. Construct as `None` (a direct caller
+    /// gets a driver-private flag with the same discipline).
+    pub reaped_slot: Option<Arc<AtomicBool>>,
 }
 
 /// The outcome of one bounded command run.
@@ -288,15 +318,125 @@ const POLL_MS: u64 = 25;
 
 #[cfg(unix)]
 fn signal_pid(pid: i32, sig: i32) {
-    // already gone
+    #[cfg(test)]
+    SIGNAL_LOG.with(|log| {
+        if let Ok(mut log) = log.lock() {
+            log.push((pid, sig));
+        }
+    });
+    // SAFETY: `kill` only reads its arguments; signaling a pid that is
+    // already gone answers ESRCH, which this fire-and-forget helper
+    // intentionally ignores (callers observe liveness separately).
     unsafe { libc::kill(pid, sig) };
+}
+
+// Test-only observation seam for every signal `terminate` would deliver,
+// so the reap-gate on blanket group signals can be pinned without racing
+// a recycled pgid in production code (the recording is additive; the real
+// signal still goes out). Thread-local by design: `#[tokio::test]` runs
+// the current_thread runtime on the test thread, so `terminate`'s signals
+// land in the same log the assertions read.
+#[cfg(all(test, unix))]
+thread_local! {
+    static SIGNAL_LOG: std::sync::Mutex<Vec<(i32, i32)>> =
+        const { std::sync::Mutex::new(Vec::new()) };
+}
+
+#[cfg(all(test, unix))]
+fn signal_log_snapshot() -> Vec<(i32, i32)> {
+    SIGNAL_LOG.with(|log| log.lock().unwrap().clone())
+}
+
+#[cfg(all(test, unix))]
+fn signal_log_reset() {
+    SIGNAL_LOG.with(|log| log.lock().unwrap().clear());
 }
 
 #[cfg(not(unix))]
 fn signal_pid(_pid: i32, _sig: i32) {}
 
+/// Non-reaping exit-status probe for the driver pump. `waitid(P_PID,
+/// WNOWAIT | WEXITED | WNOHANG)` reports the child's exit while LEAVING it
+/// a zombie, so the driver keeps the child unreaped — and therefore the
+/// process-group number unrecyclable — until teardown has finished
+/// signalling the group. WNOHANG is load-bearing: without it `waitid`
+/// BLOCKS until the child changes state, freezing the driver task inside a
+/// syscall so timeouts and cancellation never reach the poll loop.
+/// Polling (not signal-driven) keeps this clear of tokio's internal reaper;
+/// the final `Child::wait` after teardown does the actual reap.
+#[cfg(unix)]
+async fn pump_wait(child: &mut tokio::process::Child) -> Option<std::process::ExitStatus> {
+    use std::os::unix::process::ExitStatusExt;
+    let pid = child.id()? as libc::id_t;
+    loop {
+        // `siginfo_t` carries a raw pointer and is not `Send`, so it must
+        // never live across the poll sleep: status and errno are extracted
+        // inside a block that drops the struct before any await.
+        let (outcome, errno) = {
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            // SAFETY: `info` is a writable local owned by this block;
+            // WNOWAIT|WEXITED|WNOHANG only reports our own un-reaped
+            // child's status, never reaps it, and never blocks.
+            let rc = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid,
+                    std::ptr::addr_of_mut!(info),
+                    libc::WNOWAIT | libc::WEXITED | libc::WNOHANG,
+                )
+            };
+            if rc != 0 {
+                (
+                    None,
+                    std::io::Error::last_os_error()
+                        .raw_os_error()
+                        .unwrap_or_default(),
+                )
+            } else if info.si_code != 0 {
+                // SAFETY: on success waitid filled si_code with the exit
+                // classification and si_status with the raw exit code or
+                // terminating signal of this child.
+                (Some(unsafe { (info.si_code, info.si_status()) }), 0)
+            } else {
+                // WNOHANG with no state change yet: success with a zeroed
+                // siginfo. Never read errno here — it is stale on success.
+                (None, 0)
+            }
+        };
+        if let Some((code, status)) = outcome {
+            // Rebuild the wait(2) raw status ExitStatus expects from the
+            // siginfo fields: exit codes live in bits 8..16, signals in
+            // bits 0..7 (core-dumped adds the 0x80 bit).
+            return if code == libc::CLD_EXITED {
+                Some(std::process::ExitStatus::from_raw((status & 0xff) << 8))
+            } else if code == libc::CLD_KILLED {
+                Some(std::process::ExitStatus::from_raw(status & 0x7f))
+            } else if code == libc::CLD_DUMPED {
+                Some(std::process::ExitStatus::from_raw((status & 0x7f) | 0x80))
+            } else {
+                None
+            };
+        }
+        if errno == libc::ECHILD {
+            // No child to report (should not happen: the driver is its only
+            // reaper) — indistinguishable from a failed wait, like before.
+            return None;
+        }
+        // EINTR/transient: keep polling.
+        sleep(POLL_MS).await;
+    }
+}
+
+/// No group isolation exists on this platform (the runner refuses runs
+/// there upstream); the plain reaping wait is all there is.
+#[cfg(not(unix))]
+async fn pump_wait(child: &mut tokio::process::Child) -> Option<std::process::ExitStatus> {
+    child.wait().await.ok()
+}
+
 #[cfg(unix)]
 fn pid_alive(pid: i32) -> bool {
+    // SAFETY: `kill(pid, 0)` performs error checking only, sends no signal.
     let rc = unsafe { libc::kill(pid, 0) };
     if rc == 0 {
         return true;
@@ -348,6 +488,123 @@ fn group_populated(pgid: i32) -> bool {
 #[cfg(not(unix))]
 fn group_populated(_pgid: i32) -> bool {
     true
+}
+
+/// The driver's group leader: its own child, whose exit is observed before
+/// the reap. While `exited` reads false the leader is a live group member
+/// and counts toward "populated"; once true it is a zombie the driver is
+/// deliberately holding (signals before reap — see `GroupHandle`), and the
+/// probes below must not let it fake a populated group.
+#[derive(Clone)]
+pub struct LeaderProbe {
+    pub pid: i32,
+    pub exited: Arc<AtomicBool>,
+}
+
+/// Is the group populated by anyone other than a known-exited leader?
+/// `kill(-pgid, 0)` cannot tell the driver's own zombie apart, so once the
+/// pump saw the exit, membership is enumerated and the leader excluded.
+/// `None` from enumeration (platform cannot scan) keeps the conservative
+/// "populated" answer.
+async fn group_populated_excluding(pgid: i32, leader: &Option<LeaderProbe>) -> bool {
+    if !group_populated(pgid) {
+        return false;
+    }
+    match leader {
+        Some(probe) if probe.exited.load(Ordering::SeqCst) => {
+            match cached_group_members(pgid, probe.pid).await {
+                Some(members) => !members.is_empty(),
+                None => true,
+            }
+        }
+        _ => true,
+    }
+}
+
+/// Members of `pgid` excluding `except`, with a short cache so the 25 ms
+/// liveness polling does not become a process-scan storm. `None` when the
+/// platform cannot enumerate members.
+async fn cached_group_members(pgid: i32, except: i32) -> Option<Vec<i32>> {
+    const MEMBER_CACHE_TTL: Duration = Duration::from_millis(100);
+    type MemberCacheEntry = (Instant, Vec<i32>);
+    static MEMBER_CACHE: LazyLock<StdMutex<HashMap<i32, MemberCacheEntry>>> =
+        LazyLock::new(|| StdMutex::new(HashMap::new()));
+    if let Ok(cached) = MEMBER_CACHE.lock()
+        && let Some((seen, members)) = cached.get(&pgid)
+        && seen.elapsed() < MEMBER_CACHE_TTL
+    {
+        return Some(members.clone());
+    }
+    let members = group_members_other_than(pgid, except).await?;
+    if let Ok(mut cached) = MEMBER_CACHE.lock() {
+        cached.insert(pgid, (Instant::now(), members.clone()));
+    }
+    Some(members)
+}
+
+/// Members of `pgid` other than `except`, or `None` when the platform
+/// cannot enumerate process groups.
+#[cfg(target_os = "linux")]
+async fn group_members_other_than(pgid: i32, except: i32) -> Option<Vec<i32>> {
+    let mut members = Vec::new();
+    let mut entries = tokio::fs::read_dir("/proc").await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if name.is_empty() || !name.bytes().all(|byte| byte.is_ascii_digit()) {
+            continue;
+        }
+        let Ok(stat) = tokio::fs::read_to_string(format!("/proc/{name}/stat")).await else {
+            continue;
+        };
+        // `pid (comm) state ppid pgrp ...` — pgrp is the 3rd token after
+        // the last `)` (fields 3, 4, 5).
+        let Some(tail) = stat.rfind(')') else {
+            continue;
+        };
+        let mut fields = stat[tail + 1..].split_whitespace();
+        let _ = fields.next();
+        let _ = fields.next();
+        let Some(pgrp) = fields.next().and_then(|value| value.parse::<i32>().ok()) else {
+            continue;
+        };
+        let Ok(pid) = name.parse::<i32>() else {
+            continue;
+        };
+        if pgrp == pgid && pid != except {
+            members.push(pid);
+        }
+    }
+    Some(members)
+}
+
+/// Darwin: `ps -axo pid=,pgid=` is the only member enumeration without a
+/// privileged API; failures answer `None` (conservative populated).
+#[cfg(target_os = "macos")]
+async fn group_members_other_than(pgid: i32, except: i32) -> Option<Vec<i32>> {
+    let text = crate::process_tree::run_ps(&["-axo", "pid=,pgid="])
+        .await
+        .ok()?;
+    let mut members = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(pid), Some(pgrp)) = (
+            fields.next().and_then(|value| value.parse().ok()),
+            fields.next().and_then(|value| value.parse().ok()),
+        ) else {
+            continue;
+        };
+        if pgrp == pgid && pid != except {
+            members.push(pid);
+        }
+    }
+    Some(members)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+async fn group_members_other_than(_pgid: i32, _except: i32) -> Option<Vec<i32>> {
+    None
 }
 
 /// Marker scan that distinguishes "the platform cannot be scanned" from a
@@ -466,16 +723,16 @@ async fn sleep(ms: u64) {
 /// a transient reap delay under load (cleanup fine) from a member that
 /// truly cannot be removed (kill failure: e.g. a zombie whose live parent
 /// never reaps it, which must read as uncertainty).
-async fn group_populated_sustained(pgid: Option<i32>) -> bool {
-    let Some(pgid) = pgid else {
+async fn group_populated_sustained(group: &Option<GroupHandle>) -> bool {
+    let Some(group) = group else {
         return false;
     };
-    if !pid_alive(-pgid) {
+    if !group_populated_excluding(group.pgid, &group.leader).await {
         return false;
     }
     for _ in 0..12 {
         sleep(POLL_MS).await;
-        if !pid_alive(-pgid) {
+        if !group_populated_excluding(group.pgid, &group.leader).await {
             return false;
         }
     }
@@ -483,9 +740,37 @@ async fn group_populated_sustained(pgid: Option<i32>) -> bool {
 }
 
 /// Anything still alive after a wait: a live MARKED pid is conclusive;
-/// a merely "populated" group needs the sustained confirmation.
-async fn settled(known: &[i32], pgid: Option<i32>) -> bool {
-    known.iter().any(|pid| pid_alive(*pid)) || group_populated_sustained(pgid).await
+/// a merely "populated" group needs the sustained confirmation. The
+/// driver's own zombie leader (a member of `known`, unreaped on purpose
+/// until teardown finishes) is dead by definition once the pump saw its
+/// exit and must not fake a kill failure.
+async fn settled(known: &[i32], group: &Option<GroupHandle>) -> bool {
+    known.iter().any(|pid| known_alive(group, *pid)) || group_populated_sustained(group).await
+}
+
+/// Is anything teardown cares about still alive: a live marked pid, or a
+/// group populated by more than the driver's known-exited zombie leader.
+async fn remaining(known: &[i32], group: &Option<GroupHandle>) -> bool {
+    if let Some(group) = group
+        && group_populated_excluding(group.pgid, &group.leader).await
+    {
+        return true;
+    }
+    known.iter().any(|pid| known_alive(group, *pid))
+}
+
+/// Liveness of a discovered pid, with one exception: the driver's group
+/// leader is a member of `known` and a DELIBERATE zombie (unreaped until
+/// teardown completes), so once the pump has seen it exit it is dead for
+/// every cleanup decision; `kill(pid, 0)` on it answers "alive" forever.
+fn known_alive(group: &Option<GroupHandle>, pid: i32) -> bool {
+    let zombie_leader = group.as_ref().is_some_and(|group| {
+        group
+            .leader
+            .as_ref()
+            .is_some_and(|leader| leader.pid == pid && leader.exited.load(Ordering::SeqCst))
+    });
+    !zombie_leader && pid_alive(pid)
 }
 
 /// Recheck live suspects, retaining unresolved suspects and promoting any
@@ -623,27 +908,49 @@ fn absorb(
     }
 }
 
+/// The process group a teardown may signal, with its ownership proof.
+///
+/// A pgid number belongs to the caller's execution only while the child
+/// that led the group is UNREAPED: a reaped pid is recyclable, and a
+/// recycled number would hand `kill(-pgid)` to an entirely unrelated group.
+/// `reaped` is the driver's reap flag — every blanket group signal
+/// re-checks it at signal time, so the authorization dies with the child
+/// handle ("the process-group handle is owned by the child").
+#[derive(Clone)]
+pub struct GroupHandle {
+    pub pgid: i32,
+    pub reaped: Arc<AtomicBool>,
+    /// The driver's own child, when the caller is the driver itself: lets
+    /// the liveness probes exclude the deliberately un-reaped zombie leader
+    /// (see [`LeaderProbe`]). `None` for callers that do not own the leader.
+    pub leader: Option<LeaderProbe>,
+}
+
 /// SIGTERM the group and every MARKED pid, wait `grace_ms`, SIGKILL what is
 /// left, then report what still lives — including what could not be looked
 /// at. `seen` counts distinct marked pids. Suspects are absorbed into the
-/// report but NEVER signalled (see the kill policy on [`Teardown`]).
-async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown, usize) {
+/// report but NEVER signalled (see the kill policy on [`Teardown`]). The
+/// group is signalled only while its [`GroupHandle`] ownership proof holds
+/// (child unreaped); marked pids are always signalled individually.
+async fn terminate(group: Option<GroupHandle>, find: FindFn, grace_ms: u64) -> (Teardown, usize) {
     let mut known: Vec<i32> = Vec::new();
     let mut suspects: Vec<i32> = Vec::new();
     let mut scan = TeardownScan::Ok;
     let signal_all = |sig: i32, known: &[i32]| {
-        if let Some(pgid) = pgid {
-            signal_pid(-pgid, sig);
+        if let Some(group) = &group {
+            // Ownership re-check AT SIGNAL TIME: once the driver has reaped
+            // its child, the group number is kernel-recyclable and a
+            // blanket signal would hit whoever holds it — never us again.
+            if !group.reaped.load(Ordering::SeqCst) {
+                signal_pid(-group.pgid, sig);
+            }
         }
         for pid in known {
             signal_pid(*pid, sig);
         }
     };
-    let remaining = |known: &[i32]| -> bool {
-        (pgid.is_some_and(|pgid| pid_alive(-pgid))) || known.iter().any(|pid| pid_alive(*pid))
-    };
     absorb(&mut known, &mut suspects, &mut scan, find().await);
-    if known.is_empty() && !remaining(&known) {
+    if known.is_empty() && !remaining(&known, &group).await {
         // Nothing killable was found; cleanup is only Clean when the scan
         // completed AND no suspect stayed alive. An empty survivor list
         // alongside suspects or an unsupported scan is UNKNOWN.
@@ -674,15 +981,15 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
     signal_all(sig::SIGTERM, &known);
     signal_all(sig::SIGCONT, &known);
     let deadline = Instant::now() + Duration::from_millis(grace_ms);
-    while remaining(&known) && Instant::now() < deadline {
+    while remaining(&known, &group).await && Instant::now() < deadline {
         sleep(POLL_MS).await;
     }
-    let escalated = settled(&known, pgid).await;
+    let escalated = settled(&known, &group).await;
     if escalated {
         absorb(&mut known, &mut suspects, &mut scan, find().await);
         signal_all(sig::SIGKILL, &known);
         let end = Instant::now() + Duration::from_millis(SURVIVOR_WAIT_MS);
-        while remaining(&known) && Instant::now() < end {
+        while remaining(&known, &group).await && Instant::now() < end {
             sleep(POLL_MS).await;
         }
     }
@@ -713,7 +1020,7 @@ async fn terminate(pgid: Option<i32>, find: FindFn, grace_ms: u64) -> (Teardown,
     // failure even when no marked pid names itself inside it. The probe is
     // sustained so a zombie awaiting its reaper under load does not fake a
     // kill failure (and a witness nobody reaps cannot hide).
-    let group_stuck = group_populated_sustained(pgid).await;
+    let group_stuck = group_populated_sustained(&group).await;
     let rechecked = report_suspects(&find, &suspects, &mut scan).await;
     for pid in rechecked.marked {
         if !survivors.contains(&pid) {
@@ -1106,12 +1413,31 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
     let mut cancellation = spec.cancellation.clone();
     let mut teardown_run: Option<tokio::task::JoinHandle<Teardown>> = None;
 
+    // The reap flag is the ownership proof behind every group signal: the
+    // driver sets it only after ALL teardown signalling has finished and
+    // the child has been reaped (see the pump tail), so both this driver's
+    // teardown and a concurrent host drain reading the same slot can only
+    // signal a group number the kernel cannot yet have recycled.
+    let reaped_flag = spec.reaped_slot.clone().unwrap_or_default();
+    // The pump records the child's exit here (non-reaping `waitid`), which
+    // is what lets the probes distinguish "leader still to kill" from
+    // "leader is my deliberately-held zombie" without reaping early.
+    let exited_flag = Arc::new(AtomicBool::new(false));
+    let driver_group = pid.map(|pgid| GroupHandle {
+        pgid,
+        reaped: Arc::clone(&reaped_flag),
+        leader: Some(LeaderProbe {
+            pid: pgid,
+            exited: Arc::clone(&exited_flag),
+        }),
+    });
     let start_teardown = |teardown_run: &mut Option<tokio::task::JoinHandle<Teardown>>| {
         if teardown_run.is_none() {
             let find = Arc::clone(&find);
+            let group = driver_group.clone();
             let grace_ms = spec.limits.command_kill_grace_ms.min(KILL_GRACE_CAP_MS);
             *teardown_run = Some(tokio::spawn(async move {
-                terminate(pid, find, grace_ms).await.0
+                terminate(group, find, grace_ms).await.0
             }));
         }
     };
@@ -1173,8 +1499,8 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
                     }
                 }
             }
-            status = child.wait(), if !exited => {
-                if let Ok(status) = status {
+            status = pump_wait(&mut child), if !exited => {
+                if let Some(status) = status {
                     exit_code = status.code();
                     #[cfg(unix)]
                     {
@@ -1183,6 +1509,7 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
                     }
                 }
                 exited = true;
+                exited_flag.store(true, Ordering::SeqCst);
                 arm_grace(timed_out, aborted, &mut grace_at);
                 if stdout.is_none() && stderr.is_none() {
                     // 'close': exited and both pipes drained.
@@ -1211,11 +1538,11 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
             }
         }
     }
-    // Reap the child: every settle path means it exited (EOF paths wait for
-    // the exit, the grace path only arms after it), and the teardown sweep has
-    // now killed anything still in the group.
-    let _ = child.wait().await;
-    // Sweep stragglers left by a command that exited with children alive.
+    // Sweep stragglers left by a command that exited with children alive —
+    // BEFORE the reap. While the child stays unreaped its pid (the group id,
+    // from `process_group(0)`) cannot be recycled by the kernel, so every
+    // group signal the teardown issues is bound to our own group: the
+    // un-reaped child IS the process-group handle.
     let teardown = match teardown_run.take() {
         Some(handle) => match handle.await {
             Ok(teardown) => teardown,
@@ -1226,9 +1553,14 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
         None => {
             let find = Arc::clone(&find);
             let grace_ms = spec.limits.command_kill_grace_ms.min(KILL_GRACE_CAP_MS);
-            terminate(pid, find, grace_ms).await.0
+            terminate(driver_group, find, grace_ms).await.0
         }
     };
+    // Only now may the child be reaped; from this instant the group number
+    // is recyclable, so the flag retires every blanket group signal — for
+    // host drains reading the shared slot and for this function itself.
+    let _ = child.wait().await;
+    reaped_flag.store(true, Ordering::SeqCst);
     if let Some(tracker) = &tracker {
         tracker.stop();
     }
@@ -1281,6 +1613,7 @@ pub(crate) const SURVIVOR_RECHECK_MS: u64 = 2000;
 /// not ours to wait on.
 #[cfg(unix)]
 pub(crate) fn is_alive(pid: i32) -> bool {
+    // SAFETY: `kill(pid, 0)` performs error checking only, sends no signal.
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
@@ -1336,6 +1669,10 @@ pub struct LiveExecution {
 
 struct LiveRecord {
     pgid_slot: Arc<AtomicI64>,
+    /// Set by the driver when it reaps the child: from then on the group
+    /// number is recyclable and drains must not blanket-signal it (see
+    /// [`GroupHandle`]).
+    reaped: Arc<AtomicBool>,
     started_at_ms: u64,
     holder: String,
     root: String,
@@ -1370,6 +1707,7 @@ impl LiveRecord {
     fn clone_live(&self) -> Self {
         LiveRecord {
             pgid_slot: Arc::clone(&self.pgid_slot),
+            reaped: Arc::clone(&self.reaped),
             started_at_ms: self.started_at_ms,
             holder: self.holder.clone(),
             root: self.root.clone(),
@@ -1434,15 +1772,22 @@ async fn drain_live(root: Option<&str>) {
     let mut terminating: HashSet<String> = HashSet::new();
     let mut handles = Vec::new();
     loop {
-        let live: Vec<(String, Arc<AtomicI64>, u64)> = live_snapshot()
+        let live: Vec<(String, Arc<AtomicI64>, Arc<AtomicBool>, u64)> = live_snapshot()
             .into_iter()
             .filter(|(_, record)| root.is_none_or(|r| record.root == r))
-            .map(|(execution_id, record)| (execution_id, record.pgid_slot, record.started_at_ms))
+            .map(|(execution_id, record)| {
+                (
+                    execution_id,
+                    record.pgid_slot,
+                    record.reaped,
+                    record.started_at_ms,
+                )
+            })
             .collect();
         if live.is_empty() {
             break;
         }
-        for (execution_id, pgid_slot, started_at_ms) in live {
+        for (execution_id, pgid_slot, reaped, started_at_ms) in live {
             let pgid = pgid_slot.load(Ordering::SeqCst);
             // Not spawned yet: the driver will signal it through its own
             // pump; waiting for the registry entry to disappear covers it.
@@ -1455,7 +1800,16 @@ async fn drain_live(root: Option<&str>) {
             // marked-only list that makes cleanup look settled.
             let find: FindFn = production_find(execution_id.clone(), None, started_at_ms);
             handles.push(tokio::spawn(async move {
-                terminate(Some(pgid as i32), find, TERMINATE_GRACE_MS).await;
+                terminate(
+                    Some(GroupHandle {
+                        pgid: pgid as i32,
+                        reaped,
+                        leader: None,
+                    }),
+                    find,
+                    TERMINATE_GRACE_MS,
+                )
+                .await;
             }));
         }
         if Instant::now() >= deadline {
@@ -1569,12 +1923,15 @@ pub fn spawn_owned_execution_with_discovery(
     let execution_id = spec.execution_id.clone();
     let pgid_slot = Arc::new(AtomicI64::new(0));
     spec.pgid_slot = Some(Arc::clone(&pgid_slot));
+    let reaped_slot = Arc::new(AtomicBool::new(false));
+    spec.reaped_slot = Some(Arc::clone(&reaped_slot));
     let driver_slot = Arc::clone(&pgid_slot);
     if let Ok(mut live) = LIVE.lock() {
         live.insert(
             execution_id.clone(),
             LiveRecord {
                 pgid_slot,
+                reaped: reaped_slot,
                 started_at_ms: now_ms(),
                 holder: holder.label.clone(),
                 root: root.clone(),
@@ -1763,12 +2120,13 @@ mod tests {
             limits: CodingLimits::default(),
             execution_id: format!("{}:{}", process_id(), uuid::Uuid::new_v4()),
             pgid_slot: None,
+            reaped_slot: None,
         }
     }
 
-    #[test]
-    fn kill_process_tree_on_a_dead_pid_does_not_throw() {
-        kill_process_tree(2_000_000_000);
+    #[tokio::test]
+    async fn kill_process_tree_on_a_dead_pid_does_not_throw() {
+        kill_process_tree(2_000_000_000).await;
     }
 
     #[test]
@@ -2070,7 +2428,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    // Fixture, not a suite member: the orphan-sweep tests spawn THIS test
+    // binary with `--ignored --exact process::tests::orphan_fixture` to get
+    // a long-lived, marker-carrying process. The ignore is load-bearing —
+    // it keeps the 300 s sleep out of normal `cargo test` runs while
+    // remaining reachable through the `--ignored` filter.
+    #[ignore = "fixture for the sweep tests: sleeps 300s, invoked via `--ignored --exact`"]
     fn orphan_fixture() {
         std::thread::sleep(Duration::from_secs(300));
     }
@@ -2187,7 +2550,16 @@ mod tests {
         // A scan the platform cannot run returns `None`: an empty survivor
         // list must never be read as successful cleanup.
         let find: FindFn = Arc::new(|| Box::pin(async { None }));
-        let (teardown, seen) = terminate(Some(2_000_000_000), find, 50).await;
+        let (teardown, seen) = terminate(
+            Some(GroupHandle {
+                pgid: 2_000_000_000,
+                reaped: Arc::new(AtomicBool::new(false)),
+                leader: None,
+            }),
+            find,
+            50,
+        )
+        .await;
         assert_eq!(seen, 0);
         assert_eq!(teardown.scan, TeardownScan::Unsupported);
         assert!(teardown.survivors.is_empty());
@@ -2196,6 +2568,76 @@ mod tests {
             matches!(&outcome, crate::process::CleanupOutcome::Uncertain(u) if u.scan_unsupported),
             "an unsupported scan is UNKNOWN, never Clean: {outcome:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blanket_group_signals_retire_once_the_child_is_reaped() {
+        // The PID-reuse defense itself: after the driver reaps its child the
+        // group number is kernel-recyclable, so `terminate` must never again
+        // signal it — while individually marked pids keep being hunted.
+        // `reaped=true` must produce ZERO -pgid signals; the positive
+        // control (`reaped=false`, fresh sentinels) proves the assertion
+        // could fail.
+        for reaped in [true, false] {
+            let mut leader = tokio::process::Command::new("/bin/sleep")
+                .arg("60")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let pgid = leader.id().unwrap() as i32;
+            let mut member = tokio::process::Command::new("/bin/sleep")
+                .arg("60")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .process_group(pgid)
+                .spawn()
+                .unwrap();
+            let member_pid = member.id().unwrap() as i32;
+            let find: FindFn = Arc::new(move || {
+                Box::pin(async move {
+                    Some(Discovery {
+                        marked: vec![member_pid],
+                        suspects: vec![],
+                    })
+                })
+            });
+            signal_log_reset();
+            let group = GroupHandle {
+                pgid,
+                reaped: Arc::new(AtomicBool::new(reaped)),
+                leader: None,
+            };
+            let (_teardown, seen) = terminate(Some(group), find, 50).await;
+            assert_eq!(seen, 1);
+            let log = signal_log_snapshot();
+            assert!(
+                log.iter()
+                    .any(|(pid, sig)| *pid == member_pid && *sig == libc::SIGTERM),
+                "the marked member was never signalled: {log:?}"
+            );
+            let blanket = log.iter().any(|(pid, _)| *pid == -pgid);
+            if reaped {
+                assert!(
+                    !blanket,
+                    "a reaped group is recyclable and must never take a blanket signal: {log:?}"
+                );
+            } else {
+                assert!(
+                    blanket,
+                    "positive control broken: an unreaped group must take blanket signals: {log:?}"
+                );
+            }
+            // Teardown TERM'd the group/member; sweep both sentinels.
+            unsafe { libc::kill(pgid, libc::SIGKILL) };
+            unsafe { libc::kill(member_pid, libc::SIGKILL) };
+            let _ = leader.wait().await;
+            let _ = member.wait().await;
+        }
     }
 
     #[cfg(unix)]

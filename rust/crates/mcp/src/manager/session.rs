@@ -183,12 +183,25 @@ impl Session {
             })),
         }
     }
+    // Every `state` lock site in this file recovers from poisoning rather
+    // than panicking: `State` holds independent lifecycle flags, counters, and
+    // `Option` slots, and every reader decides conservatively (a missing
+    // client / disposed / revoked state yields `Closed` or a reconnect), so a
+    // panic mid-update can only leave a field at a previously valid value --
+    // the invariant is restore-safe, and the registration counter still bars a
+    // stale transport from re-admission.
     pub fn connected(&self) -> bool {
-        let state = self.state.lock().unwrap();
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         !state.disposed && !state.revoked && state.client.is_some()
     }
     pub fn revoke(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.revoked = true;
         state.disposed = true;
         state.epoch = state.epoch.wrapping_add(1);
@@ -199,7 +212,10 @@ impl Session {
     }
     pub async fn close_session(&self) -> Result<(), McpClientError> {
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             state.disposed = true;
             state.epoch = state.epoch.wrapping_add(1);
             state.lifetime.cancel();
@@ -209,7 +225,10 @@ impl Session {
     }
     async fn teardown(&self) -> Result<(), McpClientError> {
         let client = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let client = state.client.take();
             state.material = Arc::new(SecretMaterial::default());
             client
@@ -226,7 +245,11 @@ impl Session {
         explicit: bool,
         cancellation: CancellationToken,
     ) -> Result<Connected, McpClientError> {
-        let epoch = self.state.lock().unwrap().epoch;
+        let epoch = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .epoch;
         let _guard = tokio::select! {biased; _ = cancellation.cancelled() => return Err(McpClientError::Cancelled), guard = self.lifecycle.lock() => guard};
         let lifetime = self.prepare(explicit, epoch)?;
         let generation = self
@@ -253,7 +276,10 @@ impl Session {
         self.connect_cycle(generation, cancellation, lifetime).await
     }
     fn prepare(&self, explicit: bool, epoch: u64) -> Result<CancellationToken, McpClientError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.revoked
             || !self.config.enabled
             || state.epoch != epoch
@@ -268,7 +294,10 @@ impl Session {
         Ok(state.lifetime.clone())
     }
     fn cached(&self, generation: u64) -> Option<Connected> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state
             .secret_generation
             .is_some_and(|previous| previous != generation)
@@ -286,7 +315,10 @@ impl Session {
         })
     }
     fn assert_circuit(&self) -> Result<(), McpClientError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(opened) = state.opened_at {
             if self.clock.now_ms().saturating_sub(opened) < self.config.resilience.circuit_open_ms {
                 return Err(McpClientError::CircuitOpen);
@@ -301,7 +333,10 @@ impl Session {
         cancellation: CancellationToken,
         lifetime: CancellationToken,
     ) -> Result<Connected, McpClientError> {
-        self.state.lock().unwrap().secret_generation = Some(secret_generation);
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .secret_generation = Some(secret_generation);
         for attempt in 1..=self.config.resilience.max_connect_attempts {
             let result = self
                 .bounded(
@@ -345,7 +380,10 @@ impl Session {
                 Err(_) => break,
             }
         }
-        self.state.lock().unwrap().opened_at = Some(self.clock.now_ms());
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .opened_at = Some(self.clock.now_ms());
         Err(McpClientError::Connect)
     }
     fn install(
@@ -354,7 +392,10 @@ impl Session {
         material: Arc<SecretMaterial>,
         secret_generation: u64,
     ) -> Result<Connected, McpClientError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // The lifecycle lock excludes other installers; close/revoke cancels before waiting for it.
         if state.disposed || state.revoked || state.lifetime.is_cancelled() {
             return Err(McpClientError::Closed);
@@ -394,7 +435,12 @@ impl Session {
                 *value = value.replace(&format!("${{{placeholder}}}"), secret);
             }
         }
-        let cancellation = self.state.lock().unwrap().lifetime.child_token();
+        let cancellation = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lifetime
+            .child_token();
         let _cancel_on_drop = cancellation.clone().drop_guard();
         let client = self
             .connector
@@ -442,7 +488,13 @@ impl Session {
     }
     async fn invalidate_generation(&self, generation: u64) -> Result<(), McpClientError> {
         let _guard = self.lifecycle.lock().await;
-        if self.state.lock().unwrap().generation != generation {
+        if self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .generation
+            != generation
+        {
             return Ok(());
         }
         self.teardown().await
@@ -450,7 +502,10 @@ impl Session {
     /// The `(registration, generation)` of the live transport, or `None` when
     /// this session has none.
     fn live_binding(&self) -> Option<ToolBinding> {
-        let state = self.state.lock().unwrap();
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         (!state.disposed && !state.revoked && state.client.is_some()).then(|| ToolBinding {
             registration: self.registration,
             generation: state.generation,
@@ -692,7 +747,9 @@ fn pinned_in(
     registration: u64,
     want: ToolBinding,
 ) -> Result<Connected, McpClientError> {
-    let state = state.lock().unwrap();
+    let state = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if state.revoked || state.disposed || state.lifetime.is_cancelled() {
         return Err(McpClientError::Closed);
     }

@@ -363,7 +363,7 @@ pub(super) async fn execute(
             ));
         }
     };
-    serde_json::to_string(&value).map_err(|error| errors::internal(&error.to_string()))
+    serde_json::to_string(&value).map_err(|_| errors::internal("store port serialization"))
 }
 
 /// Shared harness for the namespace test modules: every port test speaks the

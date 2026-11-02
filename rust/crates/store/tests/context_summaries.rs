@@ -81,7 +81,9 @@ async fn summaries_survive_reopen_and_malformed_data_is_not_discarded() {
 }
 
 #[test]
-#[ignore]
+// Fixture, not a suite member: the reopen test spawns THIS binary with
+// `--ignored --exact ...::summaries_reopen_child` as the second process.
+#[ignore = "second-process fixture spawned by summaries_survive_reopen_and_malformed_data_is_not_discarded via `--ignored --exact` with AGENTKIT_SUMMARIES_DB set; run standalone it panics: `called `Option::unwrap()` on a `None` value` (context_summaries.rs:88, env unset)"]
 fn summaries_reopen_child() {
     let path = std::env::var_os("AGENTKIT_SUMMARIES_DB").unwrap();
     tokio::runtime::Builder::new_current_thread()

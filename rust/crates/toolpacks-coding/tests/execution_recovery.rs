@@ -33,7 +33,10 @@ static GATE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mu
 // macOS hides the environment of Apple-signed sleep; this fixture remains
 // visible to the actual marker scan used by recovery.
 #[test]
-#[ignore]
+// Fixture, not a suite member: the recovery tests spawn THIS binary with
+// `--ignored --exact marked_fixture` to get a long-lived marker-carrying
+// process for crash/recovery scenarios.
+#[ignore = "fixture spawned via `--ignored --exact`; sleeps 300s by design"]
 fn marked_fixture() {
     std::thread::sleep(std::time::Duration::from_secs(300));
 }

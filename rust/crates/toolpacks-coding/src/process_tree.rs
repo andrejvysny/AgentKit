@@ -482,6 +482,126 @@ pub fn descendants_of(rows: &[PsRow], seeds: impl IntoIterator<Item = i32>) -> V
     out
 }
 
+/// The leader's start-time identity (TS `process-identity.ts`
+/// `captureProcessIdentity`): a stamp that distinguishes THIS process from
+/// any future process that recycles its pid. `Some` only when the pid is
+/// observably present (live or zombie) with a readable start stamp; `None`
+/// means gone OR unobservable — every caller must fail closed on `None`,
+/// never signal a pid whose identity it cannot establish.
+pub async fn observe_start_identity(pid: i32) -> Option<String> {
+    if pid <= 0 {
+        return None;
+    }
+    match crate_platform() {
+        "linux" => {
+            let boot = boot_id()?;
+            let stat = tokio::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .await
+                .ok()?;
+            // `pid (comm) state ...` — count from after the LAST `)`;
+            // starttime is field 22 overall, the 20th token after comm.
+            let tail = stat.rfind(')')?;
+            let started = stat[tail + 1..].split_whitespace().nth(19)?;
+            Some(format!("proc-start:{boot}:{started}"))
+        }
+        "darwin" => {
+            let text = run(
+                "/bin/ps",
+                &["-p", &pid.to_string(), "-o", "pid=,ppid=,lstart="],
+            )
+            .await
+            .ok()?;
+            parse_ps_table(&text)
+                .into_iter()
+                .find(|row| row.pid == pid)
+                .map(|row| format!("lstart:{}", row.started))
+        }
+        _ => None,
+    }
+}
+
+/// Run a helper with stdout captured (shared by the marker/table scans).
+pub async fn run_ps(args: &[&str]) -> Result<String, std::io::Error> {
+    run("/bin/ps", args).await
+}
+
+/// `/proc/sys/kernel/random/boot_id`, read once; `None` when unreadable,
+/// which makes every start identity unobservable (fail closed).
+#[cfg(unix)]
+fn boot_id() -> Option<&'static str> {
+    static BOOT_ID: LazyLock<Option<String>> = LazyLock::new(|| {
+        std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .ok()
+            .map(|value| value.trim().to_owned())
+    });
+    BOOT_ID.as_deref()
+}
+
+/// Direct and transitive children of `pid` by parentage — the
+/// root-identity descendant discovery (`discoverExecution({ rootIdentity })`
+/// in TS) used where no execution marker exists. Fail-closed: an unreadable
+/// process table yields the empty set, so the compat kill then signals only
+/// the individually proven leader.
+pub async fn descendant_pids(pid: i32) -> Vec<i32> {
+    let children: HashMap<i32, Vec<i32>> = match crate_platform() {
+        "linux" => {
+            let mut map: HashMap<i32, Vec<i32>> = HashMap::new();
+            let Ok(mut entries) = tokio::fs::read_dir("/proc").await else {
+                return Vec::new();
+            };
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if !NUMERIC.is_match(&name) {
+                    continue;
+                }
+                let Ok(stat) = tokio::fs::read_to_string(format!("/proc/{name}/stat")).await else {
+                    continue;
+                };
+                // `pid (comm) state ppid ...` — ppid is the 2nd token after
+                // the last `)` (fields 3 and 4).
+                let Some(tail) = stat.rfind(')') else {
+                    continue;
+                };
+                let mut fields = stat[tail + 1..].split_whitespace();
+                let _ = fields.next();
+                let Some(ppid) = fields.next().and_then(|value| value.parse().ok()) else {
+                    continue;
+                };
+                let Ok(child) = name.parse::<i32>() else {
+                    continue;
+                };
+                map.entry(ppid).or_default().push(child);
+            }
+            map
+        }
+        "darwin" => {
+            let Ok(text) = run("/bin/ps", &["-axo", "pid=,ppid=,lstart="]).await else {
+                return Vec::new();
+            };
+            let mut map: HashMap<i32, Vec<i32>> = HashMap::new();
+            for row in parse_ps_table(&text) {
+                map.entry(row.ppid).or_default().push(row.pid);
+            }
+            map
+        }
+        _ => return Vec::new(),
+    };
+    let mut out: Vec<i32> = Vec::new();
+    let mut seen: HashSet<i32> = HashSet::from([pid]);
+    let mut queue: Vec<i32> = vec![pid];
+    while let Some(parent) = queue.pop() {
+        for child in children.get(&parent).into_iter().flatten() {
+            if seen.insert(*child) {
+                out.push(*child);
+                queue.push(*child);
+            }
+        }
+    }
+    out
+}
+
 /// macOS hides the environment of Apple-signed binaries (bash, sleep, perl),
 /// so the marker cannot find what a shell script leaves behind. Instead the
 /// process table is sampled while the command runs and every descendant of

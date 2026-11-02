@@ -570,7 +570,7 @@ impl SessionService {
     pub fn detach(&self, env: Env) -> Result<()> {
         self.bridge
             .detach(&env)
-            .map_err(|message| errors::internal(&message))
+            .map_err(|_| errors::internal("bridge detach"))
     }
 
     /// Shutdown: `Open → Closing → Closed` in one atomic sequence.
@@ -817,12 +817,12 @@ fn drain_update(update: HostResult<RunUpdate>) -> Result<Drain> {
     match update {
         Ok(RunUpdate::Event(record)) => {
             let value = serde_json::to_value(&record)
-                .map_err(|error| errors::internal(&error.to_string()))?;
+                .map_err(|_| errors::internal("run event serialization"))?;
             Ok(Drain::Event(json!({ "type": "event", "event": value })))
         }
         Ok(RunUpdate::Settled(task)) => {
             let value = serde_json::to_value(&task)
-                .map_err(|error| errors::internal(&error.to_string()))?;
+                .map_err(|_| errors::internal("settled task serialization"))?;
             Ok(Drain::Done(Some(
                 json!({ "type": "settled", "task": value }),
             )))
