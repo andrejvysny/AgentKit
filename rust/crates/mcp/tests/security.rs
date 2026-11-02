@@ -86,16 +86,24 @@ async fn initialize(endpoint: &str) -> String {
 async fn auth_precedes_catalogue_and_other_principals_cannot_borrow_sessions() {
     let (endpoint, server, host, handle) = serve(ServerOptions::default()).await;
     let client = reqwest::Client::new();
+    let anonymous = client
+        .post(&endpoint)
+        .body("malformed")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), 401);
     assert_eq!(
-        client
-            .post(&endpoint)
-            .body("malformed")
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        401
+        anonymous
+            .headers()
+            .get("www-authenticate")
+            .expect("the 401 carries the challenge")
+            .to_str()
+            .unwrap(),
+        "Bearer realm=\"agentkit-mcp\"",
+        "the challenge matches the TypeScript reference verbatim"
     );
+    assert_eq!(anonymous.text().await.unwrap(), "", "the 401 is bodyless");
     assert_eq!(host.calls.load(Ordering::SeqCst), 0);
     let session = initialize(&endpoint).await;
     for method in [
