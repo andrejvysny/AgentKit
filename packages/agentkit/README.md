@@ -28,7 +28,11 @@ npm install better-sqlite3@13.0.3
 
 Retain the artifact SHA-256 and corresponding qualification evidence. See
 [DEVELOPING.md](../../DEVELOPING.md) for the frozen snapshot and qualification
-procedure. Publication remains a separate approved action.
+procedure. Publication remains a separate approved action. The `agentkit/native`
+subpath resolves its addon from the `@agentkit/native-*` platform packages
+pinned at this exact version; until the gated npm lane has published that
+version, those optional dependencies resolve to nothing, `agentkit/native`
+fails loudly on first use, and every other subpath works unchanged.
 
 ## Root import
 
@@ -57,12 +61,25 @@ Subpaths, each resolving to that package's public barrel:
 | `agentkit/adapters-sqlite`      | Durable `bun:sqlite` `AssistantStore`. **Bun only.**     |
 | `agentkit/adapters-sqlite-node` | Durable `better-sqlite3` storage: `NodeSqliteAssistantStore` and `NodeSqliteMcpServerConfigStore`. Node >=22; explicit optional native peer. |
 | `agentkit/runner-local`         | Single-process `TaskRunner`.                            |
+| `agentkit/runner-local/filesystem` | `FileSkillSource`: skills loaded from a trusted directory. |
+| `agentkit/toolpacks-coding`      | Coding toolpack: sandboxed command execution, file tools, standing approvals, fingerprints. |
+| `agentkit/native`                | The Rust runtime through the Node-API binding: `NativeStore`, session service, REST/SSE + MCP servers from Rust, JS tool/provider callbacks. Loads the prebuilt platform addon for your os/cpu. |
 
 ```ts
 import { runChat } from "agentkit/core";
 import { TurnRunner } from "agentkit/host";
 import { MemoryAssistantStore } from "agentkit/adapters-memory";
+import { NativeStore } from "agentkit/native";
 ```
+
+`agentkit/native` is the production backend: `agentkit/core`'s `runChat`
+executes on the Rust runtime and **never** falls back to a TypeScript
+engine — if the platform addon is missing (unsupported os/cpu, or the npm
+lane has not published for your version yet), the first call fails loudly
+with `the native binding failed to load`. Prebuilt addons ship as
+`optionalDependencies` for `linux-x64-gnu`, `linux-arm64-gnu`,
+`darwin-arm64`, `darwin-x64`, and `win32-x64-msvc`; installation never
+builds Rust code.
 
 `agentkit/adapters-sqlite` preserves the Bun `bun:sqlite` entry point.
 `agentkit/adapters-sqlite-node` is a separate Node entry point and requires

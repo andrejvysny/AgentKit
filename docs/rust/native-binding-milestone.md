@@ -202,6 +202,20 @@ the binding exposes handles, promises, and async iteration — nothing else.
   the napi-rs prebuild convention. `npm install` must NEVER invoke cargo;
   CI builds the triples, and a missing prebuilt is a hard install error,
   never a silent source build.
+  **Status (npm finalization, 2026-11-02):** shipped as five platform
+  packages (`native-linux-x64-gnu`, `native-linux-arm64-gnu`,
+  `native-darwin-arm64`, `native-darwin-x64`, `native-win32-x64-msvc`),
+  one lockstep version across wrapper + platforms + umbrella pins + the
+  committed loader's embedded checks (`scripts/release/native-lockstep.mjs`,
+  pinned by `packages/native/tests/distribution.test.ts`);
+  `.github/workflows/native-release.yml` builds each triple on its own
+  runner (per-triple cargo release build + container-identity check +
+  isolated offline install + acceptance lifecycle where the runner can
+  execute the triple, structural-only and labeled otherwise — M2.1 A4), and
+  the gated `publish` job (environment reviewers, dry-run default, npm
+  provenance, verified digests only — no rebuild) publishes the seven npm
+  packages. The first publication awaits the maintainer steps in
+  `DEVELOPING.md` "Publishing the npm native stack".
 - Browser-safe import: the package's root export must not load the native
   binary at import time (lazy load on first API call) so bundlers keep
   working; the browser story stays the existing transport clients.
@@ -223,7 +237,7 @@ listed unverified and never counted as passed (M2.1 A4 rule):
 | macos-latest · Node 24 + Bun 1.4.0 | same matrix job; macOS links with `rustc-link-arg=-Wl,-undefined,dynamic_lookup` only — the `-tests` key variant was REJECTED by Cargo (no supporting test target) and removed; harness binaries link via the in-crate `#[cfg(test)]` napi stubs | runner-recorded on push |
 | windows-latest | `native-windows` job: workspace minus the Unix-only coding pack; the binding crate dropped its coding-pack dependency entirely (shared permission authority is portable in `agentkit-core`/`agentkit-host`), so no Unix process APIs sit on its build path | runner-recorded on push |
 | Node 20 | — | **untested**, named gap |
-| aarch64 targets, release-profile prebuilds, install-never-cargo | — | **not shipped**, named gap |
+| aarch64 targets, release-profile prebuilds, install-never-cargo | `.github/workflows/native-release.yml` builds all five triples (release profile, per-row `check-native-artifact` gate, packed platform tarball), consuming the same triple table as the packages (`rust/scripts/native-platform-targets.mjs`, pinned by `packages/native/tests/distribution.test.ts`); install never builds Rust - a missing prebuilt fails loudly at first use | lane complete; **first publish pending maintainer approval** |
 
 ## The first vertical slice (acceptance scenario)
 
