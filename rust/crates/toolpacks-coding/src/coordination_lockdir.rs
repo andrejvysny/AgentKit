@@ -2448,7 +2448,16 @@ mod tests {
                     "executionId": nonce,
                     "ownerPid": dead_pid().await,
                     "pgid": null,
-                    "spawnedAtMs": crate::coordination::now_ms_u64().saturating_sub(3_600_000),
+                    // Anchored at record-creation time, not an hour back:
+                    // the clean-scan premise is "no unreadable suspect
+                    // younger than the anchor", and a real dev box always
+                    // has same-uid processes whose environ answers EPERM
+                    // (a session `sshd`, `systemd --user` re-exec). An hour
+                    // old anchor turns one of those into a permanent
+                    // suspect and the lift into a timeout that only a bare
+                    // CI machine satisfies. Record age is orthogonal to
+                    // the lift path being proven.
+                    "spawnedAtMs": crate::coordination::now_ms_u64(),
                 },
             })
             .to_string(),
