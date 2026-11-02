@@ -26,6 +26,23 @@ function entries() {
       const manifest = readJson(join(folder, "package.json"));
       if (manifest.private) return [];
       const exports = manifest.publishConfig?.exports ?? manifest.exports;
+      if (exports === undefined || exports === null) {
+        // The prebuilt platform addons are the only published packages
+        // with no JavaScript surface: `main` is the compiled addon and
+        // npm's os/cpu gates route the wrapper's loader to it. Anything
+        // else silently losing its exports must fail the inventory
+        // instead of vanishing from the frozen surface list.
+        const isNativeAddon =
+          typeof manifest.main === "string" &&
+          manifest.main.endsWith(".node") &&
+          Array.isArray(manifest.os) &&
+          Array.isArray(manifest.cpu);
+        if (!isNativeAddon)
+          throw new Error(
+            `${manifest.name}: published package declares no exports surface`,
+          );
+        return [];
+      }
       return Object.entries(exports).map(([subpath, target]) => ({
         folder,
         package: manifest.name,

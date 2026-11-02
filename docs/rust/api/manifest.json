@@ -132,6 +132,11 @@
       "report": "mcp-server"
     },
     {
+      "name": "@agentkit/native",
+      "subpath": ".",
+      "report": "native"
+    },
+    {
       "name": "@agentkit/react",
       "subpath": ".",
       "report": "react"
