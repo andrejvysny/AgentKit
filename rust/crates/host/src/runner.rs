@@ -126,6 +126,22 @@ impl WakeHandle {
     }
 }
 
+/// A handle admission sites use to refuse work this host can never run,
+/// without owning the host. Deliberately opaque: holders judge a kind,
+/// never inspect or extend the registry. `supports` answers exactly what
+/// the runner's claim filter enforces, so an admission that passes the gate
+/// is a task some worker of this host can eventually claim.
+#[derive(Clone)]
+pub struct AdmissionGate {
+    executors: Arc<HashMap<String, Arc<dyn TaskExecutor>>>,
+}
+
+impl AdmissionGate {
+    pub fn supports(&self, kind: &str) -> bool {
+        self.executors.contains_key(kind)
+    }
+}
+
 impl AgentHost {
     pub fn store(&self) -> &SqliteStore {
         &self.store
@@ -137,6 +153,26 @@ impl AgentHost {
 
     pub fn supports(&self, kind: &str) -> bool {
         self.executors.contains_key(kind)
+    }
+
+    /// Every kind this host can execute, sorted for a deterministic claim
+    /// filter. The executor map is fixed at construction, so "registered"
+    /// means "registered now": an executor cannot appear later and
+    /// retroactively admit work that admission already refused.
+    pub fn supported_kinds(&self) -> Vec<String> {
+        let mut kinds: Vec<String> = self.executors.keys().cloned().collect();
+        kinds.sort();
+        kinds
+    }
+
+    /// The handle admission sites that cannot see the host itself (the
+    /// durable session service, which talks to the store directly) use to
+    /// enforce the same registry check the host boundary enforces. It is
+    /// deliberately read-only: holders can judge a kind, never register one.
+    pub fn admission_gate(&self) -> AdmissionGate {
+        AdmissionGate {
+            executors: self.executors.clone(),
+        }
     }
 
     pub fn resolves_provider_snapshots(&self) -> bool {
@@ -198,6 +234,13 @@ impl AgentHost {
             input.kind.clone(),
             input.scope_id.clone(),
         );
+        // Admission is the host's promise to run the task, so it is refused
+        // BEFORE any row lands when no executor exists for the kind. A
+        // duplicate replay of an identical task is refused too: nothing this
+        // host can ever claim belongs in its queue.
+        if !self.supports(&kind) {
+            return Err(HostError::NoExecutorForKind(kind));
+        }
         let task = match self.store.submit(input).await {
             Ok(task) => task,
             Err(error @ StoreError::Duplicate(_)) => match self.store.get_task(&id).await? {
@@ -337,6 +380,16 @@ impl AgentHost {
     }
 
     async fn claim_context(&self) -> HostResult<Option<ExecutionContext>> {
+        // The store reads an EMPTY kind filter as "any kind", so a host with
+        // no executors must not ask at all: there is nothing it may claim.
+        if self.executors.is_empty() {
+            return Ok(None);
+        }
+        // The claim filter is the queue's starvation guarantee: a queued
+        // task of a kind this host cannot run is stepped over — the store's
+        // candidate loop `continue`s past it — so it never blocks, and never
+        // dead-letters, the runnable kinds behind it. Priority/enqueue order
+        // among claimable tasks is exactly what the store's sort pins.
         let claimed = self
             .store
             .claim_with_concurrency(
@@ -345,7 +398,7 @@ impl AgentHost {
                     now: self.runtime.now_ms(),
                     ttl_ms: self.options.lease_ttl_ms,
                     max_attempts: self.options.max_attempts,
-                    kinds: vec![],
+                    kinds: self.supported_kinds(),
                     busy_scopes: vec![],
                 },
                 self.options.concurrency,
@@ -584,6 +637,28 @@ impl AgentHost {
                     let plan = planner
                         .settle_plan(&context.task, status == TaskStatus::Completed)
                         .await?;
+                    // Batch integrity, decided by the registry the runner
+                    // owns: if the plan would admit ANY task this host has
+                    // no executor for, the whole promotion batch is refused
+                    // — not the runnable ones too. The settled turn still
+                    // commits; the queue inputs stay Pending and visible
+                    // exactly as a poison candidate does. The session
+                    // planner cannot reach this (its candidates carry the
+                    // claimed turn's own kind), so it is the fence for any
+                    // other planner, never a filter on healthy queues.
+                    let promotable = plan
+                        .convert
+                        .iter()
+                        .all(|candidate| self.supports(&candidate.task.kind))
+                        && plan
+                            .staging
+                            .as_ref()
+                            .is_none_or(|staging| self.supports(&staging.kind));
+                    let (convert, staging) = if promotable {
+                        (plan.convert, plan.staging)
+                    } else {
+                        (vec![], None)
+                    };
                     let mut input = settle.clone();
                     input.now = self.runtime.now_ms();
                     match self
@@ -591,8 +666,8 @@ impl AgentHost {
                         .settle_session(
                             input,
                             agentkit_store::SessionSettle {
-                                convert: plan.convert,
-                                staging: plan.staging,
+                                convert,
+                                staging,
                                 expected_descriptor: plan.expected_descriptor,
                             },
                         )

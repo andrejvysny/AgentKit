@@ -272,11 +272,18 @@ pub struct AgentSessionServiceDeps {
     pub wake: Option<crate::WakeHandle>,
 }
 
+#[derive(Clone)]
 struct Deps {
     store: SqliteStore,
     runtime: SharedRuntime,
     plan_approval: Option<Arc<dyn PlanApprovalPolicy>>,
     wake: Option<crate::WakeHandle>,
+    /// The host's executor registry, when this service fronts a host whose
+    /// worker will run its turns. `None` (the constructor's default) leaves
+    /// admission unfiltered — for wiring where no native worker consumes the
+    /// queue at all. When set, every admission that would create a task
+    /// refuses an unregistered kind BEFORE any row lands.
+    gate: Option<crate::AdmissionGate>,
 }
 
 /// The session service. Cheap to clone; all state lives in the store.
@@ -349,8 +356,44 @@ impl AgentSessionService {
                 runtime: deps.runtime,
                 plan_approval: deps.plan_approval,
                 wake: deps.wake,
+                gate: None,
             }),
         }
+    }
+
+    /// Bind the host's admission registry: every admission that creates a
+    /// task (turn submit, queue-or-stage, flush promotion) then refuses a
+    /// kind with no registered `TaskExecutor` with the stable
+    /// `no_executor_for_kind` code, BEFORE the store transaction begins —
+    /// so a refused admission leaves zero rows: no task, no messages, no
+    /// converted/queued input. Whole admissions are rejected, never
+    /// admitted-except-the-missing-one (the store admits an input's task
+    /// atomically with its messages and receipt; there is no partial batch
+    /// left to keep or drop). Late wiring is deliberate: the binding code
+    /// builds the host and the service from the same store and links them
+    /// here, exactly as it hands the host the service's flush planner.
+    pub fn with_gate(mut self, gate: crate::AdmissionGate) -> Self {
+        let mut deps = self.deps.as_ref().clone();
+        deps.gate = Some(gate);
+        self.deps = Arc::new(deps);
+        self
+    }
+
+    /// The registry check every task-creating admission runs before its
+    /// first write. Ungated wirings (no native worker bound) admit freely.
+    fn require_executable(&self, kind: &str) -> SessionResult<()> {
+        if self
+            .deps
+            .gate
+            .as_ref()
+            .is_some_and(|gate| !gate.supports(kind))
+        {
+            return Err(SessionError::new(
+                "no_executor_for_kind",
+                format!("No executor registered for task kind \"{kind}\"."),
+            ));
+        }
+        Ok(())
     }
 
     fn store(&self) -> &SqliteStore {
@@ -656,6 +699,7 @@ impl AgentSessionService {
     pub async fn flush_queue(&self, session_id: &str) -> SessionResult<Option<AgentSendResult>> {
         let (_, descriptor) = self.require_session(session_id).await?;
         let turn_kind = session_turn_kind(&descriptor);
+        self.require_executable(&turn_kind)?;
         let pending = self
             .store()
             .list_inputs(AgentInputQuery {
@@ -1654,6 +1698,10 @@ impl AgentSessionService {
         content: Value,
         intent: QueueIntent,
     ) -> SessionResult<AgentSendResult> {
+        // The queue-or-stage transaction admits input+task+messages as ONE
+        // batch, so the registry check runs before it: a refused admission
+        // leaves no input row behind either.
+        self.require_executable(&session_turn_kind(descriptor))?;
         let QueueIntent {
             input_id,
             turn_id,
@@ -1794,6 +1842,10 @@ impl AgentSessionService {
         content: &Value,
         input_id: Option<&str>,
     ) -> SessionResult<AgentSendResult> {
+        // Refused before the first mint: a turn whose kind no executor
+        // handles would be a task+messages batch the worker can never
+        // claim. Nothing above this line writes.
+        self.require_executable(&session_turn_kind(descriptor))?;
         let user_message_id = self.mint("msg_");
         let assistant_message_id = self.mint("msg_");
         let task_id = input_id

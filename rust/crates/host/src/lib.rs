@@ -47,6 +47,14 @@ pub enum HostError {
     Store(#[from] StoreError),
     #[error("task executor not registered: {0}")]
     UnknownKind(String),
+    /// A task admission named a kind this host registered no executor for.
+    /// Admission is refused with this stable code BEFORE any row lands, so
+    /// the queue never holds work this host has promised to run and never
+    /// can; the store-level APIs stay unfiltered for deliberate cross-pool
+    /// seeding, and the runner's claim filter keeps such rows invisible to
+    /// this host either way.
+    #[error("no executor registered for task kind: {0}")]
+    NoExecutorForKind(String),
     #[error("execution cancelled")]
     Cancelled,
     #[error("{0}")]
