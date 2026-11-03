@@ -16,6 +16,12 @@ pub struct HostOptions {
     pub retry_backoff: RetryBackoff,
     pub concurrency: usize,
     pub poll_interval_ms: u64,
+    /// Best-effort observers of durably settled tasks (subagent orphan
+    /// reaping, watchdog triggers). A failing observer never unwinds the
+    /// settlement — the durable state is already committed; the crash
+    /// recovery sweep is the same computation, so a lost observation only
+    /// delays a reap until the next startup sweep.
+    pub settled_observers: Vec<Arc<dyn TaskSettledObserver>>,
 }
 
 impl Default for HostOptions {
@@ -29,6 +35,7 @@ impl Default for HostOptions {
             retry_backoff: RetryBackoff::default(),
             concurrency: 2,
             poll_interval_ms: 100,
+            settled_observers: vec![],
         }
     }
 }
@@ -699,6 +706,20 @@ impl AgentHost {
         // A settled turn can have promoted queued work (the session settle
         // path enqueues the next turn); rouse a worker for it immediately.
         self.wake.notify_one();
+        // Best-effort settled observations: the settlement is already
+        // committed and durable, so an observer failure is surfaced to the
+        // process (stderr) and deferred to the startup recovery sweep,
+        // never allowed to unwind a finished task.
+        if let Ok(Some(record)) = self.store.get_task(&context.task.task_id).await {
+            for observer in &self.options.settled_observers {
+                if let Err(error) = observer.observe_settled(&record).await {
+                    eprintln!(
+                        "agentkit: settled observer failed for {}: {error}",
+                        record.task_id
+                    );
+                }
+            }
+        }
         Ok(())
     }
 

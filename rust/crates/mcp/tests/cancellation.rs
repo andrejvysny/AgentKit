@@ -252,7 +252,7 @@ async fn cancelling_a_running_call_reaches_the_tool_and_prevents_the_queued_call
     };
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if host.admissions.load(Ordering::SeqCst) >= queued_at + 1 {
+            if host.admissions.load(Ordering::SeqCst) > queued_at {
                 return;
             }
             tokio::task::yield_now().await;
@@ -434,7 +434,7 @@ async fn hanging_up_on_the_sse_response_alone_reaches_the_tool_and_stops_the_que
     };
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if host.admissions.load(Ordering::SeqCst) >= queued_at + 1 {
+            if host.admissions.load(Ordering::SeqCst) > queued_at {
                 return;
             }
             tokio::task::yield_now().await;

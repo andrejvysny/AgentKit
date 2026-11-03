@@ -26,15 +26,20 @@ use napi::threadsafe_function::ThreadsafeFunction;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, mpsc};
 
+use crate::advisor_lane::{
+    AdvisorLane, AdvisorLaneContributor, BridgeAdvisorSink, LaneAdvisorTools,
+};
 use crate::authority::{BindingAuthority, BindingPlanPolicy, JsToolGuard, PlanConfiguration};
+use crate::coding_lane::{
+    CodingLane, CodingLaneContributor, CodingLaneGuard, LaneWorkspaceResolver,
+};
 use crate::errors;
 use crate::jsbridge::JsBridge;
+use crate::lsp_lane::{LspLane, LspLaneContributor};
 use crate::provider::JsProvider;
+use crate::subagent_lane::{SubagentLane, SubagentLaneContributor, SubagentLaneGuard};
 use crate::tool::JsToolContributor;
-use coding_lane::{CodingLane, CodingLaneContributor, CodingLaneGuard, LaneWorkspaceResolver};
 
-#[path = "coding_lane.rs"]
-mod coding_lane;
 #[path = "http_server.rs"]
 mod http_server;
 #[path = "service_management.rs"]
@@ -52,6 +57,9 @@ struct Core {
     service: AgentSessionService,
     contributor: Arc<JsToolContributor>,
     lane: Arc<CodingLane>,
+    subagent_lane: Arc<SubagentLane>,
+    advisor_lane: Arc<AdvisorLane>,
+    lsp_lane: Arc<LspLane>,
     worker: Option<WorkerHandle>,
     subscriptions: Mutex<Vec<Arc<Subscription>>>,
     http: Option<http_server::HttpServer>,
@@ -114,6 +122,14 @@ impl SessionService {
         let authority = Arc::new(BindingAuthority::new());
         let coding_authority = Arc::clone(&authority) as Arc<dyn CodingPermissionAuthority>;
         let lane = Arc::new(CodingLane::new(Arc::clone(&coding_authority)));
+        // The three late-bound lanes: the executor holds their adapters
+        // from construction; the configuration calls below fill them.
+        // Unconfigured lanes contribute nothing, judge nothing, and hook
+        // nothing — existing services behave exactly as before.
+        let subagent_lane = Arc::new(SubagentLane::new());
+        let advisor_lane = Arc::new(AdvisorLane::new());
+        let lsp_lane = Arc::new(LspLane::new());
+        let lanes_store = store_handle.clone();
         let guard = JsToolGuard::new(
             coding_authority,
             options.configured_mode,
@@ -162,6 +178,7 @@ impl SessionService {
                 ))
             }
         };
+        let advisor_provider = Arc::clone(&provider);
         let executor: Arc<dyn TaskExecutor> = Arc::new(
             ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
                 ChatExecutorOptions {
@@ -171,6 +188,15 @@ impl SessionService {
                         // the SAME lane: same snapshot, same durable
                         // execution, same receipts.
                         Arc::new(CodingLaneContributor::new(Arc::clone(&lane)))
+                            as Arc<dyn ToolContributor>,
+                        // Delegation, advisory, and code-intelligence
+                        // namespaces: late-bound lanes; each offers nothing
+                        // until its configuration call arrives.
+                        Arc::new(SubagentLaneContributor::new(Arc::clone(&subagent_lane)))
+                            as Arc<dyn ToolContributor>,
+                        Arc::new(AdvisorLaneContributor::new(Arc::clone(&advisor_lane)))
+                            as Arc<dyn ToolContributor>,
+                        Arc::new(LspLaneContributor::new(Arc::clone(&lsp_lane)))
                             as Arc<dyn ToolContributor>,
                     ],
                     tool_guards: vec![
@@ -182,6 +208,12 @@ impl SessionService {
                         // JS guard — guards compose with AND.
                         Arc::new(CodingLaneGuard::new(Arc::clone(&lane))) as Arc<dyn ToolGuard>,
                         Arc::new(agentkit_toolpacks_coding::HighRiskCommandGuard)
+                            as Arc<dyn ToolGuard>,
+                        // Subagent namespace ceilings + workspace write
+                        // coordination; judges only subagent tools, and
+                        // read-only-role children only through the crate's
+                        // own guard. Passes everything while unconfigured.
+                        Arc::new(SubagentLaneGuard::new(Arc::clone(&subagent_lane)))
                             as Arc<dyn ToolGuard>,
                     ],
                     // Exact-call remembering for native shell approvals:
@@ -196,6 +228,14 @@ impl SessionService {
                     // sessions stay untouched. Refusals (symlink, escape)
                     // degrade to a run warning, never a lost turn.
                     project_instructions: Some(Arc::new(agentkit_host::FileProjectInstructions)),
+                    // Delegation instructions enter every main-agent run
+                    // while subagents are configured+enabled; the watchdog
+                    // observes every run loop. Both are observational:
+                    // unconfigured they add nothing and never fail a turn.
+                    delegation_guidance: Some(
+                        Arc::clone(&subagent_lane) as Arc<dyn agentkit_host::DelegationGuidance>
+                    ),
+                    run_hooks: Some(Arc::clone(&advisor_lane) as Arc<dyn agentkit_core::RunHooks>),
                     ..Default::default()
                 },
             ),
@@ -204,12 +244,30 @@ impl SessionService {
             store_handle.clone(),
             HashMap::from([(CHAT_TURN_TASK_KIND.to_owned(), executor)]),
             runtime.clone(),
-            HostOptions::default(),
+            HostOptions {
+                // Delegation safety: a parent turn holds its worker slot
+                // while `subagent_await` polls, so the pool must host the
+                // root sessions, their delegating parents, AND in-flight
+                // children — with the default subagent limits (8 children
+                // active, depth 2, 4 per parent) a pool sized only for the
+                // parents starves every child until the await times out.
+                // Idle workers park on the wake queue; overprovisioning is
+                // free.
+                concurrency: 12,
+                // Orphan reaping on parent settlement (subagents) and
+                // turn-failure tracking (watchdog). Failures never unwind
+                // the settlement; the startup sweep is the same computation.
+                settled_observers: vec![
+                    Arc::clone(&subagent_lane) as Arc<dyn agentkit_host::TaskSettledObserver>,
+                    Arc::clone(&advisor_lane) as Arc<dyn agentkit_host::TaskSettledObserver>,
+                ],
+                ..Default::default()
+            },
         )
         .map_err(errors::host)?;
         let service = AgentSessionService::new(AgentSessionServiceDeps {
             store: store_handle,
-            runtime,
+            runtime: runtime.clone(),
             plan_approval: Some(Arc::new(BindingPlanPolicy::new(options.plan.clone()))),
             wake: Some(host.wake_handle()),
         })
@@ -219,8 +277,34 @@ impl SessionService {
         // Bound before the worker exists: a run can never query an unbound
         // authority and fall back to the configured mode by accident.
         authority.bind(service.clone());
+        // Fill the late-bound lanes. Subagent coordination needs the
+        // session service (child turns are ordinary durable turns); the
+        // advisor needs the provider, store, clock, tool source, event
+        // bridge, and session service. Both are one-shot; configuration
+        // (`configureSubagents`/`configureAdvisor`) is hot afterwards.
+        subagent_lane.bind(agentkit_host::SubagentService::new(
+            lanes_store.clone(),
+            service.clone(),
+            runtime.clone(),
+            agentkit_host::SubagentConfig::default(),
+        ))?;
+        advisor_lane.bind(
+            advisor_provider,
+            lanes_store,
+            runtime.clone(),
+            Arc::new(LaneAdvisorTools {
+                coding: Arc::clone(&lane),
+                lsp: Arc::clone(&lsp_lane),
+            }),
+            Some(Arc::new(BridgeAdvisorSink::new(Arc::clone(&bridge)))),
+            service.clone(),
+        )?;
         // Crash-reconcile interrupted turns BEFORE the worker can claim work.
         host.recover().await.map_err(errors::host)?;
+        // This process's previous life may have died mid-child: children
+        // whose parent already settled are reaped before any new turn can
+        // spawn under the same identities.
+        subagent_lane.reap_orphans().await.map_err(errors::host)?;
         let worker = host.start_worker();
         Ok(Self {
             core: Mutex::new(Some(Core {
@@ -228,6 +312,9 @@ impl SessionService {
                 service,
                 contributor,
                 lane,
+                subagent_lane,
+                advisor_lane,
+                lsp_lane,
                 worker: Some(worker),
                 subscriptions: Mutex::new(Vec::new()),
                 http: None,
@@ -288,6 +375,163 @@ impl SessionService {
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         core.lane.register(&options_json).await
+    }
+
+    /// Configure the subagent subsystem: `{enabled?, limits?:
+    /// {maxDepth?, maxConcurrency?, maxPerParent?, awaitPollMs?,
+    /// maxAwaitMs?, leaseTtlMs?, cancelOrphans?}, roles?:
+    /// {<id>: {description?, prompt?, allowedTools?, readOnly?,
+    /// canSpawn?, model?, providerId?, maxIterations?, capability?}},
+    /// delegationGuidance?}`. An omitted `roles` table ships the five
+    /// built-ins (general, researcher, explorer, implementer, reviewer);
+    /// partial tables keep the built-in defaults for any built-in role
+    /// they name. Hot: applies to the next spawn.
+    /// Disabled (the default) means no delegation tools exist at all.
+    #[napi]
+    pub async fn configure_subagents(&self, config_json: String) -> Result<()> {
+        let core_guard = self.core.lock().await;
+        let core = core_guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        let config: agentkit_host::SubagentConfig = serde_json::from_str(&config_json)
+            .map_err(|error| errors::invalid(format!("invalid subagent config: {error}")))?;
+        core.subagent_lane.configure(config);
+        Ok(())
+    }
+
+    /// JSON view of the active subagent configuration.
+    #[napi]
+    pub async fn subagent_config(&self) -> Result<String> {
+        let core_guard = self.core.lock().await;
+        let core = core_guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        Ok(core
+            .subagent_lane
+            .view()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "null".into()))
+    }
+
+    /// The children spawned by one parent chat: JSON array of the full
+    /// child views `{childChatId, parentChatId, parentTaskId, role, depth,
+    /// prompt, model, status, result, error, createdAt, updatedAt,
+    /// turnTaskId, taskStatus, waiting, queuedInputs}` — the registry row
+    /// joined with the live task state.
+    #[napi]
+    pub async fn subagents_list(&self, parent_chat_id: String) -> Result<String> {
+        let core_guard = self.core.lock().await;
+        let core = core_guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        let views = core
+            .subagent_lane
+            .list(&parent_chat_id)
+            .await
+            .map_err(errors::host)?;
+        serde_json::to_string(&views).map_err(|error| errors::internal(&error.to_string()))
+    }
+
+    /// The state of one child session by id.
+    #[napi]
+    pub async fn subagent_status(&self, child_chat_id: String) -> Result<String> {
+        let core_guard = self.core.lock().await;
+        let core = core_guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        let view = core
+            .subagent_lane
+            .status(&child_chat_id)
+            .await
+            .map_err(errors::host)?;
+        serde_json::to_string(&view).map_err(|error| errors::internal(&error.to_string()))
+    }
+
+    /// Register the LSP namespace: `{workspaceRoot (REQUIRED, absolute),
+    /// config?: {servers?: {<language>: {command, args?, env?}},
+    /// requestTimeoutMs?, initTimeoutMs?, idleTimeoutMs?,
+    /// diagnosticsWaitMs?, maxRestarts?, restartWindowMs?,
+    /// allowWorkspaceBinaries?}}`. Language servers are DISCOVERED only
+    /// (explicit `servers` override → env → PATH; the workspace
+    /// `node_modules/.bin` walk requires `allowWorkspaceBinaries: true`
+    /// because running a binary that came with the repository is host
+    /// code execution) — a missing server fails the tool call honestly;
+    /// nothing is ever installed.
+    #[napi]
+    pub async fn register_lsp_tools(&self, options_json: String) -> Result<()> {
+        let core_guard = self.core.lock().await;
+        let core = core_guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        core.lsp_lane.register(&options_json).await
+    }
+
+    /// Configure advisor + watchdog: `{enabled?, model?, watchdogModel?,
+    /// maxIterations?, maxToolCallsPerIteration?, toolTimeoutMs?,
+    /// providerRequests?, overallTimeoutMs?, maxFindings?,
+    /// maxReviewConcurrency?, cooldownMs?, reviewsPerWindow?, windowMs?,
+    /// triggerConsecutiveToolFailures?, triggerRepeatedErrorCode?,
+    /// triggerEditCount?, triggerTurnFailures?, escalateCritical?}`.
+    /// `model`/`watchdogModel` set the explicit-review and automatic-review
+    /// models independently of the main agent's model. Hot: applies to the
+    /// next review.
+    #[napi]
+    pub async fn configure_advisor(&self, config_json: String) -> Result<()> {
+        let core_guard = self.core.lock().await;
+        let core = core_guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        let config: agentkit_host::AdvisorConfig = serde_json::from_str(&config_json)
+            .map_err(|error| errors::invalid(format!("invalid advisor config: {error}")))?;
+        core.advisor_lane.configure(config);
+        Ok(())
+    }
+
+    /// JSON view of the active advisor configuration.
+    #[napi]
+    pub async fn advisor_config(&self) -> Result<String> {
+        let core_guard = self.core.lock().await;
+        let core = core_guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        Ok(core.advisor_lane.view().to_string())
+    }
+
+    /// Run one explicit advisory review of a session now (the `focus` is
+    /// the reviewer's task framing). Returns the persisted report JSON.
+    #[napi]
+    pub async fn advisor_review(&self, session_id: String, focus: String) -> Result<String> {
+        // Take only the lane handle. An explicit review is a full model
+        // round-trip (seconds); holding the core mutex across it would
+        // stall every other service call behind one reviewer.
+        let lane = {
+            let core_guard = self.core.lock().await;
+            core_guard
+                .as_ref()
+                .ok_or_else(|| errors::closed("the session service is closed"))?
+                .advisor_lane
+                .clone()
+        };
+        let report = lane
+            .review(&session_id, focus)
+            .await
+            .map_err(errors::host)?;
+        serde_json::to_string(&report).map_err(|error| errors::internal(&error.to_string()))
+    }
+
+    /// Persisted advisor findings for a session, newest first.
+    #[napi]
+    pub async fn advisor_findings(&self, session_id: String, limit: Option<i32>) -> Result<String> {
+        let core_guard = self.core.lock().await;
+        let core = core_guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        let records = core
+            .advisor_lane
+            .findings(&session_id, limit.unwrap_or(50).max(1) as i64)
+            .await
+            .map_err(errors::host)?;
+        serde_json::to_string(&records).map_err(|error| errors::internal(&error.to_string()))
     }
 
     #[napi]
@@ -659,6 +903,10 @@ impl SessionService {
             // startup sweep, not ours. Outcomes stay whatever the receipt
             // log decides — teardown never claims them.
             core.lane.dispose().await;
+            // Language servers get a clean shutdown (exit + kill fallback)
+            // once no new dispatch can start; a dead process's leftovers
+            // die with the process, not with us.
+            core.lsp_lane.close().await;
             drop(core);
         }
         self.bridge.mark_closed();

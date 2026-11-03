@@ -1,5 +1,6 @@
 //! Durable storage. Every database mutation runs on one bounded, dedicated worker.
 mod actor;
+mod advisor;
 mod agent_inputs;
 mod context_summaries;
 mod conversations;
@@ -14,6 +15,7 @@ mod provider_connections;
 mod schema;
 mod session_ops;
 mod settings_commit;
+mod subagents;
 mod tasks;
 mod timestamp;
 mod transaction;
@@ -22,6 +24,7 @@ mod ts_import;
 mod util;
 
 pub use actor::SqliteStore;
+pub use advisor::*;
 pub use agent_inputs::*;
 pub use context_summaries::*;
 pub use conversations::*;
@@ -35,6 +38,7 @@ pub use provider_connections::{provider_connection_identity, register_provider_c
 pub use schema::SCHEMA_VERSION;
 pub use session_ops::*;
 pub use settings_commit::{SettingWrite, SettingsCommit};
+pub use subagents::*;
 pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};
 pub use transaction::StoreTransaction;
 #[cfg(feature = "ts-import")]

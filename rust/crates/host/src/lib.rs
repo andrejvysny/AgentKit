@@ -1,6 +1,7 @@
 //! Durable native execution. Subscribers observe persisted events; dropping a
 //! subscriber does not cancel the task that produced them.
 
+mod advisor;
 mod budget;
 mod chat;
 mod connection_transport;
@@ -17,9 +18,11 @@ mod proposals;
 mod retry;
 mod runner;
 mod session;
+mod subagents;
 mod subscription;
 
-pub use budget::{parse_budget_limits, restore_execution_budget};
+pub use advisor::*;
+pub use budget::{RoleTaskOverrides, parse_budget_limits, restore_execution_budget};
 pub use chat::*;
 pub use connection_transport::*;
 pub use emulated_tool_call::{EMULATED_TOOL_CALL_MESSAGE, looks_like_emulated_tool_call};
@@ -31,6 +34,7 @@ pub use proposals::*;
 pub use retry::*;
 pub use runner::*;
 pub use session::*;
+pub use subagents::*;
 pub use subscription::*;
 
 use agentkit_store::{LeaseFence, SqliteStore, StoreError, TaskRecord};

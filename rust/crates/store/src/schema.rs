@@ -10,8 +10,11 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// `version < N` steps below. Version 8 adds the durable uncertainty
 /// barriers a tolerant TypeScript import leaves for admitted effects whose
 /// receipt cannot be placed; version 9 adds the persistent FTS5 message
-/// index (with a one-time backfill of the messages already on disk).
-pub const SCHEMA_VERSION: i64 = 9;
+/// index (with a one-time backfill of the messages already on disk);
+/// version 10 adds the durable subagent registry (the host's spawn and
+/// orphan-reaper flows project child-task state onto these rows) and the
+/// advisor findings ledger the explicit/watchdog advice sources append to.
+pub const SCHEMA_VERSION: i64 = 11;
 const VERSION: i64 = SCHEMA_VERSION;
 
 fn ownership(path: &Path) -> Result<Option<File>> {
@@ -121,6 +124,12 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<File>)> {
         if version < 9 {
             migrate_message_search(&mut connection)?;
         }
+        if version < 10 {
+            migrate_feature_tables(&mut connection)?;
+        }
+        if version < 11 {
+            migrate_advisor_reviews(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -209,6 +218,13 @@ fn schema_sql(version: i64) -> String {
     }
     if version >= 9 {
         sql.push_str(&message_search_schema());
+    }
+    if version >= 10 {
+        sql.push_str(SUBAGENTS_SCHEMA);
+        sql.push_str(ADVISOR_SCHEMA);
+    }
+    if version >= 11 {
+        sql.push_str(REVIEWS_SCHEMA);
     }
     sql
 }
@@ -383,6 +399,65 @@ fn migrate_message_search(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(&message_search_schema())?;
     transaction.pragma_update(None, "user_version", 9)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Durable subagent registry, additive at schema version 10. One row per
+/// spawned child chat: the parent binding (`parent_chat_id`, and the
+/// spawning `parent_task_id` when the spawn rode a task), the spawn
+/// contract (`role`, `depth`, `prompt`, optional `model`), and the
+/// projected child-task state. `turn_task_id` is the child's current turn
+/// task — the host re-points it when a follow-up starts a new turn, so the
+/// registry always names the authoritative task for child progress. The
+/// status CHECK freezes the lifecycle to the five states the spawn
+/// protocol defines; `result`/`error` fill on the terminal transition and
+/// the row then freezes (delivery retry stays idempotent). The parent
+/// indexes serve the per-chat and per-task listings; the orphan reaper
+/// enumerates the non-terminal rows.
+const SUBAGENTS_SCHEMA: &str = r#"
+CREATE TABLE subagents(child_chat_id TEXT PRIMARY KEY, parent_chat_id TEXT NOT NULL, parent_task_id TEXT, role TEXT NOT NULL, depth INTEGER NOT NULL CHECK(depth>=0), prompt TEXT NOT NULL, model TEXT, turn_task_id TEXT, status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','cancelled')), result TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+CREATE INDEX idx_subagents_parent ON subagents(parent_chat_id);
+CREATE INDEX idx_subagents_parent_task ON subagents(parent_task_id);
+"#;
+
+/// The advisor findings ledger, additive at schema version 10. One row per
+/// advice observation — from an explicit request or the watchdog — under a
+/// source/severity pair the CHECKs pin to their protocol vocabularies.
+/// `detail` is a JSON object (validated at write time); `escalated` marks
+/// the findings the host already escalated to the user, and the
+/// `(chat_id, created_at)` index is the watchdog rate-limit window's scan
+/// path (`count_advisor_findings_since`). `trigger_kind` avoids the SQL
+/// keyword.
+const ADVISOR_SCHEMA: &str = r#"
+CREATE TABLE advisor_findings(finding_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, source TEXT NOT NULL CHECK(source IN ('explicit','watchdog')), trigger_kind TEXT NOT NULL, severity TEXT NOT NULL CHECK(severity IN ('info','warning','critical')), title TEXT NOT NULL, detail TEXT NOT NULL, model TEXT NOT NULL, created_at INTEGER NOT NULL, escalated INTEGER NOT NULL DEFAULT 0 CHECK(escalated IN (0,1)));
+CREATE INDEX idx_findings_chat ON advisor_findings(chat_id, created_at);
+"#;
+
+/// The advisor review-attempt ledger, additive at schema version 11. One
+/// row per STARTED review (whether or not it produced findings), which is
+/// the only honest denominator for the watchdog's rolling-window budget:
+/// findings-only counting let zero-finding reviews — the common outcome of
+/// an adversarially triggered sweep — escape the window entirely and drain
+/// provider quota.
+const REVIEWS_SCHEMA: &str = r#"
+CREATE TABLE advisor_reviews(run_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, origin TEXT NOT NULL CHECK(origin IN ('explicit','watchdog')), trigger_kind TEXT NOT NULL, started_at INTEGER NOT NULL);
+CREATE INDEX idx_reviews_chat ON advisor_reviews(chat_id, started_at);
+"#;
+
+fn migrate_advisor_reviews(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(REVIEWS_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 11)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn migrate_feature_tables(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(SUBAGENTS_SCHEMA)?;
+    transaction.execute_batch(ADVISOR_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 10)?;
     transaction.commit()?;
     Ok(())
 }

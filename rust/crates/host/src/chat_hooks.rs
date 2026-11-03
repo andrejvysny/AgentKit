@@ -28,6 +28,15 @@ pub struct ChatExecutorOptions {
     /// Exact-call remembering for approvable refusals (the coding pack's
     /// shell policy wires this); absent, every approvable call asks.
     pub standing: Option<Arc<dyn crate::governance::StandingApprovalPolicy>>,
+    /// Delegation guidance appended to every session's resolved system
+    /// prompt while subagents are enabled — the autonomous-delegation
+    /// channel for BOTH Chat and Coding profiles. Consulted per turn so
+    /// `configure_subagents` takes effect without rebuilding the executor.
+    pub delegation_guidance: Option<Arc<dyn crate::DelegationGuidance>>,
+    /// Core run-loop hooks (watchdog observation). Hosts that add hooks
+    /// must keep them observational: a hook failure or timeout degrades to
+    /// the run's warning path, never to a lost turn.
+    pub run_hooks: Option<Arc<dyn agentkit_core::RunHooks>>,
     pub actor: Value,
     pub actor_id: Option<String>,
     pub hook_timeouts: ChatHookTimeouts,
@@ -50,6 +59,8 @@ impl Default for ChatExecutorOptions {
             tool_contributors: vec![],
             tool_guards: vec![],
             project_instructions: None,
+            delegation_guidance: None,
+            run_hooks: None,
             skip_untrusted_project_instructions: false,
             standing: None,
             actor: Value::Null,

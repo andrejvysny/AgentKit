@@ -243,6 +243,65 @@ export declare class SessionService {
    * service is immutable once the worker can claim turns.
    */
   registerCodingTools(optionsJson: string): Promise<void>
+  /**
+   * Configure the subagent subsystem: `{enabled?, limits?:
+   * {maxDepth?, maxConcurrency?, maxPerParent?, awaitPollMs?,
+   * maxAwaitMs?, leaseTtlMs?, cancelOrphans?}, roles?:
+   * {<id>: {description?, prompt?, allowedTools?, readOnly?,
+   * canSpawn?, model?, providerId?, maxIterations?, capability?}},
+   * delegationGuidance?}`. An omitted `roles` table ships the five
+   * built-ins (general, researcher, explorer, implementer, reviewer);
+   * partial tables keep the built-in defaults for any built-in role
+   * they name. Hot: applies to the next spawn.
+   * Disabled (the default) means no delegation tools exist at all.
+   */
+  configureSubagents(configJson: string): Promise<void>
+  /** JSON view of the active subagent configuration. */
+  subagentConfig(): Promise<string>
+  /**
+   * The children spawned by one parent chat: JSON array of the full
+   * child views `{childChatId, parentChatId, parentTaskId, role, depth,
+   * prompt, model, status, result, error, createdAt, updatedAt,
+   * turnTaskId, taskStatus, waiting, queuedInputs}` — the registry row
+   * joined with the live task state.
+   */
+  subagentsList(parentChatId: string): Promise<string>
+  /** The state of one child session by id. */
+  subagentStatus(childChatId: string): Promise<string>
+  /**
+   * Register the LSP namespace: `{workspaceRoot (REQUIRED, absolute),
+   * config?: {servers?: {<language>: {command, args?, env?}},
+   * requestTimeoutMs?, initTimeoutMs?, idleTimeoutMs?,
+   * diagnosticsWaitMs?, maxRestarts?, restartWindowMs?,
+   * allowWorkspaceBinaries?}}`. Language servers are DISCOVERED only
+   * (explicit `servers` override → env → PATH; the workspace
+   * `node_modules/.bin` walk requires `allowWorkspaceBinaries: true`
+   * because running a binary that came with the repository is host
+   * code execution) — a missing server fails the tool call honestly;
+   * nothing is ever installed.
+   */
+  registerLspTools(optionsJson: string): Promise<void>
+  /**
+   * Configure advisor + watchdog: `{enabled?, model?, watchdogModel?,
+   * maxIterations?, maxToolCallsPerIteration?, toolTimeoutMs?,
+   * providerRequests?, overallTimeoutMs?, maxFindings?,
+   * maxReviewConcurrency?, cooldownMs?, reviewsPerWindow?, windowMs?,
+   * triggerConsecutiveToolFailures?, triggerRepeatedErrorCode?,
+   * triggerEditCount?, triggerTurnFailures?, escalateCritical?}`.
+   * `model`/`watchdogModel` set the explicit-review and automatic-review
+   * models independently of the main agent's model. Hot: applies to the
+   * next review.
+   */
+  configureAdvisor(configJson: string): Promise<void>
+  /** JSON view of the active advisor configuration. */
+  advisorConfig(): Promise<string>
+  /**
+   * Run one explicit advisory review of a session now (the `focus` is
+   * the reviewer's task framing). Returns the persisted report JSON.
+   */
+  advisorReview(sessionId: string, focus: string): Promise<string>
+  /** Persisted advisor findings for a session, newest first. */
+  advisorFindings(sessionId: string, limit?: number | undefined | null): Promise<string>
   createSession(inputJson: string): Promise<string>
   send(sessionId: string, inputJson: string): Promise<string>
   followUp(sessionId: string, inputJson: string): Promise<string>

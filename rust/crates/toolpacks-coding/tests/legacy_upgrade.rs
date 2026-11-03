@@ -154,6 +154,9 @@ fn downgrade(path: &Path, version: i64) {
          DROP TABLE IF EXISTS managed_skills;
          DROP TABLE IF EXISTS run_content_records;
          DROP TABLE IF EXISTS uncertainty_barriers;
+         DROP TABLE IF EXISTS subagents;
+         DROP TABLE IF EXISTS advisor_findings;
+         DROP TABLE IF EXISTS advisor_reviews;
          DROP TRIGGER IF EXISTS messages_search_insert;
          DROP TRIGGER IF EXISTS messages_search_delete;
          DROP TRIGGER IF EXISTS messages_search_update;

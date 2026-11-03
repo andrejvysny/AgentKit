@@ -20,6 +20,9 @@ fn version_one(path: &Path) {
         DROP TABLE managed_skills;
         DROP TABLE run_content_records;
         DROP TABLE uncertainty_barriers;
+        DROP TABLE subagents;
+        DROP TABLE advisor_findings;
+        DROP TABLE advisor_reviews;
         DROP TRIGGER messages_search_insert;
         DROP TRIGGER messages_search_delete;
         DROP TRIGGER messages_search_update;
