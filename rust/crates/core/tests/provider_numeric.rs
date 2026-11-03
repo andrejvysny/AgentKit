@@ -66,6 +66,59 @@ fn responses_schema_overflow_matches_ajv_acceptance_then_javascript_parameter_cl
         json!(9007199254740992u64)
     );
 }
+#[test]
+fn responses_accepts_unique_items_in_array_tool_schemas_and_still_fails_closed_on_unknown_constructs(
+) {
+    // `artifact_design_to_site` (OneMind pack_artifacts, byte-identical to the TS
+    // chat-artifacts definition) declares `uniqueItems` on its frame/artboard id
+    // arrays. The keyword is Draft-07 core vocabulary and the contracts validator
+    // compiles and enforces it, so the request pre-check must accept it too.
+    let schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "frameIds": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+                          "items": { "type": "string" } },
+            "artboardIds": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+                             "items": { "type": "string" } },
+            "title": { "type": "string" }
+        },
+        "required": ["title"]
+    });
+    let request = ChatRequest {
+        model: "model".into(),
+        tools: vec![tool(schema)],
+        ..Default::default()
+    };
+    let body = build_responses_request(&request, &identity("responses"), false).unwrap();
+    let parameters = &body["tools"][0]["tools"][0]["parameters"];
+    assert_eq!(
+        parameters["properties"]["frameIds"]["uniqueItems"],
+        json!(true),
+        "uniqueItems survives to the wire verbatim"
+    );
+    // The pre-check stays a fail-closed grammar boundary: unknown keywords and
+    // structurally malformed branches keep dying with the exact diagnostic.
+    for malformed in [
+        json!({"type": "object", "properties": {"a": {"type": "string", "uniqueItemss": true}}}),
+        json!({"type": "object", "anyOf": []}),
+        json!({"type": "object", "properties": []}),
+        json!({"type": "object", "minProperties": 1}),
+    ] {
+        let request = ChatRequest {
+            model: "model".into(),
+            tools: vec![tool(malformed.clone())],
+            ..Default::default()
+        };
+        assert_eq!(
+            build_responses_request(&request, &identity("responses"), false)
+                .unwrap_err()
+                .code,
+            "unsupported_tool_schema",
+            "malformed schema {malformed} must fail closed"
+        );
+    }
+}
 #[tokio::test]
 async fn chat_indices_accept_javascript_numbers_and_keep_separate_accumulators() {
     for index in ["-1.5", "1e400", "-0"] {
