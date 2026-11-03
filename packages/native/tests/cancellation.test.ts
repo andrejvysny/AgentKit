@@ -354,7 +354,9 @@ nativeTest(
       {
         kind: "toolCall",
         name: "run_command",
-        args: { command: `sleep 45 # ${marker}`, timeoutSec: 40 },
+        // `; :` keeps the shell (and the marker in its argv) alive: bash as
+        // /bin/sh execs a lone simple command, dropping a `# marker` comment.
+        args: { command: `sleep 45; : ${marker}`, timeoutSec: 40 },
       },
       { kind: "content", text: "done" },
     ]);

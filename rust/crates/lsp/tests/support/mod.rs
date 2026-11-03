@@ -123,12 +123,21 @@ impl Drop for FixtureRoot {
     }
 }
 
-/// Count live processes whose command line mentions `needle` (via /proc).
+/// Count live processes whose command line mentions `needle` (via /proc,
+/// or `ps` where /proc does not exist, e.g. macOS). Zombies are excluded:
+/// a reaped-late server must not count as a second live process.
 pub fn count_processes_matching(needle: &str) -> usize {
-    let mut count = 0;
     let Ok(entries) = fs::read_dir("/proc") else {
-        return 0;
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-axo", "state=,command="])
+            .output()
+            .expect("ps runs");
+        return String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('Z') && line.contains(needle))
+            .count();
     };
+    let mut count = 0;
     for entry in entries.flatten() {
         if !entry
             .file_name()
