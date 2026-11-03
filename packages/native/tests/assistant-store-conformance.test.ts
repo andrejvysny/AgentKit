@@ -34,35 +34,14 @@ const fresh = async () => {
   };
 };
 
-/**
- * DOCUMENTED ENGINE GAP (open defect): priority AGING is a queue policy the
- * reference adapters implement at the store layer, and the Rust engine has
- * no notion of it — `ClaimInput` carries no aging fields
- * (`rust/crates/store/src/models.rs`, `pub struct ClaimInput`) and
- * `claim_with_concurrency`
- * (`rust/crates/store/src/tasks.rs:257` sorts by `(Reverse(priority),
- * enqueued_at)` only), so an aged task can never overtake a younger
- * higher-priority one no matter how the binding is driven. There is no
- * mapping that fixes this in TypeScript without the adapter forging
- * priorities (which would corrupt the stored rows and fail the priority
- * tests instead), so exactly the two aging cases are skipped, named here:
- *   - "ages a long-waiting task past a younger, higher-priority one when aging is enabled"
- *   - "caps the aging bonus so a waiting task cannot climb past the ceiling"
- * Everything else `createTuned` exercises (injected clock, transaction-gate
- * timeout) runs for real.
- */
-const AGING_ENGINE_GAPS: Record<string, true> = {
-  "ages a long-waiting task past a younger, higher-priority one when aging is enabled": true,
-  "caps the aging bonus so a waiting task cannot climb past the ceiling": true,
-};
-
 describeAssistantStoreConformance({
   name: "NativeAssistantStore",
   create: fresh,
-  createTuned: async ({ clock, transactionGateTimeoutMs }) => {
+  createTuned: async ({ clock, transactionGateTimeoutMs, aging }) => {
     const native = await NativeStore.inMemory();
     if (transactionGateTimeoutMs !== undefined)
       native.setTransactionGateTimeout(transactionGateTimeoutMs);
+    if (aging !== undefined) native.setTaskAging(aging);
     return {
       // The injected clock is threaded to the binding as the `now` every
       // time-taking op accepts, so engine stamps land on tuned time.
@@ -75,16 +54,7 @@ describeAssistantStoreConformance({
   },
   test: {
     describe,
-    it: (name: string, fn: () => void | Promise<void>) => {
-      if (name in AGING_ENGINE_GAPS) {
-        it.skip(
-          `${name} (skipped: Rust engine has no priority aging — see file comment)`,
-          fn,
-        );
-        return;
-      }
-      it(name, fn);
-    },
+    it,
     expect,
   },
 });

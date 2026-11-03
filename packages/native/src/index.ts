@@ -512,6 +512,28 @@ export class NativeStore {
     }
   }
 
+  /** Opt into claim-time priority aging (same formula as the TS stores).
+   * Omitted fields take defaults; `agingBonus` 0 leaves aging off. Values
+   * must be non-negative safe integers (interval >= 1). Call before
+   * `createService`: a service built earlier keeps the setting it saw. */
+  setTaskAging(options: {
+    agingIntervalMs?: number;
+    agingBonus?: number;
+    agingMaxBonus?: number;
+  }): void {
+    if (this.closed)
+      throw new NativeAgentError("closed", "the native store is closed");
+    try {
+      this.raw.setTaskAging(
+        options.agingIntervalMs,
+        options.agingBonus,
+        options.agingMaxBonus,
+      );
+    } catch (error) {
+      throw mapError(error);
+    }
+  }
+
   /** Create a session service over this store with one JS provider slot
    * and the JS tool registry. Options select Rust-side behavior (shutdown
    * deadline, JS-tool authority); unsupported values fail with

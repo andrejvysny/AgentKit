@@ -6,6 +6,46 @@ use rusqlite::{Connection, params};
 use serde_json::{Value, json as object};
 
 mod events;
+
+const DEFAULT_AGING_INTERVAL_MS: i64 = 30_000;
+
+/// Opt-in starvation valve for `claim`: `priority + min(max_bonus,
+/// floor(wait / interval) * bonus)`. Identical to the TS `task-aging.ts`
+/// formula; `bonus == 0` (the default) leaves plain priority order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskAging {
+    pub interval_ms: i64,
+    pub bonus: i64,
+    pub max_bonus: i64,
+}
+
+impl Default for TaskAging {
+    fn default() -> Self {
+        Self {
+            interval_ms: DEFAULT_AGING_INTERVAL_MS,
+            bonus: 0,
+            max_bonus: i64::MAX,
+        }
+    }
+}
+
+impl TaskAging {
+    pub fn effective_priority(&self, priority: i32, enqueued_at: i64, now: i64) -> i64 {
+        let priority = i64::from(priority);
+        if self.bonus == 0 {
+            return priority;
+        }
+        let interval = if self.interval_ms > 0 {
+            self.interval_ms
+        } else {
+            DEFAULT_AGING_INTERVAL_MS
+        };
+        let wait = now.saturating_sub(enqueued_at).max(0);
+        let earned = (wait / interval).saturating_mul(self.bonus);
+        priority.saturating_add(earned.min(self.max_bonus))
+    }
+}
+
 mod lease;
 mod lifecycle;
 mod ports;
@@ -236,6 +276,7 @@ impl SqliteStore {
         input: ClaimInput,
         concurrency: usize,
     ) -> Result<Option<ClaimedTask>> {
+        let aging = self.aging;
         self.call(move |db| {
             util::checked_expiry(input.now, input.ttl_ms)?;
             if input.max_attempts == 0 || concurrency == 0 {
@@ -254,7 +295,16 @@ impl SqliteStore {
                     ) || task.retry_pending && task.status == TaskStatus::Queued
                 })
                 .count();
-            tasks.sort_by_key(|task| (std::cmp::Reverse(task.priority), task.enqueued_at));
+            tasks.sort_by_key(|task| {
+                (
+                    std::cmp::Reverse(aging.effective_priority(
+                        task.priority,
+                        task.enqueued_at,
+                        input.now,
+                    )),
+                    task.enqueued_at,
+                )
+            });
             let mut claimed = None;
             for mut task in tasks
                 .iter()
