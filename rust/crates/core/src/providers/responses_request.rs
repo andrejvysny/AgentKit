@@ -277,6 +277,7 @@ fn validate_schema(schema: &Value, depth: usize) -> Result<(), CoreError> {
         "maxLength",
         "minItems",
         "maxItems",
+        "uniqueItems",
         "anyOf",
         "oneOf",
         "allOf",
