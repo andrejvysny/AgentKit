@@ -199,6 +199,182 @@ export interface NativeCodingToolsOptions {
   coordinationWaitMs?: number;
 }
 
+/** Global fan-out bounds for delegation, enforced from durable rows at
+ * spawn time (mirrors `SubagentRoleLimits` in
+ * `rust/crates/host/src/subagents/config.rs`). */
+export interface NativeSubagentLimits {
+  /** Child depth below the main agent. Default 2; 0 disables nesting. */
+  maxDepth?: number;
+  /** Non-terminal children across the whole service. Default 8. */
+  maxConcurrency?: number;
+  /** Non-terminal children per parent chat. Default 4. */
+  maxPerParent?: number;
+  /** Poll cadence inside `subagent_await`, ms. Floor 10. */
+  awaitPollMs?: number;
+  /** Hard wall on one `subagent_await` call, ms. */
+  maxAwaitMs?: number;
+  /** Exclusive workspace-lease TTL, ms; refreshed while the child runs. */
+  leaseTtlMs?: number;
+  /** Cancel still-live children when their parent turn settles
+   * (startup sweep + settle observers). Default true. */
+  cancelOrphans?: boolean;
+}
+
+/** One delegation role: a ceiling, never a grant (mirrors `RoleSpec`).
+ * Unknown role ids in `roles` are custom roles; naming a built-in
+ * (general, researcher, explorer, implementer, reviewer) partially
+ * overrides its defaults. */
+export interface NativeSubagentRole {
+  description?: string;
+  /** Prepended to the spawn prompt as the child's role briefing. */
+  prompt?: string;
+  /** Tool allowlist (`"<ns>:<name>"` or bare name; `"*"` = everything
+   * the host guard chain allows anyway). Empty array denies ALL tools. */
+  allowedTools?: readonly string[];
+  /** Read-only roles are pinned to `read_only` execution mode and may
+   * not mutate the workspace, regardless of the parent's grants. */
+  readOnly?: boolean;
+  /** Whether this role may spawn its own children (subject to depth). */
+  canSpawn?: boolean;
+  /** Model override for this role; inherits the parent when omitted. */
+  model?: string | null;
+  /** Provider override; inherits the parent binding when omitted. */
+  providerId?: string | null;
+  /** Tool-loop bound for the role's turns. */
+  maxIterations?: number | null;
+  /** Free-form capability summary surfaced in listings. */
+  capability?: string | null;
+}
+
+/** Subagent subsystem configuration (mirrors `SubagentConfig`).
+ * An omitted `roles` table ships the five built-in roles. */
+export interface NativeSubagentConfig {
+  /** Master switch. While false the delegation tools do not exist. */
+  enabled?: boolean;
+  limits?: NativeSubagentLimits;
+  roles?: Record<string, NativeSubagentRole>;
+  /** Guidance text injected into session system prompts while enabled. */
+  delegationGuidance?: string | null;
+}
+
+/** One child's registry row joined with its live task state (mirrors
+ * `SubagentView`). `status`: queued | running | completed | failed |
+ * cancelled. */
+export interface NativeSubagentView {
+  childChatId: string;
+  parentChatId: string;
+  parentTaskId: string | null;
+  role: string;
+  depth: number;
+  prompt: string;
+  model: string | null;
+  status: string;
+  result: string | null;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+  turnTaskId: string | null;
+  taskStatus: string | null;
+  waiting: boolean;
+  queuedInputs: number;
+}
+
+/** Explicit language-server command (discovery is override → env → PATH
+ * → workspace `node_modules/.bin`; nothing is ever installed). */
+export interface NativeLspServerCommand {
+  command: string;
+  args?: readonly string[];
+  env?: Record<string, string>;
+}
+
+/** LSP client tuning (mirrors `LspConfig` in `rust/crates/lsp`). */
+export interface NativeLspConfig {
+  /** Per-language overrides, keyed `rust` | `typescript`. */
+  servers?: Record<string, NativeLspServerCommand>;
+  requestTimeoutMs?: number;
+  initTimeoutMs?: number;
+  idleTimeoutMs?: number;
+  diagnosticsWaitMs?: number;
+  maxRestarts?: number;
+  restartWindowMs?: number;
+}
+
+/** Registration options for the native LSP namespace: the six `lsp_*`
+ * read tools (`lsp_definition`, `lsp_references`, `lsp_hover`,
+ * `lsp_symbols`, `lsp_implementation`, `lsp_diagnostics`), shared
+ * workspace-scoped servers. */
+export interface NativeLspToolsOptions {
+  /** The one workspace root the servers serve. REQUIRED, absolute. */
+  workspaceRoot: string;
+  config?: NativeLspConfig;
+}
+
+/** Advisor + watchdog configuration (mirrors `AdvisorConfig`). The
+ * advisor's models are set independently of the main agent's model. */
+export interface NativeAdvisorConfig {
+  /** Master switch. While false there are no advisor tools, no hooks,
+   * no settled observations. */
+  enabled?: boolean;
+  /** Model for explicit `advisor_review` calls. */
+  model?: string | null;
+  /** Model for automatic watchdog reviews. */
+  watchdogModel?: string | null;
+  maxIterations?: number;
+  maxToolCallsPerIteration?: number;
+  toolTimeoutMs?: number;
+  providerRequests?: number | null;
+  overallTimeoutMs?: number | null;
+  /** Hard cap on findings kept from one report. */
+  maxFindings?: number;
+  /** Concurrent reviews process-wide. */
+  maxReviewConcurrency?: number;
+  /** Per-chat+trigger cooldown between automatic reviews, ms. */
+  cooldownMs?: number;
+  /** Rolling-window watchdog review budget. */
+  reviewsPerWindow?: number;
+  windowMs?: number;
+  /** Consecutive failed tool results in one run that raise a review. */
+  triggerConsecutiveToolFailures?: number;
+  /** Repetitions of the SAME error code that raise a review. */
+  triggerRepeatedErrorCode?: number;
+  /** Distinct files one turn may touch before a scope-deviation review. */
+  triggerEditCount?: number;
+  /** Consecutive failed turns of a session that raise a review. */
+  triggerTurnFailures?: number;
+  /** Deliver critical findings to the reviewed session as a steer. */
+  escalateCritical?: boolean;
+}
+
+/** One persisted advisor finding (`advisor_findings` rows, newest
+ * first). `detail` carries the report summary, evidence, recommendation,
+ * and category. */
+export interface NativeAdvisorFinding {
+  findingId: string;
+  chatId: string;
+  source: "explicit" | "watchdog";
+  triggerKind: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  detail: Record<string, unknown>;
+  model: string;
+  createdAt: number;
+  escalated: boolean;
+}
+
+/** The structured result of one advisor review. */
+export interface NativeAdvisorReport {
+  runId: string;
+  summary: string;
+  findings: Array<{
+    severity: "info" | "warning" | "critical";
+    category: string;
+    title: string;
+    evidence: Array<{ file?: string; line?: number; detail: string }>;
+    recommendation?: string;
+  }>;
+  findingIds: string[];
+}
+
 /** Registration options for a DURABLE provider connection (mirrors
  * `optionsJson` on `registerProviderConnection` in
  * `rust/crates/napi/src/provider_connection.rs`). Without these, the
@@ -732,6 +908,82 @@ export class NativeSessionService extends NativeSessionManagement {
    * `rust/crates/napi/src/coding_lane.rs`) */
   async registerCodingTools(options: NativeCodingToolsOptions): Promise<void> {
     await lift(() => this.raw.registerCodingTools(JSON.stringify(options)));
+  }
+
+  /** Configure the subagent subsystem (hot: applies to the next spawn).
+   * While disabled (the default) the seven `subagent_*` tools do not
+   * exist, so sessions cannot delegate at all. (mirrors
+   * `configure_subagents` in `rust/crates/napi/src/service.rs`) */
+  async configureSubagents(config: NativeSubagentConfig): Promise<void> {
+    await lift(() => this.raw.configureSubagents(JSON.stringify(config)));
+  }
+
+  /** JSON view of the active subagent configuration, or null before the
+   * first `configureSubagents`. */
+  async subagentConfig(): Promise<NativeSubagentConfig | null> {
+    const text = await lift(() => this.raw.subagentConfig());
+    return text === "null" ? null : (JSON.parse(text) as NativeSubagentConfig);
+  }
+
+  /** The children of one parent chat: the durable registry rows joined
+   * with live task state. */
+  async subagentsList(parentChatId: string): Promise<NativeSubagentView[]> {
+    const text = await lift(() => this.raw.subagentsList(parentChatId));
+    return JSON.parse(text) as NativeSubagentView[];
+  }
+
+  /** The state of one child session by id. */
+  async subagentStatus(childChatId: string): Promise<NativeSubagentView> {
+    const text = await lift(() => this.raw.subagentStatus(childChatId));
+    return JSON.parse(text) as NativeSubagentView;
+  }
+
+  /** Register the native LSP namespace: the six `lsp_*` read tools over
+   * workspace-scoped, shared, DISCOVERED-ONLY language servers. One-shot
+   * per service; the root is immutable once the worker can claim turns.
+   * (mirrors `register_lsp_tools` in `rust/crates/napi/src/service.rs`) */
+  async registerLspTools(options: NativeLspToolsOptions): Promise<void> {
+    await lift(() => this.raw.registerLspTools(JSON.stringify(options)));
+  }
+
+  /** Configure advisor + watchdog (hot: applies to the next review).
+   * While disabled (the default) there are no advisor tools, no run
+   * hooks, and no settled observations. */
+  async configureAdvisor(config: NativeAdvisorConfig): Promise<void> {
+    await lift(() => this.raw.configureAdvisor(JSON.stringify(config)));
+  }
+
+  /** JSON view of the active advisor configuration, or null before the
+   * first `configureAdvisor`. */
+  async advisorConfig(): Promise<NativeAdvisorConfig | null> {
+    const text = await lift(() => this.raw.advisorConfig());
+    return text === "null" ? null : (JSON.parse(text) as NativeAdvisorConfig);
+  }
+
+  /** Run one explicit advisory review of a session now. The advisor
+   * investigates with its own read-only tools on its own model and
+   * returns structured, evidence-backed findings — persisted durably,
+   * announced on the host event stream, and (criticals) injected into
+   * the reviewed session as a durable steer. */
+  async advisorReview(
+    sessionId: string,
+    focus: string,
+    options?: NativeCallOptions,
+  ): Promise<NativeAdvisorReport> {
+    const text = await waitFor(
+      () => lift(() => this.raw.advisorReview(sessionId, focus)),
+      options,
+    );
+    return JSON.parse(text) as NativeAdvisorReport;
+  }
+
+  /** Persisted advisor findings for a session, newest first. */
+  async advisorFindings(
+    sessionId: string,
+    limit?: number,
+  ): Promise<NativeAdvisorFinding[]> {
+    const text = await lift(() => this.raw.advisorFindings(sessionId, limit));
+    return JSON.parse(text) as NativeAdvisorFinding[];
   }
 
   async send(

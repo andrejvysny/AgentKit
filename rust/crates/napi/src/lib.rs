@@ -12,11 +12,14 @@ use napi::bindgen_prelude::*;
 #[macro_use]
 extern crate napi_derive;
 
+mod advisor_lane;
 mod authority;
 #[cfg(test)]
 mod authority_tests;
+mod coding_lane;
 mod errors;
 mod jsbridge;
+mod lsp_lane;
 mod provider;
 mod provider_connection;
 mod run;
@@ -25,6 +28,7 @@ mod run_hooks;
 mod run_provider;
 mod run_retry;
 mod run_steering;
+mod subagent_lane;
 pub use run_provider::{
     end_run_provider, is_run_callback_active, push_run_provider_event, reserve_run_provider_request,
 };

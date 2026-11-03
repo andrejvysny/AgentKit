@@ -239,6 +239,20 @@ impl TaskExecutor for ChatExecutor {
             resolved.system_prompt.clone(),
         )
         .await?;
+        // Autonomous-delegation channel: while subagents are enabled, every
+        // session turn (Chat and Coding alike) carries the guidance to
+        // delegate when beneficial. Consulted per turn so hot configuration
+        // takes effect without rebuilding the executor.
+        let system_prompt = match &self.options.delegation_guidance {
+            Some(guidance) => match guidance.guidance(chat_id).await {
+                Some(text) if !text.is_empty() => Some(match system_prompt {
+                    Some(existing) if !existing.is_empty() => format!("{existing}\n\n{text}"),
+                    _ => text,
+                }),
+                _ => system_prompt,
+            },
+            None => system_prompt,
+        };
         // Read the history AFTER the resume pass wrote its records: an
         // approval-mismatch refusal appended moments ago must be visible to
         // the model in this same attempt, not only after a restart.
@@ -287,9 +301,16 @@ impl TaskExecutor for ChatExecutor {
         }
         let runtime: Arc<dyn agentkit_core::Runtime> =
             Arc::new(CoreRuntime(context.runtime.clone()));
+        // Subagent children carry per-role execution bounds on their chat
+        // metadata; non-subagent sessions get defaults (no behavior change).
+        let role_overrides = if session {
+            crate::subagents::task_overrides(&context.store, chat_id).await?
+        } else {
+            crate::budget::RoleTaskOverrides::default()
+        };
         let budget = crate::restore_execution_budget(
             &context,
-            self.options.execution_budgets.clone(),
+            role_overrides.apply(self.options.execution_budgets.clone()),
             runtime.clone(),
         )
         .await?;
@@ -398,7 +419,9 @@ impl TaskExecutor for ChatExecutor {
             chat_id: Some(chat_id.into()),
             scope_id: Some(context.task.scope_id.clone()),
             bindings: resolved.bindings,
-            max_tool_iterations: self.options.max_tool_iterations,
+            max_tool_iterations: role_overrides
+                .max_tool_iterations
+                .unwrap_or(self.options.max_tool_iterations),
             max_tool_calls_per_iteration: self.options.max_tool_calls_per_iteration,
             default_tool_timeout_ms: self.options.default_tool_timeout_ms,
             cancellation: context.cancellation.clone(),
@@ -409,6 +432,7 @@ impl TaskExecutor for ChatExecutor {
                 context: context.clone(),
             })),
             interruption: Some(context.interruption.clone()),
+            hooks: self.options.run_hooks.clone(),
             steering: session.then(|| {
                 Arc::new(session_run::SessionSteering::new(context.clone(), chat_id))
                     as Arc<dyn agentkit_core::SteeringSource>

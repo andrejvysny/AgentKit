@@ -171,6 +171,39 @@ impl CodingLane {
     async fn state(&self) -> Option<Arc<LaneState>> {
         self.state.lock().await.as_ref().map(Arc::clone)
     }
+
+    /// The advisor's read-only view of the pack: contribute under a
+    /// neutral context and keep only the `Read` variants. Unregistered
+    /// yields nothing; a contribution failure yields nothing (the advisor
+    /// degrades to fewer tools, never to a failed review).
+    pub(crate) async fn contribute_read_tools(&self) -> Vec<Arc<dyn agentkit_core::Tool>> {
+        let Some(lane) = self.state().await else {
+            return vec![];
+        };
+        let context = ToolContributionContext {
+            chat_id: None,
+            run_id: "advisor-read".into(),
+            scope_id: None,
+            actor: serde_json::Value::Null,
+            actor_id: None,
+            bindings: vec![],
+            limits: agentkit_core::ToolLimits::default(),
+            cancellation: agentkit_core::CancellationToken::new(),
+            has_primary_binding: false,
+            timeout_ms: 30_000,
+            durable: None,
+        };
+        match lane.pack.contribute(&context).await {
+            Ok(contributed) => contributed
+                .into_iter()
+                .filter_map(|contributed| match contributed {
+                    ContributedTool::Read(tool) => Some(tool),
+                    _ => None,
+                })
+                .collect(),
+            Err(_) => vec![],
+        }
+    }
 }
 
 /// The coding-namespace contributor. Unregistered offers no tools; once

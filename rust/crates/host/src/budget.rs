@@ -40,6 +40,31 @@ fn invalid(message: &str) -> HostError {
     HostError::Execution(format!("invalid_budget: {message}"))
 }
 
+/// Per-role execution overrides a subagent child turn carries on its chat
+/// metadata (written once at spawn). Applied to the executor's budget
+/// limits at dispatch; because the source is durable chat metadata, every
+/// attempt of the same task computes the SAME limits, which is what the
+/// persisted budget's limits-equality check requires.
+#[derive(Clone, Debug, Default)]
+pub struct RoleTaskOverrides {
+    pub max_tool_iterations: Option<u32>,
+    pub max_provider_requests: Option<u64>,
+    pub overall_timeout_ms: Option<u64>,
+}
+
+impl RoleTaskOverrides {
+    /// Overlay the role's bounds onto the executor defaults: a role can
+    /// only RAISE OR LOWER the provider-request and overall-time bounds;
+    /// everything else keeps the host's policy.
+    pub fn apply(&self, limits: agentkit_core::BudgetLimits) -> agentkit_core::BudgetLimits {
+        agentkit_core::BudgetLimits {
+            provider_requests: self.max_provider_requests.or(limits.provider_requests),
+            overall_ms: self.overall_timeout_ms.or(limits.overall_ms),
+            ..limits
+        }
+    }
+}
+
 fn known_fields(value: &Value, fields: &[&str]) -> HostResult<()> {
     let object = value
         .as_object()

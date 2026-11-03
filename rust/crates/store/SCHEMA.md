@@ -45,3 +45,36 @@ constraints are applied at query time in the join, never at indexing time, becau
 those metadata keys are rewritten after a row is indexed. The index is keyed by
 `messages.rowid`, so a live store file must never be VACUUMed (SQLite may renumber
 rowids and silently orphan every posting).
+
+## Subagent registry and advisor findings (schema version 10)
+
+`subagents` holds one row per spawned child chat: the parent binding
+(`parent_chat_id`, optional spawning `parent_task_id`), the spawn contract
+(`role`, `depth`, `prompt`, optional `model`), the child's CURRENT turn task
+(`turn_task_id`, re-pointed by the host when a follow-up starts a new turn),
+and the projected lifecycle — exactly `queued`/`running`/`completed`/
+`failed`/`cancelled`. A terminal row is frozen: a later update names a
+different status is refused, while the same-status update only fills
+`result`/`error`, so result delivery retry is idempotent. Indexes serve the
+per-parent and per-parent-task listings; the orphan reaper enumerates the
+non-terminal rows and the concurrency budget counts them.
+`advisor_findings` is the advice ledger: one row per observation from the
+`explicit` or `watchdog` source, with a CHECK-pinned severity, a JSON-object
+`detail`, and an `escalated` flag for findings already surfaced to the user.
+Inserts are idempotent on `finding_id`. Model-authored text (`title`, the
+strings inside `detail`, and the `subagents` `prompt`/`result`/`error`
+columns) is capped with a marked truncation at the write boundary. The
+watchdog's rate-limit window counts the REVIEW ledger, not findings — see
+version 11. `delete_chat` clears this chat's child-registry row, its roster
+as a parent, and its advisor traces in the same transaction.
+
+## Advisor review ledger (schema version 11)
+
+`advisor_reviews` records one row per STARTED review (`run_id`, reviewed
+`chat_id`, CHECK-pinned `origin`, `trigger_kind`, `started_at`). It exists
+because findings are a dishonest denominator for the watchdog's rolling
+window: a sweep that correctly concludes "nothing wrong" persists no
+finding, and counting only findings lets an adversarially triggered session
+drain provider quota unbounded. `count_advisor_reviews_since` (indexed on
+`(chat_id, started_at)`) is the durable budget the watchdog consults before
+firing another review.

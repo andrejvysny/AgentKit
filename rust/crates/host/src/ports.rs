@@ -36,6 +36,24 @@ pub trait TaskExecutor: Send + Sync {
     async fn execute(&self, context: ExecutionContext) -> HostResult<()>;
 }
 
+/// Best-effort observer of a durably settled task, run by the runner after
+/// the settlement committed. Observers must be idempotent and must never
+/// hold state only they know — every sweep they perform must be
+/// reconstructible from durable records (that is what makes a dropped
+/// observation merely late, never wrong).
+#[async_trait]
+pub trait TaskSettledObserver: Send + Sync {
+    async fn observe_settled(&self, task: &agentkit_store::TaskRecord) -> HostResult<()>;
+}
+
+/// Per-turn delegation guidance (subagent instructions) consulted by the
+/// executor for session turns. Implementations read durable/host config,
+/// never process-memory caches a restart could not rebuild.
+#[async_trait]
+pub trait DelegationGuidance: Send + Sync {
+    async fn guidance(&self, chat_id: &str) -> Option<String>;
+}
+
 #[async_trait]
 pub trait ChatProviderFactory: Send + Sync {
     async fn resolve(

@@ -143,6 +143,17 @@ impl SqliteStore {
             // The messages go with the FK cascade; the schema's DELETE
             // trigger retires their `message_search` postings row by row,
             // in this same transaction.
+            //
+            // The feature tables hang off the chat too: this chat's own
+            // child-registry row (it was someone's spawn), the roster of
+            // children it coordinated (with the parent gone no one can
+            // list/await/cancel those rows — the children themselves are
+            // independent chats and finish on their own), and every
+            // advisor trace taken of the reviewed chat.
+            transaction.execute("DELETE FROM subagents WHERE child_chat_id=?", [&chat_id])?;
+            transaction.execute("DELETE FROM subagents WHERE parent_chat_id=?", [&chat_id])?;
+            transaction.execute("DELETE FROM advisor_findings WHERE chat_id=?", [&chat_id])?;
+            transaction.execute("DELETE FROM advisor_reviews WHERE chat_id=?", [&chat_id])?;
             transaction.execute("DELETE FROM chats WHERE id=?", [chat_id])?;
             transaction.commit()?;
             Ok(())
