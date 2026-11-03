@@ -39,6 +39,7 @@ pub use schema::SCHEMA_VERSION;
 pub use session_ops::*;
 pub use settings_commit::{SettingWrite, SettingsCommit};
 pub use subagents::*;
+pub use tasks::TaskAging;
 pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};
 pub use transaction::StoreTransaction;
 #[cfg(feature = "ts-import")]

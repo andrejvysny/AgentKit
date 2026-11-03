@@ -53,6 +53,7 @@ pub struct SqliteStore {
     pub(crate) gate: Arc<Mutex<()>>,
     pub(crate) scope: Option<Arc<TransactionScope>>,
     pub(crate) gate_timeout: Duration,
+    pub(crate) aging: crate::TaskAging,
 }
 impl std::fmt::Debug for SqliteStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -91,6 +92,7 @@ impl SqliteStore {
             gate: Arc::new(Mutex::new(())),
             scope: None,
             gate_timeout: Duration::from_secs(30),
+            aging: crate::TaskAging::default(),
         })
     }
     pub fn memory(capacity: usize) -> Result<Self> {
@@ -99,6 +101,11 @@ impl SqliteStore {
     /// Sets the maximum wait for a root operation blocked by an ambient transaction.
     pub fn with_transaction_gate_timeout(mut self, timeout: Duration) -> Self {
         self.gate_timeout = timeout;
+        self
+    }
+    /// Opts `claim` into priority aging; the default store never ages.
+    pub fn with_task_aging(mut self, aging: crate::TaskAging) -> Self {
+        self.aging = aging;
         self
     }
     pub(crate) async fn lock_root(&self) -> Result<tokio::sync::OwnedMutexGuard<()>> {

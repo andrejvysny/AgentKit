@@ -96,6 +96,11 @@ export declare class NativeStore {
   beginTransaction(): Promise<StoreTransactionHandle>
   setTransactionGateTimeout(milliseconds: number): void
   /**
+   * Opt into claim-time priority aging. Omitted fields take the engine
+   * defaults (30s interval, bonus 0 = off, uncapped).
+   */
+  setTaskAging(intervalMs?: number | undefined | null, bonus?: number | undefined | null, maxBonus?: number | undefined | null): void
+  /**
    * Open (creating if necessary) a durable store file. A second open of
    * the same path while it is owned is rejected with `already_owned`.
    */
