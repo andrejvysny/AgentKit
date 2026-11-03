@@ -1,3 +1,3 @@
 export function target(): number {
-    return 42;
+  return 42;
 }

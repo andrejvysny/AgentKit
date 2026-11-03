@@ -590,8 +590,8 @@ async fn group_members_other_than(pgid: i32, except: i32) -> Option<Vec<i32>> {
     for line in text.lines() {
         let mut fields = line.split_whitespace();
         let (Some(pid), Some(pgrp)) = (
-            fields.next().and_then(|value| value.parse().ok()),
-            fields.next().and_then(|value| value.parse().ok()),
+            fields.next().and_then(|value| value.parse::<i32>().ok()),
+            fields.next().and_then(|value| value.parse::<i32>().ok()),
         ) else {
             continue;
         };
@@ -993,10 +993,13 @@ async fn terminate(group: Option<GroupHandle>, find: FindFn, grace_ms: u64) -> (
             sleep(POLL_MS).await;
         }
     }
+    // `known_alive`, not `pid_alive`: the darwin tree tracker samples the
+    // driver's deliberately unreaped zombie leader as a descendant, and a
+    // zombie answers kill(pid, 0) — it must never read as a survivor.
     let mut survivors: Vec<i32> = known
         .iter()
         .copied()
-        .filter(|pid| pid_alive(*pid))
+        .filter(|pid| known_alive(&group, *pid))
         .collect();
     if !survivors.is_empty() && scan == TeardownScan::Ok {
         // A zombie nobody reaped still answers kill(pid, 0) but has no
@@ -1008,7 +1011,7 @@ async fn terminate(group: Option<GroupHandle>, find: FindFn, grace_ms: u64) -> (
                 // marks and suspects instead of using it only as a filter.
                 absorb(&mut known, &mut suspects, &mut scan, Some(live.clone()));
                 for pid in live.marked {
-                    if pid_alive(pid) && !survivors.contains(&pid) {
+                    if known_alive(&group, pid) && !survivors.contains(&pid) {
                         survivors.push(pid);
                     }
                 }

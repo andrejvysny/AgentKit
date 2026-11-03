@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -54,7 +55,9 @@ interface Fixture {
  * fixture's `node_modules` also symlinks the repo's `typescript` so
  * `ensureBuilt` finds the compiler. */
 function fixture(options?: { betaTsconfig?: unknown }): Fixture {
-  const root = mkdtempSync(join(tmpdir(), "agentkit-prepack-"));
+  // realpath: macOS tmpdir() is a /var symlink to /private/var, and the
+  // script reports resolved paths.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "agentkit-prepack-")));
   temporary.push(root);
   const packages = join(root, "packages");
   const alpha = join(packages, "alpha");
