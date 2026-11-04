@@ -304,7 +304,10 @@ pub async fn resolve_inside_root(root: &str, raw: &str) -> Result<ConfinedPath, 
                         format!("{raw} is outside the workspace"),
                     ));
                 }
-                missing.insert(0, existing[parent.len() + 1..].to_owned());
+                missing.insert(
+                    0,
+                    existing[parent.len()..].trim_start_matches('/').to_owned(),
+                );
                 existing = parent.to_owned();
             }
         }
@@ -398,6 +401,19 @@ mod tests {
             .await
             .expect_err("must be refused")
             .code
+    }
+
+    #[tokio::test]
+    async fn root_level_missing_components_do_not_panic() {
+        let root = temp_root("rootlevel").await;
+        for raw in [
+            "/日本/x",
+            "/é",
+            "/zzz-akpaths-missing",
+            "/zzz-akpaths-missing/y",
+        ] {
+            assert_eq!(code(&root, raw, STRICT).await, "path_outside_root", "{raw}");
+        }
     }
 
     #[tokio::test]

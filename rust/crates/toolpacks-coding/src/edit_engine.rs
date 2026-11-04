@@ -70,35 +70,50 @@ pub fn normalize_to_lf(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// LF view of `text` plus, per view byte offset (only match boundaries are
-/// queried), its offset in `text` (and one extra entry for the end), so
-/// matches can be spliced back into the original.
-fn lf_view(text: &str) -> (String, Vec<usize>) {
-    let mut view = String::with_capacity(text.len());
-    let mut pairs: Vec<(usize, usize)> = Vec::with_capacity(text.len() + 1);
+/// Maps offsets in the LF view back to the source text. Only a collapsed
+/// CRLF shortens the text (a lone CR becomes one `\n` byte), so recording
+/// where those happened is enough: one `usize` per CRLF instead of per byte.
+struct LfMap {
+    /// View offset of the `\n` that stands for each collapsed CRLF, ascending.
+    crlf_view_offsets: Vec<usize>,
+}
+
+impl LfMap {
+    fn at(&self, view_offset: usize) -> usize {
+        view_offset
+            + self
+                .crlf_view_offsets
+                .partition_point(|offset| *offset < view_offset)
+    }
+}
+
+/// LF view of `text` plus the map that sends view offsets (only match
+/// boundaries are queried) back to `text`, so matches can be spliced into
+/// the original.
+fn lf_view(text: &str) -> (String, LfMap) {
     let bytes = text.as_bytes();
+    let mut view = String::with_capacity(text.len());
+    let mut crlf_view_offsets = Vec::new();
+    let mut segment = 0usize;
     let mut i = 0usize;
     while i < bytes.len() {
-        pairs.push((view.len(), i));
-        if bytes[i] == b'\r' {
-            view.push('\n');
+        if bytes[i] != b'\r' {
             i += 1;
-            if i < bytes.len() && bytes[i] == b'\n' {
-                i += 1;
-            }
-        } else {
-            let ch = text[i..].chars().next().expect("non-empty");
-            view.push(ch);
-            i += ch.len_utf8();
+            continue;
         }
+        // `\r` and `\n` are ASCII, so these are char boundaries.
+        view.push_str(&text[segment..i]);
+        if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            crlf_view_offsets.push(view.len());
+            i += 2;
+        } else {
+            i += 1;
+        }
+        view.push('\n');
+        segment = i;
     }
-    // Unmatched (mid-character) offsets never occur at match boundaries;
-    // defaulting them to the end keeps any stray use harmless.
-    let mut starts = vec![text.len(); view.len() + 1];
-    for (view_off, source_off) in pairs {
-        starts[view_off] = source_off;
-    }
-    (view, starts)
+    view.push_str(&text[segment..]);
+    (view, LfMap { crlf_view_offsets })
 }
 
 /// The trailing terminator of `s`, as the EOL_AT_END regex would capture it.
@@ -196,6 +211,110 @@ pub fn normalize_for_fuzzy_match(text: &str) -> String {
     let quoted = RE_QUOTE_DOUBLE.replace_all(&quoted, "\"");
     let dashed = RE_DASH.replace_all(&quoted, "-");
     RE_SPACE.replace_all(&dashed, " ").into_owned()
+}
+
+/// The character-level part of [`normalize_for_fuzzy_match`] (NFKC, quotes,
+/// dashes, special spaces) without the per-line trailing-whitespace trim, so
+/// a fragment of a line can be folded on its own.
+fn fold_without_trim(text: &str) -> String {
+    let nfkc: String = text.nfkc().collect();
+    let quoted = RE_QUOTE_SINGLE.replace_all(&nfkc, "'");
+    let quoted = RE_QUOTE_DOUBLE.replace_all(&quoted, "\"");
+    let dashed = RE_DASH.replace_all(&quoted, "-");
+    RE_SPACE.replace_all(&dashed, " ").into_owned()
+}
+
+/// Maps byte offsets of a line to offsets of its folded form, built in ONE
+/// forward pass. Offsets are only known at cluster boundaries, where folding
+/// the text so far and the text after it separately gives the same result as
+/// folding them together (so NFKC composition cannot straddle them); an
+/// ASCII char always starts a new cluster. Anything else is "unknown", which
+/// callers treat as unsafe.
+struct FoldMap {
+    /// `(original_offset, folded_offset)` ascending at each cluster boundary.
+    boundaries: Vec<(usize, usize)>,
+}
+
+impl FoldMap {
+    fn new(line: &str) -> Option<Self> {
+        let mut boundaries = vec![(0usize, 0usize)];
+        let mut folded_total = 0usize;
+        let mut cluster = String::new();
+        let mut cluster_folded = String::new();
+        let mut cluster_end = 0usize;
+        for (at, ch) in line.char_indices() {
+            if !cluster.is_empty() {
+                let mut joined = cluster.clone();
+                joined.push(ch);
+                let joined_folded = if ch.is_ascii() {
+                    None
+                } else {
+                    let folded = fold_without_trim(&joined);
+                    let mut separate = cluster_folded.clone();
+                    separate.push_str(&fold_without_trim(ch.encode_utf8(&mut [0u8; 4])));
+                    (folded != separate).then_some(folded)
+                };
+                if let Some(folded) = joined_folded {
+                    // `ch` composes with the cluster: it joins it.
+                    cluster = joined;
+                    cluster_folded = folded;
+                    cluster_end = at + ch.len_utf8();
+                    continue;
+                }
+                folded_total += cluster_folded.len();
+                boundaries.push((cluster_end, folded_total));
+                cluster.clear();
+                cluster_folded.clear();
+            }
+            cluster.push(ch);
+            cluster_folded = fold_without_trim(ch.encode_utf8(&mut [0u8; 4]));
+            cluster_end = at + ch.len_utf8();
+        }
+        if !cluster.is_empty() {
+            folded_total += cluster_folded.len();
+            boundaries.push((cluster_end, folded_total));
+        }
+        // The pieces must add up to the real fold, or the map is not exact.
+        (folded_total == fold_without_trim(line).len()).then_some(Self { boundaries })
+    }
+
+    /// Smallest original offset whose prefix folds to exactly `target` bytes.
+    fn original_offset_of(&self, target: usize) -> Option<usize> {
+        let at = self
+            .boundaries
+            .partition_point(|(_, folded)| *folded < target);
+        self.boundaries
+            .get(at)
+            .filter(|(_, folded)| *folded == target)
+            .map(|(original, _)| *original)
+    }
+}
+
+/// True when every part of `line` OUTSIDE the matched `spans` (byte ranges of
+/// the normalised line) is already in normalised form, so rewriting the line
+/// from the normalised text cannot change anything the edit did not target.
+/// Trailing whitespace may differ: that has always been trimmed.
+fn untouched_text_is_stable(line: &str, spans: &[(usize, usize)]) -> bool {
+    let Some(map) = FoldMap::new(line) else {
+        return false;
+    };
+    let mut cursor = 0usize;
+    for &(from, to) in spans {
+        let (Some(start), Some(end)) = (map.original_offset_of(from), map.original_offset_of(to))
+        else {
+            return false;
+        };
+        if start < cursor || end < start {
+            return false;
+        }
+        let gap = &line[cursor..start];
+        if fold_without_trim(gap) != gap {
+            return false;
+        }
+        cursor = end;
+    }
+    let tail = &line[cursor..];
+    js_trim_end(tail) == js_trim_end(&fold_without_trim(tail))
 }
 
 /// `content.match(/[^\n]*\n|[^\n]+/g)` — lines with their LF endings.
@@ -324,6 +443,31 @@ struct Group {
     replacements: Vec<Replacement>,
 }
 
+/// One touched line: is the text outside this group's matched spans already
+/// normalised?
+fn line_is_safe_to_rewrite(
+    original_line: &str,
+    base_line: &LineSpan,
+    base: &str,
+    group: &Group,
+) -> bool {
+    let line = original_line.trim_end_matches(['\r', '\n']);
+    let text_len = base[base_line.start..base_line.end]
+        .trim_end_matches('\n')
+        .len();
+    let spans: Vec<(usize, usize)> = group
+        .replacements
+        .iter()
+        .filter(|r| r.0 <= base_line.end && r.0 + r.1 >= base_line.start)
+        .map(|r| {
+            let from = r.0.max(base_line.start) - base_line.start;
+            let to = (r.0 + r.1).min(base_line.end) - base_line.start;
+            (from.min(text_len), to.min(text_len))
+        })
+        .collect();
+    untouched_text_is_stable(line, &spans)
+}
+
 /// Apply replacements matched against a normalised `base` to the original,
 /// copying every untouched line block back byte-for-byte.
 fn apply_preserving_unchanged_lines(
@@ -357,6 +501,16 @@ fn apply_preserving_unchanged_lines(
             }),
         }
     }
+    for group in &groups {
+        for index in group.start_line..group.end_line {
+            if !line_is_safe_to_rewrite(original_lines[index], &base_lines[index], base, group) {
+                return Err(CodingError::new(
+                    "fuzzy_match_would_normalize",
+                    "the match needed whitespace/quote/dash normalization, and rewriting its lines would also change other text on them (smart quotes, special spaces, compatibility characters); use the exact text from the file as oldText",
+                ));
+            }
+        }
+    }
     let mut cursor = 0usize;
     let mut result = String::new();
     for group in &groups {
@@ -384,8 +538,37 @@ struct FuzzyMatch {
     used_fuzzy_match: bool,
 }
 
-fn find_text(content: &str, old_text: &str) -> FuzzyMatch {
-    if let Some(exact) = content.find(old_text) {
+/// Text plus its fuzzy normalisation, computed at most once per call.
+struct Haystack<'a> {
+    content: &'a str,
+    normalized: std::cell::OnceCell<std::borrow::Cow<'a, str>>,
+}
+
+impl<'a> Haystack<'a> {
+    fn new(content: &'a str) -> Self {
+        Self {
+            content,
+            normalized: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// `content` that is already in normalised form (normalising is
+    /// idempotent), so it is never normalised again.
+    fn already_normalized(content: &'a str) -> Self {
+        Self {
+            content,
+            normalized: std::cell::OnceCell::from(std::borrow::Cow::Borrowed(content)),
+        }
+    }
+
+    fn normalized(&self) -> &str {
+        self.normalized
+            .get_or_init(|| std::borrow::Cow::Owned(normalize_for_fuzzy_match(self.content)))
+    }
+}
+
+fn find_text(haystack: &Haystack<'_>, old_text: &str) -> FuzzyMatch {
+    if let Some(exact) = haystack.content.find(old_text) {
         return FuzzyMatch {
             found: true,
             index: exact,
@@ -394,7 +577,7 @@ fn find_text(content: &str, old_text: &str) -> FuzzyMatch {
         };
     }
     let fuzzy_old = normalize_for_fuzzy_match(old_text);
-    if let Some(at) = normalize_for_fuzzy_match(content).find(&fuzzy_old) {
+    if let Some(at) = haystack.normalized().find(&fuzzy_old) {
         return FuzzyMatch {
             found: true,
             index: at,
@@ -410,29 +593,37 @@ fn find_text(content: &str, old_text: &str) -> FuzzyMatch {
     }
 }
 
-/// `normalize(content).split(normalize(oldText)).length - 1` with JS split
-/// semantics (an empty separator yields one piece per UTF-16 code unit).
-fn count_occurrences(content: &str, old_text: &str) -> i64 {
-    let hay = normalize_for_fuzzy_match(content);
+/// Occurrences of the normalised `old_text` in the normalised content, with
+/// JS `split` semantics for an empty needle (one piece per UTF-16 code
+/// unit). Overlapping occurrences count: `aa` occurs twice in `aaa`, and an
+/// edit that could land on either is ambiguous.
+fn count_occurrences(haystack: &Haystack<'_>, old_text: &str) -> i64 {
+    let hay = haystack.normalized();
     let needle = normalize_for_fuzzy_match(old_text);
-    let pieces = if needle.is_empty() {
-        if hay.is_empty() {
-            0
+    if needle.is_empty() {
+        return if hay.is_empty() {
+            -1
         } else {
-            hay.encode_utf16().count()
-        }
-    } else {
-        hay.matches(needle.as_str()).count() + 1
-    };
-    pieces as i64 - 1
+            hay.encode_utf16().count() as i64 - 1
+        };
+    }
+    // Advance by one char (not one byte) so every slice stays on a boundary.
+    let step = needle.chars().next().map_or(1, char::len_utf8);
+    let mut count = 0i64;
+    let mut from = 0usize;
+    while let Some(at) = hay[from..].find(needle.as_str()) {
+        count += 1;
+        from += at + step;
+    }
+    count
 }
 
-fn splice_original(original: &str, starts: &[usize], matched: &[Replacement], eol: Eol) -> String {
+fn splice_original(original: &str, starts: &LfMap, matched: &[Replacement], eol: Eol) -> String {
     let mut result = String::new();
     let mut cursor = 0usize;
     for r in matched {
-        let from = starts[r.0];
-        let to = starts[r.0 + r.1];
+        let from = starts.at(r.0);
+        let to = starts.at(r.0 + r.1);
         result.push_str(&original[cursor..from]);
         result.push_str(&with_eol(&r.2, &original[from..to], eol));
         cursor = to;
@@ -492,17 +683,24 @@ pub fn apply_edits(
             ));
         }
     }
+    // The content is normalised at most once per call and shared by the
+    // fuzzy-fallback detection, the matching and the occurrence counting.
+    let content_view = Haystack::new(&normalized_content);
     let used_fuzzy = normalized
         .iter()
-        .any(|(old_text, _)| find_text(&normalized_content, old_text).used_fuzzy_match);
-    let base = if used_fuzzy {
-        normalize_for_fuzzy_match(&normalized_content)
+        .any(|(old_text, _)| find_text(&content_view, old_text).used_fuzzy_match);
+    let base_view = if used_fuzzy {
+        Haystack::already_normalized(content_view.normalized())
     } else {
-        normalized_content.clone()
+        Haystack {
+            content: &normalized_content,
+            normalized: std::cell::OnceCell::new(),
+        }
     };
+    let base = base_view.content;
     let mut matched: Vec<MatchedEdit> = Vec::new();
     for (i, (old_text, new_text)) in normalized.iter().enumerate() {
-        let match_ = find_text(&base, old_text);
+        let match_ = find_text(&base_view, old_text);
         if !match_.found {
             return Err(CodingError::new(
                 "edit_no_match",
@@ -512,7 +710,7 @@ pub fn apply_edits(
                 ),
             ));
         }
-        let occurrences = count_occurrences(&base, old_text);
+        let occurrences = count_occurrences(&base_view, old_text);
         if occurrences > 1 {
             return Err(CodingError::new(
                 "edit_ambiguous",
@@ -548,7 +746,7 @@ pub fn apply_edits(
         .map(|m| (m.match_index, m.match_length, m.new_text.clone()))
         .collect();
     let output = if used_fuzzy {
-        apply_preserving_unchanged_lines(original, &base, &replacements, eol)?
+        apply_preserving_unchanged_lines(original, base, &replacements, eol)?
     } else {
         splice_original(original, &starts, &replacements, eol)
     };
@@ -749,5 +947,77 @@ mod tests {
             ["a\r\n", "b\r", "c\n", "d"]
         );
         assert_eq!(split_original_lines(""), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn overlapping_occurrences_are_ambiguous() {
+        let err = apply_edits("aaa\n", &[edit("aa", "b")], "f.txt").unwrap_err();
+        assert_eq!(err.code, "edit_ambiguous");
+        assert!(
+            err.message.starts_with("Found 2 occurrences"),
+            "{}",
+            err.message
+        );
+        let err = apply_edits("ababab\n", &[edit("abab", "x")], "f.txt").unwrap_err();
+        assert_eq!(err.code, "edit_ambiguous");
+        assert!(
+            err.message.starts_with("Found 2 occurrences"),
+            "{}",
+            err.message
+        );
+        // Multi-byte needle stays on char boundaries.
+        let err = apply_edits("ééé\n", &[edit("éé", "x")], "f.txt").unwrap_err();
+        assert_eq!(err.code, "edit_ambiguous");
+    }
+
+    #[test]
+    fn count_occurrences_counts_overlaps() {
+        let hay = Haystack::new("aaa");
+        assert_eq!(count_occurrences(&hay, "aa"), 2);
+        assert_eq!(count_occurrences(&Haystack::new("abab"), "abab"), 1);
+        assert_eq!(count_occurrences(&Haystack::new("ababab"), "abab"), 2);
+    }
+
+    #[test]
+    fn fuzzy_match_refuses_to_normalize_text_outside_the_match() {
+        let original = "\u{201C}x\u{201D} = const a = \u{201C}hi\u{201D};\n";
+        let err = apply_edits(
+            original,
+            &[edit("const a = \"hi\";", "const a = 1;")],
+            "f.txt",
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "fuzzy_match_would_normalize");
+        // Same line, but the smart quotes are only inside the match: fine.
+        let applied = apply_edits(
+            "const a = \u{201C}hi\u{201D};\n",
+            &[edit("const a = \"hi\";", "const a = 1;")],
+            "f.txt",
+        )
+        .unwrap();
+        assert_eq!(applied.output, "const a = 1;\n");
+    }
+
+    #[test]
+    fn whitespace_only_fuzzy_match_on_ascii_still_works() {
+        let applied = apply_edits(
+            "fn a()   \n    body();  \nend\n",
+            &[edit("fn a()\n    body();", "fn b() {}")],
+            "f.txt",
+        )
+        .unwrap();
+        assert_eq!(applied.output, "fn b() {}\nend\n");
+    }
+
+    #[test]
+    fn lf_map_matches_crlf_cr_and_lf_sources() {
+        let text = "a\r\nb\rc\nd\r\n";
+        let (view, map) = lf_view(text);
+        assert_eq!(view, "a\nb\nc\nd\n");
+        assert_eq!(map.at(0), 0);
+        assert_eq!(map.at(1), 1); // the collapsed CRLF's "\n"
+        assert_eq!(map.at(2), 3); // "b"
+        assert_eq!(map.at(4), 5); // "c"
+        assert_eq!(map.at(view.len()), text.len());
     }
 }

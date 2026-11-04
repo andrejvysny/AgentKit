@@ -308,7 +308,231 @@ fn inline_other(token: &str, rest: &[String]) -> bool {
     matches!(token, "awk" | "gawk" | "mawk")
 }
 
+/// One simple command: its raw words and the character that ended it
+/// (`'\0'` end of text, `';'`, `'\n'`, `'&'`, `'|'`, `'('`, `')'`, or `'D'`
+/// for the case-arm terminator `;;`).
+struct SimpleCommand {
+    words: Vec<String>,
+    end: char,
+}
+
+/// Lexer state for [`command_words`].
+#[derive(Default)]
+struct CommandLexer {
+    commands: Vec<SimpleCommand>,
+    command: Vec<String>,
+    word: String,
+    skip_word: bool,
+}
+
+impl CommandLexer {
+    fn end_word(&mut self) {
+        if self.word.is_empty() {
+            return;
+        }
+        let word = std::mem::take(&mut self.word);
+        // A redirection target is a file, not a command or an argument.
+        if std::mem::take(&mut self.skip_word) {
+            return;
+        }
+        self.command.push(word);
+    }
+
+    fn end_command(&mut self, end: char) {
+        self.end_word();
+        if !self.command.is_empty() || end == ')' || end == 'D' {
+            self.commands.push(SimpleCommand {
+                words: std::mem::take(&mut self.command),
+                end,
+            });
+        }
+    }
+}
+
+/// The RAW (unexpanded, quotes and escapes kept) words of every simple
+/// command in `raw`, split at unquoted `; & | ( )` and newlines, with
+/// redirection targets and fd numbers dropped and backslash-newline
+/// continuations joined. Quoting is tracked only well enough to know where
+/// a word ends; nothing is expanded or evaluated.
+fn command_words(raw: &str) -> Vec<SimpleCommand> {
+    let joined = raw.replace("\\\n", "");
+    let mut lexer = CommandLexer::default();
+    let mut quote: Option<char> = None;
+    let mut chars = joined.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && quote != Some('\'') {
+            lexer.word.push(ch);
+            if let Some(next) = chars.next() {
+                lexer.word.push(next);
+            }
+        } else if let Some(open) = quote {
+            lexer.word.push(ch);
+            if ch == open {
+                quote = None;
+            }
+        } else if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            lexer.word.push(ch);
+        } else if ch == '\n' {
+            lexer.end_command('\n');
+        } else if js_is_space(ch) {
+            lexer.end_word();
+        } else if ch == '<' || ch == '>' {
+            // `2>file`: the digits are an fd number, not a word.
+            if !lexer.word.is_empty() && lexer.word.bytes().all(|b| b.is_ascii_digit()) {
+                lexer.word.clear();
+            }
+            lexer.end_word();
+            lexer.skip_word = true;
+            if chars.peek() == Some(&'&') {
+                chars.next();
+            }
+        } else if ch == ';' && chars.peek() == Some(&';') {
+            chars.next();
+            lexer.end_command('D');
+        } else if ";&|()".contains(ch) {
+            lexer.end_command(ch);
+        } else {
+            lexer.word.push(ch);
+        }
+    }
+    lexer.end_command('\0');
+    lexer.commands
+}
+
+/// Shell keywords that precede (or stand in for) the real command word.
+const COMMAND_PREFIX_KEYWORDS: &[&str] = &[
+    "if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "fi", "done", "esac",
+];
+
+/// Wrappers whose first non-option argument is the command they run. They
+/// are skipped (with their options) and the next word is judged instead.
+const WRAPPER_WORDS: &[&str] = &[
+    "nohup", "nice", "timeout", "setsid", "stdbuf", "time", "xargs", "env", "command", "builtin",
+];
+
+/// Builtins that run text this lexer cannot resolve to a plain word.
+const INDIRECT_COMMAND_WORDS: &[&str] = &["eval", "exec", "source", "."];
+
+/// Options of a wrapper that consume the following word as their value.
+fn wrapper_option_takes_value(wrapper: &str, option: &str) -> bool {
+    match wrapper {
+        "xargs" => matches!(
+            option,
+            "-I" | "-n" | "-P" | "-d" | "-L" | "-s" | "-E" | "-a" | "-J" | "-R" | "-S"
+        ),
+        "nice" => option == "-n",
+        "timeout" => matches!(option, "-s" | "-k"),
+        "stdbuf" => matches!(option, "-i" | "-o" | "-e"),
+        "env" => matches!(option, "-u" | "-C" | "-P"),
+        "time" => matches!(option, "-f" | "-o"),
+        _ => false,
+    }
+}
+
+/// The word that actually names the command, after leading assignments,
+/// keywords and wrappers (with their options). `None` when the command has
+/// no command word, or is a `command -v` style probe that runs nothing.
+fn resolve_command_word(words: &[String]) -> Option<&String> {
+    static ASSIGNMENT: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| compiled(r"\A[A-Za-z_][A-Za-z0-9_]*="));
+    static DURATION: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| compiled(r"\A[0-9.]+[smhd]?\z"));
+    let mut index = 0;
+    while let Some(word) = words.get(index) {
+        if ASSIGNMENT.is_match(word) || COMMAND_PREFIX_KEYWORDS.contains(&word.as_str()) {
+            index += 1;
+            continue;
+        }
+        let name = executable_name(word);
+        if !WRAPPER_WORDS.contains(&name.as_str()) {
+            return Some(word);
+        }
+        // `command -v foo` / `command -V foo` only look a name up.
+        if name == "command"
+            && words
+                .get(index + 1)
+                .is_some_and(|next| next == "-v" || next == "-V")
+        {
+            return None;
+        }
+        index += 1;
+        let mut duration_pending = name == "timeout";
+        while let Some(next) = words.get(index) {
+            if next == "--" {
+                index += 1;
+                break;
+            }
+            if next.starts_with('-') && next.len() > 1 {
+                index += 1;
+                if wrapper_option_takes_value(&name, next) {
+                    index += 1;
+                }
+            } else if (name == "env" && ASSIGNMENT.is_match(next))
+                || (duration_pending && DURATION.is_match(next))
+            {
+                duration_pending = false;
+                index += 1;
+            } else {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// True when some simple command's command word cannot be read off the text:
+/// it is built by expansion (`$x`, `${x}m`, `$(…)`, backticks), by quoting
+/// or escaping (`$'\x72m'`, `"r"m`, `\rm`), by globbing (`/bin/r?`), or it
+/// is an indirection (`eval`, `source`, `.`). Wrappers (`env`, `nohup`,
+/// `timeout`, `xargs`, …) are looked through, so the word they run is judged
+/// by the same rules. The token denylist below only ever sees spelled-out
+/// words, so every such command is treated as high risk instead of guessed
+/// at. Limitation: a substitution nested inside a double-quoted ARGUMENT is
+/// not opened up.
+fn has_unresolvable_command_word(raw: &str) -> bool {
+    let mut case_depth = 0usize;
+    let mut in_patterns = false;
+    for command in command_words(raw) {
+        if in_patterns {
+            // `*)` / `a|b)` are case patterns, not commands.
+            if command.end == ')' {
+                in_patterns = false;
+            }
+            continue;
+        }
+        let first = command.words.first().map(String::as_str);
+        match first {
+            Some("case") => {
+                case_depth += 1;
+                // The head `case x in` ends at the newline/`;`, and patterns
+                // follow; on one line the head already swallowed `*)`.
+                in_patterns = command.end != ')';
+                continue;
+            }
+            Some("esac") => case_depth = case_depth.saturating_sub(1),
+            Some("for" | "select") => continue,
+            _ => {}
+        }
+        if command.end == 'D' && case_depth > 0 {
+            in_patterns = true;
+        }
+        let Some(word) = resolve_command_word(&command.words) else {
+            continue;
+        };
+        if word.contains(['$', '`', '\\', '\'', '"', '*', '?'])
+            || (word.contains('[') && word != "[" && word != "[[")
+            || INDIRECT_COMMAND_WORDS.contains(&executable_name(word).as_str())
+        {
+            return true;
+        }
+    }
+    false
+}
 fn is_high_risk(raw: &str) -> bool {
+    if has_unresolvable_command_word(raw) {
+        return true;
+    }
     static TOKEN_SPLIT: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| compiled(&format!("[{JS_SPACE_CLASS};&|()<>\\x60$]+")));
     static DANGEROUS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
@@ -1502,5 +1726,108 @@ mod tests {
             HighRiskCommandGuard.can_execute(&context).await.unwrap(),
             ToolGuardVerdict::Allowed
         ));
+    }
+
+    #[test]
+    fn expansion_and_indirection_cannot_hide_a_dangerous_command_word() {
+        for command in [
+            "x=r; ${x}m -rf ~",
+            "x=r ${x}m -rf ~",
+            "$'\\x72m' -rf ~",
+            "$(echo cm0=|base64 -d) -rf ~",
+            "`echo cm0= | base64 -d` -rf ~",
+            "\\rm -rf ~",
+            "\"r\"m -rf ~",
+            "/bin/r? -rf ~",
+            "/bin/[r]m -rf ~",
+            "eval \"$(echo cm0gLXJmIH4= | base64 -d)\"",
+            "echo hi && eval foo",
+            "source ./setup.sh",
+            ". ./setup.sh",
+            "command rm -rf ~",
+            "builtin exec foo",
+            "env ${x}m -rf ~",
+            "if true; then $cmd; fi",
+        ] {
+            assert_eq!(
+                classify_shell_command(command),
+                CommandClass::HighRisk,
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_commands_are_not_pushed_to_high_risk_by_the_expansion_rule() {
+        for command in [
+            "cargo test",
+            "cargo build --release 2>&1",
+            "git status",
+            "git -C /repo status",
+            "bun test",
+            "npm run test:unit",
+            "FOO=bar cargo test",
+            "echo hello > out.txt",
+            "[ -f Cargo.toml ] && cargo test",
+            "cargo test -- --nocapture 'some filter'",
+            "for f in a b; do echo $f; done",
+            "cat file | grep needle",
+        ] {
+            assert_ne!(
+                classify_shell_command(command),
+                CommandClass::HighRisk,
+                "{command}"
+            );
+        }
+        assert_eq!(classify_shell_command("cargo test"), CommandClass::Eligible);
+        assert_eq!(classify_shell_command("bun test"), CommandClass::Eligible);
+    }
+
+    #[test]
+    fn newlines_fd_numbers_and_wrappers_cannot_hide_the_command_word() {
+        for command in [
+            "true\n${x}m -rf ~",
+            "2>/dev/null ${x}m -rf ~",
+            "${x}m 2>/dev/null",
+            "nohup ${x}m -rf ~",
+            "echo / | xargs ${x}m -rf",
+            "time -p $x",
+            "timeout 5 $x",
+            "timeout -s KILL 5 $x",
+            "nice -n 10 $x",
+            "env -u HOME FOO=1 $x",
+            "setsid stdbuf -oL $x",
+            "command $x",
+        ] {
+            assert_eq!(
+                classify_shell_command(command),
+                CommandClass::HighRisk,
+                "{command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn continuations_probes_and_case_patterns_are_not_false_positives() {
+        for command in [
+            "cargo \\\n  test",
+            "command -v cargo",
+            "command -V cargo >/dev/null",
+            "case $x in\n  *) echo other ;;\n  a|b) echo ab ;;\nesac",
+            "case $x in *) echo hi;; esac",
+            "timeout 5 cargo test",
+            "nohup cargo build",
+        ] {
+            assert_ne!(
+                classify_shell_command(command),
+                CommandClass::HighRisk,
+                "{command:?}"
+            );
+        }
+        // A case BODY command is still judged.
+        assert_eq!(
+            classify_shell_command("case x in\n  *) ${y}m -rf ~ ;;\nesac"),
+            CommandClass::HighRisk
+        );
     }
 }

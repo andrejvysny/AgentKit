@@ -5,7 +5,7 @@
 //! Operations on the same realpath run one at a time; others stay parallel.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
@@ -24,10 +24,16 @@ fn io_error(error: &std::io::Error) -> CodingError {
 }
 
 fn is_missing_path_error(error: &std::io::Error) -> bool {
-    matches!(
-        error.raw_os_error(),
-        Some(libc::ENOENT) | Some(libc::ENOTDIR)
-    )
+    if error.kind() == std::io::ErrorKind::NotFound {
+        return true;
+    }
+    // A path component that is a file: not a distinct portable ErrorKind on
+    // every toolchain, so match the errno where POSIX defines it.
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::ENOTDIR) {
+        return true;
+    }
+    false
 }
 
 /// `path.resolve(filePath)`: anchor relative paths at the cwd, then apply
@@ -63,19 +69,66 @@ async fn queue_key(file_path: &str) -> Result<String, CodingError> {
 
 /// One link in a key's chain: wait for every earlier link, then for our own
 /// release (TS's `current.then(() => next)`).
+///
+/// `prev` is dropped as soon as this link has itself waited out every earlier
+/// link: from then on all of them are complete, so successors need not walk
+/// (or keep alive) the history. Without this the chain of a hot key grows by
+/// one link per mutation for the life of the process.
 struct Tail {
-    prev: Option<Arc<Tail>>,
+    prev: Mutex<Option<Arc<Tail>>>,
     done: CancellationToken,
 }
 
 impl Tail {
-    fn wait(&self) -> futures::future::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            if let Some(prev) = &self.prev {
-                prev.wait().await;
+    fn new(prev: Option<Arc<Tail>>) -> Self {
+        Self {
+            prev: Mutex::new(prev),
+            done: CancellationToken::new(),
+        }
+    }
+
+    fn prev(&self) -> Option<Arc<Tail>> {
+        self.prev
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Waits until every EARLIER link is done. Iterative: a long chain of
+    /// pending links must not recurse. Order is irrelevant — all must finish.
+    async fn wait_for_predecessors(&self) {
+        let mut next = self.prev();
+        while let Some(link) = next {
+            link.done.cancelled().await;
+            next = link.prev();
+        }
+        // Every earlier link is complete: successors never need them.
+        *self.prev.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+}
+
+/// Unlinks iteratively so dropping the head of a long abandoned chain (links
+/// whose waiters were dropped never prune themselves) cannot overflow the
+/// stack through nested `Arc` drops.
+impl Drop for Tail {
+    fn drop(&mut self) {
+        let mut next = self
+            .prev
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        while let Some(link) = next {
+            match Arc::try_unwrap(link) {
+                Ok(mut tail) => {
+                    next = tail
+                        .prev
+                        .get_mut()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take();
+                }
+                Err(_) => break,
             }
-            self.done.cancelled().await;
-        })
+        }
     }
 }
 
@@ -88,7 +141,7 @@ struct Guard {
 impl Drop for Guard {
     fn drop(&mut self) {
         self.tail.done.cancel();
-        let mut queues = QUEUES.lock().expect("mutation queues");
+        let mut queues = QUEUES.lock().unwrap_or_else(PoisonError::into_inner);
         if queues
             .get(&self.key)
             .is_some_and(|tail| Arc::ptr_eq(tail, &self.tail))
@@ -107,11 +160,8 @@ where
     let registration = REGISTRATION.lock().await;
     let key = queue_key(file_path).await?;
     let tail = {
-        let mut queues = QUEUES.lock().expect("mutation queues");
-        let tail = Arc::new(Tail {
-            prev: queues.get(&key).cloned(),
-            done: CancellationToken::new(),
-        });
+        let mut queues = QUEUES.lock().unwrap_or_else(PoisonError::into_inner);
+        let tail = Arc::new(Tail::new(queues.get(&key).cloned()));
         queues.insert(key.clone(), Arc::clone(&tail));
         tail
     };
@@ -126,9 +176,7 @@ where
         key,
         tail: Arc::clone(&tail),
     };
-    if let Some(prev) = &tail.prev {
-        prev.wait().await;
-    }
+    tail.wait_for_predecessors().await;
     f().await
 }
 
@@ -317,11 +365,11 @@ mod tests {
                 loop {
                     let registered = {
                         let queues = QUEUES.lock().expect("queues");
-                        let mut current = queues.get(&key).map(Arc::as_ref);
+                        let mut current = queues.get(&key).cloned();
                         let mut depth = 0;
                         while let Some(tail) = current {
                             depth += 1;
-                            current = tail.prev.as_deref();
+                            current = tail.prev();
                         }
                         depth
                     };
@@ -389,5 +437,55 @@ mod tests {
         .await
         .expect("queue must not be wedged by an abandoned waiter");
         later.expect("queue");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ten_thousand_overlapping_mutations_on_one_key_stay_serial_and_bounded() {
+        let path = temp_file("hot-key");
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let tasks: Vec<_> = (0..10_000)
+            .map(|_| {
+                let (path, active, peak) = (path.clone(), Arc::clone(&active), Arc::clone(&peak));
+                tokio::spawn(async move {
+                    with_file_mutation_queue(&path, || claim(&active, &peak, Duration::ZERO)).await
+                })
+            })
+            .collect();
+        for task in tasks {
+            task.await.expect("join").expect("queue");
+        }
+        assert_eq!(peak.load(Ordering::SeqCst), 1, "still one at a time");
+        let key = queue_key(&path).await.expect("key");
+        assert!(
+            !QUEUES
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains_key(&key),
+            "an idle key keeps no queue entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_waited_link_drops_its_history() {
+        let first = Arc::new(Tail::new(None));
+        first.done.cancel();
+        let second = Arc::new(Tail::new(Some(Arc::clone(&first))));
+        second.done.cancel();
+        let third = Arc::new(Tail::new(Some(Arc::clone(&second))));
+        third.wait_for_predecessors().await;
+        assert!(third.prev().is_none(), "completed history is released");
+        // Successors of `third` no longer keep `first` / `second` alive.
+        drop(second);
+        assert_eq!(Arc::strong_count(&first), 1);
+    }
+
+    #[test]
+    fn dropping_a_very_long_chain_does_not_overflow_the_stack() {
+        let mut head: Option<Arc<Tail>> = None;
+        for _ in 0..200_000 {
+            head = Some(Arc::new(Tail::new(head.take())));
+        }
+        drop(head);
     }
 }

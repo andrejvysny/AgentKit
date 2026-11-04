@@ -30,11 +30,17 @@ pub struct MarkedProcess {
 static ID_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([0-9]+):(\S+)$").expect("id pattern"));
 
-// `ps -E` appends the environment to the command line, space separated.
-// The TS lookahead `(?=\s|$)` is implied: `[0-9]+:\S+` is greedy and stops
-// at whitespace or end-of-text anyway.
+// `ps -E` appends the environment to the command line, space separated, so
+// the REAL marker is the last `AGENTKIT_EXEC_ID=` token on the line: argv
+// decoys come before it. The token is captured in any shape and only then
+// held to the exact `<pid>:<id>` format by `parse_exec_id`, so a malformed
+// trailing token cannot fall back to an earlier decoy.
+// Limitation: `ps` joins argv and env with plain spaces, so a value inside
+// the environment that itself contains ` AGENTKIT_EXEC_ID=<pid>:<id>` is
+// indistinguishable from a real entry; the marker is a cleanup aid, not a
+// security boundary against a hostile command.
 static PS_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(r"(?:^|\s){EXEC_ID_ENV}=([0-9]+:\S+)")).expect("ps token pattern")
+    Regex::new(&format!(r"(?:^|\s){EXEC_ID_ENV}=(\S*)")).expect("ps token pattern")
 });
 
 static PS_HEAD: LazyLock<Regex> =
@@ -70,7 +76,7 @@ pub fn parse_ps_output(text: &str) -> Vec<MarkedProcess> {
             continue;
         };
         let rest = head.get(2).map(|m| m.as_str()).unwrap_or("");
-        let Some(token) = PS_TOKEN.captures(rest).map(|c| c[1].to_owned()) else {
+        let Some(token) = PS_TOKEN.captures_iter(rest).last().map(|c| c[1].to_owned()) else {
             continue;
         };
         if let Some((owner_pid, exec_id)) = parse_exec_id(&token) {
@@ -493,17 +499,7 @@ pub async fn observe_start_identity(pid: i32) -> Option<String> {
         return None;
     }
     match crate_platform() {
-        "linux" => {
-            let boot = boot_id()?;
-            let stat = tokio::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .await
-                .ok()?;
-            // `pid (comm) state ...` — count from after the LAST `)`;
-            // starttime is field 22 overall, the 20th token after comm.
-            let tail = stat.rfind(')')?;
-            let started = stat[tail + 1..].split_whitespace().nth(19)?;
-            Some(format!("proc-start:{boot}:{started}"))
-        }
+        "linux" => linux_start_identity(pid).await,
         "darwin" => {
             let text = run(
                 "/bin/ps",
@@ -525,9 +521,29 @@ pub async fn run_ps(args: &[&str]) -> Result<String, std::io::Error> {
     run("/bin/ps", args).await
 }
 
+/// Linux `/proc` start stamp; non-Linux targets compile the arm but never
+/// reach it at runtime (`crate_platform()` is not "linux"), so fail closed.
+#[cfg(target_os = "linux")]
+async fn linux_start_identity(pid: i32) -> Option<String> {
+    let boot = boot_id()?;
+    let stat = tokio::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .await
+        .ok()?;
+    // `pid (comm) state ...` — count from after the LAST `)`;
+    // starttime is field 22 overall, the 20th token after comm.
+    let tail = stat.rfind(')')?;
+    let started = stat[tail + 1..].split_whitespace().nth(19)?;
+    Some(format!("proc-start:{boot}:{started}"))
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn linux_start_identity(_pid: i32) -> Option<String> {
+    None
+}
+
 /// `/proc/sys/kernel/random/boot_id`, read once; `None` when unreadable,
 /// which makes every start identity unobservable (fail closed).
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn boot_id() -> Option<&'static str> {
     static BOOT_ID: LazyLock<Option<String>> = LazyLock::new(|| {
         std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
@@ -773,6 +789,34 @@ mod tests {
         );
         assert_eq!(parse_exec_id("9007199254740992:x"), None);
         assert_eq!(parse_exec_id("99999999999999999999:x"), None);
+    }
+
+    #[test]
+    fn parse_ps_output_takes_the_last_marker_token_not_an_argv_decoy() {
+        let out = [
+            // argv decoy, env marker appended after it.
+            "  201 /bin/echo AGENTKIT_EXEC_ID=1:decoy HOME=/x AGENTKIT_EXEC_ID=42:real TERM=dumb",
+            // Malformed trailing token must not fall back to the decoy.
+            "  202 /bin/echo AGENTKIT_EXEC_ID=1:decoy AGENTKIT_EXEC_ID=bad",
+            // Decoy only, no env marker after it: still the last token.
+            "  203 /bin/echo AGENTKIT_EXEC_ID=7:only",
+        ]
+        .join("\n");
+        assert_eq!(
+            parse_ps_output(&out),
+            vec![
+                MarkedProcess {
+                    pid: 201,
+                    exec_id: "42:real".to_owned(),
+                    owner_pid: 42
+                },
+                MarkedProcess {
+                    pid: 203,
+                    exec_id: "7:only".to_owned(),
+                    owner_pid: 7
+                },
+            ]
+        );
     }
 
     #[test]

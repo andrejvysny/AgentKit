@@ -16,7 +16,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -75,10 +75,22 @@ impl WorkspaceLease {
 
     /// Idempotent.
     pub async fn release(&mut self) {
-        if let Some(releases) = self.releases.take() {
-            for release in releases {
-                release().await;
-            }
+        // Take ONE closure at a time (in order): if this future is dropped
+        // while one release awaits, the rest are still in `self.releases`
+        // and `Drop` defers them. The in-flight closure's own future dies
+        // with us, so closures should do their effect before awaiting.
+        while let Some(release) = self.next_release() {
+            release().await;
+        }
+        self.releases = None;
+    }
+
+    fn next_release(&mut self) -> Option<ReleaseFn> {
+        let releases = self.releases.as_mut()?;
+        if releases.is_empty() {
+            None
+        } else {
+            Some(releases.remove(0))
         }
     }
 }
@@ -190,6 +202,10 @@ pub struct AcquireWorkspaceInput {
 pub struct QuarantineEvidence {
     pub pids: Vec<i32>,
     pub holder: LeaseHolder,
+    /// Fixed machine code for why cleanup was not established (for example
+    /// `driver_panic`, `group_stuck`). Never command text, so it is stored and
+    /// shown in clear.
+    pub reason: Option<String>,
 }
 
 /// SAFE process identity for cleanup evidence (ADR 0020 / B5). A bare pid is
@@ -247,6 +263,8 @@ pub struct WorkspaceQuarantine {
     pub pids: Vec<i32>,
     pub holder: LeaseHolder,
     pub quarantined_at_ms: u64,
+    /// See [`QuarantineEvidence::reason`]; absent in older records.
+    pub reason: Option<String>,
     /// SAFE identity for a command quarantine (B5). `Some` upgrades the
     /// positive-exit proof from a bare pid probe to the marker scan +
     /// process-group probe; `None` is generic evidence (no execution
@@ -301,10 +319,15 @@ pub(crate) fn quarantine_error(quarantine: &WorkspaceQuarantine) -> CodingError 
         .as_ref()
         .map(|identity| format!(" execution {}", identity.execution_id))
         .unwrap_or_default();
+    let reason = quarantine
+        .reason
+        .as_ref()
+        .map(|reason| format!(" [reason: {reason}]"))
+        .unwrap_or_default();
     CodingError::new(
         "workspace_quarantined",
         format!(
-            "workspace cleanup is unresolved: {who} from {} '{}' (run {}{nonce}) may still be writing; the workspace stays blocked until the processes exit or recovery is recorded.",
+            "workspace cleanup is unresolved: {who} from {} '{}' (run {}{nonce}){reason} may still be writing; the workspace stays blocked until the processes exit or recovery is recorded.",
             quarantine.holder.tool, quarantine.holder.label, quarantine.holder.run_id
         ),
     )
@@ -525,7 +548,7 @@ impl WaitTracker {
         observer: Option<&Arc<dyn CoordinatorObserver>>,
     ) {
         let fire = {
-            let mut state = self.state.lock().expect("coordination tracker lock");
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             state.last = Some(wait.clone());
             if state.fired {
                 false
@@ -543,7 +566,7 @@ impl WaitTracker {
     pub(crate) fn last_holders(&self) -> Vec<LeaseHolder> {
         self.state
             .lock()
-            .expect("coordination tracker lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .last
             .as_ref()
             .map(|wait| wait.holders.clone())
@@ -551,10 +574,16 @@ impl WaitTracker {
     }
 
     pub(crate) fn acquired(&self, observer: Option<&Arc<dyn CoordinatorObserver>>) {
-        let snapshot = self.state.lock().expect("coordination tracker lock");
-        if let (true, Some(wait)) = (snapshot.fired, snapshot.last.clone())
-            && let Some(observer) = observer
-        {
+        // Copy under the lock, call the observer after unlocking.
+        let wait = {
+            let snapshot = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if snapshot.fired {
+                snapshot.last.clone()
+            } else {
+                None
+            }
+        };
+        if let (Some(wait), Some(observer)) = (wait, observer) {
             observer.on_acquired(&wait);
         }
     }
@@ -582,19 +611,21 @@ struct Entry {
 }
 
 /// FIFO reader/writer gate with writer preference; a mutex is
-/// exclusive-only.
+/// exclusive-only. Grants are tracked by [`EntryId`], never by holder
+/// equality: two requests may carry equal `LeaseHolder`s (no tool-call id,
+/// or a reused one) and must not release each other's grant.
 #[derive(Default)]
 struct Gate {
-    shared: Vec<LeaseHolder>,
-    exclusive: Option<LeaseHolder>,
+    shared: Vec<(EntryId, LeaseHolder)>,
+    exclusive: Option<(EntryId, LeaseHolder)>,
     queue: VecDeque<Entry>,
 }
 
 impl Gate {
     fn holders(&self) -> Vec<LeaseHolder> {
         match &self.exclusive {
-            Some(holder) => vec![holder.clone()],
-            None => self.shared.clone(),
+            Some((_, holder)) => vec![holder.clone()],
+            None => self.shared.iter().map(|(_, h)| h.clone()).collect(),
         }
     }
 
@@ -609,10 +640,20 @@ impl Gate {
         }
     }
 
-    fn take(&mut self, mode: Mode, holder: &LeaseHolder) {
+    fn take(&mut self, id: EntryId, mode: Mode, holder: &LeaseHolder) {
         match mode {
-            Mode::Exclusive => self.exclusive = Some(holder.clone()),
-            Mode::Shared => self.shared.push(holder.clone()),
+            Mode::Exclusive => self.exclusive = Some((id, holder.clone())),
+            Mode::Shared => self.shared.push((id, holder.clone())),
+        }
+    }
+
+    /// Drops the grant owned by exactly this entry, if any.
+    fn remove_grant(&mut self, id: EntryId) {
+        if self.exclusive.as_ref().is_some_and(|(held, _)| *held == id) {
+            self.exclusive = None;
+        }
+        if let Some(at) = self.shared.iter().position(|(held, _)| *held == id) {
+            self.shared.remove(at);
         }
     }
 
@@ -622,7 +663,7 @@ impl Gate {
                 return;
             }
             let mut entry = self.queue.pop_front().expect("front checked");
-            self.take(entry.mode, &entry.holder);
+            self.take(entry.id, entry.mode, &entry.holder);
             if let Some(grant) = entry.grant.take() {
                 let _ = grant.send(());
             }
@@ -631,25 +672,26 @@ impl Gate {
 }
 
 enum AcquireState {
-    Granted,
+    Granted(EntryId),
     Queued {
         id: EntryId,
         receiver: oneshot::Receiver<()>,
-        mode: Mode,
-        holder: LeaseHolder,
+        /// Holders at enqueue time, reported to `on_block` once the reclaim
+        /// guard exists and the gate lock is released.
+        blocked_by: Vec<LeaseHolder>,
     },
 }
 
-/// Reclaims a queued acquisition whose future never completes: removes the
-/// queue entry, un-installs a grant that no one accepted, re-pumps the gate
-/// and drops the key when idle. Disarmed once the waiter is granted (the
-/// release closure owns the holder from then on).
+/// Reclaims a queued acquisition whose future never completes. A still
+/// queued entry is only removed (it holds nothing, so no holder state is
+/// touched); an entry that was granted but not yet accepted has its OWN
+/// grant removed, by id. Then the gate is re-pumped and dropped when idle.
+/// Disarmed once the waiter is granted and accepted (the release closure
+/// owns the grant from then on).
 struct AcquireGuard {
     map: Arc<GateMap>,
     key: String,
     id: EntryId,
-    mode: Mode,
-    holder: LeaseHolder,
     armed: bool,
 }
 
@@ -658,30 +700,26 @@ impl Drop for AcquireGuard {
         if !self.armed {
             return;
         }
-        let mut gates = self.map.gates.lock().expect("gate map lock");
+        let mut gates = lock(&self.map.gates);
         let Some(gate) = gates.get_mut(&self.key) else {
             return;
         };
         if let Some(at) = gate.queue.iter().position(|entry| entry.id == self.id) {
             gate.queue.remove(at);
-        }
-        match self.mode {
-            Mode::Exclusive => {
-                if gate.exclusive.as_ref() == Some(&self.holder) {
-                    gate.exclusive = None;
-                }
-            }
-            Mode::Shared => {
-                if let Some(at) = gate.shared.iter().position(|h| h == &self.holder) {
-                    gate.shared.remove(at);
-                }
-            }
+        } else {
+            gate.remove_grant(self.id);
         }
         gate.pump();
         if gate.idle() {
             gates.remove(&self.key);
         }
     }
+}
+
+/// Poison-tolerant lock: a panicking observer or test must not wedge every
+/// later acquisition behind a poisoned mutex.
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 struct GateMap {
@@ -695,23 +733,19 @@ impl GateMap {
         }
     }
 
-    /// Try the fast path; on block, notify and enqueue a waiter.
-    fn try_acquire(
-        &self,
-        key: &str,
-        mode: Mode,
-        holder: &LeaseHolder,
-        on_block: &dyn Fn(&[LeaseHolder]),
-    ) -> AcquireState {
-        let mut gates = self.gates.lock().expect("gate map lock");
+    /// Try the fast path; on block, enqueue a waiter. The observer is NOT
+    /// called here (it must run outside the lock): `wait` reports
+    /// `blocked_by` after unlocking.
+    fn try_acquire(&self, key: &str, mode: Mode, holder: &LeaseHolder) -> AcquireState {
+        let mut gates = lock(&self.gates);
         let gate = gates.entry(key.to_owned()).or_default();
-        if gate.queue.is_empty() && gate.can_grant(mode) {
-            gate.take(mode, holder);
-            return AcquireState::Granted;
-        }
-        on_block(&gate.holders());
-        let (sender, receiver) = oneshot::channel();
         let id = EntryId(next_entry_id());
+        if gate.queue.is_empty() && gate.can_grant(mode) {
+            gate.take(id, mode, holder);
+            return AcquireState::Granted(id);
+        }
+        let blocked_by = gate.holders();
+        let (sender, receiver) = oneshot::channel();
         gate.queue.push_back(Entry {
             id,
             mode,
@@ -721,38 +755,37 @@ impl GateMap {
         AcquireState::Queued {
             id,
             receiver,
-            mode,
-            holder: holder.clone(),
+            blocked_by,
         }
     }
 
     /// Wait for the queued grant, honoring cancellation. An entry already
     /// granted by `pump` still runs its release afterwards. Every EARLY
     /// exit — including the future being dropped mid-await by the core
-    /// harness — is reclaimed by [`AcquireGuard`].
+    /// harness, or `on_block` panicking — is reclaimed by [`AcquireGuard`].
+    /// Returns the id that owns the grant.
     async fn wait(
         self: &Arc<Self>,
         key: &str,
         state: AcquireState,
         cancellation: &Option<CancellationToken>,
-    ) -> Result<(), CodingError> {
-        let AcquireState::Queued {
-            id,
-            mut receiver,
-            mode,
-            holder,
-        } = state
-        else {
-            return Ok(());
+        on_block: &(dyn Fn(&[LeaseHolder]) + Sync),
+    ) -> Result<EntryId, CodingError> {
+        let (id, mut receiver, blocked_by) = match state {
+            AcquireState::Granted(id) => return Ok(id),
+            AcquireState::Queued {
+                id,
+                receiver,
+                blocked_by,
+            } => (id, receiver, blocked_by),
         };
         let mut guard = AcquireGuard {
             map: Arc::clone(self),
             key: key.to_owned(),
             id,
-            mode,
-            holder,
             armed: true,
         };
+        on_block(&blocked_by);
         let outcome = if let Some(token) = cancellation {
             tokio::select! {
                 biased;
@@ -760,9 +793,9 @@ impl GateMap {
                 _ = token.cancelled() => {
                     // Prefer a grant that landed with the cancellation: a
                     // vanished queue entry means `pump` already installed
-                    // this holder, and the lease must still be released.
+                    // this entry's grant, and the lease must still be released.
                     let granted = {
-                        let gates = self.gates.lock().expect("gate map lock");
+                        let gates = lock(&self.gates);
                         gates.get(key).is_some_and(|gate| {
                             !gate.queue.iter().any(|entry| entry.id == id)
                         })
@@ -778,29 +811,18 @@ impl GateMap {
             receiver.await.map_err(|_| abort_error())
         };
         if outcome.is_ok() {
-            // The release closure now owns the holder's cleanup.
+            // The release closure now owns the grant's cleanup.
             guard.armed = false;
         }
-        outcome
+        outcome.map(|()| id)
     }
 
-    fn release(&self, key: &str, mode: Mode, holder: &LeaseHolder) {
-        let mut gates = self.gates.lock().expect("gate map lock");
+    fn release(&self, key: &str, id: EntryId) {
+        let mut gates = lock(&self.gates);
         let Some(gate) = gates.get_mut(key) else {
             return;
         };
-        match mode {
-            Mode::Exclusive => {
-                if gate.exclusive.as_ref() == Some(holder) {
-                    gate.exclusive = None;
-                }
-            }
-            Mode::Shared => {
-                if let Some(at) = gate.shared.iter().position(|h| h == holder) {
-                    gate.shared.remove(at);
-                }
-            }
-        }
+        gate.remove_grant(id);
         gate.pump();
         if gate.idle() {
             gates.remove(key);
@@ -808,10 +830,10 @@ impl GateMap {
     }
 }
 
-fn sync_release(map: Arc<GateMap>, key: String, mode: Mode, holder: LeaseHolder) -> ReleaseFn {
+fn sync_release(map: Arc<GateMap>, key: String, id: EntryId) -> ReleaseFn {
     Box::new(move || {
         Box::pin(async move {
-            map.release(&key, mode, &holder);
+            map.release(&key, id);
         })
     })
 }
@@ -852,24 +874,26 @@ where
     let Some(max_wait_ms) = max_wait_ms else {
         return run(cancellation).await;
     };
-    let cap = CancellationToken::new();
+    // A child token follows the caller's cancellation without a forwarder
+    // task, and the timer is a `select!` arm on this future itself, so
+    // dropping the future leaves no task (or timer) behind.
+    let cap = match &cancellation {
+        Some(source) => source.child_token(),
+        None => CancellationToken::new(),
+    };
     let busy = Arc::new(AtomicBool::new(false));
-    if let Some(source) = cancellation.clone() {
-        let forwarded = cap.clone();
-        tokio::spawn(async move {
-            source.cancelled().await;
-            forwarded.cancel();
-        });
-    }
-    let timer_busy = Arc::clone(&busy);
-    let timer_cap = cap.clone();
-    let timer = tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(max_wait_ms)).await;
-        timer_busy.store(true, Ordering::SeqCst);
-        timer_cap.cancel();
-    });
-    let result = run(Some(cap)).await;
-    timer.abort();
+    let mut running = run(Some(cap.clone()));
+    let timer = tokio::time::sleep(std::time::Duration::from_millis(max_wait_ms));
+    tokio::pin!(timer);
+    let result = tokio::select! {
+        biased;
+        result = &mut running => result,
+        () = &mut timer => {
+            busy.store(true, Ordering::SeqCst);
+            cap.cancel();
+            running.await
+        }
+    };
     result.map_err(|error| {
         let caller_aborted = cancellation
             .as_ref()
@@ -902,8 +926,207 @@ pub struct InProcessCoordinator {
 /// reconciliation of every coordinator kind consults its own storage; the
 /// in-process coordinator's storage is this directory, keyed by
 /// `sha256(canonical root)`.
+///
+/// The directory is per-user (`agentkit-exec-intents-<uid>`) and private
+/// (`0o700`): `$TMPDIR` is commonly world-writable, and these records name
+/// pids and process groups that reconciliation later trusts.
 pub(crate) fn intent_journal_dir() -> std::path::PathBuf {
-    std::env::temp_dir().join("agentkit-exec-intents")
+    #[cfg(unix)]
+    {
+        std::env::temp_dir().join(format!("agentkit-exec-intents-{}", current_uid()))
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::temp_dir().join("agentkit-exec-intents")
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn current_uid() -> u32 {
+    // SAFETY: `geteuid` takes no arguments, touches no memory and cannot fail.
+    unsafe { libc::geteuid() }
+}
+
+fn journal_io_error(error: &std::io::Error) -> CodingError {
+    CodingError::new("io_error", format!("{error}"))
+}
+
+/// Create one directory level with mode `0o700`; an existing one is fine
+/// (it is verified separately, never trusted).
+fn create_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    let created = {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(path)
+    };
+    #[cfg(not(unix))]
+    let created = std::fs::create_dir(path);
+    match created {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        other => other,
+    }
+}
+
+/// Fail closed unless `path` is a real directory (not a symlink) owned by
+/// the current user with no group/other access. `Ok(false)` = it does not
+/// exist (callers treat that as "no records").
+#[cfg(unix)]
+fn check_private_dir(path: &std::path::Path) -> Result<bool, CodingError> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(journal_io_error(&error)),
+    };
+    let refuse = |why: &str| {
+        Err(CodingError::new(
+            "io_error",
+            format!("execution journal directory {} {why}", path.display()),
+        ))
+    };
+    if !meta.file_type().is_dir() {
+        return refuse("is not a directory (symlinks are refused)");
+    }
+    if meta.uid() != current_uid() {
+        return refuse("is not owned by the current user");
+    }
+    if meta.mode() & 0o077 != 0 {
+        return refuse("is accessible by group or other users");
+    }
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+fn check_private_dir(path: &std::path::Path) -> Result<bool, CodingError> {
+    Ok(path.is_dir())
+}
+
+/// The root's journal directory for WRITING: created private on first use
+/// and verified on every use. Blocking syscalls run on the blocking pool,
+/// never on an async worker.
+async fn ensure_journal_dir(root_key: &str) -> Result<std::path::PathBuf, CodingError> {
+    let root_key = root_key.to_owned();
+    join_blocking(tokio::task::spawn_blocking(move || {
+        ensure_journal_dir_sync(&root_key)
+    }))
+    .await
+}
+
+fn ensure_journal_dir_sync(root_key: &str) -> Result<std::path::PathBuf, CodingError> {
+    let base = intent_journal_dir();
+    create_private_dir(&base).map_err(|error| journal_io_error(&error))?;
+    check_private_dir(&base)?;
+    let leaf = intent_dir_for(root_key);
+    create_private_dir(&leaf).map_err(|error| journal_io_error(&error))?;
+    check_private_dir(&leaf)?;
+    Ok(leaf)
+}
+
+async fn join_blocking<T>(
+    handle: tokio::task::JoinHandle<Result<T, CodingError>>,
+) -> Result<T, CodingError> {
+    handle
+        .await
+        .map_err(|error| CodingError::new("io_error", format!("journal task failed: {error}")))?
+}
+
+/// The root's journal directories for READING / removing: the per-user
+/// directory, then (unix) the legacy shared `agentkit-exec-intents/` one that
+/// older builds wrote. Missing directories are skipped; a present-but-
+/// untrusted per-user one is an error.
+async fn existing_journal_dirs(root_key: &str) -> Result<Vec<std::path::PathBuf>, CodingError> {
+    let root_key = root_key.to_owned();
+    join_blocking(tokio::task::spawn_blocking(move || {
+        existing_journal_dirs_sync(&root_key)
+    }))
+    .await
+}
+
+fn existing_journal_dirs_sync(root_key: &str) -> Result<Vec<std::path::PathBuf>, CodingError> {
+    let mut dirs = Vec::new();
+    if check_private_dir(&intent_journal_dir())? {
+        let leaf = intent_dir_for(root_key);
+        if check_private_dir(&leaf)? {
+            dirs.push(leaf);
+        }
+    }
+    #[cfg(unix)]
+    dirs.extend(legacy_journal_leaf(root_key));
+    Ok(dirs)
+}
+
+/// Pending records written by builds that used one world-shared
+/// `agentkit-exec-intents/` directory must still be honored after an
+/// upgrade, or an unresolved cleanup would be forgotten (fail open). Only a
+/// real directory owned by THIS user is read; anything else belongs to other
+/// users (the old directory was shared) or is untrusted, and is ignored
+/// with a one-time warning.
+#[cfg(unix)]
+fn legacy_journal_leaf(root_key: &str) -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    let ours = |path: &std::path::Path| -> Option<bool> {
+        let meta = std::fs::symlink_metadata(path).ok()?;
+        Some(meta.file_type().is_dir() && meta.uid() == current_uid())
+    };
+    let base = std::env::temp_dir().join("agentkit-exec-intents");
+    match ours(&base) {
+        None => return None,
+        Some(false) => {
+            WARNED.call_once(|| {
+                eprintln!(
+                    "Warning: ignoring legacy execution journal {}: not a directory owned by the current user",
+                    base.display()
+                );
+            });
+            return None;
+        }
+        Some(true) => {}
+    }
+    let leaf = base.join(crate::fs_util::sha256(root_key.as_bytes()));
+    (ours(&leaf) == Some(true)).then_some(leaf)
+}
+
+/// Create-new write, owner-only (`0o600`) from the first byte.
+async fn write_private_file(path: &std::path::Path, text: &str) -> Result<(), CodingError> {
+    use tokio::io::AsyncWriteExt;
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(path)
+        .await
+        .map_err(|error| journal_io_error(&error))?;
+    file.write_all(text.as_bytes())
+        .await
+        .map_err(|error| journal_io_error(&error))?;
+    file.flush().await.map_err(|error| journal_io_error(&error))
+}
+
+/// A pid / pgid from untrusted JSON: must fit `i32` and be positive.
+/// Anything else (0, negative, huge) would let `kill(-1, ..)` style values
+/// through, so the whole record is rejected as corrupt instead.
+pub(crate) fn parse_pid(value: &serde_json::Value) -> Option<i32> {
+    i32::try_from(value.as_i64()?).ok().filter(|pid| *pid > 0)
+}
+
+/// Hex sha256 of a holder label: records store the digest, never the text.
+pub(crate) fn label_digest(label: &str) -> String {
+    crate::fs_util::sha256(label.as_bytes())
+}
+
+/// The label a reader reconstructs: the short digest of a current record
+/// (the clear text was never persisted), or `unknown`. A legacy record's
+/// clear `label` is deliberately ignored.
+fn label_from_record(value: &serde_json::Value) -> String {
+    value
+        .get("labelSha256")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(
+            || "unknown".to_owned(),
+            |digest| format!("sha256:{}", digest.chars().take(12).collect::<String>()),
+        )
 }
 
 /// Filesystem-safe filename for an execution nonce (`{pid}:{uuid}`).
@@ -930,13 +1153,17 @@ pub(crate) fn intent_json(intent: &ExecutionIntent) -> serde_json::Value {
         "chatId": intent.holder.chat_id,
         "toolCallId": intent.holder.tool_call_id,
         "tool": intent.holder.tool,
-        "label": intent.holder.label,
+        "labelSha256": label_digest(&intent.holder.label),
     })
 }
 
 pub(crate) fn intent_from_json(value: &serde_json::Value) -> Option<ExecutionIntent> {
     let execution_id = value.get("executionId")?.as_str()?.to_owned();
-    let owner_pid = value.get("ownerPid")?.as_i64()?;
+    let owner_pid = i64::from(parse_pid(value.get("ownerPid")?)?);
+    let pgid = match value.get("pgid") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(pgid) => Some(parse_pid(pgid)?),
+    };
     let text = |name: &str| {
         value
             .get(name)
@@ -953,10 +1180,7 @@ pub(crate) fn intent_from_json(value: &serde_json::Value) -> Option<ExecutionInt
         identity: CommandCleanupIdentity {
             execution_id,
             owner_pid,
-            pgid: value
-                .get("pgid")
-                .and_then(serde_json::Value::as_i64)
-                .map(|pgid| pgid as i32),
+            pgid,
             spawned_at_ms: value
                 .get("spawnedAtMs")
                 .and_then(serde_json::Value::as_u64)
@@ -973,7 +1197,7 @@ pub(crate) fn intent_from_json(value: &serde_json::Value) -> Option<ExecutionInt
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
             tool: text("tool"),
-            label: text("label"),
+            label: label_from_record(value),
         },
         spawned: value
             .get("spawned")
@@ -992,25 +1216,13 @@ pub(crate) async fn write_intent_file(
     root_key: &str,
     intent: &ExecutionIntent,
 ) -> Result<(), CodingError> {
-    let dir = intent_dir_for(root_key);
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+    let dir = ensure_journal_dir(root_key).await?;
     let path = dir.join(intent_file_name(&intent.identity.execution_id) + ".json");
     let temp = dir.join(format!(".tmp-{}", uuid::Uuid::new_v4().simple()));
     let written: Result<(), CodingError> = async {
-        use tokio::io::AsyncWriteExt;
-        let mut file = tokio::fs::File::create(&temp)
-            .await
-            .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
         let text = serde_json::to_string(&intent_json(intent))
             .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
-        file.write_all(text.as_bytes())
-            .await
-            .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
-        file.flush()
-            .await
-            .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+        write_private_file(&temp, &text).await?;
         tokio::fs::rename(&temp, &path)
             .await
             .map_err(|error| CodingError::new("io_error", format!("{error}")))
@@ -1026,24 +1238,39 @@ pub(crate) async fn remove_intent_file(
     root_key: &str,
     execution_id: &str,
 ) -> Result<(), CodingError> {
-    let path = intent_dir_for(root_key).join(intent_file_name(execution_id) + ".json");
-    match tokio::fs::remove_file(&path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(CodingError::new("io_error", format!("{error}"))),
+    for dir in existing_journal_dirs(root_key).await? {
+        let path = dir.join(intent_file_name(execution_id) + ".json");
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CodingError::new("io_error", format!("{error}"))),
+        }
     }
+    Ok(())
 }
 
 /// Every intent file recorded for the root. An unparseable intent is NOT
 /// dropped: it reconciles as an unknown survivor set (fail closed).
 pub(crate) async fn read_intent_files(root_key: &str) -> Result<Vec<ExecutionIntent>, CodingError> {
-    let dir = intent_dir_for(root_key);
-    let mut entries = match tokio::fs::read_dir(&dir).await {
+    let mut intents = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for dir in existing_journal_dirs(root_key).await? {
+        read_intent_dir(&dir, root_key, &mut seen, &mut intents).await?;
+    }
+    Ok(intents)
+}
+
+async fn read_intent_dir(
+    dir: &std::path::Path,
+    root_key: &str,
+    seen: &mut std::collections::HashSet<String>,
+    intents: &mut Vec<ExecutionIntent>,
+) -> Result<(), CodingError> {
+    let mut entries = match tokio::fs::read_dir(dir).await {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(CodingError::new("io_error", format!("{error}"))),
     };
-    let mut intents = Vec::new();
     while let Some(entry) = entries
         .next_entry()
         .await
@@ -1054,6 +1281,9 @@ pub(crate) async fn read_intent_files(root_key: &str) -> Result<Vec<ExecutionInt
             // The root's quarantine record lives in the same journal dir;
             // it is not an intent and must never reconcile as one.
             continue;
+        }
+        if !seen.insert(name.clone()) {
+            continue; // already read from the per-user directory
         }
         let text = tokio::fs::read_to_string(entry.path())
             .await
@@ -1080,7 +1310,7 @@ pub(crate) async fn read_intent_files(root_key: &str) -> Result<Vec<ExecutionInt
             });
         intents.push(intent);
     }
-    Ok(intents)
+    Ok(())
 }
 
 /// Name of the durable quarantine record inside the root's journal
@@ -1101,7 +1331,8 @@ pub(crate) fn quarantine_json(quarantine: &WorkspaceQuarantine) -> serde_json::V
         "chatId": quarantine.holder.chat_id,
         "toolCallId": quarantine.holder.tool_call_id,
         "tool": quarantine.holder.tool,
-        "label": quarantine.holder.label,
+        "labelSha256": label_digest(&quarantine.holder.label),
+        "reason": quarantine.reason,
         "identity": quarantine.identity.as_ref().map(|identity| serde_json::json!({
             "executionId": identity.execution_id,
             "ownerPid": identity.owner_pid,
@@ -1115,12 +1346,18 @@ pub(crate) fn quarantine_from_json(
     root: &str,
     value: &serde_json::Value,
 ) -> Option<WorkspaceQuarantine> {
-    let pids = value
-        .get("pids")?
-        .as_array()?
-        .iter()
-        .filter_map(|pid| pid.as_i64().map(|pid| pid as i32))
-        .collect();
+    // One bad pid rejects the record (-> unknown survivors, fail closed)
+    // rather than being silently dropped from the survivor set.
+    // A record with NO `pids` key (older / TS-written) keeps its
+    // identity-based clearing; a PRESENT but invalid list is rejected.
+    let pids = match value.get("pids") {
+        None => Vec::new(),
+        Some(pids) => pids
+            .as_array()?
+            .iter()
+            .map(parse_pid)
+            .collect::<Option<Vec<i32>>>()?,
+    };
     let text = |name: &str| {
         value
             .get(name)
@@ -1128,20 +1365,23 @@ pub(crate) fn quarantine_from_json(
             .unwrap_or("unknown")
             .to_owned()
     };
-    let identity = value.get("identity").and_then(|identity| {
-        Some(CommandCleanupIdentity {
+    // Absent / null identity = generic evidence; a PRESENT but malformed one
+    // rejects the record instead of downgrading it to the weaker pid-only rule.
+    let identity = match value.get("identity") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(identity) => Some(CommandCleanupIdentity {
             execution_id: identity.get("executionId")?.as_str()?.to_owned(),
-            owner_pid: identity.get("ownerPid")?.as_i64()?,
-            pgid: identity
-                .get("pgid")
-                .and_then(serde_json::Value::as_i64)
-                .map(|pgid| pgid as i32),
+            owner_pid: i64::from(parse_pid(identity.get("ownerPid")?)?),
+            pgid: match identity.get("pgid") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(pgid) => Some(parse_pid(pgid)?),
+            },
             spawned_at_ms: identity
                 .get("spawnedAtMs")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or_default(),
-        })
-    });
+        }),
+    };
     Some(WorkspaceQuarantine {
         root: root.to_owned(),
         pids,
@@ -1156,12 +1396,16 @@ pub(crate) fn quarantine_from_json(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
             tool: text("tool"),
-            label: text("label"),
+            label: label_from_record(value),
         },
         quarantined_at_ms: value
             .get("quarantinedAtMs")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or_default(),
+        reason: value
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
         identity,
     })
 }
@@ -1174,25 +1418,13 @@ pub(crate) async fn write_quarantine_file(
     root_key: &str,
     quarantine: &WorkspaceQuarantine,
 ) -> Result<(), CodingError> {
-    let dir = intent_dir_for(root_key);
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+    let dir = ensure_journal_dir(root_key).await?;
     let path = dir.join(QUARANTINE_FILE_NAME);
     let temp = dir.join(format!(".tmp-quarantine-{}", uuid::Uuid::new_v4().simple()));
     let written: Result<(), CodingError> = async {
-        use tokio::io::AsyncWriteExt;
-        let mut file = tokio::fs::File::create(&temp)
-            .await
-            .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
         let text = serde_json::to_string(&quarantine_json(quarantine))
             .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
-        file.write_all(text.as_bytes())
-            .await
-            .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
-        file.flush()
-            .await
-            .map_err(|error| CodingError::new("io_error", format!("{error}")))?;
+        write_private_file(&temp, &text).await?;
         tokio::fs::rename(&temp, &path)
             .await
             .map_err(|error| CodingError::new("io_error", format!("{error}")))
@@ -1204,12 +1436,125 @@ pub(crate) async fn write_quarantine_file(
     written
 }
 
+/// Unconditional removal: explicit operator recovery only. Retirement on
+/// positive evidence goes through [`retire_quarantine_file`].
 pub(crate) async fn remove_quarantine_file(root_key: &str) -> Result<(), CodingError> {
-    let path = intent_dir_for(root_key).join(QUARANTINE_FILE_NAME);
-    match tokio::fs::remove_file(&path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(CodingError::new("io_error", format!("{error}"))),
+    for dir in existing_journal_dirs(root_key).await? {
+        let path = dir.join(QUARANTINE_FILE_NAME);
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CodingError::new("io_error", format!("{error}"))),
+        }
+    }
+    Ok(())
+}
+
+/// Retire the root's durable quarantine record, but only if it is still the
+/// record that was judged positively exited. Returns `true` when retired (or
+/// already gone), `false` when a DIFFERENT record sits there now — the
+/// caller must keep treating the root as quarantined.
+pub(crate) async fn retire_quarantine_file(
+    root_key: &str,
+    scanned: &WorkspaceQuarantine,
+) -> Result<bool, CodingError> {
+    let mut all_retired = true;
+    for dir in existing_journal_dirs(root_key).await? {
+        let path = dir.join(QUARANTINE_FILE_NAME);
+        all_retired &= retire_quarantine_record(&path, root_key, scanned).await?;
+    }
+    Ok(all_retired)
+}
+
+/// Do two quarantine records describe the same unresolved cleanup? Compares
+/// the fields that make a record THIS record rather than a republished one:
+/// publication time, execution identity, owning run / tool call, pids.
+pub(crate) fn same_quarantine_record(a: &WorkspaceQuarantine, b: &WorkspaceQuarantine) -> bool {
+    a.quarantined_at_ms == b.quarantined_at_ms
+        && a.identity == b.identity
+        && a.pids == b.pids
+        && a.holder.run_id == b.holder.run_id
+        && a.holder.tool_call_id == b.holder.tool_call_id
+}
+
+/// Check-then-unlink without the race: `remove_file` after a read could
+/// delete a record republished in between (a NEW unresolved cleanup).
+/// Instead the record is renamed to a unique tombstone — which atomically
+/// pins one concrete file — re-read, compared with the scanned record, and
+/// only then unlinked. A mismatch puts the record back. If the path was
+/// repopulated meanwhile the newer record wins and the displaced one stays
+/// in its tombstone (`<path>.retiring.<uuid>`, never read by any scanner)
+/// for an operator; the result is `false` (still quarantined, fail closed).
+/// Remaining window: between the rename and the restore a concurrent reader
+/// sees no record; that needs a mismatch to occur at all.
+///
+/// The whole sequence is ONE synchronous closure on the blocking pool: a
+/// spawned blocking task runs to completion even if the awaiting future is
+/// dropped, so cancellation can never strand a record in a tombstone.
+pub(crate) async fn retire_quarantine_record(
+    path: &std::path::Path,
+    root_key: &str,
+    scanned: &WorkspaceQuarantine,
+) -> Result<bool, CodingError> {
+    let (path, root_key, scanned) = (path.to_owned(), root_key.to_owned(), scanned.clone());
+    join_blocking(tokio::task::spawn_blocking(move || {
+        retire_quarantine_record_sync(&path, &root_key, &scanned)
+    }))
+    .await
+}
+
+fn retire_quarantine_record_sync(
+    path: &std::path::Path,
+    root_key: &str,
+    scanned: &WorkspaceQuarantine,
+) -> Result<bool, CodingError> {
+    let tomb = std::path::PathBuf::from(format!(
+        "{}.retiring.{}",
+        path.display(),
+        uuid::Uuid::new_v4().simple()
+    ));
+    match std::fs::rename(path, &tomb) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(journal_io_error(&error)),
+    }
+    let moved = match std::fs::read_to_string(&tomb) {
+        Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|value| quarantine_from_json(root_key, &value)),
+        Err(error) => {
+            restore_tombstone(&tomb, path);
+            return Err(journal_io_error(&error));
+        }
+    };
+    if moved
+        .as_ref()
+        .is_some_and(|moved| same_quarantine_record(moved, scanned))
+    {
+        match std::fs::remove_file(&tomb) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+            Err(error) => Err(journal_io_error(&error)),
+        }
+    } else {
+        restore_tombstone(&tomb, path);
+        Ok(false)
+    }
+}
+
+/// Put a displaced record back. `hard_link` never overwrites, so a record
+/// published into the vacated path wins; ours then stays in the tombstone.
+fn restore_tombstone(tomb: &std::path::Path, path: &std::path::Path) {
+    match std::fs::hard_link(tomb, path) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(tomb);
+        }
+        Err(error) => eprintln!(
+            "Warning: quarantine record displaced by a concurrent retire kept at {} ({error}); \
+             a newer record occupies {}",
+            tomb.display(),
+            path.display()
+        ),
     }
 }
 
@@ -1219,11 +1564,21 @@ pub(crate) async fn remove_quarantine_file(root_key: &str) -> Result<(), CodingE
 pub(crate) async fn read_quarantine_file(
     root_key: &str,
 ) -> Result<Option<WorkspaceQuarantine>, CodingError> {
-    let path = intent_dir_for(root_key).join(QUARANTINE_FILE_NAME);
-    let text = match tokio::fs::read_to_string(&path).await {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(CodingError::new("io_error", format!("{error}"))),
+    // The per-user directory wins; a legacy record is honored when it has
+    // no per-user successor.
+    let mut found = None;
+    for dir in existing_journal_dirs(root_key).await? {
+        match tokio::fs::read_to_string(dir.join(QUARANTINE_FILE_NAME)).await {
+            Ok(text) => {
+                found = Some(text);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CodingError::new("io_error", format!("{error}"))),
+        }
+    }
+    let Some(text) = found else {
+        return Ok(None);
     };
     let quarantine = serde_json::from_str::<serde_json::Value>(&text)
         .ok()
@@ -1239,6 +1594,7 @@ pub(crate) async fn read_quarantine_file(
                 label: "unreadable quarantine record".to_owned(),
             },
             quarantined_at_ms: 0,
+            reason: None,
             identity: None,
         });
     Ok(Some(quarantine))
@@ -1266,7 +1622,10 @@ impl InProcessCoordinator {
         root: &str,
     ) -> Result<Option<WorkspaceQuarantine>, CodingError> {
         let candidate = {
-            let quarantines = self.quarantines.lock().expect("quarantine lock");
+            let quarantines = self
+                .quarantines
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             quarantines.get(root).cloned()
         };
         let candidate = match candidate {
@@ -1281,8 +1640,29 @@ impl InProcessCoordinator {
             // Retire BOTH halves of the record. A failed durable removal is
             // an `Err` (the root stays blocked) — half-retiring would let a
             // reopen resurrect the same uncertain evidence anyway.
-            remove_quarantine_file(root).await?;
-            let mut quarantines = self.quarantines.lock().expect("quarantine lock");
+            if !retire_quarantine_file(root, &candidate).await? {
+                // A different durable record replaced the one judged exited.
+                // Drop a stale in-memory mirror of the judged one (else the
+                // root stays blocked on it forever), then report the durable
+                // record that now governs the root.
+                {
+                    let mut quarantines = self
+                        .quarantines
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    if quarantines
+                        .get(root)
+                        .is_some_and(|current| same_quarantine_record(current, &candidate))
+                    {
+                        quarantines.remove(root);
+                    }
+                }
+                return read_quarantine_file(root).await;
+            }
+            let mut quarantines = self
+                .quarantines
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             if let Some(current) = quarantines.get(root)
                 && current.pids == candidate.pids
                 && current.identity == candidate.identity
@@ -1295,7 +1675,7 @@ impl InProcessCoordinator {
         // journal on every poll.
         self.quarantines
             .lock()
-            .expect("quarantine lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .entry(root.to_owned())
             .or_insert_with(|| candidate.clone());
         Ok(Some(candidate))
@@ -1371,13 +1751,13 @@ impl InProcessCoordinator {
         tracker: &WaitTracker,
     ) -> Result<ReleaseFn, CodingError> {
         let observer = self.observer.clone();
-        let state = {
-            let tracker = tracker.clone();
-            let observer_inner = observer.clone();
-            let root_owned = root.to_owned();
-            let path_owned = path.map(str::to_owned);
-            let holder_owned = holder.clone();
-            map.try_acquire(&key, mode, holder, &move |holders| {
+        let state = map.try_acquire(&key, mode, holder);
+        let tracker = tracker.clone();
+        let root_owned = root.to_owned();
+        let path_owned = path.map(str::to_owned);
+        let holder_owned = holder.clone();
+        let id = map
+            .wait(&key, state, cancellation, &move |holders| {
                 tracker.waiting(
                     CoordinationWait {
                         kind,
@@ -1386,12 +1766,11 @@ impl InProcessCoordinator {
                         waiter: holder_owned.clone(),
                         holders: holders.to_vec(),
                     },
-                    observer_inner.as_ref(),
+                    observer.as_ref(),
                 );
             })
-        };
-        map.wait(&key, state, cancellation).await?;
-        Ok(sync_release(Arc::clone(map), key, mode, holder.clone()))
+            .await?;
+        Ok(sync_release(Arc::clone(map), key, id))
     }
 
     pub(crate) async fn acquire_file_tracked(
@@ -1589,11 +1968,12 @@ impl WorkspaceCoordinator for InProcessCoordinator {
             pids: evidence.pids.clone(),
             holder: evidence.holder.clone(),
             quarantined_at_ms: now_ms_u64(),
+            reason: evidence.reason.clone(),
             identity: None,
         };
         self.quarantines
             .lock()
-            .expect("quarantine lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(root.clone(), record.clone());
         // Durability rule: the in-memory record alone dies with the
         // coordinator, so the durable journal publication IS the blocking
@@ -1625,7 +2005,7 @@ impl WorkspaceCoordinator for InProcessCoordinator {
         let removed_memory = self
             .quarantines
             .lock()
-            .expect("quarantine lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .remove(&root)
             .is_some();
         let removed = had_durable || removed_memory;
@@ -1641,7 +2021,7 @@ impl WorkspaceCoordinator for InProcessCoordinator {
         let mut candidates: Vec<ExecutionIntent> = self
             .intents
             .lock()
-            .expect("intent lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .get(&root)
             .map(|live| live.values().cloned().collect())
             .unwrap_or_default();
@@ -1680,11 +2060,12 @@ impl WorkspaceCoordinator for InProcessCoordinator {
             pids: evidence.pids.clone(),
             holder: evidence.holder.clone(),
             quarantined_at_ms: now_ms_u64(),
+            reason: evidence.reason.clone(),
             identity: Some(identity.clone()),
         };
         self.quarantines
             .lock()
-            .expect("quarantine lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .insert(root.clone(), record.clone());
         // Driver-created quarantine must be DURABLE (the assessor defect:
         // a memory-only Ok here let the driver delete the durable intent,
@@ -1702,7 +2083,7 @@ impl WorkspaceCoordinator for InProcessCoordinator {
         };
         self.intents
             .lock()
-            .expect("intent lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .entry(root.clone())
             .or_default()
             .insert(stored.identity.execution_id.clone(), stored.clone());
@@ -1721,7 +2102,7 @@ impl WorkspaceCoordinator for InProcessCoordinator {
         let drained = self
             .intents
             .lock()
-            .expect("intent lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .get_mut(&root)
             .map(|root_intents| {
                 root_intents.remove(execution_id);
@@ -1729,7 +2110,10 @@ impl WorkspaceCoordinator for InProcessCoordinator {
             })
             .unwrap_or(false);
         if drained {
-            self.intents.lock().expect("intent lock").remove(&root);
+            self.intents
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&root);
         }
         remove_intent_file(&root, execution_id).await
     }
@@ -1739,7 +2123,7 @@ impl WorkspaceCoordinator for InProcessCoordinator {
         let mut candidates: Vec<ExecutionIntent> = self
             .intents
             .lock()
-            .expect("intent lock")
+            .unwrap_or_else(PoisonError::into_inner)
             .get(&root)
             .map(|live| live.values().cloned().collect())
             .unwrap_or_default();
@@ -1794,16 +2178,20 @@ impl WorkspaceCoordinator for InProcessCoordinator {
             // remains — the next coordinator would admit modifying work.
             let pids = survivors.unwrap_or_default();
             if self.live_quarantine(&root).await?.is_none() {
-                self.quarantines.lock().expect("quarantine lock").insert(
-                    root.clone(),
-                    WorkspaceQuarantine {
-                        root: root.clone(),
-                        pids,
-                        holder: intent.holder.clone(),
-                        quarantined_at_ms: now_ms_u64(),
-                        identity: (!corrupt).then(|| intent.identity.clone()),
-                    },
-                );
+                self.quarantines
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(
+                        root.clone(),
+                        WorkspaceQuarantine {
+                            root: root.clone(),
+                            pids,
+                            holder: intent.holder.clone(),
+                            quarantined_at_ms: now_ms_u64(),
+                            reason: None,
+                            identity: (!corrupt).then(|| intent.identity.clone()),
+                        },
+                    );
             }
             // If a live quarantine already blocks the root it was published
             // for a DIFFERENT execution's identity, so it does not represent
@@ -1864,6 +2252,7 @@ mod tests {
                 &QuarantineEvidence {
                     pids: vec![pid],
                     holder: holder("r1", "command", "long build"),
+                    reason: None,
                 },
             )
             .await
@@ -1928,6 +2317,7 @@ mod tests {
                 &QuarantineEvidence {
                     pids: vec![],
                     holder: holder("r1", "command", "crashed"),
+                    reason: None,
                 },
             )
             .await
@@ -2122,7 +2512,7 @@ mod tests {
                 if self
                     .events
                     .lock()
-                    .expect("observer lock")
+                    .unwrap_or_else(PoisonError::into_inner)
                     .iter()
                     .any(|event| event.contains(needle))
                 {
@@ -2147,18 +2537,24 @@ mod tests {
                 WaitKind::File => "file",
                 WaitKind::Workspace => "workspace",
             };
-            self.events.lock().expect("observer lock").push(format!(
-                "waiting:{kind}:{}:{}",
-                wait.waiter.run_id, wait.waiter.tool
-            ));
+            self.events
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(format!(
+                    "waiting:{kind}:{}:{}",
+                    wait.waiter.run_id, wait.waiter.tool
+                ));
             self.signal.notify_waiters();
         }
 
         fn on_acquired(&self, wait: &CoordinationWait) {
-            self.events.lock().expect("observer lock").push(format!(
-                "acquired:{}:{}",
-                wait.waiter.run_id, wait.waiter.tool
-            ));
+            self.events
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(format!(
+                    "acquired:{}:{}",
+                    wait.waiter.run_id, wait.waiter.tool
+                ));
             self.signal.notify_waiters();
         }
     }
@@ -2638,6 +3034,7 @@ mod tests {
                 &QuarantineEvidence {
                     pids: vec![pid],
                     holder: holder("run-a", "run_command", "make install"),
+                    reason: None,
                 },
             )
             .await
@@ -2693,6 +3090,7 @@ mod tests {
                 &QuarantineEvidence {
                     pids: vec![pid],
                     holder: holder("run-a", "edit_file", "edit a.txt"),
+                    reason: None,
                 },
             )
             .await
@@ -2715,5 +3113,453 @@ mod tests {
         .expect("the workspace is reclaimable once the survivor exited")
         .expect("C acquires the exclusive lease the file lease had blocked");
         reclaim.release().await;
+    }
+
+    // ---- K1: grants are tracked by entry id, not holder equality ----
+
+    #[tokio::test]
+    async fn an_abandoned_queued_waiter_with_an_equal_holder_keeps_the_first_grant() {
+        let map = Arc::new(GateMap::new());
+        // Identical holders: no tool_call_id, same run — `==` cannot tell them apart.
+        let same = holder("same-run", "command", "x");
+        let first = map.try_acquire("k", Mode::Exclusive, &same);
+        let first_id = map
+            .wait("k", first, &None, &|_| {})
+            .await
+            .expect("first granted");
+        let second = map.try_acquire("k", Mode::Exclusive, &same);
+        assert!(matches!(second, AcquireState::Queued { .. }));
+        {
+            let waiting = map.wait("k", second, &None, &|_| {});
+            tokio::pin!(waiting);
+            assert!(futures::poll!(&mut waiting).is_pending());
+        } // second's future dropped while queued
+        // The first grant is still held: a third request must queue.
+        let third = map.try_acquire("k", Mode::Exclusive, &same);
+        let AcquireState::Queued { receiver, .. } = third else {
+            panic!("the first holder's exclusive grant was released by a dropped waiter");
+        };
+        map.release("k", first_id);
+        receiver
+            .await
+            .expect("third is granted once the first releases");
+    }
+
+    #[tokio::test]
+    async fn a_granted_but_unaccepted_waiter_drop_removes_only_its_own_grant() {
+        let map = Arc::new(GateMap::new());
+        let same = holder("same-run", "command", "x");
+        let first = map.try_acquire("k", Mode::Exclusive, &same);
+        let first_id = map.wait("k", first, &None, &|_| {}).await.expect("first");
+        let second = map.try_acquire("k", Mode::Exclusive, &same);
+        let mut waiting = Box::pin(map.wait("k", second, &None, &|_| {}));
+        assert!(futures::poll!(&mut waiting).is_pending());
+        // `pump` grants the second entry; its future never runs again.
+        map.release("k", first_id);
+        drop(waiting);
+        // Nothing is left held: the next request is granted immediately.
+        assert!(matches!(
+            map.try_acquire("k", Mode::Exclusive, &same),
+            AcquireState::Granted(_)
+        ));
+    }
+
+    // ---- K3: a half-released lease still defers the remaining closures ----
+
+    #[tokio::test]
+    async fn dropping_a_lease_mid_release_defers_the_remaining_releases() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let (second_tx, second_rx) = tokio::sync::oneshot::channel::<()>();
+        let first: ReleaseFn = Box::new(move || {
+            Box::pin(async move {
+                let _ = started_tx.send(());
+                futures::future::pending::<()>().await;
+            })
+        });
+        let second: ReleaseFn = Box::new(move || {
+            Box::pin(async move {
+                let _ = second_tx.send(());
+            })
+        });
+        let mut lease = WorkspaceLease::new(vec![first, second]);
+        {
+            let releasing = lease.release();
+            tokio::pin!(releasing);
+            assert!(futures::poll!(&mut releasing).is_pending());
+            started_rx.await.expect("first release started");
+        } // dropped mid-release
+        drop(lease);
+        tokio::time::timeout(Duration::from_secs(5), second_rx)
+            .await
+            .expect("the remaining release runs via Drop")
+            .expect("second release ran");
+    }
+
+    // ---- K6: the wait cap spawns no forwarder / timer task ----
+
+    #[tokio::test]
+    async fn the_wait_cap_spawns_no_task_and_follows_the_caller_token() {
+        let parent = CancellationToken::new();
+        let tracker = WaitTracker::default();
+        let observed_tasks = Arc::new(AtomicU64::new(u64::MAX));
+        let seen = Arc::clone(&observed_tasks);
+        let waiting = with_wait_cap(Some(parent.clone()), Some(60_000), &tracker, move |token| {
+            Box::pin(async move {
+                let alive = tokio::runtime::Handle::current()
+                    .metrics()
+                    .num_alive_tasks();
+                seen.store(alive as u64, Ordering::SeqCst);
+                token.expect("capped token").cancelled().await;
+                Err::<(), _>(abort_error())
+            })
+        });
+        tokio::pin!(waiting);
+        assert!(futures::poll!(&mut waiting).is_pending());
+        parent.cancel();
+        let error = waiting
+            .await
+            .expect_err("the caller's cancel reaches the capped token");
+        assert_eq!(error.code, "aborted", "not reported as busy: {error:?}");
+        assert_eq!(observed_tasks.load(Ordering::SeqCst), 0, "no spawned task");
+    }
+
+    // ---- K7: observers run outside the gate lock ----
+
+    struct PanickingObserver;
+
+    impl CoordinatorObserver for PanickingObserver {
+        fn on_waiting(&self, _wait: &CoordinationWait) {
+            panic!("observer bug");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_panicking_observer_neither_poisons_nor_wedges_the_gate() {
+        let coordinator = coordinator_with(Arc::new(PanickingObserver));
+        let root = temp_dir("panicking-observer");
+        let mut held = coordinator
+            .acquire_workspace(ws_input(&root, "obs-a", "command", "a"))
+            .await
+            .expect("a acquires");
+        let blocked = {
+            let (coordinator, root) = (Arc::clone(&coordinator), root.clone());
+            tokio::spawn(async move {
+                coordinator
+                    .acquire_workspace(ws_input(&root, "obs-b", "command", "b"))
+                    .await
+            })
+        };
+        let joined = blocked.await;
+        assert!(
+            joined.is_err_and(|error| error.is_panic()),
+            "observer panicked in b"
+        );
+        held.release().await;
+        let mut later = tokio::time::timeout(
+            Duration::from_secs(5),
+            coordinator.acquire_workspace(ws_input(&root, "obs-c", "command", "c")),
+        )
+        .await
+        .expect("the gate is not wedged or poisoned")
+        .expect("c acquires");
+        later.release().await;
+    }
+
+    // ---- K4: retire is rename + verify, never check-then-unlink ----
+
+    fn quarantine_at(stamp: u64, run: &str) -> WorkspaceQuarantine {
+        WorkspaceQuarantine {
+            root: "/r".into(),
+            pids: vec![4242],
+            holder: holder(run, "command", "x"),
+            quarantined_at_ms: stamp,
+            reason: None,
+            identity: None,
+        }
+    }
+
+    fn write_quarantine(path: &std::path::Path, quarantine: &WorkspaceQuarantine) {
+        std::fs::write(path, quarantine_json(quarantine).to_string()).expect("write record");
+    }
+
+    #[tokio::test]
+    async fn retire_unlinks_the_record_that_was_scanned() {
+        let dir = std::path::PathBuf::from(temp_dir("retire-same"));
+        let path = dir.join(QUARANTINE_FILE_NAME);
+        let scanned = quarantine_at(100, "run-a");
+        write_quarantine(&path, &scanned);
+        assert!(
+            retire_quarantine_record(&path, "/r", &scanned)
+                .await
+                .unwrap()
+        );
+        assert!(!path.exists(), "the scanned record is retired");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "no tombstone left"
+        );
+    }
+
+    #[tokio::test]
+    async fn retire_racing_a_republish_keeps_the_new_record() {
+        let dir = std::path::PathBuf::from(temp_dir("retire-race"));
+        let path = dir.join(QUARANTINE_FILE_NAME);
+        let scanned = quarantine_at(100, "run-a");
+        // Between the scan and the retire a NEW unresolved cleanup replaced it.
+        write_quarantine(&path, &quarantine_at(200, "run-b"));
+        let retired = retire_quarantine_record(&path, "/r", &scanned)
+            .await
+            .unwrap();
+        assert!(
+            !retired,
+            "a different record must report 'still quarantined'"
+        );
+        let kept: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("record restored"))
+                .unwrap();
+        assert_eq!(kept["runId"], "run-b", "the newer record survives");
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no tombstone left"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_displaced_record_whose_name_was_retaken_stays_in_its_tombstone() {
+        let dir = std::path::PathBuf::from(temp_dir("retire-retaken"));
+        let path = dir.join(QUARANTINE_FILE_NAME);
+        let tomb = dir.join("quarantine.json.retiring.1.2");
+        write_quarantine(&tomb, &quarantine_at(100, "run-old"));
+        write_quarantine(&path, &quarantine_at(200, "run-new"));
+        restore_tombstone(&tomb, &path);
+        assert!(tomb.exists(), "the displaced record is kept, not destroyed");
+        let kept = std::fs::read_to_string(&path).unwrap();
+        assert!(kept.contains("run-new"), "the newer record wins the name");
+    }
+
+    // ---- K5: private journal, digest-only labels, strict pid parsing ----
+
+    #[cfg(unix)]
+    #[test]
+    fn the_journal_directory_check_refuses_loose_symlinked_and_accepts_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::path::PathBuf::from(temp_dir("private-check"));
+        let dir = base.join("d");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(check_private_dir(&dir).unwrap());
+        for loose in [0o755, 0o750, 0o770, 0o707] {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(loose)).unwrap();
+            assert!(
+                check_private_dir(&dir).is_err(),
+                "mode {loose:o} must be refused"
+            );
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        assert!(check_private_dir(&link).is_err(), "symlinks are refused");
+        assert!(!check_private_dir(&base.join("missing")).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn journal_files_are_owner_only_and_carry_no_clear_label() {
+        use std::os::unix::fs::PermissionsExt;
+        let root_key = format!("/k5-root-{}", uuid::Uuid::new_v4());
+        let secret_label = "super secret command label";
+        let intent = ExecutionIntent {
+            root: root_key.clone(),
+            identity: CommandCleanupIdentity {
+                execution_id: format!("{}:{}", std::process::id(), uuid::Uuid::new_v4()),
+                owner_pid: i64::from(std::process::id()),
+                pgid: Some(4242),
+                spawned_at_ms: 1,
+            },
+            holder: holder("k5", "command", secret_label),
+            spawned: true,
+        };
+        write_intent_file(&root_key, &intent).await.expect("intent");
+        let quarantine = WorkspaceQuarantine {
+            root: root_key.clone(),
+            pids: vec![4242],
+            holder: holder("k5", "command", secret_label),
+            quarantined_at_ms: 5,
+            reason: None,
+            identity: None,
+        };
+        write_quarantine_file(&root_key, &quarantine)
+            .await
+            .expect("quarantine");
+        let leaf = intent_dir_for(&root_key);
+        let mode =
+            |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&intent_journal_dir()), 0o700);
+        assert_eq!(mode(&leaf), 0o700);
+        let mut files = 0;
+        for entry in std::fs::read_dir(&leaf).unwrap() {
+            let path = entry.unwrap().path();
+            assert_eq!(mode(&path), 0o600, "{}", path.display());
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(!text.contains(secret_label), "clear label on disk: {text}");
+            assert!(text.contains("labelSha256"), "{text}");
+            files += 1;
+        }
+        assert_eq!(files, 2);
+        let back = read_quarantine_file(&root_key)
+            .await
+            .unwrap()
+            .expect("readable");
+        assert_eq!(back.pids, vec![4242]);
+        let _ = std::fs::remove_dir_all(&leaf);
+    }
+
+    #[test]
+    fn records_with_bad_pids_are_rejected_and_legacy_labels_are_ignored() {
+        let base = serde_json::json!({
+            "executionId": "1:abc", "ownerPid": 7, "pgid": 9, "runId": "r",
+            "tool": "command", "label": "clear legacy label",
+        });
+        let legacy = intent_from_json(&base).expect("legacy record still parses");
+        assert_eq!(
+            legacy.holder.label, "unknown",
+            "legacy clear label is ignored"
+        );
+        for bad in [
+            serde_json::json!(0),
+            serde_json::json!(-5),
+            serde_json::json!(i64::from(i32::MAX) + 1),
+            serde_json::json!("12"),
+        ] {
+            let mut value = base.clone();
+            value["pgid"] = bad.clone();
+            assert!(intent_from_json(&value).is_none(), "pgid {bad}");
+            let mut value = base.clone();
+            value["ownerPid"] = bad.clone();
+            assert!(intent_from_json(&value).is_none(), "ownerPid {bad}");
+            let record = serde_json::json!({"pids": [bad.clone()]});
+            assert!(
+                quarantine_from_json("/r", &record).is_none(),
+                "pids [{bad}]"
+            );
+        }
+    }
+
+    // ---- review fixes: legacy journal, in-memory mirror on mismatch ----
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pending_records_in_the_legacy_shared_journal_are_still_honored() {
+        use std::os::unix::fs::MetadataExt;
+        let legacy_base = std::env::temp_dir().join("agentkit-exec-intents");
+        if let Ok(meta) = std::fs::symlink_metadata(&legacy_base)
+            && (meta.uid() != current_uid() || !meta.file_type().is_dir())
+        {
+            return; // a foreign legacy dir is (correctly) ignored; nothing to assert
+        }
+        let root_key = format!("/legacy-root-{}", uuid::Uuid::new_v4());
+        let leaf = legacy_base.join(crate::fs_util::sha256(root_key.as_bytes()));
+        std::fs::create_dir_all(&leaf).expect("legacy leaf");
+        std::fs::write(
+            leaf.join(QUARANTINE_FILE_NAME),
+            serde_json::json!({
+                "pids": [std::process::id()], "quarantinedAtMs": 9, "runId": "old-run",
+                "tool": "command", "label": "clear old label",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            leaf.join("11-abc.json"),
+            serde_json::json!({
+                "executionId": "11:abc", "ownerPid": 11, "runId": "old-run",
+                "tool": "command", "label": "clear old label", "spawned": false,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let quarantine = read_quarantine_file(&root_key)
+            .await
+            .unwrap()
+            .expect("legacy quarantine honored");
+        assert_eq!(quarantine.holder.run_id, "old-run");
+        assert_eq!(quarantine.pids, vec![std::process::id() as i32]);
+        let intents = read_intent_files(&root_key).await.unwrap();
+        assert_eq!(intents.len(), 1, "legacy intent honored");
+        assert_eq!(intents[0].identity.execution_id, "11:abc");
+        // Recovery removes the legacy copies too.
+        remove_quarantine_file(&root_key).await.unwrap();
+        remove_intent_file(&root_key, "11:abc").await.unwrap();
+        assert!(read_quarantine_file(&root_key).await.unwrap().is_none());
+        assert!(read_intent_files(&root_key).await.unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&leaf);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_retire_mismatch_drops_the_stale_memory_mirror_and_reports_the_durable_record() {
+        let coordinator = InProcessCoordinator::new(None);
+        let root_key = format!("/mirror-root-{}", uuid::Uuid::new_v4());
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let dead = child.id().expect("pid") as i32;
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        // Memory mirrors a record whose process is gone...
+        let judged = WorkspaceQuarantine {
+            root: root_key.clone(),
+            pids: vec![dead],
+            holder: holder("old-run", "command", "x"),
+            quarantined_at_ms: 1,
+            reason: None,
+            identity: None,
+        };
+        lock(&coordinator.quarantines).insert(root_key.clone(), judged);
+        // ...but a different, live record was durably published since.
+        let durable = WorkspaceQuarantine {
+            root: root_key.clone(),
+            pids: vec![std::process::id() as i32],
+            holder: holder("new-run", "command", "y"),
+            quarantined_at_ms: 2,
+            reason: None,
+            identity: None,
+        };
+        write_quarantine_file(&root_key, &durable).await.unwrap();
+        let reported = coordinator
+            .live_quarantine(&root_key)
+            .await
+            .unwrap()
+            .expect("the durable record governs");
+        assert_eq!(reported.holder.run_id, "new-run");
+        assert!(
+            !lock(&coordinator.quarantines).contains_key(&root_key),
+            "stale mirror dropped"
+        );
+        let _ = std::fs::remove_dir_all(intent_dir_for(&root_key));
+    }
+
+    #[tokio::test]
+    async fn the_quarantine_reason_round_trips_and_names_itself_in_the_error() {
+        let root_key = format!("/reason-root-{}", uuid::Uuid::new_v4());
+        let mut quarantine = quarantine_at(7, "run-r");
+        quarantine.root = root_key.clone();
+        quarantine.reason = Some("group_stuck".to_owned());
+        write_quarantine_file(&root_key, &quarantine).await.unwrap();
+        let back = read_quarantine_file(&root_key).await.unwrap().unwrap();
+        assert_eq!(back.reason.as_deref(), Some("group_stuck"));
+        assert!(quarantine_error(&back).message.contains("group_stuck"));
+        // A record without the field (older build) reads back as None.
+        let mut value = quarantine_json(&quarantine);
+        value.as_object_mut().unwrap().remove("reason");
+        assert!(
+            quarantine_from_json(&root_key, &value)
+                .unwrap()
+                .reason
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(intent_dir_for(&root_key));
     }
 }

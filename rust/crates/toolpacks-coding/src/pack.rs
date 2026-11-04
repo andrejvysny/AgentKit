@@ -48,7 +48,7 @@ fn resolve_limits(
     partial: &crate::limits::CodingLimitsOverride,
 ) -> Result<CodingLimits, CodingError> {
     let resolved = partial.resolve();
-    let checks: [(&str, f64); 34] = [
+    let checks: [(&str, f64); 33] = [
         ("readMaxLines", resolved.read_max_lines as f64),
         ("readMaxBytes", resolved.read_max_bytes as f64),
         ("readMaxFileBytes", resolved.read_max_file_bytes as f64),
@@ -111,7 +111,6 @@ fn resolve_limits(
             resolved.command_tail_max_bytes as f64,
         ),
         ("commandMaxLogBytes", resolved.command_max_log_bytes as f64),
-        ("commandKillGraceMs", resolved.command_kill_grace_ms as f64),
         ("toolTimeoutMs", resolved.tool_timeout_ms as f64),
     ];
     for (name, value) in checks {
@@ -121,6 +120,7 @@ fn resolve_limits(
             )));
         }
     }
+    resolved.validate().map_err(invalid_configuration)?;
     Ok(resolved)
 }
 

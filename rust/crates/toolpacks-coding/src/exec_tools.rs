@@ -119,6 +119,101 @@ pub(crate) fn process_env() -> HashMap<String, String> {
         .collect()
 }
 
+// Environments hosts bound to a workspace root (canonical). The approval
+// resolver fingerprints `StandingApprovalWorkspace::environment` when it is
+// `Some`; binding the SAME map here makes the spawn run under exactly what
+// the grant was keyed against (TS `workspace.environment ?? process.env`).
+static WORKSPACE_ENVIRONMENTS: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<String, HashMap<String, String>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Bind (`Some`) or unbind (`None`) the environment commands under `root`
+/// spawn with. Call it with the same map as
+/// `StandingApprovalWorkspace::environment`; unbound roots use
+/// [`process_env`], exactly like the approval key does for `None`.
+pub async fn bind_workspace_environment(root: &str, environment: Option<HashMap<String, String>>) {
+    let root = crate::paths::canonical_root(root)
+        .await
+        .unwrap_or_else(|_| root.to_owned());
+    if let Ok(mut bound) = WORKSPACE_ENVIRONMENTS.lock() {
+        match environment {
+            Some(environment) => {
+                bound.insert(root, environment);
+            }
+            None => {
+                bound.remove(&root);
+            }
+        }
+    }
+}
+
+/// The environment a command under `root` spawns with BEFORE sanitizing:
+/// the bound workspace environment if any, else the process environment.
+pub(crate) fn effective_environment(root: &str) -> HashMap<String, String> {
+    WORKSPACE_ENVIRONMENTS
+        .lock()
+        .ok()
+        .and_then(|bound| bound.get(root).cloned())
+        .unwrap_or_else(process_env)
+}
+
+/// Clears the pre-spawn execution intent unless disarmed at handoff to the
+/// driver. Covers every pre-handoff exit: an acquisition error (explicit
+/// `clear`) and the tool future being dropped at any await (`Drop` spawns
+/// the clear), so a command that never reached a driver leaves no ownership
+/// record behind.
+struct IntentGuard {
+    coordinator: Arc<dyn crate::coordination::WorkspaceCoordinator>,
+    root: String,
+    execution_id: String,
+    armed: bool,
+}
+
+impl IntentGuard {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    async fn clear(&mut self) {
+        if self.armed {
+            let _ = self
+                .coordinator
+                .clear_execution_intent(&self.root, &self.execution_id)
+                .await;
+            // Disarmed only AFTER the clear finished: a future dropped
+            // mid-clear still reaches `Drop`, which retries.
+            self.armed = false;
+        }
+    }
+}
+
+impl Drop for IntentGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let coordinator = Arc::clone(&self.coordinator);
+        let root = std::mem::take(&mut self.root);
+        let execution_id = std::mem::take(&mut self.execution_id);
+        runtime.spawn(async move {
+            let _ = coordinator
+                .clear_execution_intent(&root, &execution_id)
+                .await;
+            // A `record_execution_intent` dropped mid-flight may still land
+            // its file write after the clear above (the write runs on the
+            // blocking pool and is not cancelled with the future). Let it
+            // settle, then clear once more so no intent outlives the call.
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let _ = coordinator
+                .clear_execution_intent(&root, &execution_id)
+                .await;
+        });
+    }
+}
+
 /// JS `String.prototype.slice(0, n)` counts UTF-16 code units.
 fn slice_utf16(value: &str, max_units: usize) -> String {
     let units: Vec<u16> = value.encode_utf16().take(max_units).collect();
@@ -170,7 +265,7 @@ async fn run_shell(
         ));
     }
     let scratch = env.scratch().await?;
-    let base = process_env();
+    let base = effective_environment(&root);
     let (file, args) = if sandboxed {
         let profile = sandbox_profile(&SandboxPolicy {
             root: root.clone(),
@@ -230,7 +325,14 @@ async fn run_shell(
     // permanently unreadable (an unanchored 0 would make every one of them
     // a permanent suspect and the record unsatisfiable). The driver
     // upgrades the stamp to the real spawn time together with the pgid.
-    env.coordinator
+    let mut intent_guard = IntentGuard {
+        coordinator: Arc::clone(&env.coordinator),
+        root: root.clone(),
+        execution_id: execution_id.clone(),
+        armed: true,
+    };
+    let recorded = env
+        .coordinator
         .record_execution_intent(&crate::coordination::ExecutionIntent {
             root: root.clone(),
             identity: crate::coordination::CommandCleanupIdentity {
@@ -242,8 +344,12 @@ async fn run_shell(
             holder: holder.clone(),
             spawned: false,
         })
-        .await?;
-    let lease = env
+        .await;
+    if let Err(error) = recorded {
+        intent_guard.clear().await;
+        return Err(error);
+    }
+    let acquired = env
         .coordinator
         .acquire_workspace(AcquireWorkspaceInput {
             root: root.clone(),
@@ -252,7 +358,16 @@ async fn run_shell(
             max_wait_ms: Some(env.coordination_wait_ms),
             execution_id: Some(execution_id.clone()),
         })
-        .await?;
+        .await;
+    let lease = match acquired {
+        Ok(lease) => lease,
+        Err(error) => {
+            // Busy, quarantined or aborted: nothing was handed to a driver,
+            // so the pre-spawn intent must not outlive this call.
+            intent_guard.clear().await;
+            return Err(error);
+        }
+    };
     let log_name = format!(
         "command-{}-{}.log",
         (env.clock)(),
@@ -265,6 +380,9 @@ async fn run_shell(
     // release the gate through `WorkspaceLease::drop` while the command was
     // still running, skipping quarantine (B1). Awaiting the driver is the
     // normal path; being dropped here only stops us from listening.
+    // From here the driver owns the intent (it clears it on clean cleanup
+    // or keeps it beside the quarantine).
+    intent_guard.disarm();
     let execution = spawn_owned_execution(
         RunSpec {
             file,
@@ -796,7 +914,11 @@ mod tests {
 
     #[tokio::test]
     async fn kill_process_tree_on_a_dead_pid_does_not_panic() {
-        crate::process::kill_process_tree(2_000_000_000).await;
+        assert!(
+            crate::process::kill_process_tree(2_000_000_000)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1088,5 +1210,103 @@ mod tests {
         let r = run(&tool, json!({ "command": "echo FAIL; exit 1" })).await;
         assert!(!r.ok);
         assert_eq!(text(&r), "FAIL\n[exit code 1]");
+    }
+
+    #[tokio::test]
+    async fn a_failed_acquisition_leaves_no_execution_intent() {
+        let h = TempRoot::new("intent-guard").await;
+        let mut env = env_for(&h.root, SandboxMode::Off, vec![]);
+        Arc::get_mut(&mut env).unwrap().coordination_wait_ms = 100;
+        let root = env.root().await.unwrap();
+        // Hold the workspace so the command's acquisition times out busy.
+        let mut held = env
+            .coordinator
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: LeaseHolder {
+                    chat_id: None,
+                    run_id: "holder".to_owned(),
+                    tool_call_id: None,
+                    tool: "test".to_owned(),
+                    label: "holder".to_owned(),
+                },
+                cancellation: None,
+                max_wait_ms: Some(1000),
+                execution_id: None,
+            })
+            .await
+            .unwrap();
+        let tool = run_command_tool(&env);
+        let refused = run(&tool, json!({ "command": "echo never" })).await;
+        assert!(!refused.ok, "busy workspace must refuse the command");
+        let key = crate::coordination::canonical_root_key(&root).await;
+        let intents = crate::coordination::read_intent_files(&key).await.unwrap();
+        assert!(intents.is_empty(), "stale pre-spawn intent: {intents:?}");
+        held.release().await;
+    }
+
+    #[tokio::test]
+    async fn spawn_runs_under_the_environment_bound_for_the_workspace() {
+        let h = TempRoot::new("bound-env").await;
+        let env = env_for(&h.root, SandboxMode::Off, vec![]);
+        let root = env.root().await.unwrap();
+        let tool = run_command_tool(&env);
+        let probe = json!({ "command": "echo \"[${AK_BOUND_ENV:-unset}]\"" });
+        assert_eq!(
+            text(&run(&tool, probe.clone()).await),
+            "[unset]\n[exit code 0]"
+        );
+
+        let mut bound = process_env();
+        bound.insert("AK_BOUND_ENV".to_owned(), "from-workspace".to_owned());
+        bind_workspace_environment(&root, Some(bound.clone())).await;
+        // The approval key fingerprints this same map; the spawn sees it.
+        assert_eq!(effective_environment(&root), bound);
+        assert_eq!(
+            text(&run(&tool, probe.clone()).await),
+            "[from-workspace]\n[exit code 0]"
+        );
+
+        bind_workspace_environment(&root, None).await;
+        assert_eq!(effective_environment(&root), process_env());
+        assert_eq!(text(&run(&tool, probe).await), "[unset]\n[exit code 0]");
+    }
+
+    #[tokio::test]
+    async fn a_dropped_tool_future_leaves_no_execution_intent() {
+        let h = TempRoot::new("intent-drop").await;
+        // Default 20 s wait: the timeout below drops the future mid-acquire.
+        let env = env_for(&h.root, SandboxMode::Off, vec![]);
+        let root = env.root().await.unwrap();
+        let mut held = env
+            .coordinator
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: LeaseHolder {
+                    chat_id: None,
+                    run_id: "holder".to_owned(),
+                    tool_call_id: None,
+                    tool: "test".to_owned(),
+                    label: "holder".to_owned(),
+                },
+                cancellation: None,
+                max_wait_ms: Some(1000),
+                execution_id: None,
+            })
+            .await
+            .unwrap();
+        let tool = run_command_tool(&env);
+        let dropped = tokio::time::timeout(
+            Duration::from_millis(200),
+            tool.execute(context(), json!({ "command": "echo never" })),
+        )
+        .await;
+        assert!(dropped.is_err(), "the call must still be waiting");
+        // The guard's spawned clear (plus its settle retry) runs after drop.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let key = crate::coordination::canonical_root_key(&root).await;
+        let intents = crate::coordination::read_intent_files(&key).await.unwrap();
+        assert!(intents.is_empty(), "stale pre-spawn intent: {intents:?}");
+        held.release().await;
     }
 }

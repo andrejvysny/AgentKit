@@ -132,7 +132,7 @@ fn walk_files(dir: &std::path::Path) -> Vec<PathBuf> {
 /// executions (the journal survives coordinator drops by construction;
 /// this is the evidence a reopen reconciles from).
 fn journal_intents(execution_ids: &[impl AsRef<str>]) -> Vec<String> {
-    let journal = std::env::temp_dir().join("agentkit-exec-intents");
+    let journal = journal_base();
     walk_files(&journal)
         .into_iter()
         .filter_map(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
@@ -710,7 +710,7 @@ async fn every_unresolved_lockdir_intent_survives_an_existing_quarantine() {
 async fn journal_dir_for(root: &str) -> PathBuf {
     let key = canonical_root_key(root).await;
     std::env::temp_dir()
-        .join("agentkit-exec-intents")
+        .join(journal_base_name())
         .join(sha256(key.as_bytes()))
 }
 
@@ -770,6 +770,7 @@ async fn in_process_driver_quarantine_survives_reopen_until_positive_exit() {
             &QuarantineEvidence {
                 pids: vec![child_pid],
                 holder: holder("quarantined-run"),
+                reason: None,
             },
             &identity,
         )
@@ -858,6 +859,7 @@ async fn failed_in_process_quarantine_publication_keeps_original_evidence() {
             &QuarantineEvidence {
                 pids: vec![child_pid],
                 holder: holder("quarantined-run"),
+                reason: None,
             },
             &identity,
         )
@@ -877,7 +879,7 @@ async fn failed_in_process_quarantine_publication_keeps_original_evidence() {
 
     // Restore writability: the quarantine now publishes durably, and a
     // REOPENED coordinator still denies the next modifying lease.
-    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o755))
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o700))
         .expect("restore journal");
     coordinator
         .quarantine_execution(
@@ -885,6 +887,7 @@ async fn failed_in_process_quarantine_publication_keeps_original_evidence() {
             &QuarantineEvidence {
                 pids: vec![child_pid],
                 holder: holder("quarantined-run"),
+                reason: None,
             },
             &identity,
         )
@@ -914,4 +917,16 @@ async fn failed_in_process_quarantine_publication_keeps_original_evidence() {
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&journal);
+}
+
+/// Per-user, private journal directory name (mirrors `intent_journal_dir`).
+#[allow(dead_code)]
+fn journal_base_name() -> String {
+    // SAFETY: `geteuid` takes no arguments, touches no memory, cannot fail.
+    format!("agentkit-exec-intents-{}", unsafe { libc::geteuid() })
+}
+
+#[allow(dead_code)]
+fn journal_base() -> std::path::PathBuf {
+    std::env::temp_dir().join(journal_base_name())
 }

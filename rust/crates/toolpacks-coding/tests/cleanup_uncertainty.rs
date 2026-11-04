@@ -131,7 +131,7 @@ use std::os::unix::process::CommandExt;
 async fn journal_dir(root: &str) -> PathBuf {
     let key = canonical_root_key(root).await;
     std::env::temp_dir()
-        .join("agentkit-exec-intents")
+        .join(journal_base_name())
         .join(sha256(key.as_bytes()))
 }
 
@@ -646,4 +646,16 @@ async fn detached_marked_child_is_classified_and_cleanup_not_clean() {
     lease.release().await;
 
     let _ = std::fs::remove_dir_all(&journal);
+}
+
+/// Per-user, private journal directory name (mirrors `intent_journal_dir`).
+#[allow(dead_code)]
+fn journal_base_name() -> String {
+    // SAFETY: `geteuid` takes no arguments, touches no memory, cannot fail.
+    format!("agentkit-exec-intents-{}", unsafe { libc::geteuid() })
+}
+
+#[allow(dead_code)]
+fn journal_base() -> std::path::PathBuf {
+    std::env::temp_dir().join(journal_base_name())
 }

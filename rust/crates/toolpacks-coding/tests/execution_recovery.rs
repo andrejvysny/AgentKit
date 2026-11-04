@@ -568,7 +568,7 @@ async fn corrupt_intent_blocks_instead_of_silently_retiring() {
     crash.crash_owner();
 
     // Corrupt the durable record the way a torn write would.
-    let journal = std::env::temp_dir().join("agentkit-exec-intents");
+    let journal = journal_base();
     let mut corrupted = false;
     if let Some(entries) = walk(&journal) {
         for path in entries {
@@ -733,4 +733,16 @@ impl Drop for ChildGuard {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+/// Per-user, private journal directory name (mirrors `intent_journal_dir`).
+#[allow(dead_code)]
+fn journal_base_name() -> String {
+    // SAFETY: `geteuid` takes no arguments, touches no memory, cannot fail.
+    format!("agentkit-exec-intents-{}", unsafe { libc::geteuid() })
+}
+
+#[allow(dead_code)]
+fn journal_base() -> std::path::PathBuf {
+    std::env::temp_dir().join(journal_base_name())
 }

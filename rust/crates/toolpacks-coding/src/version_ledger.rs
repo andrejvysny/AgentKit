@@ -92,7 +92,9 @@ fn put(chat_id: Option<&str>, path: &str, sha256: &str, full: bool) {
     let Some(chat_id) = chat_id else {
         return;
     };
-    let mut state = LEDGER.lock().expect("version ledger lock poisoned");
+    let mut state = LEDGER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let used = state.tick();
     let chat = touch_chat(&mut state, chat_id);
     let previous = chat.paths.get(path);
@@ -139,7 +141,9 @@ pub fn record_write(chat_id: Option<&str>, canonical_path: &str, sha256: &str) {
 
 pub fn expected(chat_id: Option<&str>, canonical_path: &str) -> Option<LedgerEntry> {
     let chat_id = chat_id?;
-    let mut state = LEDGER.lock().expect("version ledger lock poisoned");
+    let mut state = LEDGER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let used = state.tick();
     let chat = state.chats.get_mut(chat_id)?;
     let entry = chat.paths.get_mut(canonical_path)?;
@@ -154,7 +158,9 @@ pub fn expected(chat_id: Option<&str>, canonical_path: &str) -> Option<LedgerEnt
 
 /// Test seam.
 pub fn clear_version_ledger() {
-    let mut state = LEDGER.lock().expect("version ledger lock poisoned");
+    let mut state = LEDGER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     state.chats.clear();
     state.clock = 0;
 }
@@ -250,6 +256,20 @@ mod tests {
         assert!(expected(Some("chat-0"), "/p/a").is_none());
         assert!(expected(Some("chat-1"), "/p/a").is_none());
         assert!(expected(Some(&format!("chat-{MAX_CHATS}")), "/p/a").is_some());
+        clear_version_ledger();
+    }
+
+    #[test]
+    fn a_poisoned_ledger_lock_is_recovered() {
+        let _g = lock();
+        let _ = std::panic::catch_unwind(|| {
+            let _held = LEDGER
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poison the ledger");
+        });
+        record_read(Some("poison"), "/p/a", "aa", true);
+        assert!(expected(Some("poison"), "/p/a").is_some());
         clear_version_ledger();
     }
 }

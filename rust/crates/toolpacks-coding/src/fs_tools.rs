@@ -20,7 +20,8 @@ use crate::diff::unified_diff;
 use crate::edit_engine::{Edit, apply_edits, split_bom};
 use crate::errors::{CodingError, file_changed_error, file_not_read_error};
 use crate::fs_util::{
-    atomic_write, create_if_absent, decode_utf8, looks_binary, read_regular_file, sha256,
+    atomic_write_in_root, create_if_absent_in_root, decode_utf8, looks_binary, read_regular_file,
+    read_regular_file_in_root, sha256,
 };
 use crate::paths::{ConfineOptions, ConfinedPath, PathAccess, confine, is_sensitive_segment};
 use crate::search::load_ignore_matcher;
@@ -98,7 +99,13 @@ async fn read_one(
         },
     )
     .await?;
-    let buffer = read_regular_file(&target.path, path, env.limits.read_max_file_bytes).await?;
+    let buffer = read_regular_file_in_root(
+        Some(&target.root),
+        &target.path,
+        path,
+        env.limits.read_max_file_bytes,
+    )
+    .await?;
     if looks_binary(&buffer) {
         return Err(CodingError::new(
             "binary_file",
@@ -458,6 +465,11 @@ pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                     ));
                 }
                 let mut all: Vec<(String, bool, bool)> = Vec::new();
+                let collect_cap = env
+                    .limits
+                    .list_max_entries
+                    .saturating_add(LIST_COLLECT_SLACK);
+                let mut capped = false;
                 let mut handle = tokio::fs::read_dir(&target.path)
                     .await
                     .map_err(|error| CodingError::new("io_error", error.to_string()))?;
@@ -466,6 +478,13 @@ pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                     .await
                     .map_err(|error| CodingError::new("io_error", error.to_string()))?
                 {
+                    // Sensitive/ignored entries do not count against the cap,
+                    // hence the slack; past it the directory is cut in
+                    // readdir order instead of buffering it whole.
+                    if all.len() >= collect_cap {
+                        capped = true;
+                        break;
+                    }
                     let file_type = entry
                         .file_type()
                         .await
@@ -520,6 +539,11 @@ pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         visible.len() - shown.len()
                     ));
                 }
+                if capped {
+                    lines.push(format!(
+                        "[directory has more entries; only the first {collect_cap} were read]"
+                    ));
+                }
                 if hidden > 0 {
                     lines.push(format!("[{hidden} sensitive entries hidden]"));
                 }
@@ -543,7 +567,7 @@ pub fn list_dir_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                         },
                         shown.len()
                     )),
-                    truncated: visible.len() > shown.len(),
+                    truncated: capped || visible.len() > shown.len(),
                     warnings: vec![],
                     details: None,
                 })
@@ -698,21 +722,9 @@ async fn write_file_body(
     first: &ConfinedPath,
     options: ConfineOptions,
 ) -> Result<Outcome, CodingError> {
-    throw_if_aborted(ctx)?;
-    let parent = match first.path.rfind('/') {
-        Some(at) => &first.path[..at],
-        None => ".",
-    };
-    tokio::fs::create_dir_all(parent)
-        .await
-        .map_err(|error| CodingError::new("io_error", error.to_string()))?;
-    // Re-resolve after mkdir: confirms no parent turned into an escape.
-    let target = confine(root, path, options).await?;
     // One resolution per mutation: the lock, read, write and ledger all use
     // the locked path, so a path that now resolves elsewhere is refused.
-    if target.path != first.path {
-        return Err(file_changed_error(&first.relative_path));
-    }
+    let target = first;
     throw_if_aborted(ctx)?;
     let read_limit = std::cmp::max(
         std::cmp::max(
@@ -745,13 +757,33 @@ async fn write_file_body(
             read_limit,
             options,
         );
-        atomic_write(&target.path, data, path, Some(verify)).await?;
+        atomic_write_in_root(Some(&target.root), &target.path, data, path, Some(verify)).await?;
     } else {
         // An expected version means "overwrite that file"; it is gone.
         if explicit.is_some() {
             return Err(file_changed_error(&target.relative_path));
         }
-        create_if_absent(&target.path, data, &target.relative_path).await?;
+        // Parents are created only now, after every refusal check, so a
+        // refused write leaves no empty directories behind.
+        let parent = match target.path.rfind('/') {
+            Some(at) => &target.path[..at],
+            None => ".",
+        };
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| CodingError::new("io_error", error.to_string()))?;
+        // Re-resolve after mkdir: confirms no parent turned into an escape.
+        let again = confine(root, path, options).await?;
+        if again.path != target.path {
+            return Err(file_changed_error(&target.relative_path));
+        }
+        create_if_absent_in_root(
+            Some(&target.root),
+            &target.path,
+            data,
+            &target.relative_path,
+        )
+        .await?;
     }
     ledger::record_write(ctx.chat_id.as_deref(), &target.path, &digest);
     Ok(Outcome {
@@ -807,6 +839,10 @@ fn verify_callback(
         })
     }
 }
+
+/// Extra directory entries read beyond `list_max_entries`, so entries that
+/// are hidden (sensitive/ignored) do not crowd out visible ones.
+const LIST_COLLECT_SLACK: usize = 1_000;
 
 const MAX_EDITS: usize = 50;
 
@@ -951,7 +987,13 @@ async fn edit_file_body(
     options: ConfineOptions,
 ) -> Result<Outcome, CodingError> {
     throw_if_aborted(ctx)?;
-    let buffer = read_regular_file(&target.path, path, env.limits.edit_max_file_bytes).await?;
+    let buffer = read_regular_file_in_root(
+        Some(&target.root),
+        &target.path,
+        path,
+        env.limits.edit_max_file_bytes,
+    )
+    .await?;
     if looks_binary(&buffer) {
         return Err(CodingError::new(
             "binary_file",
@@ -973,8 +1015,18 @@ async fn edit_file_body(
             format!("{path} is not valid UTF-8; not edited (editing would corrupt it)"),
         )
     })?;
-    let split = split_bom(&decoded);
-    let applied = apply_edits(&split.text, edits, path)?;
+    let mut split = split_bom(&decoded);
+    // Pure CPU work over up to the file-size cap; keep it off the async
+    // workers so a large file cannot stall other tools.
+    let (text, edits_owned, path_owned) = (
+        std::mem::take(&mut split.text),
+        edits.to_vec(),
+        path.to_owned(),
+    );
+    let applied =
+        tokio::task::spawn_blocking(move || apply_edits(&text, &edits_owned, &path_owned))
+            .await
+            .map_err(|error| CodingError::new("io_error", error.to_string()))??;
     let out = format!("{}{}", split.bom, applied.output).into_bytes();
     throw_if_aborted(ctx)?;
     let verify = verify_callback(
@@ -986,7 +1038,7 @@ async fn edit_file_body(
         env.limits.edit_max_file_bytes,
         options,
     );
-    atomic_write(&target.path, &out, path, Some(verify)).await?;
+    atomic_write_in_root(Some(&target.root), &target.path, &out, path, Some(verify)).await?;
     let after = sha256(&out);
     ledger::record_write(ctx.chat_id.as_deref(), &target.path, &after);
     let patch = unified_diff(
@@ -1925,6 +1977,29 @@ mod tests {
             Harness::text(&r),
             "z.txt\n\u{1f600}.txt\n[1 more entries not shown]"
         );
+        h.remove();
+    }
+
+    #[tokio::test]
+    async fn list_dir_stops_reading_huge_directories() {
+        let h = Harness::new(CodingLimits {
+            list_max_entries: 2,
+            ..CodingLimits::default()
+        });
+        for i in 0..(2 + LIST_COLLECT_SLACK + 50) {
+            h.put(&format!("f{i:05}.txt"), b"x");
+        }
+        let r = h.run(&h.list_dir, json!({})).await;
+        assert!(r.ok);
+        let text = Harness::text(&r);
+        assert!(
+            text.contains(&format!(
+                "[directory has more entries; only the first {} were read]",
+                2 + LIST_COLLECT_SLACK
+            )),
+            "{text}"
+        );
+        assert!(r.truncated);
         h.remove();
     }
 }

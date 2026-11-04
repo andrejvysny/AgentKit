@@ -47,8 +47,9 @@ use crate::coordination::{
     CoordinatorObserver, ExecutionIntent, InProcessCoordinator, LeaseHolder, QuarantineEvidence,
     ReleaseFn, WaitKind, WaitTracker, WorkspaceCoordinator, WorkspaceLease, WorkspaceQuarantine,
     abort_error, canonical_file_key, canonical_root_key, default_in_process_coordinator,
-    intent_file_name, intent_from_json, intent_json, quarantine_error,
-    quarantine_positively_exited, spawn_release, with_wait_cap,
+    intent_file_name, intent_from_json, intent_json, label_digest, parse_pid, quarantine_error,
+    quarantine_from_json, quarantine_positively_exited, retire_quarantine_record, spawn_release,
+    with_wait_cap,
 };
 use crate::errors::CodingError;
 use crate::fs_util::sha256;
@@ -73,8 +74,8 @@ fn io_error(error: &std::io::Error) -> CodingError {
     CodingError::new("io_error", format!("{error}"))
 }
 
-fn errno_is(error: &std::io::Error, code: i32) -> bool {
-    error.raw_os_error() == Some(code)
+fn is_not_found(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound
 }
 
 fn report(on_error: &OnError, error: &dyn std::fmt::Display) {
@@ -114,7 +115,7 @@ static STARTS: LazyLock<StartCache> = LazyLock::new(|| Mutex::new(HashMap::new()
 /// Process start time as printed by ps; None when it cannot be read.
 async fn process_start(pid: i64) -> Option<String> {
     let own = pid == i64::from(std::process::id());
-    if let Some((value, at)) = STARTS.lock().expect("starts cache").get(&pid)
+    if let Some((value, at)) = crate::coordination::lock(&STARTS).get(&pid)
         && (own || at.elapsed() < Duration::from_millis(START_TTL_MS))
     {
         return value.clone();
@@ -128,10 +129,7 @@ async fn process_start(pid: i64) -> Option<String> {
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .filter(|text| !text.is_empty());
-    STARTS
-        .lock()
-        .expect("starts cache")
-        .insert(pid, (value.clone(), Instant::now()));
+    crate::coordination::lock(&STARTS).insert(pid, (value.clone(), Instant::now()));
     value
 }
 
@@ -215,32 +213,54 @@ enum Read {
     Corrupt,
 }
 
+/// Synchronous removal for the spots where no await may separate the unlink
+/// from the bookkeeping that follows it.
+fn remove_sync(path: &str) -> Result<(), CodingError> {
+    match std::fs::remove_file(path) {
+        Err(error) if !is_not_found(&error) => Err(io_error(&error)),
+        _ => Ok(()),
+    }
+}
+
 async fn remove(path: &str) -> Result<(), CodingError> {
     match tokio::fs::remove_file(path).await {
-        Err(error) if !errno_is(&error, libc::ENOENT) => Err(io_error(&error)),
+        Err(error) if !is_not_found(&error) => Err(io_error(&error)),
         _ => Ok(()),
     }
 }
 
 async fn read_record(path: &str) -> Result<Read, CodingError> {
-    let text = match tokio::fs::read_to_string(path).await {
-        Ok(text) => text,
-        Err(error) if errno_is(&error, libc::ENOENT) => return Ok(Read::Gone),
-        Err(error) => return Err(io_error(&error)),
-    };
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Ok(Read::Corrupt);
+    match tokio::fs::read_to_string(path).await {
+        Ok(text) => Ok(parse_record(&text)),
+        Err(error) if is_not_found(&error) => Ok(Read::Gone),
+        Err(error) => Err(io_error(&error)),
+    }
+}
+
+fn read_record_sync(path: &str) -> Result<Read, CodingError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(parse_record(&text)),
+        Err(error) if is_not_found(&error) => Ok(Read::Gone),
+        Err(error) => Err(io_error(&error)),
+    }
+}
+
+fn parse_record(text: &str) -> Read {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Read::Corrupt;
     };
     let Some(object) = parsed.as_object() else {
-        return Ok(Read::Corrupt);
+        return Read::Corrupt;
     };
+    // A pid that is not a positive i32 makes the record corrupt (never a
+    // value `kill` could read as a group or "every process").
     let (Some(pid), Some(tool)) = (
-        object.get("pid").and_then(serde_json::Value::as_i64),
+        object.get("pid").and_then(parse_pid).map(i64::from),
         object.get("tool").and_then(serde_json::Value::as_str),
     ) else {
-        return Ok(Read::Corrupt);
+        return Read::Corrupt;
     };
-    Ok(Read::Record(Box::new(LockRecord {
+    Read::Record(Box::new(LockRecord {
         pid,
         process_start: object
             .get("processStart")
@@ -256,7 +276,7 @@ async fn read_record(path: &str) -> Result<Read, CodingError> {
         run_id: text_field(object, "runId"),
         tool_call_id: text_field(object, "toolCallId"),
         execution_id: text_field(object, "executionId"),
-    })))
+    }))
 }
 
 /// An optional identity field: absent, null or empty all mean "not recorded",
@@ -277,26 +297,88 @@ fn insert_text(record: &mut serde_json::Map<String, Value>, name: &str, value: O
     }
 }
 
+#[derive(Clone)]
 enum Judged {
     Record(Box<LockRecord>),
     Corrupt,
 }
 
-/// Take a stale (or corrupt) lock out of the way. Returns the live record when
-/// the file turned out to belong to someone else after all.
+/// Outcome of taking a lock file judged stale (or corrupt) out of the way.
+enum Reclaimed {
+    /// The judged-stale file is gone; the name is free to take.
+    Cleared,
+    /// The file turned out to belong to a live holder and was put back.
+    Live(LockRecord),
+    /// A live holder's file was displaced and could NOT be put back (the name
+    /// was retaken meanwhile). Ownership is unknown: the caller must back off
+    /// and retry, never assume the name.
+    Contended(LockRecord),
+}
+
+/// Take a stale (or corrupt) lock out of the way.
+///
+/// Known limitation: judging staleness (read + `kill(pid, 0)`) and moving the
+/// file (`rename`) are separate steps, so a stale lock can be replaced by a
+/// fresh live one in between. The rename-then-verify below detects that and
+/// links the displaced lock back, but the window in which the name is briefly
+/// free cannot be closed without an `flock`-style lock held on the file
+/// itself.
 async fn reclaim(
     path: &str,
     judged: &Judged,
     on_error: &OnError,
-) -> Result<Option<LockRecord>, CodingError> {
-    let tomb = format!("{path}.stale-{}", uuid::Uuid::new_v4());
-    if let Err(error) = tokio::fs::rename(path, &tomb).await {
-        if errno_is(&error, libc::ENOENT) {
-            return Ok(None);
+) -> Result<Reclaimed, CodingError> {
+    // rename -> re-read -> unlink-or-restore is ONE synchronous closure on
+    // the blocking pool: a spawned blocking task runs to completion even if
+    // this future is dropped, so cancellation cannot strand a live lock in a
+    // tombstone.
+    let (path, judged, on_error) = (path.to_owned(), judged.clone(), Arc::clone(on_error));
+    blocking(move || {
+        let tomb = format!("{path}.stale-{}", uuid::Uuid::new_v4());
+        if let Err(error) = std::fs::rename(&path, &tomb) {
+            if is_not_found(&error) {
+                return Ok(Reclaimed::Cleared);
+            }
+            return Err(io_error(&error));
         }
-        return Err(io_error(&error));
-    }
-    let moved = read_record(&tomb).await?;
+        verify_displaced_sync(&path, &tomb, &judged, &on_error)
+    })
+    .await
+}
+
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, CodingError> + Send + 'static,
+) -> Result<T, CodingError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| CodingError::new("io_error", format!("lock task failed: {error}")))?
+}
+
+/// Re-read the tombstone and decide whether it is the record that was judged
+/// stale; if not, link the displaced lock back (see [`reclaim`]).
+#[cfg(test)]
+async fn verify_displaced(
+    path: &str,
+    tomb: &str,
+    judged: &Judged,
+    on_error: &OnError,
+) -> Result<Reclaimed, CodingError> {
+    let (path, tomb, judged, on_error) = (
+        path.to_owned(),
+        tomb.to_owned(),
+        judged.clone(),
+        Arc::clone(on_error),
+    );
+    blocking(move || verify_displaced_sync(&path, &tomb, &judged, &on_error)).await
+}
+
+fn verify_displaced_sync(
+    path: &str,
+    tomb: &str,
+    judged: &Judged,
+    on_error: &OnError,
+) -> Result<Reclaimed, CodingError> {
+    let moved = read_record_sync(tomb)?;
     let unchanged = match (&moved, judged) {
         (Read::Gone, _) => true,
         (Read::Corrupt, Judged::Corrupt) => true,
@@ -304,24 +386,47 @@ async fn reclaim(
         _ => false,
     };
     if unchanged {
-        if let Err(error) = remove(&tomb).await {
+        if let Err(error) = remove_sync(tomb) {
             report(on_error, &error);
         }
-        return Ok(None);
+        return Ok(Reclaimed::Cleared);
     }
     // We displaced a different holder's lock. hard_link never overwrites, so
-    // put it back if the name is still free; either way that holder owns the
-    // lock.
-    if let Err(error) = tokio::fs::hard_link(&tomb, path).await {
-        report(on_error, &error);
-    }
-    if let Err(error) = remove(&tomb).await {
-        report(on_error, &error);
-    }
-    Ok(Some(match moved {
+    // put it back if the name is still free.
+    let displaced = match moved {
         Read::Record(record) => *record,
         Read::Corrupt | Read::Gone => unknown_record(),
-    }))
+    };
+    match std::fs::hard_link(tomb, path) {
+        Ok(()) => {
+            if let Err(error) = remove_sync(tomb) {
+                report(on_error, &error);
+            }
+            Ok(Reclaimed::Live(displaced))
+        }
+        Err(error) => {
+            // The name was retaken (AlreadyExists) or the link failed: the
+            // displaced record stays in its tombstone rather than being
+            // destroyed, and the caller retries.
+            report(
+                on_error,
+                &format!(
+                    "could not restore live lock {path} (pid {}, {}): {error}; its record is kept at {tomb}",
+                    displaced.pid, displaced.tool
+                ),
+            );
+            Ok(Reclaimed::Contended(displaced))
+        }
+    }
+}
+
+/// `None` only when the name is free; a displaced live holder (restored or
+/// contended) is reported as an owner so callers wait and re-check.
+fn owner_of(reclaimed: Reclaimed) -> Option<LockRecord> {
+    match reclaimed {
+        Reclaimed::Cleared => None,
+        Reclaimed::Live(record) | Reclaimed::Contended(record) => Some(record),
+    }
 }
 
 /// The live owner of a lock file, or None (also after reclaiming a stale one).
@@ -340,13 +445,15 @@ async fn live_owner(path: &str, on_error: &OnError) -> Result<Option<LockRecord>
             {
                 return Ok(Some(unknown_record()));
             }
-            reclaim(path, &Judged::Corrupt, on_error).await
+            Ok(owner_of(reclaim(path, &Judged::Corrupt, on_error).await?))
         }
         Read::Record(record) => {
             if !is_stale(&record).await {
                 return Ok(Some(*record));
             }
-            reclaim(path, &Judged::Record(record), on_error).await
+            Ok(owner_of(
+                reclaim(path, &Judged::Record(record), on_error).await?,
+            ))
         }
     }
 }
@@ -367,12 +474,18 @@ async fn sleep(ms: u64, cancellation: &Option<CancellationToken>) -> Result<(), 
 }
 
 /// Atomically create `path` with our record; false when it already exists.
+///
+/// On success the new path is pushed into `locks` BEFORE any further await,
+/// so a future dropped at any later point removes the file. (The link is the
+/// synchronous `std::fs::hard_link`: a `tokio::fs` link dropped mid-flight
+/// would still complete on the blocking pool and orphan the lock.)
 async fn try_create(
     dir: &str,
     path: &str,
     holder: &LeaseHolder,
     execution_id: Option<&str>,
     on_error: &OnError,
+    locks: &mut PendingLocks,
 ) -> Result<bool, CodingError> {
     let pid = i64::from(std::process::id());
     let start = process_start(pid).await;
@@ -437,6 +550,8 @@ async fn try_create(
     }
     record.insert("createdAt".to_owned(), serde_json::Value::from(now_ms()));
     let temp = format!("{dir}/.tmp-{}", uuid::Uuid::new_v4());
+    let mut temp_guard = PendingLocks::new(on_error);
+    temp_guard.push(temp.clone());
     let written: Result<(), CodingError> = async {
         let mut options = tokio::fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -458,14 +573,20 @@ async fn try_create(
     }
     .await;
     written?;
-    let result = match tokio::fs::hard_link(&temp, path).await {
-        Ok(()) => Ok(true),
-        Err(error) if errno_is(&error, libc::EEXIST) => Ok(false),
+    let result = match std::fs::hard_link(&temp, path) {
+        Ok(()) => {
+            locks.push(path.to_owned());
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
         Err(error) => Err(io_error(&error)),
     };
     // After a successful link the lock is ours; a failed unlink is only litter.
-    if let Err(error) = remove(&temp).await {
-        (*on_error)(format!("{error}"));
+    match remove(&temp).await {
+        Ok(()) => {
+            temp_guard.take();
+        }
+        Err(error) => (*on_error)(format!("{error}")),
     }
     result
 }
@@ -483,13 +604,17 @@ impl LockDir {
         format!("{}/exclusive.lock", self.ws_dir)
     }
 
+    /// Every lock file created here is owned by `locks` the moment it exists
+    /// (see [`try_create`]), so dropping this future at any await leaves
+    /// nothing behind.
     async fn acquire_shared(
         &self,
         holder: &LeaseHolder,
         execution_id: Option<&str>,
         cancellation: &Option<CancellationToken>,
         block: Block<'_>,
-    ) -> Result<String, CodingError> {
+        locks: &mut PendingLocks,
+    ) -> Result<(), CodingError> {
         let entry = format!(
             "{}/shared-{}-{}.lock",
             self.ws_dir,
@@ -502,21 +627,24 @@ impl LockDir {
             if let Some(first) = first {
                 block(WaitKind::Workspace, &[holder_of(&first)]);
             } else {
-                try_create(&self.ws_dir, &entry, holder, execution_id, &self.on_error).await?;
+                try_create(
+                    &self.ws_dir,
+                    &entry,
+                    holder,
+                    execution_id,
+                    &self.on_error,
+                    locks,
+                )
+                .await?;
                 // A marker may have appeared between the check and our entry.
-                let second = match live_owner(&marker, &self.on_error).await {
-                    Ok(second) => second,
-                    Err(error) => {
-                        if let Err(error) = remove(&entry).await {
-                            report(&self.on_error, &error);
-                        }
-                        return Err(error);
-                    }
-                };
+                let second = live_owner(&marker, &self.on_error).await?;
                 let Some(second) = second else {
-                    return Ok(entry);
+                    return Ok(());
                 };
-                remove(&entry).await?;
+                // Still guarded while the removal is in flight; forgotten only
+                // once the file is really gone.
+                remove_sync(&entry)?;
+                locks.forget(&entry);
                 block(WaitKind::Workspace, &[holder_of(&second)]);
             }
             sleep(self.poll_ms, cancellation).await?;
@@ -529,9 +657,19 @@ impl LockDir {
         execution_id: Option<&str>,
         cancellation: &Option<CancellationToken>,
         block: Block<'_>,
-    ) -> Result<String, CodingError> {
+        locks: &mut PendingLocks,
+    ) -> Result<(), CodingError> {
         let marker = self.marker();
-        while !try_create(&self.ws_dir, &marker, holder, execution_id, &self.on_error).await? {
+        while !try_create(
+            &self.ws_dir,
+            &marker,
+            holder,
+            execution_id,
+            &self.on_error,
+            locks,
+        )
+        .await?
+        {
             let owner = live_owner(&marker, &self.on_error).await?;
             let Some(owner) = owner else { continue };
             block(WaitKind::Workspace, &[holder_of(&owner)]);
@@ -553,12 +691,16 @@ impl LockDir {
         .await;
         if let Err(error) = waited {
             // A marker we cannot hand over must not linger either way.
-            if let Err(error) = remove(&marker).await {
-                report(&self.on_error, &error);
+            // Synchronous, then forget with no await between: a drop in
+            // that gap would otherwise remove the fixed-name marker twice
+            // and could delete a successor's.
+            match remove_sync(&marker) {
+                Ok(()) => locks.forget(&marker),
+                Err(error) => report(&self.on_error, &error),
             }
             return Err(error);
         }
-        Ok(marker)
+        Ok(())
     }
 
     async fn acquire_file_lock(
@@ -568,15 +710,25 @@ impl LockDir {
         execution_id: Option<&str>,
         cancellation: &Option<CancellationToken>,
         block: Block<'_>,
-    ) -> Result<String, CodingError> {
+        locks: &mut PendingLocks,
+    ) -> Result<(), CodingError> {
         let path = format!("{}/file-{}.lock", self.ws_dir, sha256(key.as_bytes()));
-        while !try_create(&self.ws_dir, &path, holder, execution_id, &self.on_error).await? {
+        while !try_create(
+            &self.ws_dir,
+            &path,
+            holder,
+            execution_id,
+            &self.on_error,
+            locks,
+        )
+        .await?
+        {
             let owner = live_owner(&path, &self.on_error).await?;
             let Some(owner) = owner else { continue };
             block(WaitKind::File, &[holder_of(&owner)]);
             sleep(self.poll_ms, cancellation).await?;
         }
-        Ok(path)
+        Ok(())
     }
 
     async fn live_shared(&self) -> Result<Vec<LockRecord>, CodingError> {
@@ -656,6 +808,11 @@ impl PendingLocks {
         std::mem::take(&mut self.paths)
     }
 
+    /// The file is confirmed gone; stop guarding it.
+    fn forget(&mut self, path: &str) {
+        self.paths.retain(|held| held != path);
+    }
+
     fn consume(mut self) -> Vec<String> {
         std::mem::take(&mut self.paths)
     }
@@ -724,15 +881,22 @@ async fn create_dir_private(path: &str) -> std::io::Result<()> {
 }
 
 /// The shared coordination directory usually lives under world-writable
-/// `/tmp`. Before use, prove the tree is ours: owned by the effective uid
-/// and not writable by group or other. An existing 0755/0700 directory
-/// (created by either implementation) passes; a planted, foreign-owned or
-/// opened-up one fails closed rather than reading or writing locks through
-/// a directory someone else controls.
+/// `/tmp`. Before use, prove the tree is ours: a real directory (a symlink
+/// is refused, not followed), owned by the effective uid and not writable by
+/// group or other. An existing 0755/0700 directory (created by either
+/// implementation) passes; a planted, foreign-owned or opened-up one fails
+/// closed rather than reading or writing locks through a directory someone
+/// else controls.
 #[cfg(unix)]
 fn verify_private_dir(path: &str) -> Result<(), CodingError> {
     use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(path).map_err(|error| io_error(&error))?;
+    let meta = std::fs::symlink_metadata(path).map_err(|error| io_error(&error))?;
+    if !meta.file_type().is_dir() {
+        return Err(CodingError::new(
+            "io_error",
+            format!("coordination directory {path} is not a directory (symlinks are refused)"),
+        ));
+    }
     // SAFETY: `geteuid` takes no arguments, touches no memory, and is
     // always successful.
     if meta.uid() != unsafe { libc::geteuid() } {
@@ -741,11 +905,18 @@ fn verify_private_dir(path: &str) -> Result<(), CodingError> {
             format!("coordination directory {path} is not owned by the current user"),
         ));
     }
-    if meta.mode() & 0o002 != 0 {
-        return Err(CodingError::new(
-            "io_error",
-            format!("coordination directory {path} is writable by other users"),
-        ));
+    if meta.mode() & 0o022 != 0 {
+        // Older builds created these 0o775 / umask-dependent. We own it (and
+        // it is not a symlink), so tighten rather than refuse the upgrade.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(
+            |error| {
+                CodingError::new(
+                    "io_error",
+                    format!("coordination directory {path} is writable by group or other users and could not be tightened: {error}"),
+                )
+            },
+        )?;
     }
     Ok(())
 }
@@ -754,6 +925,15 @@ fn verify_private_dir(path: &str) -> Result<(), CodingError> {
 #[cfg(not(unix))]
 fn verify_private_dir(_path: &str) -> Result<(), CodingError> {
     Ok(())
+}
+
+/// Owner-only (`0o600`) create-new file for durable records.
+async fn create_private_file(path: &str) -> std::io::Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    options.open(path).await
 }
 
 struct LockDirCoordinator {
@@ -770,13 +950,29 @@ fn quarantine_path(dir: &str, key: &str) -> String {
     format!("{}/{}/quarantine.json", dir, sha256(key.as_bytes()))
 }
 
+/// Retire the durable record only if it is still the one that was judged
+/// positively exited (see `retire_quarantine_record`); `false` = a different
+/// record is there now.
+async fn retire_quarantine(
+    dir: &str,
+    key: &str,
+    scanned: &WorkspaceQuarantine,
+) -> Result<bool, CodingError> {
+    retire_quarantine_record(
+        std::path::Path::new(&quarantine_path(dir, key)),
+        key,
+        scanned,
+    )
+    .await
+}
+
 /// Read the durable quarantine for the root. An unparseable record is an
 /// *unknown* survivor set: cleanup was not positively established, so it
 /// keeps blocking until explicit recovery (empty pids never auto-clear).
 async fn read_quarantine(dir: &str, key: &str) -> Result<Option<WorkspaceQuarantine>, CodingError> {
     let path = quarantine_path(dir, key);
     let text = match tokio::fs::read_to_string(&path).await {
-        Err(error) if errno_is(&error, libc::ENOENT) => return Ok(None),
+        Err(error) if is_not_found(&error) => return Ok(None),
         Err(error) => return Err(io_error(&error)),
         Ok(text) => text,
     };
@@ -791,71 +987,17 @@ async fn read_quarantine(dir: &str, key: &str) -> Result<Option<WorkspaceQuarant
             label: "unreadable quarantine record".to_owned(),
         },
         quarantined_at_ms: 0,
+        reason: None,
         identity: None,
     };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Ok(Some(unknown()));
-    };
-    let field = |name: &str| {
-        value
-            .get(name)
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_owned()
-    };
-    // B5: SAFE cleanup identity. A record written by an older build (or by
-    // the generic `quarantine_workspace` path) has no `identity` object and
-    // keeps the pid-only positive-exit rule; a command record carries the
-    // stable nonce, owner pid, process group and spawn time so liveness is
-    // never decided by a bare — recyclable — pid.
-    let identity = value.get("identity").and_then(|identity| {
-        let execution_id = identity.get("executionId")?.as_str()?.to_owned();
-        let owner_pid = identity.get("ownerPid")?.as_i64()?;
-        Some(CommandCleanupIdentity {
-            execution_id,
-            owner_pid,
-            pgid: identity
-                .get("pgid")
-                .and_then(Value::as_i64)
-                .map(|pgid| pgid as i32),
-            spawned_at_ms: identity
-                .get("spawnedAtMs")
-                .and_then(Value::as_u64)
-                .unwrap_or_default(),
-        })
-    });
-    Ok(Some(WorkspaceQuarantine {
-        root: key.to_owned(),
-        pids: value
-            .get("pids")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_i64)
-                    .map(|pid| pid as i32)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        holder: LeaseHolder {
-            chat_id: value
-                .get("chatId")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            run_id: field("runId"),
-            tool_call_id: value
-                .get("toolCallId")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            tool: field("tool"),
-            label: field("label"),
-        },
-        quarantined_at_ms: value
-            .get("quarantinedAtMs")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        identity,
-    }))
+    // Shared parser: malformed pids / identity reject the record, which then
+    // reads as an unknown survivor set (blocking until explicit recovery).
+    Ok(Some(
+        serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|value| quarantine_from_json(key, &value))
+            .unwrap_or_else(unknown),
+    ))
 }
 
 /// Every durable intent record for one workspace directory. An unparseable
@@ -864,7 +1006,7 @@ async fn read_quarantine(dir: &str, key: &str) -> Result<Option<WorkspaceQuarant
 async fn read_intent_records(key: &str, ws_dir: &str) -> Result<Vec<ExecutionIntent>, CodingError> {
     let mut entries = match tokio::fs::read_dir(ws_dir).await {
         Ok(entries) => entries,
-        Err(error) if errno_is(&error, libc::ENOENT) => return Ok(vec![]),
+        Err(error) if is_not_found(&error) => return Ok(vec![]),
         Err(error) => return Err(io_error(&error)),
     };
     let mut intents: Vec<ExecutionIntent> = Vec::new();
@@ -879,7 +1021,7 @@ async fn read_intent_records(key: &str, ws_dir: &str) -> Result<Vec<ExecutionInt
         }
         let text = match tokio::fs::read_to_string(entry.path()).await {
             Ok(text) => text,
-            Err(error) if errno_is(&error, libc::ENOENT) => continue,
+            Err(error) if is_not_found(&error) => continue,
             Err(error) => return Err(io_error(&error)),
         };
         intents.push(
@@ -926,7 +1068,8 @@ fn quarantine_record_json(
         "chatId": evidence.holder.chat_id,
         "toolCallId": evidence.holder.tool_call_id,
         "tool": evidence.holder.tool,
-        "label": evidence.holder.label,
+        "labelSha256": label_digest(&evidence.holder.label),
+        "reason": evidence.reason,
     });
     if let Some(identity) = identity {
         record["identity"] = serde_json::json!({
@@ -987,7 +1130,9 @@ impl LockDirCoordinator {
             };
             if quarantine_positively_exited(&quarantine).await {
                 // Positive cleanup evidence: retire the record, then re-check.
-                remove(&quarantine_path(&self.dir, &key)).await?;
+                // A different record republished meanwhile survives the
+                // retire and is simply read again on the next pass.
+                retire_quarantine(&self.dir, &key, &quarantine).await?;
                 continue;
             }
             if deadline.is_some_and(|at| Instant::now() >= at) {
@@ -1002,16 +1147,24 @@ impl LockDirCoordinator {
     /// evidence while processes may still write must never read as success.
     async fn publish_quarantine(&self, key: &str, text: &str) -> Result<(), CodingError> {
         let path = quarantine_path(&self.dir, key);
-        if let Some(parent) = std::path::Path::new(&path).parent()
-            && let Err(error) = tokio::fs::create_dir_all(parent).await
-        {
-            let error = io_error(&error);
-            report(&self.on_error, &error.message);
-            return Err(error);
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            let parent = parent.to_string_lossy();
+            let prepared: Result<(), CodingError> = async {
+                create_dir_private(&parent)
+                    .await
+                    .map_err(|error| io_error(&error))?;
+                verify_private_dir(&self.dir)?;
+                verify_private_dir(&parent)
+            }
+            .await;
+            if let Err(error) = prepared {
+                report(&self.on_error, &error.message);
+                return Err(error);
+            }
         }
         let temp = format!("{path}.tmp-{}", uuid::Uuid::new_v4().simple());
         let written: Result<(), CodingError> = async {
-            let mut file = tokio::fs::File::create(&temp)
+            let mut file = create_private_file(&temp)
                 .await
                 .map_err(|error| io_error(&error))?;
             file.write_all(text.as_bytes())
@@ -1083,22 +1236,19 @@ impl WorkspaceCoordinator for LockDirCoordinator {
                             );
                         };
                         let execution = execution_id.as_deref();
-                        locks.push(
-                            lock_dir
-                                .acquire_shared(&holder, execution, &cancellation, &block)
-                                .await?,
-                        );
-                        locks.push(
-                            lock_dir
-                                .acquire_file_lock(
-                                    &file_key,
-                                    &holder,
-                                    execution,
-                                    &cancellation,
-                                    &block,
-                                )
-                                .await?,
-                        );
+                        lock_dir
+                            .acquire_shared(&holder, execution, &cancellation, &block, &mut locks)
+                            .await?;
+                        lock_dir
+                            .acquire_file_lock(
+                                &file_key,
+                                &holder,
+                                execution,
+                                &cancellation,
+                                &block,
+                                &mut locks,
+                            )
+                            .await?;
                         // B2: `await_clear` proved the root clear before the
                         // in-process gate and the on-disk locks were taken.
                         // Re-read the durable evidence now that they are ours
@@ -1174,16 +1324,15 @@ impl WorkspaceCoordinator for LockDirCoordinator {
                                 observer.as_ref(),
                             );
                         };
-                        locks.push(
-                            lock_dir
-                                .acquire_exclusive(
-                                    &holder,
-                                    execution_id.as_deref(),
-                                    &cancellation,
-                                    &block,
-                                )
-                                .await?,
-                        );
+                        lock_dir
+                            .acquire_exclusive(
+                                &holder,
+                                execution_id.as_deref(),
+                                &cancellation,
+                                &block,
+                                &mut locks,
+                            )
+                            .await?;
                         // B2: the exclusive marker is ours, so this is the
                         // last point before an executable lease where a
                         // quarantine that landed while we queued can still
@@ -1251,9 +1400,14 @@ impl WorkspaceCoordinator for LockDirCoordinator {
     async fn record_execution_intent(&self, intent: &ExecutionIntent) -> Result<(), CodingError> {
         let key = canonical_root_key(&intent.root).await;
         let ws_dir = format!("{}/{}", self.dir, sha256(key.as_bytes()));
-        tokio::fs::create_dir_all(&ws_dir)
+        create_dir_private(&self.dir)
             .await
             .map_err(|error| io_error(&error))?;
+        verify_private_dir(&self.dir)?;
+        create_dir_private(&ws_dir)
+            .await
+            .map_err(|error| io_error(&error))?;
+        verify_private_dir(&ws_dir)?;
         let stored = ExecutionIntent {
             root: key.clone(),
             ..intent.clone()
@@ -1264,7 +1418,7 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         );
         let temp = format!("{ws_dir}/.intent-tmp-{}", uuid::Uuid::new_v4().simple());
         let written: Result<(), CodingError> = async {
-            let mut file = tokio::fs::File::create(&temp)
+            let mut file = create_private_file(&temp)
                 .await
                 .map_err(|error| io_error(&error))?;
             let text = serde_json::to_string(&intent_json(&stored))
@@ -1298,7 +1452,7 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         );
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),
-            Err(error) if errno_is(&error, libc::ENOENT) => Ok(()),
+            Err(error) if is_not_found(&error) => Ok(()),
             Err(error) => Err(io_error(&error)),
         }
     }
@@ -1361,6 +1515,7 @@ impl WorkspaceCoordinator for LockDirCoordinator {
                 &QuarantineEvidence {
                     pids,
                     holder: intent.holder.clone(),
+                    reason: None,
                 },
                 (!corrupt).then_some(&intent.identity),
             );
@@ -1379,8 +1534,11 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         let Some(quarantine) = read_quarantine(&self.dir, &key).await? else {
             return Ok(None);
         };
-        if quarantine_positively_exited(&quarantine).await {
-            remove(&quarantine_path(&self.dir, &key)).await?;
+        // A newer record replacing the retired one leaves the root quarantined
+        // (fail closed).
+        if quarantine_positively_exited(&quarantine).await
+            && retire_quarantine(&self.dir, &key, &quarantine).await?
+        {
             return Ok(None);
         }
         Ok(Some(quarantine))
@@ -1391,7 +1549,7 @@ impl WorkspaceCoordinator for LockDirCoordinator {
         let path = quarantine_path(&self.dir, &key);
         let removed = match tokio::fs::remove_file(&path).await {
             Ok(()) => true,
-            Err(error) if errno_is(&error, libc::ENOENT) => false,
+            Err(error) if is_not_found(&error) => false,
             Err(error) => return Err(io_error(&error)),
         };
         // Explicit recovery retires the DURABLE unresolved-execution
@@ -1560,6 +1718,7 @@ mod tests {
                 &QuarantineEvidence {
                     pids: vec![pid],
                     holder: holder("r1", "command", "long build"),
+                    reason: None,
                 },
             )
             .await
@@ -1615,6 +1774,7 @@ mod tests {
                 &QuarantineEvidence {
                     pids: vec![dead_pid().await as i32],
                     holder: holder("r1", "command", "done"),
+                    reason: None,
                 },
             )
             .await
@@ -2207,6 +2367,7 @@ mod tests {
                 &QuarantineEvidence {
                     pids: vec![pid],
                     holder: holder("cmd-a", "run_command", "make install"),
+                    reason: None,
                 },
             )
             .await
@@ -2218,7 +2379,12 @@ mod tests {
             .expect("join")
             .expect_err("a live quarantine must not hand B an executable lease");
         assert_eq!(error.code, "workspace_quarantined", "{error:?}");
-        assert!(error.message.contains("make install"), "{error}");
+        // The record stores only the label digest, so that is what a later
+        // process (and the refusal message) can name.
+        assert!(
+            error.message.contains(&label_digest("make install")[..12]),
+            "{error}"
+        );
         assert!(error.message.contains(&pid.to_string()), "{error}");
         // The refused lease gave its marker back: only the record remains.
         let ws = ws_dir(&dir, &root).await;
@@ -2268,6 +2434,7 @@ mod tests {
                 &QuarantineEvidence {
                     pids: vec![pid],
                     holder: holder("cmd", "run_command", "make install"),
+                    reason: None,
                 },
             )
             .await
@@ -2696,5 +2863,367 @@ mod tests {
             "the retired intent leaves neither intent nor quarantine"
         );
         assert!(errors.lock().expect("errors").is_empty());
+    }
+
+    // ---- K2: created lock files are owned by a drop guard at once ----
+
+    fn lock_dir_at(ws_dir: &str) -> LockDir {
+        LockDir {
+            ws_dir: ws_dir.to_owned(),
+            poll_ms: 20,
+            on_error: default_on_error(),
+        }
+    }
+
+    fn lock_names(ws_dir: &str, prefix: &str) -> Vec<String> {
+        entries(ws_dir)
+            .into_iter()
+            .filter(|name| name.starts_with(prefix))
+            .collect()
+    }
+
+    /// The release is deferred to a spawned task, so poll for it (bounded)
+    /// rather than assuming it already ran.
+    async fn eventually_no_lock(ws_dir: &str, prefix: &str) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !lock_names(ws_dir, prefix).is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{prefix}* still on disk: {:?}", entries(ws_dir)));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dropped_exclusive_acquire_removes_its_marker_while_shared_drains() {
+        let ws = temp_dir("k2-exclusive");
+        // A live shared holder (this process) keeps the drain wait open.
+        std::fs::write(
+            format!("{ws}/shared-other.lock"),
+            Value::Object(record(i64::from(std::process::id()), "edit_file", "l")).to_string(),
+        )
+        .expect("write shared lock");
+        let lock_dir = lock_dir_at(&ws);
+        let (tx, mut blocked) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let block = move |_kind: WaitKind, _holders: &[LeaseHolder]| {
+            let _ = tx.send(());
+        };
+        let mut locks = PendingLocks::new(&lock_dir.on_error);
+        {
+            let who = holder("x", "run_command", "l");
+            let acquire = lock_dir.acquire_exclusive(&who, None, &None, &block, &mut locks);
+            tokio::pin!(acquire);
+            tokio::select! {
+                done = &mut acquire => panic!("must still wait for the shared holder: {done:?}"),
+                _ = blocked.recv() => {}
+            }
+            assert!(
+                std::path::Path::new(&format!("{ws}/exclusive.lock")).exists(),
+                "the marker exists while the drain wait is pending"
+            );
+        } // the future is dropped at its await, like an aborted tool call
+        drop(locks);
+        eventually_no_lock(&ws, "exclusive.lock").await;
+        assert!(
+            std::path::Path::new(&format!("{ws}/shared-other.lock")).exists(),
+            "the other holder's lock is untouched"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dropped_shared_acquire_removes_its_entry() {
+        let ws = temp_dir("k2-shared");
+        let lock_dir = lock_dir_at(&ws);
+        let block = |_kind: WaitKind, _holders: &[LeaseHolder]| {};
+        let mut locks = PendingLocks::new(&lock_dir.on_error);
+        {
+            let who = holder("x", "edit_file", "l");
+            let acquire = lock_dir.acquire_shared(&who, None, &None, &block, &mut locks);
+            tokio::pin!(acquire);
+            // Poll until the entry has been linked; drop mid-flight there (or,
+            // if the whole acquire raced to completion, with the lock held).
+            loop {
+                if let std::task::Poll::Ready(done) = futures::poll!(&mut acquire) {
+                    done.expect("acquired");
+                    break;
+                }
+                if !lock_names(&ws, "shared-").is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }
+        drop(locks);
+        eventually_no_lock(&ws, "shared-").await;
+    }
+
+    // ---- K10: reclaim verifies what it displaced ----
+
+    fn stale_judgement(pid: i64) -> Judged {
+        Judged::Record(Box::new(LockRecord {
+            pid,
+            process_start: None,
+            tool: "command".to_owned(),
+            label: "l".to_owned(),
+            chat_id: None,
+            run_id: Some("judged-run".to_owned()),
+            tool_call_id: None,
+            execution_id: None,
+        }))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reclaim_puts_back_a_live_lock_that_replaced_the_stale_one() {
+        let ws = temp_dir("k10-restore");
+        let path = format!("{ws}/exclusive.lock");
+        let mut live = record(i64::from(std::process::id()), "edit_file", "l");
+        live.insert("runId".to_owned(), Value::from("live-run"));
+        std::fs::write(&path, Value::Object(live).to_string()).expect("write live lock");
+        let errors = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = Arc::clone(&errors);
+        let on_error: OnError = Arc::new(move |message| sink.lock().expect("errors").push(message));
+        // The judgement was about a DIFFERENT (now gone) holder.
+        let outcome = reclaim(&path, &stale_judgement(1), &on_error)
+            .await
+            .expect("reclaim");
+        let Reclaimed::Live(owner) = outcome else {
+            panic!("a live lock must be reported as its owner's, not reclaimed");
+        };
+        assert_eq!(owner.run_id.as_deref(), Some("live-run"));
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("lock linked back")
+                .contains("live-run")
+        );
+        assert_eq!(
+            entries(&ws),
+            vec!["exclusive.lock".to_owned()],
+            "no tombstone"
+        );
+        assert!(errors.lock().expect("errors").is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reclaim_reports_contention_when_the_displaced_lock_cannot_be_restored() {
+        let ws = temp_dir("k10-contended");
+        let path = format!("{ws}/exclusive.lock");
+        let tomb = format!("{path}.stale-test");
+        let mut displaced = record(i64::from(std::process::id()), "edit_file", "l");
+        displaced.insert("runId".to_owned(), Value::from("displaced-run"));
+        std::fs::write(&tomb, Value::Object(displaced).to_string()).expect("write tombstone");
+        // The name was retaken between the rename and the link-back.
+        std::fs::write(
+            &path,
+            Value::Object(record(i64::from(std::process::id()), "x", "l")).to_string(),
+        )
+        .expect("write newer lock");
+        let errors = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = Arc::clone(&errors);
+        let on_error: OnError = Arc::new(move |message| sink.lock().expect("errors").push(message));
+        let outcome = verify_displaced(&path, &tomb, &stale_judgement(1), &on_error)
+            .await
+            .expect("verify");
+        let Reclaimed::Contended(owner) = outcome else {
+            panic!("a failed link-back must be contended, never ownership");
+        };
+        assert_eq!(owner.run_id.as_deref(), Some("displaced-run"));
+        assert!(
+            std::path::Path::new(&tomb).exists(),
+            "displaced record kept"
+        );
+        let logged = errors.lock().expect("errors").join("\n");
+        assert!(logged.contains("could not restore live lock"), "{logged}");
+        // `live_owner` reports it as an owner so callers back off and retry.
+        assert!(owner_of(Reclaimed::Contended(owner)).is_some());
+    }
+
+    // ---- K5: private directories, owner-only files, digest-only labels ----
+
+    #[cfg(unix)]
+    #[test]
+    fn verify_private_dir_tightens_owned_loose_dirs_and_refuses_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = temp_dir("k5-verify");
+        let dir = format!("{base}/d");
+        std::fs::create_dir(&dir).expect("mkdir");
+        for ok in [0o700, 0o755] {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(ok)).expect("chmod");
+            verify_private_dir(&dir).unwrap_or_else(|e| panic!("mode {ok:o}: {e:?}"));
+        }
+        // A loose directory we own (older builds made them 0o775) is
+        // tightened to 0o700 and accepted; a foreign-owned one cannot be
+        // simulated without root and is refused by the uid check.
+        for loose in [0o770, 0o707, 0o777, 0o722, 0o775] {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(loose)).expect("chmod");
+            verify_private_dir(&dir).unwrap_or_else(|e| panic!("mode {loose:o}: {e:?}"));
+            let mode = std::fs::metadata(&dir).expect("stat").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "tightened from {loose:o}");
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let link = format!("{base}/link");
+        std::os::unix::fs::symlink(&dir, &link).expect("symlink");
+        assert!(verify_private_dir(&link).is_err(), "symlink refused");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lockdir_records_are_owner_only_and_hold_no_clear_label() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("k5-files");
+        let root = temp_dir("k5-files-root");
+        let (coordinator, errors) = coordinator(&dir, None);
+        let secret = "super secret build label";
+        coordinator
+            .quarantine_workspace(
+                &root,
+                &QuarantineEvidence {
+                    pids: vec![],
+                    holder: holder("k5", "run_command", secret),
+                    reason: None,
+                },
+            )
+            .await
+            .expect("publishes");
+        let key = canonical_root_key(&root).await;
+        let identity = CommandCleanupIdentity {
+            execution_id: format!("{}:k5", std::process::id()),
+            owner_pid: i64::from(std::process::id()),
+            pgid: Some(4242),
+            spawned_at_ms: 1,
+        };
+        coordinator
+            .record_execution_intent(&ExecutionIntent {
+                root: root.clone(),
+                identity,
+                holder: holder("k5", "run_command", secret),
+                spawned: true,
+            })
+            .await
+            .expect("intent");
+        let ws = ws_dir(&dir, &root).await;
+        let mode = |path: &str| std::fs::metadata(path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode(&ws), 0o700);
+        let mut seen = 0;
+        for name in entries(&ws) {
+            let path = format!("{ws}/{name}");
+            assert_eq!(mode(&path), 0o600, "{name}");
+            let text = std::fs::read_to_string(&path).expect("read");
+            assert!(
+                !text.contains(secret),
+                "{name} holds the clear label: {text}"
+            );
+            assert!(text.contains("labelSha256"), "{name}: {text}");
+            seen += 1;
+        }
+        assert_eq!(seen, 2, "{:?}", entries(&ws));
+        let quarantine = read_quarantine(&dir, &key)
+            .await
+            .expect("read")
+            .expect("some");
+        assert!(
+            quarantine.holder.label.starts_with("sha256:"),
+            "{quarantine:?}"
+        );
+        assert!(errors.lock().expect("errors").is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_lock_or_quarantine_record_with_a_bad_pid_is_corrupt() {
+        let ws = temp_dir("k5-pid");
+        for bad in [
+            Value::from(0),
+            Value::from(-3),
+            Value::from(i64::from(i32::MAX) + 1),
+        ] {
+            let path = format!("{ws}/exclusive.lock");
+            let mut body = record(1, "edit_file", "l");
+            body.insert("pid".to_owned(), bad.clone());
+            std::fs::write(&path, Value::Object(body).to_string()).expect("write");
+            assert!(
+                matches!(read_record(&path).await.expect("read"), Read::Corrupt),
+                "pid {bad}"
+            );
+        }
+        let dir = temp_dir("k5-pid-q");
+        let key = "/k5-bad-pid-root";
+        let path = quarantine_path(&dir, key);
+        std::fs::create_dir_all(std::path::Path::new(&path).parent().expect("parent"))
+            .expect("dir");
+        std::fs::write(&path, r#"{"pids":[0],"tool":"command","runId":"r"}"#).expect("write");
+        let quarantine = read_quarantine(&dir, key)
+            .await
+            .expect("read")
+            .expect("some");
+        assert_eq!(
+            quarantine.holder.tool, "unknown",
+            "rejected -> unknown survivors"
+        );
+        assert!(quarantine.pids.is_empty(), "blocks until explicit recovery");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn read_quarantine_keeps_compat_for_missing_pids_but_rejects_invalid_ones() {
+        let dir = temp_dir("k9-compat");
+        let write = |key: &str, body: &str| {
+            let path = quarantine_path(&dir, key);
+            std::fs::create_dir_all(std::path::Path::new(&path).parent().expect("parent"))
+                .expect("dir");
+            std::fs::write(path, body).expect("write");
+        };
+        // No `pids` key at all: older / TS-written, identity-based clearing.
+        write(
+            "/compat",
+            r#"{"tool":"command","runId":"r","identity":{"executionId":"1:x","ownerPid":5}}"#,
+        );
+        let compat = read_quarantine(&dir, "/compat").await.unwrap().unwrap();
+        assert!(compat.pids.is_empty());
+        assert_eq!(compat.holder.run_id, "r");
+        assert_eq!(compat.identity.expect("identity kept").owner_pid, 5);
+        // Present but invalid values are corrupt (unknown survivors).
+        write("/badpid", r#"{"pids":[0],"tool":"command","runId":"r"}"#);
+        write(
+            "/badidentity",
+            r#"{"pids":[7],"tool":"command","runId":"r","identity":{"executionId":"1:x","ownerPid":-1}}"#,
+        );
+        for key in ["/badpid", "/badidentity"] {
+            let rejected = read_quarantine(&dir, key).await.unwrap().unwrap();
+            assert_eq!(rejected.holder.tool, "unknown", "{key}");
+            assert!(
+                rejected.identity.is_none() && rejected.pids.is_empty(),
+                "{key}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_lockdir_quarantine_persists_its_reason() {
+        let dir = temp_dir("reason-dir");
+        let root = temp_dir("reason-root");
+        let (coordinator, _) = coordinator(&dir, None);
+        coordinator
+            .quarantine_workspace(
+                &root,
+                &QuarantineEvidence {
+                    pids: vec![],
+                    holder: holder("r", "run_command", "x"),
+                    reason: Some("driver_panic".to_owned()),
+                },
+            )
+            .await
+            .expect("publishes");
+        let key = canonical_root_key(&root).await;
+        let back = read_quarantine(&dir, &key).await.unwrap().unwrap();
+        assert_eq!(back.reason.as_deref(), Some("driver_panic"));
+        let error = coordinator
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder("r2", "run_command", "y"),
+                cancellation: None,
+                max_wait_ms: Some(80),
+                execution_id: None,
+            })
+            .await
+            .expect_err("blocked");
+        assert!(error.message.contains("driver_panic"), "{error}");
     }
 }
