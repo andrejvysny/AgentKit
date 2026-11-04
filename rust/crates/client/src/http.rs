@@ -5,6 +5,11 @@ use reqwest::{Client as HttpClient, Url, header::HeaderMap};
 use serde_json::Value;
 use std::{collections::BTreeMap, time::Duration};
 
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// The server's default SSE keep-alive interval.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+
 #[derive(Debug, Clone, Default)]
 pub struct Call {
     pub path: BTreeMap<String, String>,
@@ -22,6 +27,13 @@ pub struct Client {
     pub max_response_bytes: usize,
     pub max_idempotent_retries: usize,
     pub retry_delay: Duration,
+    /// Deadline for one non-streaming call, headers through body.
+    pub call_timeout: Duration,
+    /// A stream that stays silent this long is treated as dead and
+    /// reconnected. Keep it above twice the server's SSE heartbeat interval
+    /// (the server default is 15 s; this defaults to 3x that): a shorter
+    /// value would drop healthy connections between heartbeats.
+    pub stream_idle_timeout: Duration,
 }
 
 impl Client {
@@ -37,11 +49,16 @@ impl Client {
         }
         Ok(Self {
             base_url: base_url.trim_end_matches('/').into(),
-            http: HttpClient::new(),
+            http: HttpClient::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .build()
+                .map_err(|e| ClientError::InvalidRequest(e.to_string()))?,
             headers: HeaderMap::new(),
             max_response_bytes: 4 * 1_048_576,
             max_idempotent_retries: 2,
             retry_delay: Duration::from_millis(100),
+            call_timeout: CALL_TIMEOUT,
+            stream_idle_timeout: HEARTBEAT_INTERVAL * 3,
         })
     }
 
@@ -68,7 +85,10 @@ impl Client {
         };
         let mut attempts = 0;
         loop {
-            let response = match self.send(&operation, &call, url.clone()).await {
+            let response = match self
+                .send(&operation, &call, url.clone(), Some(self.call_timeout))
+                .await
+            {
                 Ok(response) => checked(response).await?,
                 Err(error) => {
                     if let Some(key) = retry_key {
@@ -134,6 +154,7 @@ impl Client {
         operation: &RestOperation,
         call: &Call,
         url: Url,
+        timeout: Option<Duration>,
     ) -> Result<reqwest::Response, reqwest::Error> {
         let route = operation.route();
         let method = reqwest::Method::from_bytes(route.method.as_str().as_bytes()).unwrap();
@@ -147,6 +168,9 @@ impl Client {
         }
         if let Some(key) = &call.idempotency_key {
             request = request.header("idempotency-key", key);
+        }
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
         }
         request.send().await
     }
@@ -210,9 +234,9 @@ impl Client {
         if bytes.is_empty() {
             Ok(Value::Null)
         } else {
-            Ok(agentkit_contracts::parse_javascript_json(
-                &String::from_utf8_lossy(&bytes),
-            )?)
+            let text = String::from_utf8(bytes)
+                .map_err(|_| ClientError::Protocol("HTTP response is not valid UTF-8".into()))?;
+            Ok(agentkit_contracts::parse_javascript_json(&text)?)
         }
     }
 }

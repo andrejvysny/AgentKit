@@ -12,6 +12,8 @@ use axum::{
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 
+const BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub base_path: String,
@@ -140,6 +142,9 @@ async fn route_request(service: &Service, request: Request) -> Result<Response, 
     let query = parse_query(request.uri().query(), service.config.max_query_bytes)?;
     let operation = route.operation.clone();
     let headers = request.headers().clone();
+    // Authenticate before touching the body so an unauthenticated peer can
+    // neither make us buffer it nor hold the connection open.
+    let actor = service.backend.authenticate(&headers).await?;
     if headers
         .get("content-length")
         .and_then(|v| v.to_str().ok())
@@ -155,19 +160,28 @@ async fn route_request(service: &Service, request: Request) -> Result<Response, 
             ),
         ));
     }
-    let bytes = to_bytes(request.into_body(), service.config.max_body_bytes)
-        .await
-        .map_err(|_| {
-            Problem::new(
-                413,
-                "body_too_large",
-                format!(
-                    "Request body exceeds the configured limit of {} bytes.",
-                    service.config.max_body_bytes
-                ),
-            )
-        })?;
-    let actor = service.backend.authenticate(&headers).await?;
+    let bytes = tokio::time::timeout(
+        BODY_READ_TIMEOUT,
+        to_bytes(request.into_body(), service.config.max_body_bytes),
+    )
+    .await
+    .map_err(|_| {
+        Problem::new(
+            408,
+            "request_timeout",
+            "Request body was not received in time.",
+        )
+    })?
+    .map_err(|_| {
+        Problem::new(
+            413,
+            "body_too_large",
+            format!(
+                "Request body exceeds the configured limit of {} bytes.",
+                service.config.max_body_bytes
+            ),
+        )
+    })?;
     let mut input = OperationRequest {
         actor,
         operation,

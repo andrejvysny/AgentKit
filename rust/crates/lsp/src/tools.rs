@@ -1,8 +1,10 @@
 //! The six read-only AgentKit tools over [`LspPool`]. Positions are
-//! 1-based in the tool interface and converted to LSP's 0-based form at
-//! the boundary; results come back workspace-relative.
+//! 1-based in the tool interface (columns count Unicode scalar values) and
+//! converted to LSP's 0-based UTF-16 form at the boundary; results come
+//! back workspace-relative with columns converted the other way.
 
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -14,6 +16,7 @@ use serde_json::{Value, json};
 use crate::documents::resolve_confined;
 use crate::error::{INVALID_INPUT, SERVER_NOT_FOUND, err};
 use crate::pool::LspPool;
+use crate::positions::{LineIndex, lsp_to_tool};
 use crate::server::ServerHandle;
 use crate::uri::uri_to_path;
 
@@ -106,7 +109,8 @@ impl LspTool {
 }
 
 fn position_schema() -> Value {
-    json!({"type": "number", "minimum": 1, "description": "1-based position"})
+    json!({"type": "integer", "minimum": 1,
+           "description": "1-based position; character counts Unicode characters"})
 }
 
 fn base_properties(extra: Vec<(&str, Value, bool)>) -> Value {
@@ -262,39 +266,61 @@ impl LspTool {
         canonical_root: &Path,
         cancellation: &CancellationToken,
     ) -> Result<Value, CoreError> {
-        let position_params = |uri: &str| -> Value {
-            json!({
+        let position = match self.kind {
+            ToolKind::Definition
+            | ToolKind::References
+            | ToolKind::Hover
+            | ToolKind::Implementation => Some((
+                required_position(args, "line")?,
+                required_position(args, "character")?,
+            )),
+            ToolKind::Symbols | ToolKind::Diagnostics => None,
+        };
+        let position_params = |uri: &str, text: Option<&Arc<str>>| -> Result<Value, CoreError> {
+            let (line, character) = position.expect("positional tool");
+            let (line0, char0) = (line - 1, character - 1);
+            let character = match text {
+                Some(text) => LineIndex::new(Arc::clone(text))
+                    .char_to_utf16(line0, char0)
+                    .ok_or_else(|| {
+                        err(
+                            INVALID_INPUT,
+                            format!("line {line} is beyond the end of the file"),
+                        )
+                    })?,
+                None => char0,
+            };
+            Ok(json!({
                 "textDocument": {"uri": uri},
-                "position": {
-                    "line": position_arg(args, "line").unwrap_or(1) - 1,
-                    "character": position_arg(args, "character").unwrap_or(1) - 1
-                }
-            })
+                "position": {"line": line0, "character": character}
+            }))
         };
         match self.kind {
             ToolKind::Definition => {
                 let path = resolve_confined(canonical_root, &req_string(args, "file")?)?;
                 let result = handle
-                    .guarded_request(
+                    .guarded_request_with_text(
                         "textDocument/definition",
                         Some(&path),
                         &position_params,
                         cancellation,
                     )
                     .await?;
-                Ok(json!({"definitions": self.locations(&result, canonical_root)}))
+                let columns = Columns::load(handle, canonical_root, &result).await;
+                Ok(json!({"definitions": self.locations(&result, canonical_root, &columns)}))
             }
             ToolKind::Implementation => {
                 let path = resolve_confined(canonical_root, &req_string(args, "file")?)?;
                 let result = handle
-                    .guarded_request(
+                    .guarded_request_with_text(
                         "textDocument/implementation",
                         Some(&path),
                         &position_params,
                         cancellation,
                     )
                     .await?;
-                Ok(json!({"implementations": self.locations(&result, canonical_root)}))
+                let columns = Columns::load(handle, canonical_root, &result).await;
+                Ok(json!({"implementations": self.locations(&result, canonical_root, &columns)}))
             }
             ToolKind::References => {
                 let path = resolve_confined(canonical_root, &req_string(args, "file")?)?;
@@ -303,26 +329,30 @@ impl LspTool {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let result = handle
-                    .guarded_request(
+                    .guarded_request_with_text(
                         "textDocument/references",
                         Some(&path),
-                        &|uri: &str| {
-                            let mut params = position_params(uri).as_object().unwrap().clone();
+                        &|uri: &str, text: Option<&Arc<str>>| {
+                            let mut params = position_params(uri, text)?
+                                .as_object()
+                                .cloned()
+                                .unwrap_or_default();
                             params.insert(
                                 "context".into(),
                                 json!({"includeDeclaration": include_declaration}),
                             );
-                            Value::Object(params)
+                            Ok(Value::Object(params))
                         },
                         cancellation,
                     )
                     .await?;
-                Ok(json!({"references": self.locations(&result, canonical_root)}))
+                let columns = Columns::load(handle, canonical_root, &result).await;
+                Ok(json!({"references": self.locations(&result, canonical_root, &columns)}))
             }
             ToolKind::Hover => {
                 let path = resolve_confined(canonical_root, &req_string(args, "file")?)?;
                 let result = handle
-                    .guarded_request(
+                    .guarded_request_with_text(
                         "textDocument/hover",
                         Some(&path),
                         &position_params,
@@ -335,14 +365,15 @@ impl LspTool {
             ToolKind::Symbols => {
                 let query = req_string(args, "query")?;
                 let result = handle
-                    .guarded_request(
+                    .guarded_request_with_text(
                         "workspace/symbol",
                         None,
-                        &|_uri: &str| json!({"query": query}),
+                        &|_uri: &str, _text: Option<&Arc<str>>| Ok(json!({"query": query})),
                         cancellation,
                     )
                     .await?;
-                Ok(json!({"symbols": self.symbols(&result, canonical_root)}))
+                let columns = Columns::load(handle, canonical_root, &result).await;
+                Ok(json!({"symbols": self.symbols(&result, canonical_root, &columns)}))
             }
             ToolKind::Diagnostics => {
                 let file = string_arg(args, "file")?;
@@ -372,7 +403,7 @@ impl LspTool {
 impl LspTool {
     /// `Location[] | LocationLink[] | Location | null` → tool shape
     /// (workspace-relative files, 1-based positions).
-    fn locations(&self, result: &Value, root: &Path) -> Vec<Value> {
+    fn locations(&self, result: &Value, root: &Path, columns: &Columns) -> Vec<Value> {
         let entries: Vec<&Value> = match result {
             Value::Array(items) => items.iter().collect(),
             Value::Null => vec![],
@@ -394,14 +425,15 @@ impl LspTool {
                 };
                 let mut out = serde_json::Map::new();
                 out.insert("file".into(), json!(self.relative_file(&uri, root)));
-                insert_position(&mut out, "line", "character", &range, "start");
-                insert_position(&mut out, "endLine", "endCharacter", &range, "end");
+                let index = columns.index(&uri);
+                insert_position(&mut out, "line", "character", &range, "start", index);
+                insert_position(&mut out, "endLine", "endCharacter", &range, "end", index);
                 Some(Value::Object(out))
             })
             .collect()
     }
 
-    fn symbols(&self, result: &Value, root: &Path) -> Vec<Value> {
+    fn symbols(&self, result: &Value, root: &Path, columns: &Columns) -> Vec<Value> {
         let entries: Vec<&Value> = result
             .as_array()
             .map(|a| a.iter().collect())
@@ -426,7 +458,14 @@ impl LspTool {
                 out.insert("name".into(), json!(name));
                 out.insert("kind".into(), json!(kind));
                 out.insert("file".into(), json!(self.relative_file(&uri, root)));
-                insert_position(&mut out, "line", "character", &range, "start");
+                insert_position(
+                    &mut out,
+                    "line",
+                    "character",
+                    &range,
+                    "start",
+                    columns.index(&uri),
+                );
                 Some(Value::Object(out))
             })
             .collect()
@@ -462,23 +501,30 @@ impl LspTool {
                 list.truncate(max_items);
                 truncated = true;
             }
-            loop {
-                let too_big = serde_json::to_string(&payload)
-                    .map(|serialized| serialized.len())
-                    .unwrap_or(0)
-                    > context.limits.max_bytes;
-                let non_empty = payload
-                    .get(key)
-                    .and_then(Value::as_array)
-                    .is_some_and(|items| !items.is_empty());
-                if !too_big || !non_empty {
-                    break;
+            if encoded_len(&payload) > context.limits.max_bytes
+                && let Some(items) = payload.get(key).and_then(Value::as_array).cloned()
+            {
+                // Largest prefix that fits, found by bisection: each probe
+                // is one serialization, so cost is O(n log n), not O(n^2).
+                let (mut keep, mut over) = (0usize, items.len());
+                while keep < over {
+                    let mid = (keep + over).div_ceil(2);
+                    let mut probe = payload.clone();
+                    probe[key] = Value::Array(items[..mid].to_vec());
+                    if encoded_len(&probe) <= context.limits.max_bytes {
+                        keep = mid;
+                    } else {
+                        over = mid - 1;
+                    }
                 }
-                if let Some(list) = payload.get_mut(key).and_then(Value::as_array_mut) {
-                    list.pop();
-                }
+                payload[key] = Value::Array(items[..keep].to_vec());
                 truncated = true;
             }
+        }
+        if payload.get("contents").is_some_and(Value::is_string)
+            && fit_string(&mut payload, "contents", context.limits.max_bytes)
+        {
+            truncated = true;
         }
         let count = payload
             .as_object()
@@ -514,6 +560,116 @@ impl LspTool {
     }
 }
 
+fn encoded_len(value: &Value) -> usize {
+    serde_json::to_string(value).map_or(0, |serialized| serialized.len())
+}
+
+/// Shorten the string at `payload[key]` on a char boundary until the whole
+/// payload serializes within `max_bytes`. True when it had to cut.
+fn fit_string(payload: &mut Value, key: &str, max_bytes: usize) -> bool {
+    if encoded_len(payload) <= max_bytes {
+        return false;
+    }
+    let Some(full) = payload[key].as_str().map(str::to_owned) else {
+        return false;
+    };
+    let boundaries: Vec<usize> = full
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(full.len()))
+        .collect();
+    let (mut keep, mut over) = (0usize, boundaries.len() - 1);
+    while keep < over {
+        let mid = (keep + over).div_ceil(2);
+        payload[key] = json!(&full[..boundaries[mid]]);
+        if encoded_len(payload) <= max_bytes {
+            keep = mid;
+        } else {
+            over = mid - 1;
+        }
+    }
+    payload[key] = json!(&full[..boundaries[keep]]);
+    true
+}
+
+/// Line indexes for the files a server answer points into, so UTF-16
+/// columns can become scalar columns. A document the server has open uses
+/// the text it was synced with; any other file is read off the runtime
+/// (regular files inside the workspace root only, size- and count-capped).
+/// Anything else keeps the raw server offsets.
+#[derive(Default)]
+struct Columns {
+    loaded: HashMap<String, LineIndex>,
+}
+
+impl Columns {
+    const MAX_FILES: usize = 64;
+    const MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+    fn index(&self, uri: &str) -> Option<&LineIndex> {
+        self.loaded.get(uri)
+    }
+
+    async fn load(handle: &ServerHandle, root: &Path, result: &Value) -> Self {
+        let mut loaded = HashMap::new();
+        for uri in result_uris(result) {
+            if loaded.len() >= Self::MAX_FILES {
+                break;
+            }
+            let index = match handle.document_text(&uri) {
+                Some(text) => Some(LineIndex::new(text)),
+                None => Self::read_from_disk(root, &uri).await,
+            };
+            if let Some(index) = index {
+                loaded.insert(uri, index);
+            }
+        }
+        Self { loaded }
+    }
+
+    async fn read_from_disk(root: &Path, uri: &str) -> Option<LineIndex> {
+        let (root, uri) = (root.to_path_buf(), uri.to_owned());
+        tokio::task::spawn_blocking(move || {
+            let path = uri_to_path(&uri).ok()?.canonicalize().ok()?;
+            if !path.starts_with(&root) {
+                return None;
+            }
+            let metadata = std::fs::metadata(&path).ok()?;
+            if !metadata.is_file() || metadata.len() > Self::MAX_BYTES {
+                return None;
+            }
+            let text = std::fs::read_to_string(&path).ok()?;
+            Some(LineIndex::new(Arc::from(text)))
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+}
+
+/// Distinct document URIs a locations/symbols answer refers to.
+fn result_uris(result: &Value) -> Vec<String> {
+    let entries: Vec<&Value> = match result {
+        Value::Array(items) => items.iter().collect(),
+        Value::Null => vec![],
+        single => vec![single],
+    };
+    let mut uris: Vec<String> = Vec::new();
+    for entry in entries {
+        let uri = entry
+            .get("targetUri")
+            .or_else(|| entry.get("uri"))
+            .or_else(|| entry.get("location").and_then(|l| l.get("uri")))
+            .and_then(Value::as_str);
+        if let Some(uri) = uri
+            && !uris.iter().any(|seen| seen == uri)
+        {
+            uris.push(uri.to_owned());
+        }
+    }
+    uris
+}
+
 /// Workspace-relative display path (absolute when outside the root).
 fn strip_root(path: &str, root: &Path) -> String {
     Path::new(path)
@@ -528,16 +684,12 @@ fn insert_position(
     char_key: &str,
     range: &Value,
     side: &str,
+    index: Option<&LineIndex>,
 ) {
     if let Some(point) = range.get(side) {
-        out.insert(
-            line_key.into(),
-            json!(point.get("line").and_then(Value::as_i64).unwrap_or(0) + 1),
-        );
-        out.insert(
-            char_key.into(),
-            json!(point.get("character").and_then(Value::as_i64).unwrap_or(0) + 1),
-        );
+        let (line, character) = lsp_to_tool(index, point);
+        out.insert(line_key.into(), json!(line));
+        out.insert(char_key.into(), json!(character));
     }
 }
 
@@ -636,6 +788,20 @@ fn string_arg(
     }
 }
 
+/// A required 1-based position: a JSON integer in `1..=u32::MAX`. Anything
+/// else is an invalid-input error, never a silent default.
+fn required_position(args: &serde_json::Map<String, Value>, key: &str) -> Result<u32, CoreError> {
+    position_arg(args, key)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value >= 1)
+        .ok_or_else(|| {
+            err(
+                INVALID_INPUT,
+                format!("{key} is required and must be an integer >= 1"),
+            )
+        })
+}
+
 fn position_arg(args: &serde_json::Map<String, Value>, key: &str) -> Option<i64> {
     args.get(key).and_then(|value| match value {
         Value::Number(number) => number.as_i64().or_else(|| {
@@ -710,6 +876,7 @@ mod tests {
                 {"junk":true}
             ]),
             root,
+            &Columns::default(),
         );
         assert_eq!(out.len(), 3);
         assert_eq!(out[0]["file"], "src/a.rs");
@@ -732,6 +899,7 @@ mod tests {
                 {"name":"bad"}
             ]),
             Path::new("/ws"),
+            &Columns::default(),
         );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["name"], "target");
@@ -811,6 +979,105 @@ mod tests {
             metadata: serde_json::Map::new(),
             suspension: None,
         }
+    }
+
+    #[test]
+    fn positions_must_be_positive_integers() {
+        for bad in [
+            json!(0),
+            json!(-3),
+            json!(1.5),
+            json!("2"),
+            json!(null),
+            json!(1e30),
+        ] {
+            let args = json!({ "line": bad }).as_object().unwrap().clone();
+            let error = required_position(&args, "line").unwrap_err();
+            assert_eq!(error.code, INVALID_INPUT, "{bad}");
+        }
+        let args = json!({"line": 7}).as_object().unwrap().clone();
+        assert_eq!(required_position(&args, "line").unwrap(), 7);
+        assert!(required_position(&args, "character").is_err());
+        let schema = position_schema();
+        assert_eq!(schema["type"], "integer");
+        assert_eq!(schema["minimum"], 1);
+    }
+
+    #[test]
+    fn big_symbol_list_truncates_fast_and_within_budget() {
+        let t = tool(ToolKind::Symbols);
+        let symbols: Vec<Value> = (0..50_000)
+            .map(|i| json!({"name": format!("symbol_{i}"), "kind": "function", "file": "src/lib.rs"}))
+            .collect();
+        let context = ToolContext {
+            limits: agentkit_core::ToolLimits {
+                profile: "small".into(),
+                max_bytes: 16 * 1024,
+                max_items: None,
+            },
+            ..test_context()
+        };
+        let started = std::time::Instant::now();
+        let result = t.result(context, "lsp_symbols".into(), json!({ "symbols": symbols }));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(result.truncated);
+        let data = result.data.unwrap();
+        assert!(serde_json::to_string(&data).unwrap().len() <= 16 * 1024);
+        assert!(!data["symbols"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn huge_hover_is_cut_on_a_char_boundary() {
+        let t = tool(ToolKind::Hover);
+        let context = ToolContext {
+            limits: agentkit_core::ToolLimits {
+                profile: "tiny".into(),
+                max_bytes: 200,
+                max_items: None,
+            },
+            ..test_context()
+        };
+        let contents = "日本語\n\"é\"😀".repeat(500);
+        let result = t.result(context, "lsp_hover".into(), json!({ "contents": contents }));
+        assert!(result.truncated);
+        let data = result.data.unwrap();
+        assert!(serde_json::to_string(&data).unwrap().len() <= 200);
+        assert!(data["contents"].as_str().unwrap().starts_with("日本語"));
+    }
+
+    #[test]
+    fn locations_convert_utf16_columns_to_scalar_columns() {
+        let uri = "file:///ws/e.rs".to_owned();
+        // `b`: scalar index 11, UTF-16 offset 12 (the emoji is two units).
+        let columns = Columns {
+            loaded: HashMap::from([(
+                uri.clone(),
+                LineIndex::new(Arc::from("let s = \"a😀b\";\n")),
+            )]),
+        };
+        let t = tool(ToolKind::Definition);
+        let out = t.locations(
+            &json!([{"uri": uri, "range": {
+                "start": {"line": 0, "character": 12},
+                "end": {"line": 0, "character": 13}}}]),
+            Path::new("/ws"),
+            &columns,
+        );
+        assert_eq!(out[0]["character"], 12);
+        assert_eq!(out[0]["endCharacter"], 13);
+    }
+
+    #[tokio::test]
+    async fn columns_read_unopened_files_off_the_runtime_and_stay_confined() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("e.rs"), "a😀b").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("o.rs"), "x").unwrap();
+        let inside = crate::uri::path_to_uri(&root.join("e.rs"));
+        let escaped = crate::uri::path_to_uri(&outside.path().canonicalize().unwrap().join("o.rs"));
+        assert!(Columns::read_from_disk(&root, &inside).await.is_some());
+        assert!(Columns::read_from_disk(&root, &escaped).await.is_none());
     }
 
     #[test]

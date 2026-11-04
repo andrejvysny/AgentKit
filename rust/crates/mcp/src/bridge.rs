@@ -18,6 +18,9 @@ pub enum BridgeError {
     Client(#[from] McpClientError),
 }
 
+/// Longest tool name model providers accept.
+const MAX_PROJECTED_NAME: usize = 64;
+
 pub struct McpToolSet {
     alias: String,
     aliases: BTreeMap<String, String>,
@@ -103,7 +106,20 @@ impl McpToolSet {
         let mut canonical = BTreeSet::new();
         let mut result: Vec<Arc<dyn Tool>> = Vec::new();
         for tool in listed {
-            let tool = self.project(tool, binding)?;
+            let remote_name = tool.name.to_string();
+            // One malformed remote name must not hide the server's other tools.
+            let tool = match self.project(tool, binding) {
+                Ok(tool) => tool,
+                Err(BridgeError::Identity) => {
+                    tracing::warn!(
+                        alias = %self.alias,
+                        tool = %remote_name,
+                        "skipping MCP tool with an invalid or over-long name"
+                    );
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if !canonical.insert(tool.definition.capability.clone())
                 || !names.insert(tool.definition.name.clone())
             {
@@ -152,6 +168,9 @@ impl McpToolSet {
             return Err(BridgeError::Collision);
         }
         let canonical = format!("mcp.{}.{effective}", self.alias);
+        if canonical.replace('.', "__").len() > MAX_PROJECTED_NAME {
+            return Err(BridgeError::Identity);
+        }
         // Remote annotations are DESCRIPTIVE ONLY: whatever `readOnlyHint` the
         // server claims, the contributed effect comes solely from the host's
         // own `readOnly` allowance for this server (AGENTKIT-56). The

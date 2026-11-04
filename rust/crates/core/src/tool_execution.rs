@@ -128,14 +128,22 @@ pub(crate) async fn execute(
                 } else {Err(CoreError::new("exec_failed",&format!("Tool {} timed out after {ms}ms",call.name)))}
             }
             _ = context.cancellation.cancelled() => { child.cancel(); Err(cancelled()) }
+            _ = closed(&close) => { child.cancel(); Err(cancelled()) }
         }
     } else {
         tokio::select! { biased;
             result = &mut running => result,
             _ = context.cancellation.cancelled() => { child.cancel(); Err(cancelled()) }
+            _ = closed(&close) => { child.cancel(); Err(cancelled()) }
         }
     };
     outcome(call, result, max, &context.limits)
+}
+async fn closed(close: &Option<tokio_util::sync::CancellationToken>) {
+    match close {
+        Some(close) => close.cancelled().await,
+        None => std::future::pending::<()>().await,
+    }
 }
 fn cancelled() -> CoreError {
     CoreError::new(

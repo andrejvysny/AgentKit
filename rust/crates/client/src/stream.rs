@@ -4,6 +4,8 @@ use futures::{StreamExt, stream::BoxStream};
 use serde_json::Value;
 use std::{collections::BTreeMap, time::Duration};
 
+const IDLE_MESSAGE: &str = "Run event stream was idle for too long";
+
 #[derive(Debug, Clone)]
 pub struct StreamOptions {
     pub last_event_id: Option<String>,
@@ -44,8 +46,10 @@ impl Client {
                 futures::pin_mut!(connection);
                 let mut settled = false;
                 let mut failure = None;
+                let mut delivered = false;
                 while let Some(item) = connection.next().await {
                     let frame = match item { Ok(frame) => frame, Err(error) => { failure = Some(error); break; } };
+                    delivered = true;
                     if let Some(ms) = frame.retry { delay = Duration::from_millis(ms.clamp(250,30_000)); }
                     if frame.event.as_deref() == Some("agentkit.stream.settled") {
                         if settled { Err(protocol("Duplicate settlement marker"))?; }
@@ -67,11 +71,16 @@ impl Client {
                 }
                 if settled && failure.is_none() { break; }
                 let error = failure.unwrap_or_else(|| protocol("Run event stream ended without a settlement marker."));
+                let idle_after_progress = delivered && matches!(&error, ClientError::Protocol(m) if m == IDLE_MESSAGE);
                 if matches!(error,ClientError::Http { .. }|ClientError::InvalidRequest(_))
                     || attempts >= options.max_retries || reconnects >= options.max_total_reconnects {
                     Err(error)?;
                 }
-                attempts += 1; reconnects += 1;
+                attempts += 1;
+                // A connection that delivered events and then went quiet is
+                // routine churn, not a failing server: it must not eat the
+                // reconnect budget of a long-lived run.
+                if !idle_after_progress { reconnects += 1; }
                 tokio::time::sleep(delay).await;
             }
         })
@@ -93,14 +102,22 @@ impl Client {
                 call.headers.insert("last-event-id",id.parse().map_err(|_| protocol("Invalid Last-Event-ID"))?);
             }
             let url = client.url(&RestOperation::StreamRun,&call)?;
-            let response = checked(client.send(&RestOperation::StreamRun,&call,url).await?).await?;
+            // Connect, headers and a problem body all count as "silence".
+            let response = tokio::time::timeout(client.stream_idle_timeout, async {
+                checked(client.send(&RestOperation::StreamRun,&call,url,None).await?).await
+            }).await.map_err(|_| protocol(IDLE_MESSAGE))??;
             if !response.headers().get("content-type").and_then(|v| v.to_str().ok())
                 .is_some_and(|v| v.split(';').next() == Some("text/event-stream")) {
                 Err(protocol("Expected text/event-stream response"))?;
             }
             let mut decoder = SseDecoder::new(limit);
             let mut bytes = response.bytes_stream();
-            while let Some(chunk) = bytes.next().await {
+            loop {
+                let Ok(chunk) = tokio::time::timeout(client.stream_idle_timeout, bytes.next()).await else {
+                    Err(protocol(IDLE_MESSAGE))?;
+                    unreachable!();
+                };
+                let Some(chunk) = chunk else { break; };
                 for frame in decoder.feed(&chunk?)? { yield frame; }
             }
             if decoder.has_partial_frame() { Err(protocol("SSE stream ended mid-frame"))?; }

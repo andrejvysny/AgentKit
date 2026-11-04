@@ -12,6 +12,7 @@ mod documents;
 mod error;
 mod jsonrpc;
 mod pool;
+mod positions;
 mod server;
 mod tools;
 mod uri;
@@ -20,7 +21,10 @@ pub use discovery::{
     LANGUAGES, LanguageSpec, detect_language, language_for_extension, language_for_path,
     resolve_server_command,
 };
-pub use documents::{DocumentStore, SyncAction, normalize_diagnostics, resolve_confined};
+pub use documents::{
+    DocumentStore, SyncAction, normalize_diagnostics, normalize_diagnostics_with_text,
+    resolve_confined,
+};
 pub use error::{
     CANCELLED, INVALID_FILE, INVALID_INPUT, PROTOCOL, REQUEST_TIMEOUT, SERVER_CRASHED,
     SERVER_ERROR, SERVER_NOT_FOUND, SERVER_UNAVAILABLE, STALE_RESULT,

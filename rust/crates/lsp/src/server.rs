@@ -26,11 +26,17 @@ use crate::jsonrpc::{Connection, NotificationHandler, RequestHook, RpcFailure};
 use crate::pool::{LspConfig, ServerCommand};
 use crate::uri::path_to_uri;
 
+/// Builds request params from the document URI and the text it was synced with.
+type ParamsBuilder<'a> = dyn Fn(&str, Option<&Arc<str>>) -> Result<Value, CoreError> + Sync + 'a;
+
 const STDERR_TAIL_BYTES: usize = 64 * 1024;
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 fn client_capabilities() -> Value {
     json!({
+        // Positions on the wire are UTF-16 code units; tools convert at the
+        // boundary (see `positions`).
+        "general": { "positionEncodings": ["utf-16"] },
         "textDocument": {
             "definition": {},
             "references": {},
@@ -92,6 +98,14 @@ pub struct ServerProcess {
     pub language: String,
     pub capabilities: Value,
     stderr_tail: Arc<Mutex<Vec<u8>>>,
+    /// One async lock per document: the store marks a document opened or
+    /// changed under its own lock, but the server only learns of it when
+    /// the notification is written. Holding this across both keeps a
+    /// concurrent request from overtaking the `didOpen`/`didChange`.
+    doc_locks: Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Set once the process group has been signalled; later teardown must
+    /// not signal a pgid the kernel may have recycled.
+    group_killed: AtomicBool,
 }
 
 impl ServerProcess {
@@ -125,8 +139,39 @@ impl ServerProcess {
             .as_mut()
             .map(|child| child.try_wait());
         match exited {
-            Some(Ok(Some(status))) => Some(format!("server process exited with {status}")),
+            Some(Ok(Some(status))) => {
+                // `try_wait` just reaped the leader: this is the one safe
+                // moment to take the leftover group down.
+                self.kill_group_once();
+                Some(format!("server process exited with {status}"))
+            }
             _ => None,
+        }
+    }
+
+    /// SIGKILL the process group at most once per generation, and only at a
+    /// moment the leader's pid is still ours (not yet recycled): at reap
+    /// time or while the leader is unreaped.
+    fn kill_group_once(&self) {
+        if !self.group_killed.swap(true, Ordering::SeqCst) {
+            kill_group_pid(self.pid);
+        }
+    }
+
+    /// Teardown for a generation dropped or replaced without a shutdown:
+    /// kills the group only while the leader is still unreaped.
+    fn kill_group_if_unreaped(&self) {
+        if self.group_killed.load(Ordering::SeqCst) {
+            return;
+        }
+        let unreaped = self
+            .child
+            .lock()
+            .ok()
+            .and_then(|mut child| child.as_mut().map(|child| child.try_wait()))
+            .is_some_and(|status| matches!(status, Ok(None)));
+        if unreaped {
+            self.kill_group_once();
         }
     }
 
@@ -197,6 +242,14 @@ impl ServerProcess {
     /// Read the file, open it lazily (or `didChange` it when the on-disk
     /// hash moved on) and return `(uri, docVersion)` to guard requests.
     pub async fn sync_document(&self, path: &Path) -> Result<(String, i64), CoreError> {
+        let lock = Arc::clone(
+            self.doc_locks
+                .lock()
+                .expect("doc locks")
+                .entry(path_to_uri(path))
+                .or_default(),
+        );
+        let _serialized = lock.lock().await;
         let action = self.store.ensure(path)?;
         match action {
             SyncAction::Opened { uri, text, version } => {
@@ -239,14 +292,22 @@ impl ServerProcess {
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            return Ok(crate::documents::normalize_diagnostics(uri, &items));
+            return Ok(crate::documents::normalize_diagnostics_with_text(
+                uri,
+                &items,
+                self.store.text(uri),
+            ));
         }
         let items = self
             .store
             .await_publish(uri, self.config.diagnostics_wait())
             .await
             .unwrap_or_default();
-        Ok(crate::documents::normalize_diagnostics(uri, &items))
+        Ok(crate::documents::normalize_diagnostics_with_text(
+            uri,
+            &items,
+            self.store.text(uri),
+        ))
     }
 
     /// `shutdown` request, `exit` notification, then SIGKILL fallback
@@ -272,28 +333,55 @@ impl ServerProcess {
             // so forked helpers (rust-analyzer's proc-macro servers,
             // tsserver children) cannot outlive the generation as orphans —
             // a direct-child kill would leave them running.
-            kill_group(&child);
+            self.kill_group_once();
             let _ = child.start_kill();
             let _ = tokio::time::timeout(SHUTDOWN_GRACE, child.wait()).await;
+        } else {
+            // Graceful exit, reaped just now. It can still have left forked
+            // helpers behind; the group id stays valid while any member
+            // lives, and the pid cannot have been recycled this soon.
+            self.kill_group_once();
         }
+    }
+}
+
+impl Drop for ServerProcess {
+    /// Dropping a generation (replacement after a crash, pool teardown)
+    /// takes its whole process group down: `kill_on_drop` only reaches the
+    /// direct child, which would orphan grandchildren.
+    fn drop(&mut self) {
+        self.kill_group_if_unreaped();
     }
 }
 
 /// SIGKILL the server's whole process group (pgid == child pid, set at
 /// spawn). Best-effort: an already-dead group answers ESRCH, ignored.
-#[cfg(unix)]
 fn kill_group(child: &tokio::process::Child) {
     if let Some(id) = child.id() {
-        // SAFETY: the pid is ours (spawned into its own group); kill(2) of
-        // our own group is well-defined, and a dead group just errors.
-        unsafe {
-            libc::kill(-(id as i32), libc::SIGKILL);
-        }
+        kill_group_pid(id);
+    }
+}
+
+/// [`kill_group`] by pid, for a leader already reaped. The kernel never
+/// reuses a pid while it is still a live group id, so the only residual
+/// risk is a recycled number after the whole group is gone, which the
+/// short window between exit and teardown makes negligible.
+#[cfg(unix)]
+fn kill_group_pid(pid: u32) {
+    let Ok(pid) = i32::try_from(pid) else { return };
+    if pid <= 1 {
+        return;
+    }
+    // SAFETY: the pid was our child, spawned into its own group; kill(2)
+    // of that group is well-defined, and a dead group just answers ESRCH.
+    unsafe {
+        libc::kill(-pid, libc::SIGKILL);
     }
 }
 
 #[cfg(not(unix))]
-fn kill_group(_child: &tokio::process::Child) {}
+fn kill_group_pid(_pid: u32) {}
+
 /// Spawn one server generation and run the `initialize` handshake. On any
 /// handshake failure (including caller cancellation) the child is killed
 /// before the error returns (`kill_on_drop`).
@@ -374,8 +462,12 @@ async fn spawn_process(
                 .as_ref()
                 .and_then(|p| p.get("diagnostics"))
                 .and_then(Value::as_array);
+            let version = params
+                .as_ref()
+                .and_then(|p| p.get("version"))
+                .and_then(Value::as_i64);
             if let (Some(uri), Some(items)) = (uri, items) {
-                publish_store.record_publish(uri, items.clone());
+                publish_store.record_publish_versioned(uri, version, items.clone());
             }
         }
         // window/logMessage, $/progress and unknown notifications: ignored.
@@ -457,6 +549,8 @@ async fn spawn_process(
         language: language.to_owned(),
         capabilities,
         stderr_tail,
+        doc_locks: Mutex::new(std::collections::HashMap::new()),
+        group_killed: AtomicBool::new(false),
     })
 }
 
@@ -568,6 +662,15 @@ impl ServerHandle {
             .map(|process| process.pid)
     }
 
+    /// The text most recently synced to the live server for `uri`.
+    pub fn document_text(&self, uri: &str) -> Option<Arc<str>> {
+        self.current
+            .lock()
+            .expect("current lock")
+            .as_ref()
+            .and_then(|process| process.store().text(uri))
+    }
+
     fn doc_version(&self, uri: &str) -> Option<i64> {
         self.current
             .lock()
@@ -598,7 +701,12 @@ impl ServerHandle {
         {
             return Ok(process);
         }
-        self.current.lock().expect("current lock").take();
+        // A replaced generation takes its process group with it, even while
+        // a straggler request still holds an `Arc` to it.
+        let replaced = self.current.lock().expect("current lock").take();
+        if let Some(old) = replaced {
+            old.kill_group_if_unreaped();
+        }
         if cancellation.is_cancelled() {
             return Err(err(CANCELLED, "LSP acquisition was cancelled"));
         }
@@ -688,6 +796,25 @@ impl ServerHandle {
         build_params: &(dyn Fn(&str) -> Value + Sync),
         cancellation: &CancellationToken,
     ) -> Result<Value, CoreError> {
+        self.guarded_request_with_text(
+            method,
+            file,
+            &|uri: &str, _text: Option<&Arc<str>>| Ok(build_params(uri)),
+            cancellation,
+        )
+        .await
+    }
+
+    /// [`Self::guarded_request`] whose parameter builder also receives the
+    /// document text the server was just synced with (for position
+    /// conversion) and may reject the request.
+    pub async fn guarded_request_with_text(
+        self: &Arc<Self>,
+        method: &str,
+        file: Option<&Path>,
+        build_params: &ParamsBuilder<'_>,
+        cancellation: &CancellationToken,
+    ) -> Result<Value, CoreError> {
         let _busy = self.busy();
         let mut attempts_left = 1usize;
         loop {
@@ -701,8 +828,8 @@ impl ServerHandle {
                 None => None,
             };
             let params = match &document {
-                Some((uri, _)) => build_params(uri),
-                None => build_params(""),
+                Some((uri, _)) => build_params(uri, process.store().text(uri).as_ref())?,
+                None => build_params("", None)?,
             };
             match process.request(method, params, cancellation).await {
                 Ok(value) => {
