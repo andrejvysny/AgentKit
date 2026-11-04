@@ -155,9 +155,9 @@ impl AdvisorLane {
     }
 
     pub(crate) async fn review(&self, chat_id: &str, focus: String) -> HostResult<AdvisorReport> {
-        let state = self
-            .state()
-            .ok_or_else(|| agentkit_host::HostError::Execution("advisor not configured".into()))?;
+        let state = self.state().ok_or_else(|| {
+            agentkit_host::HostError::Execution(crate::errors::ADVISOR_NOT_CONFIGURED.into())
+        })?;
         agentkit_host::explicit_review(
             &state.engine,
             chat_id,
@@ -172,9 +172,9 @@ impl AdvisorLane {
         chat_id: &str,
         limit: i64,
     ) -> HostResult<Vec<agentkit_store::AdvisorFindingRecord>> {
-        let state = self
-            .state()
-            .ok_or_else(|| agentkit_host::HostError::Execution("advisor not configured".into()))?;
+        let state = self.state().ok_or_else(|| {
+            agentkit_host::HostError::Execution(crate::errors::ADVISOR_NOT_CONFIGURED.into())
+        })?;
         let records = state.store.list_advisor_findings(chat_id, limit).await?;
         Ok(records)
     }

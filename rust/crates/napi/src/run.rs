@@ -348,19 +348,16 @@ fn run_options(
         serde_json::from_value(value["resumeCalls"].clone())
             .map_err(|e| errors::stable("invalid_input", e.to_string(), None))?
     };
-    options.hook_timeout_ms = value["hookTimeoutMs"].as_f64().map(|v| {
-        if v.is_finite() && v > 0.0 {
-            v as u64
-        } else {
-            0
-        }
-    });
+    options.hook_timeout_ms = value["hookTimeoutMs"].as_f64().map(hook_timeout_or_default);
     options.run_id = value["runId"].as_str().map(str::to_owned);
     options.first_seq = value["firstSeq"].as_u64().unwrap_or(0);
     options.attempt_id = value["attemptId"].as_str().map(str::to_owned);
-    options.max_tool_iterations = value["maxToolIterations"].as_u64().unwrap_or(4).max(1) as u32;
+    options.max_tool_iterations =
+        u32::try_from(value["maxToolIterations"].as_u64().unwrap_or(4).max(1))
+            .map_err(|_| errors::invalid("maxToolIterations is out of range"))?;
     options.max_tool_calls_per_iteration =
-        value["maxToolCallsPerIteration"].as_u64().unwrap_or(8) as usize;
+        usize::try_from(value["maxToolCallsPerIteration"].as_u64().unwrap_or(8))
+            .map_err(|_| errors::invalid("maxToolCallsPerIteration is out of range"))?;
     options.default_tool_timeout_ms = value["defaultToolTimeoutMs"].as_u64();
     options.limits = match serde_json::from_value(value["limits"].clone()) {
         Ok(limits) => limits,
@@ -463,6 +460,19 @@ fn provider(value: &Value, bridge: &Arc<JsBridge>) -> Arc<dyn agentkit_core::Cha
     provider
 }
 
+/// The core's hook bound when the request names none. `0` would DISABLE the
+/// per-hook timeout, so a non-finite or non-positive caller value (NaN,
+/// negative, zero) must fall back to this default rather than become 0.
+const DEFAULT_HOOK_TIMEOUT_MS: u64 = 5000;
+
+fn hook_timeout_or_default(value: f64) -> u64 {
+    if value.is_finite() && value >= 1.0 {
+        value as u64
+    } else {
+        DEFAULT_HOOK_TIMEOUT_MS
+    }
+}
+
 fn lifecycle_hooks(value: &Value, bridge: &Arc<JsBridge>) -> Result<Option<Arc<LifecycleHooks>>> {
     if value["hooks"].is_null() {
         return Ok(None);
@@ -474,14 +484,8 @@ fn lifecycle_hooks(value: &Value, bridge: &Arc<JsBridge>) -> Result<Option<Arc<L
     }
     let timeout_ms = value["hookTimeoutMs"]
         .as_f64()
-        .map(|v| {
-            if v.is_finite() && v > 0.0 {
-                v as u64
-            } else {
-                0
-            }
-        })
-        .unwrap_or(5000);
+        .map(hook_timeout_or_default)
+        .unwrap_or(DEFAULT_HOOK_TIMEOUT_MS);
     Ok(Some(Arc::new(LifecycleHooks {
         bridge: bridge.clone(),
         names,

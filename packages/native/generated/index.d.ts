@@ -340,6 +340,13 @@ export declare class SessionService {
    */
   subscribeTurn(taskId: string, afterSeq?: number | undefined | null): Promise<SubscriptionHandle>
   /**
+   * Tag this service with the calling Node environment and make sure that
+   * environment has a cleanup hook (once per env). The JS wrapper calls it
+   * right after construction; async constructors have no `Env`, so this
+   * is the earliest synchronous point. Idempotent.
+   */
+  bindEnv(): void
+  /**
    * Release the event-loop reference held by the callback delivery
    * function. The JS wrapper calls this first in `close()`; after it, no
    * new callback can wake the loop, so a process whose script has ended

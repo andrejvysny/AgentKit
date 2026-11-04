@@ -39,8 +39,13 @@ import type {
  * token.
  */
 export interface NativeMcpServerOptions {
-  /** Interface to bind. Default `127.0.0.1`. */
+  /** Interface to bind. Default `127.0.0.1`. Only loopback hosts
+   * (`127.0.0.0/8`, `::1`, `localhost`) are accepted unless
+   * `allowNonLoopback` is set. */
   host?: string;
+  /** Opt in to binding a non-loopback host. Without it such a host fails
+   * with `non_loopback_bind_refused`. Default false. */
+  allowNonLoopback?: boolean;
   /** Port to bind; `0` (the default) asks the OS for an ephemeral port. */
   port?: number;
   /** REQUIRED, non-empty. Every token must be at least 32 bytes of

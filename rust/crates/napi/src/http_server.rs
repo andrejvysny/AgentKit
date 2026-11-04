@@ -13,10 +13,16 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use agentkit_host::http::DesktopBackend;
 use agentkit_transport_http::{Actor, Config, StreamOptions};
+use axum::body::Body;
+use axum::extract::{Request, State};
+use axum::middleware::Next;
+use axum::response::Response;
+use futures::StreamExt;
 use napi::bindgen_prelude::*;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
@@ -38,6 +44,9 @@ const DEFAULT_MODEL: &str = "model";
 /// signal; keeps `stopHttpServer()`/`close()` deterministic even with a
 /// client that never finishes reading (e.g. a parked SSE consumer).
 pub(super) const CONNECTION_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+/// Extra time, after in-flight connections were cut, for the accept loop to
+/// observe their closure before it is force-aborted.
+const CONNECTION_ABORT_GRACE: Duration = Duration::from_millis(250);
 
 /// One running desktop HTTP server: the accept-loop task plus the token
 /// that drains it. Cancelling closes the listener immediately (follow-up
@@ -46,6 +55,53 @@ pub(super) const CONNECTION_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 pub(super) struct HttpServer {
     token: CancellationToken,
     join: JoinHandle<()>,
+    gate: Arc<ServerGate>,
+}
+
+/// Per-server admission gate: `closed` refuses new requests with a 503
+/// `service_closed` the moment shutdown begins (a kept-alive connection can
+/// otherwise keep submitting work after the listener is gone), and `abort`
+/// cuts every remaining in-flight handler and streaming body after the
+/// shutdown grace. `axum::serve` detaches its per-connection tasks, so
+/// aborting the accept loop alone would leave them running.
+struct ServerGate {
+    closed: AtomicBool,
+    abort: CancellationToken,
+}
+
+fn closed_response() -> Response {
+    let body = json!({
+        "code": "service_closed",
+        "message": "the session service is closed",
+    })
+    .to_string();
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = http::StatusCode::SERVICE_UNAVAILABLE;
+    response.headers_mut().insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    response
+}
+
+async fn gate_middleware(
+    State(gate): State<Arc<ServerGate>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if gate.closed.load(Ordering::SeqCst) {
+        return closed_response();
+    }
+    let response = tokio::select! {
+        biased;
+        () = gate.abort.cancelled() => return closed_response(),
+        response = next.run(request) => response,
+    };
+    let (parts, body) = response.into_parts();
+    let stream = body
+        .into_data_stream()
+        .take_until(gate.abort.clone().cancelled_owned());
+    Response::from_parts(parts, Body::from_stream(stream))
 }
 
 impl HttpServer {
@@ -58,10 +114,31 @@ impl HttpServer {
     /// SSE consumer on an unsettled run; the socket is already closed, the
     /// orphaned connection task can only hold its store clone until the
     /// run finally settles).
+    /// Environment-teardown stop: no grace for in-flight connections - the
+    /// gate cuts handlers and bodies at once so the accept loop can finish.
+    pub(super) async fn shutdown_now(self) {
+        self.gate.closed.store(true, Ordering::SeqCst);
+        self.gate.abort.cancel();
+        self.token.cancel();
+        let cut = tokio::time::Instant::now() + CONNECTION_ABORT_GRACE;
+        while !self.join.is_finished() && tokio::time::Instant::now() < cut {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        self.join.abort();
+    }
+
     pub(super) async fn shutdown(self, grace: Duration) {
+        self.gate.closed.store(true, Ordering::SeqCst);
         self.token.cancel();
         let deadline = tokio::time::Instant::now() + grace.max(CONNECTION_SHUTDOWN_GRACE);
         while !self.join.is_finished() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Remaining connections (parked SSE consumers, stalled handlers)
+        // are cut by the gate, which lets graceful shutdown complete.
+        self.gate.abort.cancel();
+        let cut = tokio::time::Instant::now() + CONNECTION_ABORT_GRACE;
+        while !self.join.is_finished() && tokio::time::Instant::now() < cut {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         self.join.abort();
@@ -74,6 +151,7 @@ impl HttpServer {
 #[derive(Debug)]
 struct ServerOptions {
     host: String,
+    allow_non_loopback: bool,
     port: u16,
     base_path: String,
     max_body_bytes: usize,
@@ -258,6 +336,7 @@ fn parse_server_options(text: &str) -> Result<ServerOptions> {
             "host must be a bare hostname or IP literal",
         ));
     }
+    let allow_non_loopback = ensure_loopback_bind(&object, &host)?;
     let port = optional_u64(&object, "port")?
         .map(|port| {
             u16::try_from(port).map_err(|_| {
@@ -268,6 +347,7 @@ fn parse_server_options(text: &str) -> Result<ServerOptions> {
         .unwrap_or(0);
     Ok(ServerOptions {
         host,
+        allow_non_loopback,
         port,
         base_path: optional_text(&object, "basePath", true)?.unwrap_or_default(),
         max_body_bytes: optional_sized(&object, "maxBodyBytes")?.unwrap_or(1_048_576),
@@ -304,6 +384,62 @@ fn normalize_base_path(path: &str) -> String {
     } else {
         path
     }
+}
+
+/// Refuse a non-loopback bind host unless `allowNonLoopback: true` is in the
+/// options. Loopback is `127.0.0.0/8`, `::1`, or the name `localhost`; any
+/// other name is refused because it may resolve to a routable interface.
+/// The servers authenticate with a bearer token, but a token on a LAN-facing
+/// plain-HTTP listener is still an exposure the caller must opt into.
+pub(super) fn ensure_loopback_bind(object: &Value, host: &str) -> Result<bool> {
+    let allow = match object.get("allowNonLoopback") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(allow)) => *allow,
+        Some(_) => return Err(errors::invalid("allowNonLoopback must be a boolean")),
+    };
+    if allow || is_loopback_host(host) {
+        return Ok(allow);
+    }
+    Err(errors::stable(
+        "non_loopback_bind_refused",
+        format!(
+            "refusing to bind non-loopback host {host:?}; pass allowNonLoopback: true to opt in"
+        ),
+        None,
+    ))
+}
+
+/// Post-bind check: a NAME that passed the textual test (`localhost`) is
+/// only trusted if the socket really landed on a loopback address. The
+/// listener is dropped (closing the socket) on refusal.
+pub(super) fn ensure_bound_loopback(
+    listener: tokio::net::TcpListener,
+    allow_non_loopback: bool,
+) -> Result<tokio::net::TcpListener> {
+    let loopback = listener
+        .local_addr()
+        .is_ok_and(|address| address.ip().is_loopback());
+    if allow_non_loopback || loopback {
+        return Ok(listener);
+    }
+    drop(listener);
+    Err(errors::stable(
+        "non_loopback_bind_refused",
+        "the host resolved to a non-loopback address; pass allowNonLoopback: true to opt in",
+        None,
+    ))
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(host);
+    if bare.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    bare.parse::<std::net::IpAddr>()
+        .is_ok_and(|address| address.is_loopback())
 }
 
 /// Bracket IPv6 literals so the advertised URL is fetchable as-is.
@@ -383,7 +519,10 @@ impl SessionService {
     #[napi]
     pub async fn start_http_server(&self, options_json: String) -> Result<String> {
         let options = parse_server_options(&options_json)?;
-        let listener = bind_listener(&options.host, options.port).await?;
+        let listener = ensure_bound_loopback(
+            bind_listener(&options.host, options.port).await?,
+            options.allow_non_loopback,
+        )?;
         let port = listener
             .local_addr()
             .map_err(|error| {
@@ -421,6 +560,10 @@ impl SessionService {
                 agentkit_connections::MemorySecretStore::default(),
             ));
         }
+        let gate = Arc::new(ServerGate {
+            closed: AtomicBool::new(false),
+            abort: CancellationToken::new(),
+        });
         let router = Arc::new(backend).into_router(Config {
             base_path: options.base_path.clone(),
             max_body_bytes: options.max_body_bytes,
@@ -428,6 +571,10 @@ impl SessionService {
             streaming: StreamOptions::default(),
             cors: options.cors.clone(),
         });
+        let router = router.layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&gate),
+            gate_middleware,
+        ));
         let token = CancellationToken::new();
         let serve_token = token.clone();
         let join = tokio::spawn(async move {
@@ -440,7 +587,7 @@ impl SessionService {
                 .with_graceful_shutdown(async move { serve_token.cancelled().await })
                 .await;
         });
-        core.http = Some(HttpServer { token, join });
+        core.http = Some(HttpServer { token, join, gate });
         Ok(json!({
             "port": port,
             "baseUrl": format!("http://{}:{}{}", url_host(&options.host), port, normalize_base_path(&options.base_path)),

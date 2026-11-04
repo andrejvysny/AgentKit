@@ -351,70 +351,85 @@ impl NativeStore {
                 "mcpConnect never connects a disabled server; omit enabled or set it true",
             ));
         }
-        let mut state = self.mcp.lock().await;
-        if state.is_none() {
-            let manager = McpClientManager::new(Vec::new(), Arc::new(UnavailableSecrets))
-                .map_err(map_client)?;
-            *state = Some(Registry {
-                manager: Arc::new(manager),
-                configs: BTreeMap::new(),
-                tools: HashMap::new(),
-                registrations: HashMap::new(),
-                pending: HashMap::new(),
-                cancelled: HashSet::new(),
-            });
-        }
-        let registry = state
-            .as_mut()
-            .ok_or_else(|| errors::internal("MCP registry state was not installed"))?;
-        if registry.configs.contains_key(&config.alias) {
-            return Err(errors::invalid(format!(
-                "MCP server {} is already connected; call mcpDisconnect() first",
-                config.alias
-            )));
-        }
+        // Connects are serialized by their own gate so the registry mutex is
+        // never held across spawn / handshake / `tools/list` (which can take
+        // as long as a server cares to stall): calls, cancels, and
+        // disconnects on OTHER aliases keep flowing meanwhile.
+        let _connect_gate = self.mcp_connect_gate.lock().await;
         let alias = config.alias.clone();
-        // Build the NEXT state completely before publishing any of it. The
-        // mirrors (`configs`, `tools`, `registrations`) are written only once
-        // the new server has connected AND projected, so every failure path
-        // leaves the servers that were already connected exactly as they were —
-        // including their cached descriptors, which a clear-then-connect
-        // ordering would drop on the floor.
-        // A reconnect under a known alias is a NEW registration: it mints new
-        // handles, and the previous registration's handles stop being admitted
-        // even though the alias (and every tool name under it) is unchanged.
-        let registration = registry
-            .registrations
-            .get(&alias)
-            .copied()
-            .unwrap_or(0)
-            .wrapping_add(1);
-        let mut next_configs = registry.configs.clone();
-        next_configs.insert(alias.clone(), config.clone());
-        // Cross-server descriptor uniqueness is checked against the CURRENT
-        // cache plus the candidate set, before anything is published.
-        let mut names: Vec<String> = registry
-            .tools
-            .values()
-            .flatten()
-            .filter_map(|entry| entry.descriptor.get("name")?.as_str().map(str::to_owned))
-            .collect();
-        let mut canonicals: Vec<String> = registry
-            .tools
-            .values()
-            .flatten()
-            .map(|entry| entry.canonical.clone())
-            .collect();
+        // Phase 1 (short lock): validate, snapshot, mint the registration.
+        let (manager, registration, known_aliases, next_configs, mut names, mut canonicals) = {
+            let mut state = self.mcp.lock().await;
+            if state.is_none() {
+                let manager = McpClientManager::new(Vec::new(), Arc::new(UnavailableSecrets))
+                    .map_err(map_client)?;
+                *state = Some(Registry {
+                    manager: Arc::new(manager),
+                    configs: BTreeMap::new(),
+                    tools: HashMap::new(),
+                    registrations: HashMap::new(),
+                    pending: HashMap::new(),
+                    cancelled: HashSet::new(),
+                });
+            }
+            let registry = state
+                .as_mut()
+                .ok_or_else(|| errors::internal("MCP registry state was not installed"))?;
+            if registry.configs.contains_key(&config.alias) {
+                return Err(errors::invalid(format!(
+                    "MCP server {} is already connected; call mcpDisconnect() first",
+                    config.alias
+                )));
+            }
+            // Build the NEXT state completely before publishing any of it.
+            // The mirrors (`configs`, `tools`, `registrations`) are written
+            // only once the new server has connected AND projected, so every
+            // failure path leaves the servers that were already connected
+            // exactly as they were. A reconnect under a known alias is a NEW
+            // registration: it mints new handles, and the previous
+            // registration's handles stop being admitted.
+            let registration = registry
+                .registrations
+                .get(&alias)
+                .copied()
+                .unwrap_or(0)
+                .wrapping_add(1);
+            let mut next_configs = registry.configs.clone();
+            next_configs.insert(alias.clone(), config.clone());
+            // Cross-server descriptor uniqueness is checked against the
+            // CURRENT cache plus the candidate set, before publishing.
+            let names: Vec<String> = registry
+                .tools
+                .values()
+                .flatten()
+                .filter_map(|entry| entry.descriptor.get("name")?.as_str().map(str::to_owned))
+                .collect();
+            let canonicals: Vec<String> = registry
+                .tools
+                .values()
+                .flatten()
+                .map(|entry| entry.canonical.clone())
+                .collect();
+            let known_aliases: Vec<String> = registry.configs.keys().cloned().collect();
+            (
+                Arc::clone(&registry.manager),
+                registration,
+                known_aliases,
+                next_configs,
+                names,
+                canonicals,
+            )
+        };
+        // Phase 2 (no registry lock): the network work.
         let cancellation = CancellationToken::new();
         let projected = async {
-            let manager = Arc::clone(&registry.manager);
             manager
                 .replace_configs(next_configs.values().cloned().collect())
                 .await?;
             manager.connect(&alias, cancellation.clone()).await?;
             let listed = manager.list_tools(&alias, cancellation).await?;
             // Capture the transport the listing just answered on: every
-            // descriptor minted here is pinned to it (W1d — bound dispatch
+            // descriptor minted here is pinned to it (W1d - bound dispatch
             // across automatic reconnects). A session that lost its
             // transport between the listing and this read is refused here;
             // an unbound descriptor would silently dispatch on whichever
@@ -441,25 +456,43 @@ impl NativeStore {
             }
             // Cross-namespace ambiguity (an advertised name that is another
             // tool's ORIGINAL) is refused here, before a single descriptor of
-            // this registration leaves the lock.
+            // this registration is published.
             if !catalogue_is_addressable(&projected) {
                 return Err(McpClientError::Configuration);
             }
             Ok::<_, McpClientError>(projected)
         }
         .await;
+        // Phase 3 (short lock): publish, or roll the manager back to the
+        // declaration set the registry actually holds.
+        let mut state = self.mcp.lock().await;
         let projected = match projected {
             Ok(projected) => projected,
             Err(error) => {
-                // The new server never became usable: roll the MANAGER back to
-                // the declaration set it started from. The mirrors were never
-                // touched, so kept servers keep their live transports, their
-                // descriptors and their handles.
-                let rollback = registry.configs.values().cloned().collect::<Vec<_>>();
-                let _ = registry.manager.replace_configs(rollback).await;
+                if let Some(registry) = state.as_ref() {
+                    let rollback = registry.configs.values().cloned().collect::<Vec<_>>();
+                    let _ = registry.manager.replace_configs(rollback).await;
+                }
                 return Err(map_client(error));
             }
         };
+        let Some(registry) = state.as_mut() else {
+            // The store closed while the connect was in flight; its teardown
+            // already closed the manager, so there is nothing to publish.
+            return Err(errors::closed("the store is closed"));
+        };
+        if !registry.configs.keys().eq(known_aliases.iter()) {
+            // A disconnect landed during the handshake: the manager was
+            // configured from a stale declaration set. Restore it and make
+            // the caller retry against the registry as it now stands.
+            let rollback = registry.configs.values().cloned().collect::<Vec<_>>();
+            let _ = registry.manager.replace_configs(rollback).await;
+            return Err(errors::stable(
+                "invalid_state",
+                "the connected MCP server set changed while connecting; retry mcpConnect()",
+                None,
+            ));
+        }
         registry.configs = next_configs;
         registry.tools.insert(alias.clone(), projected);
         registry.registrations.insert(alias.clone(), registration);

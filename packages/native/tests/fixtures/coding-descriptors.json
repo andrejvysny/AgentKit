@@ -1,6 +1,6 @@
 {
   "source": "packages/toolpacks-coding/src (frozen at Phase 2 deletion, 2026-11-02)",
-  "note": "The coding lane model-facing contract as the TypeScript authority produced it. The native binding lane is asserted against this fixture byte-for-byte (modulo the host DirectWrite annotation prefix), replacing the retired TS differential oracle.",
+  "note": "The coding lane model-facing contract as the TypeScript authority produced it. The native binding lane is asserted against this fixture byte-for-byte (modulo the host DirectWrite annotation prefix), replacing the retired TS differential oracle. Deliberate post-freeze divergence: git_inspect states that paths are literal pathspecs (2026-11-04 hardening).",
   "tools": [
     {
       "name": "read_file",
@@ -159,7 +159,7 @@
     {
       "name": "git_inspect",
       "effect": "read",
-      "description": "Read-only git inspection: status, diff (staged or not), log, show. Fixed commands only. Hooks, fsmonitor, filter/textconv/external-diff drivers, pager and ssh/askpass helpers configured by the repository are neutralized and never run; if the repository config cannot be read the call is refused. Output is capped at 50.0KB. Prefer this over running git through a shell.",
+      "description": "Read-only git inspection: status, diff (staged or not), log, show. Fixed commands only. Hooks, fsmonitor, filter/textconv/external-diff drivers, pager and ssh/askpass helpers configured by the repository are neutralized and never run; if the repository config cannot be read the call is refused. Output is capped at 50.0KB. Paths are taken literally (no globs or pathspec magic). Prefer this over running git through a shell.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -172,7 +172,7 @@
             "properties": {
               "path": {
                 "type": "string",
-                "description": "Limit to this path (relative to the workspace root)."
+                "description": "Limit to this path (relative to the workspace root). Taken literally: no globs or pathspec magic."
               },
               "staged": {
                 "type": "boolean",

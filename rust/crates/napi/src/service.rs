@@ -5,13 +5,16 @@
 //! response crosses back as JSON text so the portable contract — not a
 //! parallel Rust-only schema — defines the wire shape. Shutdown order is
 //! explicit: reject outstanding callbacks, stop the worker, drain queued
-//! store writes, release the store clone. A dropped JS wrapper never runs
-//! any of this, and that is by design: GC must never cancel durable work.
+//! store writes, release the store clone. A service dropped WITHOUT `close()`
+//! (GC, or Node tearing the environment down) still gets a best-effort,
+//! non-blocking version of it: the bridge starts closing and the worker and
+//! listeners are stopped so no orphan task keeps running against a dead
+//! host. Durable work is unaffected - it recovers on the next boot.
 
 use std::collections::HashMap;
 use std::ops::DerefMut;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use agentkit_core::ToolRegistry;
@@ -25,6 +28,7 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunction;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, mpsc};
+use tokio_util::sync::CancellationToken;
 
 use crate::advisor_lane::{
     AdvisorLane, AdvisorLaneContributor, BridgeAdvisorSink, LaneAdvisorTools,
@@ -48,9 +52,13 @@ mod management;
 mod mcp_server;
 
 const MAX_POLL_BATCH: i32 = 64;
+/// Workers for root sessions and their delegating parents; the subagent
+/// `maxConcurrency` is added on top at construction.
+const BASE_WORKERS: usize = 12;
 const DEFAULT_POLL_WAIT_MS: u64 = 25;
 const DEFAULT_CLOSE_TIMEOUT_MS: u64 = 5_000;
 const MAX_CLOSE_TIMEOUT_MS: u64 = 300_000;
+const MAX_SUBAGENT_POOL: i64 = 64;
 
 struct Core {
     host: AgentHost,
@@ -61,25 +69,66 @@ struct Core {
     advisor_lane: Arc<AdvisorLane>,
     lsp_lane: Arc<LspLane>,
     worker: Option<WorkerHandle>,
-    subscriptions: Mutex<Vec<Arc<Subscription>>>,
+    subscriptions: Subscriptions,
     http: Option<http_server::HttpServer>,
     mcp: Option<mcp_server::McpServerHandle>,
 }
 
+/// Live subscriptions of one service. A std mutex on purpose: pruning runs
+/// from synchronous `cancel()` and from `Drop`-adjacent paths and is never
+/// held across an await.
+type Subscriptions = Arc<std::sync::Mutex<Vec<Arc<Subscription>>>>;
+
 #[napi(js_name = "SessionService")]
 pub struct SessionService {
-    core: Mutex<Option<Core>>,
+    core: Arc<Mutex<Option<Core>>>,
     bridge: Arc<JsBridge>,
     gate: Arc<CloseGate>,
     close_timeout: Duration,
     uncertain: Arc<AtomicBool>,
+    /// The Node environment (raw `napi_env`) that owns this service; 0
+    /// until `bindEnv`. Environment cleanup drains only its own services.
+    env: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// One-shot shutdown coordination: concurrent `close` callers await the
 /// same completion instead of racing the teardown or returning early.
 struct CloseGate {
-    state: Mutex<GateState>,
+    state: std::sync::Mutex<GateState>,
     wake: Notify,
+}
+
+impl CloseGate {
+    fn lock(&self) -> std::sync::MutexGuard<'_, GateState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Resets `busy` (and wakes waiters) however `close()` ends - success,
+/// error, panic, or the future being dropped mid-shutdown - so a failed
+/// attempt can never wedge every later `close()` behind a stale flag.
+struct BusyGuard<'a> {
+    gate: &'a CloseGate,
+    done: bool,
+}
+
+impl Drop for BusyGuard<'_> {
+    fn drop(&mut self) {
+        {
+            let mut state = self.gate.lock();
+            state.busy = false;
+            state.done = self.done;
+        }
+        self.gate.wake.notify_waiters();
+    }
+}
+
+enum GateAction {
+    Done,
+    Wait,
+    Run,
 }
 
 struct GateState {
@@ -126,7 +175,7 @@ impl SessionService {
         // from construction; the configuration calls below fill them.
         // Unconfigured lanes contribute nothing, judge nothing, and hook
         // nothing — existing services behave exactly as before.
-        let subagent_lane = Arc::new(SubagentLane::new());
+        let subagent_lane = Arc::new(SubagentLane::new(options.subagent_max_concurrency));
         let advisor_lane = Arc::new(AdvisorLane::new());
         let lsp_lane = Arc::new(LspLane::new());
         let lanes_store = store_handle.clone();
@@ -252,8 +301,11 @@ impl SessionService {
                 // active, depth 2, 4 per parent) a pool sized only for the
                 // parents starves every child until the await times out.
                 // Idle workers park on the wake queue; overprovisioning is
-                // free.
-                concurrency: 12,
+                // free. The child term is the START-TIME subagent
+                // `maxConcurrency`; `configureSubagents` clamps later raises
+                // to it, because the pool is fixed once the worker starts.
+                concurrency: BASE_WORKERS
+                    + usize::try_from(options.subagent_max_concurrency).unwrap_or(0),
                 // Orphan reaping on parent settlement (subagents) and
                 // turn-failure tracking (watchdog). Failures never unwind
                 // the settlement; the startup sweep is the same computation.
@@ -306,8 +358,8 @@ impl SessionService {
         // spawn under the same identities.
         subagent_lane.reap_orphans().await.map_err(errors::host)?;
         let worker = host.start_worker();
-        Ok(Self {
-            core: Mutex::new(Some(Core {
+        let service = Self {
+            core: Arc::new(Mutex::new(Some(Core {
                 host,
                 service,
                 contributor,
@@ -316,13 +368,13 @@ impl SessionService {
                 advisor_lane,
                 lsp_lane,
                 worker: Some(worker),
-                subscriptions: Mutex::new(Vec::new()),
+                subscriptions: Arc::new(std::sync::Mutex::new(Vec::new())),
                 http: None,
                 mcp: None,
-            })),
+            }))),
             bridge,
             gate: Arc::new(CloseGate {
-                state: Mutex::new(GateState {
+                state: std::sync::Mutex::new(GateState {
                     busy: false,
                     done: false,
                 }),
@@ -330,7 +382,10 @@ impl SessionService {
             }),
             close_timeout: options.close_timeout,
             uncertain: Arc::new(AtomicBool::new(false)),
-        })
+            env: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        };
+        register_live(&service);
+        Ok(service)
     }
 
     /// Register a JS-executed tool. `definitionJson` is the portable tool
@@ -521,14 +576,18 @@ impl SessionService {
 
     /// Persisted advisor findings for a session, newest first.
     #[napi]
-    pub async fn advisor_findings(&self, session_id: String, limit: Option<i32>) -> Result<String> {
+    pub async fn advisor_findings(&self, session_id: String, limit: Option<f64>) -> Result<String> {
+        let limit = match limit {
+            None => 50,
+            Some(value) => integer_arg("limit", value, 1, i64::from(i32::MAX))?,
+        };
         let core_guard = self.core.lock().await;
         let core = core_guard
             .as_ref()
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let records = core
             .advisor_lane
-            .findings(&session_id, limit.unwrap_or(50).max(1) as i64)
+            .findings(&session_id, limit)
             .await
             .map_err(errors::host)?;
         serde_json::to_string(&records).map_err(|error| errors::internal(&error.to_string()))
@@ -795,15 +854,42 @@ impl SessionService {
         let subscription = Arc::new(Subscription {
             receiver: Mutex::new(Some(receiver)),
             closed: AtomicBool::new(false),
+            cancellation: CancellationToken::new(),
+            registry: Arc::downgrade(&core.subscriptions),
         });
         core.subscriptions
             .lock()
-            .await
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(Arc::clone(&subscription));
         Ok(SubscriptionHandle {
             subscription,
             buffer: std::sync::Mutex::new(Vec::new()),
+            deferred_error: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Tag this service with the calling Node environment and make sure that
+    /// environment has a cleanup hook (once per env). The JS wrapper calls it
+    /// right after construction; async constructors have no `Env`, so this
+    /// is the earliest synchronous point. Idempotent.
+    #[napi(catch_unwind)]
+    pub fn bind_env(&self, env: Env) -> Result<()> {
+        let raw = env.raw() as usize;
+        self.env.store(raw, Ordering::SeqCst);
+        let mut hooked = HOOKED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !hooked.contains(&raw) {
+            env.add_env_cleanup_hook(raw, |raw| {
+                HOOKED
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .retain(|candidate| *candidate != raw);
+                shutdown_live_services(raw);
+            })?;
+            hooked.push(raw);
+        }
+        Ok(())
     }
 
     /// Release the event-loop reference held by the callback delivery
@@ -847,24 +933,31 @@ impl SessionService {
         loop {
             let mut waited = Box::pin(self.gate.wake.notified());
             waited.as_mut().enable();
-            {
-                let mut state = self.gate.state.lock().await;
+            let action = {
+                let mut state = self.gate.lock();
                 if state.done {
-                    return Ok(());
+                    GateAction::Done
+                } else if state.busy {
+                    GateAction::Wait
+                } else {
+                    state.busy = true;
+                    GateAction::Run
                 }
-                if state.busy {
-                    drop(state);
+            };
+            match action {
+                GateAction::Done => return Ok(()),
+                GateAction::Wait => {
                     waited.await;
                     continue;
                 }
-                state.busy = true;
+                GateAction::Run => {}
             }
+            let mut busy = BusyGuard {
+                gate: &self.gate,
+                done: false,
+            };
             let outcome = self.shutdown_once().await;
-            let mut state = self.gate.state.lock().await;
-            state.busy = false;
-            state.done = outcome.is_ok();
-            drop(state);
-            self.gate.wake.notify_waiters();
+            busy.done = outcome.is_ok();
             return outcome;
         }
     }
@@ -878,39 +971,20 @@ impl SessionService {
         // method. The MCP close revokes every session lease first, which
         // cancels in-flight JS tool callbacks dispatched by remote calls.
         let mut core = self.core.lock().await.take();
-        let http = core.as_mut().and_then(|core| core.http.take());
-        let mcp = core.as_mut().and_then(|core| core.mcp.take());
-        if let Some(server) = http {
-            server.shutdown(self.close_timeout).await;
-        }
-        if let Some(server) = mcp {
-            server.shutdown(self.close_timeout).await;
+        if let Some(core) = core.as_mut() {
+            stop_servers(core, self.close_timeout).await;
         }
         self.bridge.start_closing();
-        if let Some(mut core) = core {
-            for subscription in core.subscriptions.lock().await.drain(..) {
-                subscription.cancel();
-            }
-            if let Some(worker) = core.worker.take() {
-                match tokio::time::timeout(self.close_timeout, worker.shutdown()).await {
-                    Ok(result) => result.map_err(errors::host)?,
-                    Err(_) => self.uncertain.store(true, Ordering::SeqCst),
-                }
-            }
-            // Native coding commands this process owns get the crate's own
-            // teardown (drain + scratch removal) once no new dispatch can
-            // start; anything a DEAD process left is the next boot's
-            // startup sweep, not ours. Outcomes stay whatever the receipt
-            // log decides — teardown never claims them.
-            core.lane.dispose().await;
-            // Language servers get a clean shutdown (exit + kill fallback)
-            // once no new dispatch can start; a dead process's leftovers
-            // die with the process, not with us.
-            core.lsp_lane.close().await;
-            drop(core);
-        }
+        // Cleanup is unconditional: a worker error is remembered and
+        // returned only AFTER lanes are disposed and the bridge is closed,
+        // so a failed drain can never leave commands or language servers
+        // running behind a "closed" service.
+        let outcome = match core {
+            Some(core) => drain_core(core, self.close_timeout, &self.uncertain).await,
+            None => Ok(()),
+        };
         self.bridge.mark_closed();
-        Ok(())
+        outcome
     }
 
     /// True when a `close()` completed without establishing that owned
@@ -925,6 +999,214 @@ impl SessionService {
     }
 }
 
+/// Stop the desktop listeners (before the bridge starts Closing).
+async fn stop_servers(core: &mut Core, grace: Duration) {
+    if let Some(server) = core.http.take() {
+        server.shutdown(grace).await;
+    }
+    if let Some(server) = core.mcp.take() {
+        server.shutdown(grace).await;
+    }
+}
+
+/// Everything after the bridge is Closing: cancel subscriptions, drain the
+/// worker (bounded), then dispose the coding lane and the language servers.
+/// Always runs to the end; returns the first worker error afterwards.
+async fn drain_core(mut core: Core, close_timeout: Duration, uncertain: &AtomicBool) -> Result<()> {
+    let mut first_error: Option<napi::Error> = None;
+    cancel_all(&core.subscriptions);
+    if let Some(worker) = core.worker.take() {
+        // `shutdown` stops admissions itself; the whole wait, including
+        // acquiring the admission lock, is inside the deadline.
+        match tokio::time::timeout(close_timeout, worker.shutdown()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => first_error = Some(errors::host(error)),
+            Err(_) => {
+                // The drain deadline passed; the host exposes no abort for
+                // its worker task, so refuse any further native execution
+                // (the bridge already rejects JS dispatch and provider
+                // requests) and record that drain was not established.
+                uncertain.store(true, Ordering::SeqCst);
+                core.lane.mark_disposed();
+            }
+        }
+    }
+    // Native coding commands this process owns get the crate's own
+    // teardown (drain + scratch removal) once no new dispatch can
+    // start; anything a DEAD process left is the next boot's
+    // startup sweep, not ours. Outcomes stay whatever the receipt
+    // log decides - teardown never claims them.
+    core.lane.mark_disposed();
+    core.lane.dispose().await;
+    // Language servers get a clean shutdown (exit + kill fallback)
+    // once no new dispatch can start; a dead process's leftovers
+    // die with the process, not with us.
+    core.lsp_lane.close().await;
+    drop(core);
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn cancel_all(subscriptions: &Subscriptions) {
+    // Drain under the lock, cancel outside it: `Subscription::cancel`
+    // prunes itself from this same list.
+    let drained: Vec<Arc<Subscription>> = subscriptions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .drain(..)
+        .collect();
+    for subscription in drained {
+        subscription.cancel();
+    }
+}
+
+/// Teardown without a `close()` caller: listeners are cut at once and run
+/// CONCURRENTLY with the drain, so worker stop, lane disposal and language
+/// server shutdown always get their (bounded) turn.
+async fn fast_teardown(
+    mut core: Core,
+    bridge: Arc<JsBridge>,
+    close_timeout: Duration,
+    uncertain: Arc<AtomicBool>,
+) {
+    let http = core.http.take();
+    let mcp = core.mcp.take();
+    let servers = async {
+        if let Some(server) = http {
+            server.shutdown_now().await;
+        }
+        if let Some(server) = mcp {
+            server.shutdown_now().await;
+        }
+    };
+    let _ = tokio::join!(servers, drain_core(core, close_timeout, &uncertain));
+    bridge.mark_closed();
+}
+
+/// Best-effort teardown for a service that was never `close()`d. Never
+/// blocks: the bridge starts closing synchronously, the rest runs on the
+/// binding's runtime.
+fn teardown_in_background(
+    core: Core,
+    bridge: Arc<JsBridge>,
+    close_timeout: Duration,
+    uncertain: Arc<AtomicBool>,
+) {
+    bridge.start_closing();
+    let task = fast_teardown(core, bridge, close_timeout, uncertain);
+    // A runtime that is already gone (late env teardown) cannot take the
+    // task; the bridge fence above is all that can still be done.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        napi::bindgen_prelude::spawn(task);
+    }));
+}
+
+impl Drop for SessionService {
+    fn drop(&mut self) {
+        let core = match self.core.try_lock() {
+            Ok(mut guard) => guard.take(),
+            Err(_) => None,
+        };
+        let Some(core) = core else {
+            return;
+        };
+        teardown_in_background(
+            core,
+            Arc::clone(&self.bridge),
+            self.close_timeout,
+            Arc::clone(&self.uncertain),
+        );
+    }
+}
+
+/// Services alive in this process, for the environment cleanup hook: Node
+/// tears an environment down without running Rust destructors for objects
+/// still referenced from JS, so the hook is the only place a never-closed
+/// service can be fenced before the process (or worker thread) goes away.
+struct Live {
+    env: Arc<std::sync::atomic::AtomicUsize>,
+    bridge: Weak<JsBridge>,
+    core: Weak<Mutex<Option<Core>>>,
+    close_timeout: Duration,
+    uncertain: Weak<AtomicBool>,
+}
+
+static LIVE: std::sync::Mutex<Vec<Live>> = std::sync::Mutex::new(Vec::new());
+
+fn register_live(service: &SessionService) {
+    let mut live = LIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    live.retain(|entry| entry.core.strong_count() > 0);
+    live.push(Live {
+        env: Arc::clone(&service.env),
+        bridge: Arc::downgrade(&service.bridge),
+        core: Arc::downgrade(&service.core),
+        close_timeout: service.close_timeout,
+        uncertain: Arc::downgrade(&service.uncertain),
+    });
+}
+
+/// Environments that already carry a cleanup hook (one per Node env).
+static HOOKED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// Environment-cleanup entry point: fence and stop every service of `env`
+/// that is still open. Bounded - Node is waiting on this thread.
+fn shutdown_live_services(env: usize) {
+    // Only this environment's services: a worker thread exiting must not
+    // tear down the main thread's (or a sibling worker's) services.
+    let entries: Vec<Live> = {
+        let mut live = LIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (mine, others): (Vec<Live>, Vec<Live>) = std::mem::take(&mut *live)
+            .into_iter()
+            .partition(|entry| entry.env.load(Ordering::SeqCst) == env);
+        *live = others;
+        mine
+    };
+    let mut jobs = Vec::new();
+    for entry in entries {
+        let (Some(bridge), Some(core), Some(uncertain)) = (
+            entry.bridge.upgrade(),
+            entry.core.upgrade(),
+            entry.uncertain.upgrade(),
+        ) else {
+            continue;
+        };
+        bridge.start_closing();
+        let taken = match core.try_lock() {
+            Ok(mut guard) => guard.take(),
+            Err(_) => None,
+        };
+        if let Some(taken) = taken {
+            jobs.push((taken, bridge, entry.close_timeout, uncertain));
+        }
+    }
+    if jobs.is_empty() {
+        return;
+    }
+    let cap = Duration::from_millis(2_000);
+    // A private current-thread runtime: napi's own runtime may already be
+    // shut down by the time Node runs this hook (hooks run in reverse
+    // registration order), and tasks it owned died with it.
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return;
+    };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.block_on(async move {
+            let mut tasks = Vec::new();
+            for (core, bridge, timeout, uncertain) in jobs {
+                tasks.push(fast_teardown(core, bridge, timeout.min(cap), uncertain));
+            }
+            let _ = tokio::time::timeout(cap, futures::future::join_all(tasks)).await;
+        })
+    }));
+    // Blocking tasks (spawn_blocking) must not hold the hook past the cap.
+    runtime.shutdown_timeout(cap);
+}
+
 /// One turn subscription. `poll` drains the next committed events; the
 /// stream is pull-based, so a slow consumer applies backpressure to the
 /// follower instead of overflowing a queue.
@@ -932,18 +1214,46 @@ impl SessionService {
 pub struct SubscriptionHandle {
     subscription: Arc<Subscription>,
     buffer: std::sync::Mutex<Vec<Value>>,
+    /// An error that arrived behind already-popped events. The batch goes
+    /// out first; the error is reported by the next poll instead of
+    /// discarding events the follower cannot re-read.
+    deferred_error: std::sync::Mutex<Option<(Status, String)>>,
+}
+
+impl Drop for SubscriptionHandle {
+    fn drop(&mut self) {
+        self.subscription.cancel();
+    }
 }
 
 struct Subscription {
     receiver: Mutex<Option<mpsc::Receiver<HostResult<RunUpdate>>>>,
     closed: AtomicBool,
+    /// Wakes a `poll` that is parked on the receiver: `cancel` must not
+    /// depend on winning the receiver lock (a parked poll holds it).
+    cancellation: CancellationToken,
+    registry: Weak<std::sync::Mutex<Vec<Arc<Subscription>>>>,
 }
 
 impl Subscription {
     fn cancel(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        self.cancellation.cancel();
         if let Ok(mut guard) = self.receiver.try_lock() {
             let _ = guard.take();
+        }
+        self.prune();
+    }
+
+    /// Remove this subscription from its service's list (a finished or
+    /// cancelled subscription must not stay pinned there for the life of
+    /// the service).
+    fn prune(&self) {
+        if let Some(registry) = self.registry.upgrade() {
+            registry
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .retain(|candidate| !std::ptr::eq(Arc::as_ptr(candidate), self));
         }
     }
 }
@@ -954,11 +1264,13 @@ impl SubscriptionHandle {
     /// `waitMs` for at least one when idle. `done` means the turn settled
     /// (or failed/closed) and no further events will arrive.
     #[napi]
-    pub async fn poll(&self, limit: Option<i32>, wait_ms: Option<f64>) -> Result<String> {
-        let limit = limit.unwrap_or(MAX_POLL_BATCH);
-        if !(1..=MAX_POLL_BATCH).contains(&limit) {
-            return Err(errors::invalid("limit must be between 1 and 64"));
-        }
+    pub async fn poll(&self, limit: Option<f64>, wait_ms: Option<f64>) -> Result<String> {
+        let limit = match limit {
+            None => MAX_POLL_BATCH,
+            Some(value) => integer_arg("limit", value, 1, i64::from(MAX_POLL_BATCH))
+                .map_err(|_| errors::invalid("limit must be an integer between 1 and 64"))?
+                as i32,
+        };
         let wait = wait_ms
             .filter(|value| value.is_finite() && *value >= 0.0)
             .unwrap_or(DEFAULT_POLL_WAIT_MS as f64)
@@ -969,6 +1281,15 @@ impl SubscriptionHandle {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .deref_mut(),
         );
+        if events.is_empty()
+            && let Some((status, reason)) = self
+                .deferred_error
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+        {
+            return Err(Error::new(status, reason));
+        }
         if events.len() >= usize::try_from(limit).unwrap_or(1) {
             self.finish_batch(events)
         } else {
@@ -990,8 +1311,18 @@ impl SubscriptionHandle {
 }
 
 impl SubscriptionHandle {
+    fn defer_error(&self, error: Error) {
+        *self
+            .deferred_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((error.status, error.reason));
+    }
+
     fn finish_batch(&self, mut events: Vec<Value>) -> Result<String> {
         let done = self.subscription.closed.load(Ordering::SeqCst);
+        if done {
+            self.subscription.prune();
+        }
         let limit = events.len();
         if !done && limit > usize::try_from(MAX_POLL_BATCH).unwrap_or(64) {
             // Cannot happen through `poll`, but the contract holds: excess
@@ -1018,13 +1349,20 @@ impl SubscriptionHandle {
                 break;
             }
             match receiver.try_recv() {
-                Ok(update) => match drain_update(update)? {
-                    Drain::Event(value) => events.push(value),
-                    Drain::Done(value) => {
+                Ok(update) => match drain_update(update) {
+                    Ok(Drain::Event(value)) => events.push(value),
+                    Ok(Drain::Done(value)) => {
                         if let Some(value) = value {
                             events.push(value);
                         }
                         self.subscription.closed.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    Err(error) => {
+                        if events.is_empty() {
+                            return Err(error);
+                        }
+                        self.defer_error(error);
                         break;
                     }
                 },
@@ -1033,10 +1371,18 @@ impl SubscriptionHandle {
         }
         if events.is_empty() && !self.subscription.closed.load(Ordering::SeqCst) {
             // Wait for the first item so idle turns do not spin the JS side.
-            match tokio::time::timeout(std::time::Duration::from_millis(wait_ms), receiver.recv())
-                .await
-            {
-                Ok(Some(update)) => match drain_update(update)? {
+            let waited = tokio::select! {
+                () = self.subscription.cancellation.cancelled() => None,
+                waited = tokio::time::timeout(
+                    std::time::Duration::from_millis(wait_ms),
+                    receiver.recv(),
+                ) => Some(waited),
+            };
+            match waited {
+                None => {
+                    self.subscription.closed.store(true, Ordering::SeqCst);
+                }
+                Some(Ok(Some(update))) => match drain_update(update)? {
                     Drain::Event(value) => events.push(value),
                     Drain::Done(value) => {
                         if let Some(value) = value {
@@ -1045,11 +1391,16 @@ impl SubscriptionHandle {
                         self.subscription.closed.store(true, Ordering::SeqCst);
                     }
                 },
-                Ok(None) => {
+                Some(Ok(None)) => {
                     self.subscription.closed.store(true, Ordering::SeqCst);
                 }
-                Err(_elapsed) => {}
+                Some(Err(_elapsed)) => {}
             }
+        }
+        if self.subscription.closed.load(Ordering::SeqCst) {
+            // Done or cancelled: release the receiver (and with it the run
+            // follower) now rather than at handle drop.
+            let _ = guard.take();
         }
         drop(guard);
         self.finish_batch(events)
@@ -1088,6 +1439,19 @@ use agentkit_host::{
     AgentSendResult, AnswerInput, CreateSessionInput, FollowUpInput, OnSettled, SendInput,
     SteerInput, WhenBusy,
 };
+
+/// Validate a JS number destined for an integer parameter: finite, whole,
+/// and inside `[min, max]`. `f64 -> i32` casts would silently saturate or
+/// truncate (NaN becomes 0); an out-of-contract value is `invalid_input`.
+fn integer_arg(name: &str, value: f64, min: i64, max: i64) -> Result<i64> {
+    if value.is_finite() && value.fract() == 0.0 && value >= min as f64 && value <= max as f64 {
+        Ok(value as i64)
+    } else {
+        Err(errors::invalid(format!(
+            "{name} must be an integer between {min} and {max}"
+        )))
+    }
+}
 
 fn parse_object(text: &str, what: &str) -> Result<Value> {
     serde_json::from_str::<Value>(text)
@@ -1139,6 +1503,10 @@ struct ServiceOptions {
     /// `chatgpt-account` clients), and the bridge payload omits options the
     /// adapter does not declare. The API-key lane (default) is unchanged.
     account_backed_provider: bool,
+    /// START-TIME subagent `maxConcurrency`: sizes the worker pool (parents
+    /// hold a slot while awaiting children) and is the ceiling later
+    /// `configureSubagents` calls are clamped to.
+    subagent_max_concurrency: i64,
 }
 
 /// The Rust-native provider lane selected by `providerConfig`. A
@@ -1185,6 +1553,9 @@ impl Default for ServiceOptions {
             },
             provider: None,
             account_backed_provider: false,
+            subagent_max_concurrency: agentkit_host::SubagentConfig::default()
+                .limits
+                .max_concurrency,
         }
     }
 }
@@ -1243,6 +1614,16 @@ fn parse_service_options(text: Option<&str>) -> Result<ServiceOptions> {
             }
             options.plan.tool_names = parsed;
         }
+    }
+    if let Some(value) = object.get("subagentMaxConcurrency") {
+        options.subagent_max_concurrency = value
+            .as_i64()
+            .filter(|value| (1..=MAX_SUBAGENT_POOL).contains(value))
+            .ok_or_else(|| {
+                errors::invalid(format!(
+                    "subagentMaxConcurrency must be an integer between 1 and {MAX_SUBAGENT_POOL}"
+                ))
+            })?;
     }
     if let Some(value) = object.get("providerConfig") {
         options.provider = Some(parse_provider_config(value)?);

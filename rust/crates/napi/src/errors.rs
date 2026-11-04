@@ -157,6 +157,15 @@ fn store_mapped(
         ),
         E::TransactionGateTimeout => ("transaction_gate_timeout", error.to_string()),
         E::TransactionScopeExpired => ("transaction_scope_expired", error.to_string()),
+        // A caught panic or aborted ambient scope: the detail stays in the
+        // native log, never in the JS-visible message.
+        E::Internal(detail) => {
+            eprintln!("agentkit-native: internal store error: {detail}");
+            (
+                "internal_error",
+                "internal store error; inspect the native logs".to_owned(),
+            )
+        }
         _ => ("unknown-store-error", error.to_string()),
     };
     stable(code, message, None)
@@ -166,8 +175,36 @@ pub fn session(error: agentkit_host::SessionError) -> Error {
     stable(&error.code, error.message, None)
 }
 
+/// Sentinel texts the late-bound lanes raise through `HostError::Execution`
+/// when a subsystem was never configured; `host` turns them into stable
+/// public codes instead of an opaque `internal_error`.
+pub(crate) const SUBAGENTS_NOT_CONFIGURED: &str = "subagents not configured";
+pub(crate) const ADVISOR_NOT_CONFIGURED: &str = "advisor not configured";
+
+/// Map a host error. Store failures keep their store codes (`not_found`,
+/// `already_owned`, `lease_lost`, ...); the unconfigured-lane sentinels get
+/// stable codes; everything else collapses to a redacted `internal_error`
+/// and leaves a native-log breadcrumb carrying only the variant name —
+/// never the Display text, which may embed arguments or secrets.
 pub fn host(error: agentkit_host::HostError) -> Error {
-    stable("internal_error", error.to_string(), None)
+    use agentkit_host::HostError as H;
+    let text = error.to_string();
+    let kind = match error {
+        H::Store(inner) => return store(inner),
+        H::Execution(sentinel) if sentinel == SUBAGENTS_NOT_CONFIGURED => {
+            return stable("subagents_not_configured", sentinel, None);
+        }
+        H::Execution(sentinel) if sentinel == ADVISOR_NOT_CONFIGURED => {
+            return stable("advisor_not_configured", sentinel, None);
+        }
+        H::Failure(_) => "failure",
+        H::UnknownKind(_) => "unknown_kind",
+        H::NoExecutorForKind(_) => "no_executor_for_kind",
+        H::Cancelled => "cancelled",
+        H::Execution(_) => "execution",
+    };
+    eprintln!("agentkit-napi: host error mapped to internal_error (kind: {kind})");
+    stable("internal_error", text, None)
 }
 
 pub fn invalid(message: impl Into<String>) -> Error {
@@ -267,6 +304,27 @@ mod tests {
             "run event serialization failed; inspect the native logs"
         );
         assert!(payload.get("details").is_none());
+    }
+
+    #[test]
+    fn host_store_errors_keep_their_store_codes_and_unconfigured_lanes_are_stable() {
+        let payload = |error: Error| -> Value { serde_json::from_str(&error.reason).unwrap() };
+        let mapped = payload(host(agentkit_host::HostError::Store(
+            agentkit_store::StoreError::NotFound("x".into()),
+        )));
+        assert_eq!(mapped["code"], "not_found");
+        let mapped = payload(host(agentkit_host::HostError::Store(
+            agentkit_store::StoreError::LeaseLost("x".into()),
+        )));
+        assert_eq!(mapped["code"], "lease_lost");
+        let mapped = payload(host(agentkit_host::HostError::Execution(
+            SUBAGENTS_NOT_CONFIGURED.into(),
+        )));
+        assert_eq!(mapped["code"], "subagents_not_configured");
+        let mapped = payload(host(agentkit_host::HostError::Execution(
+            ADVISOR_NOT_CONFIGURED.into(),
+        )));
+        assert_eq!(mapped["code"], "advisor_not_configured");
     }
 
     #[test]

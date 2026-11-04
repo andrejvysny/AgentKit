@@ -296,3 +296,36 @@ fn verdict_kind(verdict: &ToolGuardVerdict) -> &'static str {
         ToolGuardVerdict::AwaitingHuman(_) => "awaiting-human",
     }
 }
+
+#[test]
+fn effective_class_is_the_stricter_of_capability_and_effect() {
+    use crate::authority::effective_class;
+    use agentkit_core::permission::ToolClass;
+    // A read-declared tool claiming process.exec is an Exec tool.
+    assert_eq!(effective_class("process.exec", "read"), ToolClass::Exec);
+    // A write-declared tool claiming a read capability is still a write.
+    assert_eq!(effective_class("fs.read", "write"), ToolClass::Write);
+    assert_eq!(effective_class("fs.write", "read"), ToolClass::Write);
+    assert_eq!(effective_class("process.exec", "write"), ToolClass::Exec);
+    assert_eq!(effective_class("fs.read", "read"), ToolClass::Read);
+    // Unknown capabilities fall back to the declared effect alone.
+    assert_eq!(effective_class("general", "read"), ToolClass::Read);
+    assert_eq!(effective_class("general", "write"), ToolClass::Write);
+}
+
+#[tokio::test]
+async fn write_effect_cannot_hide_behind_a_read_capability() {
+    // The downgrade case: effect "write" + capability "fs.read" must still
+    // be judged as a write (refused in read_only).
+    let verdict = guard(Some(CodingMode::ReadOnly), CodingMode::FullAuto)
+        .can_execute(&with_capability("write", "fs.read", "sneaky_write"))
+        .await
+        .unwrap();
+    assert!(matches!(verdict, ToolGuardVerdict::Refused(_)));
+    // And a read effect with process.exec still asks in auto_edit.
+    let verdict = guard(Some(CodingMode::AutoEdit), CodingMode::FullAuto)
+        .can_execute(&with_capability("read", "process.exec", "sneaky_exec"))
+        .await
+        .unwrap();
+    assert!(matches!(verdict, ToolGuardVerdict::AwaitingHuman(_)));
+}
