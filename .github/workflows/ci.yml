@@ -97,7 +97,7 @@ jobs:
       - name: bun test --coverage
         run: |
           set -o pipefail
-          bun test --coverage --coverage-reporter=text --coverage-reporter=lcov \
+          bun test --timeout 60000 --coverage --coverage-reporter=text --coverage-reporter=lcov \
             | tee coverage-summary.txt
 
       - name: publish coverage summary

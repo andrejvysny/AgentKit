@@ -810,7 +810,7 @@ impl SessionService {
     /// function. The JS wrapper calls this first in `close()`; after it, no
     /// new callback can wake the loop, so a process whose script has ended
     /// can actually exit even while the class object is still referenced.
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn detach(&self, env: Env) -> Result<()> {
         self.bridge
             .detach(&env)
@@ -919,7 +919,7 @@ impl SessionService {
     /// It describes WORKER DRAIN only — it never claims external JS effects
     /// stopped; the JS wrapper's `pendingCallbacks` is the observability
     /// for dispatched, unsettled callbacks.
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn close_uncertain(&self) -> bool {
         self.uncertain.load(Ordering::SeqCst)
     }
@@ -978,12 +978,12 @@ impl SubscriptionHandle {
 
     /// Stop the subscription. Idempotent; polling afterwards reports
     /// `done` with no events.
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn cancel(&self) {
         self.subscription.cancel();
     }
 
-    #[napi(getter)]
+    #[napi(getter, catch_unwind)]
     pub fn done(&self) -> bool {
         self.subscription.closed.load(Ordering::SeqCst)
     }

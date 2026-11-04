@@ -237,12 +237,12 @@ export function verifyArtifacts(artifactsDir, version, commit) {
   return plan;
 }
 
-function npmRegistryIntegrity(name, version) {
+function npmRegistryIntegrity(npm, name, version) {
   // --registry on the command line outranks every .npmrc (including a
   // repo-committed project .npmrc), so no source commit can redirect the
   // probe — or the publish below — to a lookalike registry.
   const result = spawnSync(
-    "npm",
+    npm,
     [
       "view",
       `${name}@${version}`,
@@ -264,7 +264,7 @@ function npmRegistryIntegrity(name, version) {
   return result.stdout.trim();
 }
 
-function npmPublish(file, { execute }) {
+function npmPublish(npm, file, { execute }) {
   const args = [
     "publish",
     file,
@@ -275,7 +275,7 @@ function npmPublish(file, { execute }) {
   ];
   if (!execute) args.push("--dry-run");
   else args.push("--provenance");
-  const result = spawnSync("npm", args, {
+  const result = spawnSync(npm, args, {
     encoding: "utf8",
     stdio: execute ? "inherit" : "pipe",
   });
@@ -286,7 +286,19 @@ function npmPublish(file, { execute }) {
   }
 }
 
-export function publishArtifacts(artifactsDir, version, commit, execute) {
+/**
+ * `npm` is the npm executable to drive. Tests pass an absolute path to a
+ * fake: a PATH mutation is not honoured by every runtime's spawn lookup
+ * (Bun 1.3 resolves against the startup PATH), and a missed fake would
+ * reach the real registry.
+ */
+export function publishArtifacts(
+  artifactsDir,
+  version,
+  commit,
+  execute,
+  { npm = "npm" } = {},
+) {
   const plan = verifyArtifacts(artifactsDir, version, commit);
   if (execute && !process.env.NPM_TOKEN)
     fail(
@@ -317,7 +329,7 @@ export function publishArtifacts(artifactsDir, version, commit, execute) {
   for (const target of targets) {
     const name = target.manifest.name;
     if (execute) {
-      const registryIntegrity = npmRegistryIntegrity(name, version);
+      const registryIntegrity = npmRegistryIntegrity(npm, name, version);
       if (registryIntegrity !== null) {
         // Skip a completed publish only when the registry holds EXACTLY
         // these verified bytes — an unpublish-and-replace of the same
@@ -336,7 +348,7 @@ export function publishArtifacts(artifactsDir, version, commit, execute) {
     console.log(
       `native-publish: ${execute ? "publishing" : "dry-run"} ${name}@${version}`,
     );
-    npmPublish(target.file, { execute });
+    npmPublish(npm, target.file, { execute });
   }
   console.log(
     execute

@@ -53,7 +53,7 @@ pub struct NativeStore {
 impl NativeStore {
     /// Open (creating if necessary) a durable store file. A second open of
     /// the same path while it is owned is rejected with `already_owned`.
-    #[napi(factory)]
+    #[napi(factory, catch_unwind)]
     pub fn open(path: String) -> Result<Self> {
         let capacity = default_capacity()?;
         let store = SqliteStore::open(Path::new(&path), capacity).map_err(errors::store)?;
@@ -64,7 +64,7 @@ impl NativeStore {
     }
 
     /// Open an in-memory store (tests, throwaway sessions).
-    #[napi(factory)]
+    #[napi(factory, catch_unwind)]
     pub fn memory() -> Result<Self> {
         let capacity = default_capacity()?;
         let store = SqliteStore::memory(capacity).map_err(errors::store)?;

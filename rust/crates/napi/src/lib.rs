@@ -73,7 +73,7 @@ mod napi_test_stubs {
 /// either `{ payload }` (the JSON result) or `{ error }` (a rejection
 /// message). Returns false for unknown or already-settled ids: a stale
 /// resolve is ignored, never an exception, and never a double-settle.
-#[napi]
+#[napi(catch_unwind)]
 pub fn resolve_call(call_id: String, payload: Option<String>, error: Option<String>) -> bool {
     jsbridge::resolve(&call_id, payload, error)
 }
@@ -84,14 +84,14 @@ pub fn resolve_call(call_id: String, payload: Option<String>, error: Option<Stri
 /// cancelled, abandoned by the executor, or drained by close); on false the
 /// router must settle nothing and must never run the user function — the
 /// host has already given up on this invocation.
-#[napi]
+#[napi(catch_unwind)]
 pub fn claim_call(call_id: String) -> bool {
     jsbridge::claim(&call_id)
 }
 
 /// Load-time identity probe: proves the addon, its runtime, and the error
 /// contract are all present before any session call is attempted.
-#[napi]
+#[napi(catch_unwind)]
 pub fn binding_smoke() -> Result<String> {
     // Validate the embedded contract at load, not on first error.
     let codes = errors::contract_codes();

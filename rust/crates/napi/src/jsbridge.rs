@@ -344,12 +344,16 @@ pub(crate) fn active(call_id: &str) -> bool {
 /// False for unknown, already-settled, cancelled, abandoned, claimed, or
 /// closing/closed ids: the router must not enter user code on that answer.
 pub(crate) fn claim(call_id: &str) -> bool {
-    calls()
+    // Lock order is `inner` → `CALLS` everywhere else (request, settle,
+    // cancel): the routing guard must be dropped before the bridge's own
+    // lock is taken, or a concurrent dispatch/cancel deadlocks this
+    // synchronous JS call.
+    let bridge = calls()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(call_id)
-        .and_then(|weak| weak.upgrade())
-        .is_some_and(|bridge| bridge.claim(call_id))
+        .and_then(Weak::upgrade);
+    bridge.is_some_and(|bridge| bridge.claim(call_id))
 }
 
 /// Exported resolver entry point: JS answers exactly one in-flight callback.

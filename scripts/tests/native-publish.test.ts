@@ -495,7 +495,6 @@ describe("native publication artifact verification", () => {
 });
 
 describe("native publication resume semantics", () => {
-  const savedPath = process.env.PATH;
   let fakeBin: string;
 
   beforeAll(() => {
@@ -525,7 +524,6 @@ process.exit(2);
   });
 
   afterAll(() => {
-    process.env.PATH = savedPath;
     rmSync(fakeBin, { recursive: true, force: true });
   });
 
@@ -536,7 +534,7 @@ process.exit(2);
   ): { result: T; published: string[] } {
     const marker = join(dir, "published.log");
     const previousToken = process.env.NPM_TOKEN;
-    process.env.PATH = `${fakeBin}:${savedPath}`;
+    const previousUserconfig = process.env.NPM_CONFIG_USERCONFIG;
     process.env.NPM_TOKEN = "fake-token";
     process.env.FAKE_REGISTRY = JSON.stringify(registry);
     process.env.PUBLISH_MARKER = marker;
@@ -549,7 +547,9 @@ process.exit(2);
           : [],
       };
     } finally {
-      process.env.PATH = savedPath;
+      if (previousUserconfig === undefined)
+        delete process.env.NPM_CONFIG_USERCONFIG;
+      else process.env.NPM_CONFIG_USERCONFIG = previousUserconfig;
       if (previousToken === undefined) delete process.env.NPM_TOKEN;
       else process.env.NPM_TOKEN = previousToken;
       delete process.env.FAKE_REGISTRY;
@@ -564,7 +564,10 @@ process.exit(2);
     const { published } = withFakeNpm(
       dir,
       { "@agentkit/native-linux-x64-gnu@9.9.9": integrity },
-      () => publishArtifacts(dir, VERSION, COMMIT, true),
+      () =>
+        publishArtifacts(dir, VERSION, COMMIT, true, {
+          npm: join(fakeBin, "npm"),
+        }),
     );
     const names = published.map((p) => p.split("/").pop());
     // A partial run resumes: the identical package is skipped, everything
@@ -588,7 +591,10 @@ process.exit(2);
           "@agentkit/native-linux-x64-gnu@9.9.9":
             "sha512-WRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONG=",
         },
-        () => publishArtifacts(dir, VERSION, COMMIT, true),
+        () =>
+          publishArtifacts(dir, VERSION, COMMIT, true, {
+            npm: join(fakeBin, "npm"),
+          }),
       ),
     ).toThrow("different bytes");
   });

@@ -17,6 +17,7 @@
  *   packages/agentkit/package.json                  platform pins
  *   packages/core/package.json                      wrapper pin
  *   packages/native/generated/index.js              embedded version strings
+ *   packages/native/src/addon-version.ts            wrapper guard's expected version
  *   bun.lock                                        entry versions + spec pins
  *
  * `packages/native/tests/distribution.test.ts` enforces the same equality
@@ -123,6 +124,25 @@ export function bumpNativeStackVersions(output, version) {
     );
   writeFileSync(join(output, loaderPath), loader);
   changed.push(loaderPath);
+
+  // Wrapper guard: the embedded expected-addon literal (exactly one).
+  const addonVersionPath = "packages/native/src/addon-version.ts";
+  const addonSource = readFileSync(join(output, addonVersionPath), "utf8");
+  const declared = [
+    ...addonSource.matchAll(/NATIVE_ADDON_VERSION = "([^"]+)"/g),
+  ];
+  if (declared.length !== 1 || declared[0][1] !== devVersion)
+    throw new Error(
+      `native lockstep: ${addonVersionPath} must declare NATIVE_ADDON_VERSION = "${devVersion}" exactly once`,
+    );
+  writeFileSync(
+    join(output, addonVersionPath),
+    addonSource.replace(
+      `NATIVE_ADDON_VERSION = "${devVersion}"`,
+      `NATIVE_ADDON_VERSION = "${version}"`,
+    ),
+  );
+  changed.push(addonVersionPath);
 
   // bun.lock: workspace entry versions and the exact dependency specs. The
   // release projection must stay installable with --frozen-lockfile.

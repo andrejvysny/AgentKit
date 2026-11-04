@@ -82,7 +82,7 @@ pub async fn reserve_run_provider_request(call_id: String) -> Result<()> {
     }
     Ok(())
 }
-#[napi]
+#[napi(catch_unwind)]
 pub fn is_run_callback_active(call_id: String) -> bool {
     STREAMS
         .lock()
@@ -91,7 +91,7 @@ pub fn is_run_callback_active(call_id: String) -> bool {
         .is_some_and(|entry| !entry.cancellation.is_cancelled())
         || crate::jsbridge::active(&call_id)
 }
-#[napi]
+#[napi(catch_unwind)]
 pub fn end_run_provider(call_id: String) -> bool {
     STREAMS
         .lock()

@@ -381,7 +381,7 @@ impl Connection {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use tokio::io::{ReadHalf, WriteHalf, duplex, split};

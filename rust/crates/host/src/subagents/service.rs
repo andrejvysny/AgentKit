@@ -1116,10 +1116,18 @@ impl SubagentService {
         // Drop the child's not-yet-dispatched inputs too: a promoted turn
         // after this cancel would rebind the row back to life.
         let _ = self.session.clear_queue(&row.child_chat_id).await;
-        if let Some(turn_id) = row.turn_task_id.clone()
+        // Same order as public `cancel`: re-project first. After a crash
+        // between child admission and `set_subagent_turn` the row has no
+        // turn, and after a follow-up promotion it names the settled
+        // previous turn — cancelling only that stale id would leave the
+        // real child turn to run after restart.
+        let view = self.refresh(row).await?;
+        let mut live_turn = false;
+        if let Some(turn_id) = view.turn_task_id.clone()
             && let Some(task) = self.store.get_task(&turn_id).await?
             && !task.status.is_terminal()
         {
+            live_turn = true;
             let _ = self
                 .session
                 .cancel(&row.child_chat_id, &turn_id)
@@ -1135,7 +1143,13 @@ impl SubagentService {
                 self.now_ms(),
             )
             .await?;
-        self.leases.release(&row.child_chat_id);
+        // Cancellation is cooperative: a live turn may be mid-tool, so its
+        // exclusive lease stays until `refresh` observes the turn terminal
+        // (or the lease TTL lapses). With no live turn there is nothing
+        // left to fence.
+        if !live_turn {
+            self.leases.release(&row.child_chat_id);
+        }
         Ok(())
     }
 

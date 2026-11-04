@@ -196,6 +196,16 @@ impl AdvisorEngine {
         self
     }
 
+    /// The reviewed chat's durable session model, when it is a session.
+    async fn session_model(&self, chat_id: &str) -> crate::HostResult<Option<String>> {
+        let Some(chat) = self.store.get_chat(chat_id).await? else {
+            return Ok(None);
+        };
+        Ok(crate::read_session_descriptor(&chat.metadata)
+            .and_then(|descriptor| descriptor["model"].as_str().map(str::to_owned))
+            .filter(|model| !model.is_empty()))
+    }
+
     pub fn config(&self) -> AdvisorConfig {
         self.config
             .lock()
@@ -333,14 +343,23 @@ impl AdvisorEngine {
         let _permit = reviews
             .try_acquire_owned()
             .map_err(|_| crate::HostError::Execution("advisor_saturated".into()))?;
-        let model = self
-            .model_override
-            .clone()
-            .or_else(|| match origin {
-                ReviewOrigin::Explicit => config.model.clone(),
-                ReviewOrigin::Watchdog { .. } => config.watchdog_model.clone(),
-            })
-            .unwrap_or_default();
+        let configured = self.model_override.clone().or_else(|| match origin {
+            ReviewOrigin::Explicit => config.model.clone(),
+            ReviewOrigin::Watchdog { .. } => config.watchdog_model.clone(),
+        });
+        let model = match configured.filter(|model| !model.is_empty()) {
+            Some(model) => model,
+            // No advisor-specific model: review with the reviewed chat's
+            // own durable session model. Never send an empty `model` — a
+            // provider rejects it, failing every review opaquely.
+            None => self.session_model(&request.chat_id).await?.ok_or_else(|| {
+                crate::HostError::Execution(
+                    "advisor_model_unconfigured: set advisor `model`/`watchdogModel` \
+                         or review a session chat with a model"
+                        .into(),
+                )
+            })?,
+        };
         let tools = self.tools.read_tools(&request.chat_id).await;
         let mut registry = ToolRegistry::new();
         for tool in tools.into_iter().filter(|tool| {

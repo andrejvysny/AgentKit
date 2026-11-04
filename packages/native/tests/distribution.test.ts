@@ -3,6 +3,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_PLATFORM_TARGETS } from "../../../rust/scripts/native-platform-targets.mjs";
+import { NATIVE_ADDON_VERSION } from "../src/addon-version";
 
 const packages = join(import.meta.dir, "../..");
 function manifest(name: string): Record<string, unknown> {
@@ -118,6 +119,10 @@ test("the wrapper's own version guard covers every triple in the table", () => {
     wrapperLoader.match(/NAPI_RS_ENFORCE_VERSION_CHECK/g)?.length,
   ).toBeGreaterThanOrEqual(1);
   expect(wrapperLoader).toContain('NAPI_RS_ENFORCE_VERSION_CHECK === "0"');
+  // The guard compares against an embedded literal, never a runtime
+  // `../package.json` read (the umbrella's dist/native has none).
+  expect(wrapperLoader).not.toContain('"../package.json"');
+  expect(NATIVE_ADDON_VERSION).toBe(nativeVersion);
 });
 
 test("platform pack refuses a missing addon", () => {

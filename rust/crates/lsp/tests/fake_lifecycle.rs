@@ -1,5 +1,6 @@
 //! Integration against the scripted fake LSP servers: lifecycle, crash
 //! respawn, backoff, cancellation, timeouts, idle eviction and pooling.
+#![cfg(unix)] // POSIX process tooling; the pool refuses non-unix hosts.
 
 use std::{
     collections::BTreeMap,
