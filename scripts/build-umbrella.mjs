@@ -38,8 +38,10 @@
  *          template literal) fails the build with the file and line instead
  *          of being collapsed into a broken bare import — see
  *          `./umbrella-specifiers.mjs`.
+ *      `@agentkit/native-<platform-key>` (the external prebuilt addon
+ *      packages) is never rewritten or collapsed: it is a real npm name.
  *   5. Verifies no `@agentkit/` string remains anywhere in the umbrella
- *      dist, and that every `exports` entry in
+ *      dist (other than those platform package names), and that every `exports` entry in
  *      `packages/agentkit/package.json` resolves to a file that actually
  *      exists. Exits non-zero on any failure.
  */
@@ -56,7 +58,9 @@ import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   AGENTKIT_SPECIFIER,
+  collapseAgentkitScope,
   findResidualSpecifiers,
+  hasUnexpectedScope,
 } from "./umbrella-specifiers.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -213,7 +217,7 @@ function rewriteContent(content, fileDir, sourcePath) {
         residual.map((r) => `  line ${r.line}: ${r.text}`).join("\n"),
     );
   }
-  return withRewrittenSpecifiers.replace(/@agentkit\//g, "agentkit/");
+  return collapseAgentkitScope(withRewrittenSpecifiers);
 }
 
 function copyDistTree(srcDir, dstDir) {
@@ -295,11 +299,11 @@ const leftovers = allFiles.filter(
   (file) =>
     !file.startsWith(join(UMBRELLA_DIST, "generated") + sep) &&
     !file.endsWith(".node") &&
-    readFileSync(file, "utf8").includes("@agentkit/"),
+    hasUnexpectedScope(readFileSync(file, "utf8")),
 );
 if (leftovers.length > 0) {
   fail(
-    '"@agentkit/" still appears in these built files after rewriting:\n' +
+    '"@agentkit/" (other than external @agentkit/native-<platform> packages) still appears in these built files after rewriting:\n' +
       leftovers.map((f) => `  ${relative(ROOT, f)}`).join("\n"),
   );
 }

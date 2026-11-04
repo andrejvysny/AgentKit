@@ -3,13 +3,13 @@
  * Native npm publication for the AgentKit release stack.
  *
  *   node scripts/release/native-publish.mjs verify  <artifactsDir> <version> --commit <sha>
- *   node scripts/release/native-publish.mjs publish <artifactsDir> <version> --commit <sha> [--execute]
+ *   node scripts/release/native-publish.mjs publish <artifactsDir> <version> --commit <sha> [--execute] [--tag <auto|latest|next|…>] [--allow-unexecuted-targets]
  *
  * `verify` is the gate the workflow runs unconditionally: the artifact set
  * must be COMPLETE (all five triples, one per key from the platform table),
  * every digest and byte count must match its manifest, every package must
- * carry the exact release version, the wrapper tarball must be byte-identical
- * across all five build jobs, the umbrella tarball must be present with the
+ * carry the exact release version, the wrapper tarball must have identical
+ * member paths and contents (gzip/mtime ignored) across all five build jobs, the umbrella tarball must be present with the
  * matching version and platform pins, and every manifest must name the same
  * source commit. `publish` verifies again and then publishes the VERIFIED
  * tarball bytes (no repack): platforms → wrapper → umbrella, so any
@@ -20,14 +20,16 @@
  * the set without ever replacing what the registry already holds.
  *
  * Scope ownership is a maintainer decision (see DEVELOPING.md "Publishing
- * the npm stack"): nothing here can run without an approved
- * `agentkit-native-publication` environment dispatch.
+ * the npm stack"): the `agentkit-native-publication` environment must be
+ * configured with required reviewers (a repository setting this script
+ * cannot verify).
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { gunzipSync } from "node:zlib";
 import { assertBinaryBytesMatchTarget } from "../../rust/scripts/build-native-release-artifact.mjs";
 import { NATIVE_PLATFORM_TARGETS } from "../../rust/scripts/native-platform-targets.mjs";
 
@@ -69,6 +71,48 @@ function tarMember(tarballPath, member, { encoding = "utf8" } = {}) {
   });
   if (result.status !== 0) fail(`cannot read ${member} from ${tarballPath}`);
   return result.stdout;
+}
+
+/**
+ * Canonical digest of a gzipped tarball's decompressed entries: every
+ * member's path, type, and content sha256, sorted by path. mtime, mode,
+ * owner, and the gzip container are deliberately ignored.
+ */
+export function tarMemberDigests(tarballPath) {
+  const data = gunzipSync(readFileSync(tarballPath));
+  const text = (start, end) => {
+    const slice = data.subarray(start, end);
+    const nul = slice.indexOf(0);
+    return slice.subarray(0, nul === -1 ? slice.length : nul).toString("utf8");
+  };
+  const entries = [];
+  let pendingPath;
+  for (let offset = 0; offset + 512 <= data.length; ) {
+    if (data.subarray(offset, offset + 512).every((b) => b === 0)) break;
+    const size = Number.parseInt(text(offset + 124, offset + 136).trim(), 8);
+    if (!Number.isFinite(size)) fail(`corrupt tar header in ${tarballPath}`);
+    const type = String.fromCharCode(data[offset + 156] || 0x30);
+    const prefix = text(offset + 345, offset + 500);
+    const headerName = text(offset, offset + 100);
+    const body = data.subarray(offset + 512, offset + 512 + size);
+    offset += 512 + Math.ceil(size / 512) * 512;
+    if (type === "x" || type === "g") {
+      const match = /\d+ path=([^\n]*)\n/.exec(body.toString("utf8"));
+      if (type === "x" && match) pendingPath = match[1];
+      continue;
+    }
+    if (type === "L") {
+      pendingPath = body.toString("utf8").replace(/\0.*$/s, "");
+      continue;
+    }
+    const name =
+      pendingPath ?? (prefix ? `${prefix}/${headerName}` : headerName);
+    pendingPath = undefined;
+    entries.push(
+      `${name}\t${type}\t${createHash("sha256").update(body).digest("hex")}`,
+    );
+  }
+  return entries.sort().join("\n");
 }
 
 function packedJson(tarballPath) {
@@ -180,11 +224,16 @@ export function verifyArtifacts(artifactsDir, version, commit) {
       target,
       `${basename(platform.file)}:${addonMember}`,
     );
-    if (wrapperSha && wrapper.entry.sha256 !== wrapperSha)
+    // Members, not raw bytes: gzip headers and tar mtimes legitimately
+    // differ between runner OSes, the packed file contents must not.
+    const wrapperMembers = tarMemberDigests(wrapper.file);
+    if (wrapperMembers.length === 0)
+      fail(`wrapper tarball for ${target.key} has no members`);
+    if (wrapperSha && wrapperMembers !== wrapperSha)
       fail(
-        `wrapper tarball is not byte-identical across build jobs (${target.key} differs) — nondeterministic build`,
+        `wrapper tarball members are not identical across build jobs (${target.key} differs) — nondeterministic build`,
       );
-    wrapperSha = wrapper.entry.sha256;
+    wrapperSha ??= wrapperMembers;
     plan.platforms.push({
       key: target.key,
       triple: target.triple,
@@ -192,7 +241,9 @@ export function verifyArtifacts(artifactsDir, version, commit) {
       wrapper: wrapper.file,
       structuralOnly: manifest.structuralOnly === true,
     });
-    plan.wrapper = wrapper.file;
+    // One canonical tarball is published: the first job's, whose member
+    // contents every other job just proved identical.
+    plan.wrapper ??= wrapper.file;
   }
   const umbrellaPath = join(artifactsDir, `agentkit-${version}.tgz`);
   if (!existsSync(umbrellaPath))
@@ -252,11 +303,13 @@ function npmRegistryIntegrity(npm, name, version) {
     ],
     {
       encoding: "utf8",
+      // Explicit: Bun 1.3 does not propagate process.env mutations to children.
+      env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
   if (result.status !== 0) {
-    if (/E404|404/.test(`${result.stdout}${result.stderr}`)) return null;
+    if (/\bE404\b/.test(`${result.stdout}${result.stderr}`)) return null;
     fail(
       `npm view ${name}@${version} failed: ${result.stderr || result.stdout}`,
     );
@@ -264,12 +317,75 @@ function npmRegistryIntegrity(npm, name, version) {
   return result.stdout.trim();
 }
 
-function npmPublish(npm, file, { execute }) {
+const SEMVER =
+  /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/** Minimal semver order: -1/0/1. A prerelease sorts below its release. */
+export function compareSemver(a, b) {
+  const [pa, pb] = [a, b].map((v) => SEMVER.exec(v));
+  if (!pa || !pb) fail(`cannot compare non-semver versions ${a} and ${b}`);
+  for (let i = 1; i <= 3; i += 1) {
+    const d = Number(pa[i]) - Number(pb[i]);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  if (!pa[4] || !pb[4]) return pa[4] === pb[4] ? 0 : pa[4] ? -1 : 1;
+  const ia = pa[4].split(".");
+  const ib = pb[4].split(".");
+  for (let i = 0; i < Math.max(ia.length, ib.length); i += 1) {
+    if (ia[i] === undefined) return -1;
+    if (ib[i] === undefined) return 1;
+    const na = /^\d+$/.test(ia[i]);
+    const nb = /^\d+$/.test(ib[i]);
+    if (na && nb && Number(ia[i]) !== Number(ib[i]))
+      return Number(ia[i]) < Number(ib[i]) ? -1 : 1;
+    if (na !== nb) return na ? -1 : 1;
+    if (!(na && nb) && ia[i] !== ib[i]) return ia[i] < ib[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+/** `auto` => `next` for a prerelease version, `latest` otherwise. */
+export function resolveDistTag(version, tag = "auto") {
+  if (tag === "auto") return version.includes("-") ? "next" : "latest";
+  if (!/^[A-Za-z][A-Za-z0-9._-]*$/.test(tag))
+    fail(`dist-tag ${JSON.stringify(tag)} is not a valid npm dist-tag`);
+  return tag;
+}
+
+/** The registry's current `latest` for `name`, or null when it has none. */
+function npmRegistryLatest(npm, name) {
+  const result = spawnSync(
+    npm,
+    [
+      "view",
+      name,
+      "dist-tags.latest",
+      "--registry",
+      "https://registry.npmjs.org/",
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status !== 0) {
+    if (/\bE404\b/.test(`${result.stdout}${result.stderr}`)) return null;
+    fail(
+      `npm view ${name} dist-tags.latest failed: ${result.stderr || result.stdout}`,
+    );
+  }
+  return result.stdout.trim() || null;
+}
+
+function npmPublish(npm, file, { execute, tag }) {
   const args = [
     "publish",
     file,
     "--access",
     "public",
+    "--tag",
+    tag,
     "--registry",
     "https://registry.npmjs.org/",
   ];
@@ -277,6 +393,8 @@ function npmPublish(npm, file, { execute }) {
   else args.push("--provenance");
   const result = spawnSync(npm, args, {
     encoding: "utf8",
+    // Explicit: Bun 1.3 does not propagate process.env mutations to children.
+    env: { ...process.env },
     stdio: execute ? "inherit" : "pipe",
   });
   if (result.status !== 0) {
@@ -291,15 +409,27 @@ function npmPublish(npm, file, { execute }) {
  * fake: a PATH mutation is not honoured by every runtime's spawn lookup
  * (Bun 1.3 resolves against the startup PATH), and a missed fake would
  * reach the real registry.
+ *
+ * `tag` is the npm dist-tag (`auto`: `next` for a prerelease, else
+ * `latest`). Publishing as `latest` is refused when the registry's
+ * `latest` is already semver-greater. A structuralOnly row (cross-built,
+ * never executed) is refused on a real publish unless
+ * `allowUnexecutedTargets` is true.
  */
 export function publishArtifacts(
   artifactsDir,
   version,
   commit,
   execute,
-  { npm = "npm" } = {},
+  { npm = "npm", tag = "auto", allowUnexecutedTargets = false } = {},
 ) {
   const plan = verifyArtifacts(artifactsDir, version, commit);
+  const distTag = resolveDistTag(version, tag);
+  const unexecuted = plan.platforms.filter((p) => p.structuralOnly);
+  if (execute && unexecuted.length > 0 && allowUnexecutedTargets !== true)
+    fail(
+      `refusing to publish structural-only (never executed) targets: ${unexecuted.map((p) => p.triple).join(", ")} — dispatch with allow_unexecuted_targets to accept them`,
+    );
   if (execute && !process.env.NPM_TOKEN)
     fail(
       "publishing requires NPM_TOKEN (an automation token for the npm account owning the scope)",
@@ -326,6 +456,16 @@ export function publishArtifacts(
     { file: plan.wrapper, manifest: packedJson(plan.wrapper) },
     { file: plan.umbrella, manifest: packedJson(plan.umbrella) },
   ];
+  if (execute && distTag === "latest")
+    // Preflight every package before the first publish so a refusal never
+    // leaves a half-published release behind.
+    for (const target of targets) {
+      const current = npmRegistryLatest(npm, target.manifest.name);
+      if (current !== null && compareSemver(current, version) > 0)
+        fail(
+          `refusing to move latest backwards: ${target.manifest.name} latest is ${current}, release is ${version} (use dist_tag next, or publish a newer version)`,
+        );
+    }
   for (const target of targets) {
     const name = target.manifest.name;
     if (execute) {
@@ -348,7 +488,7 @@ export function publishArtifacts(
     console.log(
       `native-publish: ${execute ? "publishing" : "dry-run"} ${name}@${version}`,
     );
-    npmPublish(npm, target.file, { execute });
+    npmPublish(npm, target.file, { execute, tag: distTag });
   }
   console.log(
     execute
@@ -382,11 +522,16 @@ if (
             : ""),
       );
     } else {
+      const tagFlag = rest.indexOf("--tag");
       publishArtifacts(
         artifactsDir,
         version,
         commit,
         rest.includes("--execute"),
+        {
+          tag: tagFlag >= 0 ? rest[tagFlag + 1] : "auto",
+          allowUnexecutedTargets: rest.includes("--allow-unexecuted-targets"),
+        },
       );
     }
   } catch (error) {

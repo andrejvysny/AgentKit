@@ -4,9 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Durable native execution host for AgentKit"
 repository = "https://github.com/andrejvysny/AgentKit"
 readme = "../../../README.md"
+# Binary SQLite fixtures are test-only and trip the package privacy gate
+# (rust/scripts/check-packages.mjs refuses *.sqlite in a crate archive).
+exclude = ["tests/fixtures/**/*.sqlite"]
 
 [features]
 default = []

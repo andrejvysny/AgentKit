@@ -6,6 +6,61 @@
 import type * as Generated from "../generated/index.js";
 import { NATIVE_ADDON_VERSION } from "./addon-version.js";
 
+/** Platform keys that ship a prebuilt addon (mirrors
+ * `rust/scripts/native-platform-targets.mjs`; pinned by distribution.test.ts). */
+const SUPPORTED_PLATFORM_KEYS = [
+  "linux-x64-gnu",
+  "linux-arm64-gnu",
+  "darwin-arm64",
+  "darwin-x64",
+  "win32-x64-msvc",
+] as const;
+
+/**
+ * The loader key for a host, derived as the NAPI-RS loader names its
+ * platform packages. `glibc` is the runtime glibc version string, or
+ * `undefined` when the host is known NOT to be glibc (musl); `null` means
+ * "could not tell", treated as gnu so a runtime without `process.report`
+ * is never misclassified.
+ */
+export function nativePlatformKey(
+  platform: string,
+  arch: string,
+  glibc: string | null | undefined,
+): string {
+  if (platform === "linux")
+    return `linux-${arch}-${glibc === undefined ? "musl" : "gnu"}`;
+  if (platform === "win32") return `win32-${arch}-msvc`;
+  return `${platform}-${arch}`;
+}
+
+/** Throws a precise error when this host has no prebuilt addon. */
+export function assertSupportedPlatform(): void {
+  // `globalThis` is narrowed, not typed: this package keeps ZERO Node types,
+  // and the generated loader would otherwise fail on an unsupported host
+  // with a far less actionable "Cannot find module".
+  const global: unknown = globalThis;
+  const proc =
+    typeof global === "object" && global !== null && "process" in global
+      ? (global.process as {
+          platform?: string;
+          arch?: string;
+          report?: {
+            getReport?: () => { header?: { glibcVersionRuntime?: string } };
+          };
+        })
+      : undefined;
+  if (!proc?.platform || !proc.arch) return;
+  let glibc: string | null | undefined = null;
+  if (proc.platform === "linux" && typeof proc.report?.getReport === "function")
+    glibc = proc.report.getReport().header?.glibcVersionRuntime;
+  const key = nativePlatformKey(proc.platform, proc.arch, glibc);
+  if (!(SUPPORTED_PLATFORM_KEYS as readonly string[]).includes(key))
+    throw new Error(
+      `@agentkit/native: unsupported platform ${key}; supported: ${SUPPORTED_PLATFORM_KEYS.join(", ")}`,
+    );
+}
+
 /**
  * The generated NAPI-RS loader's embedded version comparison is opt-in
  * (`NAPI_RS_ENFORCE_VERSION_CHECK`), so by default a wrapper could load an
@@ -46,13 +101,7 @@ async function assertAddonVersionsMatchWrapper(): Promise<void> {
     return;
   const { createRequire } = await import("node:module");
   const requireLocal = createRequire(import.meta.url);
-  for (const key of [
-    "linux-x64-gnu",
-    "linux-arm64-gnu",
-    "darwin-arm64",
-    "darwin-x64",
-    "win32-x64-msvc",
-  ]) {
+  for (const key of SUPPORTED_PLATFORM_KEYS) {
     let addon: { version?: unknown } | undefined;
     try {
       addon = requireLocal(`@agentkit/native-${key}/package.json`) as {
@@ -80,6 +129,7 @@ let loaded: Binding | undefined;
 let loading: Promise<Binding> | undefined;
 
 export async function loadBinding(): Promise<Binding> {
+  assertSupportedPlatform();
   loading ??= import("../generated/index.js")
     .then(async (module) => {
       if (module.bindingSmoke() !== "agentkit-native")

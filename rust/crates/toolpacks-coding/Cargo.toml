@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Confined coding tool pack for AgentKit: filesystem read/search/edit, read-only git, sandboxed commands"
 repository = "https://github.com/andrejvysny/AgentKit"
 

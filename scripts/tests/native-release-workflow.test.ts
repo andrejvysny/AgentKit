@@ -18,6 +18,7 @@
  * shell sees the line).
  */
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 import { NATIVE_PLATFORM_TARGETS } from "../../rust/scripts/native-platform-targets.mjs";
 
 const yaml = await Bun.file(
@@ -103,7 +104,7 @@ describe("native-release workflow structure", () => {
     expect(snapshot).toContain("scripts/snapshot-release.mjs");
     expect(snapshot).toContain("bun-version: 1.4.0");
     expect(snapshot).toContain("npm pack ./packages/agentkit");
-    expect(snapshot).toContain("actions/upload-artifact@v4");
+    expect(snapshot).toMatch(/actions\/upload-artifact@[0-9a-f]{40} # v4/);
     // Only the default branch may freeze a release.
     expect(snapshot).toContain("github.event.repository.default_branch");
     expect(snapshot).toContain("merge-base --is-ancestor");
@@ -153,7 +154,58 @@ describe("native-release workflow structure", () => {
   it("keeps input interpolation out of run scripts", () => {
     assertNoRunInterpolation(yaml);
   });
+
+  it("pins every action to a full commit SHA", () => {
+    for (const source of [yaml, workflowText("publish.yml")])
+      for (const match of source.matchAll(/uses:\s*(\S+)/g))
+        expect(match[1], `unpinned action ${match[1]}`).toMatch(
+          /@[0-9a-f]{40}$/,
+        );
+  });
+
+  it("unpacks the snapshot with --force-local (Git Bash tar treats D: as a host)", () => {
+    for (const source of [yaml, rehearsalYaml])
+      for (const line of source
+        .split("\n")
+        .filter((l) => /\btar\b.*-C/.test(l)))
+        expect(line).toContain("tar --force-local");
+  });
+
+  it("drops checkout credentials in the publish job and keeps the snapshot out of its download", () => {
+    const publish = section("publish");
+    expect(publish).toContain("persist-credentials: false");
+    expect(publish).toContain("pattern: native-build-*-${{ inputs.version }}");
+    expect(yaml).toContain("name: native-build-${{ matrix.key }}-");
+    expect(yaml).not.toContain("pattern: native-*-");
+  });
+
+  it("wires dist_tag and allow_unexecuted_targets through to the publisher", () => {
+    expect(yaml).toMatch(/dist_tag:[\s\S]*?default: auto/);
+    expect(yaml).toMatch(/allow_unexecuted_targets:[\s\S]*?default: false/);
+    const publish = section("publish");
+    expect(publish).toContain('--tag "$DIST_TAG"');
+    expect(publish).toContain("$ALLOW_FLAG");
+  });
+
+  it("does not claim the verifier checks reviewers", () => {
+    expect(yaml).not.toContain("the verifier refuses a run that lacks");
+    expect(yaml).toContain("REPOSITORY SETTING");
+  });
+
+  it("ci and nightly declare least-privilege token permissions", () => {
+    for (const name of ["ci.yml", "nightly.yml"])
+      expect(workflowText(name)).toMatch(
+        /\npermissions:\n {2}contents: read\n/,
+      );
+  });
 });
+
+function workflowText(name: string): string {
+  return readFileSync(
+    new URL(`../../.github/workflows/${name}`, import.meta.url),
+    "utf8",
+  );
+}
 
 function assertNoRunInterpolation(source: string): void {
   const lines = source.split("\n");
