@@ -355,3 +355,91 @@ async fn failed_tool_reservation_never_dispatches_tool_or_next_call() {
         3
     );
 }
+struct Interrupting {
+    definition: ToolDefinition,
+    token: CancellationToken,
+}
+#[async_trait]
+impl Tool for Interrupting {
+    fn definition(&self) -> &ToolDefinition {
+        &self.definition
+    }
+    async fn execute(&self, context: ToolContext, _: Value) -> Result<ToolResult, CoreError> {
+        self.token.cancel();
+        Ok(ToolResult {
+            ok: true,
+            data: Some(json!({"applied":true})),
+            sources: vec![],
+            warnings: vec![],
+            truncated: false,
+            limits: context.limits,
+            model_data: None,
+            summary: None,
+            status: None,
+            model_content: None,
+        })
+    }
+}
+#[tokio::test]
+async fn interruption_after_a_tool_ran_still_records_its_outcome() {
+    let token = CancellationToken::new();
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(Interrupting {token: token.clone(),definition:serde_json::from_value(json!({"name":"write","version":"1","effect":"write","capability":"test","description":"Write","inputSchema":{"type":"object"}})).unwrap()})).unwrap();
+    let options = RunOptions {
+        interruption: Some(token),
+        ..Default::default()
+    };
+    let handle = run_chat(options, Arc::new(Calls), Arc::new(registry));
+    let events: Vec<_> = handle.events.collect().await;
+    let result = handle.result.await.unwrap();
+    assert_eq!(result.terminal, Terminal::Completed);
+    // The executed call's outcome is durable; the two that never ran are not
+    // fabricated (the resumed attempt replays them).
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == "run.tool.succeeded")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type() == "run.tool.failed")
+            .count(),
+        0
+    );
+    assert!(result
+        .appended_messages
+        .iter()
+        .any(|message| message.tool_call_id.as_deref() == Some("call0")));
+}
+#[tokio::test]
+async fn stream_ending_without_completion_is_incomplete_even_without_a_budget() {
+    struct Truncated;
+    #[async_trait]
+    impl ChatProvider for Truncated {
+        fn id(&self) -> &str {
+            "truncated"
+        }
+        fn stream_chat(&self, _: ChatRequest, _: CancellationToken) -> ProviderStream {
+            Box::pin(futures_util::stream::iter(vec![
+                Ok(ProviderEvent::Started),
+                Ok(ProviderEvent::Delta("partial".into())),
+            ]))
+        }
+    }
+    let handle = run_chat(
+        RunOptions::default(),
+        Arc::new(Truncated),
+        Arc::new(ToolRegistry::new()),
+    );
+    let events: Vec<_> = handle.events.collect().await;
+    assert_eq!(handle.result.await.unwrap().terminal, Terminal::Failed);
+    assert!(events.iter().any(|event| {
+        event.event_type() == "run.failed"
+            && serde_json::to_string(event)
+                .unwrap()
+                .contains("incomplete_stream")
+    }));
+}

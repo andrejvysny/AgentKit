@@ -1,6 +1,6 @@
 use super::{
     chat_completions::usage_data,
-    responses_request::{build_responses_request, make_continuation},
+    responses_request::{build_responses_request_with_warnings, make_continuation},
     responses_state::{ResponsesResult, ResponsesState},
     transport::{dispatch, read_json},
     AuthKind, ConnectionIdentity, TrustedTransport,
@@ -37,11 +37,14 @@ impl ResponsesProvider {
             if cancellation.is_cancelled() {
                 Err(CoreError::new("cancelled", "aborted"))?;
             }
-            let body = build_responses_request(
+            let (body, warnings) = build_responses_request_with_warnings(
                 &input,
                 &provider.identity,
                 provider.transport.auth_kind() == AuthKind::ChatGptAccount,
             )?;
+            for message in warnings {
+                yield ProviderEvent::Warning { code: "tool_schema_unsupported".into(), message };
+            }
             if let Some(budget) = &input.budget {
                 budget.consume("providerRequests").await?;
             }

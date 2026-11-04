@@ -98,6 +98,117 @@ struct Session {
     lease: Arc<ScopeLease>,
     last_used: Instant,
 }
+/// A session slot held for an in-flight initialize. Dropping it without
+/// `promote` (error, abort, client hang-up) releases the slot.
+struct Reservation {
+    state: Arc<State>,
+    lease: Arc<ScopeLease>,
+    key: Option<String>,
+}
+impl Reservation {
+    async fn promote(mut self, id: &str) {
+        // Lock first: if this future is dropped while waiting, the key is
+        // still owned by `Drop`, which releases the placeholder. No await
+        // may sit between taking the key and finishing the move.
+        let state = self.state.clone();
+        let mut sessions = state.sessions.lock().await;
+        let Some(key) = self.key.take() else { return };
+        if let Some(session) = sessions.remove(&key) {
+            sessions.insert(id.to_owned(), session);
+        }
+        self.lease.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+#[cfg(test)]
+mod reservation_tests {
+    use super::*;
+    use futures::FutureExt;
+
+    struct Stub;
+    #[async_trait::async_trait]
+    impl Backend for Stub {
+        async fn list_tools(
+            &self,
+            _: &SessionScope,
+        ) -> Result<Vec<crate::CatalogTool>, rmcp::ErrorData> {
+            Ok(vec![])
+        }
+        async fn call_tool(
+            &self,
+            _: &str,
+            _: rmcp::model::JsonObject,
+            _: &SessionScope,
+        ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+            Err(rmcp::ErrorData::internal_error("unused", None))
+        }
+        fn revoke_actor(&self, _: &str) {}
+    }
+    #[async_trait::async_trait]
+    impl Authenticator for Stub {
+        async fn authenticate(&self, _: &HeaderMap) -> Option<(Value, Option<String>)> {
+            None
+        }
+    }
+    fn test_state() -> Arc<State> {
+        McpServer::new(Arc::new(Stub), Arc::new(Stub), ServerOptions::default())
+            .unwrap()
+            .state
+    }
+
+    #[tokio::test]
+    async fn promote_dropped_while_waiting_for_the_lock_releases_the_slot() {
+        let state = test_state();
+        let lease = Arc::new(ScopeLease::new(
+            SessionScope {
+                principal: Value::Null,
+                chat_id: None,
+                actor_id: "a".into(),
+                cancellation: CancellationToken::new(),
+            },
+            state.backend.clone(),
+        ));
+        lease.active.fetch_add(1, Ordering::SeqCst);
+        state.sessions.lock().await.insert(
+            "pending:x".into(),
+            Session {
+                fingerprint: [0; 32],
+                lease: lease.clone(),
+                last_used: Instant::now(),
+            },
+        );
+        let reservation = Reservation {
+            state: state.clone(),
+            lease: lease.clone(),
+            key: Some("pending:x".into()),
+        };
+        // Hold the lock so promote parks on it, then drop that future.
+        let guard = state.sessions.lock().await;
+        let mut promote = Box::pin(reservation.promote("real"));
+        assert!(promote.as_mut().now_or_never().is_none());
+        drop(promote);
+        drop(guard);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while state.sessions.lock().await.contains_key("pending:x") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("placeholder released");
+        assert_eq!(lease.active.load(Ordering::SeqCst), 0);
+    }
+}
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        let Some(key) = self.key.take() else { return };
+        self.lease.active.fetch_sub(1, Ordering::SeqCst);
+        let state = self.state.clone();
+        tokio::spawn(async move {
+            if let Some(session) = state.sessions.lock().await.remove(&key) {
+                session.lease.revoke();
+            }
+        });
+    }
+}
 struct State {
     backend: Arc<dyn Backend>,
     auth: Arc<dyn Authenticator>,
@@ -222,21 +333,32 @@ impl McpServer {
             .get("mcp-session-id")
             .and_then(|id| id.to_str().ok())
             .map(str::to_owned);
-        let _initialization = if session_id.is_none() {
-            Some(state.initialization.lock().await)
-        } else {
-            None
-        };
         let deleting = request.method() == Method::DELETE;
-        let lease = match self
-            .session(session_id.as_deref(), fingerprint, principal, chat_id)
-            .await
-        {
-            Ok(lease) => lease,
+        // The initialization lock covers the capacity check AND the slot
+        // reservation (a busy placeholder session), then is released:
+        // holding it while reading the body would let one slow client stall
+        // every other initialize, and releasing it before the reservation
+        // would let concurrent initializes all pass the check.
+        let admitted = {
+            let _initialization = if session_id.is_none() {
+                Some(state.initialization.lock().await)
+            } else {
+                None
+            };
+            self.session(session_id.as_deref(), fingerprint, principal, chat_id)
+                .await
+        };
+        let (lease, reserved) = match admitted {
+            Ok(admitted) => admitted,
             // Admission control is temporary and the client's correct move is
             // to come back, so it is the one refusal that carries Retry-After.
             Err(StatusCode::SERVICE_UNAVAILABLE) => return capacity_refusal(),
             Err(status) => return response(status),
+        };
+        let reservation = Reservation {
+            state: state.clone(),
+            lease: lease.clone(),
+            key: reserved,
         };
         request.extensions_mut().insert(lease.clone());
         let _request_active = lease.begin();
@@ -400,11 +522,11 @@ impl McpServer {
                                 .await;
                             let (parts, body) = response.into_parts();
                             let answer = if parts.status.is_success() {
-                                body.collect()
+                                http_body_util::Limited::new(body, bound)
+                                    .collect()
                                     .await
                                     .ok()
                                     .map(|collected| collected.to_bytes())
-                                    .filter(|bytes| bytes.len() <= bound)
                             } else {
                                 None
                             };
@@ -448,14 +570,7 @@ impl McpServer {
                 .get("mcp-session-id")
                 .and_then(|id| id.to_str().ok())
         {
-            state.sessions.lock().await.insert(
-                id.to_owned(),
-                Session {
-                    fingerprint,
-                    lease,
-                    last_used: Instant::now(),
-                },
-            );
+            reservation.promote(id).await;
         }
         if deleting
             && result.status().is_success()
@@ -472,7 +587,7 @@ impl McpServer {
         fingerprint: [u8; 32],
         principal: Value,
         chat_id: Option<String>,
-    ) -> Result<Arc<ScopeLease>, StatusCode> {
+    ) -> Result<(Arc<ScopeLease>, Option<String>), StatusCode> {
         let mut sessions = self.state.sessions.lock().await;
         let stale: Vec<_> = sessions
             .iter()
@@ -497,37 +612,10 @@ impl McpServer {
                 .filter(|session| bool::from(session.fingerprint.ct_eq(&fingerprint)))
                 .ok_or(StatusCode::NOT_FOUND)?;
             session.last_used = Instant::now();
-            return Ok(session.lease.clone());
+            return Ok((session.lease.clone(), None));
         }
-        let per_principal = self.state.options.max_sessions_per_principal;
-        while sessions
-            .values()
-            .filter(|session| session.fingerprint == fingerprint)
-            .count()
-            >= per_principal
-        {
-            let oldest = sessions
-                .iter()
-                .filter(|(_, session)| session.fingerprint == fingerprint && !busy(session))
-                .min_by_key(|(_, session)| session.last_used)
-                .map(|(id, _)| id.clone());
-            let Some(oldest) = oldest else {
-                return Err(StatusCode::SERVICE_UNAVAILABLE);
-            };
-            self.remove_session(&mut sessions, &oldest);
-        }
-        while sessions.len() >= per_principal.saturating_mul(16) {
-            let oldest = sessions
-                .iter()
-                .filter(|(_, session)| !busy(session))
-                .min_by_key(|(_, session)| session.last_used)
-                .map(|(id, _)| id.clone());
-            let Some(oldest) = oldest else {
-                return Err(StatusCode::SERVICE_UNAVAILABLE);
-            };
-            self.remove_session(&mut sessions, &oldest);
-        }
-        Ok(Arc::new(ScopeLease::new(
+        self.make_room(&mut sessions, fingerprint, None, 0)?;
+        let lease = Arc::new(ScopeLease::new(
             SessionScope {
                 principal,
                 chat_id,
@@ -535,7 +623,63 @@ impl McpServer {
                 cancellation: self.state.shutdown.child_token(),
             },
             self.state.backend.clone(),
-        )))
+        ));
+        // Placeholder under a key no client can address: counted by the caps
+        // and busy (never evicted) until the initialize settles.
+        let key = format!("pending:{}", uuid::Uuid::new_v4());
+        lease.active.fetch_add(1, Ordering::SeqCst);
+        sessions.insert(
+            key.clone(),
+            Session {
+                fingerprint,
+                lease: lease.clone(),
+                last_used: Instant::now(),
+            },
+        );
+        Ok((lease, Some(key)))
+    }
+    /// Evicts idle sessions until `slack` more sessions than the caps allow
+    /// fit. `keep` is never evicted (the session just created).
+    fn make_room(
+        &self,
+        sessions: &mut HashMap<String, Session>,
+        fingerprint: [u8; 32],
+        keep: Option<&str>,
+        slack: usize,
+    ) -> Result<(), StatusCode> {
+        let per_principal = self.state.options.max_sessions_per_principal;
+        while sessions
+            .values()
+            .filter(|session| session.fingerprint == fingerprint)
+            .count()
+            >= per_principal + slack
+        {
+            let oldest = sessions
+                .iter()
+                .filter(|(id, session)| {
+                    session.fingerprint == fingerprint
+                        && !busy(session)
+                        && Some(id.as_str()) != keep
+                })
+                .min_by_key(|(_, session)| session.last_used)
+                .map(|(id, _)| id.clone());
+            let Some(oldest) = oldest else {
+                return Err(StatusCode::SERVICE_UNAVAILABLE);
+            };
+            self.remove_session(sessions, &oldest);
+        }
+        while sessions.len() >= per_principal.saturating_mul(16) + slack {
+            let oldest = sessions
+                .iter()
+                .filter(|(id, session)| !busy(session) && Some(id.as_str()) != keep)
+                .min_by_key(|(_, session)| session.last_used)
+                .map(|(id, _)| id.clone());
+            let Some(oldest) = oldest else {
+                return Err(StatusCode::SERVICE_UNAVAILABLE);
+            };
+            self.remove_session(sessions, &oldest);
+        }
+        Ok(())
     }
     fn remove_session(&self, sessions: &mut HashMap<String, Session>, id: &str) {
         if let Some(session) = sessions.remove(id) {

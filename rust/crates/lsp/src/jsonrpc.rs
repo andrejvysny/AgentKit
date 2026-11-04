@@ -6,7 +6,9 @@
 //! registered handler, and server-initiated requests (`window/…`,
 //! `window/workDoneProgress/create`, …) are answered through the
 //! incoming-request hook on a spawned task so a slow hook can never
-//! deadlock the reader. Malformed frames are protocol errors that mark the
+//! deadlock the reader. One writer task owns the server's stdin: callers
+//! enqueue complete frames, so a cancelled caller can never leave half a
+//! frame on the wire. Malformed frames are protocol errors that mark the
 //! connection broken and fail every in-flight request.
 
 use std::{
@@ -31,7 +33,7 @@ use tokio::{
 /// Hard cap on the size of a header block (bytes before `\r\n\r\n`).
 pub const MAX_HEADER_BLOCK_BYTES: usize = 64 * 1024;
 /// Hard cap on a single message body.
-pub const MAX_BODY_BYTES: usize = 128 * 1024 * 1024;
+pub const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RpcErrorObject {
@@ -77,6 +79,40 @@ pub fn encode_frame(body: &Value) -> Vec<u8> {
     out
 }
 
+/// Read one `\n`-terminated line into `line`, never buffering more than
+/// `cap` bytes. A peer that streams bytes without a newline errors out at
+/// the cap instead of growing memory without bound (`BufRead::read_line`
+/// has no such limit). Returns the byte count read (0 = clean EOF).
+async fn read_bounded_line<R: AsyncRead + Unpin>(
+    reader: &mut BufReader<R>,
+    line: &mut Vec<u8>,
+    cap: usize,
+) -> Result<usize, String> {
+    let mut total = 0usize;
+    loop {
+        let chunk = reader
+            .fill_buf()
+            .await
+            .map_err(|e| format!("header read failed: {e}"))?;
+        if chunk.is_empty() {
+            return Ok(total);
+        }
+        let (take, found) = match chunk.iter().position(|byte| *byte == b'\n') {
+            Some(index) => (index + 1, true),
+            None => (chunk.len(), false),
+        };
+        if total + take > cap {
+            return Err(format!("header block exceeds {cap} bytes"));
+        }
+        line.extend_from_slice(&chunk[..take]);
+        reader.consume(take);
+        total += take;
+        if found {
+            return Ok(total);
+        }
+    }
+}
+
 /// Read one frame. Returns `Ok(None)` on clean EOF at a frame boundary,
 /// `Err(reason)` on any protocol violation (which invalidates the stream).
 pub async fn read_frame<R: AsyncRead + Unpin>(
@@ -85,11 +121,8 @@ pub async fn read_frame<R: AsyncRead + Unpin>(
     let mut content_length: Option<usize> = None;
     let mut header_bytes = 0usize;
     loop {
-        let mut line = String::new();
-        let read = reader
-            .read_line(&mut line)
-            .await
-            .map_err(|e| format!("header read failed: {e}"))?;
+        let mut raw = Vec::new();
+        let read = read_bounded_line(reader, &mut raw, MAX_HEADER_BLOCK_BYTES).await?;
         if read == 0 {
             return if header_bytes == 0 {
                 Ok(None)
@@ -97,12 +130,13 @@ pub async fn read_frame<R: AsyncRead + Unpin>(
                 Err("connection closed inside the header block".into())
             };
         }
-        header_bytes += line.len();
+        header_bytes += read;
         if header_bytes > MAX_HEADER_BLOCK_BYTES {
             return Err(format!(
                 "header block exceeds {MAX_HEADER_BLOCK_BYTES} bytes"
             ));
         }
+        let line = String::from_utf8(raw).map_err(|_| "header line is not UTF-8".to_string())?;
         if line == "\r\n" || line == "\n" {
             break;
         }
@@ -110,23 +144,38 @@ pub async fn read_frame<R: AsyncRead + Unpin>(
             .split_once(':')
             .ok_or_else(|| format!("malformed header line: {line:?}"))?;
         if name.trim().eq_ignore_ascii_case("content-length") {
+            let value = value.trim();
+            // `usize::from_str` also accepts a leading `+`; the wire format
+            // is plain digits only.
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(format!("invalid Content-Length: {value:?}"));
+            }
             let parsed: usize = value
-                .trim()
                 .parse()
-                .map_err(|_| format!("invalid Content-Length: {:?}", value.trim()))?;
+                .map_err(|_| format!("invalid Content-Length: {value:?}"))?;
             if parsed > MAX_BODY_BYTES {
                 return Err(format!("message body of {parsed} bytes exceeds the cap"));
             }
-            content_length = Some(parsed);
+            if content_length.replace(parsed).is_some() {
+                return Err("duplicate Content-Length header".into());
+            }
         }
         // All other headers (Content-Type) are accepted and ignored.
     }
     let length = content_length.ok_or_else(|| "frame without Content-Length".to_string())?;
-    let mut body = vec![0u8; length];
-    reader
-        .read_exact(&mut body)
+    // Grow with the bytes that actually arrive: a hostile length never
+    // pre-allocates more than the peer really sends.
+    let mut body = Vec::new();
+    let read = (&mut *reader)
+        .take(length as u64)
+        .read_to_end(&mut body)
         .await
-        .map_err(|e| format!("body read failed after {length} bytes: {e}"))?;
+        .map_err(|e| format!("body read failed after {} bytes: {e}", body.len()))?;
+    if read != length {
+        return Err(format!(
+            "body read failed after {read} bytes: expected {length}"
+        ));
+    }
     let value: Value =
         serde_json::from_slice(&body).map_err(|e| format!("body is not valid JSON: {e}"))?;
     Ok(Some(value))
@@ -136,15 +185,48 @@ struct Pending {
     tx: oneshot::Sender<Result<Value, RpcFailure>>,
 }
 
-/// A live JSON-RPC connection plus its reader task.
+/// One queued frame. `done` (when present) learns whether the writer task
+/// flushed it.
+struct WriteJob {
+    bytes: Vec<u8>,
+    done: Option<oneshot::Sender<Result<(), String>>>,
+}
+
+/// Frames queued ahead of the writer task. Bounded so a stalled server
+/// back-pressures callers (who are all under a deadline) instead of
+/// growing memory.
+const WRITE_QUEUE: usize = 256;
+/// A frame the writer cannot flush within this long means the server
+/// stopped draining stdin: the byte stream is untrustworthy and the
+/// connection is marked broken so the pool respawns it.
+const DEFAULT_WRITE_STALL: Duration = Duration::from_secs(10);
+
+/// A live JSON-RPC connection plus its reader and writer tasks.
 pub struct Connection {
-    writer: tokio::sync::Mutex<Box<dyn AsyncWrite + Unpin + Send>>,
+    writer: tokio::sync::mpsc::Sender<WriteJob>,
     next_id: AtomicI64,
     pending: Mutex<HashMap<Value, Pending>>,
     broken: Mutex<Option<String>>,
     broken_notify: Notify,
     on_notification: NotificationHandler,
     on_request: RequestHook,
+}
+
+/// Removes a request's response slot however the request future ends
+/// (reply, timeout, cancellation or the caller dropping the future).
+struct PendingSlot<'a> {
+    connection: &'a Connection,
+    id: Value,
+}
+
+impl Drop for PendingSlot<'_> {
+    fn drop(&mut self) {
+        self.connection
+            .pending
+            .lock()
+            .expect("pending lock")
+            .remove(&self.id);
+    }
 }
 
 impl Connection {
@@ -156,8 +238,25 @@ impl Connection {
         on_notification: NotificationHandler,
         on_request: RequestHook,
     ) -> Arc<Self> {
+        Self::attach_with_write_stall(
+            reader,
+            writer,
+            on_notification,
+            on_request,
+            DEFAULT_WRITE_STALL,
+        )
+    }
+
+    pub(crate) fn attach_with_write_stall(
+        reader: impl AsyncRead + Unpin + Send + 'static,
+        writer: impl AsyncWrite + Unpin + Send + 'static,
+        on_notification: NotificationHandler,
+        on_request: RequestHook,
+        write_stall: Duration,
+    ) -> Arc<Self> {
+        let (queue, jobs) = tokio::sync::mpsc::channel(WRITE_QUEUE);
         let conn = Arc::new(Self {
-            writer: tokio::sync::Mutex::new(Box::new(writer)),
+            writer: queue,
             next_id: AtomicI64::new(1),
             pending: Mutex::new(HashMap::new()),
             broken: Mutex::new(None),
@@ -165,6 +264,12 @@ impl Connection {
             on_notification,
             on_request,
         });
+        tokio::spawn(Self::write_loop(
+            Arc::downgrade(&conn),
+            Box::new(writer),
+            jobs,
+            write_stall,
+        ));
         let reader_conn = Arc::clone(&conn);
         tokio::spawn(async move {
             let mut buf = BufReader::new(reader);
@@ -183,6 +288,41 @@ impl Connection {
             }
         });
         conn
+    }
+
+    /// The single owner of the server's stdin. Frames are written whole and
+    /// in queue order; a caller giving up never leaves half a frame behind
+    /// because callers only enqueue complete frames.
+    async fn write_loop(
+        conn: std::sync::Weak<Self>,
+        mut writer: Box<dyn AsyncWrite + Unpin + Send>,
+        mut jobs: tokio::sync::mpsc::Receiver<WriteJob>,
+        stall: Duration,
+    ) {
+        while let Some(job) = jobs.recv().await {
+            let outcome = tokio::time::timeout(stall, async {
+                writer.write_all(&job.bytes).await?;
+                writer.flush().await
+            })
+            .await;
+            let failure = match outcome {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(format!("write failed: {e}")),
+                Err(_) => Some("write stalled: the server stopped reading its stdin".to_owned()),
+            };
+            if let Some(done) = job.done {
+                let _ = done.send(match &failure {
+                    None => Ok(()),
+                    Some(reason) => Err(reason.clone()),
+                });
+            }
+            if let Some(reason) = failure {
+                if let Some(conn) = conn.upgrade() {
+                    conn.mark_broken(reason);
+                }
+                return;
+            }
+        }
     }
 
     pub fn is_broken(&self) -> Option<String> {
@@ -209,57 +349,38 @@ impl Connection {
         self.broken_notify.notify_waiters();
     }
 
-    async fn write_frame(self: &Arc<Self>, frame: &Value) -> Result<(), RpcFailure> {
-        let bytes = encode_frame(frame);
-        let mut writer = self.writer.lock().await;
-        let written = writer.write_all(&bytes).await;
-        let outcome = match written {
-            Ok(()) => writer.flush().await,
-            Err(e) => Err(e),
-        };
-        match outcome {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                drop(writer);
-                self.mark_broken(format!("write failed: {e}"));
-                Err(RpcFailure::Disconnected(format!("write failed: {e}")))
-            }
-        }
+    fn broken_failure(&self) -> RpcFailure {
+        RpcFailure::Disconnected(
+            self.is_broken()
+                .unwrap_or_else(|| "connection broken".into()),
+        )
     }
 
-    /// `write_frame` under a deadline (and optional cancellation). A live
-    /// server that stops draining stdin fills the OS pipe; an unbounded
-    /// `write_all` then blocks forever HOLDING the writer mutex — no
-    /// request timeout or caller cancellation can fire, and every later
-    /// frame of the generation (`$/cancelRequest`, `shutdown`, `exit`)
-    /// queues behind it, hanging `ServerProcess::shutdown` before it ever
-    /// reaches `start_kill`. A stalled write means the byte stream is no
-    /// longer trustworthy: mark the connection broken so the pool respawns.
-    async fn write_frame_bounded(
-        self: &Arc<Self>,
+    /// Queue one frame for the writer task, giving up at `deadline` or when
+    /// `cancellation` fires. Giving up only abandons the queue slot: the
+    /// shared byte stream is untouched, so the connection stays healthy.
+    async fn enqueue(
+        &self,
         frame: &Value,
-        deadline: Duration,
+        deadline: tokio::time::Instant,
         cancellation: Option<&CancellationToken>,
+        done: Option<oneshot::Sender<Result<(), String>>>,
     ) -> Result<(), RpcFailure> {
-        let outcome = match cancellation {
-            Some(token) => {
-                tokio::select! {
-                    result = self.write_frame(frame) => result,
-                    _ = tokio::time::sleep(deadline) => Err(RpcFailure::Timeout),
-                    _ = token.cancelled() => Err(RpcFailure::Cancelled),
-                }
-            }
-            None => {
-                tokio::select! {
-                    result = self.write_frame(frame) => result,
-                    _ = tokio::time::sleep(deadline) => Err(RpcFailure::Timeout),
-                }
-            }
+        let job = WriteJob {
+            bytes: encode_frame(frame),
+            done,
         };
-        if outcome.is_err() {
-            self.mark_broken("write stalled or abandoned mid-frame".into());
+        let never = std::future::pending::<()>();
+        tokio::select! {
+            sent = self.writer.send(job) => sent.map_err(|_| self.broken_failure()),
+            _ = tokio::time::sleep_until(deadline) => Err(RpcFailure::Timeout),
+            _ = async {
+                match cancellation {
+                    Some(token) => token.cancelled().await,
+                    None => never.await,
+                }
+            } => Err(RpcFailure::Cancelled),
         }
-        outcome
     }
 
     fn dispatch(self: Arc<Self>, frame: Value) {
@@ -279,14 +400,30 @@ impl Connection {
                             "error":{"code":error.code,"message":error.message,
                                       "data":error.data}}),
                     };
-                    let _ = self.write_frame(&reply).await;
+                    let deadline = tokio::time::Instant::now() + DEFAULT_WRITE_STALL;
+                    let _ = self.enqueue(&reply, deadline, None, None).await;
                 });
             }
             (Some(method), None) => {
-                let method = method.to_owned();
-                let params = frame.get("params").cloned();
-                let handler = Arc::clone(&self.on_notification);
-                tokio::spawn(async move { handler(method, params) });
+                // Inline, not spawned: notifications must reach the handler
+                // in the order the server sent them (two `publishDiagnostics`
+                // for one document, the later one wins). The handler is a
+                // short synchronous bookkeeping call.
+                (self.on_notification)(method.to_owned(), frame.get("params").cloned());
+            }
+            (None, Some(Value::Null)) => {
+                // A response to no request: servers send `id: null` only to
+                // report an error they could not attribute (parse error,
+                // invalid request). The stream state is unknowable.
+                if let Some(error) = frame.get("error") {
+                    let message = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown error");
+                    self.mark_broken(format!(
+                        "server reported an unattributable error: {message}"
+                    ));
+                }
             }
             (None, Some(id)) => {
                 let entry = self.pending.lock().expect("pending lock").remove(&id);
@@ -313,7 +450,8 @@ impl Connection {
     }
 
     /// Send a request and await its reply. Honours the caller's
-    /// cancellation token and the deadline; both send `$/cancelRequest`.
+    /// cancellation token and ONE deadline covering queueing, writing and
+    /// the reply wait; timeout or cancellation sends `$/cancelRequest`.
     pub async fn request(
         self: &Arc<Self>,
         method: &str,
@@ -324,60 +462,82 @@ impl Connection {
         if let Some(reason) = self.is_broken() {
             return Err(RpcFailure::Disconnected(reason));
         }
+        let deadline = tokio::time::Instant::now() + timeout;
         let id = Value::from(self.next_id.fetch_add(1, Ordering::SeqCst));
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()
             .expect("pending lock")
             .insert(id.clone(), Pending { tx });
+        let slot = PendingSlot {
+            connection: self,
+            id: id.clone(),
+        };
         if let Some(reason) = self.is_broken() {
-            self.pending.lock().expect("pending lock").remove(&id);
             return Err(RpcFailure::Disconnected(reason));
         }
-        let frame = json!({"jsonrpc":"2.0","id":id,"method":method,
-                           "params":if params.is_null() {json!({})} else {params}});
-        if let Err(error) = self
-            .write_frame_bounded(&frame, timeout, Some(&cancellation))
-            .await
-        {
-            self.pending.lock().expect("pending lock").remove(&id);
-            return Err(error);
-        }
-
         let broken_wait = self.broken_notify.notified();
         tokio::pin!(broken_wait);
-        let outcome = tokio::select! {
-            reply = rx => match reply {
-                Ok(outcome) => outcome,
-                Err(_) => Err(RpcFailure::Disconnected("request abandoned".into())),
+        // Registered before the write so a break during it is not missed.
+        broken_wait.as_mut().enable();
+        let frame = json!({"jsonrpc":"2.0","id":id,"method":method,
+                           "params":if params.is_null() {json!({})} else {params}});
+        let queued = self
+            .enqueue(&frame, deadline, Some(&cancellation), None)
+            .await;
+        let outcome = match queued {
+            Err(error) => Err(error),
+            Ok(()) => tokio::select! {
+                reply = rx => match reply {
+                    Ok(outcome) => outcome,
+                    Err(_) => Err(RpcFailure::Disconnected("request abandoned".into())),
+                },
+                _ = cancellation.cancelled() => Err(RpcFailure::Cancelled),
+                _ = tokio::time::sleep_until(deadline) => Err(RpcFailure::Timeout),
+                _ = &mut broken_wait => Err(self.broken_failure()),
             },
-            _ = cancellation.cancelled() => Err(RpcFailure::Cancelled),
-            _ = tokio::time::sleep(timeout) => Err(RpcFailure::Timeout),
-            _ = &mut broken_wait => Err(self.is_broken()
-                .map(RpcFailure::Disconnected)
-                .unwrap_or_else(|| RpcFailure::Disconnected("connection broken".into()))),
         };
+        drop(slot);
         if matches!(outcome, Err(RpcFailure::Cancelled | RpcFailure::Timeout)) {
-            self.pending.lock().expect("pending lock").remove(&id);
-            let _ = self.notify("$/cancelRequest", json!({"id": id})).await;
+            // Best effort and never awaited past the queue: the caller is
+            // already done, and a stalled writer breaks the connection on
+            // its own clock.
+            let cancel = json!({"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id": id}});
+            let _ = self
+                .enqueue(
+                    &cancel,
+                    tokio::time::Instant::now() + Duration::from_secs(1),
+                    None,
+                    None,
+                )
+                .await;
         }
         outcome
     }
 
-    /// Fire-and-forget notification. Bounded write: shutdown paths send
-    /// `exit` through here and must reach `start_kill` even against a
-    /// server that stopped draining stdin.
+    /// Notification, returned once the writer task has flushed it (bounded
+    /// to 5 s): shutdown paths send `exit` through here and must reach
+    /// `start_kill` even against a server that stopped draining stdin.
     pub async fn notify(self: &Arc<Self>, method: &str, params: Value) -> Result<(), RpcFailure> {
         if let Some(reason) = self.is_broken() {
             return Err(RpcFailure::Disconnected(reason));
         }
-        self.write_frame_bounded(
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let (done, flushed) = oneshot::channel();
+        self.enqueue(
             &json!({"jsonrpc":"2.0","method":method,
                     "params":if params.is_null() {json!({})} else {params}}),
-            Duration::from_secs(5),
+            deadline,
             None,
+            Some(done),
         )
-        .await
+        .await?;
+        match tokio::time::timeout_at(deadline, flushed).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(reason))) => Err(RpcFailure::Disconnected(reason)),
+            Ok(Err(_)) => Err(self.broken_failure()),
+            Err(_) => Err(RpcFailure::Timeout),
+        }
     }
 }
 
@@ -413,7 +573,13 @@ mod tests {
         let (cr, cw) = split(conn_side);
         let (tr, tw) = split(test_side);
         Peer {
-            conn: Connection::attach(cr, cw, notification, request),
+            conn: Connection::attach_with_write_stall(
+                cr,
+                cw,
+                notification,
+                request,
+                Duration::from_millis(300),
+            ),
             read: BufReader::new(tr),
             write: tw,
         }
@@ -596,8 +762,11 @@ mod tests {
         )
         .await
         .expect("a stalled write must not outlive its deadline")
-        .expect_err("stalled write is a timeout");
-        assert_eq!(result, RpcFailure::Timeout);
+        .expect_err("stalled write fails the request");
+        assert!(
+            matches!(&result, RpcFailure::Disconnected(reason) if reason.contains("stalled")),
+            "{result:?}"
+        );
         assert!(
             p.conn.is_broken().is_some(),
             "a connection whose writer stalled must be marked broken for the pool to respawn it"
@@ -628,6 +797,142 @@ mod tests {
                 .unwrap(),
             Err(RpcFailure::Cancelled)
         );
+    }
+
+    #[tokio::test]
+    async fn header_line_flood_without_newline_errors_at_the_cap() {
+        // An endless newline-free stream: an unbounded `read_line` would
+        // allocate until the process dies.
+        let mut reader = BufReader::new(tokio::io::repeat(b'a'));
+        let err = tokio::time::timeout(secs(5), read_frame(&mut reader))
+            .await
+            .expect("bounded read must return")
+            .unwrap_err();
+        assert!(err.contains("header block"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn garbage_content_length_is_rejected() {
+        for value in ["abc", "-5", "+5", "", "1.5", "99999999999999999999999"] {
+            let raw = format!("Content-Length: {value}\r\n\r\n{{}}");
+            let mut reader = BufReader::new(raw.as_bytes());
+            let err = read_frame(&mut reader).await.unwrap_err();
+            assert!(err.contains("Content-Length"), "{value:?}: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_content_length_is_rejected() {
+        let raw = b"Content-Length: 2\r\nContent-Length: 2\r\n\r\n{}";
+        let mut reader = BufReader::new(&raw[..]);
+        let err = read_frame(&mut reader).await.unwrap_err();
+        assert!(err.contains("duplicate"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn hostile_length_with_short_body_errors_without_preallocating() {
+        let raw = format!("Content-Length: {MAX_BODY_BYTES}\r\n\r\n{{}}");
+        let mut reader = BufReader::new(raw.as_bytes());
+        let err = read_frame(&mut reader).await.unwrap_err();
+        assert!(err.contains("body read failed"), "{err}");
+        let over = format!("Content-Length: {}\r\n\r\n", MAX_BODY_BYTES + 1);
+        let mut reader = BufReader::new(over.as_bytes());
+        assert!(read_frame(&mut reader).await.unwrap_err().contains("cap"));
+    }
+
+    #[tokio::test]
+    async fn notifications_reach_the_handler_in_order() {
+        let seen = Arc::new(Mutex::new(Vec::<i64>::new()));
+        let sink = Arc::clone(&seen);
+        let handler: NotificationHandler = Arc::new(move |_m, params| {
+            let n = params.and_then(|p| p["n"].as_i64()).unwrap();
+            sink.lock().unwrap().push(n);
+        });
+        let mut p = peer_with(handler, null_hook());
+        for n in 0..200 {
+            p.write
+                .write_all(&encode_frame(&json!({"jsonrpc":"2.0",
+                    "method":"textDocument/publishDiagnostics","params":{"n":n}})))
+                .await
+                .unwrap();
+        }
+        for _ in 0..200 {
+            if seen.lock().unwrap().len() == 200 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(*seen.lock().unwrap(), (0..200).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn cancelled_caller_mid_write_does_not_break_the_connection() {
+        let (test_side, conn_side) = duplex(64 * 1024);
+        let (cr, cw) = split(conn_side);
+        let (tr, tw) = split(test_side);
+        let conn = Connection::attach_with_write_stall(
+            cr,
+            cw,
+            noop_notify(),
+            null_hook(),
+            Duration::from_secs(30),
+        );
+        let token = CancellationToken::new();
+        let call = {
+            let conn = Arc::clone(&conn);
+            let token = token.clone();
+            tokio::spawn(async move {
+                conn.request(
+                    "big",
+                    json!({"blob": "z".repeat(256 * 1024)}),
+                    secs(30),
+                    token,
+                )
+                .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        token.cancel();
+        assert_eq!(call.await.unwrap(), Err(RpcFailure::Cancelled));
+        assert!(
+            conn.is_broken().is_none(),
+            "a caller giving up must not poison the shared stream"
+        );
+        // The writer finishes the frame once the peer drains; the stream
+        // stays frame-aligned for everything queued behind it.
+        let mut reader = BufReader::new(tr);
+        let big = read_frame(&mut reader).await.unwrap().unwrap();
+        assert_eq!(big["method"], "big");
+        let cancel = read_frame(&mut reader).await.unwrap().unwrap();
+        assert_eq!(cancel["method"], "$/cancelRequest");
+        conn.notify("ping", json!(null)).await.unwrap();
+        let ping = read_frame(&mut reader).await.unwrap().unwrap();
+        assert_eq!(ping["method"], "ping");
+        drop(tw);
+    }
+
+    #[tokio::test]
+    async fn null_id_error_response_marks_the_connection_broken() {
+        let mut p = peer();
+        let call = {
+            let conn = Arc::clone(&p.conn);
+            tokio::spawn(async move {
+                conn.request("m", json!(null), secs(5), CancellationToken::new())
+                    .await
+            })
+        };
+        let _ = read_frame(&mut p.read).await.unwrap().unwrap();
+        p.write
+            .write_all(&encode_frame(&json!({"jsonrpc":"2.0","id":null,
+                "error":{"code":-32700,"message":"Parse error"}})))
+            .await
+            .unwrap();
+        let failure = call.await.unwrap().unwrap_err();
+        assert!(
+            matches!(&failure, RpcFailure::Disconnected(reason) if reason.contains("Parse error")),
+            "{failure:?}"
+        );
+        assert!(p.conn.is_broken().is_some());
     }
 
     #[tokio::test]

@@ -266,6 +266,11 @@ impl McpClient {
         crate::manager::check_dispatch(guard, &cancellation).await?;
         let mut result = self
             .bounded(
+                // FOLLOW-UP: on timeout/cancel the request is only dropped
+                // locally; `notifications/cancelled` is not sent. rmcp's
+                // `Peer::call_tool` (which drives MRTR `input_required`
+                // rounds) does not expose the request id, and the cancellable
+                // path (`send_cancellable_request`) bypasses MRTR.
                 peer.call_tool(
                     CallToolRequestParams::new(name.to_owned()).with_arguments(arguments),
                 ),

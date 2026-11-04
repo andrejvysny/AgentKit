@@ -59,7 +59,13 @@ fn encode_path(path: &str) -> String {
 }
 
 /// `file://` URI → local path. Percent-decodes UTF-8; rejects non-`file`
-/// schemes and malformed escapes.
+/// schemes and malformed escapes. A `?query` or `#fragment` (legal in a
+/// URI a server sends, never produced by [`path_to_uri`], which encodes
+/// both characters) is dropped, not read as part of the file name.
+///
+/// POSIX paths only: Windows drive letters and UNC authorities are not
+/// interpreted. That is deliberate: the pool refuses to start servers on
+/// non-unix hosts, so no such URI is ever produced or accepted.
 pub fn uri_to_path(uri: &str) -> Result<PathBuf, String> {
     let rest = uri
         .strip_prefix("file://")
@@ -77,6 +83,7 @@ pub fn uri_to_path(uri: &str) -> Result<PathBuf, String> {
             "file URI has a foreign authority {authority:?}: {uri}"
         ));
     }
+    let path = path.split(['?', '#']).next().unwrap_or("");
     decode_percent(path)
         .map(PathBuf::from)
         .ok_or_else(|| format!("file URI does not contain valid UTF-8 percent escapes: {uri}"))
@@ -139,6 +146,18 @@ mod tests {
     fn encodes_reserved_delimiters() {
         let uri = path_to_uri(Path::new("/a#b?c%d"));
         assert_eq!(uri, "file:///a%23b%3Fc%25d");
+    }
+
+    #[test]
+    fn strips_query_and_fragment() {
+        assert_eq!(
+            uri_to_path("file:///tmp/x.rs?version=3#L10").unwrap(),
+            PathBuf::from("/tmp/x.rs")
+        );
+        assert_eq!(
+            uri_to_path("file:///tmp/a%23b.rs#frag").unwrap(),
+            PathBuf::from("/tmp/a#b.rs")
+        );
     }
 
     #[test]

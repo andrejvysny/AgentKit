@@ -651,3 +651,58 @@ async fn an_unsupported_session_protocol_version_header_is_refused_with_400() {
     server.close().await;
     handle.abort();
 }
+
+#[tokio::test]
+async fn concurrent_initializes_never_exceed_the_session_cap() {
+    const CAP: usize = 3;
+    const EXTRA: usize = 3;
+    let options = ServerOptions {
+        max_sessions_per_principal: CAP,
+        max_call_duration: Duration::from_secs(5),
+        ..ServerOptions::default()
+    };
+    let (endpoint, server, _host, handle) = serve(options).await;
+    let client = reqwest::Client::new();
+    let initialize = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"race","version":"1"}}})
+    .to_string();
+    let mut attempts = Vec::new();
+    for _ in 0..CAP + EXTRA {
+        let (client, endpoint, initialize) = (client.clone(), endpoint.clone(), initialize.clone());
+        attempts.push(tokio::spawn(async move {
+            // The body arrives late, so every admitted initialize stays in
+            // flight (holding its reserved slot) while the others are judged.
+            let body = reqwest::Body::wrap_stream(futures::stream::once(async move {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                Ok::<_, std::io::Error>(initialize)
+            }));
+            client
+                .post(&endpoint)
+                .bearer_auth("secret")
+                .header("accept", "application/json, text/event-stream")
+                .header("content-type", "application/json")
+                .header("mcp-protocol-version", "2025-11-25")
+                .body(body)
+                .send()
+                .await
+                .unwrap()
+                .status()
+        }));
+    }
+    let mut statuses = Vec::new();
+    for attempt in attempts {
+        statuses.push(attempt.await.unwrap().as_u16());
+    }
+    assert_eq!(
+        statuses.iter().filter(|s| **s == 200).count(),
+        CAP,
+        "{statuses:?}"
+    );
+    assert_eq!(
+        statuses.iter().filter(|s| **s == 503).count(),
+        EXTRA,
+        "{statuses:?}"
+    );
+    server.close().await;
+    handle.abort();
+}

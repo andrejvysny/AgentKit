@@ -30,6 +30,15 @@ pub fn build_responses_request(
     identity: &ConnectionIdentity,
     account: bool,
 ) -> Result<Value, CoreError> {
+    build_responses_request_with_warnings(input, identity, account).map(|(body, _)| body)
+}
+/// Like [`build_responses_request`], also returning one message per tool that
+/// was left out of the request because its schema is unsupported.
+pub fn build_responses_request_with_warnings(
+    input: &ChatRequest,
+    identity: &ConnectionIdentity,
+    account: bool,
+) -> Result<(Value, Vec<String>), CoreError> {
     if account && (input.temperature.is_some() || input.max_output_tokens.is_some()) {
         return Err(CoreError::responses("unsupported_parameter"));
     }
@@ -56,7 +65,7 @@ pub fn build_responses_request(
         .map(|message| content::text(message, true))
         .collect::<Result<Vec<_>, _>>()?
         .join("\n\n");
-    let tools = tools(input)?;
+    let (tools, warnings) = tools(input)?;
     let mut body = json!({"model":input.model,"input":items,"stream":true,"store":false,"include":["reasoning.encrypted_content"]});
     if !instructions.is_empty() {
         body["instructions"] = instructions.into();
@@ -71,7 +80,7 @@ pub fn build_responses_request(
         body["max_output_tokens"] = value.into();
     }
     bounded(&body)?;
-    Ok(body)
+    Ok((body, warnings))
 }
 fn check_state(
     state: &State,
@@ -223,9 +232,10 @@ fn map_messages(messages: &[ChatMessage]) -> Result<Vec<Value>, CoreError> {
     }
     Ok(items)
 }
-fn tools(input: &ChatRequest) -> Result<Vec<Value>, CoreError> {
+fn tools(input: &ChatRequest) -> Result<(Vec<Value>, Vec<String>), CoreError> {
     let mut seen = std::collections::HashSet::new();
     let mut functions = vec![];
+    let mut warnings = vec![];
     for tool in &input.tools {
         if tool.name.is_empty()
             || tool.name.len() > 64
@@ -237,21 +247,68 @@ fn tools(input: &ChatRequest) -> Result<Vec<Value>, CoreError> {
         {
             return Err(CoreError::responses("unsupported_tool"));
         }
-        validate_schema(&tool.input_schema, 0)?;
-        if tool.input_schema["type"] != "object"
-            || agentkit_contracts::compile_tool_schema(&tool.input_schema).is_err()
-        {
-            return Err(CoreError::responses("unsupported_tool_schema"));
-        }
-        functions.push(json!({"type":"function","name":tool.name,"description":tool.description,"parameters":agentkit_contracts::javascript_json_value(&tool.input_schema),"strict":false}));
+        // One tool with an exotic schema (common with MCP servers) must not
+        // fail the whole turn: leave it out and tell the run.
+        let Some(schema) = supported_schema(&tool.input_schema) else {
+            warnings.push(format!(
+                "Tool {} was excluded from the request: its input schema is not supported.",
+                tool.name
+            ));
+            continue;
+        };
+        functions.push(json!({"type":"function","name":tool.name,"description":tool.description,"parameters":agentkit_contracts::javascript_json_value(&schema),"strict":false}));
     }
-    Ok(if functions.is_empty() {
+    let tools = if functions.is_empty() {
         vec![]
     } else {
         vec![
             json!({"type":"namespace","name":"agentkit","description":"Tools supplied by the application.","tools":functions}),
         ]
-    })
+    };
+    Ok((tools, warnings))
+}
+fn supported_schema(schema: &Value) -> Option<Value> {
+    let mut schema = schema.clone();
+    strip_annotations(&mut schema);
+    (validate_schema(&schema, 0).is_ok()
+        && schema["type"] == "object"
+        && agentkit_contracts::compile_tool_schema(&schema).is_ok())
+    .then_some(schema)
+}
+/// Drops annotation-only keywords at schema positions. Property names under
+/// `properties` are data, not keywords, so only the subschemas are visited.
+fn strip_annotations(schema: &mut Value) {
+    const ANNOTATIONS: &[&str] = &[
+        "$schema",
+        "$id",
+        "$comment",
+        "examples",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+    ];
+    let Some(map) = schema.as_object_mut() else {
+        return;
+    };
+    for key in ANNOTATIONS {
+        map.remove(*key);
+    }
+    for (key, value) in map.iter_mut() {
+        match key.as_str() {
+            "properties" => {
+                if let Some(children) = value.as_object_mut() {
+                    children.values_mut().for_each(strip_annotations);
+                }
+            }
+            "items" | "additionalProperties" => strip_annotations(value),
+            "anyOf" | "oneOf" | "allOf" => {
+                if let Some(children) = value.as_array_mut() {
+                    children.iter_mut().for_each(strip_annotations);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 fn validate_schema(schema: &Value, depth: usize) -> Result<(), CoreError> {
     let schema = schema
@@ -283,6 +340,8 @@ fn validate_schema(schema: &Value, depth: usize) -> Result<(), CoreError> {
         "allOf",
         "const",
         "title",
+        "format",
+        "pattern",
     ];
     for (key, value) in schema {
         if !KEYS.contains(&key.as_str()) {

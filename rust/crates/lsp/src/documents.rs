@@ -5,7 +5,7 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
 
 use crate::error::{INVALID_FILE, err};
+use crate::positions::{LineIndex, lsp_to_tool};
 use crate::uri::{path_to_uri, uri_to_path};
 
 /// What the server must be told about a document before a request runs.
@@ -39,6 +40,9 @@ struct DocState {
     path: PathBuf,
     version: i64,
     hash: [u8; 32],
+    /// The text the server was last told about; position conversion must
+    /// use exactly this, not whatever is on disk by now.
+    text: Arc<str>,
 }
 
 /// One store per server generation: opened documents and the latest
@@ -85,6 +89,7 @@ impl DocumentStore {
                         path: path.to_path_buf(),
                         version: 1,
                         hash,
+                        text: Arc::from(text.as_str()),
                     },
                 );
                 self.published.lock().expect("published lock").remove(&uri);
@@ -101,6 +106,7 @@ impl DocumentStore {
             Some(state) => {
                 state.version += 1;
                 state.hash = hash;
+                state.text = Arc::from(text.as_str());
                 self.published.lock().expect("published lock").remove(&uri);
                 Ok(SyncAction::Changed {
                     uri,
@@ -120,6 +126,15 @@ impl DocumentStore {
             .map(|d| d.version)
     }
 
+    /// The text most recently synced for `uri`, for position conversion.
+    pub fn text(&self, uri: &str) -> Option<Arc<str>> {
+        self.docs
+            .lock()
+            .expect("docs lock")
+            .get(uri)
+            .map(|d| Arc::clone(&d.text))
+    }
+
     pub fn opened_uris(&self) -> Vec<(String, PathBuf)> {
         self.docs
             .lock()
@@ -135,7 +150,20 @@ impl DocumentStore {
     /// this bound.
     const MAX_PUBLISHED_ITEMS: usize = 2_000;
 
-    pub fn record_publish(&self, uri: &str, mut items: Vec<Value>) {
+    pub fn record_publish(&self, uri: &str, items: Vec<Value>) {
+        self.record_publish_versioned(uri, None, items);
+    }
+
+    /// Like [`Self::record_publish`], honouring the optional
+    /// `PublishDiagnosticsParams.version`: a push for a document version
+    /// older than the one we hold is stale (the server analysed text we
+    /// have since replaced) and is dropped.
+    pub fn record_publish_versioned(&self, uri: &str, version: Option<i64>, mut items: Vec<Value>) {
+        if let (Some(pushed), Some(current)) = (version, self.version(uri))
+            && pushed < current
+        {
+            return;
+        }
         if items.len() > Self::MAX_PUBLISHED_ITEMS {
             items.truncate(Self::MAX_PUBLISHED_ITEMS);
         }
@@ -222,6 +250,18 @@ pub fn resolve_confined(root_canon: &Path, raw: &str) -> Result<PathBuf, agentki
 /// Render LSP diagnostic items to the normalized tool shape
 /// `{file,line,character,endLine?,endCharacter?,severity,code?,source?,message}`.
 pub fn normalize_diagnostics(uri: &str, items: &[Value]) -> Vec<Value> {
+    normalize_diagnostics_with_text(uri, items, None)
+}
+
+/// [`normalize_diagnostics`] with the document text the server analysed:
+/// UTF-16 columns become 1-based scalar columns. Without text the raw
+/// offsets are reported.
+pub fn normalize_diagnostics_with_text(
+    uri: &str,
+    items: &[Value],
+    text: Option<Arc<str>>,
+) -> Vec<Value> {
+    let index = text.map(LineIndex::new);
     let file = uri_to_path(uri)
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| uri.to_owned());
@@ -232,20 +272,16 @@ pub fn normalize_diagnostics(uri: &str, items: &[Value]) -> Vec<Value> {
             let start = range.get("start")?;
             let mut out = serde_json::Map::new();
             out.insert("file".into(), json!(file));
-            out.insert(
-                "line".into(),
-                json!(start.get("line").and_then(Value::as_i64).unwrap_or(0) + 1),
-            );
-            out.insert(
-                "character".into(),
-                json!(start.get("character").and_then(Value::as_i64).unwrap_or(0) + 1),
-            );
+            let (line, character) = lsp_to_tool(index.as_ref(), start);
+            out.insert("line".into(), json!(line));
+            out.insert("character".into(), json!(character));
             if let Some(end) = range.get("end") {
-                if let Some(line) = end.get("line").and_then(Value::as_i64) {
-                    out.insert("endLine".into(), json!(line + 1));
+                let (line, character) = lsp_to_tool(index.as_ref(), end);
+                if end.get("line").and_then(Value::as_i64).is_some() {
+                    out.insert("endLine".into(), json!(line));
                 }
-                if let Some(ch) = end.get("character").and_then(Value::as_i64) {
-                    out.insert("endCharacter".into(), json!(ch + 1));
+                if end.get("character").and_then(Value::as_i64).is_some() {
+                    out.insert("endCharacter".into(), json!(character));
                 }
             }
             out.insert(
@@ -308,6 +344,39 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert_eq!(store.version(&path_to_uri(&path)), Some(2));
+    }
+
+    #[test]
+    fn stale_versioned_publish_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocumentStore::new();
+        let path = write(dir.path(), "a.rs", "fn a() {}");
+        let uri = path_to_uri(&path);
+        store.ensure(&path).unwrap();
+        std::fs::write(&path, "fn a() { 1 }").unwrap();
+        store.ensure(&path).unwrap(); // now version 2
+        let item =
+            |message: &str| json!({"range":{"start":{"line":0,"character":0}},"message":message});
+        store.record_publish_versioned(&uri, Some(1), vec![item("stale")]);
+        assert!(store.published(&uri).is_none(), "version 1 < 2 is stale");
+        store.record_publish_versioned(&uri, Some(2), vec![item("fresh")]);
+        assert_eq!(store.published(&uri).unwrap()[0]["message"], "fresh");
+        // A push without a version is accepted as before.
+        store.record_publish_versioned(&uri, None, vec![item("unversioned")]);
+        assert_eq!(store.published(&uri).unwrap()[0]["message"], "unversioned");
+    }
+
+    #[test]
+    fn diagnostics_columns_follow_the_document_text() {
+        // "a😀b": `b` is UTF-16 offset 3, scalar column 2 (1-based 3).
+        let items = vec![json!({"range":{"start":{"line":0,"character":3},
+                                          "end":{"line":0,"character":4}},"message":"m"})];
+        let norm =
+            normalize_diagnostics_with_text("file:///tmp/e.rs", &items, Some(Arc::from("a😀b")));
+        assert_eq!(norm[0]["character"], 3);
+        assert_eq!(norm[0]["endCharacter"], 4);
+        let raw = normalize_diagnostics("file:///tmp/e.rs", &items);
+        assert_eq!(raw[0]["character"], 4);
     }
 
     #[test]

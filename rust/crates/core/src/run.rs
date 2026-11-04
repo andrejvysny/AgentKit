@@ -149,9 +149,15 @@ struct State {
     continuation: Option<Value>,
     applied_steers: HashSet<String>,
 }
+/// How long a terminal/usage event may wait for a full channel after the run
+/// was cancelled.
+const TERMINAL_SEND_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Default)]
 struct Turn {
     delta: String,
+    /// A completed message was seen (a tool-call-only message completes with
+    /// `content: null`, so `content` cannot witness completion).
+    completed: bool,
     content: Option<String>,
     calls: Vec<ToolCall>,
     requested: Vec<ToolCall>,
@@ -198,7 +204,29 @@ impl State {
         }
         self.seq += 1;
         self.pending_messages.clear();
-        if self.sender.send(event).await.is_ok() {
+        let sent = if matches!(
+            kind,
+            "run.cancelled" | "run.failed" | "run.completed" | "run.usage"
+        ) {
+            // Terminal and billing events are what cancellation exists to
+            // report: never lose them to the token that already fired. A
+            // gone consumer still ends this quickly (send errors).
+            match self.sender.try_send(event) {
+                Ok(()) => true,
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(event)) => self
+                    .sender
+                    .send_timeout(event, TERMINAL_SEND_TIMEOUT)
+                    .await
+                    .is_ok(),
+            }
+        } else {
+            tokio::select! { biased;
+                sent = self.sender.send(event) => sent.is_ok(),
+                _ = self.options.cancellation.cancelled() => false,
+            }
+        };
+        if sent {
             if let Some(gate) = &self.options.event_gate {
                 gate.wait(&self.options.cancellation).await;
             }
@@ -486,6 +514,9 @@ impl State {
             };
             if let Err(error) = self.check() {
                 provider_cancellation.cancel();
+                if usage_cleanup {
+                    self.flush_usage(&mut stream).await?;
+                }
                 return Err(error);
             }
             let event = event?;
@@ -515,7 +546,7 @@ impl State {
             }
             self.provider_event(&mut turn, event).await?;
         }
-        if budget.is_some() && turn.content.is_none() {
+        if !turn.completed {
             return Err(CoreError::new(
                 "incomplete_stream",
                 "Provider stream ended without a completed response",
@@ -545,6 +576,7 @@ impl State {
                 finish_reason,
             } => {
                 self.emit("run.message.completed",json!({"content":content,"toolCallCount":tool_calls.len(),"toolCalls":tool_calls,"finishReason":finish_reason})).await?;
+                turn.completed = true;
                 turn.content = Some(content);
                 turn.calls = tool_calls;
                 turn.finish = finish_reason;
@@ -558,7 +590,11 @@ impl State {
                 if code == "tool_call_unparseable" {
                     turn.saw_no_tool_warning = true;
                 }
-                if code != "multimodal_flattened" || self.iteration == 1 {
+                if !matches!(
+                    code.as_str(),
+                    "multimodal_flattened" | "tool_schema_unsupported"
+                ) || self.iteration == 1
+                {
                     self.warning(&code, &message).await?;
                 }
             }
@@ -572,6 +608,7 @@ impl State {
             | ProviderEvent::RetryBackoff(_) => {}
             ProviderEvent::Event { kind, data } => {
                 if kind == "run.message.completed" {
+                    turn.completed = true;
                     turn.content = data["content"].as_str().map(str::to_owned);
                     turn.finish = data["finishReason"].as_str().unwrap_or("").into();
                     turn.calls =
@@ -623,6 +660,7 @@ impl State {
                     self.cancel_suspended(&held).await?;
                 }
             }
+            let mut executed = false;
             let outcome = if self.options.cancellation.is_cancelled() || cancelled {
                 cancelled = true;
                 tool_execution::failed(
@@ -679,6 +717,7 @@ impl State {
                         json!({"phase":"guard", "retryable":false}),
                     )
                 } else {
+                    executed = true;
                     tool_execution::execute(
                         registry,
                         call,
@@ -716,7 +755,7 @@ impl State {
                     outcome
                 }
             };
-            if self.interrupted() {
+            if !executed && self.interrupted() {
                 // Stop without failing the calls that never ran: the resumed
                 // attempt replays the unanswered ones against receipts.
                 return Ok(());
@@ -762,6 +801,10 @@ impl State {
             self.emit(outcome.kind, outcome.data).await?;
             if !cancelled && self.options.hooks.is_some() {
                 self.observe("onToolResult", json!({"runId":self.run_id,"step":self.iteration,"toolCallId":call.id,"toolName":call.name,"status":status,"errorCode":error_code})).await?;
+            }
+            if executed && self.interrupted() {
+                // The finished outcome is recorded above; now stop.
+                return Ok(());
             }
         }
         if let Some((spec, call)) = pending_suspension {

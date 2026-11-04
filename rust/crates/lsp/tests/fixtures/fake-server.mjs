@@ -6,6 +6,7 @@
 //   LSP_FAKE_SILENT=<method>   same as hang (alias)
 // Everything else is answered from canned, deterministic payloads.
 import fs from "node:fs";
+import { spawn } from "node:child_process";
 
 let buffer = Buffer.alloc(0);
 const pendingChunks = [];
@@ -78,6 +79,12 @@ function onMessage(message) {
     case "initialize":
       if (process.env.LSP_FAKE_EXIT_EARLY === "1") process.exit(1);
       if (hangOn === method) return;
+      if (process.env.LSP_FAKE_GRANDCHILD) {
+        // A helper in the server's own process group, like a proc-macro
+        // server: it must not outlive the generation.
+        const helper = spawn("sleep", ["300"], { stdio: "ignore" });
+        fs.writeFileSync(process.env.LSP_FAKE_GRANDCHILD, String(helper.pid));
+      }
       reply(id, {
         capabilities: {
           ...(process.env.LSP_FAKE_PULL === "1"
