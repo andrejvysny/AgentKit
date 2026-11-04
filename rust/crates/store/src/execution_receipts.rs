@@ -392,7 +392,14 @@ pub fn insert_barrier(
             "an uncertainty barrier needs a barrier id, tool name, reason and a well-formed argument hash".into(),
         ));
     }
-    let changes = db.execute(
+    // An upsert that updates reports one change just like an insert does, so
+    // existence is read first or a re-import would count the barrier twice.
+    let existed: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM uncertainty_barriers WHERE barrier_id=?)",
+        [&barrier.barrier_id],
+        |row| row.get(0),
+    )?;
+    db.execute(
         "INSERT INTO uncertainty_barriers(barrier_id,chat_id,run_id,tool_name,args_sha256,args_hash_provenance,reason) \
          VALUES(?,?,?,?,?,?,?) ON CONFLICT(barrier_id) DO UPDATE SET \
          chat_id=COALESCE(uncertainty_barriers.chat_id, excluded.chat_id), \
@@ -411,7 +418,7 @@ pub fn insert_barrier(
             barrier.reason,
         ],
     )?;
-    Ok(changes == 1)
+    Ok(!existed)
 }
 
 /// The deterministic barrier id: sha-256 over the best-known identity of
@@ -596,8 +603,11 @@ impl SqliteStore {
                 Ok(changes) => changes == 1,
                 // The UNIQUE approval index fired: this authorization is
                 // already consumed by another execution.
+                // Only the UNIQUE code: any other constraint failure is a
+                // real defect and must surface, not read as "already consumed".
                 Err(rusqlite::Error::SqliteFailure(failure, _))
-                    if failure.code == rusqlite::ErrorCode::ConstraintViolation =>
+                    if failure.code == rusqlite::ErrorCode::ConstraintViolation
+                        && failure.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
                 {
                     false
                 }
@@ -716,5 +726,32 @@ impl SqliteStore {
     ) -> Result<Vec<UncertaintyBarrierRecord>, StoreError> {
         self.call(move |db| select_barriers(db, &chat_id, &run_id))
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inserting_the_same_barrier_twice_counts_it_once() {
+        let (db, _) = crate::schema::open(std::path::Path::new(":memory:")).unwrap();
+        let barrier = UncertaintyBarrierRecord {
+            barrier_id: barrier_id_of(Some("exec"), Some("run"), "write_file", None),
+            chat_id: None,
+            run_id: Some("run".into()),
+            tool_name: "write_file".into(),
+            args_sha256: None,
+            args_hash_provenance: ArgsHashProvenance::Canonical,
+            reason: "unplaceable".into(),
+        };
+        assert!(insert_barrier(&db, &barrier).unwrap());
+        assert!(!insert_barrier(&db, &barrier).unwrap());
+        let rows: i64 = db
+            .query_row("SELECT count(*) FROM uncertainty_barriers", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 }

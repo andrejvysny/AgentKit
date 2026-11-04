@@ -40,6 +40,16 @@ fn fence_by_token(db: &Connection, task_id: &str, lease_token: &str, now: i64) -
         .ok_or_else(|| StoreError::LeaseLost(task_id.to_owned()))
 }
 
+fn lease_by_token(db: &Connection, lease_token: &str) -> Result<Option<Lease>> {
+    Ok(select::<Lease>(
+        db,
+        "SELECT record FROM leases WHERE json_extract(record,'$.leaseToken')=? LIMIT 1",
+        [lease_token],
+    )?
+    .into_iter()
+    .next())
+}
+
 impl SqliteStore {
     /// Compare-and-set a task status against the shared transition table,
     /// applying the patch in the same write. With a lease token the write is
@@ -89,6 +99,11 @@ impl SqliteStore {
                 task.payload = payload;
             }
             save(&transaction, &task)?;
+            // A terminal or interrupted task owns nothing: a lease left behind
+            // would let a later recovery pass restate finished work as a crash.
+            if to.is_terminal() || to == TaskStatus::Interrupted {
+                transaction.execute("DELETE FROM leases WHERE task_id=?", [&task_id])?;
+            }
             transaction.commit()?;
             Ok(task)
         })
@@ -115,7 +130,10 @@ impl SqliteStore {
             if get::<AttemptRecord>(&transaction, "attempts", "id", &attempt_id)?.is_some() {
                 return Err(StoreError::Duplicate(attempt_id));
             }
-            task.attempt_count += 1;
+            task.attempt_count = task
+                .attempt_count
+                .checked_add(1)
+                .ok_or_else(|| StoreError::InvalidInput("attempt count overflow".into()))?;
             let attempt = AttemptRecord {
                 attempt_id,
                 task_id: task.task_id.clone(),
@@ -180,7 +198,10 @@ impl SqliteStore {
             )?;
             if status == "abandoned" {
                 let mut task: TaskRecord = required(&transaction, "tasks", "id", &attempt.task_id)?;
-                task.poison_count += 1;
+                task.poison_count = task
+                    .poison_count
+                    .checked_add(1)
+                    .ok_or_else(|| StoreError::InvalidInput("poison count overflow".into()))?;
                 save(&transaction, &task)?;
             }
             transaction.commit()?;
@@ -247,32 +268,31 @@ impl SqliteStore {
 
     /// Delete every task in a scope — with its events, leases, attempts, and
     /// lifecycle outbox rows — refusing with `ScopeBusy` while anything in
-    /// the scope is running or waiting approval. The check and the deletes
+    /// the scope is running, waiting approval, or interrupted. The check and the deletes
     /// are one transaction: no caller can slip a claim between them.
     pub async fn delete_by_scope(&self, scope_id: &str) -> Result<usize> {
         let scope_id = scope_id.to_owned();
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
-            let tasks: Vec<TaskRecord> = all::<TaskRecord>(&transaction, "tasks")?
-                .into_iter()
-                .filter(|task| task.scope_id == scope_id)
-                .collect();
+            let tasks: Vec<TaskRecord> = select(
+                &transaction,
+                "SELECT record FROM tasks WHERE scope=? ORDER BY rowid",
+                [&scope_id],
+            )?;
             if tasks.iter().any(|task| {
                 matches!(
                     task.status,
-                    TaskStatus::Running | TaskStatus::WaitingApproval
+                    TaskStatus::Running | TaskStatus::WaitingApproval | TaskStatus::Interrupted
                 )
             }) {
                 return Err(StoreError::ScopeBusy(scope_id));
             }
             let mut removed = 0;
             for task in tasks {
-                for outbox in all::<OutboxRecord>(&transaction, "outbox")?
-                    .into_iter()
-                    .filter(|record| record.run_id.as_deref() == Some(task.task_id.as_str()))
-                {
-                    transaction.execute("DELETE FROM outbox WHERE id=?", [outbox.id])?;
-                }
+                transaction.execute(
+                    "DELETE FROM outbox WHERE json_extract(record,'$.runId')=?",
+                    [&task.task_id],
+                )?;
                 transaction.execute("DELETE FROM tasks WHERE id=?", [&task.task_id])?;
                 removed += 1;
             }
@@ -300,6 +320,10 @@ impl SqliteStore {
             }
             task.dead_lettered_at = Some(now);
             task.dead_letter_reason = Some(reason);
+            // The lease stays: the marker is not a status change, and the live
+            // attempt still lands its own terminal write under this lease
+            // (port conformance "fenced terminal write"); the terminal
+            // transition is what drops it.
             save(&transaction, &task)?;
             transaction.commit()?;
             Ok(task)
@@ -318,9 +342,7 @@ impl SqliteStore {
         let lease_token = lease_token.to_owned();
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
-            let mut lease: Lease = all::<Lease>(&transaction, "leases")?
-                .into_iter()
-                .find(|lease| lease.lease_token == lease_token)
+            let mut lease: Lease = lease_by_token(&transaction, &lease_token)?
                 .ok_or_else(|| StoreError::LeaseLost(lease_token.clone()))?;
             if lease.expires_at <= now {
                 return Err(StoreError::LeaseLost(lease.task_id));
@@ -342,9 +364,7 @@ impl SqliteStore {
         let lease_token = lease_token.to_owned();
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
-            let lease: Option<Lease> = all::<Lease>(&transaction, "leases")?
-                .into_iter()
-                .find(|lease| lease.lease_token == lease_token);
+            let lease = lease_by_token(&transaction, &lease_token)?;
             let Some(lease) = lease else {
                 return Err(StoreError::LeaseLost(lease_token));
             };

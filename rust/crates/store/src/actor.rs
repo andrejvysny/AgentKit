@@ -1,6 +1,7 @@
 use crate::{Result, StoreError, deadline::Deadlines, schema, transaction::TransactionScope};
 use rusqlite::Connection;
 use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     sync::{
         Arc,
@@ -46,6 +47,28 @@ impl Drop for Worker {
     }
 }
 
+/// A panicking job can leave a transaction open; the next job must not
+/// inherit it.
+fn rollback_if_open(connection: &Connection) {
+    if !connection.is_autocommit() {
+        let _ = connection.execute_batch("ROLLBACK");
+    }
+}
+
+pub(crate) fn scope_aborted() -> StoreError {
+    StoreError::Internal(
+        "transaction scope aborted: an operation panicked and rolled it back".into(),
+    )
+}
+
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_owned())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "store job panicked".into())
+}
+
 /// Clones share one actor and database ownership lock.
 #[derive(Clone)]
 pub struct SqliteStore {
@@ -63,6 +86,8 @@ impl std::fmt::Debug for SqliteStore {
     }
 }
 impl SqliteStore {
+    /// `capacity` is reserved: the actor queue is unbounded today, so the
+    /// value is only validated (must be positive) and kept for API stability.
     pub fn open(path: impl AsRef<Path>, capacity: usize) -> Result<Self> {
         if capacity == 0 {
             return Err(StoreError::InvalidInput(
@@ -78,7 +103,11 @@ impl SqliteStore {
             .spawn(move || {
                 let _ownership = lock;
                 while let Some(job) = receiver.blocking_recv() {
-                    job(&mut connection);
+                    // `call` jobs catch their own panics to answer the caller;
+                    // this net keeps the actor alive for any other job.
+                    if catch_unwind(AssertUnwindSafe(|| job(&mut connection))).is_err() {
+                        rollback_if_open(&connection);
+                    }
                 }
             })?;
         Ok(Self {
@@ -168,9 +197,30 @@ impl SqliteStore {
         };
         let (sender, receiver) = oneshot::channel();
         let worker = self.worker.clone();
+        let scope = self.scope.clone();
         let job = Box::new(move |connection: &mut Connection| {
             crate::transaction::take_cleanup_failure();
-            let mut result = operation(connection);
+            if scope.as_ref().is_some_and(|scope| scope.is_failed()) {
+                drop(permit);
+                let _ = sender.send(Err(scope_aborted()));
+                return;
+            }
+            // Read BEFORE the job runs: an ambient transaction is already
+            // open here, and a bare ROLLBACK must not be mistaken for the
+            // job's own cleanup.
+            let was_autocommit = connection.is_autocommit();
+            let mut result = match catch_unwind(AssertUnwindSafe(|| operation(connection))) {
+                Ok(result) => result,
+                Err(panic) => {
+                    rollback_if_open(connection);
+                    if !was_autocommit && let Some(scope) = &scope {
+                        // The outer transaction is gone; every later job of
+                        // this scope must fail rather than autocommit.
+                        scope.mark_failed();
+                    }
+                    Err(StoreError::Internal(panic_message(panic.as_ref())))
+                }
+            };
             if crate::transaction::take_cleanup_failure() {
                 worker.poisoned.store(true, Ordering::Release);
                 if result.is_ok() {
@@ -191,6 +241,9 @@ impl SqliteStore {
             if !state.active {
                 return Err(StoreError::TransactionScopeExpired);
             }
+            if state.failed {
+                return Err(scope_aborted());
+            }
             self.worker.send(job)?;
         } else {
             self.worker.send(job)?;
@@ -201,5 +254,83 @@ impl SqliteStore {
         let result = self.call(|_| Ok(())).await;
         let releases = self.worker.deadlines.flush_releases().await;
         result.and(releases)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_panicking_job_rolls_back_replies_internal_and_keeps_the_actor_alive() {
+        let store = SqliteStore::memory(2).unwrap();
+        let error = store
+            .call(|db| -> Result<()> {
+                db.execute_batch("BEGIN; CREATE TABLE ghost(x);")?;
+                panic!("boom");
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, StoreError::Internal(message) if message == "boom"),
+            "{error:?}"
+        );
+        // The open transaction was rolled back, so the table never existed,
+        // and the next job runs normally.
+        let exists = store
+            .call(|db| {
+                Ok(db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='ghost')",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert!(!exists);
+        store.flush().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_panic_inside_an_ambient_transaction_aborts_the_whole_scope() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteStore::open(directory.path().join("scope.db"), 2).unwrap();
+        let transaction = store.begin_transaction().await.unwrap();
+        let view = transaction.view();
+        view.call(|db| {
+            Ok(db.execute_batch("CREATE TABLE partial(x); INSERT INTO partial VALUES(1);")?)
+        })
+        .await
+        .unwrap();
+        let error = view
+            .call(|_| -> Result<()> { panic!("mid-scope") })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Internal(_)), "{error:?}");
+        // Later scope jobs must fail instead of autocommitting piecemeal.
+        let later = view
+            .call(|db| Ok(db.execute_batch("INSERT INTO partial VALUES(2);")?))
+            .await;
+        assert!(matches!(later, Err(StoreError::Internal(_))), "{later:?}");
+        assert!(transaction.commit().await.is_err());
+        // The worker is healthy and nothing from the scope persisted.
+        let exists = store
+            .call(|db| {
+                Ok(db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='partial')",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert!(!exists);
+        store
+            .begin_transaction()
+            .await
+            .unwrap()
+            .rollback()
+            .await
+            .unwrap();
     }
 }

@@ -12,9 +12,11 @@
 //! validation, ordering, and atomicity; the binding port and the HTTP lane
 //! are thin arms over these methods.
 //!
-//! No secrets live in these tables. Connection configs keep their
-//! credential-shaped `transport.env`/`transport.headers` values redacted on
-//! every read path, and `secretRefs` entries are refused outright on save —
+//! `connector_connections` DOES hold secrets: `transport.env`/
+//! `transport.headers` values are stored in plaintext in the record JSON and
+//! are masked (`***`) only on read paths. Saving a record whose value is the
+//! mask keeps the stored value, so a get -> save round trip is lossless.
+//! `secretRefs` entries are refused outright on save —
 //! the binding's deny-all posture (`docs/rust/native-binding-milestone.md`
 //! "Open gaps": no OAuth, deny-all secret resolution) never accepts a
 //! reference it cannot resolve. Connection lifecycle (connect/reconnect/
@@ -725,6 +727,48 @@ pub fn validate_connection_config(config: &Value) -> Result<String> {
     normalize_server_alias(object["alias"].as_str().expect("validated"))
 }
 
+/// Placeholder every read path shows in place of a credential-shaped value.
+const REDACTED: &str = "***";
+
+/// A client that read a record back (values masked) and saves it again sends
+/// the mask, not the secret. Any `transport.env` / `transport.headers` value
+/// equal to the mask keeps the value already stored under the same key, so a
+/// get -> save round trip never overwrites a credential with `***`.
+///
+/// The stored secret is only ever restored toward the endpoint it was stored
+/// for: if the transport kind, url, command or args changed, restoring it
+/// would let a masked save exfiltrate the credential to a new destination, so
+/// that save is refused and the caller must re-enter the secrets.
+fn keep_redacted_secrets(old: &Value, config: &mut Map<String, Value>) -> Result<()> {
+    let Some(transport) = config.get_mut("transport").and_then(Value::as_object_mut) else {
+        return Ok(());
+    };
+    let old_transport = &old["config"]["transport"];
+    let same_endpoint = ["kind", "url", "command", "args"]
+        .iter()
+        .all(|key| transport.get(*key) == old_transport.get(*key));
+    for field in ["env", "headers"] {
+        let Some(bag) = transport.get_mut(field).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for (key, entry) in bag.iter_mut() {
+            if entry.as_str() != Some(REDACTED) {
+                continue;
+            }
+            let Some(stored) = old_transport[field].get(key) else {
+                continue;
+            };
+            if !same_endpoint {
+                return Err(StoreError::InvalidInput(
+                    "re-enter secrets when changing the endpoint".into(),
+                ));
+            }
+            *entry = stored.clone();
+        }
+    }
+    Ok(())
+}
+
 /// The connection list projection: credential-shaped transport values are
 /// redacted on EVERY read path (`***`), so a managed connection record can
 /// never echo a literal back through the binding or REST.
@@ -742,7 +786,7 @@ pub fn redact_connection(record: &mut Value) {
             .and_then(|value| value.as_object_mut())
         {
             for entry in bag.values_mut() {
-                *entry = Value::String("***".to_owned());
+                *entry = Value::String(REDACTED.to_owned());
             }
         }
     }
@@ -1098,6 +1142,9 @@ impl SqliteStore {
                 .expect("validated")
                 .clone();
             config.insert("alias".into(), Value::String(alias));
+            if let Some((_, text)) = existing.as_ref() {
+                keep_redacted_secrets(&read_stored(text)?, &mut config)?;
+            }
             draft.insert("config".into(), Value::Object(config));
             draft.insert("status".into(), Value::String("disconnected".into()));
             let saved = Value::Object(draft);
@@ -1160,7 +1207,7 @@ impl SqliteStore {
     }
 
     /// `ConnectionService.remove` (the store leg): local deletion always
-    /// takes effect; there is no secret to scrub (this store holds none) and
+    /// takes effect; deleting the row drops its plaintext env/header values and
     /// remote revocation is the documented OAuth reduction refused above
     /// this layer. Unknown ids are a no-op, exactly like the adapter.
     pub async fn delete_connection(&self, id: String) -> Result<()> {
@@ -1752,6 +1799,75 @@ mod tests {
             !stored.contains("***"),
             "durable record is not the redaction"
         );
+    }
+
+    #[tokio::test]
+    async fn saving_a_read_back_record_keeps_the_stored_secrets() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("secrets.db");
+        let store = SqliteStore::open(&path, 4).expect("open");
+        let record = |revision: i64, token: &str| {
+            json!({
+                "id": "c1",
+                "connectorId": "github",
+                "accountId": "acc",
+                "revision": revision,
+                "config": {
+                    "alias": "github",
+                    "transport": {
+                        "kind": "stdio",
+                        "command": "x",
+                        "env": { "TOKEN": token, "OTHER": "plain" },
+                    },
+                },
+            })
+        };
+        store
+            .save_connection(record(1, "real-secret"), None)
+            .await
+            .expect("create");
+        // get -> save: the client echoes the masked values back.
+        let mut echoed = store
+            .get_connection("c1".into())
+            .await
+            .expect("get")
+            .expect("row");
+        assert_eq!(echoed["config"]["transport"]["env"]["TOKEN"], json!("***"));
+        echoed["revision"] = json!(2);
+        // One value is genuinely changed in the same save.
+        echoed["config"]["transport"]["env"]["OTHER"] = json!("changed");
+        store
+            .save_connection(echoed, Some(1))
+            .await
+            .expect("resave");
+        // Pointing the same masked credentials at a new endpoint is refused.
+        let mut hijack = store
+            .get_connection("c1".into())
+            .await
+            .expect("get")
+            .expect("row");
+        hijack["revision"] = json!(3);
+        hijack["config"]["transport"]["command"] = json!("attacker");
+        let refused = store
+            .save_connection(hijack, Some(2))
+            .await
+            .expect_err("exfiltration refused");
+        assert!(
+            refused.to_string().contains("re-enter secrets"),
+            "{refused}"
+        );
+        drop(store);
+        let raw = rusqlite::Connection::open(&path).expect("raw open");
+        let stored: String = raw
+            .query_row(
+                "SELECT record FROM connector_connections WHERE id = 'c1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("stored connection");
+        assert!(stored.contains("real-secret"), "{stored}");
+        assert!(stored.contains("changed"), "{stored}");
+        assert!(!stored.contains("***"), "{stored}");
     }
 
     async fn store_records_of(store: &SqliteStore) -> Vec<String> {

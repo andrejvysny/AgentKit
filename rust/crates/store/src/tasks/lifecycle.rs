@@ -1,5 +1,10 @@
 use super::*;
 
+/// How long a lease-less `running` task may sit untouched before recovery
+/// treats it as orphaned (10 minutes): longer than any port-path window
+/// between a status transition and its lease acquire/release.
+pub(crate) const ORPHAN_GRACE_MS: i64 = 10 * 60 * 1000;
+
 pub(super) fn dead_letter(
     db: &Connection,
     task: &mut TaskRecord,
@@ -235,6 +240,12 @@ impl SqliteStore {
     }
 
     /// Recovery evidence and retry intent are durable before the expired lease disappears.
+    ///
+    /// Intended for startup (or an equivalent quiescent point). Beyond expired
+    /// leases it also sweeps `running` tasks that hold no lease and have shown
+    /// no attempt/start activity for more than [`ORPHAN_GRACE_MS`]; leases on
+    /// tasks that already left `running`/`waiting_approval` are residue and
+    /// are dropped without touching the task.
     pub async fn recover(
         &self,
         now: i64,
@@ -251,6 +262,16 @@ impl SqliteStore {
             let mut recovered = Vec::new();
             for lease in leases.into_iter().filter(|lease| lease.expires_at <= now) {
                 let mut task: TaskRecord = required(&transaction, "tasks", "id", &lease.task_id)?;
+                if !matches!(
+                    task.status,
+                    TaskStatus::Running | TaskStatus::WaitingApproval
+                ) {
+                    // The task already settled, requeued, or was interrupted:
+                    // the lease is residue, and recovering would re-run finished work.
+                    end_running_attempts(&transaction, &task.task_id, now)?;
+                    transaction.execute("DELETE FROM leases WHERE task_id=?", [&task.task_id])?;
+                    continue;
+                }
                 end_attempt(
                     &transaction,
                     &lease,
@@ -258,19 +279,38 @@ impl SqliteStore {
                     now,
                     Some("lease_expired".into()),
                 )?;
-                task.poison_count = task
-                    .poison_count
-                    .checked_add(1)
-                    .ok_or_else(|| StoreError::InvalidInput("poison count overflow".into()))?;
-                recover_task(
-                    &transaction,
-                    &mut task,
-                    now,
-                    max_attempts,
-                    retry_delay_ms,
-                    mode,
-                )?;
+                abandon(&transaction, &mut task, now, max_attempts, retry_delay_ms, mode)?;
                 transaction.execute("DELETE FROM leases WHERE task_id=?", [&task.task_id])?;
+                recovered.push(task);
+            }
+            // A running task with no lease row at all (its lease was dropped
+            // without a settle) is an expired lease by another name. A parked
+            // retry is a legitimate lease-less running state, and so are the
+            // short port-path windows (Queued->Running before the lease is
+            // acquired; the lease released before the terminal transition):
+            // only a task quiet for longer than ORPHAN_GRACE_MS is swept.
+            let orphans: Vec<TaskRecord> = select(
+                &transaction,
+                "SELECT record FROM tasks WHERE status='running' AND id NOT IN (SELECT task_id FROM leases) ORDER BY rowid",
+                [],
+            )?;
+            for mut task in orphans.into_iter().filter(|task| !task.retry_pending) {
+                let attempts: Vec<AttemptRecord> = select(
+                    &transaction,
+                    "SELECT record FROM attempts WHERE task_id=?",
+                    [&task.task_id],
+                )?;
+                let last_activity = attempts
+                    .iter()
+                    .map(|attempt| attempt.started_at)
+                    .chain(task.started_at)
+                    .max()
+                    .unwrap_or(task.enqueued_at);
+                if now.saturating_sub(last_activity) <= ORPHAN_GRACE_MS {
+                    continue;
+                }
+                end_running_attempts(&transaction, &task.task_id, now)?;
+                abandon(&transaction, &mut task, now, max_attempts, retry_delay_ms, mode)?;
                 recovered.push(task);
             }
             transaction.commit()?;
@@ -289,6 +329,40 @@ impl SqliteStore {
         })
         .await
     }
+}
+
+/// Ends every still-running attempt of `task_id` as abandoned.
+fn end_running_attempts(db: &Connection, task_id: &str, now: i64) -> Result<()> {
+    let attempts: Vec<AttemptRecord> = select(
+        db,
+        "SELECT record FROM attempts WHERE task_id=? ORDER BY rowid",
+        [task_id],
+    )?;
+    for mut attempt in attempts.into_iter().filter(|a| a.status == "running") {
+        attempt.status = "abandoned".into();
+        attempt.ended_at = Some(now);
+        attempt.error = Some("lease_expired".into());
+        db.execute(
+            "UPDATE attempts SET record=? WHERE id=?",
+            params![json(db, &attempt)?, attempt.attempt_id],
+        )?;
+    }
+    Ok(())
+}
+
+fn abandon(
+    db: &Connection,
+    task: &mut TaskRecord,
+    now: i64,
+    max_attempts: u32,
+    delay: i64,
+    mode: RecoveryMode,
+) -> Result<()> {
+    task.poison_count = task
+        .poison_count
+        .checked_add(1)
+        .ok_or_else(|| StoreError::InvalidInput("poison count overflow".into()))?;
+    recover_task(db, task, now, max_attempts, delay, mode)
 }
 
 fn recover_task(
