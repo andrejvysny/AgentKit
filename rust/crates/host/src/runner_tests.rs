@@ -283,3 +283,66 @@ async fn runner_claim_steps_over_unrunnable_kinds_without_starving_the_queue() {
         "the dead-kind task outlives every claim attempt, unchanged"
     );
 }
+
+/// Settle plans that always collide with the descriptor fence for one task.
+struct ConflictFor(&'static str);
+#[async_trait::async_trait]
+impl SessionFlushPlanner for ConflictFor {
+    async fn settle_plan(&self, settling: &TaskRecord, _completed: bool) -> HostResult<SettlePlan> {
+        Ok(SettlePlan {
+            // The chat carries no session descriptor, so any expectation
+            // fails the store's atomic descriptor check.
+            expected_descriptor: (settling.task_id == self.0).then(|| json!({"stale": true})),
+            staging: None,
+            convert: vec![],
+        })
+    }
+}
+
+/// A settle conflict that outlasts every re-plan is that ONE task's failure:
+/// the worker logs it, leaves the lease to expire, and keeps claiming.
+#[tokio::test]
+async fn worker_survives_an_exhausted_settle_conflict_and_keeps_claiming() {
+    let store = SqliteStore::memory(16).unwrap();
+    let clock = Arc::new(Clock(AtomicI64::new(1_000)));
+    let ran = Arc::new(AtomicUsize::new(0));
+    let host = AgentHost::new(
+        store.clone(),
+        HashMap::from([(
+            "runnable".to_owned(),
+            Arc::new(Counter(ran.clone())) as Arc<dyn TaskExecutor>,
+        )]),
+        clock,
+        HostOptions {
+            // One slot: "good" can only run if the conflicted task freed it.
+            concurrency: 1,
+            poll_interval_ms: 10,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    host.set_session_flush_planner(Arc::new(ConflictFor("bad")))
+        .await;
+    for id in ["bad", "good"] {
+        store.create_chat(id, None, json!({}), 1_000).await.unwrap();
+        host.submit(queued_task(id, "runnable")).await.unwrap();
+    }
+    let worker = host.start_worker();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while store.get_task("good").await.unwrap().unwrap().status != TaskStatus::Completed {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the worker died on the conflicting task"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(ran.load(Ordering::SeqCst), 2);
+    let bad = store.get_task("bad").await.unwrap().unwrap();
+    assert_eq!(
+        bad.status,
+        TaskStatus::Interrupted,
+        "the conflicted task is parked resumable, not left leased"
+    );
+    assert_eq!(bad.error.as_deref(), Some("settle_conflict"));
+    worker.shutdown().await.expect("worker exits cleanly");
+}

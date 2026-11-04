@@ -3969,3 +3969,49 @@ async fn the_live_compaction_recipe_config_admits_and_compacts() {
         "the compacted view never reached the provider"
     );
 }
+
+/// A pending human request aimed at the cancelled turn must die with it
+/// even when the turn was not observed parked at cancel time.
+#[tokio::test]
+async fn cancel_always_cancels_the_turns_pending_requests() {
+    let f = fixture().await;
+    let AgentSendResult::Turn { turn_id, .. } = f
+        .service
+        .send("s1", &send_input(json!("go"), None, WhenBusy::Reject))
+        .await
+        .unwrap()
+    else {
+        panic!("expected turn")
+    };
+    assert_eq!(
+        f.store.get_task(&turn_id).await.unwrap().unwrap().status,
+        agentkit_store::TaskStatus::Queued,
+        "the turn is not parked"
+    );
+    f.store
+        .create_input(
+            agentkit_store::CreateAgentInput {
+                input_id: "req-1".into(),
+                session_id: "s1".into(),
+                kind: agentkit_store::AgentInputKind::HumanRequest,
+                content: json!({"kind": "approval", "toolName": "write_file"}),
+                content_hash: "h".into(),
+                target_task_id: Some(turn_id.clone()),
+                on_settled: None,
+                attempt_id: Some("attempt".into()),
+                tool_call_id: Some("call".into()),
+                expires_at: None,
+            },
+            1_000,
+        )
+        .await
+        .unwrap();
+    f.service.cancel("s1", &turn_id).await.unwrap();
+    let record = f
+        .store
+        .get_input("req-1".into())
+        .await
+        .unwrap()
+        .expect("request");
+    assert_eq!(record.status, agentkit_store::AgentInputStatus::Cancelled);
+}

@@ -110,6 +110,30 @@ pub struct SubagentService {
     spawn_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
+/// Releases a lease taken during `resume` unless disarmed with `keep`, so
+/// no error path after acquisition can leave the workspace locked.
+struct LeaseRelease {
+    leases: WorkspaceLeaseRegistry,
+    child_chat_id: String,
+    /// The generation this call took; `None` = nothing to release.
+    generation: Option<u64>,
+}
+
+impl LeaseRelease {
+    fn keep(mut self) {
+        self.generation = None;
+    }
+}
+
+impl Drop for LeaseRelease {
+    fn drop(&mut self) {
+        if let Some(generation) = self.generation {
+            self.leases
+                .release_generation(&self.child_chat_id, generation);
+        }
+    }
+}
+
 fn session_error(error: crate::SessionError) -> HostError {
     HostError::Execution(format!("{}: {}", error.code, error.message))
 }
@@ -236,6 +260,16 @@ impl SubagentService {
         let role = config.role(&request.role).cloned().ok_or_else(|| {
             HostError::Execution(format!("unknown_subagent_role: {}", request.role))
         })?;
+        // A host-pinned role model is a ceiling the model-authored request
+        // cannot lift: the role may run on exactly that model.
+        if let (Some(pinned), Some(requested)) = (role.model.as_deref(), request.model.as_deref())
+            && pinned != requested
+        {
+            return Err(HostError::Execution(format!(
+                "model_not_allowed: role {} is pinned to model {pinned}; requested {requested}",
+                role.id
+            )));
+        }
         let parent_task = self
             .store
             .get_task(&request.parent_task_id)
@@ -467,23 +501,7 @@ impl SubagentService {
             // takes the replay branch and returns.
             return Box::pin(self.spawn(request)).await;
         }
-        if self.store.count_active_subagents().await? >= limits.max_concurrency {
-            return Err(HostError::Execution(format!(
-                "subagent_concurrency_limit: {} active children (max {})",
-                limits.max_concurrency, limits.max_concurrency
-            )));
-        }
-        let siblings = self.store.list_subagents(&request.parent_chat_id).await?;
-        let active_siblings = siblings
-            .iter()
-            .filter(|row| !is_terminal_status(&row.status))
-            .count();
-        if active_siblings as i64 >= limits.max_per_parent {
-            return Err(HostError::Execution(format!(
-                "subagent_parent_limit: {} active children for this parent (max {})",
-                active_siblings, limits.max_per_parent
-            )));
-        }
+        self.check_fanout_caps(&request.parent_chat_id).await?;
 
         // Per-role execution limits ride the child chat metadata; the
         // executor reads them at dispatch (`subagents::task_overrides`), so
@@ -582,22 +600,37 @@ impl SubagentService {
                 })?;
         }
 
-        self.store
-            .register_subagent(RegisterSubagent {
-                child_chat_id: child_chat_id.clone(),
-                parent_chat_id: request.parent_chat_id.clone(),
-                parent_task_id: Some(request.parent_task_id.clone()),
-                role: role.id.clone(),
-                depth: depth + 1,
-                prompt: request.prompt.clone(),
-                model: child_model.clone(),
-                now: self.now_ms(),
-                turn_task_id: None,
-            })
+        // Authoritative cap check: count + insert in ONE store job, so a
+        // second process sharing the store cannot slip past the gate's
+        // in-process check→insert window.
+        let registered = self
+            .store
+            .register_subagent_if_under(
+                RegisterSubagent {
+                    child_chat_id: child_chat_id.clone(),
+                    parent_chat_id: request.parent_chat_id.clone(),
+                    parent_task_id: Some(request.parent_task_id.clone()),
+                    role: role.id.clone(),
+                    depth: depth + 1,
+                    prompt: request.prompt.clone(),
+                    model: child_model.clone(),
+                    now: self.now_ms(),
+                    turn_task_id: None,
+                },
+                limits.max_concurrency,
+                limits.max_per_parent,
+            )
             .await
             .inspect_err(|_| {
                 self.leases.release(&child_chat_id);
             })?;
+        if !registered {
+            self.leases.release(&child_chat_id);
+            self.check_fanout_caps(&request.parent_chat_id).await?;
+            return Err(HostError::Execution(
+                "subagent_concurrency_limit: fan-out cap reached during registration".into(),
+            ));
+        }
 
         // Parent-liveness recheck immediately before dispatch: the parent
         // may have settled since the first check, and the settle observer
@@ -764,7 +797,7 @@ impl SubagentService {
                         &SteerInput {
                             content,
                             input_id: Some(input_id),
-                            turn_id: row.turn_task_id.clone(),
+                            turn_id: view.turn_task_id.clone(),
                             on_settled: None,
                         },
                     )
@@ -949,38 +982,56 @@ impl SubagentService {
     /// the assignment after a failed/cancelled one (a fresh turn, so the
     /// durable engine — not this module — owns the new attempt).
     pub async fn resume(&self, child_chat_id: &str, resume_key: &str) -> HostResult<SubagentView> {
+        self.resume_for_parent(child_chat_id, resume_key, None)
+            .await
+    }
+
+    /// [`Self::resume`] on behalf of a live parent turn: a re-dispatch
+    /// rebinds the row to `parent_task_id`, so the orphan reaper judges the
+    /// revived child by the parent that revived it.
+    pub async fn resume_for_parent(
+        &self,
+        child_chat_id: &str,
+        resume_key: &str,
+        parent_task_id: Option<&str>,
+    ) -> HostResult<SubagentView> {
+        // One resume at a time (and never beside a spawn): the row and turn
+        // status are re-read AFTER the gate, so a concurrent resume that
+        // already revived the child makes this one bail as not resumable.
+        let _spawn_gate = self.spawn_gate.lock().await;
         let row = self.require_row(child_chat_id).await?;
-        // A resumed writer re-admits its exclusive lease before its turn
-        // runs again: the lease lapsed when the previous turn settled, and
-        // an unleased resume could mutate beside a fresh exclusive sibling.
-        if let Some(chat) = self.store.get_chat(child_chat_id).await?
-            && chat.metadata["agentkit.subagent"]["exclusive"]
-                .as_bool()
-                .unwrap_or(false)
-        {
-            let root = read_session_descriptor(&chat.metadata).and_then(|descriptor| {
-                descriptor
-                    .get("workspace")?
-                    .get("root")?
-                    .as_str()
-                    .map(str::to_owned)
-            });
-            let ttl = self.config().limits.lease_ttl_ms;
-            self.acquire_lease(root.as_deref(), true, child_chat_id, ttl)?;
-        }
-        let task = match row.turn_task_id.as_deref() {
+        // Re-project first: a stale row must not decide what resumes.
+        let view = self.refresh(&row).await?;
+        let task = match view.turn_task_id.as_deref() {
             Some(turn_id) => self.store.get_task(turn_id).await?,
             None => None,
         };
+        // The turn status is judged BEFORE any lease is taken: only the
+        // paths that actually re-dispatch need the workspace.
         match task.as_ref().map(|task| task.status) {
             Some(TaskStatus::Interrupted) => {
-                let turn_id = row.turn_task_id.clone().expect("checked above");
+                let turn_id = view.turn_task_id.clone().expect("checked above");
+                let lease = self.admit_resume_lease(child_chat_id).await?;
                 self.session
                     .resume(child_chat_id, &turn_id)
                     .await
                     .map_err(session_error)?;
+                lease.keep();
             }
             Some(TaskStatus::Failed) | Some(TaskStatus::Cancelled) => {
+                // A resume is a fresh admission: it runs under the same
+                // gate and the same fan-out caps as `spawn`, so a cancelled
+                // roster cannot be revived past the limits.
+                self.check_resume_admission(&view, parent_task_id).await?;
+                let lease = self.admit_resume_lease(child_chat_id).await?;
+                // Rebind unconditionally and before dispatch: the reaper must
+                // never judge the revived child by the settled original
+                // parent, whatever `follow_up` turns out to do.
+                if let Some(parent_task_id) = parent_task_id {
+                    self.store
+                        .rebind_subagent_parent(child_chat_id, parent_task_id)
+                        .await?;
+                }
                 let input_id = format!(
                     "subresume:{}",
                     &sha256_hex(&format!("{child_chat_id}:{resume_key}"))[..24]
@@ -993,12 +1044,12 @@ impl SubagentService {
                     "Resume your previous assignment after it ended {status}{}.\nContinue from \
                      the current state and complete the original task; report the complete \
                      result.",
-                    row.error
+                    view.error
                         .as_deref()
                         .map(|error| format!(" (error: {error})"))
                         .unwrap_or_default(),
                 );
-                match self
+                let sent = self
                     .session
                     .follow_up(
                         child_chat_id,
@@ -1008,11 +1059,28 @@ impl SubagentService {
                         },
                     )
                     .await
-                    .map_err(session_error)?
-                {
+                    .map_err(session_error)?;
+                // The turn is durably dispatched: from here the lease
+                // belongs to the live child whatever the bookkeeping does.
+                lease.keep();
+                match sent {
                     AgentSendResult::Turn { turn_id, .. } => {
                         self.store
                             .set_subagent_turn(child_chat_id, &turn_id)
+                            .await?;
+                        // Rejoin the active ledger while the gate is still
+                        // held, so the next admission counts this child.
+                        let projected = match self.store.get_task(&turn_id).await? {
+                            Some(task) if task.status == TaskStatus::Queued => "queued",
+                            _ => "running",
+                        };
+                        self.store
+                            .reactivate_subagent_for_parent(
+                                child_chat_id,
+                                projected,
+                                self.now_ms(),
+                                parent_task_id,
+                            )
                             .await?;
                     }
                     AgentSendResult::Queued { .. } => {}
@@ -1032,6 +1100,150 @@ impl SubagentService {
         self.status(child_chat_id).await
     }
 
+    /// The active-roster caps `spawn` enforces, against DURABLE state.
+    /// Callers hold `spawn_gate`.
+    async fn check_fanout_caps(&self, parent_chat_id: &str) -> HostResult<()> {
+        let config = self.config();
+        let limits = &config.limits;
+        if self.store.count_active_subagents().await? >= limits.max_concurrency {
+            return Err(HostError::Execution(format!(
+                "subagent_concurrency_limit: {} active children (max {})",
+                limits.max_concurrency, limits.max_concurrency
+            )));
+        }
+        let siblings = self.store.list_subagents(parent_chat_id).await?;
+        let active_siblings = siblings
+            .iter()
+            .filter(|row| !is_terminal_status(&row.status))
+            .count();
+        if active_siblings as i64 >= limits.max_per_parent {
+            return Err(HostError::Execution(format!(
+                "subagent_parent_limit: {} active children for this parent (max {})",
+                active_siblings, limits.max_per_parent
+            )));
+        }
+        Ok(())
+    }
+
+    /// Admission checks a re-dispatching resume must pass: depth, a live
+    /// caller task (when named), and the fan-out caps.
+    async fn check_resume_admission(
+        &self,
+        view: &SubagentView,
+        parent_task_id: Option<&str>,
+    ) -> HostResult<()> {
+        let max_depth = self.config().limits.max_depth;
+        if view.depth > max_depth {
+            return Err(HostError::Execution(format!(
+                "subagent_depth_exceeded: depth {} exceeds max {max_depth}",
+                view.depth
+            )));
+        }
+        if let Some(parent_task_id) = parent_task_id {
+            let live = self
+                .store
+                .get_task(parent_task_id)
+                .await?
+                .is_some_and(|task| {
+                    task.scope_id == view.parent_chat_id && !task.status.is_terminal()
+                });
+            if !live {
+                return Err(HostError::Execution(
+                    "resume requires the caller's own live turn task".into(),
+                ));
+            }
+        }
+        self.check_fanout_caps(&view.parent_chat_id).await
+    }
+
+    /// A resumed writer re-admits its exclusive lease before its turn runs
+    /// again: the lease lapsed when the previous turn settled, and an
+    /// unleased resume could mutate beside a fresh exclusive sibling. The
+    /// returned guard releases a lease THIS call took if the resume then
+    /// fails; `keep` disarms it on success.
+    async fn admit_resume_lease(&self, child_chat_id: &str) -> HostResult<LeaseRelease> {
+        let mut release = LeaseRelease {
+            leases: self.leases.clone(),
+            child_chat_id: child_chat_id.to_owned(),
+            generation: None,
+        };
+        let Some(chat) = self.store.get_chat(child_chat_id).await? else {
+            return Ok(release);
+        };
+        if !chat.metadata["agentkit.subagent"]["exclusive"]
+            .as_bool()
+            .unwrap_or(false)
+        {
+            return Ok(release);
+        }
+        let root = read_session_descriptor(&chat.metadata).and_then(|descriptor| {
+            descriptor
+                .get("workspace")?
+                .get("root")?
+                .as_str()
+                .map(str::to_owned)
+        });
+        let held_before = root
+            .as_deref()
+            .is_some_and(|root| self.leases.is_held_by(root, child_chat_id, self.now_ms()));
+        let ttl = self.config().limits.lease_ttl_ms;
+        self.acquire_lease(root.as_deref(), true, child_chat_id, ttl)?;
+        if root.is_some() && !held_before {
+            release.generation = self.leases.generation_of(child_chat_id);
+        }
+        Ok(release)
+    }
+
+    /// Rebuild the in-memory exclusive leases from durable state after a
+    /// restart: every active subagent whose chat metadata marks it
+    /// exclusive and whose turn is live (queued/running/waiting approval)
+    /// holds its workspace root again, so a restarted writer never runs
+    /// unleased beside a fresh exclusive sibling. Idempotent; a root a
+    /// foreign child already holds is left alone.
+    pub async fn restore_leases(&self) -> HostResult<usize> {
+        let ttl = self.config().limits.lease_ttl_ms;
+        let mut restored = 0usize;
+        for row in self.store.list_active_subagents().await? {
+            let Some(chat) = self.store.get_chat(&row.child_chat_id).await? else {
+                continue;
+            };
+            if !chat.metadata["agentkit.subagent"]["exclusive"]
+                .as_bool()
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let live = match row.turn_task_id.as_deref() {
+                Some(turn_id) => self.store.get_task(turn_id).await?.is_some_and(|task| {
+                    matches!(
+                        task.status,
+                        TaskStatus::Running | TaskStatus::Queued | TaskStatus::WaitingApproval
+                    )
+                }),
+                None => false,
+            };
+            if !live {
+                continue;
+            }
+            let root = read_session_descriptor(&chat.metadata).and_then(|descriptor| {
+                descriptor
+                    .get("workspace")?
+                    .get("root")?
+                    .as_str()
+                    .map(str::to_owned)
+            });
+            if let Some(root) = root
+                && self
+                    .leases
+                    .try_acquire(Some(&root), true, &row.child_chat_id, self.now_ms(), ttl)
+                    .is_ok()
+            {
+                restored += 1;
+            }
+        }
+        Ok(restored)
+    }
+
     // -- reaping ------------------------------------------------------------------
 
     /// Cancel children whose parent turn already settled. Runs at startup
@@ -1041,6 +1253,9 @@ impl SubagentService {
     pub async fn reap_orphans(&self) -> HostResult<usize> {
         let config = self.config();
         self.leases.expire(self.now_ms());
+        // Startup path: the lease table is memory-only, so re-derive it from
+        // the durable roster before anything is reaped or resumed.
+        self.restore_leases().await?;
         if !config.limits.cancel_orphans {
             return Ok(0);
         }

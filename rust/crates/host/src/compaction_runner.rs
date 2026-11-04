@@ -444,34 +444,52 @@ async fn validate_snapshot(
 
 async fn trim_and_report(
     context: &ExecutionContext,
-    mut entries: Vec<Entry>,
+    entries: Vec<Entry>,
     budget: u64,
 ) -> HostResult<Vec<Entry>> {
-    let tokens = |entries: &[Entry]| {
-        entries
-            .iter()
-            .map(|entry| context_budget::message_tokens(&entry.0))
-            .sum::<u64>()
-    };
+    let (entries, dropped) = trim_entries(entries, budget);
+    if dropped > 0 {
+        let remaining = entries_tokens(&entries);
+        context.emit("run.warning", json!({"code":"context_trimmed","message":format!("Dropped the {dropped} oldest turn(s) to fit the context window; about {remaining} of {budget} budgeted tokens remain in use.")})).await?;
+    }
+    Ok(entries)
+}
+
+fn entries_tokens(entries: &[Entry]) -> u64 {
+    entries
+        .iter()
+        .map(|entry| context_budget::message_tokens(&entry.0))
+        .sum::<u64>()
+}
+
+/// Drop the oldest whole turns until the entries fit `budget`. A leading
+/// compaction summary (id prefix `summary:`) right after the system message
+/// is the only record of everything compacted away: trimming starts AFTER
+/// it, never through it.
+fn trim_entries(mut entries: Vec<Entry>, budget: u64) -> (Vec<Entry>, usize) {
     let system = usize::from(
         entries
             .first()
             .is_some_and(|entry| entry.0.role == "system"),
     );
+    let summary = usize::from(
+        entries
+            .get(system)
+            .and_then(|entry| entry.1.as_deref())
+            .is_some_and(|id| id.starts_with("summary:")),
+    );
+    let start = system + summary;
     let mut dropped = 0;
-    while tokens(&entries) > budget {
-        let next = (system + 1..entries.len())
+    while entries_tokens(&entries) > budget {
+        let next = (start + 1..entries.len())
             .find(|&i| entries[i].0.role == "user" && entries[i - 1].0.role != "tool");
         let Some(next) = next else {
             break;
         };
-        entries.drain(system..next);
+        entries.drain(start..next);
         dropped += 1;
     }
-    if dropped > 0 {
-        context.emit("run.warning", json!({"code":"context_trimmed","message":format!("Dropped the {dropped} oldest turn(s) to fit the context window; about {} of {budget} budgeted tokens remain in use.", tokens(&entries))})).await?;
-    }
-    Ok(entries)
+    (entries, dropped)
 }
 
 #[cfg(test)]

@@ -34,4 +34,4 @@ pub use service::{
     AwaitOutcome, AwaitResult, MessageReceipt, SpawnRequest, SpawnedChild, SubagentService,
     SubagentView, child_identity, task_overrides,
 };
-pub use tools::{SUBAGENT_TOOL_NAMES, SubagentContributor};
+pub use tools::{SUBAGENT_TOOL_NAMES, SubagentContributor, is_mutating_subagent_tool};
