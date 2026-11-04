@@ -78,6 +78,38 @@ impl CodingPermissionAuthority for BindingAuthority {
     }
 }
 
+/// The ONE classification every JS-tool gate uses (the JS guard and the MCP
+/// server's write gate): the STRICTER of the capability class and the
+/// declared-effect class (`Exec` > `Write` > `Read`). Unknown capabilities
+/// fall back to the effect alone; a tool can never downgrade itself by
+/// declaring a benign capability with a write effect, or the reverse.
+pub(crate) fn effective_class(capability: &str, effect: &str) -> ToolClass {
+    let by_effect = if effect == "read" {
+        ToolClass::Read
+    } else {
+        ToolClass::Write
+    };
+    match classify_capability(capability) {
+        Some(by_capability) => stricter(by_capability, by_effect),
+        None => by_effect,
+    }
+}
+
+fn stricter(left: ToolClass, right: ToolClass) -> ToolClass {
+    fn rank(class: ToolClass) -> u8 {
+        match class {
+            ToolClass::Read => 0,
+            ToolClass::Write => 1,
+            ToolClass::Exec => 2,
+        }
+    }
+    if rank(left) >= rank(right) {
+        left
+    } else {
+        right
+    }
+}
+
 /// The plan-approvable JS tools and the mode the human's approval grants.
 #[derive(Clone)]
 pub(crate) struct PlanConfiguration {
@@ -120,17 +152,10 @@ impl ToolGuard for JsToolGuard {
             return Ok(ToolGuardVerdict::Allowed);
         }
         // The SAME matrix the coding pack's guard runs (`decide`), with the
-        // JS metadata adapted into its axes: capability classifies first —
-        // a tool declaring `process.exec` is an Exec tool even if it
-        // declares effect `write`; only unknown capabilities fall back to
-        // the validated declared effect ("read"/"write").
-        let tool_class = classify_capability(&context.tool.capability).unwrap_or_else(|| {
-            if context.tool.effect == "read" {
-                ToolClass::Read
-            } else {
-                ToolClass::Write
-            }
-        });
+        // JS metadata adapted into its axes via the shared stricter-of
+        // classification: neither a declared effect nor a declared
+        // capability can downgrade the other.
+        let tool_class = effective_class(&context.tool.capability, &context.tool.effect);
         let name = context.tool.name.clone();
         let chat = PermissionContext {
             chat_id: context.contribution.chat_id.clone(),

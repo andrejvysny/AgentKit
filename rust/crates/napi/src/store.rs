@@ -47,6 +47,9 @@ pub struct NativeStore {
     /// descriptors). In-memory only, exactly like the crate's contract:
     /// the store file never carries server configs or secrets.
     mcp: tokio::sync::Mutex<Option<mcp_client::Registry>>,
+    /// Serializes `mcpConnect` so the registry mutex above is never held
+    /// across a spawn / handshake / `tools/list`.
+    mcp_connect_gate: tokio::sync::Mutex<()>,
 }
 
 #[napi]
@@ -60,6 +63,7 @@ impl NativeStore {
         Ok(Self {
             inner: Mutex::new(Some(store)),
             mcp: tokio::sync::Mutex::new(None),
+            mcp_connect_gate: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -71,6 +75,7 @@ impl NativeStore {
         Ok(Self {
             inner: Mutex::new(Some(store)),
             mcp: tokio::sync::Mutex::new(None),
+            mcp_connect_gate: tokio::sync::Mutex::new(()),
         })
     }
 

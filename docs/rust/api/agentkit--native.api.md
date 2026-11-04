@@ -1149,6 +1149,7 @@ export interface NativeHttpServerInfo {
 // @public
 export interface NativeHttpServerOptions {
     actorId?: string;
+    allowNonLoopback?: boolean;
     basePath?: string;
     bearerToken: string;
     cors?: NativeHttpCorsOptions;
@@ -1258,6 +1259,7 @@ export interface NativeMcpServerInfo {
 export interface NativeMcpServerOptions {
     allowedHosts?: string[];
     allowedOrigins?: string[];
+    allowNonLoopback?: boolean;
     bearerTokens: string[];
     callDeadlineMs?: number;
     host?: string;
@@ -1381,6 +1383,7 @@ export interface NativeServiceOptions {
     };
     providerAuthKind?: "api-key" | "chatgpt-account";
     providerConfig?: NativeProviderConfig;
+    subagentMaxConcurrency?: number;
 }
 
 // @public (undocumented)
@@ -1992,6 +1995,7 @@ class SessionService {
     // (undocumented)
     approve(requestId: string, answerId: string, note?: string | undefined | null, remember?: boolean | undefined | null): Promise<string>
     archiveChat(sessionId: string): Promise<string>
+    bindEnv(): void
     // (undocumented)
     cancel(sessionId: string, turnId: string): Promise<void>
     // (undocumented)

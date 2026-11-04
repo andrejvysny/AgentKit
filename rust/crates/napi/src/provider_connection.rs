@@ -36,6 +36,77 @@ struct Connection {
     base_url: String,
     api_key: Option<String>,
     generation: u64,
+    /// Canonicalized path of the store a keyed registration was persisted
+    /// in; `None` for process-local (unkeyed) registrations. The keyed id is
+    /// derived from the key alone, so two stores using the same key would
+    /// otherwise silently overwrite each other's credentials here.
+    store_path: Option<std::path::PathBuf>,
+}
+
+/// Where a keyed registration lands once it passed the conflict check.
+#[derive(Debug, PartialEq, Eq)]
+enum Placement {
+    Insert,
+    KeepExisting,
+}
+
+/// One async gate per connection id: pre-check, persist, and insert of a
+/// keyed registration are one critical section, so concurrent rotations of
+/// the same id cannot interleave (a stale insert after a newer persist).
+static REGISTRATION_GATES: LazyLock<std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn registration_gate(connection_id: &str) -> Arc<Mutex<()>> {
+    Arc::clone(
+        REGISTRATION_GATES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(connection_id.to_owned())
+            .or_default(),
+    )
+}
+
+/// Refuse a keyed registration that would clobber a live entry:
+/// * another store holding the same id -> `connection_key_conflict`, unless
+///   base URL and key are identical (then the registration is a no-op for
+///   credentials);
+/// * the same store re-registering with a different base URL ->
+///   `connection_base_url_changed` (revoke first; a silent base-URL swap
+///   would redirect in-flight runs' credentials to a new host).
+fn check_keyed_conflict(
+    existing: Option<&Connection>,
+    store_path: &std::path::Path,
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Placement> {
+    let Some(existing) = existing else {
+        return Ok(Placement::Insert);
+    };
+    match existing.store_path.as_deref() {
+        Some(owner) if owner == store_path => {
+            if existing.base_url != base_url {
+                return Err(errors::stable(
+                    "connection_base_url_changed",
+                    "the connection is already registered with a different baseUrl; revoke it first",
+                    None,
+                ));
+            }
+            Ok(Placement::Insert)
+        }
+        _ => {
+            if existing.base_url == base_url && existing.api_key.as_deref() == api_key {
+                // Identical credentials from another store: the live entry
+                // keeps its owner (ownership never moves).
+                Ok(Placement::KeepExisting)
+            } else {
+                Err(errors::stable(
+                    "connection_key_conflict",
+                    "the connectionKey is already registered from a different store with different credentials",
+                    None,
+                ))
+            }
+        }
+    }
 }
 
 /// Binding-instance connection registry, keyed by connection id (the same
@@ -77,6 +148,9 @@ pub async fn register_provider_connection(
     // `authorization` header for a falsy apiKey, and this lane must not
     // send a bare `Bearer `.
     let api_key = api_key.filter(|key| !key.is_empty());
+    let mut keyed_store_path = None;
+    let mut keep_existing = false;
+    let mut _gate = None;
     let (connection_id, generation) = match options_json.as_deref() {
         None | Some("") => (format!("conn_{}", uuid::Uuid::new_v4()), 1),
         Some(text) => {
@@ -100,21 +174,69 @@ pub async fn register_provider_connection(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_millis() as i64)
                 .unwrap_or(0);
-            agentkit_store::register_provider_connection(
-                std::path::Path::new(&store_path),
-                &connection_key,
-                api_key.as_deref(),
-                now,
-            )
-            .map_err(errors::store)?
+            // The store call is synchronous SQLite (up to a 5 s busy
+            // timeout); it must not stall a runtime worker.
+            let (canonical, check_base_url, check_key) =
+                (store_path.clone(), base_url.clone(), api_key.clone());
+            let key_for_check = connection_key.clone();
+            let canonical = tokio::task::spawn_blocking(move || {
+                std::fs::canonicalize(&canonical)
+                    .unwrap_or_else(|_| std::path::PathBuf::from(canonical))
+            })
+            .await
+            .map_err(|_| errors::internal("provider connection registration"))?;
+            // Pre-check BEFORE the store persists anything: a conflicting
+            // registration must not rotate the durable generation.
+            let provisional_id = agentkit_store::provider_connection_identity(&key_for_check);
+            _gate = Some(registration_gate(&provisional_id).lock_owned().await);
+            keep_existing = check_keyed_conflict(
+                CONNECTIONS.lock().await.get(&provisional_id),
+                &canonical,
+                &check_base_url,
+                check_key.as_deref(),
+            )? == Placement::KeepExisting;
+            let (path, key, secret) = (canonical.clone(), connection_key, api_key.clone());
+            let registered = tokio::task::spawn_blocking(move || {
+                agentkit_store::register_provider_connection(&path, &key, secret.as_deref(), now)
+            })
+            .await
+            .map_err(|_| errors::internal("provider connection registration"))?
+            .map_err(errors::store)?;
+            keyed_store_path = Some(canonical);
+            registered
         }
     };
-    CONNECTIONS.lock().await.insert(
+    let mut connections = CONNECTIONS.lock().await;
+    if let Some(store_path) = keyed_store_path.as_deref() {
+        let placement = check_keyed_conflict(
+            connections.get(&connection_id),
+            store_path,
+            &base_url,
+            api_key.as_deref(),
+        )?;
+        if keep_existing || placement == Placement::KeepExisting {
+            return Ok(connection_id);
+        }
+        // Never replace a newer generation of the same store's connection
+        // with an older one.
+        if let Some(existing) = connections.get(&connection_id)
+            && existing.store_path.as_deref() == Some(store_path)
+            && existing.generation > generation
+        {
+            return Err(errors::stable(
+                "invalid_state",
+                "a newer generation of this connection is already registered",
+                None,
+            ));
+        }
+    }
+    connections.insert(
         connection_id.clone(),
         Connection {
             base_url,
             api_key,
             generation,
+            store_path: keyed_store_path,
         },
     );
     Ok(connection_id)
@@ -140,6 +262,12 @@ pub(crate) type Fence = Arc<dyn (Fn() -> std::result::Result<(), CoreError>) + S
 /// and rotation take effect immediately, never from a stale snapshot.
 pub(crate) struct BindingTransport {
     identity: ConnectionIdentity,
+    /// The base URL the connection had when this transport's identity was
+    /// minted (not a secret). A request resolves the live entry and refuses
+    /// when its generation or base URL no longer match, so a credential
+    /// rotation or re-registration mid-run surfaces as `connection_changed`
+    /// instead of silently sending the run's traffic to a new target.
+    base_url: String,
     fence: Fence,
     client: reqwest::Client,
 }
@@ -186,6 +314,7 @@ impl BindingTransport {
                 generation: connection.generation,
             },
             fence,
+            base_url: connection.base_url.clone(),
             client,
         }))
     }
@@ -231,6 +360,10 @@ impl TrustedTransport for BindingTransport {
             .get(&self.identity.connection_id)
             .cloned()
             .ok_or_else(|| CoreError::responses("connection_changed"))?;
+        if connection.generation != self.identity.generation || connection.base_url != self.base_url
+        {
+            return Err(CoreError::responses("connection_changed"));
+        }
         // `models` is a keyless GET in the reference client (no body, no
         // content type); the completion operations POST a JSON body.
         let get = path == "models";
@@ -351,9 +484,16 @@ mod tests {
         Arc::new(|| Ok(()))
     }
 
-    fn transport(connection_id: &str) -> BindingTransport {
+    async fn transport(connection_id: &str) -> BindingTransport {
+        let base_url = CONNECTIONS
+            .lock()
+            .await
+            .get(connection_id)
+            .map(|connection| connection.base_url.clone())
+            .unwrap_or_default();
         BindingTransport {
             identity: identity(connection_id),
+            base_url,
             fence: open_fence(),
             client: reqwest::Client::builder().build().unwrap(),
         }
@@ -393,6 +533,7 @@ mod tests {
                 base_url,
                 api_key,
                 generation: 1,
+                store_path: None,
             },
         );
     }
@@ -405,6 +546,7 @@ mod tests {
                 base_url: "http://127.0.0.1:1/v1".to_owned(),
                 api_key: None,
                 generation: 4,
+                store_path: None,
             },
         );
         let transport =
@@ -451,6 +593,7 @@ mod tests {
         )
         .await;
         let response = transport("test-keyed")
+            .await
             .request(
                 &identity("test-keyed"),
                 "chat/completions",
@@ -486,6 +629,7 @@ mod tests {
         .await;
         registered("test-keyless", format!("{endpoint}/v1"), None).await;
         let response = transport("test-keyless")
+            .await
             .request(
                 &identity("test-keyless"),
                 "models",
@@ -509,7 +653,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_operation_and_revoked_connection_fail_honestly() {
         registered("test-revoked", "http://127.0.0.1:1/v1".to_owned(), None).await;
-        let transport = transport("test-revoked");
+        let transport = transport("test-revoked").await;
         let error = transport
             .request(
                 &identity("test-revoked"),
@@ -542,6 +686,7 @@ mod tests {
         let token = CancellationToken::new();
         token.cancel();
         let error = transport("test-fence")
+            .await
             .request(
                 &identity("test-fence"),
                 "chat/completions",
@@ -552,11 +697,11 @@ mod tests {
             .expect_err("a cancelled run never dispatches");
         assert_eq!(error.code, "cancelled");
 
-        let closed = transport("test-fence");
+        let closed = transport("test-fence").await;
         assert!(closed.check_current().is_ok());
         let closed = BindingTransport {
             fence: Arc::new(|| Err(CoreError::new("cancelled", "the binding is closing"))),
-            ..transport("test-fence")
+            ..transport("test-fence").await
         };
         let error = closed.check_current().expect_err("closing is current");
         assert_eq!(error.code, "cancelled");
@@ -633,6 +778,106 @@ mod tests {
                 assert_eq!(payload["code"], "invalid_input", "{options}");
             }
         });
+    }
+
+    #[tokio::test]
+    async fn rotation_or_rebase_mid_run_yields_connection_changed() {
+        registered("test-rotate", "http://127.0.0.1:1/v1".to_owned(), None).await;
+        let transport = transport("test-rotate").await;
+        // A rotation under the same id advances the generation.
+        CONNECTIONS.lock().await.insert(
+            "test-rotate".to_owned(),
+            Connection {
+                base_url: "http://127.0.0.1:1/v1".to_owned(),
+                api_key: Some("new".to_owned()),
+                generation: 2,
+                store_path: None,
+            },
+        );
+        let error = transport
+            .request(
+                &identity("test-rotate"),
+                "chat/completions",
+                Some(serde_json::json!({})),
+                CancellationToken::new(),
+            )
+            .await
+            .expect_err("a rotated generation never sends HTTP");
+        assert_eq!(error.code, "connection_changed");
+        // A swapped base URL under the same generation is refused as well.
+        registered("test-rotate", "http://127.0.0.1:2/v1".to_owned(), None).await;
+        let error = transport
+            .request(
+                &identity("test-rotate"),
+                "chat/completions",
+                Some(serde_json::json!({})),
+                CancellationToken::new(),
+            )
+            .await
+            .expect_err("a changed base url never sends HTTP");
+        assert_eq!(error.code, "connection_changed");
+    }
+
+    fn keyed(store: &str, base_url: &str, key: Option<&str>) -> Connection {
+        Connection {
+            base_url: base_url.to_owned(),
+            api_key: key.map(str::to_owned),
+            generation: 1,
+            store_path: Some(std::path::PathBuf::from(store)),
+        }
+    }
+
+    fn conflict_code(result: Result<Placement>) -> Option<String> {
+        result.err().map(|error| {
+            serde_json::from_str::<Value>(&error.reason).unwrap()["code"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+    }
+
+    #[test]
+    fn keyed_registration_conflicts_across_stores_and_base_url_changes() {
+        let live = keyed("/a.db", "https://one/v1", Some("k1"));
+        let check = |store: &str, url: &str, key: Option<&str>| {
+            conflict_code(check_keyed_conflict(
+                Some(&live),
+                std::path::Path::new(store),
+                url,
+                key,
+            ))
+        };
+        assert_eq!(
+            check("/a.db", "https://one/v1", Some("k2")),
+            None,
+            "rotation"
+        );
+        assert_eq!(
+            check("/a.db", "https://two/v1", Some("k1")).as_deref(),
+            Some("connection_base_url_changed")
+        );
+        assert_eq!(
+            check("/b.db", "https://one/v1", Some("other")).as_deref(),
+            Some("connection_key_conflict")
+        );
+        assert_eq!(
+            check("/b.db", "https://other/v1", Some("k1")).as_deref(),
+            Some("connection_key_conflict")
+        );
+        assert_eq!(
+            check("/b.db", "https://one/v1", Some("k1")),
+            None,
+            "identical"
+        );
+        assert_eq!(
+            conflict_code(check_keyed_conflict(
+                None,
+                std::path::Path::new("/b.db"),
+                "x",
+                None
+            )),
+            None
+        );
     }
 
     struct Capture {

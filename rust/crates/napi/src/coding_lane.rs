@@ -19,6 +19,7 @@
 //! workspace. There is no TS fallback anywhere on this path.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use agentkit_core::permission::{CodingMode, CodingRole};
 use agentkit_host::{
@@ -51,6 +52,9 @@ struct LaneState {
 pub(crate) struct CodingLane {
     authority: Arc<dyn CodingPermissionAuthority>,
     state: tokio::sync::Mutex<Option<Arc<LaneState>>>,
+    /// Set when shutdown begins, before the pack is disposed: no tool may
+    /// start executing against a pack that is being torn down.
+    disposed: AtomicBool,
 }
 
 /// The parsed `optionsJson` of `registerCodingTools` (camelCase on the
@@ -76,7 +80,19 @@ impl CodingLane {
         Self {
             authority,
             state: tokio::sync::Mutex::new(None),
+            disposed: AtomicBool::new(false),
         }
+    }
+
+    /// Refuse all further executions (`service_closed`). Called before
+    /// `dispose` so a still-draining run cannot start a command while the
+    /// pack's scratch is being removed. Irreversible.
+    pub(crate) fn mark_disposed(&self) {
+        self.disposed.store(true, Ordering::SeqCst);
+    }
+
+    fn is_disposed(&self) -> bool {
+        self.disposed.load(Ordering::SeqCst)
     }
 
     /// One-shot registration of the Rust-owned coding tools. A second call
@@ -162,6 +178,7 @@ impl CodingLane {
     /// claims outcomes: whatever the receipt log cannot decide stays
     /// uncertain there, exactly what the crate's own `dispose` promises.
     pub(crate) async fn dispose(&self) {
+        self.mark_disposed();
         let state = self.state.lock().await;
         if let Some(state) = state.as_ref() {
             state.pack.dispose().await;
@@ -229,6 +246,9 @@ impl ToolContributor for CodingLaneContributor {
         &self,
         context: &ToolContributionContext,
     ) -> HostResult<Vec<ContributedTool>> {
+        if self.lane.is_disposed() {
+            return Ok(vec![]);
+        }
         match self.lane.state().await {
             Some(lane) => lane.pack.contribute(context).await,
             None => Ok(vec![]),
@@ -252,6 +272,11 @@ impl CodingLaneGuard {
 #[async_trait::async_trait]
 impl ToolGuard for CodingLaneGuard {
     async fn can_execute(&self, context: &ToolGuardContext) -> HostResult<ToolGuardVerdict> {
+        if self.lane.is_disposed() && context.namespace == CODING_NAMESPACE {
+            return Ok(ToolGuardVerdict::Refused(
+                "service_closed: the session service is closed".to_owned(),
+            ));
+        }
         match self.lane.state().await {
             Some(lane) => lane.guard.can_execute(context).await,
             None => Ok(ToolGuardVerdict::Allowed),

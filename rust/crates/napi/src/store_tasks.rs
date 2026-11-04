@@ -99,7 +99,7 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
                 .filter(|task| {
                     matches!(
                         task.status,
-                        TaskStatus::Running | TaskStatus::WaitingApproval
+                        TaskStatus::Running | TaskStatus::Interrupted | TaskStatus::WaitingApproval
                     )
                 })
                 .map(|task| {
@@ -141,11 +141,19 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
                         available_at: opt_instant(&patch, "availableAt")?,
                         priority: match patch.get("priority") {
                             None | Some(Value::Null) => None,
-                            Some(_) => Some(required_i64(&patch, "priority")? as i32),
+                            Some(_) => {
+                                Some(i32::try_from(required_i64(&patch, "priority")?).map_err(
+                                    |_| errors::invalid("patch.priority is out of range"),
+                                )?)
+                            }
                         },
                         poison_count: match patch.get("poisonCount") {
                             None | Some(Value::Null) => None,
-                            Some(_) => Some(nonnegative_i64(&patch, "poisonCount")? as u32),
+                            Some(_) => Some(
+                                u32::try_from(nonnegative_i64(&patch, "poisonCount")?).map_err(
+                                    |_| errors::invalid("patch.poisonCount is out of range"),
+                                )?,
+                            ),
                         },
                         payload: match patch.get("payload") {
                             None | Some(Value::Null) => None,
@@ -252,7 +260,8 @@ pub(super) async fn execute(store: &SqliteStore, method: &str, input: Value) -> 
             };
             let limit = match opts.get("limit") {
                 None | Some(Value::Null) => usize::MAX,
-                Some(_) => nonnegative_i64(&opts, "limit")? as usize,
+                Some(_) => usize::try_from(nonnegative_i64(&opts, "limit")?)
+                    .map_err(|_| errors::invalid("opts.limit is out of range"))?,
             };
             match store
                 .events_after_number(text(&input, "taskId")?, after_seq, limit)
@@ -362,7 +371,8 @@ fn port_error(error: agentkit_store::StoreError) -> napi::Error {
 fn opt_i32(input: &Value, field: &str, default: i32) -> Result<i32> {
     match input.get(field) {
         None | Some(Value::Null) => Ok(default),
-        Some(_) => Ok(required_i64(input, field)? as i32),
+        Some(_) => i32::try_from(required_i64(input, field)?)
+            .map_err(|_| errors::invalid(format!("{field} is out of range"))),
     }
 }
 

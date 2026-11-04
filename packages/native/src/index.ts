@@ -117,6 +117,10 @@ export interface NativeServiceOptions {
   /** How long `close()` waits for owned execution to drain before it
    * completes and reports `closeUncertain`. Default 5000. */
   closeTimeoutMs?: number;
+  /** Start-time subagent `maxConcurrency` (1..=64, default 8). It sizes
+   * the worker pool, so `configureSubagents` can lower the limit but any
+   * larger value is clamped to this one. */
+  subagentMaxConcurrency?: number;
   jsToolAuthority?: {
     /** Mode applied when a session has no durable execution state yet.
      * Default `ask` (every JS write call needs one human approval). */
@@ -401,8 +405,13 @@ export interface NativeProviderConnectionOptions {
  * store. Only `bearerToken` is required; the backend itself refuses tokens
  * shorter than 32 bytes, and the binding rejects them up front. */
 export interface NativeHttpServerOptions {
-  /** Interface to bind. Default `127.0.0.1`. */
+  /** Interface to bind. Default `127.0.0.1`. Only loopback hosts
+   * (`127.0.0.0/8`, `::1`, `localhost`) are accepted unless
+   * `allowNonLoopback` is set. */
   host?: string;
+  /** Opt in to binding a non-loopback host. Without it such a host fails
+   * with `non_loopback_bind_refused`. Default false. */
+  allowNonLoopback?: boolean;
   /** Port to bind; `0` (the default) asks the OS for an ephemeral port. */
   port?: number;
   /** Optional URL prefix; routes then live under `{basePath}/v1/...`. */
@@ -463,6 +472,9 @@ export interface NativeHttpServerInfo {
   port: number;
   baseUrl: string;
 }
+
+/** Services not yet closed; see `NativeStore.createService`. */
+const OPEN_SERVICES = new Set<NativeSessionService>();
 
 export class NativeStore {
   private readonly raw: RawNativeStore;
@@ -573,7 +585,20 @@ export class NativeStore {
         options === undefined ? null : JSON.stringify(options),
       ),
     );
-    return new NativeSessionService(raw, router, this, options?.providerConfig);
+    // Tag the native service with this Node environment so the addon's
+    // environment-cleanup hook only ever stops this env's services.
+    raw.bindEnv();
+    const service = new NativeSessionService(
+      raw,
+      router,
+      this,
+      options?.providerConfig,
+    );
+    // Strong reference until `close()`: a service kept only for its effects
+    // (an HTTP/MCP listener, the worker) must not be reclaimed by GC when
+    // the caller drops the handle. The native Drop is a last resort only.
+    OPEN_SERVICES.add(service);
+    return service;
   }
 
   /**
@@ -1232,6 +1257,7 @@ export class NativeSessionService extends NativeSessionManagement {
         await lift(() => this.raw.close());
       } finally {
         this.router.close();
+        OPEN_SERVICES.delete(this);
       }
     })();
     this.closing = run;

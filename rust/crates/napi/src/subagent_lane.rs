@@ -20,13 +20,19 @@ use agentkit_store::TaskRecord;
 pub(crate) struct SubagentLane {
     service: Mutex<Option<Arc<SubagentService>>>,
     config: Mutex<SubagentConfig>,
+    /// Start-time `maxConcurrency`. The worker pool was sized from it, so a
+    /// hot config may lower the limit but never raise it above this.
+    concurrency_ceiling: i64,
 }
 
 impl SubagentLane {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(concurrency_ceiling: i64) -> Self {
+        let mut config = SubagentConfig::default();
+        config.limits.max_concurrency = config.limits.max_concurrency.min(concurrency_ceiling);
         Self {
             service: Mutex::new(None),
-            config: Mutex::new(SubagentConfig::default()),
+            config: Mutex::new(config),
+            concurrency_ceiling,
         }
     }
 
@@ -52,7 +58,14 @@ impl SubagentLane {
 
     /// Hot configuration; applies whether or not binding already happened
     /// (a pre-bind configuration is remembered and applied at bind).
-    pub(crate) fn configure(&self, config: SubagentConfig) {
+    pub(crate) fn configure(&self, mut config: SubagentConfig) {
+        if config.limits.max_concurrency > self.concurrency_ceiling {
+            eprintln!(
+                "agentkit-napi: subagent maxConcurrency {} exceeds the service's start-time ceiling {}; clamped (set subagentMaxConcurrency in the service options)",
+                config.limits.max_concurrency, self.concurrency_ceiling
+            );
+            config.limits.max_concurrency = self.concurrency_ceiling;
+        }
         {
             let mut slot = self.config.lock().unwrap_or_else(PoisonError::into_inner);
             *slot = config.clone();
@@ -96,14 +109,14 @@ impl SubagentLane {
 
     pub(crate) async fn list(&self, parent_chat_id: &str) -> HostResult<Vec<SubagentView>> {
         let service = self.service().ok_or_else(|| {
-            agentkit_host::HostError::Execution("subagents not configured".into())
+            agentkit_host::HostError::Execution(crate::errors::SUBAGENTS_NOT_CONFIGURED.into())
         })?;
         service.list(parent_chat_id).await
     }
 
     pub(crate) async fn status(&self, child_chat_id: &str) -> HostResult<SubagentView> {
         let service = self.service().ok_or_else(|| {
-            agentkit_host::HostError::Execution("subagents not configured".into())
+            agentkit_host::HostError::Execution(crate::errors::SUBAGENTS_NOT_CONFIGURED.into())
         })?;
         service.status(child_chat_id).await
     }

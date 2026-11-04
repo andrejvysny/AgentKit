@@ -45,10 +45,14 @@ use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use agentkit_core::permission::ToolClass;
+
 use super::SessionService;
 use super::http_server::{
-    CONNECTION_SHUTDOWN_GRACE, bind_listener, optional_sized, optional_text, optional_u64, url_host,
+    CONNECTION_SHUTDOWN_GRACE, bind_listener, ensure_bound_loopback, ensure_loopback_bind,
+    optional_sized, optional_text, optional_u64, url_host,
 };
+use crate::authority::effective_class;
 use crate::errors;
 use crate::tool::JsToolContributor;
 
@@ -74,6 +78,13 @@ impl McpServerHandle {
     /// which cancels each scope's token, and the tracked child tokens
     /// below turn that into cancellation of any in-flight JS tool callback
     /// — then the accept loop drains under the close deadline.
+    /// Environment-teardown stop: revoke leases, close the listener, abort.
+    pub(super) async fn shutdown_now(self) {
+        self.server.close().await;
+        self.token.cancel();
+        self.join.abort();
+    }
+
     pub(super) async fn shutdown(self, grace: Duration) {
         self.server.close().await;
         self.token.cancel();
@@ -130,7 +141,11 @@ impl Backend for BindingBackend {
                 ),
                 // Host-owned effect: the descriptor's declared taxonomy,
                 // never anything a remote client could influence.
-                writes: definition.effect == "write",
+                // Same stricter-of classification as the run-scoped JS guard,
+                // so a write/exec capability under a "read" effect (or the
+                // reverse) is still a write for the gate.
+                writes: effective_class(&definition.capability, &definition.effect)
+                    != ToolClass::Read,
             })
             .collect())
     }
@@ -149,7 +164,9 @@ impl Backend for BindingBackend {
         let Some(definition) = self.contributor.lookup(name) else {
             return Err(ErrorData::invalid_params("Unknown tool", None));
         };
-        if definition.effect == "write" && !self.writes_enabled {
+        if effective_class(&definition.capability, &definition.effect) != ToolClass::Read
+            && !self.writes_enabled
+        {
             return Err(ErrorData::invalid_params("Unknown tool", None));
         }
         let schema = definition.input_schema.clone();
@@ -170,6 +187,13 @@ impl Backend for BindingBackend {
             .entry(actor.clone())
             .or_default()
             .push(cancellation.clone());
+        // Released on every exit path, including this future being dropped
+        // mid-invoke (client disconnect, call deadline).
+        let _release = ReleaseGuard {
+            backend: self,
+            actor: &actor,
+            token: &cancellation,
+        };
         // The engine path for a tool that has no durable run: a synthetic
         // mcp-run identity, no task lease (therefore no dispatch guard —
         // see the module header for exactly what this does and does not
@@ -192,7 +216,6 @@ impl Backend for BindingBackend {
             .contributor
             .invoke(definition, context, Value::Object(arguments))
             .await;
-        self.release(&actor, &cancellation);
         match result {
             Ok(result) => Ok(to_call_result(&result)),
             Err(error) => Err(ErrorData::internal_error(
@@ -212,6 +235,19 @@ impl Backend for BindingBackend {
         for token in tokens {
             token.cancel();
         }
+    }
+}
+
+/// Drops the in-flight token registration when the call ends for any reason.
+struct ReleaseGuard<'a> {
+    backend: &'a BindingBackend,
+    actor: &'a str,
+    token: &'a CancellationToken,
+}
+
+impl Drop for ReleaseGuard<'_> {
+    fn drop(&mut self) {
+        self.backend.release(self.actor, self.token);
     }
 }
 
@@ -298,6 +334,7 @@ impl Authenticator for BearerSet {
 /// fails the call with `invalid_input` instead of being ignored.
 struct McpServerConfig {
     host: String,
+    allow_non_loopback: bool,
     port: u16,
     bearer_tokens: Vec<String>,
     options: ServerOptions,
@@ -357,6 +394,7 @@ fn parse_mcp_options(text: &str) -> Result<McpServerConfig> {
             "host must be a bare hostname or IP literal",
         ));
     }
+    let allow_non_loopback = ensure_loopback_bind(&object, &host)?;
     let port = optional_u64(&object, "port")?
         .map(|port| {
             u16::try_from(port).map_err(|_| {
@@ -416,6 +454,7 @@ fn parse_mcp_options(text: &str) -> Result<McpServerConfig> {
     }
     Ok(McpServerConfig {
         host,
+        allow_non_loopback,
         port,
         bearer_tokens,
         options,
@@ -458,7 +497,10 @@ impl SessionService {
     #[napi]
     pub async fn start_mcp_server(&self, options_json: String) -> Result<String> {
         let config = parse_mcp_options(&options_json)?;
-        let listener = bind_listener(&config.host, config.port).await?;
+        let listener = ensure_bound_loopback(
+            bind_listener(&config.host, config.port).await?,
+            config.allow_non_loopback,
+        )?;
         let port = listener.local_addr().map_err(|error| {
             errors::stable(
                 "service_unavailable",
