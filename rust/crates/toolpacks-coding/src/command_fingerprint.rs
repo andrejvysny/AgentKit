@@ -99,8 +99,11 @@ const ENV_NAMES: &[&str] = &[
 /// The `a.localeCompare(b)` collation order Node and Bun agree on for the
 /// fixed name universe. Shared with the TypeScript side through a fixture so
 /// the digest inputs are byte-identical; pinned by a repository test.
+/// The runtime copy lives inside the crate (a packaged crate cannot reach
+/// `rust/fixtures`); `env_order_copy_matches_the_shared_fixture` pins it to
+/// the shared fixture byte-for-byte.
 static ENV_ORDER: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
-    let raw = include_str!("../../../fixtures/coding-fingerprint/env-order.json");
+    let raw = include_str!("../data/env-order.json");
     serde_json::from_str(raw).expect("env order fixture is a JSON string array")
 });
 
@@ -2275,6 +2278,15 @@ mod tests {
     /// it means re-deriving the digests from that commit's TypeScript
     /// implementation under review (port-owned; excluded from the manifest
     /// drift check).
+    #[test]
+    fn env_order_copy_matches_the_shared_fixture() {
+        assert_eq!(
+            include_str!("../data/env-order.json"),
+            include_str!("../../../fixtures/coding-fingerprint/env-order.json"),
+            "crate runtime copy drifted from rust/fixtures/coding-fingerprint/env-order.json"
+        );
+    }
+
     #[test]
     fn frozen_material_matches_the_typescript_authority() {
         let raw = include_str!("../../../fixtures/coding-fingerprint/fingerprint-material.json");

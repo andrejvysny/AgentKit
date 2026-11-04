@@ -180,6 +180,29 @@ struct ListedEntry {
     is_symlink: bool,
 }
 
+/// Orders entries by name bytes, the walk's visiting order.
+struct ByName(ListedEntry);
+
+impl PartialEq for ByName {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.name == other.0.name
+    }
+}
+
+impl Eq for ByName {}
+
+impl PartialOrd for ByName {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ByName {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.name.as_bytes().cmp(other.0.name.as_bytes())
+    }
+}
+
 struct DirState {
     directory: String,
     rules: Arc<Vec<IgnoreRule>>,
@@ -250,22 +273,40 @@ impl Walk {
                                 .collect::<Vec<_>>(),
                         )
                     };
-                    let mut listed = match tokio::fs::read_dir(&directory).await {
+                    let listed = match tokio::fs::read_dir(&directory).await {
                         Ok(mut reader) => {
-                            let mut listed: Vec<ListedEntry> = Vec::new();
+                            // Never hold more entries than the file budget can
+                            // still visit (+1 so exhaustion is detected below).
+                            // A bounded max-heap keeps the lexicographically
+                            // smallest `cap` names, so the visited set is the
+                            // same sorted prefix an unbounded listing gave.
+                            let mut heap: std::collections::BinaryHeap<ByName> =
+                                std::collections::BinaryHeap::new();
+                            let cap = self
+                                .options
+                                .limits
+                                .search_max_files
+                                .saturating_sub(self.scanned)
+                                .saturating_add(1);
                             while let Ok(Some(entry)) = reader.next_entry().await {
                                 let file_type = match entry.file_type().await {
                                     Ok(file_type) => file_type,
                                     Err(_) => continue,
                                 };
-                                listed.push(ListedEntry {
+                                heap.push(ByName(ListedEntry {
                                     name: entry.file_name().to_string_lossy().into_owned(),
                                     is_dir: file_type.is_dir(),
                                     is_file: file_type.is_file(),
                                     is_symlink: file_type.is_symlink(),
-                                });
+                                }));
+                                if heap.len() > cap {
+                                    heap.pop();
+                                }
                             }
-                            listed
+                            heap.into_sorted_vec()
+                                .into_iter()
+                                .map(|entry| entry.0)
+                                .collect::<Vec<ListedEntry>>()
                         }
                         Err(_) => {
                             // TS `catch { continue; }`
@@ -273,7 +314,6 @@ impl Walk {
                             continue;
                         }
                     };
-                    listed.sort_by(|left, right| left.name.as_bytes().cmp(right.name.as_bytes()));
                     DirState {
                         directory,
                         rules: effective,
@@ -395,15 +435,14 @@ async fn ignore_rules(
         let path = join(directory, name);
         // Node `readFile(path, "utf8")` decodes lossily; a missing or
         // unreadable file is skipped like TS's catch.
-        let bytes = match tokio::fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(_) => continue,
-        };
+        // Only a regular file within the cap is read: a symlink (possibly
+        // pointing outside the workspace), a FIFO or a device is skipped, and
+        // the read itself is bounded so a file that grows cannot blow the cap.
         // TS caps the decoded string length; byte length is the UTF-8
         // equivalent for ASCII ignore files, the only realistic case.
-        if bytes.len() as u64 > limits.ignore_file_max_bytes {
+        let Some(bytes) = read_regular_capped(&path, limits.ignore_file_max_bytes).await else {
             continue;
-        }
+        };
         let text = String::from_utf8_lossy(&bytes);
         for line in text.split('\n') {
             if let Some(rule) = parse_ignore_rule(line) {
@@ -419,6 +458,45 @@ async fn ignore_rules(
     let rules = Arc::new(rules);
     cache.insert(directory.to_owned(), Arc::clone(&rules));
     rules
+}
+
+/// Opens `path` without following a symlink at the last component and
+/// without blocking on a FIFO, and returns it only when the OPENED object is a
+/// regular file.
+async fn open_regular_nofollow(path: &str) -> Option<(tokio::fs::File, std::fs::Metadata)> {
+    let before = tokio::fs::symlink_metadata(path).await.ok()?;
+    if !before.is_file() {
+        return None;
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    let file = options.open(path).await.ok()?;
+    let info = file.metadata().await.ok()?;
+    info.is_file().then_some((file, info))
+}
+
+/// Reads at most `cap` bytes of an opened file; `None` when it holds more
+/// (reading stops at `cap + 1`, so a growing file cannot exhaust memory).
+async fn read_capped(file: tokio::fs::File, cap: u64) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let mut bytes = Vec::new();
+    file.take(cap.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .await
+        .ok()?;
+    (bytes.len() as u64 <= cap).then_some(bytes)
+}
+
+/// A regular file of at most `cap` bytes, or `None` (missing, symlink, FIFO,
+/// device, oversized, unreadable).
+async fn read_regular_capped(path: &str, cap: u64) -> Option<Vec<u8>> {
+    let (file, info) = open_regular_nofollow(path).await?;
+    if info.len() > cap {
+        return None;
+    }
+    read_capped(file, cap).await
 }
 
 /// The ignore decision [`Walk`] makes, for one directory's direct children:
@@ -501,7 +579,7 @@ fn parse_ignore_rule(line: &str) -> Option<(Regex, bool, bool)> {
     if text.is_empty() {
         return None;
     }
-    let body = glob_to_pattern(&text.chars().collect::<Vec<char>>());
+    let body = glob_to_pattern(&text.chars().collect::<Vec<char>>(), true);
     // a malformed ignore file must not break searching
     let pattern = RegexBuilder::new(&if anchored {
         format!("^{body}$")
@@ -513,7 +591,10 @@ fn parse_ignore_rule(line: &str) -> Option<(Regex, bool, bool)> {
     Some((pattern, negate, directory_only))
 }
 
-fn glob_to_pattern(glob: &[char]) -> String {
+/// Compiles a glob to a regex body. `gitignore` selects ignore-file
+/// semantics: `{`, `}` and `,` are literal and a backslash escapes the next
+/// character. Tool globs (`gitignore == false`) keep brace alternation.
+fn glob_to_pattern(glob: &[char], gitignore: bool) -> String {
     let mut pattern = String::new();
     let mut index = 0usize;
     while index < glob.len() {
@@ -532,27 +613,22 @@ fn glob_to_pattern(glob: &[char]) -> String {
             pattern.push_str("[^/]*");
         } else if char == '?' {
             pattern.push_str("[^/]");
+        } else if gitignore && char == '\\' {
+            // Escaped next character is literal; a trailing backslash is too.
+            let literal = glob.get(index + 1).copied().unwrap_or('\\');
+            pattern.push_str(&regex_escape_char(literal));
+            index += 2;
+            continue;
         } else if char == '[' {
-            match glob[index + 1..].iter().position(|c| *c == ']') {
+            match class_end(glob, index + 1) {
                 None => pattern.push_str("\\["),
-                Some(offset) => {
-                    let end = index + 1 + offset;
-                    let inner = &glob[index + 1..end];
-                    let body: String = if inner.first() == Some(&'!') {
-                        std::iter::once('^')
-                            .chain(inner[1..].iter().copied())
-                            .collect()
-                    } else {
-                        inner.iter().collect()
-                    };
-                    pattern.push('[');
-                    pattern.push_str(&body);
-                    pattern.push(']');
+                Some(end) => {
+                    pattern.push_str(&class_to_pattern(&glob[index + 1..end], gitignore));
                     index = end + 1;
                     continue;
                 }
             }
-        } else if char == '{' {
+        } else if !gitignore && char == '{' {
             match glob[index + 1..].iter().position(|c| *c == '}') {
                 None => pattern.push_str("\\{"),
                 Some(offset) => {
@@ -560,7 +636,7 @@ fn glob_to_pattern(glob: &[char]) -> String {
                     let inner = &glob[index + 1..end];
                     let alternatives: Vec<String> = split_chars(inner, ',')
                         .iter()
-                        .map(|part| glob_to_pattern(part))
+                        .map(|part| glob_to_pattern(part, false))
                         .collect();
                     pattern.push_str("(?:");
                     pattern.push_str(&alternatives.join("|"));
@@ -569,15 +645,75 @@ fn glob_to_pattern(glob: &[char]) -> String {
                     continue;
                 }
             }
-        } else if "\\^$.|?*+(){}".contains(char) {
-            pattern.push('\\');
-            pattern.push(char);
         } else {
-            pattern.push(char);
+            pattern.push_str(&regex_escape_char(char));
         }
         index += 1;
     }
     pattern
+}
+
+fn regex_escape_char(char: char) -> String {
+    if "\\^$.|?*+(){}[]-&~#".contains(char) {
+        format!("\\{char}")
+    } else {
+        char.to_string()
+    }
+}
+
+/// Index of the `]` closing the class that opens at `glob[start - 1]`.
+/// A `]` right after the opening (and optional `!`/`^`) is a literal member,
+/// so `[]x]` and `[!]x]` are valid classes.
+fn class_end(glob: &[char], start: usize) -> Option<usize> {
+    let mut from = start;
+    if matches!(glob.get(from), Some('!') | Some('^')) {
+        from += 1;
+    }
+    if glob.get(from) == Some(&']') {
+        from += 1;
+    }
+    glob.get(from..)?
+        .iter()
+        .position(|c| *c == ']')
+        .map(|offset| from + offset)
+}
+
+/// Rust-regex character class for the glob class body `inner` (between the
+/// brackets). Members that the regex syntax treats specially (`[`, `]`, `&&`,
+/// `--`, `~~`, `\`, `^`) are escaped; `-` stays a range operator only between
+/// two members.
+fn class_to_pattern(inner: &[char], gitignore: bool) -> String {
+    let mut out = String::from("[");
+    let mut members = inner;
+    if matches!(members.first(), Some('!') | Some('^')) {
+        out.push('^');
+        members = &members[1..];
+    }
+    let mut after_range_op = false;
+    let mut index = 0usize;
+    while index < members.len() {
+        let char = members[index];
+        if char == '-' && index > 0 && index + 1 < members.len() && !after_range_op {
+            out.push('-');
+            after_range_op = true;
+            index += 1;
+            continue;
+        }
+        let literal = if gitignore && char == '\\' && index + 1 < members.len() {
+            index += 1;
+            members[index]
+        } else {
+            char
+        };
+        if "[]&~\\^-".contains(literal) {
+            out.push('\\');
+        }
+        out.push(literal);
+        after_range_op = false;
+        index += 1;
+    }
+    out.push(']');
+    out
 }
 
 /// `String.split(',')` on a `&[char]`, dropping nothing (JS keeps empties).
@@ -599,7 +735,7 @@ fn split_chars(parts: &[char], separator: char) -> Vec<Vec<char>> {
 pub fn compile_glob(glob: &str) -> Result<Regex, CodingError> {
     match RegexBuilder::new(&format!(
         "^{}$",
-        glob_to_pattern(&glob.chars().collect::<Vec<char>>())
+        glob_to_pattern(&glob.chars().collect::<Vec<char>>(), false)
     ))
     .build()
     {
@@ -880,11 +1016,12 @@ impl SearchState {
         deadline: i64,
         budget: &mut SearchBudget,
     ) -> Result<(), CodingError> {
-        let info = match tokio::fs::metadata(path).await {
-            Ok(info) => info,
-            Err(_) => return Ok(()),
+        // The size/kind decision is made on the OPENED descriptor, so a file
+        // swapped for a symlink or FIFO after the walk is never followed.
+        let Some((file, info)) = open_regular_nofollow(path).await else {
+            return Ok(());
         };
-        if !info.is_file() || info.len() > limits.search_max_file_bytes {
+        if info.len() > limits.search_max_file_bytes {
             return Ok(());
         }
         self.bytes += info.len();
@@ -892,18 +1029,25 @@ impl SearchState {
             self.input_exhausted = true;
             return Ok(());
         }
-        let raw = match tokio::fs::read(path).await {
-            Ok(raw) => raw,
-            Err(_) => return Ok(()),
+        // A file that grew past the cap since the stat is skipped, not read.
+        let Some(raw) = read_capped(file, limits.search_max_file_bytes).await else {
+            return Ok(());
         };
         if raw.contains(&0) {
             return Ok(());
         }
         let text = String::from_utf8_lossy(&raw);
-        let lines: Vec<&str> = text.split('\n').collect();
+        // Split on LF and drop one trailing CR, so `foo$` matches CRLF files
+        // and CR never leaks into the output.
+        let lines: Vec<&str> = text
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line))
+            .collect();
         for index in 0..lines.len() {
-            // A huge file must not outlive a cancel or the time budget.
+            // A huge file must not outlive a cancel or the time budget, and
+            // must not monopolise the executor thread.
             if index % 256 == 255 {
+                tokio::task::yield_now().await;
                 if cancelled(&options.signal) {
                     return Err(aborted());
                 }
@@ -1708,5 +1852,170 @@ mod tests {
         assert!(matcher.is_ignored("sub/a", false));
         assert!(!matcher.is_ignored("other/sub/a", false));
         assert!(!matcher.is_ignored("plain.txt", false));
+    }
+
+    fn ignored(rule: &str, path: &str) -> bool {
+        let Some((pattern, negate, dir_only)) = parse_ignore_rule(rule) else {
+            return false;
+        };
+        let _ = dir_only;
+        !negate && pattern.is_match(path)
+    }
+
+    #[test]
+    fn ignore_globs_follow_gitignore_semantics() {
+        // Braces and commas are literal in ignore files.
+        assert!(ignored("a{b,c}.txt", "a{b,c}.txt"));
+        assert!(!ignored("a{b,c}.txt", "ab.txt"));
+        assert!(!ignored("a{b,c}.txt", "ac.txt"));
+        // A backslash escapes the next character.
+        assert!(ignored("\\*star", "*star"));
+        assert!(!ignored("\\*star", "xstar"));
+        assert!(ignored("\\#hash", "#hash"));
+        // Classes: negation, leading `]`, and characters regex treats specially.
+        assert!(ignored("[!a]x", "bx"));
+        assert!(!ignored("[!a]x", "ax"));
+        assert!(ignored("[]x]y", "]y"));
+        assert!(ignored("[]x]y", "xy"));
+        assert!(ignored("[a-c]z", "bz"));
+        assert!(ignored("[a&&b]z", "&z"));
+        assert!(ignored("[+--]z", ",z"));
+        assert!(ignored("[~]z", "~z"));
+        assert!(ignored("[[]z", "[z"));
+        assert!(ignored("[a-]z", "-z"));
+        // An unusable pattern is dropped, not fatal.
+        assert!(parse_ignore_rule("[z-a]x").is_none());
+        // Tool globs keep brace alternation.
+        let glob = compile_glob("*.{ts,tsx}").unwrap();
+        assert!(glob.is_match("a.tsx") && glob.is_match("a.ts") && !glob.is_match("a.js"));
+    }
+
+    #[tokio::test]
+    async fn crlf_files_match_end_anchors_without_leaking_cr() {
+        let h = TempRoot::new("crlf").await;
+        h.put("a.txt", "one foo\r\ntwo\r\n").await;
+        let root = h.root();
+        let outcome = search_text(
+            &input(&root, &root, "foo$"),
+            &walk_options(CodingLimits::default()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.text, "a.txt:1:one foo");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ignore_file_symlink_fifo_and_oversize_are_not_read() {
+        let h = TempRoot::new("ignoresafe").await;
+        let outside = TempRoot::new("ignoreoutside").await;
+        outside.put("rules", "secret.txt\n").await;
+        std::os::unix::fs::symlink(outside.path("rules"), h.path(".gitignore")).unwrap();
+        h.put("secret.txt", "needle\n").await;
+        // A FIFO .ignore must not hang the walk.
+        let fifo = std::ffi::CString::new(h.path(".ignore")).unwrap();
+        // SAFETY: valid NUL-terminated path; mkfifo has no other preconditions.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let root = h.root();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            search_text(
+                &input(&root, &root, "needle"),
+                &walk_options(CodingLimits::default()),
+            ),
+        )
+        .await
+        .expect("walk must not hang on a FIFO")
+        .unwrap();
+        assert_eq!(outcome.text, "secret.txt:1:needle");
+        // Oversized ignore file: skipped.
+        let big = TempRoot::new("ignorebig").await;
+        big.put(".gitignore", &format!("secret.txt\n{}", "#".repeat(300)))
+            .await;
+        big.put("secret.txt", "needle\n").await;
+        let limits = CodingLimits {
+            ignore_file_max_bytes: 100,
+            ..CodingLimits::default()
+        };
+        let root = big.root();
+        let outcome = search_text(&input(&root, &root, "needle"), &walk_options(limits))
+            .await
+            .unwrap();
+        assert_eq!(outcome.text, "secret.txt:1:needle");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn scan_file_does_not_follow_a_swapped_in_symlink() {
+        let h = TempRoot::new("scanswap").await;
+        let outside = TempRoot::new("scanoutside").await;
+        outside.put("o.txt", "needle\n").await;
+        std::os::unix::fs::symlink(outside.path("o.txt"), h.path("swapped.txt")).unwrap();
+        let root = h.root();
+        let mut state = SearchState {
+            output: Vec::new(),
+            bytes: 0,
+            output_bytes: 0,
+            matches: 0,
+            skipped: 0,
+            input_exhausted: false,
+            output_full: false,
+        };
+        let regex = Regex::new("needle").unwrap();
+        let limits = CodingLimits::default();
+        let mut budget = SearchBudget::default();
+        state
+            .scan_file(
+                &h.path("swapped.txt"),
+                "swapped.txt",
+                &input(&root, &root, "needle"),
+                &regex,
+                &limits,
+                &walk_options(limits.clone()),
+                i64::MAX,
+                &mut budget,
+            )
+            .await
+            .unwrap();
+        assert_eq!(state.matches, 0);
+    }
+
+    fn limits_five() -> CodingLimits {
+        CodingLimits {
+            search_max_files: 5,
+            ..CodingLimits::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn walk_stops_listing_an_over_budget_directory() {
+        let h = TempRoot::new("walkcap").await;
+        for i in 0..50 {
+            h.put(&format!("f{i:02}.txt"), "x").await;
+        }
+        let limits = CodingLimits {
+            search_max_files: 5,
+            ..CodingLimits::default()
+        };
+        let root = h.root();
+        let mut walk = Walk::new(&root, &walk_options(limits)).await.unwrap();
+        let mut seen = 0;
+        while walk.next().await.unwrap().is_some() {
+            seen += 1;
+        }
+        assert_eq!(seen, 5);
+        assert!(walk.budget().entries_exhausted);
+        // The visited set is the sorted prefix, not a readdir-order subset.
+        let mut walk = Walk::new(&root, &walk_options(limits_five()))
+            .await
+            .unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = walk.next().await.unwrap() {
+            names.push(entry.rel);
+        }
+        assert_eq!(
+            names,
+            ["f00.txt", "f01.txt", "f02.txt", "f03.txt", "f04.txt"]
+        );
     }
 }

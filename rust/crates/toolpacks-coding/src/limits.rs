@@ -116,6 +116,53 @@ impl Default for CodingLimits {
     }
 }
 
+/// Longest timeout any `*_ms` / `*_sec` bound may take: a day. Anything
+/// longer is a typo that would effectively disable the bound.
+const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
+
+impl CodingLimits {
+    /// Reject bounds that would make the command runner misbehave: a zero
+    /// tail cap, a zero/absurd timeout, or a kill grace above the runner's
+    /// hard cap (which would otherwise be silently clamped). A grace of 0 is
+    /// valid: SIGKILL immediately after SIGTERM.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.command_tail_max_bytes < 1 {
+            return Err("coding limit \"commandTailMaxBytes\" must be at least 1".to_owned());
+        }
+        let ms_bounds: [(&str, u64); 3] = [
+            ("searchTimeBudgetMs", self.search_time_budget_ms),
+            ("gitTimeoutMs", self.git_timeout_ms),
+            ("toolTimeoutMs", self.tool_timeout_ms),
+        ];
+        for (name, value) in ms_bounds {
+            if value == 0 || value > MAX_TIMEOUT_MS {
+                return Err(format!(
+                    "coding limit \"{name}\" must be between 1 and {MAX_TIMEOUT_MS} ms"
+                ));
+            }
+        }
+        let sec_bounds: [(&str, u64); 2] = [
+            ("commandDefaultTimeoutSec", self.command_default_timeout_sec),
+            ("commandMaxTimeoutSec", self.command_max_timeout_sec),
+        ];
+        for (name, value) in sec_bounds {
+            if value == 0 || value > MAX_TIMEOUT_MS / 1000 {
+                return Err(format!(
+                    "coding limit \"{name}\" must be between 1 and {} s",
+                    MAX_TIMEOUT_MS / 1000
+                ));
+            }
+        }
+        let cap = crate::process::KILL_GRACE_CAP_MS;
+        if self.command_kill_grace_ms > cap {
+            return Err(format!(
+                "coding limit \"commandKillGraceMs\" must not exceed {cap} ms"
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Overridable subset of [`CodingLimits`]; mirrors `Partial<CodingLimits>`.
 #[derive(Clone, Debug, Default)]
 pub struct CodingLimitsOverride {
@@ -232,6 +279,58 @@ impl CodingLimitsOverride {
                 .command_kill_grace_ms
                 .unwrap_or(base.command_kill_grace_ms),
             tool_timeout_ms: self.tool_timeout_ms.unwrap_or(base.tool_timeout_ms),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_validate() {
+        assert_eq!(CodingLimits::default().validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_zero_kill_grace_is_valid() {
+        let limits = CodingLimits {
+            command_kill_grace_ms: 0,
+            ..CodingLimits::default()
+        };
+        assert_eq!(limits.validate(), Ok(()));
+    }
+
+    #[test]
+    fn tail_max_bytes_zero_is_rejected() {
+        let limits = CodingLimits {
+            command_tail_max_bytes: 0,
+            ..CodingLimits::default()
+        };
+        assert!(limits.validate().is_err());
+    }
+
+    #[test]
+    fn zero_oversized_and_over_cap_timeouts_are_rejected() {
+        for limits in [
+            CodingLimits {
+                tool_timeout_ms: 0,
+                ..CodingLimits::default()
+            },
+            CodingLimits {
+                git_timeout_ms: MAX_TIMEOUT_MS + 1,
+                ..CodingLimits::default()
+            },
+            CodingLimits {
+                command_kill_grace_ms: crate::process::KILL_GRACE_CAP_MS + 1,
+                ..CodingLimits::default()
+            },
+            CodingLimits {
+                command_max_timeout_sec: 24 * 60 * 60 + 1,
+                ..CodingLimits::default()
+            },
+        ] {
+            assert!(limits.validate().is_err(), "{limits:?}");
         }
     }
 }

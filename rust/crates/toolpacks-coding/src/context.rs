@@ -77,7 +77,11 @@ impl PackEnv {
             return root.clone();
         }
         let root = canonical_root(&self.workspace_root).await;
-        *cached = Some(root.clone());
+        // A failure (workspace not created yet, transient IO) is not cached:
+        // the next call retries.
+        if let Ok(resolved) = &root {
+            *cached = Some(Ok(resolved.clone()));
+        }
         root
     }
 
@@ -115,19 +119,8 @@ async fn create_scratch() -> Result<String, CodingError> {
         .into_owned();
     for _ in 0..64 {
         let candidate = format!("{base}/agentkit-coding-{}", uuid::Uuid::new_v4().simple());
-        match tokio::fs::create_dir(&candidate).await {
-            Ok(()) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = tokio::fs::set_permissions(
-                        &candidate,
-                        std::fs::Permissions::from_mode(0o700),
-                    )
-                    .await;
-                }
-                return Ok(candidate);
-            }
+        match create_private_dir(&candidate).await {
+            Ok(()) => return Ok(candidate),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
                 return Err(CodingError::new("io_error", error.to_string()));
@@ -138,6 +131,23 @@ async fn create_scratch() -> Result<String, CodingError> {
         "io_error",
         "could not create a scratch directory",
     ))
+}
+
+/// Creates the directory with mode 0700 from the start, so it is never
+/// briefly visible with the umask-derived mode.
+async fn create_private_dir(path: &str) -> std::io::Result<()> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(path)
+    })
+    .await
+    .map_err(|error| std::io::Error::other(error.to_string()))?
 }
 
 /// What a tool body returns; `define_tool` shapes it into a `ToolResult`.

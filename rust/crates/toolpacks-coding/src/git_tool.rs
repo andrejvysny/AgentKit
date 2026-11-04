@@ -152,6 +152,14 @@ pub struct GitInvocation {
     pub rev: Option<String>,
 }
 
+/// A user-supplied path as a literal pathspec: without `:(literal)` git
+/// would read a leading `:` as pathspec magic (`:(top)`, `:/`, `:(exclude)`),
+/// letting a path argument widen or invert the selection. The tool's own
+/// exclude pathspecs stay magic.
+fn literal_pathspec(path: &str) -> String {
+    format!(":(literal){path}")
+}
+
 /// Fixed argv per command; user text only ever fills a value slot.
 pub fn build_git_args(
     root: &str,
@@ -166,7 +174,10 @@ pub fn build_git_args(
         let tail = if call.path.is_some() || exclude_sensitive {
             vec![
                 "--".to_owned(),
-                call.path.clone().unwrap_or_else(|| ".".to_owned()),
+                call.path
+                    .as_deref()
+                    .map(literal_pathspec)
+                    .unwrap_or_else(|| ".".to_owned()),
             ]
         } else {
             vec![]
@@ -210,7 +221,7 @@ pub fn build_git_args(
             }
             if let Some(path) = &call.path {
                 args.push("--".to_owned());
-                args.push(path.clone());
+                args.push(literal_pathspec(path));
             }
         }
         GitCommand::Show => {
@@ -403,12 +414,24 @@ async fn run_git(
     }
 }
 
+fn git_timeout_error(command: GitCommand) -> CodingError {
+    CodingError::new("git_timeout", format!("git {} timed out", command.as_str()))
+}
+
+/// Milliseconds left until `deadline` (0 once passed).
+fn remaining_ms(deadline: std::time::Instant) -> u64 {
+    deadline
+        .saturating_duration_since(std::time::Instant::now())
+        .as_millis() as u64
+}
+
 /// Names of every filter/diff driver the repository config (includes
 /// honored) defines. Fails closed: if git cannot list them, nothing runs.
 async fn configured_drivers(
     root: &str,
     timeout_ms: u64,
     cancellation: Option<CancellationToken>,
+    command: GitCommand,
 ) -> Result<Vec<String>, CodingError> {
     let mut args = vec!["-C".to_owned(), root.to_owned()];
     args.extend(GIT_SAFETY_ARGS.iter().map(|arg| (*arg).to_owned()));
@@ -423,6 +446,9 @@ async fn configured_drivers(
         .map(str::to_owned),
     );
     let run = run_git(&args, 1 << 20, timeout_ms, cancellation).await;
+    if run.timed_out {
+        return Err(git_timeout_error(command));
+    }
     // Exit 1 means "no matching key"; anything else is an unreadable config.
     if run.timed_out || run.capped || !matches!(run.code, Some(0) | Some(1)) {
         let shown = slice_utf16(run.stderr.trim(), 300);
@@ -450,7 +476,7 @@ pub fn git_inspect_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
     let l = env.limits.clone();
     let allow_sensitive = env.allow_sensitive;
     let description = format!(
-        "Read-only git inspection: status, diff (staged or not), log, show. Fixed commands only. Hooks, fsmonitor, filter/textconv/external-diff drivers, pager and ssh/askpass helpers configured by the repository are neutralized and never run; if the repository config cannot be read the call is refused. Output is capped at {}. Prefer this over running git through a shell.",
+        "Read-only git inspection: status, diff (staged or not), log, show. Fixed commands only. Hooks, fsmonitor, filter/textconv/external-diff drivers, pager and ssh/askpass helpers configured by the repository are neutralized and never run; if the repository config cannot be read the call is refused. Output is capped at {}. Paths are taken literally (no globs or pathspec magic). Prefer this over running git through a shell.",
         format_size(l.git_max_output_bytes)
     );
     let input_schema = json!({
@@ -462,7 +488,7 @@ pub fn git_inspect_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Limit to this path (relative to the workspace root)."
+                        "description": "Limit to this path (relative to the workspace root). Taken literally: no globs or pathspec magic."
                     },
                     "staged": {
                         "type": "boolean",
@@ -557,9 +583,23 @@ pub fn git_inspect_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                     max_count: opt_int(&args, "maxCount", 1, l.git_max_count as i64)?,
                     rev,
                 };
-                let drivers =
-                    configured_drivers(&root, l.git_timeout_ms, Some(ctx.cancellation.clone()))
-                        .await?;
+                // One deadline for the whole call, shared by the driver
+                // enumeration and the git command itself. The tool-level
+                // timeout is git_timeout_ms + 5000, so this always fires
+                // first and reports a clean `git_timeout`.
+                let deadline =
+                    std::time::Instant::now() + std::time::Duration::from_millis(l.git_timeout_ms);
+                let drivers = configured_drivers(
+                    &root,
+                    remaining_ms(deadline),
+                    Some(ctx.cancellation.clone()),
+                    command,
+                )
+                .await?;
+                let remaining = remaining_ms(deadline);
+                if remaining == 0 {
+                    return Err(git_timeout_error(command));
+                }
                 if ctx.cancellation.is_cancelled() {
                     return Err(CodingError::new("aborted", "the call was aborted"));
                 }
@@ -567,7 +607,7 @@ pub fn git_inspect_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                 let run = run_git(
                     &build_git_args(&root, &call, !allow_sensitive, &overrides),
                     l.git_max_output_bytes,
-                    l.git_timeout_ms,
+                    remaining,
                     Some(ctx.cancellation.clone()),
                 )
                 .await;
@@ -575,10 +615,7 @@ pub fn git_inspect_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
                     return Err(CodingError::new("aborted", "the call was aborted"));
                 }
                 if run.timed_out {
-                    return Err(CodingError::new(
-                        "git_timeout",
-                        format!("git {} timed out", command.as_str()),
-                    ));
+                    return Err(git_timeout_error(command));
                 }
                 if !run.capped && run.code != Some(0) {
                     let source = if !run.stderr.is_empty() {
@@ -803,7 +840,7 @@ mod tests {
             args.iter().rposition(|a| a == "--").unwrap()
                 > args.iter().position(|a| a == "HEAD~1").unwrap()
         );
-        assert!(args.contains(&"src".to_owned()));
+        assert!(args.contains(&":(literal)src".to_owned()));
         // Sensitive excludes trail the pathspec.
         assert!(args.iter().any(|a| a.starts_with(":(exclude,glob)**/.env")));
     }
@@ -844,7 +881,7 @@ mod tests {
         assert!(args.contains(&"--max-count=5".to_owned()));
         assert!(args.contains(&"--format=%h %ad %an %s".to_owned()));
         let index = args.iter().position(|a| a == "HEAD~2").unwrap();
-        assert_eq!(&args[index + 1..], ["--", "a.txt"]);
+        assert_eq!(&args[index + 1..], ["--", ":(literal)a.txt"]);
         assert!(!args.iter().any(|a| a.starts_with(":(exclude")));
         // log defaults to max-count 20.
         let args = build_git_args("/r", &call(GitCommand::Log), false, &[]);
@@ -859,6 +896,44 @@ mod tests {
             &args[2 + GIT_SAFETY_ARGS.len()..2 + GIT_SAFETY_ARGS.len() + 3],
             ["-c", "filter.x.clean=cat", "status"]
         );
+    }
+
+    #[test]
+    fn user_paths_are_literal_pathspecs_but_excludes_stay_magic() {
+        for path in [":(top)x", ":/", ":(exclude)a.txt"] {
+            let args = build_git_args(
+                "/r",
+                &GitInvocation {
+                    command: GitCommand::Status,
+                    path: Some(path.to_owned()),
+                    staged: None,
+                    max_count: None,
+                    rev: None,
+                },
+                true,
+                &[],
+            );
+            let at = args.iter().position(|a| a == "--").unwrap();
+            assert_eq!(args[at + 1], format!(":(literal){path}"));
+            assert!(
+                args[at + 2..]
+                    .iter()
+                    .all(|a| a.starts_with(":(exclude,glob)"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn magic_looking_paths_do_not_widen_the_selection() {
+        let h = repo("literal").await;
+        let tool = git_inspect_tool(&env_with(h.path(), CodingLimits::default()));
+        h.put("a.txt", "one\ntwo\nchanged\n").await;
+        let r = run(
+            &tool,
+            json!({ "command": "status", "args": { "path": ":(top)a.txt" } }),
+        )
+        .await;
+        assert!(!text(&r).contains(" M a.txt"), "{}", text(&r));
     }
 
     #[test]

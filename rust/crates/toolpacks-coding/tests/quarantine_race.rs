@@ -251,6 +251,7 @@ async fn queued_writer_learns_the_workspace_is_quarantined() {
             &QuarantineEvidence {
                 pids: vec![survivor_pid],
                 holder: holder("parent", "run_command", "make install"),
+                reason: None,
             },
         )
         .await

@@ -41,6 +41,34 @@ const CREDENTIAL_PATTERNS: &[&str] = &[
     "/\\.local/share/keyrings(/|$)",
     "/Library/(Keychains|Cookies)(/|$)",
 ];
+/// `(allow default)` leaves the Mach/AppleEvent plumbing open, which lets a
+/// sandboxed command ask an UNSANDBOXED system service to act for it:
+/// LaunchServices (`open`), AppleEvents (`osascript` driving Terminal),
+/// launchd job submission, and another process's task port. Each is denied
+/// here; verified empirically against real `sandbox-exec` (see
+/// `tests/sandbox_escape.rs`).
+///
+/// `mach-priv-task-port` is kept on purpose: it blocks `task_for_pid` /
+/// privileged task-port access, so debuggers (lldb, dtrace-style tools) and
+/// anything that injects into other processes cannot work inside the
+/// sandbox. That is an intentional trade-off, not an oversight.
+const ESCAPE_DENIES: &str = concat!(
+    "(deny lsopen)",
+    "(deny appleevent-send)",
+    "(deny mach-lookup (global-name \"com.apple.coreservices.launchservicesd\") ",
+    "(global-name-regex #\"^com\\.apple\\.lsd\\.\") ",
+    "(global-name \"com.apple.coreservices.quarantine-resolver\"))",
+    "(deny mach-priv-task-port)",
+    "(deny mach-lookup (global-name-regex #\"^com\\.apple\\.xpc\\.launchd\\.domain\\.\"))",
+);
+/// With the network off, the resolver daemons are also closed: DNS lookups
+/// through `mDNSResponder` would otherwise leak data out of a "no network"
+/// sandbox, and `system-socket` closes the raw PF_SYSTEM control sockets.
+const NO_NETWORK_DENIES: &str = concat!(
+    "(deny mach-lookup (global-name \"com.apple.mDNSResponder\") ",
+    "(global-name \"com.apple.dnssd.service\"))",
+    "(deny system-socket)",
+);
 const TOOLCHAIN_DIRS: &[&str] = &[
     ".rustup",
     ".cargo",
@@ -103,13 +131,21 @@ pub fn sandbox_profile(policy: &SandboxPolicy) -> Result<String, CodingError> {
         vec![join_path(&policy.root, ".git")]
     };
     Ok(format!(
-        "{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}",
         "(version 1)(allow default)",
         if policy.network {
             ""
         } else {
             "(deny network*)"
         },
+        format_args!(
+            "{ESCAPE_DENIES}{}",
+            if policy.network {
+                ""
+            } else {
+                NO_NETWORK_DENIES
+            }
+        ),
         "(deny file-write*)",
         format_args!(
             "(allow file-write* {} {} (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\") (regex #\"^/dev/fd/[0-9]+$\"))",
@@ -204,6 +240,10 @@ pub fn toolchain_paths(env: &std::collections::HashMap<String, String>) -> Vec<S
     {
         found.push(real);
     }
+    // A readable grant of $HOME (or any ancestor) would re-expose every
+    // credential directory beneath it, so such an entry is never granted.
+    let real_home = real_directory(&home);
+    found.retain(|path| !is_home_or_ancestor(path, &home, real_home.as_deref()));
     let mut found: Vec<String> = found
         .into_iter()
         .collect::<HashSet<_>>()
@@ -214,23 +254,63 @@ pub fn toolchain_paths(env: &std::collections::HashMap<String, String>) -> Vec<S
     found
 }
 
+/// True for "/", "/Users", "/home", and any path equal to or containing the
+/// (raw or canonical) home directory.
+fn is_home_or_ancestor(path: &str, home: &str, real_home: Option<&str>) -> bool {
+    let path = path.trim_end_matches('/');
+    if path.is_empty() || path == "/Users" || path == "/home" {
+        return true;
+    }
+    let covers = |home: &str| {
+        let home = home.trim_end_matches('/');
+        !home.is_empty() && (home == path || home.starts_with(&format!("{path}/")))
+    };
+    covers(home) || real_home.is_some_and(covers)
+}
+
 /// `os.homedir()` fallback when HOME is unset: getpwuid(getuid()).
 fn home_dir() -> Option<String> {
     #[cfg(unix)]
     {
-        // SAFETY: getuid is always safe; getpwuid returns a static per-thread
-        // buffer we copy synchronously.
-        unsafe {
-            let pw = libc::getpwuid(libc::getuid());
-            if pw.is_null() || (*pw).pw_dir.is_null() {
+        // Caller-owned buffer; `getpwuid_r` answers ERANGE when it is too
+        // small, so grow and retry up to a sane ceiling.
+        let mut size = 1024usize;
+        while size <= 1 << 20 {
+            let mut buffer = vec![0 as libc::c_char; size];
+            // SAFETY: an all-zero `passwd` is a valid initial value (null
+            // pointers, zero ids); it is only read after `getpwuid_r`
+            // reports success.
+            let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+            let mut result: *mut libc::passwd = std::ptr::null_mut();
+            // SAFETY: `passwd` and `result` are valid for writes, `buffer`
+            // is a live allocation of exactly `size` bytes owned by this
+            // frame, and `getuid` is always safe.
+            let rc = unsafe {
+                libc::getpwuid_r(
+                    libc::getuid(),
+                    &mut passwd,
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    &mut result,
+                )
+            };
+            if rc == libc::ERANGE {
+                size *= 2;
+                continue;
+            }
+            if rc != 0 || result.is_null() || passwd.pw_dir.is_null() {
                 return None;
             }
-            Some(
-                std::ffi::CStr::from_ptr((*pw).pw_dir)
+            // SAFETY: on success `pw_dir` points at a NUL-terminated string
+            // inside `buffer`, which is still alive and unmodified here; it
+            // is copied out before `buffer` drops.
+            return Some(
+                unsafe { std::ffi::CStr::from_ptr(passwd.pw_dir) }
                     .to_string_lossy()
                     .into_owned(),
-            )
+            );
         }
+        None
     }
     #[cfg(not(unix))]
     {
@@ -257,7 +337,8 @@ mod tests {
         let text = sandbox_profile(&policy()).unwrap();
         assert_eq!(
             text,
-            r##"(version 1)(allow default)(deny network*)(deny file-write*)(allow file-write* (subpath "/w/root") (subpath "/w/scratch") (literal "/dev/null") (literal "/dev/tty") (literal "/dev/dtracehelper") (regex #"^/dev/fd/[0-9]+$"))(deny file-write* (subpath "/w/root/.git"))(deny file-read-data (subpath "/Users") (subpath "/Volumes") (subpath "/private/tmp") (subpath "/private/var/folders") (subpath "/private/var/root"))(allow file-read-data (subpath "/w/scratch") (subpath "/w/root"))(deny file-read-data (regex #"/\.(netrc|npmrc|pypirc|git-credentials)$") (regex #"/\.cargo/credentials(\.toml)?$") (regex #"/\.(ssh|aws|gnupg|kube|docker|azure|terraform\.d|password-store)(/|$)") (regex #"/\.pgpass$") (regex #"/\.config/(gh|gcloud|hub)(/|$)") (regex #"/\.local/share/keyrings(/|$)") (regex #"/Library/(Keychains|Cookies)(/|$)"))"##
+            r##"(version 1)(allow default)(deny network*)__DENIES__(deny file-write*)(allow file-write* (subpath "/w/root") (subpath "/w/scratch") (literal "/dev/null") (literal "/dev/tty") (literal "/dev/dtracehelper") (regex #"^/dev/fd/[0-9]+$"))(deny file-write* (subpath "/w/root/.git"))(deny file-read-data (subpath "/Users") (subpath "/Volumes") (subpath "/private/tmp") (subpath "/private/var/folders") (subpath "/private/var/root"))(allow file-read-data (subpath "/w/scratch") (subpath "/w/root"))(deny file-read-data (regex #"/\.(netrc|npmrc|pypirc|git-credentials)$") (regex #"/\.cargo/credentials(\.toml)?$") (regex #"/\.(ssh|aws|gnupg|kube|docker|azure|terraform\.d|password-store)(/|$)") (regex #"/\.pgpass$") (regex #"/\.config/(gh|gcloud|hub)(/|$)") (regex #"/\.local/share/keyrings(/|$)") (regex #"/Library/(Keychains|Cookies)(/|$)"))"##
+            .replace("__DENIES__", &format!("{ESCAPE_DENIES}{NO_NETWORK_DENIES}"))
         );
     }
 
@@ -281,7 +362,9 @@ mod tests {
         let mut p = policy();
         p.network = true;
         let text = sandbox_profile(&p).unwrap();
-        assert!(text.starts_with("(version 1)(allow default)(deny file-write*)"));
+        assert!(text.starts_with(&format!(
+            "(version 1)(allow default){ESCAPE_DENIES}(deny file-write*)"
+        )));
         assert!(!text.contains("(deny network*)"));
     }
 
@@ -368,5 +451,72 @@ mod tests {
         sorted.sort();
         assert_eq!(paths, sorted);
         std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn profile_denies_the_launch_services_apple_event_and_launchd_escapes() {
+        for network in [false, true] {
+            let mut p = policy();
+            p.network = network;
+            let text = sandbox_profile(&p).unwrap();
+            for rule in [
+                "(deny lsopen)",
+                "(deny appleevent-send)",
+                "(deny mach-priv-task-port)",
+                "com.apple.coreservices.launchservicesd",
+                r"com\.apple\.xpc\.launchd\.domain",
+            ] {
+                assert!(text.contains(rule), "{rule}: {text}");
+            }
+            // The resolver/PF_SYSTEM denies belong to the no-network profile only.
+            assert_eq!(text.contains("com.apple.mDNSResponder"), !network);
+            assert_eq!(text.contains("(deny system-socket)"), !network);
+        }
+    }
+
+    #[test]
+    fn home_and_its_ancestors_are_never_readable_grants() {
+        assert!(is_home_or_ancestor("/", "/Users/me", None));
+        assert!(is_home_or_ancestor("/Users", "/Users/me", None));
+        assert!(is_home_or_ancestor("/home", "/home/me", None));
+        assert!(is_home_or_ancestor("/Users/me", "/Users/me", None));
+        assert!(is_home_or_ancestor("/Users/me/", "/Users/me", None));
+        assert!(is_home_or_ancestor(
+            "/private/Users",
+            "/x",
+            Some("/private/Users/me")
+        ));
+        assert!(!is_home_or_ancestor("/Users/me/bin", "/Users/me", None));
+        assert!(!is_home_or_ancestor("/Users/meow", "/Users/me", None));
+        assert!(!is_home_or_ancestor("/usr/bin", "/Users/me", None));
+    }
+
+    #[test]
+    fn a_path_entry_equal_to_home_is_dropped_by_toolchain_paths() {
+        let home = std::env::temp_dir().join(format!("toolchain-home-{}", std::process::id()));
+        std::fs::create_dir_all(home.join("bin")).unwrap();
+        let home_s = home.to_string_lossy().into_owned();
+        let env = std::collections::HashMap::from([
+            ("HOME".to_owned(), home_s.clone()),
+            ("PATH".to_owned(), format!("{home_s}:{home_s}/bin")),
+        ]);
+        let real = std::fs::canonicalize(&home).unwrap();
+        let paths = toolchain_paths(&env);
+        assert!(
+            !paths.iter().any(|p| p == real.to_str().unwrap()),
+            "{paths:?}"
+        );
+        assert!(
+            paths.contains(&format!("{}/bin", real.display())),
+            "{paths:?}"
+        );
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn home_dir_fallback_resolves_through_getpwuid_r() {
+        let home = home_dir().expect("passwd entry for the current uid");
+        assert!(home.starts_with('/'), "{home}");
     }
 }

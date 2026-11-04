@@ -14,6 +14,7 @@
 //! Ported from `packages/toolpacks-coding/src/process.ts`.
 
 use std::collections::{HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -22,6 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
 
+use futures::FutureExt;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -67,9 +69,20 @@ mod sig {
 /// `kill(-pgid)` is ever issued here; leader and descendants are signalled
 /// individually. On platforms without identity observation nothing is
 /// signalled at all, matching the TS `unknown` fail-closed.
-pub async fn kill_process_tree(pid: i32) {
+///
+/// Pids that are never a legitimate target are refused before anything is
+/// observed or signalled: `<= 1` (kernel/init, and the `0`/negative values
+/// that `kill(2)` turns into group/broadcast signals), this process, and its
+/// parent.
+pub async fn kill_process_tree(pid: i32) -> Result<(), CodingError> {
+    if let Some(reason) = protected_pid(pid) {
+        return Err(CodingError::new(
+            "refused_pid",
+            format!("refusing to signal pid {pid}: {reason}"),
+        ));
+    }
     let Some(identity) = crate::process_tree::observe_start_identity(pid).await else {
-        return;
+        return Ok(());
     };
     let find: FindFn = Arc::new(move || {
         let identity = identity.clone();
@@ -94,6 +107,26 @@ pub async fn kill_process_tree(pid: i32) {
     // No group handle: the caller holds no un-reaped child, so only
     // individually proven pids are ever signalled.
     terminate(None, find, 0).await;
+    Ok(())
+}
+
+/// Why `pid` must never be signalled by [`kill_process_tree`], if so.
+fn protected_pid(pid: i32) -> Option<&'static str> {
+    if pid <= 1 {
+        return Some("pid <= 1");
+    }
+    if u32::try_from(pid).is_ok_and(|pid| pid == std::process::id()) {
+        return Some("it is this process");
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: `getppid` takes no arguments, touches no memory and
+        // cannot fail.
+        if pid == unsafe { libc::getppid() } {
+            return Some("it is this process's parent");
+        }
+    }
+    None
 }
 
 /// One bounded command run.
@@ -144,6 +177,10 @@ pub struct RunResult {
     pub aborted: bool,
     pub spawn_error: Option<String>,
     pub teardown: Teardown,
+    /// Set when the run was abandoned without cleanup being established
+    /// (`"group_stuck"`: the hard settle ceiling expired). The owning driver
+    /// then publishes a quarantine tagged with this reason.
+    pub quarantine_reason: Option<&'static str>,
 }
 
 /// What the teardown of one command found and had to do.
@@ -312,9 +349,128 @@ pub enum TeardownScan {
     Unsupported,
 }
 
-const KILL_GRACE_CAP_MS: u64 = 10_000;
+pub(crate) const KILL_GRACE_CAP_MS: u64 = 10_000;
+/// Absolute ceiling on how long the driver keeps settling a command AFTER
+/// teardown has been issued (timeout or abort). A leader that ignores the
+/// kill, or an escaped writer holding the pipes open, must not pin the
+/// driver (and the workspace lease) forever: at expiry the pipes are
+/// dropped and the group is reported stuck.
+pub(crate) const HARD_SETTLE_CAP_MS: u64 = KILL_GRACE_CAP_MS * 2;
+#[cfg(test)]
+thread_local! {
+    /// Test-only override of [`HARD_SETTLE_CAP_MS`] for the current thread
+    /// (0 = none); thread-local so parallel tests cannot affect each other.
+    static HARD_SETTLE_TEST_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only: the driver never observes the child's exit (the pump hangs),
+    /// the shape of a leader whose exit cannot be seen.
+    static HANG_EXIT_OBSERVATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `pump_wait`, plus the test-only hang above.
+async fn observe_exit(child: &mut tokio::process::Child) -> Option<std::process::ExitStatus> {
+    #[cfg(test)]
+    if HANG_EXIT_OBSERVATION.with(std::cell::Cell::get) {
+        std::future::pending::<()>().await;
+    }
+    pump_wait(child).await
+}
+
+fn hard_settle_ms() -> u64 {
+    #[cfg(test)]
+    {
+        let forced = HARD_SETTLE_TEST_MS.with(std::cell::Cell::get);
+        if forced > 0 {
+            return forced;
+        }
+    }
+    HARD_SETTLE_CAP_MS
+}
+
+#[cfg(test)]
+static PANIC_DRIVER_IDS: LazyLock<StdMutex<HashSet<String>>> =
+    LazyLock::new(|| StdMutex::new(HashSet::new()));
+
+/// Test-only fault injection: panic once, shortly after the child spawned
+/// (long enough for it to write its pid file), for the execution with this
+/// id.
+#[cfg(test)]
+async fn maybe_inject_driver_panic(execution_id: &str) {
+    let hit = PANIC_DRIVER_IDS
+        .lock()
+        .map(|mut ids| ids.remove(execution_id))
+        .unwrap_or(false);
+    if hit {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        panic!("injected driver panic");
+    }
+}
+
+/// Join the teardown task. After the hard ceiling expired the wait itself
+/// is bounded too: a teardown that cannot finish is reported stuck, never
+/// awaited forever.
+async fn await_teardown(handle: tokio::task::JoinHandle<Teardown>, hard_expired: bool) -> Teardown {
+    let joined = if hard_expired {
+        match tokio::time::timeout(Duration::from_millis(KILL_GRACE_CAP_MS), handle).await {
+            Ok(joined) => joined,
+            Err(_) => {
+                return Teardown {
+                    group_stuck: true,
+                    ..Teardown::unknown()
+                };
+            }
+        }
+    } else {
+        handle.await
+    };
+    // A panicking teardown observed NOTHING: honestly unknown, never an
+    // empty survivor list that reads as success.
+    joined.unwrap_or_else(|_| Teardown::unknown())
+}
+
+/// Reap the child and publish the reaped flag inside ONE [`REAP_GATE`]
+/// critical section, so no group signal can check the flag, lose the race to
+/// the reap, then `kill(-pgid)` a freed number. `try_wait` is polled (never
+/// a blocking wait under a std lock); if the child still has not exited
+/// after the grace cap (uninterruptible sleep) the flag is published anyway
+/// — fail safe: blanket group signals stop, tokio reaps the zombie later.
+async fn reap_child(child: &mut tokio::process::Child, reaped: &AtomicBool) {
+    let give_up = deadline_after(KILL_GRACE_CAP_MS);
+    loop {
+        {
+            let _gate = REAP_GATE.lock().unwrap_or_else(|e| e.into_inner());
+            let still_running = matches!(child.try_wait(), Ok(None));
+            if !still_running || Instant::now() >= give_up {
+                reaped.store(true, Ordering::SeqCst);
+                return;
+            }
+        }
+        sleep(5).await;
+    }
+}
+
+/// Fallback horizon when `Instant + Duration` would overflow.
+const FAR_FUTURE: Duration = Duration::from_secs(86_400 * 365);
+
+/// `Instant::now() + ms` without the overflow panic.
+fn deadline_after(ms: u64) -> Instant {
+    let now = Instant::now();
+    now.checked_add(Duration::from_millis(ms))
+        .or_else(|| now.checked_add(FAR_FUTURE))
+        .unwrap_or(now)
+}
 const SURVIVOR_WAIT_MS: u64 = 500;
 const POLL_MS: u64 = 25;
+
+/// Serialises "is the child still unreaped? then `kill(-pgid)`" against
+/// "reap the child and publish the reaped flag". Process-global on purpose:
+/// both critical sections are a few syscalls, and one lock keeps host
+/// drains (which only hold the shared flag) under the same discipline as
+/// the driver.
+static REAP_GATE: StdMutex<()> = StdMutex::new(());
 
 #[cfg(unix)]
 fn signal_pid(pid: i32, sig: i32) {
@@ -947,6 +1103,10 @@ async fn terminate(group: Option<GroupHandle>, find: FindFn, grace_ms: u64) -> (
             // Ownership re-check AT SIGNAL TIME: once the driver has reaped
             // its child, the group number is kernel-recyclable and a
             // blanket signal would hit whoever holds it — never us again.
+            // The check and the kill sit in ONE critical section shared with
+            // the reap (`reap_child`), so a reap can never land between the
+            // check and the syscall and free the number under the signal.
+            let _gate = REAP_GATE.lock().unwrap_or_else(|e| e.into_inner());
             if !group.reaped.load(Ordering::SeqCst) {
                 signal_pid(-group.pgid, sig);
             }
@@ -1141,8 +1301,14 @@ impl Tail {
         }
         self.chunks.push(chunk.to_vec());
         self.held += chunk.len();
-        while self.held - self.chunks.first().map_or(0, Vec::len) >= hold {
-            self.held -= self.chunks.remove(0).len();
+        // Never indexes an empty vec: a zero `hold` (or empty chunks) just
+        // drains whatever is left and stops.
+        while let Some(first) = self.chunks.first() {
+            if self.held - first.len() < hold {
+                break;
+            }
+            self.held -= first.len();
+            self.chunks.remove(0);
             self.dropped = true;
         }
     }
@@ -1319,6 +1485,7 @@ fn failed_spawn(message: &str) -> RunResult {
         spawn_error: Some(message.to_string()),
         // Nothing ever spawned: there is no process tree left to clean.
         teardown: Teardown::clean(),
+        quarantine_reason: None,
     }
 }
 
@@ -1360,6 +1527,51 @@ pub async fn run_bounded(spec: RunSpec) -> RunResult {
 /// uncertainty path (live suspect, environ PermissionDenied, unsupported
 /// scan) can be regressed without prctl or racing the real scheduler.
 pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>) -> RunResult {
+    run_bounded_inner(spec, discovery, ChildSlot::default()).await
+}
+
+/// The driver's child, kept OUTSIDE the future that runs the pump so a panic
+/// in that future cannot lose the handle: panic recovery takes it from here
+/// to signal the group while it is still unreaped and to reap it under
+/// [`REAP_GATE`].
+type ChildSlot = Arc<Mutex<Option<tokio::process::Child>>>;
+
+/// `pump_wait` on the slotted child (the lock is held only while the pump
+/// future is alive; dropping it, or unwinding through it, releases it).
+async fn observe_exit_slot(slot: &ChildSlot) -> Option<std::process::ExitStatus> {
+    let mut guard = slot.lock().await;
+    let child = guard.as_mut()?;
+    observe_exit(child).await
+}
+
+/// Take the child out of the slot and reap it (flag + reap in one gate
+/// critical section). With no child available the flag is still published:
+/// nothing backs the group number any more.
+async fn reap_slot(slot: &ChildSlot, reaped: &AtomicBool) {
+    let child = slot.lock().await.take();
+    match child {
+        Some(mut child) => reap_child(&mut child, reaped).await,
+        None => {
+            let _gate = REAP_GATE.lock().unwrap_or_else(|e| e.into_inner());
+            reaped.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Arm the hard settle ceiling, but only while the leader has not exited:
+/// once its exit is observed the grace window governs, and the ceiling only
+/// covers "the leader never exits".
+fn arm_hard_ceiling(hard_at: &mut Option<Instant>, exited: bool) {
+    if !exited {
+        hard_at.get_or_insert_with(|| deadline_after(hard_settle_ms()));
+    }
+}
+
+async fn run_bounded_inner(
+    spec: RunSpec,
+    discovery: Option<FindFn>,
+    child_slot: ChildSlot,
+) -> RunResult {
     if let Some(refusal) = platform_refusal() {
         return refusal;
     }
@@ -1402,6 +1614,9 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
     }
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
+    *child_slot.lock().await = Some(child);
+    #[cfg(test)]
+    maybe_inject_driver_panic(&exec_id).await;
 
     // The marker misses Apple-signed binaries on macOS, so sample the tree too.
     let tracker: Option<Arc<TreeTracker>> = if crate_platform() == "darwin" {
@@ -1429,7 +1644,11 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
     let mut exited = false;
     let mut settled = false;
     let mut grace_at: Option<Instant> = None;
-    let timeout_at = Instant::now() + Duration::from_millis(spec.timeout_ms);
+    let timeout_at = deadline_after(spec.timeout_ms);
+    // Absolute settle ceiling, armed the first time a timeout/abort issues
+    // teardown (see `HARD_SETTLE_CAP_MS`).
+    let mut hard_at: Option<Instant> = None;
+    let mut hard_expired = false;
     let mut timeout_pending = true;
     let mut cancellation = spec.cancellation.clone();
     let mut teardown_run: Option<tokio::task::JoinHandle<Teardown>> = None;
@@ -1467,16 +1686,17 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
     // can still drain them), then sweep the group and stop waiting.
     let arm_grace = |timed_out: bool, aborted: bool, grace_at: &mut Option<Instant>| {
         let ms = if timed_out || aborted {
-            spec.limits.command_kill_grace_ms
+            spec.limits.command_kill_grace_ms.min(KILL_GRACE_CAP_MS)
         } else {
             250
         };
-        *grace_at = Some(Instant::now() + Duration::from_millis(ms));
+        *grace_at = Some(deadline_after(ms));
     };
     if cancellation.as_ref().is_some_and(|t| t.is_cancelled()) {
         aborted = true;
         cancellation = None;
         start_teardown(&mut teardown_run);
+        arm_hard_ceiling(&mut hard_at, exited);
     }
 
     let mut out_buf = vec![0u8; 65_536];
@@ -1486,8 +1706,66 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
             break;
         }
         let grace_deadline = grace_at;
+        let hard_deadline = hard_at;
+        // Control branches (cancel, timeout, grace, hard ceiling, exit) come
+        // BEFORE the pipe reads: `biased` polls in order, and a command that
+        // floods its pipes (`yes`) keeps a read branch ready forever, so any
+        // control branch listed after it would starve and the timeout would
+        // never fire.
         tokio::select! {
             biased;
+            _ = wait_cancel(cancellation.clone()), if cancellation.is_some() => {
+                aborted = true;
+                cancellation = None;
+                start_teardown(&mut teardown_run);
+                arm_hard_ceiling(&mut hard_at, exited);
+            }
+            _ = tokio::time::sleep_until(timeout_at), if timeout_pending => {
+                timed_out = true;
+                timeout_pending = false;
+                start_teardown(&mut teardown_run);
+                hard_at.get_or_insert_with(|| deadline_after(hard_settle_ms()));
+            }
+            // `select!` builds every branch future before checking guards,
+            // so these must not unwrap; the guards keep them unpolluted.
+            _ = tokio::time::sleep_until(
+                grace_deadline.unwrap_or_else(|| deadline_after(3600 * 1000)),
+            ), if grace_at.is_some() => {
+                start_teardown(&mut teardown_run);
+                stdout = None;
+                stderr = None;
+                settled = true;
+            }
+            // Teardown was issued but the run still has not settled (a pipe
+            // held open by an escaper, an exit that is never observed): stop
+            // waiting, drop the pipes and report the group stuck.
+            _ = tokio::time::sleep_until(
+                hard_deadline.unwrap_or_else(|| deadline_after(3600 * 1000)),
+            ), if hard_at.is_some() => {
+                hard_expired = true;
+                stdout = None;
+                stderr = None;
+                settled = true;
+            }
+            status = observe_exit_slot(&child_slot), if !exited => {
+                if let Some(status) = status {
+                    exit_code = status.code();
+                    #[cfg(unix)]
+                    {
+                        exit_signal = std::os::unix::process::ExitStatusExt::signal(&status)
+                            .map(signal_name);
+                    }
+                }
+                exited = true;
+                exited_flag.store(true, Ordering::SeqCst);
+                // Exit observed: the grace window governs from here.
+                hard_at = None;
+                arm_grace(timed_out, aborted, &mut grace_at);
+                if stdout.is_none() && stderr.is_none() {
+                    // 'close': exited and both pipes drained.
+                    settled = true;
+                }
+            }
             r = read_out(&mut stdout, &mut out_buf), if stdout.is_some() => {
                 match r {
                     Some(Ok(n)) if n > 0 => {
@@ -1520,43 +1798,6 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
                     }
                 }
             }
-            status = pump_wait(&mut child), if !exited => {
-                if let Some(status) = status {
-                    exit_code = status.code();
-                    #[cfg(unix)]
-                    {
-                        exit_signal = std::os::unix::process::ExitStatusExt::signal(&status)
-                            .map(signal_name);
-                    }
-                }
-                exited = true;
-                exited_flag.store(true, Ordering::SeqCst);
-                arm_grace(timed_out, aborted, &mut grace_at);
-                if stdout.is_none() && stderr.is_none() {
-                    // 'close': exited and both pipes drained.
-                    settled = true;
-                }
-            }
-            _ = tokio::time::sleep_until(timeout_at), if timeout_pending => {
-                timed_out = true;
-                timeout_pending = false;
-                start_teardown(&mut teardown_run);
-            }
-            // `select!` builds every branch future before checking guards,
-            // so this must not unwrap; the guard keeps it unpolluted.
-            _ = tokio::time::sleep_until(
-                grace_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(3600)),
-            ), if grace_at.is_some() => {
-                start_teardown(&mut teardown_run);
-                stdout = None;
-                stderr = None;
-                settled = true;
-            }
-            _ = wait_cancel(cancellation.clone()), if cancellation.is_some() => {
-                aborted = true;
-                cancellation = None;
-                start_teardown(&mut teardown_run);
-            }
         }
     }
     // Sweep stragglers left by a command that exited with children alive —
@@ -1564,24 +1805,26 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
     // from `process_group(0)`) cannot be recycled by the kernel, so every
     // group signal the teardown issues is bound to our own group: the
     // un-reaped child IS the process-group handle.
-    let teardown = match teardown_run.take() {
-        Some(handle) => match handle.await {
-            Ok(teardown) => teardown,
-            // A panicking teardown observed NOTHING: honestly unknown,
-            // never an empty survivor list that reads as success.
-            Err(_) => Teardown::unknown(),
-        },
+    let mut teardown = match teardown_run.take() {
+        Some(handle) => await_teardown(handle, hard_expired).await,
         None => {
             let find = Arc::clone(&find);
             let grace_ms = spec.limits.command_kill_grace_ms.min(KILL_GRACE_CAP_MS);
             terminate(driver_group, find, grace_ms).await.0
         }
     };
+    let mut quarantine_reason = None;
+    if hard_expired {
+        // Fail closed: the run was abandoned with the group possibly still
+        // populated (an unmarked escaper can hold the pipes unseen), so
+        // cleanup is NOT established and the driver quarantines.
+        teardown.group_stuck = true;
+        quarantine_reason = Some("group_stuck");
+    }
     // Only now may the child be reaped; from this instant the group number
     // is recyclable, so the flag retires every blanket group signal — for
     // host drains reading the shared slot and for this function itself.
-    let _ = child.wait().await;
-    reaped_flag.store(true, Ordering::SeqCst);
+    reap_slot(&child_slot, &reaped_flag).await;
     if let Some(tracker) = &tracker {
         tracker.stop();
     }
@@ -1623,6 +1866,7 @@ pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>
         aborted,
         spawn_error: None,
         teardown,
+        quarantine_reason,
     }
 }
 
@@ -1895,6 +2139,7 @@ impl OwnedExecution {
                     aborted: false,
                     spawn_error: Some("the execution driver died before reporting".to_owned()),
                     teardown: Teardown::unknown(),
+                    quarantine_reason: None,
                 },
                 stragglers: vec![],
                 cleanup: Teardown::unknown().outcome(),
@@ -1946,6 +2191,7 @@ pub fn spawn_owned_execution_with_discovery(
     spec.pgid_slot = Some(Arc::clone(&pgid_slot));
     let reaped_slot = Arc::new(AtomicBool::new(false));
     spec.reaped_slot = Some(Arc::clone(&reaped_slot));
+    let driver_reaped = Arc::clone(&reaped_slot);
     let driver_slot = Arc::clone(&pgid_slot);
     if let Ok(mut live) = LIVE.lock() {
         live.insert(
@@ -1968,7 +2214,9 @@ pub fn spawn_owned_execution_with_discovery(
     let watcher_id = execution_id.clone();
     let spawned_at_ms = now_ms();
     let watcher_slot = Arc::clone(&driver_slot);
-    tokio::spawn(async move {
+    let watcher_stop = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&watcher_stop);
+    let watcher = tokio::spawn(async move {
         // Upgrade the pre-spawn intent once the child exists: same nonce,
         // now with the confirmed process group and spawn time. Best effort
         // by design — the pre-spawn intent already blocks reconciliation,
@@ -1980,10 +2228,19 @@ pub fn spawn_owned_execution_with_discovery(
         // poll tightly for the first ~100 ms, then back off to the normal
         // cadence for the rest of the ~5 s budget, and retry a transiently
         // failed write while the slot still reads a pgid.
+        // Resolves to "did the upgraded intent land". The stop flag is
+        // checked immediately before every write: once the driver has set
+        // it and joined this task, no write can follow its `clear`.
         for tick in 0..500u32 {
+            if stop.load(Ordering::SeqCst) {
+                return false;
+            }
             let pgid = watcher_slot.load(Ordering::SeqCst);
             if pgid > 0 {
                 for _ in 0..3 {
+                    if stop.load(Ordering::SeqCst) {
+                        return false;
+                    }
                     let written = watcher_coordinator
                         .record_execution_intent(&crate::coordination::ExecutionIntent {
                             root: watcher_root.clone(),
@@ -1998,103 +2255,265 @@ pub fn spawn_owned_execution_with_discovery(
                         })
                         .await;
                     if written.is_ok() {
-                        return;
+                        return true;
                     }
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
-                return;
+                return false;
             }
             tokio::time::sleep(Duration::from_millis(if tick < 100 { 1 } else { POLL_MS })).await;
         }
+        false
     });
+    let ctx = DriverCtx {
+        coordinator,
+        root,
+        holder,
+        execution_id: driver_exec,
+        pgid_slot: driver_slot,
+        spawned_at_ms,
+        grace_ms: spec.limits.command_kill_grace_ms.min(KILL_GRACE_CAP_MS),
+        watcher_stop,
+        child_slot: ChildSlot::default(),
+    };
     tokio::spawn(async move {
         // Unregisters on completion (or unwind): the drain loop and tests
         // read this as "the driver is done with cleanup".
         let _live = LiveGuard {
             execution_id: driver_id,
         };
-        let run = run_bounded_with_discovery(spec, discovery).await;
-        let stragglers = wait_for_exit(&run.teardown.survivors, SURVIVOR_RECHECK_MS).await;
-        let pgid = match driver_slot.load(Ordering::SeqCst) {
-            0 => None,
-            pgid => Some(pgid as i32),
-        };
-        // Fold the survivor recheck into the teardown verdict: survivors
-        // that positively exited are resolved; survivors that stayed alive
-        // are kill failures, and SUSPECTS resolve only through their own
-        // liveness probe — an empty survivor list NEVER cancels a live
-        // suspect or an unsupported scan (that collapse was the assessor
-        // defect: `survivors=[]` beside a live suspect read as success).
-        let mut uncertainty = run.teardown.outcome().uncertainty();
-        uncertainty.survivors = stragglers.clone();
-        uncertainty.suspects.retain(|pid| pid_alive(*pid));
-        let cleanup = if uncertainty.is_empty() {
-            CleanupOutcome::Clean
-        } else {
-            CleanupOutcome::Uncertain(uncertainty)
-        };
+        // The lease lives OUTSIDE the catch_unwind'd body: a panic must not
+        // drop it (its deferred release would hand the gate to the next
+        // command while the child may still run). The recovery path below
+        // decides when it is released.
         let mut lease = Some(lease);
-        let mut quarantine_error = None;
-        if let CleanupOutcome::Uncertain(uncertainty) = &cleanup {
-            // Cleanup is not positively established (ADR 0020): the lease may
-            // be released (a wedge with no recovery path helps nobody), but
-            // the workspace stays quarantined — every later acquisition
-            // blocks until the evidence resolves or recovery is recorded.
-            // Name every piddable reason (kill failures + suspects) in the
-            // evidence; an empty list means the uncertainty is unnameable
-            // (unsupported scan), which stays blocked just the same. If the
-            // blocking evidence itself cannot be published, the lease stays
-            // held: live processes must never be handed a blind workspace.
-            // `forget` skips `WorkspaceLease::drop`, whose deferred release
-            // would otherwise undo exactly that.
-            let mut pids = uncertainty.survivors.clone();
-            for pid in &uncertainty.suspects {
-                if !pids.contains(pid) {
-                    pids.push(*pid);
-                }
-            }
-            let identity = crate::coordination::CommandCleanupIdentity {
-                execution_id: driver_exec.clone(),
-                owner_pid: i64::from(std::process::id()),
-                pgid,
-                spawned_at_ms,
-            };
-            if let Err(error) = coordinator
-                .quarantine_execution(&root, &QuarantineEvidence { pids, holder }, &identity)
-                .await
-            {
-                quarantine_error = Some(error);
-                if let Some(lease) = lease.take() {
-                    std::mem::forget(lease);
-                }
-            }
-        }
-        // The durable intent is retired ONLY on a positively clean cleanup.
-        // Uncertain cleanup keeps the intent alongside the quarantine —
-        // quarantine alone must be durable too (the in-process coordinator
-        // persists it through the intent journal), and neither half may be
-        // dropped while recovery has not resolved the uncertainty. A failed
-        // quarantine publication likewise keeps the intent — and the lease.
-        if cleanup.is_clean() && quarantine_error.is_none() {
-            let _ = coordinator
-                .clear_execution_intent(&root, &driver_exec)
-                .await;
-        }
-        if let Some(mut lease) = lease {
-            lease.release().await;
-        }
+        let mut watcher = Some(watcher);
+        let body = drive_owned(spec, discovery, &ctx, &mut lease, &mut watcher);
+        let outcome = match AssertUnwindSafe(body).catch_unwind().await {
+            Ok(outcome) => outcome,
+            Err(_) => recover_from_driver_panic(&ctx, &driver_reaped, lease, watcher).await,
+        };
         // A dropped receiver (caller gone) must not skip anything above: the
         // send is the driver's last act, never a precondition of it.
-        let _ = sender.send(OwnedRunOutcome {
-            run,
-            stragglers,
-            cleanup,
-            quarantine_error,
-        });
+        let _ = sender.send(outcome);
     });
     OwnedExecution {
         execution_id,
         completion,
+    }
+}
+
+/// Everything the driver body and its panic recovery share.
+struct DriverCtx {
+    coordinator: Arc<dyn WorkspaceCoordinator>,
+    root: String,
+    holder: LeaseHolder,
+    execution_id: String,
+    pgid_slot: Arc<AtomicI64>,
+    spawned_at_ms: u64,
+    grace_ms: u64,
+    /// Tells the intent-upgrade watcher to stop before its next write.
+    watcher_stop: Arc<AtomicBool>,
+    child_slot: ChildSlot,
+}
+
+impl DriverCtx {
+    fn pgid(&self) -> Option<i32> {
+        match self.pgid_slot.load(Ordering::SeqCst) {
+            0 => None,
+            pgid => Some(pgid as i32),
+        }
+    }
+
+    /// Publish the quarantine for an uncertain cleanup. `reason` is the
+    /// machine code persisted on the record (`driver_panic`, `group_stuck`). A failed
+    /// publication leaves the lease held — live processes must never be
+    /// handed a blind workspace — and returns the error.
+    async fn quarantine(
+        &self,
+        uncertainty: &Uncertainty,
+        reason: Option<&str>,
+        lease: &mut Option<WorkspaceLease>,
+    ) -> Option<CodingError> {
+        // Name every piddable reason (kill failures + suspects) in the
+        // evidence; an empty list means the uncertainty is unnameable
+        // (unsupported scan), which stays blocked just the same.
+        let mut pids = uncertainty.survivors.clone();
+        for pid in &uncertainty.suspects {
+            if !pids.contains(pid) {
+                pids.push(*pid);
+            }
+        }
+        let holder = self.holder.clone();
+        let identity = crate::coordination::CommandCleanupIdentity {
+            execution_id: self.execution_id.clone(),
+            owner_pid: i64::from(std::process::id()),
+            pgid: self.pgid(),
+            spawned_at_ms: self.spawned_at_ms,
+        };
+        match self
+            .coordinator
+            .quarantine_execution(
+                &self.root,
+                &QuarantineEvidence {
+                    pids,
+                    holder,
+                    reason: reason.map(str::to_owned),
+                },
+                &identity,
+            )
+            .await
+        {
+            Ok(_) => None,
+            Err(error) => {
+                // `forget` skips `WorkspaceLease::drop`, whose deferred
+                // release would otherwise undo exactly that.
+                if let Some(lease) = lease.take() {
+                    std::mem::forget(lease);
+                }
+                Some(error)
+            }
+        }
+    }
+}
+
+/// The driver body: run, recheck survivors, judge cleanup, quarantine,
+/// retire the intent, release the lease.
+async fn drive_owned(
+    spec: RunSpec,
+    discovery: Option<FindFn>,
+    ctx: &DriverCtx,
+    lease: &mut Option<WorkspaceLease>,
+    watcher: &mut Option<tokio::task::JoinHandle<bool>>,
+) -> OwnedRunOutcome {
+    let run = run_bounded_inner(spec, discovery, ctx.child_slot.clone()).await;
+    let stragglers = wait_for_exit(&run.teardown.survivors, SURVIVOR_RECHECK_MS).await;
+    // Fold the survivor recheck into the teardown verdict: survivors
+    // that positively exited are resolved; survivors that stayed alive
+    // are kill failures, and SUSPECTS resolve only through their own
+    // liveness probe — an empty survivor list NEVER cancels a live
+    // suspect or an unsupported scan (that collapse was the assessor
+    // defect: `survivors=[]` beside a live suspect read as success).
+    let mut uncertainty = run.teardown.outcome().uncertainty();
+    uncertainty.survivors = stragglers.clone();
+    uncertainty.suspects.retain(|pid| pid_alive(*pid));
+    let cleanup = if uncertainty.is_empty() {
+        CleanupOutcome::Clean
+    } else {
+        CleanupOutcome::Uncertain(uncertainty)
+    };
+    let mut quarantine_error = None;
+    if let CleanupOutcome::Uncertain(uncertainty) = &cleanup {
+        // Cleanup is not positively established (ADR 0020): the lease may
+        // be released (a wedge with no recovery path helps nobody), but
+        // the workspace stays quarantined — every later acquisition
+        // blocks until the evidence resolves or recovery is recorded.
+        quarantine_error = ctx
+            .quarantine(uncertainty, run.quarantine_reason, lease)
+            .await;
+    }
+    // The durable intent is retired ONLY on a positively clean cleanup.
+    // Uncertain cleanup keeps the intent alongside the quarantine —
+    // quarantine alone must be durable too (the in-process coordinator
+    // persists it through the intent journal), and neither half may be
+    // dropped while recovery has not resolved the uncertainty. A failed
+    // quarantine publication likewise keeps the intent — and the lease.
+    if cleanup.is_clean() && quarantine_error.is_none() {
+        // The intent-upgrade watcher must be GONE before the intent is
+        // cleared: a watcher mid-write would otherwise land a
+        // `spawned: true` record after the clear and resurrect the intent.
+        ctx.watcher_stop.store(true, Ordering::SeqCst);
+        let wrote = match watcher.take() {
+            // Joined, never aborted: an aborted task could be cut off
+            // mid-write and leave the record half-landed.
+            Some(watcher) => watcher.await.unwrap_or(false),
+            None => false,
+        };
+        let _ = ctx
+            .coordinator
+            .clear_execution_intent(&ctx.root, &ctx.execution_id)
+            .await;
+        if wrote {
+            // The watcher's write finished while the clear above may have
+            // been racing it: retire once more, now that it is joined.
+            let _ = ctx
+                .coordinator
+                .clear_execution_intent(&ctx.root, &ctx.execution_id)
+                .await;
+        }
+    }
+    if let Some(mut lease) = lease.take() {
+        lease.release().await;
+    }
+    OwnedRunOutcome {
+        run,
+        stragglers,
+        cleanup,
+        quarantine_error,
+    }
+}
+
+/// The driver body panicked. The child may still be running with the lease
+/// still held: tear the process group down (a panic-shielded task, so a
+/// second panic cannot skip the rest), publish a `driver_panic` quarantine
+/// — cleanup was never judged — and only then release the lease. The caller
+/// gets an internal-error outcome, never a clean one.
+async fn recover_from_driver_panic(
+    ctx: &DriverCtx,
+    reaped: &Arc<AtomicBool>,
+    mut lease: Option<WorkspaceLease>,
+    watcher: Option<tokio::task::JoinHandle<bool>>,
+) -> OwnedRunOutcome {
+    ctx.watcher_stop.store(true, Ordering::SeqCst);
+    drop(watcher);
+    // The child lives in the shared slot, so the unwind did not drop it:
+    // the pgid stays ours until `reap_slot` below. Without the child
+    // nothing backs the group number, so only marked pids are signalled.
+    let have_child = ctx.child_slot.lock().await.is_some();
+    let group = ctx.pgid().filter(|_| have_child).map(|pgid| GroupHandle {
+        pgid,
+        reaped: Arc::clone(reaped),
+        leader: None,
+    });
+    let find = production_find(ctx.execution_id.clone(), None, ctx.spawned_at_ms);
+    let teardown = match tokio::spawn(terminate(group, find, ctx.grace_ms)).await {
+        Ok((teardown, _)) => teardown,
+        Err(_) => Teardown::unknown(),
+    };
+    reap_slot(&ctx.child_slot, reaped).await;
+    let mut uncertainty = teardown.outcome().uncertainty();
+    if uncertainty.is_empty() {
+        // Nothing nameable survived, but the driver died mid-flight and
+        // never judged cleanup: unknown, not clean.
+        uncertainty.group_stuck = true;
+    }
+    let quarantine_error = ctx
+        .quarantine(&uncertainty, Some("driver_panic"), &mut lease)
+        .await;
+    if let Some(mut lease) = lease.take() {
+        lease.release().await;
+    }
+    OwnedRunOutcome {
+        run: RunResult {
+            output: String::new(),
+            truncated: false,
+            notice: String::new(),
+            log_path: None,
+            exit_code: None,
+            signal: None,
+            timed_out: false,
+            aborted: false,
+            spawn_error: Some(
+                "internal error: the execution driver panicked; the process group was torn \
+                 down and the workspace quarantined"
+                    .to_owned(),
+            ),
+            teardown,
+            quarantine_reason: Some("driver_panic"),
+        },
+        stragglers: uncertainty.survivors.clone(),
+        cleanup: CleanupOutcome::Uncertain(uncertainty),
+        quarantine_error,
     }
 }
 
@@ -2147,7 +2566,7 @@ mod tests {
 
     #[tokio::test]
     async fn kill_process_tree_on_a_dead_pid_does_not_throw() {
-        kill_process_tree(2_000_000_000).await;
+        assert!(kill_process_tree(2_000_000_000).await.is_ok());
     }
 
     #[test]
@@ -2417,6 +2836,27 @@ mod tests {
         false
     }
 
+    /// Poll until the freshly spawned fixture is visible under its marker:
+    /// the environment only becomes readable after `exec` finished, which on
+    /// a loaded machine takes well over a fixed sleep.
+    #[cfg(unix)]
+    async fn wait_until_marked(exec_id: &str, pid: i32) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let marked = crate::process_tree::find_marked_processes(exec_id)
+                .await
+                .unwrap_or_default();
+            if marked.contains(&pid) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fixture {pid} never became visible under {exec_id}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn sweep_orphans_kills_a_marked_process_whose_owner_is_dead() {
@@ -2433,14 +2873,8 @@ mod tests {
             .spawn()
             .unwrap();
         let pid = child.id().unwrap() as i32;
-        tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(pid_alive(pid));
-        assert!(
-            crate::process_tree::find_marked_processes("2000000000:orphan-test")
-                .await
-                .unwrap()
-                .contains(&pid)
-        );
+        wait_until_marked("2000000000:orphan-test", pid).await;
         let seen = sweep_orphans(Some(500)).await;
         assert!(seen >= 1);
         // Reap it so `pid_alive` does not see a zombie.
@@ -2474,14 +2908,8 @@ mod tests {
             .spawn()
             .unwrap();
         let pid = child.id().unwrap() as i32;
-        tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(pid_alive(pid));
-        assert!(
-            crate::process_tree::find_marked_processes(&exec_id)
-                .await
-                .unwrap()
-                .contains(&pid)
-        );
+        wait_until_marked(&exec_id, pid).await;
         sweep_orphans(Some(200)).await;
         assert!(pid_alive(pid));
         unsafe { libc::kill(pid, libc::SIGKILL) };
@@ -2740,5 +3168,229 @@ mod tests {
             refusal.teardown.outcome().is_clean(),
             "nothing spawned, so nothing can be left behind"
         );
+    }
+
+    #[tokio::test]
+    async fn tail_with_a_zero_hold_and_empty_chunks_does_not_panic() {
+        let dir = temp_dir("tail-zero");
+        let mut tail = Tail::new(
+            CodingLimits {
+                command_tail_max_bytes: 0,
+                ..CodingLimits::default()
+            },
+            dir.to_string_lossy().into_owned(),
+            "zero.log".to_owned(),
+        );
+        tail.push(b"").await;
+        tail.push(b"abc").await;
+        tail.push(b"").await;
+        let (text, total, dropped, _) = tail.finish().await;
+        assert_eq!(total, 3);
+        assert!(dropped);
+        assert_eq!(text, "");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn deadlines_saturate_instead_of_overflowing() {
+        // Would panic with a plain `Instant + Duration`.
+        let _ = deadline_after(u64::MAX);
+        assert!(deadline_after(10) > Instant::now());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_process_tree_refuses_protected_pids() {
+        // SAFETY: `getppid` takes no arguments and cannot fail.
+        let parent = unsafe { libc::getppid() };
+        for pid in [-5, 0, 1, process_id() as i32, parent] {
+            let error = kill_process_tree(pid)
+                .await
+                .expect_err("protected pid must be refused");
+            assert_eq!(error.code, "refused_pid", "pid {pid}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_flooding_command_is_stopped_within_timeout_plus_grace() {
+        let dir = temp_dir("flood");
+        let scratch = dir.to_string_lossy().into_owned();
+        let mut spec = spec_for(&scratch, "flood.log", "yes");
+        spec.timeout_ms = 400;
+        spec.limits.command_kill_grace_ms = 400;
+        let started = std::time::Instant::now();
+        let result = run_bounded(spec).await;
+        let elapsed = started.elapsed();
+        assert!(result.timed_out, "{result:?}");
+        // timeout + grace, with generous scheduler slack; a starved timeout
+        // branch would run until the 15 s default instead.
+        assert!(elapsed < Duration::from_secs(5), "took {elapsed:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The leader's exit is never observed (and so no grace is ever armed):
+    /// only the hard settle ceiling (shrunk to 400 ms here) can end the run,
+    /// and it must report the group stuck.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_hard_settle_ceiling_abandons_a_run_that_never_settles() {
+        let dir = temp_dir("hard-settle");
+        let scratch = dir.to_string_lossy().into_owned();
+        let mut spec = spec_for(&scratch, "hard.log", "exec sleep 30");
+        spec.timeout_ms = 150;
+        spec.limits.command_kill_grace_ms = 1_000;
+        HARD_SETTLE_TEST_MS.with(|cap| cap.set(400));
+        HANG_EXIT_OBSERVATION.with(|hang| hang.set(true));
+        let started = std::time::Instant::now();
+        let result = run_bounded(spec).await;
+        HANG_EXIT_OBSERVATION.with(|hang| hang.set(false));
+        HARD_SETTLE_TEST_MS.with(|cap| cap.set(0));
+        let elapsed = started.elapsed();
+        assert!(result.timed_out, "{result:?}");
+        assert!(result.teardown.group_stuck, "{result:?}");
+        assert_eq!(result.quarantine_reason, Some("group_stuck"));
+        assert!(
+            elapsed < Duration::from_secs(9),
+            "bounded by hard ceiling + teardown, not unbounded: {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reap_child_reaps_and_publishes_the_flag_together() {
+        let mut child = tokio::process::Command::new("/usr/bin/true")
+            .spawn()
+            .unwrap();
+        let flag = AtomicBool::new(false);
+        reap_child(&mut child, &flag).await;
+        assert!(flag.load(Ordering::SeqCst));
+        // Already reaped by `try_wait`: a second wait answers instantly.
+        assert!(child.try_wait().is_ok());
+    }
+
+    #[cfg(unix)]
+    fn process_stat(pid: i32) -> String {
+        let out = std::process::Command::new("/bin/ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .expect("ps");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// The driver body panics mid-run (test-only injection): the process
+    /// group must still be torn down, a `driver_panic` quarantine published,
+    /// the lease released, and the caller must see an internal error.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_driver_panic_tears_down_quarantines_and_releases_the_lease() {
+        use crate::coordination::{AcquireWorkspaceInput, InProcessCoordinator};
+        let dir = temp_dir("driver-panic");
+        let root = std::fs::canonicalize(&dir)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let pid_file = dir.join("pid");
+        let coordinator: Arc<dyn WorkspaceCoordinator> = Arc::new(InProcessCoordinator::new(None));
+        let holder = LeaseHolder {
+            chat_id: None,
+            run_id: "panic-run".to_owned(),
+            tool_call_id: None,
+            tool: "run_command".to_owned(),
+            label: "sleeper".to_owned(),
+        };
+        let lease = coordinator
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: holder.clone(),
+                cancellation: None,
+                max_wait_ms: Some(1_000),
+                execution_id: None,
+            })
+            .await
+            .unwrap();
+        let command = format!("echo $$ > '{}'; exec sleep 30", pid_file.display());
+        let spec = spec_for(&root, "panic.log", &command);
+        let execution_id = spec.execution_id.clone();
+        PANIC_DRIVER_IDS
+            .lock()
+            .unwrap()
+            .insert(execution_id.clone());
+        let execution =
+            spawn_owned_execution(spec, lease, Arc::clone(&coordinator), root.clone(), holder);
+        let outcome = execution.await_result().await;
+
+        let error = outcome.run.spawn_error.as_deref().unwrap_or_default();
+        assert!(error.contains("panicked"), "{error}");
+        assert_eq!(outcome.run.quarantine_reason, Some("driver_panic"));
+        assert!(!outcome.cleanup.is_clean());
+        assert!(outcome.quarantine_error.is_none());
+        assert!(
+            live_executions()
+                .iter()
+                .all(|live| live.execution_id != execution_id),
+            "driver must be unregistered"
+        );
+
+        // The quarantine record is durable and tagged.
+        let key = crate::coordination::canonical_root_key(&root).await;
+        let record = crate::coordination::read_quarantine_file(&key)
+            .await
+            .unwrap()
+            .expect("driver_panic quarantine");
+        assert_eq!(record.reason.as_deref(), Some("driver_panic"), "{record:?}");
+        // The child was killed by the panic recovery's teardown.
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .expect("child wrote its pid before the injected panic")
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        loop {
+            let stat = process_stat(pid);
+            if stat.is_empty() || stat.starts_with('Z') {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child {pid} survived: {stat}"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // The lease really was released: recovery lets the next command in.
+        coordinator.clear_workspace_quarantine(&root).await.unwrap();
+        let mut next = coordinator
+            .acquire_workspace(AcquireWorkspaceInput {
+                root: root.clone(),
+                holder: LeaseHolder {
+                    chat_id: None,
+                    run_id: "next".to_owned(),
+                    tool_call_id: None,
+                    tool: "run_command".to_owned(),
+                    label: "next".to_owned(),
+                },
+                cancellation: None,
+                max_wait_ms: Some(2_000),
+                execution_id: None,
+            })
+            .await
+            .expect("lease released after recovery");
+        next.release().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_hard_ceiling_arms_only_while_the_leader_has_not_exited() {
+        let mut hard_at = None;
+        arm_hard_ceiling(&mut hard_at, true);
+        assert!(
+            hard_at.is_none(),
+            "exit observed: grace governs, no ceiling"
+        );
+        arm_hard_ceiling(&mut hard_at, false);
+        let armed = hard_at.expect("armed while the leader may never exit");
+        arm_hard_ceiling(&mut hard_at, false);
+        assert_eq!(hard_at, Some(armed), "arming is idempotent");
     }
 }
