@@ -1,5 +1,5 @@
 use crate::{
-    util::{self, all, get, json, required},
+    util::{self, all, get, json, required, select},
     *,
 };
 use rusqlite::{Connection, params};
@@ -30,6 +30,17 @@ impl Default for TaskAging {
 }
 
 impl TaskAging {
+    /// Refuses configurations the formula cannot honour instead of silently
+    /// substituting defaults at claim time.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.bonus < 0 || self.max_bonus < 0 || self.interval_ms <= 0 {
+            return Err(StoreError::InvalidInput(
+                "task aging requires bonus >= 0, max_bonus >= 0, interval_ms > 0".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn effective_priority(&self, priority: i32, enqueued_at: i64, now: i64) -> i64 {
         let priority = i64::from(priority);
         if self.bonus == 0 {
@@ -105,16 +116,18 @@ pub(crate) fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
             "task id, scope, and kind must be nonempty".into(),
         ));
     }
-    let tasks: Vec<TaskRecord> = all(db, "tasks")?;
-    if input.exclusive_scope
-        && tasks
-            .iter()
-            .any(|t| t.scope_id == input.scope_id && !t.status.is_terminal())
-    {
-        return Err(StoreError::ScopeBusy(input.scope_id));
+    if input.exclusive_scope {
+        let busy: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE scope=? AND status NOT IN ('completed','failed','cancelled'))",
+            [&input.scope_id],
+            |row| row.get(0),
+        )?;
+        if busy {
+            return Err(StoreError::ScopeBusy(input.scope_id));
+        }
     }
     for dependency in input.depends_on.iter().chain(input.parent_task_id.iter()) {
-        if !tasks.iter().any(|task| task.task_id == *dependency) {
+        if get::<TaskRecord>(db, "tasks", "id", dependency)?.is_none() {
             return Err(StoreError::InvalidInput(format!(
                 "unknown dependency: {dependency}"
             )));
@@ -271,6 +284,8 @@ impl SqliteStore {
     }
 
     /// Pending retries retain a concurrency slot even between attempt leases.
+    /// A `WaitingApproval` task holds no slot (the approver may never answer)
+    /// but still blocks its own scope.
     pub async fn claim_with_concurrency(
         &self,
         input: ClaimInput,
@@ -278,6 +293,7 @@ impl SqliteStore {
     ) -> Result<Option<ClaimedTask>> {
         let aging = self.aging;
         self.call(move |db| {
+            aging.validate()?;
             util::checked_expiry(input.now, input.ttl_ms)?;
             if input.max_attempts == 0 || concurrency == 0 {
                 return Err(StoreError::InvalidInput(
@@ -285,14 +301,17 @@ impl SqliteStore {
                 ));
             }
             let transaction = crate::transaction::atomic(db)?;
-            let mut tasks: Vec<TaskRecord> = all(&transaction, "tasks")?;
+            // Only these statuses can occupy a slot, block a scope, or be claimed.
+            let mut tasks: Vec<TaskRecord> = select(
+                &transaction,
+                "SELECT record FROM tasks WHERE status IN ('queued','running','waiting_approval') ORDER BY rowid",
+                [],
+            )?;
             let occupied = tasks
                 .iter()
                 .filter(|task| {
-                    matches!(
-                        task.status,
-                        TaskStatus::Running | TaskStatus::WaitingApproval
-                    ) || task.retry_pending && task.status == TaskStatus::Queued
+                    task.status == TaskStatus::Running
+                        || task.retry_pending && task.status == TaskStatus::Queued
                 })
                 .count();
             tasks.sort_by_key(|task| {

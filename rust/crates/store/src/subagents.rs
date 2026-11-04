@@ -14,7 +14,7 @@
 //! first terminal write wins, re-delivery changes nothing.
 
 use crate::{Result, SqliteStore, StoreError};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 /// The complete lifecycle vocabulary of a registry row.
@@ -131,6 +131,36 @@ fn list_records(db: &Connection, sql: &str, arg: Option<&str>) -> Result<Vec<Sub
     Ok(records)
 }
 
+/// Duplicate / insert / read-back shared by both registration paths.
+fn insert_subagent(db: &Connection, input: &RegisterSubagent) -> Result<SubagentRecord> {
+    if select_by_id(db, &input.child_chat_id)?.is_some() {
+        return Err(StoreError::InvalidInput(format!(
+            "duplicate subagent: {}",
+            input.child_chat_id
+        )));
+    }
+    db.execute(
+        "INSERT INTO subagents(child_chat_id,parent_chat_id,parent_task_id,role,\
+         depth,prompt,model,turn_task_id,status,result,error,created_at,updated_at) \
+         VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)",
+        params![
+            input.child_chat_id,
+            input.parent_chat_id,
+            input.parent_task_id,
+            input.role,
+            input.depth,
+            input.prompt,
+            input.model,
+            input.turn_task_id,
+            "queued",
+            input.now,
+            input.now,
+        ],
+    )?;
+    select_by_id(db, &input.child_chat_id)?
+        .ok_or_else(|| StoreError::NotFound(format!("subagent {}", input.child_chat_id)))
+}
+
 impl SqliteStore {
     /// Register a freshly spawned child. The row starts `queued` with both
     /// timestamps at `now`; a duplicate `child_chat_id` and a negative
@@ -147,33 +177,54 @@ impl SqliteStore {
             prompt: cap_text(&input.prompt, MAX_PERSISTED_CHARS),
             ..input
         };
+        self.call(move |db| insert_subagent(db, &input)).await
+    }
+
+    /// Atomic cap-checked registration: count the active rows and insert in
+    /// ONE actor job, so concurrent spawns can never both pass a stale
+    /// count. `Ok(false)` = a cap would be exceeded, nothing inserted.
+    /// `max_concurrency` bounds all active rows, `max_per_parent` the
+    /// active rows of this row's parent chat.
+    pub async fn register_subagent_if_under(
+        &self,
+        input: RegisterSubagent,
+        max_concurrency: i64,
+        max_per_parent: i64,
+    ) -> Result<bool> {
+        if input.depth < 0 {
+            return Err(StoreError::InvalidInput(format!(
+                "subagent depth must be >= 0, got {}",
+                input.depth
+            )));
+        }
+        let input = RegisterSubagent {
+            prompt: cap_text(&input.prompt, MAX_PERSISTED_CHARS),
+            ..input
+        };
         self.call(move |db| {
-            if select_by_id(db, &input.child_chat_id)?.is_some() {
-                return Err(StoreError::InvalidInput(format!(
-                    "duplicate subagent: {}",
-                    input.child_chat_id
-                )));
-            }
-            db.execute(
-                "INSERT INTO subagents(child_chat_id,parent_chat_id,parent_task_id,role,\
-                 depth,prompt,model,turn_task_id,status,result,error,created_at,updated_at) \
-                 VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL,?,?)",
-                params![
-                    input.child_chat_id,
-                    input.parent_chat_id,
-                    input.parent_task_id,
-                    input.role,
-                    input.depth,
-                    input.prompt,
-                    input.model,
-                    input.turn_task_id,
-                    "queued",
-                    input.now,
-                    input.now,
-                ],
+            // IMMEDIATE: take the write lock before counting, so another
+            // process on the same file cannot slip between count and insert.
+            let transaction = crate::transaction::atomic_with_behavior(
+                db,
+                rusqlite::TransactionBehavior::Immediate,
             )?;
-            select_by_id(db, &input.child_chat_id)?
-                .ok_or_else(|| StoreError::NotFound(format!("subagent {}", input.child_chat_id)))
+            let active: i64 = transaction.query_row(
+                "SELECT count(*) FROM subagents WHERE status IN ('queued','running')",
+                [],
+                |row| row.get(0),
+            )?;
+            let per_parent: i64 = transaction.query_row(
+                "SELECT count(*) FROM subagents WHERE parent_chat_id=? \
+                 AND status IN ('queued','running')",
+                [&input.parent_chat_id],
+                |row| row.get(0),
+            )?;
+            if active >= max_concurrency || per_parent >= max_per_parent {
+                return Ok(false);
+            }
+            insert_subagent(&transaction, &input)?;
+            transaction.commit()?;
+            Ok(true)
         })
         .await
     }
@@ -210,7 +261,7 @@ impl SqliteStore {
                     [&child_chat_id],
                     |row| row.get(0),
                 )
-                .ok();
+                .optional()?;
             let Some(current) = current else {
                 return Ok(false);
             };
@@ -242,6 +293,21 @@ impl SqliteStore {
         status: &str,
         now: i64,
     ) -> Result<bool> {
+        self.reactivate_subagent_for_parent(child_chat_id, status, now, None)
+            .await
+    }
+
+    /// [`Self::reactivate_subagent`] that also rebinds the row's
+    /// `parent_task_id` to the caller's live parent task, so the orphan
+    /// reaper judges the revived child by the parent that revived it, not
+    /// by the long-settled original.
+    pub async fn reactivate_subagent_for_parent(
+        &self,
+        child_chat_id: &str,
+        status: &str,
+        now: i64,
+        parent_task_id: Option<&str>,
+    ) -> Result<bool> {
         if !matches!(status, "queued" | "running") {
             return Err(StoreError::InvalidInput(format!(
                 "cannot reactivate a row to {status}"
@@ -249,11 +315,32 @@ impl SqliteStore {
         }
         let child_chat_id = child_chat_id.to_owned();
         let status = status.to_owned();
+        let parent_task_id = parent_task_id.map(str::to_owned);
         self.call(move |db| {
             let updated = db.execute(
-                "UPDATE subagents SET status=?, result=NULL, error=NULL, updated_at=? \
+                "UPDATE subagents SET status=?, result=NULL, error=NULL, updated_at=?, \
+                 parent_task_id=COALESCE(?, parent_task_id) \
                  WHERE child_chat_id=? AND status IN ('completed','failed','cancelled')",
-                params![status, now, child_chat_id],
+                params![status, now, parent_task_id, child_chat_id],
+            )?;
+            Ok(updated > 0)
+        })
+        .await
+    }
+
+    /// Bind the row to the caller's live parent task, whatever the row's
+    /// status. `false` when the row is missing.
+    pub async fn rebind_subagent_parent(
+        &self,
+        child_chat_id: &str,
+        parent_task_id: &str,
+    ) -> Result<bool> {
+        let child_chat_id = child_chat_id.to_owned();
+        let parent_task_id = parent_task_id.to_owned();
+        self.call(move |db| {
+            let updated = db.execute(
+                "UPDATE subagents SET parent_task_id=? WHERE child_chat_id=?",
+                params![parent_task_id, child_chat_id],
             )?;
             Ok(updated > 0)
         })

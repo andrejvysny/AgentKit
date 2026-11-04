@@ -99,7 +99,24 @@ pub(crate) fn atomic_with_behavior(
 
 pub(crate) struct ScopeState {
     pub(crate) active: bool,
+    /// A job panicked inside this scope and the outer transaction was rolled
+    /// back; nothing may run or commit under it any more.
+    pub(crate) failed: bool,
     root_guard: Option<OwnedMutexGuard<()>>,
+}
+impl TransactionScope {
+    pub(crate) fn is_failed(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .failed
+    }
+    pub(crate) fn mark_failed(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .failed = true;
+    }
 }
 pub(crate) struct TransactionScope {
     worker: Option<Arc<Worker>>,
@@ -157,12 +174,22 @@ impl StoreTransaction {
                 return Err(StoreError::TransactionScopeExpired);
             }
             state.active = false;
+            let failed = state.failed;
             let guard = state.root_guard.take().expect("active root guard");
             let worker = self.view.worker.clone();
             self.view.worker.send_cleanup(Box::new(move |db| {
                 let _guard = guard;
                 let _permit = permit;
-                let result = finish_sql(db, &worker, commit);
+                let result = if failed {
+                    // Already rolled back by the panic handler: issue no SQL.
+                    if commit {
+                        Err(crate::actor::scope_aborted())
+                    } else {
+                        Ok(())
+                    }
+                } else {
+                    finish_sql(db, &worker, commit)
+                };
                 worker.ambient.send_replace(false);
                 let _ = sender.send(result);
             }))?;
@@ -207,13 +234,14 @@ impl Drop for StoreTransaction {
             return;
         }
         state.active = false;
+        let failed = state.failed;
         let Some(guard) = state.root_guard.take() else {
             return;
         };
         let worker = self.view.worker.clone();
         let job = Box::new(move |db: &mut Connection| {
             let _guard = guard;
-            if db.execute_batch("ROLLBACK").is_err() {
+            if !failed && db.execute_batch("ROLLBACK").is_err() {
                 worker.poisoned.store(true, Ordering::Release);
             }
             worker.ambient.send_replace(false);
@@ -250,6 +278,7 @@ impl SqliteStore {
                 worker: Some(root.worker.clone()),
                 state: Mutex::new(ScopeState {
                     active: true,
+                    failed: false,
                     root_guard: Some(guard),
                 }),
                 operation_gate: Arc::new(AsyncMutex::new(())),

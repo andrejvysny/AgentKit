@@ -86,6 +86,10 @@ pub enum StoreError {
     TransactionGateTimeout,
     #[error("transaction scope expired")]
     TransactionScopeExpired,
+    /// A store job panicked; its transaction was rolled back and the worker
+    /// kept running.
+    #[error("internal store error: {0}")]
+    Internal(String),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;

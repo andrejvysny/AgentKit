@@ -1,5 +1,5 @@
 use crate::{
-    util::{all, get, id, json, required},
+    util::{all, get, id, json, required, select},
     *,
 };
 use rusqlite::{Connection, params};
@@ -177,6 +177,15 @@ pub(crate) fn project(db: &Connection, input: MessageInput, now: i64) -> Result<
     Ok(message)
 }
 
+/// One chat's messages in insertion order, filtered in SQL (`messages_chat`).
+pub(crate) fn chat_messages(db: &Connection, chat_id: &str) -> Result<Vec<MessageRecord>> {
+    select(
+        db,
+        "SELECT record FROM messages WHERE chat_id=? ORDER BY rowid",
+        [chat_id],
+    )
+}
+
 pub(crate) fn append(db: &Connection, input: MessageInput, now: i64) -> Result<MessageRecord> {
     if !["user", "assistant", "tool", "system"].contains(&input.role.as_str()) {
         return Err(StoreError::InvalidInput("invalid message role".into()));
@@ -187,10 +196,7 @@ pub(crate) fn append(db: &Connection, input: MessageInput, now: i64) -> Result<M
             "chain append requires explicit parent".into(),
         ));
     }
-    let messages: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
-        .into_iter()
-        .filter(|m| m.chat_id == chat.id)
-        .collect();
+    let messages = chat_messages(db, &chat.id)?;
     let parent_id = if input.explicit_root {
         None
     } else {
@@ -273,10 +279,7 @@ pub(crate) fn activate(db: &Connection, message_id: &str) -> Result<Vec<MessageR
         // An archived branch is not revivable: to the tree it does not exist.
         return Err(StoreError::NotFound(message_id.to_owned()));
     }
-    let mut messages: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
-        .into_iter()
-        .filter(|m| m.chat_id == target.chat_id)
-        .collect();
+    let mut messages = chat_messages(db, &target.chat_id)?;
     let mut leaf = target;
     while let Some(child) = {
         let kids: Vec<&MessageRecord> = messages
@@ -302,8 +305,11 @@ pub(crate) fn activate(db: &Connection, message_id: &str) -> Result<Vec<MessageR
         cursor = node.parent_message_id.clone();
     }
     for message in &mut messages {
-        message.active = path.contains(&message.id);
-        save_message(db, message)?;
+        let active = path.contains(&message.id);
+        if message.active != active {
+            message.active = active;
+            save_message(db, message)?;
+        }
     }
     messages.retain(|m| m.active);
     messages.sort_by_key(|m| m.order_key);
@@ -459,10 +465,8 @@ impl SqliteStore {
             // A chat that is gone (or never was) lists no messages; the
             // reference adapters answer with the empty listing, and callers
             // legitimately read trees of chats that were just deleted.
-            let mut messages: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
-                .into_iter()
-                .filter(|m| m.chat_id == chat_id && (include_inactive || m.active))
-                .collect();
+            let mut messages = chat_messages(db, &chat_id)?;
+            messages.retain(|m| include_inactive || m.active);
             messages.sort_by_key(|m| m.order_key);
             Ok(messages)
         })

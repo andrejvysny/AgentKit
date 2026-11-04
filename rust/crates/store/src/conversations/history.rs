@@ -209,14 +209,10 @@ impl SqliteStore {
                 // messages — including their own sibling group.
                 return Err(StoreError::NotFound(message_id.clone()));
             }
-            let mut siblings: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
-                .into_iter()
-                .filter(|message| {
-                    message.chat_id == target.chat_id
-                        && message.parent_message_id == target.parent_message_id
-                        && !message.archived
-                })
-                .collect();
+            let mut siblings = chat_messages(db, &target.chat_id)?;
+            siblings.retain(|message| {
+                message.parent_message_id == target.parent_message_id && !message.archived
+            });
             siblings.sort_by_key(|message| (message.branch_index, message.order_key));
             Ok(siblings)
         })
@@ -236,10 +232,7 @@ impl SqliteStore {
                 // conversation; the port refuses it with its own code.
                 return Err(StoreError::InvalidInput("active_branch_archive".into()));
             }
-            let messages: Vec<MessageRecord> = all::<MessageRecord>(&transaction, "messages")?
-                .into_iter()
-                .filter(|message| message.chat_id == target.chat_id)
-                .collect();
+            let messages = chat_messages(&transaction, &target.chat_id)?;
             let mut queue = vec![target.id.clone()];
             let mut seen = std::collections::HashSet::new();
             let mut count = 0;

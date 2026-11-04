@@ -1200,7 +1200,7 @@ impl SqliteStore {
                 // The row was inserted Pending in THIS transaction; the only
                 // way it is not pending now is a racing apply, which already
                 // set the same fields.
-                let _ = transition_input(
+                ignore_lost_cas(transition_input(
                     &transaction,
                     id,
                     &[AgentInputStatus::Pending],
@@ -1210,7 +1210,7 @@ impl SqliteStore {
                         ..Default::default()
                     },
                     &now_text,
-                );
+                ))?;
             }
             let mut applied = vec![];
             for apply in &input.applies {
@@ -1402,14 +1402,14 @@ pub(crate) fn settle_session_inputs(
         // service writes; `content.onSettled` is not a second source.
         let cancel = steer.on_settled == Some(crate::agent_inputs::AgentInputSettlePolicy::Cancel);
         if cancel {
-            let _ = transition_input(
+            ignore_lost_cas(transition_input(
                 db,
                 &steer.input_id,
                 &[AgentInputStatus::Pending],
                 AgentInputStatus::Cancelled,
                 &AgentInputPatch::default(),
                 &now_text,
-            );
+            ))?;
         }
     }
     if !completed {
@@ -1433,7 +1433,7 @@ pub(crate) fn settle_session_inputs(
             |row| row.get::<_, String>(0),
         )
         .optional()?;
-    if busy.is_some() {
+    if busy.is_some() || unrelated_live_task(db, &task.scope_id, &task.kind, Some(&task.task_id))? {
         return Ok(());
     }
     // Eligibility selection belongs INSIDE this transaction: the pending
@@ -1643,6 +1643,38 @@ pub(crate) fn convert_candidate(
     if record.status != AgentInputStatus::Pending || record.session_id != scope_id {
         return Ok(false);
     }
+    // A scope another task still holds makes `tasks::insert` raise
+    // `ScopeBusy`. That must only forfeit THIS candidate (the input stays
+    // Pending), never abort the caller's transaction, so the write runs
+    // under its own savepoint.
+    db.execute_batch("SAVEPOINT convert_candidate")?;
+    match convert_claimed(db, &record, candidate, &now_text, now) {
+        Ok(()) => {
+            db.execute_batch("RELEASE convert_candidate")?;
+            Ok(true)
+        }
+        Err(error) => {
+            let rolled_back =
+                db.execute_batch("ROLLBACK TO convert_candidate; RELEASE convert_candidate");
+            match (error, rolled_back) {
+                // Swallowing ScopeBusy is only sound if the partial writes are gone.
+                (StoreError::ScopeBusy(_), Ok(())) => Ok(false),
+                (StoreError::ScopeBusy(_), Err(rollback)) => Err(rollback.into()),
+                // Any other error aborts the caller's transaction anyway;
+                // never mask it with a secondary rollback failure.
+                (error, _) => Err(error),
+            }
+        }
+    }
+}
+
+fn convert_claimed(
+    db: &Connection,
+    record: &AgentInputRecord,
+    candidate: &StagedCandidate,
+    now_text: &str,
+    now: i64,
+) -> Result<()> {
     // Claim the input BEFORE staging anything: the Pending -> Converted
     // transition is the CAS. A lost race returns false having written
     // nothing; the task and its messages land only behind the receipt.
@@ -1666,7 +1698,7 @@ pub(crate) fn convert_candidate(
             applied_message_id: user_message_id,
             ..Default::default()
         },
-        &now_text,
+        now_text,
     )?;
     let mut submit = candidate.task.clone();
     submit.now = now;
@@ -1695,7 +1727,7 @@ pub(crate) fn convert_candidate(
         }
         crate::conversations::append(db, message.clone(), now)?;
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Cancel every pending human request that names this turn (a cancelled
@@ -1718,16 +1750,47 @@ pub(crate) fn cancel_turn_requests(
             target_task_id: Some(turn_id.to_owned()),
         },
     )? {
-        let _ = transition_input(
+        ignore_lost_cas(transition_input(
             db,
             &record.input_id,
             &[AgentInputStatus::Pending],
             AgentInputStatus::Cancelled,
             &AgentInputPatch::default(),
             &now_text,
-        );
+        ))?;
     }
     Ok(())
+}
+
+/// A lost compare-and-set (`InvalidTransition`) is an expected race outcome;
+/// every other failure is real and must not be swallowed.
+fn ignore_lost_cas(result: Result<AgentInputRecord>) -> Result<()> {
+    match result {
+        Ok(_) | Err(StoreError::InvalidTransition(_)) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// A running, parked or interrupted task of ANOTHER kind in the scope: it
+/// cannot promise to promote a queued input when it ends. A merely queued
+/// task is not counted here; the exclusive-scope refusal from the insert is
+/// caught by the savepoint in [`convert_candidate`].
+fn unrelated_live_task(
+    db: &Connection,
+    session_id: &str,
+    task_kind: &str,
+    exclude_task_id: Option<&str>,
+) -> Result<bool> {
+    Ok(db
+        .query_row(
+            "SELECT id FROM tasks WHERE scope=?1 AND json_extract(record,'$.kind')<>?2 \
+             AND (?3 IS NULL OR id<>?3) \
+             AND status IN ('running','interrupted','waiting_approval') LIMIT 1",
+            params![session_id, task_kind, exclude_task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .is_some())
 }
 
 // ---------------------------------------------------------------------------
@@ -1768,7 +1831,14 @@ impl SqliteStore {
                     |row| row.get::<_, String>(0),
                 )
                 .optional()?;
-            if busy.is_some() {
+            if busy.is_some()
+                || unrelated_live_task(
+                    &transaction,
+                    &input.session_id,
+                    &input.task_kind,
+                    input.exclude_task_id.as_deref(),
+                )?
+            {
                 return Ok(None);
             }
             let Some(record) = get_input(&transaction, &input.input_id)? else {

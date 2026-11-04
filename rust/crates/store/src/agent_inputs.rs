@@ -205,6 +205,11 @@ pub(crate) fn parse_iso_millis(value: &str) -> Option<i64> {
             };
             p2 = end;
         }
+        // Range checks precede both return paths, so an offset suffix cannot
+        // smuggle an impossible calendar or clock value past them.
+        if !valid_ranges(month, day, (hour, minute, second, fraction)) {
+            return None;
+        }
         match bytes.get(p2) {
             None => {}
             Some(b'Z') | Some(b'z') if p2 + 1 == bytes.len() => {}
@@ -213,7 +218,7 @@ pub(crate) fn parse_iso_millis(value: &str) -> Option<i64> {
                 let (oh, q) = digits(p2 + 1, 2)?;
                 let q = take(q, b':')?;
                 let (om, q) = digits(q, 2)?;
-                if q != bytes.len() {
+                if q != bytes.len() || oh > 23 || om > 59 {
                     return None;
                 }
                 return Some(
@@ -230,10 +235,7 @@ pub(crate) fn parse_iso_millis(value: &str) -> Option<i64> {
     } else if p != bytes.len() {
         return None;
     }
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    if hour > 24 || minute > 60 || second > 60 {
+    if !valid_ranges(month, day, (hour, minute, second, fraction)) {
         return None;
     }
     Some(
@@ -243,6 +245,16 @@ pub(crate) fn parse_iso_millis(value: &str) -> Option<i64> {
             + second * 1_000
             + fraction,
     )
+}
+
+/// `Date.parse` parity: hour 24 is accepted only as exactly `24:00:00.000`.
+fn valid_ranges(month: i64, day: i64, time: (i64, i64, i64, i64)) -> bool {
+    let (hour, minute, second, fraction) = time;
+    (1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && minute <= 59
+        && second <= 59
+        && (hour <= 23 || hour == 24 && minute == 0 && second == 0 && fraction == 0)
 }
 
 /// Days since the Unix epoch (Howard Hinnant's civil algorithm).
@@ -530,5 +542,35 @@ impl SqliteStore {
             Ok(removed)
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_iso_millis;
+
+    #[test]
+    fn out_of_range_fields_are_rejected_on_every_return_path() {
+        assert_eq!(parse_iso_millis("2026-13-45T99:99:99+00:00"), None);
+        assert_eq!(parse_iso_millis("2026-13-45T99:99:99Z"), None);
+        assert_eq!(parse_iso_millis("2026-10-22T24:00:01+00:00"), None);
+        assert_eq!(parse_iso_millis("2026-10-22T24:00:00.001Z"), None);
+        assert_eq!(parse_iso_millis("2026-10-22T24:30:00Z"), None);
+        assert_eq!(
+            parse_iso_millis("2026-10-22T24:00:00Z"),
+            parse_iso_millis("2026-10-23T00:00:00Z"),
+            "24:00:00.000 is midnight, as in Date.parse"
+        );
+        assert_eq!(parse_iso_millis("2026-10-22T10:00:00+24:00"), None);
+        assert_eq!(parse_iso_millis("2026-10-22T10:00:00+01:60"), None);
+        assert_eq!(parse_iso_millis("2026-10-22T23:60:00Z"), None);
+        assert_eq!(parse_iso_millis("2026-10-22T23:59:60+01:00"), None);
+        assert_eq!(parse_iso_millis("2026-00-22T00:00:00Z"), None);
+        assert!(parse_iso_millis("2026-10-22T23:59:59.999+02:00").is_some());
+        assert_eq!(
+            parse_iso_millis("1970-01-01T00:00:00Z"),
+            Some(0),
+            "a valid instant still parses"
+        );
     }
 }

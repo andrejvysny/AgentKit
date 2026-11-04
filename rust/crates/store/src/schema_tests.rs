@@ -64,6 +64,35 @@ fn file_store_connections_run_with_foreign_keys_enabled_and_enforced() {
 }
 
 #[test]
+fn ownership_lock_file_lives_beside_the_database() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("owned.db");
+    let (_connection, lock) = open(&path).unwrap();
+    let held = lock.unwrap();
+    let beside = directory.path().join("owned.db.agentkit-owner");
+    let probe = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&beside)
+        .unwrap();
+    assert!(probe.try_lock().is_err(), "the beside-DB lock is held");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(&path).unwrap();
+        let legacy = std::env::temp_dir()
+            .join("agentkit-store-owners")
+            .join(format!("{}-{}.lock", metadata.dev(), metadata.ino()));
+        let probe = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&legacy)
+            .unwrap();
+        assert!(probe.try_lock().is_err(), "the legacy inode lock is held");
+        assert_eq!(held.len(), 2);
+    }
+    assert!(matches!(open(&path), Err(crate::StoreError::AlreadyOwned)));
+}
+
+#[test]
 fn in_memory_store_connections_enforce_foreign_keys_too() {
     let (connection, lock) = open(Path::new(":memory:")).unwrap();
     assert!(lock.is_none(), "in-memory stores own no lock file");

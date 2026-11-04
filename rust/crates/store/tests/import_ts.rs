@@ -1894,3 +1894,123 @@ async fn imported_messages_are_searchable_through_the_trigger_built_index() {
         "an imported archived message never surfaces"
     );
 }
+
+#[tokio::test]
+async fn a_reimport_never_regresses_state_the_store_advanced() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let store = SqliteStore::open(root.path().join("agentkit.db"), 8).unwrap();
+    store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap();
+    let lease = store.get_lease("run-1").await.unwrap().unwrap();
+    store
+        .settle(SettleTask {
+            fence: lease.fence(),
+            now: T3_MS,
+            status: TaskStatus::Completed,
+            error: None,
+            events: vec![],
+            messages: vec![],
+        })
+        .await
+        .unwrap();
+    let again = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap();
+    let task = store.get_task("run-1").await.unwrap().unwrap();
+    assert_eq!(
+        task.status,
+        TaskStatus::Completed,
+        "the source said running"
+    );
+    assert!(
+        store.get_lease("run-1").await.unwrap().is_none(),
+        "a lease is never imported for a task that is not running"
+    );
+    assert!(
+        again
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("task run-1: row already present; kept destination")),
+        "{:?}",
+        again.warnings
+    );
+}
+
+#[tokio::test]
+async fn a_child_listed_before_its_parent_still_imports_in_order() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let raw = Connection::open(&source).unwrap();
+    raw.execute_batch(
+        "PRAGMA foreign_keys=OFF;
+INSERT INTO messages (id,chat_id,run_id,role,content,content_format,order_key,parent_message_id,
+    depth,branch_index,active,metadata,created_at)
+  VALUES ('grandchild','chat-1',NULL,'user','c','text',20,'child',2,0,0,'{}','2026-06-06T00:00:00.000Z'),
+         ('child','chat-1',NULL,'assistant','b','text',21,'late-parent',1,0,0,'{}','2026-06-06T00:00:00.000Z'),
+         ('late-parent','chat-1',NULL,'user','a','text',22,'m1',0,3,0,'{}','2026-06-06T00:00:00.000Z');",
+    )
+    .unwrap();
+    drop(raw);
+    let store = SqliteStore::open(root.path().join("agentkit.db"), 8).unwrap();
+    let report = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap();
+    assert_eq!(report.messages, 10, "{:?}", report.warnings);
+    let grandchild = store.get_message("grandchild").await.unwrap().unwrap();
+    assert_eq!(grandchild.parent_message_id.as_deref(), Some("child"));
+}
+
+#[tokio::test]
+async fn unrepresentable_numbers_and_instants_drop_the_row_with_a_warning() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("ts.db");
+    ts_database(&source);
+    let raw = Connection::open(&source).unwrap();
+    raw.execute_batch(
+        "INSERT INTO messages (id,chat_id,run_id,role,content,content_format,order_key,
+    depth,branch_index,active,metadata,created_at)
+  VALUES ('far-future','chat-1',NULL,'user','x','text',30,0,0,0,'{}','9000000000000000');
+INSERT INTO agent_inputs VALUES ('input-big','chat-1','steer','pending','{}','h',
+  9500000000000000,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z');
+INSERT INTO agent_inputs VALUES ('input-frac','chat-1','steer','pending','{}','h',
+  1.5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z');",
+    )
+    .unwrap();
+    drop(raw);
+    let store = SqliteStore::open(root.path().join("agentkit.db"), 8).unwrap();
+    // Strict mode refuses the out-of-range instant instead of erroring opaquely.
+    let error = store
+        .import_from_ts_schema(&source, &options())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, StoreError::InvalidImport { .. }), "{error}");
+    let report = store
+        .import_from_ts_schema(
+            &source,
+            &ImportOptions {
+                abort_on_error: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(store.get_message("far-future").await.unwrap().is_none());
+    for needle in ["far-future", "input-big", "input-frac"] {
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(needle)),
+            "{needle}: {:?}",
+            report.warnings
+        );
+    }
+    assert!(store.get_input("input-big".into()).await.unwrap().is_none());
+}

@@ -1463,6 +1463,113 @@ async fn conversion_refuses_a_busy_scope_and_failure_keeps_the_queue_pending() {
 }
 
 #[tokio::test]
+async fn a_scope_held_by_another_task_never_aborts_the_settlement() {
+    let follow_up = || CreateAgentInput {
+        input_id: "fu1".into(),
+        session_id: "chat".into(),
+        kind: AgentInputKind::FollowUp,
+        content: json!({"text": "fu1"}),
+        content_hash: "hash-fu1".into(),
+        target_task_id: None,
+        on_settled: None,
+        attempt_id: None,
+        tool_call_id: None,
+        expires_at: None,
+    };
+    let candidate = || StagedCandidate {
+        input_id: "fu1".into(),
+        task: SubmitTask {
+            exclusive_scope: true,
+            ..task("fu1-turn", "chat")
+        },
+        messages: vec![],
+    };
+    let settle = |lease: &Lease| SettleTask {
+        fence: lease.fence(),
+        now: 2000,
+        status: TaskStatus::Completed,
+        error: None,
+        events: vec![],
+        messages: vec![],
+    };
+    // An unrelated-kind task shares the scope: the busy check now sees it.
+    let first = store();
+    let lease = running_turn(&first, "run").await;
+    first.create_input(follow_up(), 1600).await.unwrap();
+    first
+        .submit(SubmitTask {
+            kind: "other".into(),
+            ..task("foreign", "chat")
+        })
+        .await
+        .unwrap();
+    let settled = first
+        .settle_session(
+            settle(&lease),
+            SessionSettle {
+                expected_descriptor: None,
+                convert: vec![candidate()],
+                staging: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.status, TaskStatus::Completed);
+    assert_eq!(
+        first.get_input("fu1".into()).await.unwrap().unwrap().status,
+        AgentInputStatus::Pending
+    );
+    assert!(first.get_task("fu1-turn").await.unwrap().is_none());
+    let staged = first
+        .stage_queued_turn(StageQueuedTurn {
+            session_id: "chat".into(),
+            task_kind: "test".into(),
+            exclude_task_id: None,
+            input_id: "fu1".into(),
+            expected_kind: AgentInputKind::FollowUp,
+            task: candidate().task,
+            messages: vec![],
+            now: 2100,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        staged, None,
+        "an unrelated live task keeps the flush refused"
+    );
+
+    // A same-kind task that is merely queued is invisible to the busy check;
+    // the exclusive-scope refusal from the insert forfeits only the candidate.
+    let second = store();
+    let lease = running_turn(&second, "run").await;
+    second.create_input(follow_up(), 1600).await.unwrap();
+    second.submit(task("sibling", "chat")).await.unwrap();
+    let settled = second
+        .settle_session(
+            settle(&lease),
+            SessionSettle {
+                expected_descriptor: None,
+                convert: vec![candidate()],
+                staging: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.status, TaskStatus::Completed);
+    assert_eq!(
+        second
+            .get_input("fu1".into())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        AgentInputStatus::Pending,
+        "the input was not consumed by the refused conversion"
+    );
+    assert!(second.get_task("fu1-turn").await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn an_invalid_conversion_writes_neither_task_nor_receipt() {
     // Reproduction: invalid queued user content returned an error but left
     // a Queued task, a Pending input and no messages. The conversion is

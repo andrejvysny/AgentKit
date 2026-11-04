@@ -17,7 +17,13 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 pub const SCHEMA_VERSION: i64 = 11;
 const VERSION: i64 = SCHEMA_VERSION;
 
-fn ownership(path: &Path) -> Result<Option<File>> {
+/// Exclusive-ownership locks for one database file: the lock beside the
+/// database (`<db>.agentkit-owner`, follows the data, survives temp-dir
+/// cleaning) and, on unix, the legacy inode-keyed lock in the temp dir. The
+/// legacy lock still covers hard-link aliases in other directories and keeps
+/// a process running the previous build excluded during an upgrade. Both are
+/// held for the store's lifetime.
+fn ownership(path: &Path) -> Result<Option<Vec<File>>> {
     if path == Path::new(":memory:") {
         return Ok(None);
     }
@@ -33,19 +39,50 @@ fn ownership(path: &Path) -> Result<Option<File>> {
                 .ok_or_else(|| StoreError::InvalidInput("database path has no file name".into()))?,
         )
     };
-    let lock_path = ownership_path(&canonical)?;
+    let mut locks = Vec::new();
+    let mut beside = canonical.as_os_str().to_owned();
+    beside.push(".agentkit-owner");
+    match lock_file(Path::new(&beside)) {
+        Ok(lock) => locks.push(lock),
+        // A read-only database directory cannot hold the lock; the legacy
+        // lock then stands alone (unix). Any other failure is real.
+        Err(LockError::Io(error))
+            if cfg!(unix)
+                && matches!(
+                    error.kind(),
+                    std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+                ) => {}
+        Err(LockError::Io(error)) => return Err(error.into()),
+        Err(LockError::Owned) => return Err(StoreError::AlreadyOwned),
+    }
+    #[cfg(unix)]
+    match lock_file(&legacy_lock_path(&canonical)?) {
+        Ok(lock) => locks.push(lock),
+        Err(LockError::Io(error)) => return Err(error.into()),
+        Err(LockError::Owned) => return Err(StoreError::AlreadyOwned),
+    }
+    Ok(Some(locks))
+}
+
+enum LockError {
+    Io(std::io::Error),
+    Owned,
+}
+
+fn lock_file(path: &Path) -> std::result::Result<File, LockError> {
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(lock_path)?;
-    lock.try_lock().map_err(|_| StoreError::AlreadyOwned)?;
-    Ok(Some(lock))
+        .open(path)
+        .map_err(LockError::Io)?;
+    lock.try_lock().map_err(|_| LockError::Owned)?;
+    Ok(lock)
 }
 
 #[cfg(unix)]
-fn ownership_path(path: &Path) -> Result<std::path::PathBuf> {
+fn legacy_lock_path(path: &Path) -> Result<std::path::PathBuf> {
     use std::os::unix::fs::MetadataExt;
     // SQLite's platform VFS may share the database's OS lock primitive.
     // A separate inode-keyed lock covers hard-link aliases without interfering.
@@ -61,14 +98,7 @@ fn ownership_path(path: &Path) -> Result<std::path::PathBuf> {
     Ok(directory.join(format!("{}-{}.lock", metadata.dev(), metadata.ino())))
 }
 
-#[cfg(not(unix))]
-fn ownership_path(path: &Path) -> Result<std::path::PathBuf> {
-    let mut lock = path.as_os_str().to_owned();
-    lock.push(".agentkit-owner");
-    Ok(lock.into())
-}
-
-pub(crate) fn open(path: &Path) -> Result<(Connection, Option<File>)> {
+pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
     let lock = ownership(path)?;
     let mut connection = Connection::open_with_flags(
         path,

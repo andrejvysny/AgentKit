@@ -285,6 +285,58 @@ impl SqliteStore {
         .await
     }
 
+    /// Atomic check-then-record: inserts the attempt row only when fewer than
+    /// `limit` reviews for this (chat, origin) started at/after `since`.
+    /// Count and insert run in ONE actor job, so concurrent reservers can
+    /// never overshoot `limit`. `Ok(false)` = over budget, nothing recorded.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn reserve_advisor_review_if_under(
+        &self,
+        run_id: &str,
+        chat_id: &str,
+        origin: &str,
+        trigger_kind: &str,
+        started_at: i64,
+        since: i64,
+        limit: i64,
+    ) -> Result<bool> {
+        if !valid_source(origin) {
+            return Err(StoreError::InvalidInput(format!(
+                "invalid review origin: {origin}"
+            )));
+        }
+        let run_id = run_id.to_owned();
+        let chat_id = chat_id.to_owned();
+        let origin = origin.to_owned();
+        let trigger_kind = trigger_kind.to_owned();
+        self.call(move |db| {
+            // IMMEDIATE: take the write lock before counting, so another
+            // process on the same file cannot slip between count and insert.
+            let transaction = crate::transaction::atomic_with_behavior(
+                db,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            let count: i64 = transaction.query_row(
+                "SELECT count(*) FROM advisor_reviews \
+                 WHERE started_at>=? AND chat_id=? AND origin=?",
+                params![since, chat_id, origin],
+                |row| row.get(0),
+            )?;
+            if count >= limit {
+                return Ok(false);
+            }
+            transaction.execute(
+                "INSERT INTO advisor_reviews(run_id,chat_id,origin,trigger_kind,started_at) \
+                 VALUES(?,?,?,?,?) \
+                 ON CONFLICT(run_id) DO UPDATE SET started_at=excluded.started_at",
+                params![run_id, chat_id, origin, trigger_kind, started_at],
+            )?;
+            transaction.commit()?;
+            Ok(true)
+        })
+        .await
+    }
+
     /// Reviews STARTED since `since`, optionally per chat / origin — the
     /// watchdog's durable rolling-window budget.
     pub async fn count_advisor_reviews_since(

@@ -27,6 +27,14 @@
 //! representation for, which is reported in [`ImportReport::warnings`] rather
 //! than dropped silently.
 //!
+//! Re-running an import never regresses state: chats, messages, tasks,
+//! attempts, events, leases, run bindings, continuations, proposals,
+//! receipts, the outbox and agent inputs already in the destination are kept
+//! as they are (a warning names each), so only rows the destination lacks
+//! are added. Tool executions keep a monotonic guard instead (a durable
+//! destination receipt is never overwritten by an older state); settings and
+//! compatibility-namespace documents are refreshed by design.
+//!
 //! TypeScript renders every instant as an ISO-8601 string; Rust native clocks
 //! are epoch milliseconds. A required instant that will not parse refuses the
 //! row; an optional one degrades to absent with a warning, and a chat or
@@ -78,6 +86,11 @@ pub const SETTINGS_KEY: &str = "settings";
 /// crate cannot name the host's constructor argument, so promotion takes it
 /// through [`ImportOptions::promote_mcp_application_id`].
 pub const MCP_CONFIG_NAMESPACE: &str = "mcp-config";
+
+/// 2^53: the largest magnitude JavaScript (and so the TypeScript source) can
+/// hold as an exact integer. Counters read from the source must not exceed it.
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_992.0;
+const MAX_SAFE_INTEGER_I64: i64 = 9_007_199_254_740_992;
 
 /// The oldest TypeScript schema this importer reads (`MIN_SUPPORTED_SCHEMA_VERSION`).
 const MIN_TS_VERSION: i64 = 8;
@@ -231,10 +244,12 @@ impl Row {
 
     fn integer(&self, column: &str) -> Option<i64> {
         match self.get(column)? {
+            // A REAL is accepted only when it is a whole number a binary64
+            // holds exactly; `as i64` would saturate anything beyond that.
             Value::Number(number) => number.as_i64().or_else(|| {
                 number
                     .as_f64()
-                    .filter(|value| value.fract() == 0.0)
+                    .filter(|value| value.fract() == 0.0 && value.abs() <= MAX_SAFE_INTEGER)
                     .map(|value| value as i64)
             }),
             Value::Bool(value) => Some(i64::from(*value)),
@@ -285,8 +300,12 @@ impl SqliteStore {
     /// this store, which must be a freshly opened Rust store.
     ///
     /// The source is opened read-only and is never modified. Re-running the
-    /// import is safe: every write is an upsert on the destination's primary
-    /// key, so a second pass reports the same counts and duplicates nothing.
+    /// import is safe: every table except settings/compat documents and
+    /// guarded tool executions is inserted with `ON CONFLICT DO NOTHING`, so a row the store has since
+    /// advanced (a task completed after the first pass, say) is never
+    /// regressed to its source state; each such row is reported as a warning
+    /// ("row already present; kept destination") and still counted. A lease
+    /// is imported only for a task that is running.
     /// Importing a database into itself is refused.
     pub async fn import_from_ts_schema(
         &self,
@@ -549,12 +568,48 @@ impl<'a> Importer<'a> {
             Ok(()) => Ok(true),
             Err(error) if self.opts.abort_on_error => Err(error),
             Err(error) => {
+                // SQLite rolls the WHOLE transaction back on some errors
+                // (full disk, I/O, interrupt). Autocommit being back on
+                // means every earlier row of this import is already gone and
+                // any further write would commit on its own, so the import
+                // must stop instead of limping on with a partial result.
+                if self.db.is_autocommit() {
+                    return Err(StoreError::InvalidImport {
+                        reason: format!(
+                            "{kind} {id}: the import transaction was rolled back by SQLite ({error}); aborting"
+                        ),
+                    });
+                }
                 self.report
                     .warnings
                     .push(format!("{kind} {id} was not imported: {error}"));
                 Ok(false)
             }
         }
+    }
+
+    /// An insert that never touches a row already in the destination
+    /// (`ON CONFLICT DO NOTHING`), so a re-import cannot regress state the
+    /// store has advanced since. `write` answers how many rows it inserted;
+    /// zero means the row was already there, which is reported and still
+    /// counts as present (`Ok(true)`).
+    fn insert_keeping(
+        &mut self,
+        kind: &str,
+        id: &str,
+        write: impl FnOnce(&Connection) -> Result<usize>,
+    ) -> Result<bool> {
+        let mut inserted = 1;
+        let present = self.attempt(kind, id, |db| {
+            inserted = write(db)?;
+            Ok(())
+        })?;
+        if present && inserted == 0 {
+            self.report.warnings.push(format!(
+                "{kind} {id}: row already present; kept destination"
+            ));
+        }
+        Ok(present)
     }
 
     fn table_exists(&self, table: &str) -> Result<bool> {
@@ -840,12 +895,11 @@ impl<'a> Importer<'a> {
                 updated_at,
             };
             let record = json(self.db, &chat)?;
-            if self.attempt("chat", &id, |db| {
-                db.execute(
-                    "INSERT INTO chats(id,record) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET record=excluded.record",
+            if self.insert_keeping("chat", &id, |db| {
+                Ok(db.execute(
+                    "INSERT INTO chats(id,record) VALUES(?,?) ON CONFLICT(id) DO NOTHING",
                     params![id, record],
-                )?;
-                Ok(())
+                )?)
             })? {
                 self.report.chats += 1;
             }
@@ -854,53 +908,46 @@ impl<'a> Importer<'a> {
     }
 
     /// Parents before children: `messages.parent_id` is a real self-referencing
-    /// foreign key, so a row whose parent is not there yet waits for the next
-    /// pass. What still waits when progress stops is an orphan or a cycle, and
-    /// no number of passes will place it.
+    /// foreign key, so the rows are ordered once, in memory, by their parent
+    /// link (see [`parents_first`]) and written in a single pass. What cannot
+    /// be placed after that is an orphan or a cycle.
     fn import_messages(&mut self) -> Result<()> {
-        let mut waiting = self.rows("messages")?;
-        loop {
-            let mut deferred = Vec::new();
-            let mut progress = false;
-            for row in waiting.drain(..) {
-                let Some(id) = Row::text(&row, "id") else {
-                    self.report
-                        .warnings
-                        .push("messages: a row has no id".into());
-                    progress = true;
-                    continue;
-                };
-                let chat_ready = match Row::text(&row, "chat_id") {
-                    None => false,
-                    Some(chat) => self.exists("chats", "id", &chat)?,
-                };
-                let parent_ready = match Row::text(&row, "parent_message_id") {
-                    None => true,
-                    Some(parent) => self.exists("messages", "id", &parent)?,
-                };
-                if !chat_ready || !parent_ready {
-                    deferred.push(row);
-                    continue;
-                }
-                if self.write_message(&id, &row)? {
-                    self.report.messages += 1;
-                }
-                progress = true;
+        let rows = self.rows("messages")?;
+        let mut unplaced = Vec::new();
+        for index in parents_first(&rows) {
+            let row = &rows[index];
+            let Some(id) = Row::text(row, "id") else {
+                self.report
+                    .warnings
+                    .push("messages: a row has no id".into());
+                continue;
+            };
+            let chat_ready = match Row::text(row, "chat_id") {
+                None => false,
+                Some(chat) => self.exists("chats", "id", &chat)?,
+            };
+            let parent_ready = match Row::text(row, "parent_message_id") {
+                None => true,
+                Some(parent) => self.exists("messages", "id", &parent)?,
+            };
+            if !chat_ready || !parent_ready {
+                unplaced.push(index);
+                continue;
             }
-            waiting = deferred;
-            if waiting.is_empty() || !progress {
-                break;
+            if self.write_message(&id, row)? {
+                self.report.messages += 1;
             }
         }
-        for row in waiting {
-            let id = Row::text(&row, "id").unwrap_or_default();
-            let reason = match Row::text(&row, "parent_message_id") {
+        for index in unplaced {
+            let row = &rows[index];
+            let id = Row::text(row, "id").unwrap_or_default();
+            let reason = match Row::text(row, "parent_message_id") {
                 Some(parent) if !self.exists("messages", "id", &parent)? => {
                     format!("message {id}: parent {parent} is not in this database")
                 }
                 _ => format!(
                     "message {id}: chat {} is not in this database",
-                    Row::text(&row, "chat_id").unwrap_or_default()
+                    Row::text(row, "chat_id").unwrap_or_default()
                 ),
             };
             // Strict mode must abort here, never commit an import that
@@ -955,6 +1002,14 @@ impl<'a> Importer<'a> {
         let Some(created_at) = self.opt_millis("message", id, "created_at", row)? else {
             return self.drop_row(format!("message {id}: created_at is not an instant"));
         };
+        let created_at = match ConversationTimestamp::from_epoch_millis(created_at) {
+            Ok(timestamp) => timestamp,
+            Err(error) => {
+                return self.drop_row(format!(
+                    "message {id}: created_at is out of range ({error})"
+                ));
+            }
+        };
         let record = MessageRecord {
             id: id.to_owned(),
             chat_id: chat_id.clone(),
@@ -974,23 +1029,63 @@ impl<'a> Importer<'a> {
             active: Row::flag(row, "active").unwrap_or(true),
             // v8 predates the column; a branch nobody archived is an active one.
             archived: Row::flag(row, "archived").unwrap_or(false),
-            created_at: ConversationTimestamp::from_epoch_millis(created_at)?,
+            created_at,
         };
         let parent = record.parent_message_id.clone();
         let record = json(self.db, &record)?;
-        self.attempt("message", id, |db| {
+        self.insert_keeping("message", id, |db| {
             // The persistent FTS5 index needs no separate maintenance
             // here: the schema's INSERT/UPDATE triggers on `messages`
             // fire for this direct write inside the import transaction,
             // so imported rows are searchable the moment they land.
-            db.execute(
+            Ok(db.execute(
                 "INSERT INTO messages(id,chat_id,parent_id,order_key,record) VALUES(?,?,?,?,?)
-                 ON CONFLICT(id) DO UPDATE SET chat_id=excluded.chat_id, parent_id=excluded.parent_id, order_key=excluded.order_key, record=excluded.record",
-                params![id, chat_id, parent, crate::util::sql_integer(order_key)?, record],
-            )?;
-            Ok(())
+                 ON CONFLICT(id) DO NOTHING",
+                params![
+                    id,
+                    chat_id,
+                    parent,
+                    crate::util::sql_integer(order_key)?,
+                    record
+                ],
+            )?)
         })
     }
+}
+
+/// Row indexes ordered so every row follows its `parent_message_id` row when
+/// that parent is in the same source table. A parent outside the table (an
+/// orphan) or a cycle simply ends the walk; those rows keep their place and
+/// fail the destination's parent check, exactly as before.
+fn parents_first(rows: &[Row]) -> Vec<usize> {
+    let index: HashMap<String, usize> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(position, row)| Row::text(row, "id").map(|id| (id, position)))
+        .collect();
+    let parent_of = |position: usize| {
+        Row::text(&rows[position], "parent_message_id")
+            .and_then(|parent| index.get(&parent).copied())
+    };
+    let mut placed = vec![false; rows.len()];
+    let mut order = Vec::with_capacity(rows.len());
+    for start in 0..rows.len() {
+        let mut chain = Vec::new();
+        let mut seen = HashSet::new();
+        let mut cursor = Some(start);
+        while let Some(position) = cursor {
+            if placed[position] || !seen.insert(position) {
+                break;
+            }
+            chain.push(position);
+            cursor = parent_of(position);
+        }
+        for position in chain.into_iter().rev() {
+            placed[position] = true;
+            order.push(position);
+        }
+    }
+    order
 }
 
 impl<'a> Importer<'a> {
@@ -1078,12 +1173,11 @@ impl<'a> Importer<'a> {
             let status = self.status_text(&task.status)?;
             let scope = task.scope_id.clone();
             let record = json(self.db, &task)?;
-            if self.attempt("task", &task_id, |db| {
-                db.execute(
-                    "INSERT INTO tasks(id,scope,status,record) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope, status=excluded.status, record=excluded.record",
+            if self.insert_keeping("task", &task_id, |db| {
+                Ok(db.execute(
+                    "INSERT INTO tasks(id,scope,status,record) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING",
                     params![task_id, scope, status, record],
-                )?;
-                Ok(())
+                )?)
             })? {
                 self.report.tasks += 1;
             }
@@ -1134,12 +1228,11 @@ impl<'a> Importer<'a> {
                 error: Row::text(&row, "error"),
             };
             let record = json(self.db, &attempt)?;
-            if self.attempt("attempt", &attempt_id, |db| {
-                db.execute(
-                    "INSERT INTO attempts(id,task_id,record) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET task_id=excluded.task_id, record=excluded.record",
+            if self.insert_keeping("attempt", &attempt_id, |db| {
+                Ok(db.execute(
+                    "INSERT INTO attempts(id,task_id,record) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING",
                     params![attempt_id, task_id, record],
-                )?;
-                Ok(())
+                )?)
             })? {
                 self.report.attempts += 1;
             }
@@ -1199,12 +1292,11 @@ impl<'a> Importer<'a> {
                 created_at,
             };
             let record = json(self.db, &record)?;
-            if self.attempt("event", &event_id, |db| {
-                db.execute(
-                    "INSERT INTO events(task_id,seq,event_id,record) VALUES(?,?,?,?) ON CONFLICT(task_id,seq) DO UPDATE SET event_id=excluded.event_id, record=excluded.record",
+            if self.insert_keeping("event", &event_id, |db| {
+                Ok(db.execute(
+                    "INSERT INTO events(task_id,seq,event_id,record) VALUES(?,?,?,?) ON CONFLICT(task_id,seq) DO NOTHING",
                     params![task_id, seq, event_id, record],
-                )?;
-                Ok(())
+                )?)
             })? {
                 self.report.events += 1;
             }
@@ -1231,14 +1323,30 @@ impl<'a> Importer<'a> {
                 self.ignore(format!("lease of {task_id}: its task was not imported"))?;
                 continue;
             }
-            let Some(fencing_token) =
-                Row::integer(&row, "fencing_token").filter(|token| *token >= 0)
+            let Some(fencing_token) = Row::integer(&row, "fencing_token")
+                .filter(|token| (0..=MAX_SAFE_INTEGER_I64).contains(token))
             else {
                 self.ignore(format!(
-                    "lease of {task_id}: fencing_token is not a non-negative integer"
+                    "lease of {task_id}: fencing_token is not a non-negative integer within 2^53"
                 ))?;
                 continue;
             };
+            // A lease belongs to a running task only: any other status means
+            // the lease is residue, and importing it would let recovery
+            // restate finished work as a crash. The counter still moves past
+            // the token so it is never reissued.
+            highest = highest.max(fencing_token);
+            let status: String =
+                self.db
+                    .query_row("SELECT status FROM tasks WHERE id=?", [&task_id], |row| {
+                        row.get(0)
+                    })?;
+            if status != "running" {
+                self.report.warnings.push(format!(
+                    "lease of {task_id}: its task is {status}, not running; the lease was skipped"
+                ));
+                continue;
+            }
             let Some(expires_at) = self.millis("lease", &task_id, "expires_at", &row)? else {
                 continue;
             };
@@ -1250,14 +1358,12 @@ impl<'a> Importer<'a> {
                 fencing_token: fencing_token as u64,
                 expires_at,
             };
-            highest = highest.max(fencing_token);
             let record = json(self.db, &lease)?;
-            self.attempt("lease", &task_id, |db| {
-                db.execute(
-                    "INSERT INTO leases(task_id,record) VALUES(?,?) ON CONFLICT(task_id) DO UPDATE SET record=excluded.record",
+            self.insert_keeping("lease", &task_id, |db| {
+                Ok(db.execute(
+                    "INSERT INTO leases(task_id,record) VALUES(?,?) ON CONFLICT(task_id) DO NOTHING",
                     params![task_id, record],
-                )?;
-                Ok(())
+                )?)
             })?;
         }
         if self.table_exists("fencing_counter")? {
@@ -1268,8 +1374,14 @@ impl<'a> Importer<'a> {
                 })
                 .optional()?
                 .flatten();
-            if let Some(value) = value {
-                highest = highest.max(value);
+            match value {
+                Some(value) if (0..=MAX_SAFE_INTEGER_I64).contains(&value) => {
+                    highest = highest.max(value);
+                }
+                Some(value) => self.ignore(format!(
+                    "fencing_counter: {value} is outside 0..=2^53; the counter was not carried"
+                ))?,
+                None => {}
             }
         }
         self.counter("fence", highest)
@@ -1315,12 +1427,11 @@ impl<'a> Importer<'a> {
                 }
                 let state_required = i64::from(Row::flag(&row, "state_required").unwrap_or(false));
                 let scope = json(self.db, &scope)?;
-                self.attempt("run binding", &run_id, |db| {
-                    db.execute(
-                        "INSERT INTO run_bindings(run_id,chat_id,scope,state_required) VALUES(?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET chat_id=excluded.chat_id, scope=excluded.scope, state_required=excluded.state_required",
+                self.insert_keeping("run binding", &run_id, |db| {
+                    Ok(db.execute(
+                        "INSERT INTO run_bindings(run_id,chat_id,scope,state_required) VALUES(?,?,?,?) ON CONFLICT(run_id) DO NOTHING",
                         params![run_id, chat_id, scope, state_required],
-                    )?;
-                    Ok(())
+                    )?)
                 })?;
             }
         }
@@ -1387,16 +1498,16 @@ impl<'a> Importer<'a> {
                     continue;
                 }
                 let text = json(self.db, &record)?;
-                self.attempt("continuation", &run_id, |db| {
-                    db.execute(
-                        "INSERT INTO continuations(run_id,anchor_id,record) VALUES(?,?,?) ON CONFLICT(run_id) DO UPDATE SET anchor_id=excluded.anchor_id, record=excluded.record",
+                self.insert_keeping("continuation", &run_id, |db| {
+                    let inserted = db.execute(
+                        "INSERT INTO continuations(run_id,anchor_id,record) VALUES(?,?,?) ON CONFLICT(run_id) DO NOTHING",
                         params![run_id, anchor_id, text],
                     )?;
                     db.execute(
                         "UPDATE run_bindings SET state_required=1 WHERE run_id=?",
                         [&run_id],
                     )?;
-                    Ok(())
+                    Ok(inserted)
                 })?;
             }
         }
@@ -1802,12 +1913,11 @@ impl<'a> Importer<'a> {
                 record.operation_id.clone(),
             );
             let text = json(self.db, &record)?;
-            if self.attempt("proposal", &id, |db| {
-                db.execute(
-                    "INSERT INTO proposals(id,scope,action_id,status,operation_id,record) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET scope=excluded.scope, action_id=excluded.action_id, status=excluded.status, operation_id=excluded.operation_id, record=excluded.record",
+            if self.insert_keeping("proposal", &id, |db| {
+                Ok(db.execute(
+                    "INSERT INTO proposals(id,scope,action_id,status,operation_id,record) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
                     params![id, scope, action_id, status, operation_id, text],
-                )?;
-                Ok(())
+                )?)
             })? {
                 self.report.proposals += 1;
             }
@@ -1909,12 +2019,11 @@ impl<'a> Importer<'a> {
                 created_at,
             };
             let text = json(self.db, &record)?;
-            if self.attempt("receipt", &operation_id, |db| {
-                db.execute(
-                    "INSERT INTO receipts(operation_id,proposal_id,record) VALUES(?,?,?) ON CONFLICT(operation_id) DO UPDATE SET proposal_id=excluded.proposal_id, record=excluded.record",
+            if self.insert_keeping("receipt", &operation_id, |db| {
+                Ok(db.execute(
+                    "INSERT INTO receipts(operation_id,proposal_id,record) VALUES(?,?,?) ON CONFLICT(operation_id) DO NOTHING",
                     params![operation_id, proposal_id, text],
-                )?;
-                Ok(())
+                )?)
             })? {
                 self.report.receipts += 1;
             }
@@ -1962,12 +2071,11 @@ impl<'a> Importer<'a> {
                 claim_until: None,
             };
             let text = json(self.db, &record)?;
-            if self.attempt("outbox", &id, |db| {
-                db.execute(
-                    "INSERT INTO outbox(id,record) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET record=excluded.record",
+            if self.insert_keeping("outbox", &id, |db| {
+                Ok(db.execute(
+                    "INSERT INTO outbox(id,record) VALUES(?,?) ON CONFLICT(id) DO NOTHING",
                     params![id, text],
-                )?;
-                Ok(())
+                )?)
             })? {
                 self.report.outbox += 1;
             }
@@ -2460,8 +2568,12 @@ impl<'a> Importer<'a> {
                 continue;
             };
             record.insert("content".into(), content);
-            let Some(order) = Row::integer(&row, "input_order") else {
-                self.ignore(format!("agent input {id}: input_order is not a number"))?;
+            let Some(order) = Row::integer(&row, "input_order")
+                .filter(|order| order.abs() <= MAX_SAFE_INTEGER_I64)
+            else {
+                self.ignore(format!(
+                    "agent input {id}: input_order is not a number within 2^53"
+                ))?;
                 continue;
             };
             record.insert("order".into(), Value::from(order));
@@ -2498,15 +2610,11 @@ impl<'a> Importer<'a> {
                 crate::agent_inputs::status_text(parsed.status).to_owned(),
                 parsed.target_task_id.clone(),
             );
-            if self.attempt("agent input", &id, |db| {
-                db.execute(
-                    "INSERT INTO agent_inputs VALUES(?,?,?,?,?,?) ON CONFLICT(input_id) DO UPDATE \
-                     SET session_id=excluded.session_id, kind=excluded.kind, \
-                     status=excluded.status, target_task_id=excluded.target_task_id, \
-                     record=excluded.record",
+            if self.insert_keeping("agent input", &id, |db| {
+                Ok(db.execute(
+                    "INSERT INTO agent_inputs VALUES(?,?,?,?,?,?) ON CONFLICT(input_id) DO NOTHING",
                     params![id, session, kind, status, target, text],
-                )?;
-                Ok(())
+                )?)
             })? {
                 self.report.agent_inputs += 1;
             }
@@ -2776,4 +2884,57 @@ fn rebuilt_event(row: &Row, seq: f64, event_id: &str) -> Value {
         event.insert("attemptId".into(), Value::String(attempt_id));
     }
     Value::Object(event)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn importer<'a>(db: &'a Connection, opts: &'a ImportOptions) -> Importer<'a> {
+        Importer {
+            db,
+            source: Connection::open_in_memory().unwrap(),
+            opts,
+            report: ImportReport::default(),
+            receipt_stamp_reported: false,
+        }
+    }
+
+    #[test]
+    fn a_statement_error_inside_the_transaction_degrades_to_a_warning() {
+        let (db, _) = crate::schema::open(Path::new(":memory:")).unwrap();
+        db.execute_batch("BEGIN").unwrap();
+        let opts = ImportOptions {
+            abort_on_error: false,
+            ..Default::default()
+        };
+        let mut importer = importer(&db, &opts);
+        let written = importer
+            .attempt("row", "r1", |_| Err(StoreError::InvalidInput("bad".into())))
+            .unwrap();
+        assert!(!written);
+        assert!(importer.report.warnings[0].contains("r1 was not imported"));
+    }
+
+    #[test]
+    fn a_sqlite_side_rollback_aborts_the_import_instead_of_writing_in_autocommit() {
+        let (db, _) = crate::schema::open(Path::new(":memory:")).unwrap();
+        db.execute_batch("BEGIN").unwrap();
+        let opts = ImportOptions {
+            abort_on_error: false,
+            ..Default::default()
+        };
+        let mut importer = importer(&db, &opts);
+        // Simulates SQLite rolling the transaction back behind the importer's back.
+        let error = importer
+            .attempt("row", "r2", |db| {
+                db.execute_batch("ROLLBACK")?;
+                Err(StoreError::InvalidInput("disk full".into()))
+            })
+            .unwrap_err();
+        assert!(
+            matches!(&error, StoreError::InvalidImport { reason } if reason.contains("rolled back")),
+            "{error:?}"
+        );
+    }
 }

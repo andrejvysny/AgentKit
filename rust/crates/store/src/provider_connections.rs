@@ -34,7 +34,7 @@ use crate::{
     Result, StoreError,
     util::{json, safe_integer},
 };
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use std::path::Path;
@@ -126,7 +126,9 @@ pub fn register_provider_connection(
     }
     let connection_id = provider_connection_identity(connection_key);
     let digest = credential_digest(api_key);
-    let transaction = connection.transaction()?;
+    // IMMEDIATE: the read-then-write holds the write lock from the read, or
+    // two registrars could both observe no row / the same digest.
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let existing: Option<(String, i64)> = transaction
         .query_row(
             "SELECT credential_digest,generation FROM provider_connections WHERE connection_id=?",

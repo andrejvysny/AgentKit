@@ -34,6 +34,18 @@ pub(crate) fn all<T: DeserializeOwned>(db: &Connection, table: &str) -> Result<V
     rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
 }
 
+/// Like [`all`] but filtered in SQL: `sql` must select the `record` column
+/// only, so callers never deserialize rows they would discard.
+pub(crate) fn select<T: DeserializeOwned>(
+    db: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+) -> Result<Vec<T>> {
+    let mut statement = db.prepare(sql)?;
+    let rows = statement.query_map(params, |r| r.get::<_, String>(0))?;
+    rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+}
+
 pub(crate) fn json<T: Serialize + agentkit_contracts::JsonDeserialize>(
     db: &Connection,
     value: &T,
