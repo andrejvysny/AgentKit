@@ -1,4 +1,10 @@
+// Pull the ambient `node:module` shape in wherever this file is compiled:
+// sibling packages (core, host) reach `src/` through the workspace `types`
+// export whenever `native/dist` is absent, and their tsconfigs never include
+// this package's ambient declarations (TS2307 on clean CI checkouts).
+/// <reference path="./node-builtins.d.ts" />
 import type * as Generated from "../generated/index.js";
+import { NATIVE_ADDON_VERSION } from "./addon-version.js";
 
 /**
  * The generated NAPI-RS loader's embedded version comparison is opt-in
@@ -40,9 +46,6 @@ async function assertAddonVersionsMatchWrapper(): Promise<void> {
     return;
   const { createRequire } = await import("node:module");
   const requireLocal = createRequire(import.meta.url);
-  const pkg = requireLocal("../package.json") as { version?: unknown };
-  if (typeof pkg.version !== "string")
-    throw new Error("native wrapper package.json carries no version");
   for (const key of [
     "linux-x64-gnu",
     "linux-arm64-gnu",
@@ -58,9 +61,9 @@ async function assertAddonVersionsMatchWrapper(): Promise<void> {
     } catch {
       continue;
     }
-    if (addon.version !== pkg.version)
+    if (addon.version !== NATIVE_ADDON_VERSION)
       throw new Error(
-        `native binding package version mismatch: @agentkit/native-${key} is ${String(addon.version)}, wrapper is ${pkg.version}`,
+        `native binding package version mismatch: @agentkit/native-${key} is ${String(addon.version)}, wrapper is ${NATIVE_ADDON_VERSION}`,
       );
   }
 }

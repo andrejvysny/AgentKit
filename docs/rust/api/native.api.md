@@ -4,6 +4,20 @@
 
 ```ts
 
+import { Static } from '@sinclair/typebox';
+import { TArray } from '@sinclair/typebox';
+import { TBoolean } from '@sinclair/typebox';
+import { TInteger } from '@sinclair/typebox';
+import { TLiteral } from '@sinclair/typebox';
+import { TNull } from '@sinclair/typebox';
+import { TNumber } from '@sinclair/typebox';
+import { TObject } from '@sinclair/typebox';
+import { TOptional } from '@sinclair/typebox';
+import { TRecord } from '@sinclair/typebox';
+import { TString } from '@sinclair/typebox';
+import { TUnion } from '@sinclair/typebox';
+import { TUnknown } from '@sinclair/typebox';
+
 // @public (undocumented)
 interface AcquireLeaseInput {
     // (undocumented)
@@ -153,26 +167,26 @@ type AiMessageContent = Static<typeof AiMessageContentSchema>;
 
 // @public
 const AiMessageContentSchema: TUnion<[TString, TArray<TUnion<[TObject<    {
-    type: TLiteral<"text">;
-    text: TString;
+type: TLiteral<"text">;
+text: TString;
 }>, TObject<    {
-    type: TLiteral<"image">;
-    source: TUnion<[TObject<    {
-        kind: TLiteral<"url">;
-        url: TString;
-    }>, TObject<    {
-        kind: TLiteral<"data">;
-        base64: TString;
-        mediaType: TString;
-    }>, TObject<    {
-        kind: TLiteral<"ref">;
-        ref: TString;
-    }>]>;
-    detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>;
+type: TLiteral<"image">;
+source: TUnion<[TObject<    {
+kind: TLiteral<"url">;
+url: TString;
 }>, TObject<    {
-    type: TLiteral<"audio">;
-    data: TString;
-    format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+kind: TLiteral<"data">;
+base64: TString;
+mediaType: TString;
+}>, TObject<    {
+kind: TLiteral<"ref">;
+ref: TString;
+}>]>;
+detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>;
+}>, TObject<    {
+type: TLiteral<"audio">;
+data: TString;
+format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
 }>]>>]>;
 
 // @public (undocumented)
@@ -180,15 +194,15 @@ type AiProviderCapabilities = Static<typeof AiProviderCapabilitiesSchema>;
 
 // @public (undocumented)
 const AiProviderCapabilitiesSchema: TObject<    {
-    streaming: TBoolean;
-    toolCalling: TBoolean;
-    modelList: TBoolean;
-    vision: TOptional<TBoolean>;
-    audio: TOptional<TBoolean>;
-    jsonMode: TOptional<TBoolean>;
-    maxContextTokens: TOptional<TNumber>;
-    checkedAt: TOptional<TString>;
-    warning: TOptional<TString>;
+streaming: TBoolean;
+toolCalling: TBoolean;
+modelList: TBoolean;
+vision: TOptional<TBoolean>;
+audio: TOptional<TBoolean>;
+jsonMode: TOptional<TBoolean>;
+maxContextTokens: TOptional<TNumber>;
+checkedAt: TOptional<TString>;
+warning: TOptional<TString>;
 }>;
 
 // @public (undocumented)
@@ -196,15 +210,15 @@ type AiProviderConfig = Static<typeof AiProviderConfigSchema>;
 
 // @public (undocumented)
 const AiProviderConfigSchema: TObject<    {
-    id: TString;
-    label: TString;
-    kind: TString;
-    baseUrl: TString;
-    apiKey: TOptional<TString>;
-    defaultModel: TString;
-    enabled: TBoolean;
-    extraHeaders: TOptional<TRecord<TString, TString>>;
-    metadata: TOptional<TRecord<TString, TUnknown>>;
+id: TString;
+label: TString;
+kind: TString;
+baseUrl: TString;
+apiKey: TOptional<TString>;
+defaultModel: TString;
+enabled: TBoolean;
+extraHeaders: TOptional<TRecord<TString, TString>>;
+metadata: TOptional<TRecord<TString, TUnknown>>;
 }>;
 
 // @public (undocumented)
@@ -212,23 +226,23 @@ type AiProviderContinuation = Static<typeof AiProviderContinuationSchema>;
 
 // @public
 const AiProviderContinuationSchema: TObject<    {
-    version: TLiteral<1>;
-    scope: TObject<    {
-        providerId: TString;
-        protocol: TLiteral<"responses">;
-        connectionId: TString;
-        generation: TInteger;
-        chatId: TString;
-        branchId: TString;
-        model: TString;
-    }>;
-    runContent: TOptional<TObject<    {
-        runId: TString;
-        digest: TString;
-    }>>;
-    messageCount: TInteger;
-    messageDigest: TString;
-    inputItems: TArray<TRecord<TString, TUnknown>>;
+version: TLiteral<1>;
+scope: TObject<    {
+providerId: TString;
+protocol: TLiteral<"responses">;
+connectionId: TString;
+generation: TInteger;
+chatId: TString;
+branchId: TString;
+model: TString;
+}>;
+runContent: TOptional<TObject<    {
+runId: TString;
+digest: TString;
+}>>;
+messageCount: TInteger;
+messageDigest: TString;
+inputItems: TArray<TRecord<TString, TUnknown>>;
 }>;
 
 // @public (undocumented)
@@ -236,12 +250,12 @@ type AiProviderModel = Static<typeof AiProviderModelSchema>;
 
 // @public (undocumented)
 const AiProviderModelSchema: TObject<    {
-    providerId: TString;
-    modelId: TString;
-    displayName: TUnion<[TString, TNull]>;
-    contextWindowTokens: TOptional<TNumber>;
-    supportsToolCalling: TOptional<TBoolean>;
-    fetchedAt: TString;
+providerId: TString;
+modelId: TString;
+displayName: TUnion<[TString, TNull]>;
+contextWindowTokens: TOptional<TNumber>;
+supportsToolCalling: TOptional<TBoolean>;
+fetchedAt: TString;
 }>;
 
 // @public (undocumented)
@@ -249,9 +263,9 @@ type AiToolCall = Static<typeof AiToolCallSchema>;
 
 // @public (undocumented)
 const AiToolCallSchema: TObject<    {
-    id: TString;
-    name: TString;
-    argumentsJson: TString;
+id: TString;
+name: TString;
+argumentsJson: TString;
 }>;
 
 // @public
@@ -261,49 +275,49 @@ type AiToolResult<T = unknown> = Omit<Static<typeof AiToolResultSchema>, "data">
 
 // @public (undocumented)
 const AiToolResultSchema: TObject<    {
-    modelContent: TOptional<TArray<TUnion<[TObject<    {
-        type: TLiteral<"text">;
-        text: TString;
-    }>, TObject<    {
-        type: TLiteral<"image">;
-        source: TUnion<[TObject<    {
-            kind: TLiteral<"url">;
-            url: TString;
-        }>, TObject<    {
-            kind: TLiteral<"data">;
-            base64: TString;
-            mediaType: TString;
-        }>, TObject<    {
-            kind: TLiteral<"ref">;
-            ref: TString;
-        }>]>;
-        detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>;
-    }>, TObject<    {
-        type: TLiteral<"audio">;
-        data: TString;
-        format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
-    }>]>>>;
-    ok: TBoolean;
-    data: TOptional<TUnknown>;
-    sources: TArray<TObject<    {
-        id: TString;
-        kind: TString;
-        label: TString;
-        refId: TOptional<TString>;
-        path: TOptional<TString>;
-        excerpt: TOptional<TString>;
-        metadata: TOptional<TRecord<TString, TUnknown>>;
-    }>>;
-    warnings: TArray<TString>;
-    truncated: TBoolean;
-    limits: TObject<    {
-        profile: TUnion<[TLiteral<"small">, TLiteral<"medium">, TLiteral<"large">]>;
-        maxBytes: TNumber;
-        maxItems: TOptional<TNumber>;
-    }>;
-    modelData: TOptional<TUnknown>;
-    summary: TOptional<TString>;
-    status: TOptional<TUnion<[TLiteral<"ok">, TLiteral<"partial">]>>;
+modelContent: TOptional<TArray<TUnion<[TObject<    {
+type: TLiteral<"text">;
+text: TString;
+}>, TObject<    {
+type: TLiteral<"image">;
+source: TUnion<[TObject<    {
+kind: TLiteral<"url">;
+url: TString;
+}>, TObject<    {
+kind: TLiteral<"data">;
+base64: TString;
+mediaType: TString;
+}>, TObject<    {
+kind: TLiteral<"ref">;
+ref: TString;
+}>]>;
+detail: TOptional<TUnion<[TLiteral<"auto">, TLiteral<"low">, TLiteral<"high">]>>;
+}>, TObject<    {
+type: TLiteral<"audio">;
+data: TString;
+format: TUnion<[TLiteral<"wav">, TLiteral<"mp3">]>;
+}>]>>>;
+ok: TBoolean;
+data: TOptional<TUnknown>;
+sources: TArray<TObject<    {
+id: TString;
+kind: TString;
+label: TString;
+refId: TOptional<TString>;
+path: TOptional<TString>;
+excerpt: TOptional<TString>;
+metadata: TOptional<TRecord<TString, TUnknown>>;
+}>>;
+warnings: TArray<TString>;
+truncated: TBoolean;
+limits: TObject<    {
+profile: TUnion<[TLiteral<"small">, TLiteral<"medium">, TLiteral<"large">]>;
+maxBytes: TNumber;
+maxItems: TOptional<TNumber>;
+}>;
+modelData: TOptional<TUnknown>;
+summary: TOptional<TString>;
+status: TOptional<TUnion<[TLiteral<"ok">, TLiteral<"partial">]>>;
 }>;
 
 // @public (undocumented)
@@ -359,22 +373,6 @@ interface ApplyOutcome {
     // (undocumented)
     status: "applied" | "partial" | "failed";
 }
-
-// @public (undocumented)
-interface ArrayOptions extends SchemaOptions {
-    contains?: TSchema;
-    maxContains?: number;
-    maxItems?: number;
-    minContains?: number;
-    minItems?: number;
-    uniqueItems?: boolean;
-}
-
-// @public (undocumented)
-type ArrayStatic<T extends TSchema, P extends unknown[]> = Ensure<Static<T, P>[]>;
-
-// @public (undocumented)
-type Assert<T, E> = T extends E ? T : never;
 
 // @public
 interface AssistantSettings {
@@ -492,45 +490,45 @@ type ConnectionRecord = Omit<Static<typeof ConnectionRecordSchema>, "status"> & 
 
 // @public (undocumented)
 const ConnectionRecordSchema: TObject<    {
-    id: TString;
-    connectorId: TString;
-    accountId: TString;
-    workspaceId: TOptional<TString>;
-    revision: TInteger;
-    config: TObject<    {
-        alias: TString;
-        transport: TUnion<[TObject<    {
-            kind: TLiteral<"stdio">;
-            command: TString;
-            args: TOptional<TArray<TString>>;
-            env: TOptional<TRecord<TString, TString>>;
-        }>, TObject<    {
-            kind: TLiteral<"http">;
-            url: TString;
-            headers: TOptional<TRecord<TString, TString>>;
-        }>]>;
-        secretRefs: TOptional<TRecord<TString, TString>>;
-        enabled: TOptional<TBoolean>;
-        toolAliases: TOptional<TRecord<TString, TString>>;
-        resilience: TOptional<TObject<    {
-            requestTimeoutMs: TOptional<TNumber>;
-            connectTimeoutMs: TOptional<TNumber>;
-            maxConnectAttempts: TOptional<TNumber>;
-            connectBackoffBaseMs: TOptional<TNumber>;
-            connectBackoffMaxMs: TOptional<TNumber>;
-            circuitOpenMs: TOptional<TNumber>;
-            reconnectMaxAttempts: TOptional<TNumber>;
-            reconnectBackoffFactor: TOptional<TNumber>;
-            retryTimeouts: TOptional<TBoolean>;
-        }>>;
-        discovery: TOptional<TObject<    {
-            maxPages: TOptional<TInteger>;
-            maxItems: TOptional<TInteger>;
-            maxBytes: TOptional<TInteger>;
-        }>>;
-    }>;
-    status: TUnion<TLiteral<string>[]>;
-    errorCode: TOptional<TString>;
+id: TString;
+connectorId: TString;
+accountId: TString;
+workspaceId: TOptional<TString>;
+revision: TInteger;
+config: TObject<    {
+alias: TString;
+transport: TUnion<[TObject<    {
+kind: TLiteral<"stdio">;
+command: TString;
+args: TOptional<TArray<TString>>;
+env: TOptional<TRecord<TString, TString>>;
+}>, TObject<    {
+kind: TLiteral<"http">;
+url: TString;
+headers: TOptional<TRecord<TString, TString>>;
+}>]>;
+secretRefs: TOptional<TRecord<TString, TString>>;
+enabled: TOptional<TBoolean>;
+toolAliases: TOptional<TRecord<TString, TString>>;
+resilience: TOptional<TObject<    {
+requestTimeoutMs: TOptional<TNumber>;
+connectTimeoutMs: TOptional<TNumber>;
+maxConnectAttempts: TOptional<TNumber>;
+connectBackoffBaseMs: TOptional<TNumber>;
+connectBackoffMaxMs: TOptional<TNumber>;
+circuitOpenMs: TOptional<TNumber>;
+reconnectMaxAttempts: TOptional<TNumber>;
+reconnectBackoffFactor: TOptional<TNumber>;
+retryTimeouts: TOptional<TBoolean>;
+}>>;
+discovery: TOptional<TObject<    {
+maxPages: TOptional<TInteger>;
+maxItems: TOptional<TInteger>;
+maxBytes: TOptional<TInteger>;
+}>>;
+}>;
+status: TUnion<TLiteral<string>[]>;
+errorCode: TOptional<TString>;
 }>;
 
 // @public (undocumented)
@@ -740,14 +738,6 @@ interface EndAttemptInput {
 // @public (undocumented)
 export function endRunProvider(callId: string): boolean;
 
-// @public (undocumented)
-type Ensure<T> = T extends infer U ? U : never;
-
-// @public (undocumented)
-type Evaluate<T> = T extends infer O ? {
-    [K in keyof O]: O[K];
-} : never;
-
 // @public
 interface FencedWriteOptions {
     leaseToken?: string;
@@ -759,9 +749,6 @@ interface ForkChatResult {
     chat: ChatRecord;
     messages: MessageRecord[];
 }
-
-// @public
-const Hint: unique symbol;
 
 // @public
 interface ImportChatInput {
@@ -805,27 +792,7 @@ interface ImportMessageInput {
 }
 
 // @public (undocumented)
-interface IntegerOptions extends SchemaOptions {
-    // (undocumented)
-    exclusiveMaximum?: number;
-    // (undocumented)
-    exclusiveMinimum?: number;
-    // (undocumented)
-    maximum?: number;
-    // (undocumented)
-    minimum?: number;
-    // (undocumented)
-    multipleOf?: number;
-}
-
-// @public (undocumented)
-type IsRequiredArrayLiteralConstant<RequiredTuple extends string[]> = (RequiredTuple extends [infer Left extends string, ...infer _ extends string[]] ? TIsLiteralString<Left> : false);
-
-// @public (undocumented)
 export function isRunCallbackActive(callId: string): boolean;
-
-// @public
-const Kind: unique symbol;
 
 // @public
 interface Lease {
@@ -975,6 +942,80 @@ interface MessageSearchHit {
 }
 
 // @public
+export interface NativeAdvisorConfig {
+    cooldownMs?: number;
+    enabled?: boolean;
+    escalateCritical?: boolean;
+    maxFindings?: number;
+    // (undocumented)
+    maxIterations?: number;
+    maxReviewConcurrency?: number;
+    // (undocumented)
+    maxToolCallsPerIteration?: number;
+    model?: string | null;
+    // (undocumented)
+    overallTimeoutMs?: number | null;
+    // (undocumented)
+    providerRequests?: number | null;
+    reviewsPerWindow?: number;
+    // (undocumented)
+    toolTimeoutMs?: number;
+    triggerConsecutiveToolFailures?: number;
+    triggerEditCount?: number;
+    triggerRepeatedErrorCode?: number;
+    triggerTurnFailures?: number;
+    watchdogModel?: string | null;
+    // (undocumented)
+    windowMs?: number;
+}
+
+// @public
+export interface NativeAdvisorFinding {
+    // (undocumented)
+    chatId: string;
+    // (undocumented)
+    createdAt: number;
+    // (undocumented)
+    detail: Record<string, unknown>;
+    // (undocumented)
+    escalated: boolean;
+    // (undocumented)
+    findingId: string;
+    // (undocumented)
+    model: string;
+    // (undocumented)
+    severity: "info" | "warning" | "critical";
+    // (undocumented)
+    source: "explicit" | "watchdog";
+    // (undocumented)
+    title: string;
+    // (undocumented)
+    triggerKind: string;
+}
+
+// @public
+export interface NativeAdvisorReport {
+    // (undocumented)
+    findingIds: string[];
+    // (undocumented)
+    findings: Array<{
+        severity: "info" | "warning" | "critical";
+        category: string;
+        title: string;
+        evidence: Array<{
+            file?: string;
+            line?: number;
+            detail: string;
+        }>;
+        recommendation?: string;
+    }>;
+    // (undocumented)
+    runId: string;
+    // (undocumented)
+    summary: string;
+}
+
+// @public
 export class NativeAgentError extends Error {
     constructor(code: string, message: string, details?: unknown);
     // (undocumented)
@@ -1117,6 +1158,40 @@ export interface NativeHttpServerOptions {
     maxQueryBytes?: number;
     port?: number;
     providerSecrets?: "memory";
+}
+
+// @public
+export interface NativeLspConfig {
+    // (undocumented)
+    diagnosticsWaitMs?: number;
+    // (undocumented)
+    idleTimeoutMs?: number;
+    // (undocumented)
+    initTimeoutMs?: number;
+    // (undocumented)
+    maxRestarts?: number;
+    // (undocumented)
+    requestTimeoutMs?: number;
+    // (undocumented)
+    restartWindowMs?: number;
+    servers?: Record<string, NativeLspServerCommand>;
+}
+
+// @public
+export interface NativeLspServerCommand {
+    // (undocumented)
+    args?: readonly string[];
+    // (undocumented)
+    command: string;
+    // (undocumented)
+    env?: Record<string, string>;
+}
+
+// @public
+export interface NativeLspToolsOptions {
+    // (undocumented)
+    config?: NativeLspConfig;
+    workspaceRoot: string;
 }
 
 // @public
@@ -1342,6 +1417,9 @@ class NativeSessionManagement {
 // @public (undocumented)
 export class NativeSessionService extends NativeSessionManagement {
     constructor(raw: SessionService, router: CallbackRouter, store: NativeStore, providerConfig?: NativeProviderConfig);
+    advisorConfig(): Promise<NativeAdvisorConfig | null>;
+    advisorFindings(sessionId: string, limit?: number): Promise<NativeAdvisorFinding[]>;
+    advisorReview(sessionId: string, focus: string, options?: NativeCallOptions): Promise<NativeAdvisorReport>;
     // (undocumented)
     answer(input: AnswerInputJson): Promise<Record<string, unknown>>;
     // (undocumented)
@@ -1350,6 +1428,8 @@ export class NativeSessionService extends NativeSessionManagement {
     cancel(sessionId: string, turnId: string): Promise<void>;
     close(): Promise<void>;
     get closeUncertain(): boolean;
+    configureAdvisor(config: NativeAdvisorConfig): Promise<void>;
+    configureSubagents(config: NativeSubagentConfig): Promise<void>;
     // (undocumented)
     createSession(input: CreateSessionInputJson, options?: NativeCallOptions): Promise<Record<string, unknown>>;
     // (undocumented)
@@ -1371,6 +1451,7 @@ export class NativeSessionService extends NativeSessionManagement {
     listTurns(sessionId: string): Promise<unknown[]>;
     get pendingCallbacks(): number;
     registerCodingTools(options: NativeCodingToolsOptions): Promise<void>;
+    registerLspTools(options: NativeLspToolsOptions): Promise<void>;
     static registerProviderConnection(baseUrl: string, apiKey?: string | null, options?: NativeProviderConnectionOptions): Promise<string>;
     registerTool(definition: ToolDefinitionJson, run: ToolRunFunction): Promise<void>;
     // (undocumented)
@@ -1387,6 +1468,9 @@ export class NativeSessionService extends NativeSessionManagement {
     stopHttpServer(): Promise<void>;
     stopMcpServer(): Promise<void>;
     readonly store: NativeStore;
+    subagentConfig(): Promise<NativeSubagentConfig | null>;
+    subagentsList(parentChatId: string): Promise<NativeSubagentView[]>;
+    subagentStatus(childChatId: string): Promise<NativeSubagentView>;
     subscribeTurn(taskId: string, afterSeq?: number): Promise<TurnSubscription>;
 }
 
@@ -1415,6 +1499,11 @@ export class NativeStore {
     mcpListServers(): Promise<NativeMcpServerStatus[]>;
     // (undocumented)
     static open(path: string): Promise<NativeStore>;
+    setTaskAging(options: {
+        agingIntervalMs?: number;
+        agingBonus?: number;
+        agingMaxBonus?: number;
+    }): void;
     // (undocumented)
     setTransactionGateTimeout(milliseconds: number): void;
     // (undocumented)
@@ -1435,6 +1524,7 @@ class NativeStore_2 {
     mcpListServers(): Promise<string>
     static memory(): NativeStore_2
     static open(path: string): NativeStore_2
+    setTaskAging(intervalMs?: number | undefined | null, bonus?: number | undefined | null, maxBonus?: number | undefined | null): void
     // (undocumented)
     setTransactionGateTimeout(milliseconds: number): void
 }
@@ -1447,42 +1537,76 @@ export interface NativeStorePort {
     transaction<T>(fn: (view: NativeStorePort) => Promise<T>): Promise<T>;
 }
 
-// @public (undocumented)
-interface NumberOptions extends SchemaOptions {
+// @public
+export interface NativeSubagentConfig {
+    delegationGuidance?: string | null;
+    enabled?: boolean;
     // (undocumented)
-    exclusiveMaximum?: number;
+    limits?: NativeSubagentLimits;
     // (undocumented)
-    exclusiveMinimum?: number;
-    // (undocumented)
-    maximum?: number;
-    // (undocumented)
-    minimum?: number;
-    // (undocumented)
-    multipleOf?: number;
+    roles?: Record<string, NativeSubagentRole>;
 }
-
-// @public (undocumented)
-interface ObjectOptions extends SchemaOptions {
-    additionalProperties?: TAdditionalProperties;
-    maxProperties?: number;
-    minProperties?: number;
-}
-
-// @public (undocumented)
-type ObjectStatic<T extends TProperties, P extends unknown[]> = ObjectStaticProperties<T, {
-    [K in keyof T]: Static<T[K], P>;
-}>;
-
-// @public (undocumented)
-type ObjectStaticProperties<T extends TProperties, R extends Record<keyof any, unknown>> = Evaluate<(Readonly<Partial<Pick<R, ReadonlyOptionalPropertyKeys<T>>>> & Readonly<Pick<R, ReadonlyPropertyKeys<T>>> & Partial<Pick<R, OptionalPropertyKeys<T>>> & Required<Pick<R, RequiredPropertyKeys<T>>>)>;
 
 // @public
-const OptionalKind: unique symbol;
+export interface NativeSubagentLimits {
+    awaitPollMs?: number;
+    cancelOrphans?: boolean;
+    leaseTtlMs?: number;
+    maxAwaitMs?: number;
+    maxConcurrency?: number;
+    maxDepth?: number;
+    maxPerParent?: number;
+}
 
-// @public (undocumented)
-type OptionalPropertyKeys<T extends TProperties> = {
-    [K in keyof T]: T[K] extends TOptional<TSchema> ? (T[K] extends TReadonly<T[K]> ? never : K) : never;
-}[keyof T];
+// @public
+export interface NativeSubagentRole {
+    allowedTools?: readonly string[];
+    canSpawn?: boolean;
+    capability?: string | null;
+    // (undocumented)
+    description?: string;
+    maxIterations?: number | null;
+    model?: string | null;
+    prompt?: string;
+    providerId?: string | null;
+    readOnly?: boolean;
+}
+
+// @public
+export interface NativeSubagentView {
+    // (undocumented)
+    childChatId: string;
+    // (undocumented)
+    createdAt: number;
+    // (undocumented)
+    depth: number;
+    // (undocumented)
+    error: string | null;
+    // (undocumented)
+    model: string | null;
+    // (undocumented)
+    parentChatId: string;
+    // (undocumented)
+    parentTaskId: string | null;
+    // (undocumented)
+    prompt: string;
+    // (undocumented)
+    queuedInputs: number;
+    // (undocumented)
+    result: string | null;
+    // (undocumented)
+    role: string;
+    // (undocumented)
+    status: string;
+    // (undocumented)
+    taskStatus: string | null;
+    // (undocumented)
+    turnTaskId: string | null;
+    // (undocumented)
+    updatedAt: number;
+    // (undocumented)
+    waiting: boolean;
+}
 
 // @public (undocumented)
 interface OutboxAppendInput {
@@ -1754,24 +1878,6 @@ export interface RawRunHandle {
 }
 
 // @public
-const ReadonlyKind: unique symbol;
-
-// @public (undocumented)
-type ReadonlyOptionalPropertyKeys<T extends TProperties> = {
-    [K in keyof T]: T[K] extends TReadonly<TSchema> ? (T[K] extends TOptional<T[K]> ? K : never) : never;
-}[keyof T];
-
-// @public (undocumented)
-type ReadonlyPropertyKeys<T extends TProperties> = {
-    [K in keyof T]: T[K] extends TReadonly<TSchema> ? (T[K] extends TOptional<T[K]> ? never : K) : never;
-}[keyof T];
-
-// @public (undocumented)
-type RecordStatic<Key extends TSchema, Type extends TSchema, P extends unknown[]> = (Evaluate<{
-    [_ in Assert<Static<Key>, PropertyKey>]: Static<Type, P>;
-}>);
-
-// @public
 export type RedactedConnectionRecord = ConnectionRecord;
 
 // @public
@@ -1788,9 +1894,6 @@ export interface RenderedPromptTemplate {
         origin?: PromptTemplate["origin"];
     };
 }
-
-// @public (undocumented)
-type RequiredPropertyKeys<T extends TProperties> = keyof Omit<T, ReadonlyOptionalPropertyKeys<T> | ReadonlyPropertyKeys<T> | OptionalPropertyKeys<T>>;
 
 // @public (undocumented)
 export function reserveRunProviderRequest(callId: string): Promise<void>;
@@ -1850,21 +1953,6 @@ interface RunWriteFence {
 }
 
 // @public (undocumented)
-interface SchemaOptions {
-    $id?: string;
-    // (undocumented)
-    $schema?: string;
-    // (undocumented)
-    [prop: string]: any;
-    default?: any;
-    description?: string;
-    examples?: any;
-    readOnly?: boolean;
-    title?: string;
-    writeOnly?: boolean;
-}
-
-// @public (undocumented)
 interface SearchMessagesOptions {
     chatId?: string;
     limit?: number;
@@ -1897,6 +1985,9 @@ export type SendResultJson = {
 
 // @public (undocumented)
 class SessionService {
+    advisorConfig(): Promise<string>
+    advisorFindings(sessionId: string, limit?: number | undefined | null): Promise<string>
+    advisorReview(sessionId: string, focus: string): Promise<string>
     answer(inputJson: string): Promise<string>
     // (undocumented)
     approve(requestId: string, answerId: string, note?: string | undefined | null, remember?: boolean | undefined | null): Promise<string>
@@ -1913,6 +2004,8 @@ class SessionService {
     compact(sessionId: string): Promise<void>
     // (undocumented)
     configure(sessionId: string, inputJson: string): Promise<string>
+    configureAdvisor(configJson: string): Promise<void>
+    configureSubagents(configJson: string): Promise<void>
     // (undocumented)
     createSession(inputJson: string): Promise<string>
     deleteChat(sessionId: string): Promise<void>
@@ -1939,6 +2032,7 @@ class SessionService {
     // (undocumented)
     listTurns(sessionId: string): Promise<string>
     registerCodingTools(optionsJson: string): Promise<void>
+    registerLspTools(optionsJson: string): Promise<void>
     registerTool(definitionJson: string): Promise<void>
     // (undocumented)
     resume(sessionId: string, turnId: string): Promise<void>
@@ -1956,6 +2050,9 @@ class SessionService {
     steer(sessionId: string, inputJson: string): Promise<string>
     stopHttpServer(): Promise<void>
     stopMcpServer(): Promise<void>
+    subagentConfig(): Promise<string>
+    subagentsList(parentChatId: string): Promise<string>
+    subagentStatus(childChatId: string): Promise<string>
     subscribeTurn(taskId: string, afterSeq?: number | undefined | null): Promise<SubscriptionHandle>
     unarchiveChat(sessionId: string): Promise<string>
 }
@@ -1995,11 +2092,6 @@ export interface StandingApprovalGrant {
     toolName: string;
 }
 
-// @public
-type Static<Type extends TSchema, Params extends unknown[] = [], Result = (Type & {
-    params: Params;
-})['static']> = Result;
-
 // @public (undocumented)
 class StoreTransactionHandle {
     // (undocumented)
@@ -2008,22 +2100,6 @@ class StoreTransactionHandle {
     commit(): Promise<void>
     // (undocumented)
     rollback(): Promise<void>
-}
-
-// @public (undocumented)
-type StringContentEncodingOption = '7bit' | '8bit' | 'binary' | 'quoted-printable' | 'base64' | ({} & string);
-
-// @public (undocumented)
-type StringFormatOption = 'date-time' | 'time' | 'date' | 'email' | 'idn-email' | 'hostname' | 'idn-hostname' | 'ipv4' | 'ipv6' | 'uri' | 'uri-reference' | 'iri' | 'uuid' | 'iri-reference' | 'uri-template' | 'json-pointer' | 'relative-json-pointer' | 'regex' | ({} & string);
-
-// @public (undocumented)
-interface StringOptions extends SchemaOptions {
-    contentEncoding?: StringContentEncodingOption;
-    contentMediaType?: string;
-    format?: StringFormatOption;
-    maxLength?: number;
-    minLength?: number;
-    pattern?: string;
 }
 
 // @public
@@ -2035,31 +2111,16 @@ class SubscriptionHandle {
 }
 
 // @public (undocumented)
-type TAdditionalProperties = undefined | TSchema | boolean;
-
-// @public (undocumented)
-interface TArray<T extends TSchema = TSchema> extends TSchema, ArrayOptions {
-    // (undocumented)
-    [Kind]: 'Array';
-    // (undocumented)
-    items: T;
-    // (undocumented)
-    static: ArrayStatic<T, this['params']>;
-    // (undocumented)
-    type: 'array';
-}
-
-// @public (undocumented)
 type TaskEventEnvelope = Static<typeof TaskEventEnvelopeSchema>;
 
 // @public
 const TaskEventEnvelopeSchema: TObject<    {
-    type: TString;
-    seq: TNumber;
-    eventId: TString;
-    timestamp: TString;
-    contractVersion: TString;
-    attemptId: TOptional<TString>;
+type: TString;
+seq: TNumber;
+eventId: TString;
+timestamp: TString;
+contractVersion: TString;
+attemptId: TOptional<TString>;
 }>;
 
 // @public
@@ -2139,86 +2200,6 @@ interface TaskStore {
     renewLease(leaseToken: string, ttlMs: number): Promise<Lease>;
     transitionTask(taskId: string, from: TaskStatus[], to: TaskStatus, patch?: TaskPatch, opts?: FencedWriteOptions): Promise<TaskRecord>;
     updateProgress(taskId: string, progress: Record<string, unknown>, opts: UpdateProgressOptions): Promise<TaskRecord>;
-}
-
-// @public (undocumented)
-interface TBoolean extends TSchema {
-    // (undocumented)
-    [Kind]: 'Boolean';
-    // (undocumented)
-    static: boolean;
-    // (undocumented)
-    type: 'boolean';
-}
-
-// @public (undocumented)
-interface TInteger extends TSchema, IntegerOptions {
-    // (undocumented)
-    [Kind]: 'Integer';
-    // (undocumented)
-    static: number;
-    // (undocumented)
-    type: 'integer';
-}
-
-// @public (undocumented)
-type TIsLiteralString<Type extends string> = ([
-Type
-] extends [string] ? [string] extends [Type] ? false : true : false);
-
-// @public (undocumented)
-interface TKind {
-    // (undocumented)
-    [Kind]: string;
-}
-
-// @public (undocumented)
-interface TLiteral<T extends TLiteralValue = TLiteralValue> extends TSchema {
-    // (undocumented)
-    [Kind]: 'Literal';
-    // (undocumented)
-    const: T;
-    // (undocumented)
-    static: T;
-}
-
-// @public (undocumented)
-type TLiteralValue = boolean | number | string;
-
-// @public (undocumented)
-interface TNull extends TSchema {
-    // (undocumented)
-    [Kind]: 'Null';
-    // (undocumented)
-    static: null;
-    // (undocumented)
-    type: 'null';
-}
-
-// @public (undocumented)
-interface TNumber extends TSchema, NumberOptions {
-    // (undocumented)
-    [Kind]: 'Number';
-    // (undocumented)
-    static: number;
-    // (undocumented)
-    type: 'number';
-}
-
-// @public (undocumented)
-interface TObject<T extends TProperties = TProperties> extends TSchema, ObjectOptions {
-    // (undocumented)
-    [Kind]: 'Object';
-    // (undocumented)
-    additionalProperties?: TAdditionalProperties;
-    // (undocumented)
-    properties: T;
-    // (undocumented)
-    required: TRequiredArray<T>;
-    // (undocumented)
-    static: ObjectStatic<T, this['params']>;
-    // (undocumented)
-    type: 'object';
 }
 
 // @public
@@ -2325,85 +2306,6 @@ export interface ToolResultJson {
 // @public (undocumented)
 export type ToolRunFunction = (input: unknown, request: ToolCallRequest) => Promise<ToolResultJson | unknown> | ToolResultJson | unknown;
 
-// @public (undocumented)
-type TOptional<T extends TSchema> = T & {
-    [OptionalKind]: 'Optional';
-};
-
-// @public (undocumented)
-type TProperties = Record<TPropertyKey, TSchema>;
-
-// @public (undocumented)
-type TPropertyKey = string | number;
-
-// @public (undocumented)
-type TReadonly<T extends TSchema> = T & {
-    [ReadonlyKind]: 'Readonly';
-};
-
-// @public (undocumented)
-interface TRecord<Key extends TSchema = TSchema, Type extends TSchema = TSchema> extends TSchema {
-    // (undocumented)
-    [Kind]: 'Record';
-    // (undocumented)
-    additionalProperties: TAdditionalProperties;
-    // (undocumented)
-    patternProperties: {
-        [pattern: string]: Type;
-    };
-    // (undocumented)
-    static: RecordStatic<Key, Type, this['params']>;
-    // (undocumented)
-    type: 'object';
-}
-
-// @public (undocumented)
-type TRequiredArray<Properties extends TProperties, RequiredProperties extends TProperties = {
-    [Key in keyof Properties as Properties[Key] extends TOptional<Properties[Key]> ? never : Key]: Properties[Key];
-}, RequiredUnion extends string = Extract<keyof RequiredProperties, string>, RequiredTuple extends string[] = UnionToTuple<RequiredUnion>, Result extends string[] | undefined = (IsRequiredArrayLiteralConstant<RequiredTuple> extends true ? RequiredTuple : string[] | undefined)> = Result;
-
-// @public (undocumented)
-interface TSchema extends TKind, SchemaOptions {
-    // (undocumented)
-    [Hint]?: string;
-    // (undocumented)
-    [OptionalKind]?: string;
-    // (undocumented)
-    [ReadonlyKind]?: string;
-    // (undocumented)
-    params: unknown[];
-    // (undocumented)
-    static: unknown;
-}
-
-// @public (undocumented)
-interface TString extends TSchema, StringOptions {
-    // (undocumented)
-    [Kind]: 'String';
-    // (undocumented)
-    static: string;
-    // (undocumented)
-    type: 'string';
-}
-
-// @public (undocumented)
-interface TUnion<T extends TSchema[] = TSchema[]> extends TSchema {
-    // (undocumented)
-    [Kind]: 'Union';
-    // (undocumented)
-    anyOf: T;
-    // (undocumented)
-    static: UnionStatic<T, this['params']>;
-}
-
-// @public (undocumented)
-interface TUnknown extends TSchema {
-    // (undocumented)
-    [Kind]: 'Unknown';
-    // (undocumented)
-    static: unknown;
-}
-
 // @public
 export class TurnSubscription {
     [Symbol.asyncIterator](): AsyncIterator<unknown>;
@@ -2426,20 +2328,6 @@ export interface UnavailableRunSkill {
     // (undocumented)
     reason: string;
 }
-
-// @public (undocumented)
-type UnionLast<U> = UnionToIntersect<U extends unknown ? (x: U) => 0 : never> extends (x: infer L) => 0 ? L : never;
-
-// @public (undocumented)
-type UnionStatic<T extends TSchema[], P extends unknown[]> = {
-    [K in keyof T]: T[K] extends TSchema ? Static<T[K], P> : never;
-}[number];
-
-// @public (undocumented)
-type UnionToIntersect<U> = (U extends unknown ? (arg: U) => 0 : never) extends (arg: infer I) => 0 ? I : never;
-
-// @public (undocumented)
-type UnionToTuple<U, Acc extends unknown[] = [], R = UnionLast<U>> = [U] extends [never] ? Acc : UnionToTuple<Exclude<U, R>, [Extract<U, R>, ...Acc]>;
 
 // @public
 interface UpdateChatPatch {

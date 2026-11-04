@@ -266,7 +266,9 @@ pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-#[cfg(test)]
+// POSIX paths, permission bits and `#!/bin/sh` fakes; the pool refuses
+// non-unix hosts outright.
+#[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 

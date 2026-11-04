@@ -383,6 +383,29 @@ async fn explicit_review_persists_findings_and_escalates_criticals() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unconfigured_advisor_model_falls_back_to_the_session_model() {
+    let unconfigured = AdvisorConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    let h = Harness::start(vec![VALID_REPORT.into()], unconfigured).await;
+    h.review("parent", "fallback").await.unwrap();
+    let seen = h.oracle.seen();
+    assert_eq!(seen.len(), 1);
+    // Never an empty model on the wire: the reviewed session's own model.
+    assert_eq!(seen[0].model, "model");
+
+    // No advisor model and no session model to fall back on: refuse
+    // before any provider work instead of sending `model: ""`.
+    let error = h.review("not-a-session", "fallback").await.unwrap_err();
+    assert!(
+        error.to_string().contains("advisor_model_unconfigured"),
+        "{error}"
+    );
+    assert_eq!(h.oracle.seen().len(), 1, "no provider request was made");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unparseable_output_gets_one_repair_then_the_honest_finding() {
     let h = Harness::start(vec!["not json at all".into()], config()).await;
     let report = h.review("parent", "anything").await.unwrap();

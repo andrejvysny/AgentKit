@@ -9,7 +9,7 @@ use std::{
 use agentkit_core::CancellationToken;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{INVALID_FILE, INVALID_INPUT, err};
+use crate::error::{INVALID_FILE, INVALID_INPUT, SERVER_UNAVAILABLE, err};
 use crate::server::ServerHandle;
 
 /// One launchable language server.
@@ -160,6 +160,15 @@ impl LspPool {
         language: &str,
         cancellation: &CancellationToken,
     ) -> Result<Arc<ServerHandle>, agentkit_core::CoreError> {
+        // `file://` URIs, server discovery (no PATHEXT) and process-group
+        // teardown are POSIX-only: refuse explicitly rather than drive a
+        // server with malformed drive-letter URIs.
+        if !cfg!(unix) {
+            return Err(err(
+                SERVER_UNAVAILABLE,
+                "native LSP tools are not supported on this platform",
+            ));
+        }
         let canonical = Self::canonical_root(root)?;
         self.evict_idle();
         let key = (canonical.clone(), language.to_owned());
@@ -239,7 +248,7 @@ impl LspPool {
 
 const SHUTDOWN_SWEEP: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

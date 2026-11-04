@@ -392,12 +392,19 @@ async fn pump_wait(child: &mut tokio::process::Child) -> Option<std::process::Ex
                         .raw_os_error()
                         .unwrap_or_default(),
                 )
-            } else if info.si_code != 0 {
+            } else if matches!(
+                info.si_code,
+                libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
+            ) {
                 // SAFETY: on success waitid filled si_code with the exit
                 // classification and si_status with the raw exit code or
                 // terminating signal of this child.
                 (Some(unsafe { (info.si_code, info.si_status()) }), 0)
             } else {
+                // No exit yet. Also covers XNU, which reports CLD_STOPPED /
+                // CLD_CONTINUED despite the WEXITED-only filter — teardown
+                // SIGSTOPs the group before SIGKILL, so treating a stop as
+                // an exit would settle a live child with an unknown status.
                 // WNOHANG with no state change yet: success with a zeroed
                 // siginfo. Never read errno here — it is stale on success.
                 (None, 0)
@@ -411,10 +418,9 @@ async fn pump_wait(child: &mut tokio::process::Child) -> Option<std::process::Ex
                 Some(std::process::ExitStatus::from_raw((status & 0xff) << 8))
             } else if code == libc::CLD_KILLED {
                 Some(std::process::ExitStatus::from_raw(status & 0x7f))
-            } else if code == libc::CLD_DUMPED {
-                Some(std::process::ExitStatus::from_raw((status & 0x7f) | 0x80))
             } else {
-                None
+                // CLD_DUMPED (the only other code admitted above).
+                Some(std::process::ExitStatus::from_raw((status & 0x7f) | 0x80))
             };
         }
         if errno == libc::ECHILD {
@@ -986,8 +992,20 @@ async fn terminate(group: Option<GroupHandle>, find: FindFn, grace_ms: u64) -> (
     }
     let escalated = settled(&known, &group).await;
     if escalated {
-        absorb(&mut known, &mut suspects, &mut scan, find().await);
-        signal_all(sig::SIGKILL, &known);
+        // SIGKILL only what a FRESH, identity-checked discovery still
+        // reports (marker environment / tree-tracker start time). `known`
+        // accumulates numbers across the grace window: a marked descendant
+        // that exited after SIGTERM may have had its pid recycled by an
+        // unrelated process by now. An unscannable rescan kills no
+        // individual pid (the group signal still applies while the leader
+        // is unreaped) and the teardown reports the scan as unsupported.
+        let fresh = find().await;
+        let verified: Vec<i32> = fresh
+            .as_ref()
+            .map(|found| found.marked.clone())
+            .unwrap_or_default();
+        absorb(&mut known, &mut suspects, &mut scan, fresh);
+        signal_all(sig::SIGKILL, &verified);
         let end = Instant::now() + Duration::from_millis(SURVIVOR_WAIT_MS);
         while remaining(&known, &group).await && Instant::now() < end {
             sleep(POLL_MS).await;
@@ -2641,6 +2659,67 @@ mod tests {
             let _ = leader.wait().await;
             let _ = member.wait().await;
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sigkill_targets_only_pids_the_fresh_rescan_still_reports() {
+        // PID-reuse defense for marked descendants: a pid discovered before
+        // SIGTERM that the pre-SIGKILL rescan no longer reports (it exited
+        // and its number may now belong to an unrelated process) must never
+        // be SIGKILLed. Both sentinels ignore SIGTERM so escalation happens;
+        // `stays` is the positive control proving SIGKILL went out at all.
+        let spawn_term_immune = || {
+            tokio::process::Command::new("/bin/sh")
+                .args(["-c", "trap '' TERM; exec /bin/sleep 60"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let mut stays = spawn_term_immune();
+        let mut recycled = spawn_term_immune();
+        let stays_pid = stays.id().unwrap() as i32;
+        let recycled_pid = recycled.id().unwrap() as i32;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let find: FindFn = {
+            let calls = Arc::clone(&calls);
+            Arc::new(move || {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    // Initial discovery + freeze rescan see both; every
+                    // later scan (pre-SIGKILL onward) sees only `stays`.
+                    let marked = if call < 2 {
+                        vec![stays_pid, recycled_pid]
+                    } else {
+                        vec![stays_pid]
+                    };
+                    Some(Discovery {
+                        marked,
+                        suspects: vec![],
+                    })
+                })
+            })
+        };
+        signal_log_reset();
+        let _ = terminate(None, find, 50).await;
+        let log = signal_log_snapshot();
+        assert!(
+            log.contains(&(stays_pid, libc::SIGKILL)),
+            "positive control: the still-reported pid must be SIGKILLed: {log:?}"
+        );
+        assert!(
+            log.contains(&(recycled_pid, libc::SIGTERM)),
+            "the pid was known before SIGTERM: {log:?}"
+        );
+        assert!(
+            !log.contains(&(recycled_pid, libc::SIGKILL)),
+            "a pid the fresh rescan no longer reports took SIGKILL: {log:?}"
+        );
+        let _ = stays.kill().await;
+        let _ = recycled.kill().await;
     }
 
     #[cfg(unix)]

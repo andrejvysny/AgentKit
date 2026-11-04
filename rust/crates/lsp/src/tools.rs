@@ -648,7 +648,7 @@ fn position_arg(args: &serde_json::Map<String, Value>, key: &str) -> Option<i64>
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use crate::LspConfig;
 

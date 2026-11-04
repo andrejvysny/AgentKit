@@ -71,7 +71,7 @@ jobs:
           # checked-out source_commit — bind HEAD to the input first, then
           # prove that exact commit is an ancestor of the default branch.
           echo "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' \
-            || { echo "source_commit is not a full SHA" >&2; exit 1; fi
+            || { echo "source_commit is not a full SHA" >&2; exit 1; }
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" \
             || { echo "checkout does not match source_commit" >&2; exit 1; }
           git fetch --no-tags origin "$DEFAULT_BRANCH"

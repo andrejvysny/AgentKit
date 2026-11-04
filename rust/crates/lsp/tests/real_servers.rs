@@ -1,6 +1,7 @@
 //! Integration against the REAL language servers. Skips with a loud
 //! eprintln when a binary is absent; on the development host both exist
 //! and these tests must pass.
+#![cfg(unix)] // POSIX process tooling; the pool refuses non-unix hosts.
 
 use std::{
     collections::BTreeMap,

@@ -106,7 +106,7 @@ fn decode_percent(input: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

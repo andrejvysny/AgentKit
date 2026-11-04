@@ -238,6 +238,9 @@ describe.skipIf(!integrated)("current-source foundation projection", () => {
       expect(checks.length).toBeGreaterThan(0);
       for (const match of checks) expect(match[1]).toBe("0.6.0");
       expect(loader).not.toContain("0.1.0-dev");
+      expect(read(first, "packages/native/src/addon-version.ts")).toContain(
+        'NATIVE_ADDON_VERSION = "0.6.0"',
+      );
       const lock = read(first, "bun.lock");
       expect(lock).toContain(
         '"packages/native": {\n      "name": "@agentkit/native",\n      "version": "0.6.0"',

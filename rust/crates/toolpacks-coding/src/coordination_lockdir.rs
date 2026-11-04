@@ -2562,8 +2562,15 @@ mod tests {
         let root = temp_dir("marked-root");
         let (created, errors) = coordinator(&dir, None);
         let nonce = format!("{}:{}", std::process::id(), uuid::Uuid::new_v4().simple());
-        let mut survivor = tokio::process::Command::new("/bin/sleep")
-            .arg("120")
+        // Not /bin/sleep: macOS hides Apple-signed binaries' environments
+        // from the marker scan. This lib test binary's own fixture is
+        // observable on every platform.
+        let mut survivor = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "process::tests::orphan_fixture"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
             .env(crate::process_tree::EXEC_ID_ENV, &nonce)
             .spawn()
             .expect("spawn the marked descendant");

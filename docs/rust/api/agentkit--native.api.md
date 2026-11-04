@@ -942,6 +942,80 @@ interface MessageSearchHit {
 }
 
 // @public
+export interface NativeAdvisorConfig {
+    cooldownMs?: number;
+    enabled?: boolean;
+    escalateCritical?: boolean;
+    maxFindings?: number;
+    // (undocumented)
+    maxIterations?: number;
+    maxReviewConcurrency?: number;
+    // (undocumented)
+    maxToolCallsPerIteration?: number;
+    model?: string | null;
+    // (undocumented)
+    overallTimeoutMs?: number | null;
+    // (undocumented)
+    providerRequests?: number | null;
+    reviewsPerWindow?: number;
+    // (undocumented)
+    toolTimeoutMs?: number;
+    triggerConsecutiveToolFailures?: number;
+    triggerEditCount?: number;
+    triggerRepeatedErrorCode?: number;
+    triggerTurnFailures?: number;
+    watchdogModel?: string | null;
+    // (undocumented)
+    windowMs?: number;
+}
+
+// @public
+export interface NativeAdvisorFinding {
+    // (undocumented)
+    chatId: string;
+    // (undocumented)
+    createdAt: number;
+    // (undocumented)
+    detail: Record<string, unknown>;
+    // (undocumented)
+    escalated: boolean;
+    // (undocumented)
+    findingId: string;
+    // (undocumented)
+    model: string;
+    // (undocumented)
+    severity: "info" | "warning" | "critical";
+    // (undocumented)
+    source: "explicit" | "watchdog";
+    // (undocumented)
+    title: string;
+    // (undocumented)
+    triggerKind: string;
+}
+
+// @public
+export interface NativeAdvisorReport {
+    // (undocumented)
+    findingIds: string[];
+    // (undocumented)
+    findings: Array<{
+        severity: "info" | "warning" | "critical";
+        category: string;
+        title: string;
+        evidence: Array<{
+            file?: string;
+            line?: number;
+            detail: string;
+        }>;
+        recommendation?: string;
+    }>;
+    // (undocumented)
+    runId: string;
+    // (undocumented)
+    summary: string;
+}
+
+// @public
 export class NativeAgentError extends Error {
     constructor(code: string, message: string, details?: unknown);
     // (undocumented)
@@ -1084,6 +1158,40 @@ export interface NativeHttpServerOptions {
     maxQueryBytes?: number;
     port?: number;
     providerSecrets?: "memory";
+}
+
+// @public
+export interface NativeLspConfig {
+    // (undocumented)
+    diagnosticsWaitMs?: number;
+    // (undocumented)
+    idleTimeoutMs?: number;
+    // (undocumented)
+    initTimeoutMs?: number;
+    // (undocumented)
+    maxRestarts?: number;
+    // (undocumented)
+    requestTimeoutMs?: number;
+    // (undocumented)
+    restartWindowMs?: number;
+    servers?: Record<string, NativeLspServerCommand>;
+}
+
+// @public
+export interface NativeLspServerCommand {
+    // (undocumented)
+    args?: readonly string[];
+    // (undocumented)
+    command: string;
+    // (undocumented)
+    env?: Record<string, string>;
+}
+
+// @public
+export interface NativeLspToolsOptions {
+    // (undocumented)
+    config?: NativeLspConfig;
+    workspaceRoot: string;
 }
 
 // @public
@@ -1309,6 +1417,9 @@ class NativeSessionManagement {
 // @public (undocumented)
 export class NativeSessionService extends NativeSessionManagement {
     constructor(raw: SessionService, router: CallbackRouter, store: NativeStore, providerConfig?: NativeProviderConfig);
+    advisorConfig(): Promise<NativeAdvisorConfig | null>;
+    advisorFindings(sessionId: string, limit?: number): Promise<NativeAdvisorFinding[]>;
+    advisorReview(sessionId: string, focus: string, options?: NativeCallOptions): Promise<NativeAdvisorReport>;
     // (undocumented)
     answer(input: AnswerInputJson): Promise<Record<string, unknown>>;
     // (undocumented)
@@ -1317,6 +1428,8 @@ export class NativeSessionService extends NativeSessionManagement {
     cancel(sessionId: string, turnId: string): Promise<void>;
     close(): Promise<void>;
     get closeUncertain(): boolean;
+    configureAdvisor(config: NativeAdvisorConfig): Promise<void>;
+    configureSubagents(config: NativeSubagentConfig): Promise<void>;
     // (undocumented)
     createSession(input: CreateSessionInputJson, options?: NativeCallOptions): Promise<Record<string, unknown>>;
     // (undocumented)
@@ -1338,6 +1451,7 @@ export class NativeSessionService extends NativeSessionManagement {
     listTurns(sessionId: string): Promise<unknown[]>;
     get pendingCallbacks(): number;
     registerCodingTools(options: NativeCodingToolsOptions): Promise<void>;
+    registerLspTools(options: NativeLspToolsOptions): Promise<void>;
     static registerProviderConnection(baseUrl: string, apiKey?: string | null, options?: NativeProviderConnectionOptions): Promise<string>;
     registerTool(definition: ToolDefinitionJson, run: ToolRunFunction): Promise<void>;
     // (undocumented)
@@ -1354,6 +1468,9 @@ export class NativeSessionService extends NativeSessionManagement {
     stopHttpServer(): Promise<void>;
     stopMcpServer(): Promise<void>;
     readonly store: NativeStore;
+    subagentConfig(): Promise<NativeSubagentConfig | null>;
+    subagentsList(parentChatId: string): Promise<NativeSubagentView[]>;
+    subagentStatus(childChatId: string): Promise<NativeSubagentView>;
     subscribeTurn(taskId: string, afterSeq?: number): Promise<TurnSubscription>;
 }
 
@@ -1382,6 +1499,11 @@ export class NativeStore {
     mcpListServers(): Promise<NativeMcpServerStatus[]>;
     // (undocumented)
     static open(path: string): Promise<NativeStore>;
+    setTaskAging(options: {
+        agingIntervalMs?: number;
+        agingBonus?: number;
+        agingMaxBonus?: number;
+    }): void;
     // (undocumented)
     setTransactionGateTimeout(milliseconds: number): void;
     // (undocumented)
@@ -1402,6 +1524,7 @@ class NativeStore_2 {
     mcpListServers(): Promise<string>
     static memory(): NativeStore_2
     static open(path: string): NativeStore_2
+    setTaskAging(intervalMs?: number | undefined | null, bonus?: number | undefined | null, maxBonus?: number | undefined | null): void
     // (undocumented)
     setTransactionGateTimeout(milliseconds: number): void
 }
@@ -1412,6 +1535,77 @@ export interface NativeStorePort {
     callStore<T>(operation: string, input?: unknown): Promise<T>;
     // (undocumented)
     transaction<T>(fn: (view: NativeStorePort) => Promise<T>): Promise<T>;
+}
+
+// @public
+export interface NativeSubagentConfig {
+    delegationGuidance?: string | null;
+    enabled?: boolean;
+    // (undocumented)
+    limits?: NativeSubagentLimits;
+    // (undocumented)
+    roles?: Record<string, NativeSubagentRole>;
+}
+
+// @public
+export interface NativeSubagentLimits {
+    awaitPollMs?: number;
+    cancelOrphans?: boolean;
+    leaseTtlMs?: number;
+    maxAwaitMs?: number;
+    maxConcurrency?: number;
+    maxDepth?: number;
+    maxPerParent?: number;
+}
+
+// @public
+export interface NativeSubagentRole {
+    allowedTools?: readonly string[];
+    canSpawn?: boolean;
+    capability?: string | null;
+    // (undocumented)
+    description?: string;
+    maxIterations?: number | null;
+    model?: string | null;
+    prompt?: string;
+    providerId?: string | null;
+    readOnly?: boolean;
+}
+
+// @public
+export interface NativeSubagentView {
+    // (undocumented)
+    childChatId: string;
+    // (undocumented)
+    createdAt: number;
+    // (undocumented)
+    depth: number;
+    // (undocumented)
+    error: string | null;
+    // (undocumented)
+    model: string | null;
+    // (undocumented)
+    parentChatId: string;
+    // (undocumented)
+    parentTaskId: string | null;
+    // (undocumented)
+    prompt: string;
+    // (undocumented)
+    queuedInputs: number;
+    // (undocumented)
+    result: string | null;
+    // (undocumented)
+    role: string;
+    // (undocumented)
+    status: string;
+    // (undocumented)
+    taskStatus: string | null;
+    // (undocumented)
+    turnTaskId: string | null;
+    // (undocumented)
+    updatedAt: number;
+    // (undocumented)
+    waiting: boolean;
 }
 
 // @public (undocumented)
@@ -1791,6 +1985,9 @@ export type SendResultJson = {
 
 // @public (undocumented)
 class SessionService {
+    advisorConfig(): Promise<string>
+    advisorFindings(sessionId: string, limit?: number | undefined | null): Promise<string>
+    advisorReview(sessionId: string, focus: string): Promise<string>
     answer(inputJson: string): Promise<string>
     // (undocumented)
     approve(requestId: string, answerId: string, note?: string | undefined | null, remember?: boolean | undefined | null): Promise<string>
@@ -1807,6 +2004,8 @@ class SessionService {
     compact(sessionId: string): Promise<void>
     // (undocumented)
     configure(sessionId: string, inputJson: string): Promise<string>
+    configureAdvisor(configJson: string): Promise<void>
+    configureSubagents(configJson: string): Promise<void>
     // (undocumented)
     createSession(inputJson: string): Promise<string>
     deleteChat(sessionId: string): Promise<void>
@@ -1833,6 +2032,7 @@ class SessionService {
     // (undocumented)
     listTurns(sessionId: string): Promise<string>
     registerCodingTools(optionsJson: string): Promise<void>
+    registerLspTools(optionsJson: string): Promise<void>
     registerTool(definitionJson: string): Promise<void>
     // (undocumented)
     resume(sessionId: string, turnId: string): Promise<void>
@@ -1850,6 +2050,9 @@ class SessionService {
     steer(sessionId: string, inputJson: string): Promise<string>
     stopHttpServer(): Promise<void>
     stopMcpServer(): Promise<void>
+    subagentConfig(): Promise<string>
+    subagentsList(parentChatId: string): Promise<string>
+    subagentStatus(childChatId: string): Promise<string>
     subscribeTurn(taskId: string, afterSeq?: number | undefined | null): Promise<SubscriptionHandle>
     unarchiveChat(sessionId: string): Promise<string>
 }

@@ -23,7 +23,7 @@ impl NativeStore {
         })
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn set_transaction_gate_timeout(&self, milliseconds: f64) -> Result<()> {
         if !milliseconds.is_finite()
             || milliseconds < 0.0
@@ -45,7 +45,7 @@ impl NativeStore {
 
     /// Opt into claim-time priority aging. Omitted fields take the engine
     /// defaults (30s interval, bonus 0 = off, uncapped).
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn set_task_aging(
         &self,
         interval_ms: Option<f64>,

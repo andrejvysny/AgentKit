@@ -244,7 +244,7 @@ impl NativeRunHandle {
         }
         Ok(json!({"result":{"runId":result.run_id,"terminal":terminal,"appendedMessages":appended_messages,"iterations":iterations}}).to_string())
     }
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn close(&self, env: Env) -> Result<()> {
         self.force_close.cancel();
         self.cancellation.cancel();
@@ -257,7 +257,7 @@ impl NativeRunHandle {
         Ok(())
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn fail_budget(&self, code: String, message: String, provider_requests: f64) -> Result<()> {
         if !provider_requests.is_finite()
             || provider_requests < 0.0
@@ -283,7 +283,7 @@ impl NativeRunHandle {
         Ok(())
     }
 
-    #[napi]
+    #[napi(catch_unwind)]
     pub fn cancel(&self) {
         self.cancellation.cancel();
     }

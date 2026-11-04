@@ -268,7 +268,7 @@ pub fn normalize_diagnostics(uri: &str, items: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

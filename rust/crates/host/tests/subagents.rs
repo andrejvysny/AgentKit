@@ -564,14 +564,23 @@ async fn cancel_settles_the_child_and_frees_its_lease() {
     // Cancel is cooperative: the request is durable immediately, the task
     // settles as the worker reaches its next boundary.
     let _ = view;
-    assert!(
-        h.subagents
-            .leases()
-            .holder(&h.workspace, h.subagents.now_ms())
-            .is_some(),
-        "the lease STAYS while the cancelled child may still be mid-tool; \
-         a replacement child must not start writing beside it"
-    );
+    // The worker may land the cancel at once (the held provider stream is
+    // abortable), so "still held" is racy. The invariant is the ordering:
+    // the lease is never free while the child is not yet terminal — a
+    // replacement child must not start writing beside a mid-tool one.
+    let holder = h
+        .subagents
+        .leases()
+        .holder(&h.workspace, h.subagents.now_ms());
+    if holder.is_none() {
+        assert_eq!(
+            h.status(&child.child_chat_id).await.status,
+            "cancelled",
+            "the lease was released before the cancelled child settled"
+        );
+    } else {
+        assert_eq!(holder.as_deref(), Some(child.child_chat_id.as_str()));
+    }
     h.hold(false);
     h.release();
     wait_until(
@@ -840,6 +849,93 @@ async fn parent_settlement_reaps_live_children() {
         "reaped child settles",
     )
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reaped_exclusive_orphan_keeps_its_lease_until_the_turn_settles() {
+    let h = Harness::start().await;
+    h.hold(true);
+    let child = h
+        .subagents
+        .spawn(&SpawnRequest {
+            exclusive_workspace: true,
+            ..h.spawn_request("k", "implementer", "write code")
+        })
+        .await
+        .expect("implementer spawn");
+    wait_until(
+        || async { h.status(&child.child_chat_id).await.status == "running" },
+        "child running",
+    )
+    .await;
+    h.store
+        .cancel_task("parent-turn", h.subagents.now_ms())
+        .await
+        .unwrap();
+    assert_eq!(h.subagents.reap_orphans().await.unwrap(), 1);
+    // Cooperative cancel: the wedged child may still be mid-tool, so a
+    // competing exclusive writer must stay refused until it settles.
+    assert_eq!(
+        h.subagents
+            .leases()
+            .holder(&h.workspace, h.subagents.now_ms())
+            .as_deref(),
+        Some(child.child_chat_id.as_str()),
+        "the orphan reaper released the lease of a still-running child"
+    );
+    h.hold(false);
+    h.release();
+    wait_until(
+        || async { h.status(&child.child_chat_id).await.status == "cancelled" },
+        "reaped child settles",
+    )
+    .await;
+    assert!(
+        h.subagents
+            .leases()
+            .holder(&h.workspace, h.subagents.now_ms())
+            .is_none(),
+        "the settled orphan's lease is released by the terminal projection"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn orphan_reaper_cancels_the_live_turn_behind_a_stale_pointer() {
+    let h = Harness::start().await;
+    h.hold(true);
+    let child = h.spawn("k", "researcher", "orphan me").await;
+    wait_until(
+        || async { h.status(&child.child_chat_id).await.status == "running" },
+        "child running",
+    )
+    .await;
+    // Crash shape: the registry still names an already-settled turn (a
+    // follow-up promotion, or admission before `set_subagent_turn`), while
+    // the child session runs another live turn.
+    h.store
+        .cancel_task("parent-turn", h.subagents.now_ms())
+        .await
+        .unwrap();
+    h.store
+        .set_subagent_turn(&child.child_chat_id, "parent-turn")
+        .await
+        .unwrap();
+    assert_eq!(h.subagents.reap_orphans().await.unwrap(), 1);
+    h.hold(false);
+    h.release();
+    wait_until(
+        || async {
+            let status = h.status(&child.child_chat_id).await.status;
+            status == "cancelled" || status == "completed"
+        },
+        "child settles",
+    )
+    .await;
+    assert_eq!(
+        h.status(&child.child_chat_id).await.status,
+        "cancelled",
+        "the reaper must cancel the live turn, not only the stale pointer"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

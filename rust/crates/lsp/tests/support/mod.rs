@@ -70,9 +70,13 @@ pub fn fake_server_config(env: BTreeMap<String, String>, tag: &str) -> LspConfig
     config
 }
 
-/// True while `/proc/<pid>` exists.
+/// True while `pid` exists (`kill -0`; `/proc` is Linux-only).
 pub fn process_alive(pid: u32) -> bool {
-    std::fs::metadata(format!("/proc/{pid}")).is_ok()
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Copy a fixture tree (files + directories, no symlinks needed).
@@ -104,9 +108,14 @@ impl std::ops::Deref for FixtureRoot {
 
 impl FixtureRoot {
     pub fn new(fixture: &str) -> Self {
+        // The clock alone is not unique: macOS reports microseconds, so two
+        // parallel tests could share a root and one's Drop deletes the
+        // other's workspace mid-run.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let base = std::env::temp_dir().join(format!(
-            "agentkit-lsp-test-{}-{}",
+            "agentkit-lsp-test-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
