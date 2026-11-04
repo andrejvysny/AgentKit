@@ -58,10 +58,10 @@ async fn explicit_lease_replaces_authority_without_changing_task_or_attempt_stat
     ));
     assert!(matches!(
         reopened
-            .acquire_lease("run", "bad", "worker", 1007, 0)
+            .acquire_lease("run", "bad", "worker", 1007, -1)
             .await,
         Err(StoreError::InvalidInput(_))
-    ));
+    )); // negative TTL refuses; ttl 0 is port-legal (lease expires on the instant)
     reopened
         .append_events(late.fence(), vec![event(2, "still-live")], 1008)
         .await

@@ -114,9 +114,7 @@ impl DesktopBackend {
             | "publishPromptTemplate"
             | "deletePromptTemplate"
             | "renderPromptTemplate"
-            | "listSkills" => Err(optional(
-                "Native managed content services are not configured.",
-            )),
+            | "listSkills" => self.managed_content(input).await,
             _ => Err(Problem::host(
                 "internal_error",
                 "Unknown operation dispatch",
@@ -218,29 +216,48 @@ impl DesktopBackend {
     }
 
     async fn settings(&self, input: &OperationRequest) -> Result<OperationResponse, Problem> {
-        let mut value=self.host.store().get_setting("http","settings").await.map_err(store_error)?.unwrap_or_else(||json!({
-            "contextSizePreference":"small","writePolicyMode":"auto_readonly_confirm_writes","allowRawToolData":false,"metadata":{}}));
-        if input.operation == "updateSettings" {
-            for key in [
-                "defaultProviderId",
-                "defaultModel",
-                "contextSizePreference",
-                "writePolicyMode",
-                "allowRawToolData",
-                "maxToolIterations",
-                "toolCalling",
-                "metadata",
-            ] {
-                if let Some(entry) = input.body.get(key) {
-                    value[key] = entry.clone();
-                }
-            }
+        let defaults = || {
+            json!({
+                "contextSizePreference": "small",
+                "writePolicyMode": "auto_readonly_confirm_writes",
+                "allowRawToolData": false,
+                "metadata": {}
+            })
+        };
+        // Updates merge inside one serialized store call (update_setting):
+        // the old get-then-set pair let two concurrent patches clobber each
+        // other. Reads keep the plain path.
+        let value = if input.operation == "updateSettings" {
+            let body = input.body.clone();
             self.host
                 .store()
-                .set_setting("http", "settings", value.clone())
+                .update_setting("http", "settings", defaults(), move |mut value| {
+                    for key in [
+                        "defaultProviderId",
+                        "defaultModel",
+                        "contextSizePreference",
+                        "writePolicyMode",
+                        "allowRawToolData",
+                        "maxToolIterations",
+                        "toolCalling",
+                        "metadata",
+                    ] {
+                        if let Some(entry) = body.get(key) {
+                            value[key] = entry.clone();
+                        }
+                    }
+                    value
+                })
                 .await
-                .map_err(store_error)?;
-        }
+                .map_err(store_error)?
+        } else {
+            self.host
+                .store()
+                .get_setting("http", "settings")
+                .await
+                .map_err(store_error)?
+                .unwrap_or_else(defaults)
+        };
         Ok(output(200, value))
     }
 }

@@ -12,7 +12,12 @@
  * tsconfig, exactly as its `.mjs` files never did. They run under `bun test`.
  */
 import { describe, expect, it } from "bun:test";
-import { findResidualSpecifiers } from "../umbrella-specifiers.mjs";
+import { NATIVE_PLATFORM_TARGETS } from "../../rust/scripts/native-platform-targets.mjs";
+import {
+  collapseAgentkitScope,
+  findResidualSpecifiers,
+  hasUnexpectedScope,
+} from "../umbrella-specifiers.mjs";
 
 const lines = (found: Array<{ line: number }>) => found.map((f) => f.line);
 
@@ -78,5 +83,37 @@ describe("findResidualSpecifiers", () => {
         'import { x } from "../host/index.js";\nexport const y = 1;\n',
       ),
     ).toEqual([]);
+  });
+});
+
+describe("external platform packages keep their scoped name", () => {
+  // The wrapper loader's version guard resolves `@agentkit/native-<key>` at
+  // runtime; collapsing it to `agentkit/native-<key>` made the guard a no-op.
+  const loaderLine =
+    "addon = requireLocal(`@agentkit/native-${key}/package.json`);";
+
+  it("never collapses the template literal that builds a platform package name", () => {
+    const prose = "// see @agentkit/core and `@agentkit/host`";
+    const out = collapseAgentkitScope(`${loaderLine}\n${prose}\n`);
+    expect(out).toContain(loaderLine);
+    expect(out).toContain("// see agentkit/core and `agentkit/host`");
+    expect(findResidualSpecifiers(loaderLine)).toEqual([]);
+    expect(hasUnexpectedScope(loaderLine)).toBe(false);
+    expect(hasUnexpectedScope(prose)).toBe(true);
+  });
+
+  it("keeps every literal platform key, but still collapses unknown native-* names", () => {
+    for (const target of NATIVE_PLATFORM_TARGETS) {
+      const text = `require("@agentkit/native-${target.key}/package.json")`;
+      expect(collapseAgentkitScope(text)).toBe(text);
+      expect(findResidualSpecifiers(text)).toEqual([]);
+      expect(hasUnexpectedScope(text)).toBe(false);
+    }
+    expect(collapseAgentkitScope("@agentkit/native-android-arm64")).toBe(
+      "agentkit/native-android-arm64",
+    );
+    expect(hasUnexpectedScope("@agentkit/native-linux-x64-gnu-extra")).toBe(
+      true,
+    );
   });
 });

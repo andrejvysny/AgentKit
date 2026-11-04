@@ -6,6 +6,7 @@ use agentkit_core::Tool;
 pub use config::{Resilience, ServerConfig, TransportConfig};
 pub use ports::{
     DefaultConnector, ManagerClock, McpConnection, McpConnector, McpSecretResolver, SystemClock,
+    ToolBinding,
 };
 use session::Session;
 use std::{
@@ -153,14 +154,49 @@ impl McpClientManager {
             return Err(McpClientError::Configuration);
         }
         let session = self.session(alias)?;
-        let original = session
-            .config
-            .tool_aliases
-            .iter()
-            .find(|(_, target)| target.as_str() == effective)
-            .map(|(source, _)| source.as_str())
-            .unwrap_or(effective);
-        session.call_tool(original, arguments, cancellation).await
+        // The same inverse the bridge projected with: a name the config has
+        // renamed away is not this server's address, so it never reaches a
+        // callback whose canonical identity is something else.
+        let original = crate::bridge::resolve_original(&session.config.tool_aliases, effective)
+            .ok_or(McpClientError::Configuration)?
+            .to_owned();
+        session.call_tool(&original, arguments, cancellation).await
+    }
+    /// The `(registration, generation)` of the live transport behind an
+    /// alias, or `None` when the alias is unknown or has no transport. A
+    /// host-side descriptor cache captures this alongside its listing so it
+    /// can dispatch through [`Self::call_tool_bound`] later.
+    pub fn binding(&self, alias: &str) -> Option<ToolBinding> {
+        let session = self.session(alias).ok()?;
+        session.binding()
+    }
+    /// [`Self::call_tool`] pinned to one transport generation: the call
+    /// only ever reaches the session AND the connection `binding` names.
+    /// A descriptor listed from generation N dispatches on generation N —
+    /// never on a reconnect's replacement (that fails `Authority` at the
+    /// session pin and again at the wire-last bound guard), exactly like
+    /// the contributed-tool lane pins its handles (see `bridge::RemoteTool`).
+    pub async fn call_tool_bound(
+        &self,
+        canonical_id: &str,
+        binding: ToolBinding,
+        arguments: model::JsonObject,
+        cancellation: CancellationToken,
+    ) -> Result<model::CallToolResult, McpClientError> {
+        let rest = canonical_id
+            .strip_prefix("mcp.")
+            .ok_or(McpClientError::Configuration)?;
+        let (alias, effective) = rest.split_once('.').ok_or(McpClientError::Configuration)?;
+        if !crate::bridge::tool_name(effective) {
+            return Err(McpClientError::Configuration);
+        }
+        let session = self.session(alias)?;
+        let original = crate::bridge::resolve_original(&session.config.tool_aliases, effective)
+            .ok_or(McpClientError::Configuration)?
+            .to_owned();
+        session
+            .call_tool_bound(binding, &original, arguments, cancellation, None)
+            .await
     }
     pub async fn contribute(
         &self,
@@ -171,7 +207,9 @@ impl McpClientManager {
         let mut names = BTreeSet::new();
         for alias in connections.connected.clone() {
             let session = self.session(&alias)?;
-            let set = McpToolSet::new(&alias, session.config.tool_aliases.clone(), session)?;
+            let read_only = session.config.read_only;
+            let set = McpToolSet::new(&alias, session.config.tool_aliases.clone(), session)?
+                .with_read_only(read_only);
             match set.contribute(cancellation.clone()).await {
                 Ok(listed) => {
                     for tool in listed {
@@ -195,7 +233,26 @@ impl McpClientManager {
         }
         Ok(ContributionReport { tools, connections })
     }
-    /// Replaced/removed configs revoke old tool handles before new records become visible.
+    /// Swap the whole configuration set atomically, keeping every server the
+    /// new set still declares.
+    ///
+    /// The contract a caller can rely on:
+    /// - a configuration batch that fails to validate changes NOTHING (no
+    ///   session is revoked, closed, or reordered — the previous set stays
+    ///   exactly as it was and stays dispatchable);
+    /// - a session whose `ServerConfig` is unchanged is REUSED, so a kept
+    ///   server keeps its live transport, its generation counter, and every
+    ///   tool handle already contributed from it;
+    /// - only sessions the new set DROPS are revoked and closed, and the swap
+    ///   is published before their transports are awaited, so no window ever
+    ///   exposes an empty or half-installed server list;
+    /// - the only error this returns after validation is a failure to CLOSE a
+    ///   dropped session. Servers that survived the replacement are untouched
+    ///   and remain usable; the dropped session is already out of the routing
+    ///   table either way, so retrying the call is always safe.
+    ///
+    /// Nothing here connects the new side: connect/report failures belong to
+    /// [`Self::connect_all`], which never revokes a session it did not open.
     pub async fn replace_configs(&self, configs: Vec<ServerConfig>) -> Result<(), McpClientError> {
         let configs = validate(configs)?;
         let _guard = self.updates.lock().await;

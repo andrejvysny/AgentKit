@@ -56,6 +56,7 @@ impl AiRunEvent {
             Self::Warning(_) => "run.warning",
             Self::Usage(_) => "run.usage",
             Self::ContextCompacted(_) => "run.context.compacted",
+            Self::ContextAdmitted(_) => "run.context.admitted",
             Self::Verification(_) => "run.verification",
             Self::InputApplied(_) => "run.input.applied",
             Self::Waiting(_) => "run.waiting",

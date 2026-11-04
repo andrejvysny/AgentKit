@@ -40,7 +40,8 @@ export interface ToolGuardContext {
    *
    * Absent on the turn-runner path, where a run is already attributed by its
    * chat and its task. Set by call paths that serve a named caller — today
-   * `@agentkit/mcp-server`, whose session scope resolves one at `initialize`
+   * the native MCP server (`startMcpServer`), whose session scope resolves
+   * one at `initialize`
    * and threads it here so a guard can answer "may THIS principal see/run this"
    * rather than only "does this chat have the binding".
    */

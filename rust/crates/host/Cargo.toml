@@ -4,9 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Durable native execution host for AgentKit"
 repository = "https://github.com/andrejvysny/AgentKit"
 readme = "../../../README.md"
+# Binary SQLite fixtures are test-only and trip the package privacy gate
+# (rust/scripts/check-packages.mjs refuses *.sqlite in a crate archive).
+exclude = ["tests/fixtures/**/*.sqlite"]
 
 [features]
 default = []
@@ -24,6 +28,7 @@ reqwest.workspace = true
 futures.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -31,5 +36,18 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 regex = "=1.13.1"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The instruction reader's identity check (project_instructions/fs.rs) queries
+# the opened handle through `GetFileInformationByHandle`; the `std` getters for
+# the same fields are unstable (`windows_by_handle`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+
 [dev-dependencies]
 rusqlite = { version = "0.38", features = ["bundled"] }
+tempfile = "3"
+# The imported-receipt acceptance tests drive the TypeScript importer
+# against bun-generated fixtures.
+agentkit-store = { path = "../store", version = "0.1.0", features = ["ts-import"] }

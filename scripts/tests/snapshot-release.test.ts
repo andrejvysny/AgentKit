@@ -59,16 +59,8 @@ function assertDurableExecutionPreserved(directory: string): void {
     "packages/adapters-memory/src/memory-tool-execution-store.ts",
     "packages/adapters-sqlite/src/sqlite/tool-execution-store.ts",
     "packages/adapters-sqlite/src/sqlite/migrations.ts",
-    "packages/core/src/runs/bounded-provider.ts",
+    "packages/core/src/runs/agent-loop.ts",
     "packages/host/src/context/compactor.ts",
-    "packages/toolpacks-coding/src/command-fingerprint.ts",
-    "packages/toolpacks-coding/src/command-risk.ts",
-    "packages/toolpacks-coding/src/command-script-inputs.ts",
-    "packages/toolpacks-coding/src/context.ts",
-    "packages/toolpacks-coding/src/coordination-claim.ts",
-    "packages/toolpacks-coding/src/process-identity.ts",
-    "packages/toolpacks-coding/src/process-teardown.ts",
-    "packages/toolpacks-coding/src/process-owned.ts",
   ])
     expect(read(directory, path)).toBe(read(fixtureRoot, path));
   expect(
@@ -201,6 +193,63 @@ describe.skipIf(!integrated)("current-source foundation projection", () => {
     expect(read(first, "packages/agentkit/package.json")).toContain(
       '"version": "0.6.0"',
     );
+    // Native npm stack lockstep: the projection carries the release version
+    // in the wrapper, every platform package, every pin, the loader's
+    // embedded checks, and the lock entries — a partial bump would ship an
+    // installer that cannot resolve the platform packages.
+    {
+      const nativeManifest = JSON.parse(
+        read(first, "packages/native/package.json"),
+      ) as { version: string; optionalDependencies: Record<string, string> };
+      expect(nativeManifest.version).toBe("0.6.0");
+      const umbrellaManifest = JSON.parse(
+        read(first, "packages/agentkit/package.json"),
+      ) as { optionalDependencies: Record<string, string> };
+      const coreManifest = JSON.parse(
+        read(first, "packages/core/package.json"),
+      ) as { optionalDependencies: Record<string, string> };
+      expect(coreManifest.optionalDependencies["@agentkit/native"]).toBe(
+        "0.6.0",
+      );
+      const targets = JSON.parse(
+        read(first, "packages/native/package.json"),
+      ) as { napi: { targets: string[] } };
+      expect(targets.napi.targets.length).toBeGreaterThan(0);
+      for (const [name, pin] of Object.entries(
+        nativeManifest.optionalDependencies,
+      )) {
+        expect(pin).toBe("0.6.0");
+        const entry = JSON.parse(
+          read(
+            first,
+            `packages/${name.replace("@agentkit/", "")}/package.json`,
+          ),
+        ) as { version: string };
+        expect(entry.version).toBe("0.6.0");
+      }
+      for (const [name, pin] of Object.entries(
+        umbrellaManifest.optionalDependencies,
+      ))
+        if (name.startsWith("@agentkit/native-")) expect(pin).toBe("0.6.0");
+      const loader = read(first, "packages/native/generated/index.js");
+      const checks = [
+        ...loader.matchAll(/bindingPackageVersion !== '([^']+)'/g),
+      ];
+      expect(checks.length).toBeGreaterThan(0);
+      for (const match of checks) expect(match[1]).toBe("0.6.0");
+      expect(loader).not.toContain("0.1.0-dev");
+      expect(read(first, "packages/native/src/addon-version.ts")).toContain(
+        'NATIVE_ADDON_VERSION = "0.6.0"',
+      );
+      const lock = read(first, "bun.lock");
+      expect(lock).toContain(
+        '"packages/native": {\n      "name": "@agentkit/native",\n      "version": "0.6.0"',
+      );
+      expect(lock).not.toContain('"@agentkit/native": "0.1.0-dev"');
+      expect(lock).not.toContain(
+        '"@agentkit/native-darwin-arm64": "0.1.0-dev"',
+      );
+    }
     const provenance = JSON.parse(read(first, "snapshot-provenance.json"));
     expect(provenance.patches).toHaveLength(6);
     const nativeFixtures = JSON.parse(

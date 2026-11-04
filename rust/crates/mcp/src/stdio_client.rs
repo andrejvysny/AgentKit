@@ -10,11 +10,16 @@ use tokio::{
     io::{AsyncWriteExt, DuplexStream},
     process::{Child, ChildStdin, Command},
 };
-use tokio_util::codec::{FramedRead, LinesCodec};
+use tokio_util::{
+    codec::{FramedRead, LinesCodec},
+    sync::CancellationToken,
+};
 
 pub(crate) struct JsonChild {
     child: Child,
     reader: tokio::task::JoinHandle<()>,
+    /// Cancelled by the reader task when the child's output is unusable.
+    poisoned: CancellationToken,
     transport: AsyncRwTransport<RoleClient, DuplexStream, ChildStdin>,
 }
 impl JsonChild {
@@ -34,10 +39,22 @@ impl JsonChild {
             .take()
             .ok_or_else(|| io::Error::other("Missing child stdin"))?;
         let (mut producer, consumer) = tokio::io::duplex(65_536);
+        let poisoned = CancellationToken::new();
+        let poison = poisoned.clone();
         let reader = tokio::spawn(async move {
             let mut lines = FramedRead::new(stdout, LinesCodec::new_with_max_length(4_194_304));
-            while let Some(Ok(line)) = lines.next().await {
+            while let Some(line) = lines.next().await {
+                let line = match line {
+                    Ok(line) => line,
+                    Err(error) => {
+                        tracing::warn!(%error, "MCP stdio server output is unreadable; killing it");
+                        poison.cancel();
+                        break;
+                    }
+                };
                 let Ok(protected) = json_boundary::sdk_text(&line) else {
+                    tracing::warn!("MCP stdio server sent undecodable JSON; killing it");
+                    poison.cancel();
                     break;
                 };
                 if producer.write_all(protected.as_bytes()).await.is_err()
@@ -50,6 +67,7 @@ impl JsonChild {
         Ok(Self {
             child,
             reader,
+            poisoned,
             transport: AsyncRwTransport::new_client(consumer, stdin),
         })
     }
@@ -63,7 +81,13 @@ impl Transport<RoleClient> for JsonChild {
         self.transport.send(item)
     }
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleClient>> {
-        self.transport.receive().await
+        tokio::select! { biased;
+            _ = self.poisoned.cancelled() => {
+                let _ = self.child.start_kill();
+                None
+            }
+            message = self.transport.receive() => message,
+        }
     }
     async fn close(&mut self) -> io::Result<()> {
         self.transport.close().await?;

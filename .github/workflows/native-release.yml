@@ -1,0 +1,293 @@
+name: Native release build and npm publication
+
+# Manual release lane for the native npm stack: one pinned source commit is
+# projected through the same snapshot-release tooling as the GitHub-asset
+# flow (which keeps its own lane in publish.yml), then each prebuilt
+# platform triple is built and verified on its own runner, and — only after
+# the gated publish job — published to npm. Nothing here runs on push.
+#
+# Publish trust model (same as publish.yml): the publish job's approval gate
+# is the `agentkit-native-publication` environment. Nothing in this workflow
+# or the verifier checks it: required reviewers and an environment-scoped
+# NPM_TOKEN are a REPOSITORY SETTING that must be configured before the
+# first real release. The job never rebuilds outside the snapshot job and
+# re-checks every artifact digest before touching the registry. `dry_run`
+# defaults to true: dispatching verifies the full chain end-to-end without
+# publishing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact release version (semver, no prerelease tag)
+        required: true
+      source_commit:
+        description: Expected full source commit SHA
+        required: true
+      track:
+        description: Snapshot track (must match the GitHub-release track)
+        type: choice
+        options: [responses, foundation]
+        default: responses
+        required: true
+      dry_run:
+        description: Verify everything but do not publish
+        type: choice
+        options: ["true", "false"]
+        default: "true"
+        required: true
+      dist_tag:
+        description: npm dist-tag (auto = next for a prerelease version, else latest)
+        type: choice
+        options: [auto, latest, next]
+        default: auto
+        required: true
+      allow_unexecuted_targets:
+        description: Allow publishing structural-only targets (cross-built, never executed, e.g. darwin-x64)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentkit-native-publication-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      snapshot_sha256: ${{ steps.freeze.outputs.sha256 }}
+    steps:
+      - name: Fail fast on malformed release inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          EXPECTED_SHA: ${{ inputs.source_commit }}
+        run: |
+          case "$VERSION" in
+            ''|*[!0-9.]*|*..*) echo "version must be plain semver (digits and dots)" >&2; exit 1 ;;
+          esac
+          echo "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "source_commit is not a full SHA" >&2; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+      - name: Refuse a commit that is not on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_SHA: ${{ inputs.source_commit }}
+        run: |
+          # workflow_dispatch sets GITHUB_SHA to the DISPATCH ref, NOT the
+          # checked-out source_commit — bind HEAD to the input first, then
+          # prove that exact commit is an ancestor of the default branch.
+          echo "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "source_commit is not a full SHA" >&2; exit 1; }
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" \
+            || { echo "checkout does not match source_commit" >&2; exit 1; }
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH" \
+            || { echo "source_commit is not on the default branch" >&2; exit 1; }
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Freeze the release snapshot (native stack bumped to the release version)
+        id: freeze
+        env:
+          VERSION: ${{ inputs.version }}
+          TRACK: ${{ inputs.track }}
+        run: |
+          node scripts/snapshot-release.mjs "$RUNNER_TEMP/snapshot" "$VERSION" "$TRACK"
+          tar --force-local -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/native-snapshot.tar.gz" snapshot
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/native-snapshot.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Build inside the snapshot and pack the umbrella tarball
+        working-directory: ${{ runner.temp }}/snapshot
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+          bun run build:umbrella
+          mkdir -p "$RUNNER_TEMP/artifacts"
+          npm pack ./packages/agentkit --pack-destination "$RUNNER_TEMP/artifacts"
+          test -f "$RUNNER_TEMP/artifacts/agentkit-$VERSION.tgz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-snapshot-${{ inputs.version }}
+          path: ${{ runner.temp }}/native-snapshot.tar.gz
+          retention-days: 90
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-umbrella-${{ inputs.version }}
+          path: ${{ runner.temp }}/artifacts/agentkit-${{ inputs.version }}.tgz
+          retention-days: 90
+
+  build:
+    needs: snapshot
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: x86_64-unknown-linux-gnu
+            key: linux-x64-gnu
+            os: ubuntu-latest
+            rust_targets: x86_64-unknown-linux-gnu
+            cross: "false"
+          - triple: aarch64-unknown-linux-gnu
+            key: linux-arm64-gnu
+            os: ubuntu-24.04-arm
+            rust_targets: aarch64-unknown-linux-gnu
+            cross: "false"
+          - triple: aarch64-apple-darwin
+            key: darwin-arm64
+            os: macos-latest
+            rust_targets: aarch64-apple-darwin
+            cross: "false"
+          - triple: x86_64-apple-darwin
+            key: darwin-x64
+            os: macos-latest
+            rust_targets: x86_64-apple-darwin
+            cross: "true"
+          - triple: x86_64-pc-windows-msvc
+            key: win32-x64-msvc
+            os: windows-latest
+            rust_targets: x86_64-pc-windows-msvc
+            cross: "false"
+    runs-on: ${{ matrix.os }}
+    # The win32 row would otherwise run these bash-formatted steps under
+    # PowerShell ($RUNNER_TEMP etc. silently vanish) and the complete-set
+    # requirement would block EVERY release on one dead row.
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 90
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-snapshot-${{ inputs.version }}
+          path: ${{ runner.temp }}/dl
+      - name: Unpack the frozen snapshot (digest-bound)
+        env:
+          SNAPSHOT_SHA256: ${{ needs.snapshot.outputs.snapshot_sha256 }}
+        run: |
+          echo "$SNAPSHOT_SHA256  $RUNNER_TEMP/dl/native-snapshot.tar.gz" | sha256sum -c -
+          tar --force-local -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/dl/native-snapshot.tar.gz"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.23.2"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.97.0
+          targets: ${{ matrix.rust_targets }}
+      - name: Provision the x64-macOS cross toolchain
+        if: matrix.key == 'darwin-x64'
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
+      - name: Install workspace dependencies (no compiled devDeps needed)
+        working-directory: ${{ runner.temp }}/snapshot
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Build the prebuilt platform artifact
+        working-directory: ${{ runner.temp }}/snapshot
+        # --allow-cross only where the triple table says this row is a
+        # cross-compilation on its intended runner; a misrouted row then
+        # fails the builder's guard instead of quietly producing a host
+        # build relabelled as another triple.
+        env:
+          CROSS_FLAG: ${{ matrix.cross == 'true' && '--allow-cross' || '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          node rust/scripts/build-native-release-artifact.mjs \
+            --target ${{ matrix.triple }} \
+            --out "$RUNNER_TEMP/out" $CROSS_FLAG
+      - name: Verify the artifact (isolated offline install; acceptance lifecycle
+          when the runner can execute the triple, structural-only otherwise)
+        working-directory: ${{ runner.temp }}/snapshot
+        run: |
+          node rust/scripts/check-native-artifact.mjs \
+            --manifest "$RUNNER_TEMP/out/artifact-manifest.${{ matrix.key }}.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-build-${{ matrix.key }}-${{ inputs.version }}
+          path: ${{ runner.temp }}/out
+          retention-days: 90
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: agentkit-native-publication
+    permissions:
+      contents: read
+      id-token: write # npm provenance attestation
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit }}
+          persist-credentials: false
+      - name: Refuse to run any code that is not the reviewed default-branch commit
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_SHA: ${{ inputs.source_commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          # This job executes source_commit's own scripts with NPM_TOKEN
+          # and id-token in scope; the code it runs must be provably the
+          # reviewed commit. Re-run the full binding here — the snapshot
+          # job's check happened in a different checkout.
+          case "$VERSION" in
+            ''|*[!0-9.]*|*..*) echo "version must be plain semver (digits and dots)" >&2; exit 1 ;;
+          esac
+          echo "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' \
+            || { echo "source_commit is not a full SHA" >&2; exit 1; }
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" \
+            || { echo "checkout does not match source_commit" >&2; exit 1; }
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH" \
+            || { echo "source_commit is not on the default branch" >&2; exit 1; }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.23.2"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: native-build-*-${{ inputs.version }}
+          path: ${{ runner.temp }}/artifacts
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-umbrella-${{ inputs.version }}
+          path: ${{ runner.temp }}/artifacts
+      - name: Verify the complete artifact set against the release inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          node scripts/release/native-publish.mjs verify \
+            "$RUNNER_TEMP/artifacts" "$VERSION" \
+            --commit "$SOURCE_COMMIT"
+      - name: npm publish (platforms → wrapper → umbrella)
+        if: inputs.dry_run == 'false'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          DIST_TAG: ${{ inputs.dist_tag }}
+          ALLOW_FLAG: ${{ inputs.allow_unexecuted_targets && '--allow-unexecuted-targets' || '' }}
+        run: |
+          node scripts/release/native-publish.mjs publish \
+            "$RUNNER_TEMP/artifacts" "$VERSION" \
+            --commit "$SOURCE_COMMIT" --tag "$DIST_TAG" $ALLOW_FLAG --execute
+      - name: npm publish --dry-run (default lane)
+        if: inputs.dry_run != 'false'
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          DIST_TAG: ${{ inputs.dist_tag }}
+        run: |
+          node scripts/release/native-publish.mjs publish \
+            "$RUNNER_TEMP/artifacts" "$VERSION" \
+            --commit "$SOURCE_COMMIT" --tag "$DIST_TAG"

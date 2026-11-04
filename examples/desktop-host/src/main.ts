@@ -2,12 +2,13 @@
 /**
  * `examples/desktop-host` — a runnable composition root.
  *
- * This is the first place in this repo that wires store + task runner +
- * provider + tools + HTTP transport together outside test code. Everything
- * that decides HOW those pieces fit together lives in `./wiring.ts`
- * (`buildApp`); this file is the thin entry point that turns the resulting
- * `RestHandlerDeps` into a listening server, using `@agentkit/transport-http`'s
- * `serveRest` exactly as its README's "Wiring" section shows.
+ * The whole backend is Rust: `@agentkit/native` runs the store, the durable
+ * queue and worker, the governance authority, the REST v1 + SSE engine, and
+ * the MCP server. This file is the thin entry point that turns the object
+ * graph from `./wiring.ts` (`buildApp`) into a listening socket: one
+ * `Bun.serve` on the operator-facing host/port, in front of the private
+ * loopback Rust listeners, using the façade's `fetch` exactly as the
+ * TypeScript transport's `fetch` was used before.
  *
  * Run it:
  *   bun run start                 # from this directory
@@ -15,7 +16,7 @@
  *
  * Env vars (all optional — see ./README.md for the full list and a curl
  * walkthrough):
- *   AGENTKIT_DB             sqlite file path (default "./agentkit.sqlite")
+ *   AGENTKIT_DB             native store file (default "./agentkit.sqlite")
  *   AGENTKIT_HOST           bind address (default "127.0.0.1" — see below)
  *   AGENTKIT_PORT           HTTP port (default 8787)
  *   AGENTKIT_PROVIDER_KIND  provider preset kind (default "openai-compatible")
@@ -25,16 +26,16 @@
  *   AGENTKIT_MCP_COMMAND    stdio MCP server to bridge in, if set
  *   AGENTKIT_MCP_ARGS       space-separated args for that command
  *   AGENTKIT_MCP_SERVER_TOKEN  when set, serve THIS host's tools as an MCP
- *                              server at /mcp, behind that bearer token
+ *                              server (mounted at /mcp by the façade),
+ *                              behind that bearer token
  *
  * No provider env is required to boot: a provider is always seeded (from
  * presets when nothing is configured), and `GET /v1/version` never touches it.
  * Submitting a chat message against an unreachable provider fails that one
  * run, not the server.
  */
-import { serveRest } from "@agentkit/transport-http";
 import type { Logger } from "@agentkit/host";
-import { buildApp, resolveBindHost } from "./wiring.js";
+import { buildApp, resolveBindHost, MCP_PATH } from "./wiring.js";
 
 const consoleLogger: Logger = {
   debug: (message, fields) =>
@@ -48,66 +49,50 @@ const consoleLogger: Logger = {
 
 const PORT = Number(process.env.AGENTKIT_PORT ?? 8787);
 
-/** Where the MCP server is mounted, when one is built. */
-const MCP_PATH = "/mcp";
-
 /**
  * LOOPBACK ON PURPOSE. `Bun.serve` with no `hostname` binds every interface,
- * and `buildApp` wires no `authenticate` and no `authorize` — so the default
- * would publish an unauthenticated API that stores provider API keys
- * (`POST /v1/providers`) and spends them (the chat routes) to the whole
- * network. Naming the host is the difference between a desktop backend and an
- * open credential store.
+ * and `buildApp` wires no client-facing `authenticate` — the façade holds the
+ * private bearer token toward the Rust backend, so the default would publish
+ * an unauthenticated API that stores provider API keys and spends them (the
+ * chat routes) to the whole network. Naming the host is the difference
+ * between a desktop backend and an open credential store.
  *
- * `AGENTKIT_HOST` overrides it. Only ever set it TOGETHER WITH real
- * `authenticate`/`authorize` in `./wiring.ts` — the warning below says so at
- * boot because a misconfiguration here is silent otherwise.
+ * `AGENTKIT_HOST` overrides it. Only ever set it TOGETHER WITH a real
+ * authentication layer in front of the façade in `./wiring.ts` — the warning
+ * below says so at boot because a misconfiguration here is silent otherwise.
  */
 const { host: HOST, loopback } = resolveBindHost();
 
 const app = await buildApp({ logger: consoleLogger });
 
 /**
- * `/mcp` is matched BEFORE the REST handler sees the request.
- *
- * The two are different protocols on one socket: `serveRest` resolves paths
- * against `deps.basePath` (`/api/agentkit` here) and answers 404 for anything
- * outside it, so `/mcp` would never reach the MCP handler if it went second.
- * The exact-path test (rather than a prefix) is deliberate — the MCP streamable
- * transport uses one endpoint for POST, GET and DELETE, so there are no
- * subpaths to forward.
+ * The façade owns routing: `/mcp` (when an MCP server was built), the JS-
+ * served catalogue routes, and the proxy to the Rust REST v1 + SSE engine —
+ * see the module header of `./wiring.ts`. One socket, same paths as before.
  */
-const restFetch = serveRest(app.deps).fetch;
-const mcpServer = app.mcpServer;
-
 const server = Bun.serve({
   hostname: HOST,
   port: PORT,
-  fetch(request) {
-    if (mcpServer && new URL(request.url).pathname === MCP_PATH) {
-      return mcpServer.fetch(request);
-    }
-    return restFetch(request);
-  },
+  fetch: app.fetch,
 });
 
 if (!loopback) {
   console.warn(
     `[agentkit] WARNING: bound to ${HOST}, which is not loopback. This example wires ` +
-      "no authenticate/authorize, so every route — provider API keys included — is open " +
-      "to anything that can reach this socket. Wire auth in wiring.ts or unset AGENTKIT_HOST.",
+      "no client-facing authenticate, so every route — provider API keys included — is open " +
+      "to anything that can reach this socket. Wire auth in front of the façade or unset AGENTKIT_HOST.",
   );
 }
 
 console.log(
-  `[agentkit] listening on http://${HOST}:${server.port}${app.deps.basePath ?? ""}`,
+  `[agentkit] listening on http://${HOST}:${server.port}${app.basePath}`,
 );
 console.log(`[agentkit] db: ${app.dbPath}`);
 console.log(
   `[agentkit] mcp bridge: ${app.mcpEnabled ? "enabled" : "disabled"}`,
 );
 console.log(
-  mcpServer
+  app.mcpServer
     ? `[agentkit] mcp server: http://${HOST}:${server.port}${MCP_PATH} (bearer token required)`
     : "[agentkit] mcp server: disabled (set AGENTKIT_MCP_SERVER_TOKEN to enable)",
 );

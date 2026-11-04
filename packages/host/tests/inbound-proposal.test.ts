@@ -25,9 +25,10 @@ function setup(
     allow?: boolean;
     policyMode?: WritePolicyMode;
     currentRevision?: (scopeKey: string) => Promise<string | null>;
+    applierOptions?: Parameters<typeof createHarness>[0];
   } = {},
 ) {
-  const harness = createHarness();
+  const harness = createHarness(options.applierOptions ?? {});
   const policy = new SessionWritePolicy({ mode: options.policyMode });
   if (options.allow)
     policy.allow({
@@ -186,5 +187,48 @@ describe("createProposalBuilderTool — inbound invocation identity", () => {
     expect(f.applier.calls).toHaveLength(0);
     expect([...f.store.proposals.proposals.values()][0]!.status).toBe("failed");
     expect(f.store.proposals.outcomes.size).toBe(1);
+  });
+
+  it("reports already_applied with failed-op detail when a partial apply is repeated", async () => {
+    // Port of mcp-server/tests/inbound-actors.test.ts "stages, then honors
+    // host approval; partial mutation reports failure and is never
+    // repeated", at the host lane the MCP handler delegates to.
+    const f = setup({
+      applierOptions: {
+        outcome: {
+          status: "partial",
+          appliedOps: 1,
+          failedOps: [{ opIndex: 1, error: "missing target" }],
+        },
+      },
+    });
+    const input = { action_id: "remove_item_scope-1" };
+    const staged = await f.tool.execute(actorContext("session-a"), input);
+    expect(modelData(staged).status).toBe("pending");
+    expect(f.applier.calls).toHaveLength(0);
+
+    const proposal = [...f.store.proposals.proposals.values()][0]!;
+    await f.service.approve({
+      proposalId: proposal.id,
+      actor: "user",
+      decidedBy: "host-user",
+    });
+    const outcome = await f.service.apply({
+      proposalId: proposal.id,
+      operationId: f.ids.operationId(),
+    });
+    expect(outcome.status).toBe("partial");
+
+    const repeat = await f.tool.execute(actorContext("session-a"), input);
+    expect(JSON.stringify(repeat)).toContain("already_applied");
+    expect(repeat.ok).toBe(false);
+    expect(repeat.status).toBe("partial");
+    expect(modelData(repeat).status).toBe("already_applied");
+    expect(modelData(repeat).appliedCount).toBe(1);
+    expect(modelData(repeat).skipped).toEqual([
+      { id: "op:1", reason: "missing target" },
+    ]);
+    // Never repeated: the partial apply is the only applier invocation.
+    expect(f.applier.calls).toHaveLength(1);
   });
 });

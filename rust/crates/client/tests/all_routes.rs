@@ -2,6 +2,7 @@ use agentkit_client::{Call, Client, RestOperation as Op, StreamOptions};
 use agentkit_contracts::REST_ROUTES;
 #[path = "all_routes/mod.rs"]
 mod scenarios;
+mod support;
 use futures::StreamExt;
 use scenarios::{cancellation_and_resume, chats, management, proposals, providers};
 use serde::Deserialize;
@@ -190,6 +191,9 @@ fn id(value: &Value, field: &str) -> String {
 
 #[tokio::test]
 async fn rust_client_exercises_all_48_operations_against_the_actual_typescript_host() {
+    if support::ts_interop_skipped() {
+        return;
+    }
     let mut fixture = Fixture::start().await;
     let chat = chats(&mut fixture).await;
     providers(&mut fixture).await;

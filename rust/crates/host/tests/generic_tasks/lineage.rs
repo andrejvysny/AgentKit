@@ -68,7 +68,12 @@ async fn explicit_generic_resubmit_returns_original_without_reexecution_or_paylo
 }
 
 #[tokio::test]
-async fn unknown_kind_queues_then_fails_once_without_dead_letter_or_worker_failure() {
+async fn unregistered_kind_is_refused_at_admission_and_ignored_by_the_worker() {
+    // Admission refuses a kind with no executor, under both a populated and
+    // an empty registry, and leaves ZERO rows: the old queue-then-fail path
+    // (claim, settle `executor_not_found`, record an attempt) is gone by
+    // design — the host never claims work it cannot run, so nothing ever
+    // settles that way.
     for empty in [false, true] {
         let environment = environment(SqliteStore::memory(16).unwrap(), None);
         let host = if empty {
@@ -84,28 +89,40 @@ async fn unknown_kind_queues_then_fails_once_without_dead_letter_or_worker_failu
         };
         let mut input = task("orphan", "nobody.registered");
         input.parent_task_id = None;
-        let handle = host.submit(input).await.unwrap();
-        assert_eq!(
-            handle.status().await.unwrap().unwrap().status,
-            TaskStatus::Queued
+        assert!(matches!(
+            host.submit(input).await,
+            Err(HostError::NoExecutorForKind(kind)) if kind == "nobody.registered"
+        ));
+        assert!(
+            host.store().get_task("orphan").await.unwrap().is_none(),
+            "a refused admission leaves no partially-admitted row"
         );
-        let worker = host.start_worker();
-        let record = terminal(host.store(), "orphan").await;
-        worker.shutdown().await.unwrap();
-        assert_eq!(record.status, TaskStatus::Failed);
-        assert_eq!(
-            record.error.as_deref(),
-            Some("executor_not_found: task executor not registered: nobody.registered")
-        );
-        assert_eq!(record.attempt_count, 1);
-        assert_eq!(record.poison_count, 0);
-        assert!(!record.retry_pending);
-        assert!(record.dead_lettered_at.is_none());
-        assert!(record.dead_letter_reason.is_none());
-        assert_eq!(
-            host.store().attempts("orphan").await.unwrap()[0].status,
-            "failed"
-        );
-        assert!(!host.run_once().await.unwrap());
+        assert!(host.store().attempts("orphan").await.unwrap().is_empty());
     }
+    // A dead-kind row the queue legitimately holds for another pool is
+    // invisible to this host's worker: never claimed, never failed, never
+    // dead-lettered — and never blocking the runnable kinds behind it.
+    let environment = environment(SqliteStore::memory(16).unwrap(), None);
+    let mut dead = task("orphan", "nobody.registered");
+    dead.parent_task_id = None;
+    environment.host.store().submit(dead).await.unwrap();
+    let mut solo = task("solo", "demo.join");
+    solo.parent_task_id = None;
+    environment.host.submit(solo).await.unwrap();
+    let worker = environment.host.start_worker();
+    let record = terminal(environment.host.store(), "solo").await;
+    worker.shutdown().await.unwrap();
+    assert_eq!(record.status, TaskStatus::Completed);
+    assert_eq!(environment.join_calls.load(Ordering::SeqCst), 1);
+    let orphan = environment
+        .host
+        .store()
+        .get_task("orphan")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(orphan.status, TaskStatus::Queued);
+    assert_eq!(orphan.attempt_count, 0);
+    assert!(orphan.dead_lettered_at.is_none());
+    assert!(orphan.dead_letter_reason.is_none());
 }

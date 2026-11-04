@@ -1,5 +1,10 @@
 use super::*;
 
+/// How long a lease-less `running` task may sit untouched before recovery
+/// treats it as orphaned (10 minutes): longer than any port-path window
+/// between a status transition and its lease acquire/release.
+pub(crate) const ORPHAN_GRACE_MS: i64 = 10 * 60 * 1000;
+
 pub(super) fn dead_letter(
     db: &Connection,
     task: &mut TaskRecord,
@@ -16,7 +21,7 @@ pub(super) fn dead_letter(
     lifecycle_event(db, task, "task.dead_lettered", now)
 }
 
-pub(super) fn end_attempt(
+pub(crate) fn end_attempt(
     db: &Connection,
     lease: &Lease,
     status: &str,
@@ -54,7 +59,7 @@ impl SqliteStore {
 
     pub async fn renew(&self, proof: LeaseFence, now: i64, ttl_ms: i64) -> Result<Lease> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut lease = fence(&transaction, &proof, now)?;
             lease.expires_at = util::checked_expiry(now, ttl_ms)?;
             transaction.execute(
@@ -74,7 +79,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<()> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             fence(&transaction, &proof, now)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &proof.task_id)?;
             task.progress = Some(progress);
@@ -87,13 +92,35 @@ impl SqliteStore {
 
     /// Event evidence, message projections, task/attempt terminal state, and lease release commit together.
     pub async fn settle(&self, input: SettleTask) -> Result<TaskRecord> {
+        self.settle_inner(input, None).await
+    }
+
+    /// Session-aware settle (ADR 0016 §5): the settling turn also settles
+    /// its durable inputs in the SAME transaction — leftover steers marked
+    /// `cancel` are cancelled, and on a completed turn the first queued
+    /// follow-up is converted into the next task, so the queue advances
+    /// without a window where the follow-up is converted but the turn is not
+    /// terminal (or the reverse).
+    pub async fn settle_session(
+        &self,
+        input: SettleTask,
+        extra: crate::session_ops::SessionSettle,
+    ) -> Result<TaskRecord> {
+        self.settle_inner(input, Some(extra)).await
+    }
+
+    async fn settle_inner(
+        &self,
+        input: SettleTask,
+        extra: Option<crate::session_ops::SessionSettle>,
+    ) -> Result<TaskRecord> {
         self.call(move |db| {
             if !input.status.is_terminal() {
                 return Err(StoreError::InvalidTransition(
                     "settle requires terminal status".into(),
                 ));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let lease = fence(&transaction, &input.fence, input.now)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &input.fence.task_id)?;
             if !matches!(
@@ -104,6 +131,21 @@ impl SqliteStore {
                     "{:?} cannot settle",
                     task.status
                 )));
+            }
+            if input.status == TaskStatus::Completed
+                && !task.cancel_requested
+                && let Some(expected) = extra
+                    .as_ref()
+                    .and_then(|extra| extra.expected_descriptor.as_ref())
+            {
+                let chat: Option<ChatRecord> = get(&transaction, "chats", "id", &task.scope_id)?;
+                if chat
+                    .as_ref()
+                    .and_then(|chat| chat.metadata.get(crate::SESSION_METADATA_KEY))
+                    != Some(expected)
+                {
+                    return Err(StoreError::SessionDescriptorChanged(task.scope_id));
+                }
             }
             task.status = if task.cancel_requested {
                 TaskStatus::Cancelled
@@ -125,6 +167,15 @@ impl SqliteStore {
             end_attempt(&transaction, &lease, &status, input.now, task.error.clone())?;
             lifecycle_event(&transaction, &task, "task.settled", input.now)?;
             transaction.execute("DELETE FROM leases WHERE task_id=?", [&task.task_id])?;
+            if let Some(extra) = &extra {
+                crate::session_ops::settle_session_inputs(
+                    &transaction,
+                    &task,
+                    task.status == TaskStatus::Completed,
+                    input.now,
+                    extra,
+                )?;
+            }
             transaction.commit()?;
             Ok(task)
         })
@@ -135,16 +186,29 @@ impl SqliteStore {
     pub async fn cancel_task(&self, task_id: &str, now: i64) -> Result<TaskRecord> {
         let task_id = task_id.to_owned();
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &task_id)?;
             if !task.status.is_terminal() {
                 task.cancel_requested = true;
-                if matches!(task.status, TaskStatus::Queued | TaskStatus::Interrupted)
-                    || task.retry_pending
+                if matches!(
+                    task.status,
+                    TaskStatus::Queued | TaskStatus::Interrupted | TaskStatus::WaitingApproval
+                ) || task.retry_pending
                 {
+                    // Nothing is running to notice: a queued, interrupted,
+                    // backoff-parked, or approval-parked turn cancels now.
+                    // A parked turn holds no lease, and the approver may
+                    // never answer, so waiting for an answer would strand it.
                     task.status = TaskStatus::Cancelled;
                     task.finished_at = Some(now);
                     task.retry_pending = false;
+                    task.interrupt_requested = false;
+                    crate::session_ops::cancel_turn_requests(
+                        &transaction,
+                        &task.scope_id,
+                        &task.task_id,
+                        now,
+                    )?;
                 }
                 save(&transaction, &task)?;
                 lifecycle_event(&transaction, &task, "task.cancel_requested", now)?;
@@ -158,7 +222,7 @@ impl SqliteStore {
     pub async fn resume_task(&self, task_id: &str, now: i64) -> Result<TaskRecord> {
         let task_id = task_id.to_owned();
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut task: TaskRecord = required(&transaction, "tasks", "id", &task_id)?;
             if task.status != TaskStatus::Interrupted {
                 return Err(StoreError::InvalidTransition(
@@ -176,6 +240,12 @@ impl SqliteStore {
     }
 
     /// Recovery evidence and retry intent are durable before the expired lease disappears.
+    ///
+    /// Intended for startup (or an equivalent quiescent point). Beyond expired
+    /// leases it also sweeps `running` tasks that hold no lease and have shown
+    /// no attempt/start activity for more than [`ORPHAN_GRACE_MS`]; leases on
+    /// tasks that already left `running`/`waiting_approval` are residue and
+    /// are dropped without touching the task.
     pub async fn recover(
         &self,
         now: i64,
@@ -187,11 +257,21 @@ impl SqliteStore {
             if max_attempts == 0 || retry_delay_ms < 0 {
                 return Err(StoreError::InvalidInput("invalid recovery limits".into()));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let leases: Vec<Lease> = all(&transaction, "leases")?;
             let mut recovered = Vec::new();
             for lease in leases.into_iter().filter(|lease| lease.expires_at <= now) {
                 let mut task: TaskRecord = required(&transaction, "tasks", "id", &lease.task_id)?;
+                if !matches!(
+                    task.status,
+                    TaskStatus::Running | TaskStatus::WaitingApproval
+                ) {
+                    // The task already settled, requeued, or was interrupted:
+                    // the lease is residue, and recovering would re-run finished work.
+                    end_running_attempts(&transaction, &task.task_id, now)?;
+                    transaction.execute("DELETE FROM leases WHERE task_id=?", [&task.task_id])?;
+                    continue;
+                }
                 end_attempt(
                     &transaction,
                     &lease,
@@ -199,19 +279,38 @@ impl SqliteStore {
                     now,
                     Some("lease_expired".into()),
                 )?;
-                task.poison_count = task
-                    .poison_count
-                    .checked_add(1)
-                    .ok_or_else(|| StoreError::InvalidInput("poison count overflow".into()))?;
-                recover_task(
-                    &transaction,
-                    &mut task,
-                    now,
-                    max_attempts,
-                    retry_delay_ms,
-                    mode,
-                )?;
+                abandon(&transaction, &mut task, now, max_attempts, retry_delay_ms, mode)?;
                 transaction.execute("DELETE FROM leases WHERE task_id=?", [&task.task_id])?;
+                recovered.push(task);
+            }
+            // A running task with no lease row at all (its lease was dropped
+            // without a settle) is an expired lease by another name. A parked
+            // retry is a legitimate lease-less running state, and so are the
+            // short port-path windows (Queued->Running before the lease is
+            // acquired; the lease released before the terminal transition):
+            // only a task quiet for longer than ORPHAN_GRACE_MS is swept.
+            let orphans: Vec<TaskRecord> = select(
+                &transaction,
+                "SELECT record FROM tasks WHERE status='running' AND id NOT IN (SELECT task_id FROM leases) ORDER BY rowid",
+                [],
+            )?;
+            for mut task in orphans.into_iter().filter(|task| !task.retry_pending) {
+                let attempts: Vec<AttemptRecord> = select(
+                    &transaction,
+                    "SELECT record FROM attempts WHERE task_id=?",
+                    [&task.task_id],
+                )?;
+                let last_activity = attempts
+                    .iter()
+                    .map(|attempt| attempt.started_at)
+                    .chain(task.started_at)
+                    .max()
+                    .unwrap_or(task.enqueued_at);
+                if now.saturating_sub(last_activity) <= ORPHAN_GRACE_MS {
+                    continue;
+                }
+                end_running_attempts(&transaction, &task.task_id, now)?;
+                abandon(&transaction, &mut task, now, max_attempts, retry_delay_ms, mode)?;
                 recovered.push(task);
             }
             transaction.commit()?;
@@ -230,6 +329,40 @@ impl SqliteStore {
         })
         .await
     }
+}
+
+/// Ends every still-running attempt of `task_id` as abandoned.
+fn end_running_attempts(db: &Connection, task_id: &str, now: i64) -> Result<()> {
+    let attempts: Vec<AttemptRecord> = select(
+        db,
+        "SELECT record FROM attempts WHERE task_id=? ORDER BY rowid",
+        [task_id],
+    )?;
+    for mut attempt in attempts.into_iter().filter(|a| a.status == "running") {
+        attempt.status = "abandoned".into();
+        attempt.ended_at = Some(now);
+        attempt.error = Some("lease_expired".into());
+        db.execute(
+            "UPDATE attempts SET record=? WHERE id=?",
+            params![json(db, &attempt)?, attempt.attempt_id],
+        )?;
+    }
+    Ok(())
+}
+
+fn abandon(
+    db: &Connection,
+    task: &mut TaskRecord,
+    now: i64,
+    max_attempts: u32,
+    delay: i64,
+    mode: RecoveryMode,
+) -> Result<()> {
+    task.poison_count = task
+        .poison_count
+        .checked_add(1)
+        .ok_or_else(|| StoreError::InvalidInput("poison count overflow".into()))?;
+    recover_task(db, task, now, max_attempts, delay, mode)
 }
 
 fn recover_task(

@@ -12,12 +12,12 @@ mod server;
 mod stdio_client;
 
 pub use backend::{Backend, CatalogTool, Features, SessionScope};
-pub use bridge::{BridgeError, McpToolSet};
+pub use bridge::{BridgeError, McpToolSet, aliases_are_one_step, resolve_original};
 pub use client::{ClientOptions, McpClient, McpClientError};
 pub use manager::{
     ConnectReport, ContributionReport, DefaultConnector, ManagerClock, McpClientManager,
     McpConnection, McpConnector, McpSecretResolver, Resilience, ServerConfig, SystemClock,
-    TransportConfig,
+    ToolBinding, TransportConfig,
 };
 pub use rmcp::model;
 pub use server::{Authenticator, BearerAuth, McpServer, ServerOptions};

@@ -335,6 +335,11 @@
           },
           "data": {
             "properties": {
+              "admissionProtocol": {
+                "const": "fenced-v1",
+                "description": "Trusted host marker: this invocation cannot enter its mutating body without a durable fenced execution receipt.",
+                "type": "string"
+              },
               "toolCallId": {
                 "type": "string"
               },
@@ -855,6 +860,110 @@
           },
           "data": {
             "properties": {
+              "budgetTokens": {
+                "type": "number"
+              },
+              "estimatedInputTokens": {
+                "type": "number"
+              },
+              "extraTokens": {
+                "type": "number"
+              },
+              "maxOutputTokens": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "reserveTokens": {
+                "type": "number"
+              },
+              "toolTokens": {
+                "type": "number"
+              },
+              "windowSource": {
+                "anyOf": [
+                  {
+                    "const": "descriptor",
+                    "type": "string"
+                  },
+                  {
+                    "const": "model",
+                    "type": "string"
+                  },
+                  {
+                    "const": "capabilities",
+                    "type": "string"
+                  },
+                  {
+                    "const": "fallback",
+                    "type": "string"
+                  }
+                ]
+              },
+              "windowTokens": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "requestId",
+              "windowTokens",
+              "windowSource",
+              "reserveTokens",
+              "toolTokens",
+              "extraTokens",
+              "estimatedInputTokens",
+              "budgetTokens"
+            ],
+            "type": "object"
+          },
+          "eventId": {
+            "description": "Unique per event; the key for dedup on replay.",
+            "type": "string"
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "description": "Strictly increasing within a run; the ordering key.",
+            "type": "number"
+          },
+          "timestamp": {
+            "description": "ISO-8601 emission time. Not an ordering key — use `seq`.",
+            "type": "string"
+          },
+          "type": {
+            "const": "run.context.admitted",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "runId",
+          "timestamp",
+          "contractVersion",
+          "eventId",
+          "seq",
+          "data"
+        ],
+        "type": "object"
+      },
+      "type": "run.context.admitted"
+    },
+    {
+      "schema": {
+        "properties": {
+          "attemptId": {
+            "description": "Groups the events of one attempt when a run is retried.",
+            "type": "string"
+          },
+          "contractVersion": {
+            "description": "CONTRACT_VERSION the emitter spoke.",
+            "type": "string"
+          },
+          "data": {
+            "properties": {
               "deficiencies": {
                 "items": {
                   "type": "string"
@@ -1001,8 +1110,16 @@
           },
           "data": {
             "properties": {
+              "approvalGeneration": {
+                "description": "Stable host-generated authorization generation for an uncertain operation.",
+                "type": "string"
+              },
               "argsSha256": {
                 "description": "Approval only: sha-256 hex of the call's canonical JSON arguments.",
+                "type": "string"
+              },
+              "contextSha256": {
+                "description": "Approval only: host-computed execution-context binding.",
                 "type": "string"
               },
               "expiresAt": {

@@ -1,0 +1,337 @@
+#!/usr/bin/env node
+/**
+ * Packed-consumer acceptance scenario for `@agentkit/native`.
+ *
+ * Runs OUTSIDE the repository, against the INSTALLED package (resolved from
+ * node_modules by package name), under both Bun and Node, with no Rust
+ * toolchain on PATH. The gate (`check-native-package.mjs`) drives two modes
+ * as SEPARATE child processes:
+ *
+ *   consumer.mjs run <dbPath>    full lifecycle: open file store → create
+ *                                service/session → send → committed events →
+ *                                approval wait (auto_edit command MUST ask —
+ *                                shared permission matrix through the
+ *                                installed artifact) → answer → resume →
+ *                                terminal completion → cancel a live turn →
+ *                                awaited close, no fabricated effects.
+ *   consumer.mjs reopen <dbPath> FRESH-PROCESS reopen of the same database:
+ *                                durable replay with NO tool registered —
+ *                                a re-dispatch would strand an unsettled
+ *                                callback, and completion text must be
+ *                                present from durable state alone.
+ *   consumer.mjs types <tscPath> STRICT typed consumer against the INSTALLED
+ *                                package: compiles
+ *                                `native-package-typed-consumer.ts` with
+ *                                `tsc --strict --module nodenext
+ *                                --moduleResolution nodenext`, skipLibCheck
+ *                                OFF and `types: []` (the probe uses no
+ *                                ambient globals). Catches declarations that
+ *                                resolve inside the workspace but TS2307
+ *                                for a clean install — the packed
+ *                                `@agentkit/host` import regression that
+ *                                external review reproduced. Must run under
+ *                                Node (it spawns `process.execPath` for the
+ *                                compiler).
+ *
+ * The public export contains durable task/message projections and input
+ * records, not private tool receipt rows. This gate verifies those public
+ * outcomes; direct receipt-state assertions remain in the Rust suites.
+ */
+import { spawnSync } from "node:child_process";
+import { rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { bindingId, NativeStore } from "@agentkit/native";
+
+function assert(condition, message) {
+  if (!condition) throw new Error(`assertion failed: ${message}`);
+}
+
+async function waitFor(read, accept, timeoutMs = 20000) {
+  const started = Date.now();
+  let value = await read();
+  while (!accept(value) && Date.now() - started < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    value = await read();
+  }
+  assert(accept(value), `condition not reached within ${timeoutMs}ms`);
+  return value;
+}
+
+/** Drain a turn to its terminal update; returns events + every task status
+ * seen along the way. */
+async function pollToDone(service, turnId, timeoutMs = 20000) {
+  const subscription = await service.subscribeTurn(turnId, 0);
+  const events = [];
+  const statuses = [];
+  let done = false;
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const batch = await subscription.poll(64, 100);
+    for (const update of batch.events) {
+      events.push(update);
+      const task = update && update.task;
+      if (task && typeof task.status === "string") statuses.push(task.status);
+    }
+    done = batch.done;
+    if (done) break;
+  }
+  subscription.cancel();
+  return { events, statuses, done };
+}
+
+const mode = process.argv[2];
+const dbPath = process.argv[3];
+assert(
+  bindingId === "agentkit-native",
+  `binding identity probe returned ${String(bindingId)}`,
+);
+if (mode !== "types")
+  assert(dbPath, "usage: consumer.mjs <run|reopen> <dbPath>");
+
+const runtime = process.versions.bun
+  ? `bun ${process.versions.bun}`
+  : `node ${process.version}`;
+
+if (mode === "run") {
+  rmSync(dbPath, { force: true });
+  rmSync(`${dbPath}-wal`, { force: true });
+  rmSync(`${dbPath}-shm`, { force: true });
+  const store = await NativeStore.open(dbPath);
+  const service = await store.createService({ closeTimeoutMs: 5000 });
+  let providerCalls = 0;
+  let releaseSlow;
+  const slowGate = new Promise((resolve) => {
+    releaseSlow = resolve;
+  });
+  let commandEffects = 0;
+  let commandInput = null;
+  let slowCalls = 0;
+  let slowCompletions = 0;
+  service.setProvider(async () => {
+    providerCalls += 1;
+    if (providerCalls === 1) {
+      return {
+        content: "",
+        finishReason: "tool_calls",
+        toolCalls: [
+          { id: "call-1", name: "run_cmd", arguments: { command: "ls -la" } },
+        ],
+      };
+    }
+    if (providerCalls === 2) {
+      return {
+        content: "approved and done",
+        finishReason: "stop",
+        toolCalls: [],
+      };
+    }
+    if (providerCalls === 3) {
+      return {
+        content: "",
+        finishReason: "tool_calls",
+        toolCalls: [
+          { id: "call-2", name: "run_slow", arguments: { command: "sleep" } },
+        ],
+      };
+    }
+    // Tripwire: the cancelled turn must never drive a fourth request.
+    throw new Error(`unexpected provider request ${providerCalls}`);
+  });
+  await service.registerTool(
+    {
+      name: "run_cmd",
+      effect: "write",
+      // Capability-classified Exec: `auto_edit` must ASK for this call —
+      // the shared permission matrix, exercised through the installed
+      // artifact on the consumer's own runtime.
+      capability: "process.exec",
+      inputSchema: { type: "object" },
+    },
+    async (input) => {
+      commandEffects += 1;
+      commandInput = input;
+      return { data: "ok" };
+    },
+  );
+  await service.registerTool(
+    {
+      name: "run_slow",
+      effect: "write",
+      // Write-class (not process.exec): `auto_edit` dispatches it without
+      // an approval, so the cancel lands on a genuinely live effect.
+      capability: "fs.write",
+      inputSchema: { type: "object" },
+    },
+    async () => {
+      slowCalls += 1;
+      await slowGate;
+      slowCompletions += 1;
+      return { data: "late" };
+    },
+  );
+  try {
+    await service.createSession({
+      sessionId: "pack-sess",
+      profileId: "p1",
+      model: "test-model",
+      executionMode: "auto_edit",
+    });
+
+    // Turn 1: approval wait → answer → resume → terminal completion.
+    const sent = await service.send("pack-sess", { content: "list files" });
+    assert(sent.kind === "turn", `send() returned kind ${String(sent.kind)}`);
+    const waiting = await waitFor(
+      () => service.getState("pack-sess"),
+      (state) => state.waiting && typeof state.waiting.inputId === "string",
+    );
+    assert(
+      commandEffects === 0,
+      "auto_edit dispatched a process.exec callback without approval",
+    );
+    const ask = waiting.waiting;
+    assert(ask.content && ask.content.argsSha256, "ask carries no argument id");
+    assert(ask.content.toolName === "run_cmd", "ask is for the wrong tool");
+    await service.approve(ask.inputId, "ans-1");
+    const turn1 = await pollToDone(service, sent.turnId);
+    assert(turn1.done, "the approved turn never settled");
+    assert(
+      turn1.statuses.includes("completed"),
+      `approved turn did not reach completed: ${turn1.statuses.join(",")}`,
+    );
+    assert(commandEffects === 1, "approved command did not act exactly once");
+    assert(
+      JSON.stringify(commandInput) === JSON.stringify({ command: "ls -la" }),
+      `callback received ${JSON.stringify(commandInput)}`,
+    );
+
+    // Turn 2: cancel a live turn mid-effect.
+    const sent2 = await service.send("pack-sess", { content: "sleep please" });
+    assert(sent2.kind === "turn", "second send() returned a non-turn");
+    // Observe this tool's entry, rather than a provider callback that may
+    // still be producing the tool call. The cancellation must land while
+    // run_slow is blocked inside its JS body.
+    await waitFor(
+      async () => slowCalls,
+      (count) => count === 1,
+    );
+    assert(
+      slowCompletions === 0,
+      "slow callback completed before cancellation",
+    );
+    await service.cancel("pack-sess", sent2.turnId);
+    const turn2 = await pollToDone(service, sent2.turnId);
+    assert(turn2.done, "the cancelled turn never settled");
+    assert(
+      turn2.statuses.includes("cancelled"),
+      `cancelled turn did not reach cancelled: ${turn2.statuses.join(",")}`,
+    );
+    assert(
+      !turn2.statuses.includes("completed"),
+      "a cancelled turn settled as completed",
+    );
+    releaseSlow();
+    await waitFor(
+      async () => service.pendingCallbacks,
+      (count) => count === 0,
+    );
+    assert(
+      providerCalls === 3,
+      `unexpected provider call count ${providerCalls}`,
+    );
+    assert(
+      commandEffects === 1,
+      "approved command acted again after cancellation",
+    );
+    assert(slowCalls === 1, "slow callback was dispatched more than once");
+    assert(
+      slowCompletions === 1,
+      "released slow callback did not finish exactly once",
+    );
+
+    const exported = JSON.stringify(await service.exportSession("pack-sess"));
+    assert(
+      exported.includes("approved and done"),
+      "the approved provider reply never reached the session export",
+    );
+    console.log(
+      "packed-native-consumer-ok mode=run runtime=" +
+        runtime +
+        " events=" +
+        (turn1.events.length + turn2.events.length),
+    );
+  } finally {
+    await service.close();
+    await store.close();
+  }
+} else if (mode === "reopen") {
+  // Fresh process over the same durable database, with NO provider and NO
+  // tools registered: everything must read back from disk, and nothing may
+  // re-dispatch a callback.
+  const store = await NativeStore.open(dbPath);
+  const service = await store.createService();
+  try {
+    const state = await service.getState("pack-sess");
+    assert(state.sessionId === "pack-sess", "session did not reopen");
+    const exported = JSON.stringify(await service.exportSession("pack-sess"));
+    assert(
+      exported.includes("approved and done"),
+      "approved turn missing from durable replay",
+    );
+    assert(
+      service.pendingCallbacks === 0,
+      "replay re-dispatched a callback in a tool-less process",
+    );
+    console.log(`packed-native-consumer-ok mode=reopen runtime=${runtime}`);
+  } finally {
+    await service.close();
+    await store.close();
+  }
+} else if (mode === "types") {
+  // The strict typed consumer. The compiler is the workspace's own
+  // typescript (the isolated directory has none, and an npm-installed one
+  // would need registry access); EVERYTHING it resolves comes from this
+  // directory's node_modules — exactly what a stranger from `npm install`
+  // sees. skipLibCheck is pinned OFF: with it on, an unresolved import in
+  // a shipped .d.ts disappears and the regression class returns.
+  const tscEntry = process.argv[3];
+  assert(
+    tscEntry,
+    "usage: consumer.mjs types <path-to-typescript-bin-tsc> (run under node)",
+  );
+  const consumerDirectory = dirname(fileURLToPath(import.meta.url));
+  writeFileSync(
+    join(consumerDirectory, "tsconfig.typed.json"),
+    `${JSON.stringify(
+      {
+        compilerOptions: {
+          strict: true,
+          target: "esnext",
+          module: "nodenext",
+          moduleResolution: "nodenext",
+          noEmit: true,
+          skipLibCheck: false,
+          types: [],
+        },
+        files: ["native-package-typed-consumer.ts"],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  const result = spawnSync(
+    process.execPath,
+    [tscEntry, "-p", "tsconfig.typed.json"],
+    { cwd: consumerDirectory, stdio: "inherit" },
+  );
+  if (result.error)
+    throw new Error(`tsc could not be started: ${result.error.message}`);
+  assert(
+    result.status === 0,
+    `strict typed consumer check failed with status ${result.status}`,
+  );
+  console.log(`packed-native-consumer-ok mode=types runtime=${runtime}`);
+} else {
+  console.error("usage: consumer.mjs <run|reopen> <dbPath> | types <tscPath>");
+  process.exitCode = 2;
+}

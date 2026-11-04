@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "AgentKit MCP client and server transports"
 repository = "https://github.com/andrejvysny/AgentKit"
 readme = "README.md"
@@ -15,6 +16,7 @@ async-trait.workspace = true
 futures.workspace = true
 axum = "=0.8.8"
 http = "=1.5.0"
+http-body-util = "=0.1.5"
 reqwest.workspace = true
 rmcp = { version = "=3.5.0", default-features = false, features = ["server", "client", "transport-child-process", "transport-streamable-http-client-reqwest", "transport-streamable-http-server", "reqwest"] }
 serde.workspace = true
@@ -26,6 +28,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["process"] }
 tokio-util = "=0.7.20"
 tower = { version = "=0.5.3", features = ["util"] }
+tracing = "=0.1.44"
 uuid = { version = "=1.28.0", features = ["v4"] }
 url = "=2.5.8"
 

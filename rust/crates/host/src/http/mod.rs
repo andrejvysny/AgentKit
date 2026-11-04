@@ -1,5 +1,6 @@
 //! Optional desktop HTTP boundary. One immutable actor owns one local store.
 mod chats;
+mod managed_content;
 mod management;
 mod ports;
 pub use ports::*;
@@ -129,6 +130,28 @@ impl DesktopBackend {
         self.connections = connections;
         self.native_connections = native;
         self.secrets = secrets;
+        self
+    }
+    /// Make the provider-management routes real for this backend: the
+    /// connection authority (credential-key derivation, generation fences)
+    /// rides the backend's OWN restored repository, and the credential
+    /// vault is the caller's port. With both wired, `createProvider` /
+    /// `updateProvider` accept `apiKey`/`extraHeaders`; without them those
+    /// routes answer 501 exactly as the TypeScript transport does when no
+    /// `SecretStore` is wired. Network stays unavailable: the provider
+    /// probe routes (`testProvider`/`refreshProviderModels`) require a
+    /// `ProviderOperations` port via `with_provider_operations`, so this
+    /// wiring never opens an egress path on its own.
+    pub fn with_provider_secrets(
+        mut self,
+        secrets: agentkit_connections::SharedSecretStore,
+    ) -> Self {
+        self.native_connections = Some(Arc::new(agentkit_connections::NativeConnections::new(
+            self.connections.clone(),
+            Arc::clone(&secrets),
+            Arc::new(agentkit_connections::UnavailableNetwork),
+        )));
+        self.secrets = Some(secrets);
         self
     }
     pub fn with_pinned_provider(mut self, id: &str) -> Self {
@@ -299,6 +322,7 @@ fn host_error(error: HostError) -> Problem {
     match error {
         HostError::Store(error) => store_error(error),
         HostError::UnknownKind(kind) => Problem::host("executor_not_found", kind),
+        HostError::NoExecutorForKind(kind) => Problem::host("no_executor_for_kind", kind),
         _ => Problem::host("internal_error", error.to_string()),
     }
 }

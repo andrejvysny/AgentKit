@@ -3,9 +3,11 @@
 A coding agent you can actually run: an explicit repository, an
 OpenAI-compatible endpoint, a persistent session on SQLite, the confined coding
 tool pack, human approvals, and crash-resumable turns. No Pi, no OneMind, no
-second runtime — `@agentkit/host` plus `@agentkit/toolpacks-coding`, wired in
-about 800 lines across two files — the wiring in `src/app.ts` and the CLI shell in
-`src/main.ts`.
+second runtime — `@agentkit/native`: the durable store, session service, and
+the Rust coding tool pack (`registerCodingTools` → `rust/crates/napi/src/coding_lane.rs`)
+behind one binding — wired in about 800 lines across two files, the wiring in
+`src/app.ts` and the CLI shell in `src/main.ts` (the `@agentkit/host` imports
+there are profile/descriptor configuration helpers only).
 
 It exists to prove the claim from the other side: everything a coding agent
 needs is in AgentKit, so a host does not have to write an agent loop.

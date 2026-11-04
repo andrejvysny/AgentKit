@@ -2,7 +2,7 @@ use crate::{
     util::{all, get, json, required},
     *,
 };
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -81,6 +81,20 @@ pub struct ReceiptRecord {
     pub created_at: i64,
 }
 
+/// One finalize request for [`SqliteStore::finalize_apply`]: receipt claim,
+/// expected-state comparison, and terminal patch, grouped so the entry reads
+/// like the port's transition call instead of a positional argument wall.
+#[derive(Clone, Debug)]
+pub struct FinalizeApply {
+    pub proposal_id: String,
+    pub operation_id: String,
+    pub outcome: ApplyOutcome,
+    pub from: Vec<ProposalStatus>,
+    pub to: ProposalStatus,
+    pub patch: ProposalPatch,
+    pub now: i64,
+}
+
 pub fn validate_apply_outcome(proposal: &ProposalRecord, outcome: &ApplyOutcome) -> Result<()> {
     let mut failed = std::collections::BTreeSet::new();
     let invalid_failures = outcome.failed_ops.iter().any(|failure| {
@@ -139,8 +153,37 @@ impl SqliteStore {
             if !["low", "medium", "high", "destructive"].contains(&proposal.risk.as_str()) {
                 return Err(StoreError::InvalidInput("invalid risk level".into()));
             }
-            let _: ChatRecord = required(db, "chats", "id", &proposal.chat_id)?;
-            db.execute(
+            // The port treats `chatId` as a free-form association, not a
+            // foreign key: callers legitimately record proposals for chats
+            // they do not own (and the reference adapters persist them
+            // untouched), so no chat-row existence check here.
+            let transaction = crate::transaction::atomic(db)?;
+            // The port keys idempotency on (scopeKey, actionId): while a
+            // proposal still holds the key — every status except the
+            // releasing pair — a second live proposal is the duplicate the
+            // port refuses. The refusal is the store's own `Duplicate`, not
+            // an opaque constraint failure, so the port surface can name it
+            // `duplicate_action_id`; the partial UNIQUE index stays the race
+            // proof (this read and the INSERT share one transaction, so the
+            // loser either sees the holder here or trips the index).
+            if proposal.action_id.is_some() {
+                let holder: Option<String> = transaction
+                    .query_row(
+                        "SELECT id FROM proposals WHERE scope=? AND action_id=? \
+                         AND status NOT IN ('rejected','invalidated') LIMIT 1",
+                        params![proposal.scope_key, proposal.action_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if let Some(holder) = holder {
+                    let action = proposal.action_id.as_deref().unwrap_or_default();
+                    let scope = &proposal.scope_key;
+                    return Err(StoreError::Duplicate(format!(
+                        "action_id {action} already used in scope {scope} by proposal {holder}."
+                    )));
+                }
+            }
+            transaction.execute(
                 "INSERT INTO proposals VALUES(?,?,?,?,?,?)",
                 params![
                     proposal.id,
@@ -148,9 +191,10 @@ impl SqliteStore {
                     proposal.action_id,
                     "pending",
                     proposal.operation_id,
-                    json(db, &proposal)?
+                    json(&transaction, &proposal)?
                 ],
             )?;
+            transaction.commit()?;
             Ok(proposal)
         })
         .await
@@ -204,7 +248,7 @@ impl SqliteStore {
     ) -> Result<ProposalRecord> {
         let proposal_id = proposal_id.to_owned();
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut proposal: ProposalRecord =
                 required(&transaction, "proposals", "id", &proposal_id)?;
             if !from.contains(&proposal.status) || !allowed(proposal.status, to) {
@@ -214,9 +258,28 @@ impl SqliteStore {
                 )));
             }
             if matches!(to, ProposalStatus::Applied | ProposalStatus::Failed) {
-                return Err(StoreError::InvalidInput(
-                    "terminal apply transition requires complete_proposal and bound receipt".into(),
-                ));
+                // A committed receipt makes the terminal stamp its own:
+                // finalizing then goes through `complete_proposal` so the
+                // first-committed outcome stays byte-identical and the stamp
+                // derives from the evidence. With NO receipt this is the
+                // plain status CAS the TypeScript baseline had — it never
+                // writes an outcome row, so a status request cannot
+                // manufacture appliedOps evidence.
+                let bound = proposal
+                    .operation_id
+                    .as_deref()
+                    .is_some_and(|operation_id| {
+                        get::<ReceiptRecord>(&transaction, "receipts", "operation_id", operation_id)
+                            .ok()
+                            .flatten()
+                            .is_some()
+                    });
+                if bound {
+                    return Err(StoreError::InvalidInput(
+                        "terminal apply transition requires complete_proposal and bound receipt"
+                            .into(),
+                    ));
+                }
             }
             if to == ProposalStatus::Applying
                 && patch.operation_id.as_deref().is_none_or(str::is_empty)
@@ -274,7 +337,7 @@ impl SqliteStore {
     ) -> Result<ReceiptRecord> {
         let (proposal_id, operation_id) = (proposal_id.to_owned(), operation_id.to_owned());
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut proposal: ProposalRecord =
                 required(&transaction, "proposals", "id", &proposal_id)?;
             if proposal.operation_id.as_deref() != Some(&operation_id) {
@@ -290,6 +353,22 @@ impl SqliteStore {
                         "receipt belongs to another proposal".into(),
                     ));
                 }
+                // The receipt is the committed outcome and stays byte-identical
+                // ("first committed outcome wins"). But a receipt can exist
+                // while the stamp has not landed — the port's apply records the
+                // outcome BEFORE requesting the terminal transition — so an
+                // Applying proposal is still finalized here, idempotently,
+                // from the RECEIPT's outcome (never the replayed argument).
+                if proposal.status == ProposalStatus::Applying {
+                    proposal.status = if receipt.outcome.status == "failed" {
+                        ProposalStatus::Failed
+                    } else {
+                        ProposalStatus::Applied
+                    };
+                    proposal.applied_at = Some(now);
+                    save(&transaction, &proposal)?;
+                }
+                transaction.commit()?;
                 return Ok(receipt);
             }
             if proposal.status != ProposalStatus::Applying {
@@ -331,10 +410,190 @@ impl SqliteStore {
             .await
     }
 
+    /// The port's receipt-bound terminal `transition(…, applied | failed)`
+    /// with the CAS's expected-state comparison enforced at the write:
+    /// `from`/`to` are checked against the proposal's status INSIDE this
+    /// transaction, so two competing terminal requests cannot both land —
+    /// the loser reads a status outside `from` and is refused with the
+    /// machine's `InvalidTransition`, exactly as the reference adapters
+    /// refuse it. The patch's `reason`/`decision` land with the stamp, as
+    /// the adapters write them (a failed apply without its reason is not
+    /// actionable by the UI or the model).
+    ///
+    /// The receipt rules themselves are `complete_proposal`'s and are not
+    /// restated here loosely: first committed outcome wins, byte-identical,
+    /// and the terminal stamp derives from the committed receipt — never
+    /// from a replayed argument. This entry only adds the refused-when-stale
+    /// gate and the patch; it never rewrites a committed receipt.
+    pub async fn finalize_apply(&self, input: FinalizeApply) -> Result<ReceiptRecord> {
+        let FinalizeApply {
+            proposal_id,
+            operation_id,
+            outcome,
+            from,
+            to,
+            patch,
+            now,
+        } = input;
+        self.call(move |db| {
+            if !matches!(to, ProposalStatus::Applied | ProposalStatus::Failed) {
+                return Err(StoreError::InvalidInput(
+                    "finalize needs applied or failed".into(),
+                ));
+            }
+            if patch.operation_id.is_some() {
+                return Err(StoreError::InvalidInput(
+                    "operation id can only be set by apply claim".into(),
+                ));
+            }
+            let transaction = crate::transaction::atomic(db)?;
+            let mut proposal: ProposalRecord =
+                required(&transaction, "proposals", "id", &proposal_id)?;
+            if proposal.operation_id.as_deref() != Some(&operation_id) {
+                return Err(StoreError::InvalidInput(
+                    "receipt does not match proposal operation".into(),
+                ));
+            }
+            if !from.contains(&proposal.status) || !allowed(proposal.status, to) {
+                return Err(StoreError::InvalidTransition(format!(
+                    "{:?} to {to:?}",
+                    proposal.status
+                )));
+            }
+            // Only `applying → applied | failed` is legal here, so the
+            // status is Applying and the stamp is this call to land.
+            let stamp = |proposal: &mut ProposalRecord, failed: bool| {
+                proposal.status = if failed {
+                    ProposalStatus::Failed
+                } else {
+                    ProposalStatus::Applied
+                };
+                proposal.applied_at = Some(now);
+                if patch.reason.is_some() {
+                    proposal.reason = patch.reason.clone();
+                }
+                if patch.decision.is_some() {
+                    proposal.decision = patch.decision.clone();
+                    proposal.decided_at = Some(now);
+                }
+            };
+            if let Some(receipt) =
+                get::<ReceiptRecord>(&transaction, "receipts", "operation_id", &operation_id)?
+            {
+                if receipt.proposal_id != proposal_id {
+                    return Err(StoreError::InvalidInput(
+                        "receipt belongs to another proposal".into(),
+                    ));
+                }
+                // The committed receipt is the outcome; a replayed argument
+                // never restates it (see `complete_proposal`).
+                stamp(&mut proposal, receipt.outcome.status == "failed");
+                save(&transaction, &proposal)?;
+                transaction.commit()?;
+                return Ok(receipt);
+            }
+            validate_apply_outcome(&proposal, &outcome)?;
+            stamp(&mut proposal, outcome.status == "failed");
+            let receipt = ReceiptRecord {
+                proposal_id,
+                operation_id,
+                outcome,
+                created_at: now,
+            };
+            transaction.execute(
+                "INSERT INTO receipts VALUES(?,?,?)",
+                params![
+                    receipt.operation_id,
+                    receipt.proposal_id,
+                    json(&transaction, &receipt)?
+                ],
+            )?;
+            save(&transaction, &proposal)?;
+            transaction.commit()?;
+            Ok(receipt)
+        })
+        .await
+    }
+
+    pub async fn record_outcome(
+        &self,
+        operation_id: &str,
+        outcome: ApplyOutcome,
+        now: i64,
+    ) -> Result<ReceiptRecord> {
+        let operation_id = operation_id.to_owned();
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            // Idempotent on operation id: the first committed outcome is the
+            // one that happened; a later call is answered from the evidence.
+            if let Some(receipt) =
+                get::<ReceiptRecord>(&transaction, "receipts", "operation_id", &operation_id)?
+            {
+                return Ok(receipt);
+            }
+            // The port records an outcome by operation id alone; a proposal
+            // carrying the id supplies its identity, but a receipt stands on
+            // its own when none does (the caller's idempotency key, not the
+            // row, is what dedups).
+            let proposal_id = all::<ProposalRecord>(&transaction, "proposals")?
+                .into_iter()
+                .filter(|proposal| proposal.operation_id.as_deref() == Some(&operation_id))
+                .max_by_key(|proposal| proposal.created_at)
+                .map(|proposal| proposal.id)
+                .unwrap_or_default();
+            let receipt = ReceiptRecord {
+                proposal_id,
+                operation_id,
+                outcome,
+                created_at: now,
+            };
+            transaction.execute(
+                "INSERT INTO receipts VALUES(?,?,?)",
+                params![
+                    receipt.operation_id,
+                    // An outcome recorded without a proposal (the port's
+                    // free-floating idempotency key) keeps the column NULL:
+                    // the FK stays honest, the record JSON stays authoritative.
+                    if receipt.proposal_id.is_empty() {
+                        None
+                    } else {
+                        Some(receipt.proposal_id.as_str())
+                    },
+                    json(&transaction, &receipt)?
+                ],
+            )?;
+            transaction.commit()?;
+            Ok(receipt)
+        })
+        .await
+    }
+
+    /// Delete every proposal of one chat — with its committed receipts (the
+    /// receipt rows cascade with the proposal) — and return how many
+    /// PROPOSALS were removed. Mirrors the chat-delete cascade expectations
+    /// so a chat teardown and this scoped delete leave the same state.
+    pub async fn delete_proposals_by_chat(&self, chat_id: &str) -> Result<usize> {
+        let chat_id = chat_id.to_owned();
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            let mut removed = 0;
+            for proposal in all::<ProposalRecord>(&transaction, "proposals")?
+                .into_iter()
+                .filter(|proposal| proposal.chat_id == chat_id)
+            {
+                transaction.execute("DELETE FROM proposals WHERE id=?", [proposal.id])?;
+                removed += 1;
+            }
+            transaction.commit()?;
+            Ok(removed)
+        })
+        .await
+    }
+
     pub async fn invalidate_pending(&self, scope: &str, revision: &str) -> Result<usize> {
         let (scope, revision) = (scope.to_owned(), revision.to_owned());
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut count = 0;
             for mut proposal in all::<ProposalRecord>(&transaction, "proposals")?
                 .into_iter()

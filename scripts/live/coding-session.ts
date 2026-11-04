@@ -13,43 +13,67 @@
  * Flow: temp git repo with a tiny TS project and one failing `bun test`;
  * turn 1 fixes it, turn 2 (follow-up) adds a RangeError test, turn 3 runs in a
  * CHILD process (this script re-spawned with `--child`) that the parent
- * SIGKILLs after the first successful tool call, then a new store/runner in the
- * parent recovers the expired lease and finishes the turn. Prints PASS/FAIL per
- * assertion and a JSON summary, writes docs/baseline/live-coding-2026-10-27.md,
- * and exits non-zero on any FAIL.
+ * SIGKILLs after the first successful tool call, then a new store/service in
+ * the parent recovers the expired lease and resumes the turn. Prints PASS/FAIL
+ * per assertion and a JSON summary, writes
+ * docs/baseline/live-coding-2026-10-27.md, and exits non-zero on any FAIL.
  *
- * The coding guard runs in `full_auto`: the durable approval flow (M5) is not
- * built, so `ask`/`auto_edit` cannot yet be exercised end to end.
+ * NATIVE COMPOSITION (see examples/desktop-host/src/wiring.ts for the recipe).
+ * Every runtime piece is built ONLY through `@agentkit/native`:
+ *  - `SqliteAssistantStore`      → `NativeStore.open` (one Rust store actor
+ *    owns the file; the parent therefore does NOT hold the store while the
+ *    child runs — the binding refuses a second owner with `already_owned`).
+ *  - reads for waits/metrics (`store.tasks.*`, `store.conversations.*`) →
+ *    `NativeAssistantStore`, the same `AssistantStore` port over the native
+ *    store.
+ *  - `SingleProcessTaskRunner` + `TurnRunner` + `TaskService` +
+ *    `AgentSessionService` + `ExecutorRegistry` + `createDispatchingWorker` →
+ *    one `store.createService(...)`: the Rust scheduler, worker and session
+ *    service; the worker starts at construction and crash-reconciles first
+ *    (manual policy: a dead process's turn is parked `interrupted`, never
+ *    silently restarted — the parent resumes it explicitly, the same
+ *    lifecycle `examples/coding-agent/src/app.ts` runs).
+ *  - `providers.upsertProvider` + `settings.updateSettings(defaultProviderId)`
+ *    + `OpenAiCompatibleClient.fromConfig` → the Rust provider lane:
+ *    `NativeSessionService.registerProviderConnection(BASE_URL, null)` plus
+ *    `createService({providerConfig:{protocol:"chat-completions",…}})`. The
+ *    provider lives in the lane, not the database.
+ *  - `createCodingPermissionGuard({mode:"full_auto"})` + TurnRunner
+ *    `toolGuards` → `createService({jsToolAuthority:{configuredMode:
+ *    "full_auto"}})`: the Rust coding-pack authority judges every JS tool
+ *    call (rust/crates/napi/src/authority.rs).
+ *  - `projectInstructions: fileProjectInstructions()` → built into the
+ *    binding (`FileProjectInstructions`, rust/crates/napi/src/service.rs);
+ *    the AGENTS.md system block is injected natively for workspace sessions.
+ *  - child kill coordination: the old parent polled the shared db; under the
+ *    native exclusive store owner it instead watches the child's stdout for
+ *    `AGENTKIT_TURN3 <turnId>` / `AGENTKIT_MIDTURN <turnId> <count>` markers,
+ *    which the child prints under exactly the old kill condition (≥1
+ *    `run.tool.succeeded` while the turn is still non-terminal). The child's
+ *    stdout is forwarded to the parent's stdout, so terminal output is
+ *    unchanged.
+ *  - lease wait: the binding does not expose the scheduler's lease TTL to JS
+ *    (Rust default 30 s, rust/crates/host/src/runner.rs); the parent waits
+ *    that out before rebuilding the service so construction-time recovery
+ *    parks the killed turn.
  */
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AiRunEvent } from "@agentkit/contracts";
-import { SqliteAssistantStore } from "@agentkit/adapters-sqlite";
-import { OpenAiCompatibleClient } from "@agentkit/core";
 import {
-  AgentSessionService,
-  ChatTurnExecutor,
-  ExecutorRegistry,
-  TaskService,
-  TurnRunner,
-  createDispatchingWorker,
-  defaultClock,
-  defaultIds,
-  type AssistantStore,
-  type WorkerHandle,
-} from "@agentkit/host";
-import { SingleProcessTaskRunner } from "@agentkit/runner-local";
-import {
-  createCodingPermissionGuard,
-  createCodingToolPack,
-} from "@agentkit/toolpacks-coding";
-import { fileProjectInstructions } from "../../packages/runner-local/src/project-instructions.js";
+  NativeAssistantStore,
+  NativeSessionService,
+  NativeStore,
+} from "@agentkit/native";
 
 const BASE_URL =
   process.env["AGENTKIT_LIVE_BASE_URL"] ?? "http://127.0.0.1:8000/v1";
 const MODEL = process.env["AGENTKIT_LIVE_MODEL"] ?? "Qwen3.8-Flash-Next";
-const LEASE_TTL_MS = 5_000;
+/** The binding does not expose the scheduler's lease TTL to JS; this mirrors
+ * the Rust runtime default (`HostOptions::lease_ttl_ms`, rust/crates/host/
+ * src/runner.rs) that the parent waits out before rebuilding the service. */
+const LEASE_TTL_MS = 30_000;
 const TURN_TIMEOUT_MS = 10 * 60_000;
 const DOC_PATH = join(
   import.meta.dir,
@@ -75,74 +99,94 @@ const AGENTS_MD = `# Project rules
 `;
 
 // ---------------------------------------------------------------------------
-// Node: a full store + runner + turn runner + service stack over one sqlite file
+// Node: one native store file + one native session service over it
 // ---------------------------------------------------------------------------
 
 interface Node {
-  store: SqliteAssistantStore;
-  taskRunner: SingleProcessTaskRunner;
-  service: AgentSessionService;
-  startWorker(): Promise<void>;
-  stopWorker(): Promise<void>;
+  store: NativeStore;
+  /** The `AssistantStore` port over the same native handle: task/event/
+   * message reads for waits, metrics and structural checks. */
+  port: NativeAssistantStore;
+  service: NativeSessionService;
+  stop(): Promise<void>;
 }
 
-function buildNode(dbPath: string, root: string, ownerId: string): Node {
-  const store = new SqliteAssistantStore(dbPath);
-  const taskRunner = new SingleProcessTaskRunner({
-    store,
-    leaseTtlMs: LEASE_TTL_MS,
-    heartbeatMs: 1_000,
-    pollMs: 50,
+/** The coding tools are the Rust pack's: descriptors, bodies, guards,
+ * sandbox, leases and standing approvals all execute in Rust on the same
+ * executor lane — the exact recipe of `examples/coding-agent/src/app.ts`.
+ * `sandbox: "off"` preserves this script's historical unsandboxed local-run
+ * behavior (the native default is `"required"`); `configuredMode:
+ * "full_auto"` matches the durable-mode-less automation the retired JS
+ * bridge ran under. */
+async function registerCodingTools(
+  service: NativeSessionService,
+  root: string,
+): Promise<void> {
+  await service.registerCodingTools({
+    workspaceRoot: root,
+    sandbox: "off",
+    testCommands: ["bun test"],
+    configuredMode: "full_auto",
   });
-  const turnRunner = new TurnRunner({
-    store,
-    taskRunner,
-    providerFactory: (config) => OpenAiCompatibleClient.fromConfig(config),
-    contributors: [
-      createCodingToolPack({ workspace: { root }, testCommands: ["bun test"] }),
-    ],
-    toolGuards: [createCodingPermissionGuard({ mode: "full_auto" })],
-    projectInstructions: fileProjectInstructions(),
-    maxToolIterations: 30,
-    clock: defaultClock,
-    ids: defaultIds,
+}
+
+async function openNativeStore(
+  dbPath: string,
+): Promise<{ store: NativeStore; port: NativeAssistantStore }> {
+  const store = await NativeStore.open(dbPath);
+  return { store, port: new NativeAssistantStore({ store }) };
+}
+
+/** The service over an open store: Rust worker + session service, the Rust
+ * provider lane (a connection over the base URL — this local vLLM needs no
+ * key, and the key never reaches the database either way), and the
+ * full_auto JS-tool authority the retired `createCodingPermissionGuard`
+ * carried. Constructing it crash-reconciles and starts the worker. */
+async function attachNativeService(
+  store: NativeStore,
+  root: string,
+): Promise<{ service: NativeSessionService; connectionId: string }> {
+  const connectionId = await NativeSessionService.registerProviderConnection(
+    BASE_URL,
+    null,
+  );
+  const service = await store.createService({
+    jsToolAuthority: { configuredMode: "full_auto" },
+    providerConfig: {
+      protocol: "chat-completions",
+      providerId: PROVIDER_ID,
+      connectionId,
+      model: MODEL,
+    },
   });
-  const tasks = new TaskService({
-    store,
-    taskRunner,
-    ids: defaultIds,
-    clock: defaultClock,
-  });
-  const service = new AgentSessionService({
-    store,
-    turns: turnRunner,
-    tasks,
-    taskRunner,
-    clock: defaultClock,
-    ids: defaultIds,
-  });
-  const registry = new ExecutorRegistry();
-  registry.register(new ChatTurnExecutor(turnRunner));
-  const worker = createDispatchingWorker(registry, {
-    store,
-    clock: defaultClock,
-  });
-  let handle: WorkerHandle | null = null;
+  await registerCodingTools(service, root);
+  return { service, connectionId };
+}
+
+function makeNode(
+  store: NativeStore,
+  port: NativeAssistantStore,
+  service: NativeSessionService,
+  connectionId: string,
+): Node {
   return {
     store,
-    taskRunner,
+    port,
     service,
-    async startWorker() {
-      handle = await taskRunner.startWorker(worker, {
-        concurrency: 1,
-        ownerId,
-      });
-    },
-    async stopWorker() {
-      await handle?.stop();
-      handle = null;
+    async stop() {
+      // close() drains the Rust worker (running coding commands included);
+      // the store actor is released last.
+      await service.close();
+      await store.close();
+      await NativeSessionService.revokeProviderConnection(connectionId);
     },
   };
+}
+
+async function openNativeNode(dbPath: string, root: string): Promise<Node> {
+  const { store, port } = await openNativeStore(dbPath);
+  const { service, connectionId } = await attachNativeService(store, root);
+  return makeNode(store, port, service, connectionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +197,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 
 async function waitTerminal(
-  store: AssistantStore,
+  store: NativeAssistantStore,
   taskId: string,
   timeoutMs = TURN_TIMEOUT_MS,
 ): Promise<string> {
@@ -167,7 +211,7 @@ async function waitTerminal(
 }
 
 async function eventsOf(
-  store: AssistantStore,
+  store: NativeAssistantStore,
   taskId: string,
 ): Promise<AiRunEvent[]> {
   return (await store.tasks.listEvents(taskId)) as AiRunEvent[];
@@ -380,7 +424,7 @@ function check(name: string, pass: boolean, detail?: string): void {
 }
 
 async function structuralChecks(
-  store: AssistantStore,
+  store: NativeAssistantStore,
   turns: { label: string; id: string }[],
 ): Promise<void> {
   const messages = await store.conversations.listMessages(SESSION_ID);
@@ -408,14 +452,35 @@ async function childMain(
   sessionId: string,
   root: string,
 ): Promise<void> {
-  const node = buildNode(dbPath, root, "child");
-  await node.startWorker();
+  const node = await openNativeNode(dbPath, root);
   const sent = await node.service.send(sessionId, { content: PROMPTS.t3 });
   if (sent.kind !== "turn") throw new Error("expected a turn");
   log(`child: turn 3 ${sent.turnId} sent`);
-  await waitTerminal(node.store, sent.turnId);
+  // The parent holds no store handle while this process owns the file (the
+  // binding grants one owner per file), so the kill signal travels over the
+  // child's stdout: announce the turn, then announce the first successful
+  // tool call while the turn is still non-terminal — the parent's exact old
+  // polling condition.
+  console.log(`AGENTKIT_TURN3 ${sent.turnId}`);
+  const deadline = Date.now() + TURN_TIMEOUT_MS;
+  for (;;) {
+    const task = await node.port.tasks.getTask(sent.turnId);
+    if (task && !TERMINAL.has(task.status)) {
+      const evs = await eventsOf(node.port, sent.turnId);
+      const ok = evs.filter((e) => e.type === "run.tool.succeeded").length;
+      if (ok >= 1) {
+        console.log(`AGENTKIT_MIDTURN ${sent.turnId} ${ok}`);
+        break;
+      }
+    } else if (task) {
+      break;
+    }
+    if (Date.now() > deadline) break;
+    await sleep(100);
+  }
+  await waitTerminal(node.port, sent.turnId);
   log("child: turn 3 finished before being killed");
-  await node.stopWorker();
+  await node.stop();
 }
 
 // ---------------------------------------------------------------------------
@@ -423,7 +488,7 @@ async function childMain(
 // ---------------------------------------------------------------------------
 
 async function lastAnswer(
-  store: AssistantStore,
+  store: NativeAssistantStore,
   runId: string,
 ): Promise<string> {
   const msgs = await store.conversations.listMessages(SESSION_ID);
@@ -450,25 +515,15 @@ async function main(): Promise<void> {
   if (pre.code === 0) throw new Error("fixture is not failing");
 
   // ---- turns 1 and 2: one process --------------------------------------
-  let node = buildNode(dbPath, root, "parent-1");
-  await node.store.providers.upsertProvider({
-    id: PROVIDER_ID,
-    label: "Local vLLM",
-    kind: "openai-compatible",
-    baseUrl: BASE_URL,
-    defaultModel: MODEL,
-    enabled: true,
-  });
-  await node.store.settings.updateSettings({ defaultProviderId: PROVIDER_ID });
+  let node = await openNativeNode(dbPath, root);
   await node.service.createSession({
     sessionId: SESSION_ID,
-    profile: { id: "coding" },
+    profileId: "coding",
     providerId: PROVIDER_ID,
     model: MODEL,
     workspace: { root, trusted: true },
     context: { policy: "transcript", windowTokens: 200_000 },
   });
-  await node.startWorker();
 
   const all: TurnMetrics[] = [];
   const turnIds: { label: string; id: string }[] = [];
@@ -482,10 +537,10 @@ async function main(): Promise<void> {
     const res = await start();
     if (res.kind !== "turn" || !res.turnId) throw new Error("expected a turn");
     log(`${label}: turn ${res.turnId} started`);
-    const status = await waitTerminal(node.store, res.turnId);
+    const status = await waitTerminal(node.port, res.turnId);
     const latency = Date.now() - t0;
-    const task = await node.store.tasks.getTask(res.turnId);
-    const events = await eventsOf(node.store, res.turnId);
+    const task = await node.port.tasks.getTask(res.turnId);
+    const events = await eventsOf(node.port, res.turnId);
     const m = metricsFrom(
       label,
       status,
@@ -497,7 +552,7 @@ async function main(): Promise<void> {
     m.bunTestPass = test.code === 0;
     all.push(m);
     turnIds.push({ label, id: res.turnId });
-    answers[label] = await lastAnswer(node.store, res.turnId);
+    answers[label] = await lastAnswer(node.port, res.turnId);
     check(`${label}: turn completed`, status === "completed", status);
     check(`${label}: bun test passes afterwards`, test.code === 0);
     log(`${label}: ${status} in ${(latency / 1000).toFixed(1)}s`);
@@ -527,15 +582,18 @@ async function main(): Promise<void> {
       content: PROMPTS.t2,
     }),
   );
-  await node.stopWorker();
-  node.store.close?.();
+  await node.stop();
 
   // ---- turn 3: child process, SIGKILL, resume --------------------------
-  const poll = new SqliteAssistantStore(dbPath);
+  // The native store admits exactly one owner per file, so the parent does
+  // not (cannot) hold a polling handle while the child runs: the child
+  // announces the turn and the first successful tool call on ITS stdout —
+  // under exactly the old polling condition — and the parent kills on the
+  // marker, forwarding every other line so terminal output is unchanged.
   const t3start = Date.now();
   const child = Bun.spawn(
     [process.execPath, process.argv[1]!, "--child", dbPath, SESSION_ID, root],
-    { stdout: "inherit", stderr: "inherit", env: process.env },
+    { stdout: "pipe", stderr: "inherit", env: process.env },
   );
   let childDone = false;
   void child.exited.then(() => {
@@ -544,25 +602,38 @@ async function main(): Promise<void> {
   let turn3Id = "";
   let killedMidTurn = false;
   let killedAfterToolEvents = 0;
-  const deadline = Date.now() + TURN_TIMEOUT_MS;
-  while (Date.now() < deadline && !childDone) {
-    const turns = (await poll.tasks.listByScope(SESSION_ID))
-      .filter((t) => t.kind === "chat.turn")
-      .sort((a, b) => a.enqueuedAt.localeCompare(b.enqueuedAt));
-    const t = turns[2];
-    if (t) {
-      turn3Id = t.taskId;
-      const evs = await eventsOf(poll, t.taskId);
-      const ok = evs.filter((e) => e.type === "run.tool.succeeded").length;
-      if (ok >= 1 && !TERMINAL.has(t.status)) {
-        child.kill("SIGKILL");
-        killedMidTurn = true;
-        killedAfterToolEvents = ok;
-        break;
+  const watchChild = (async () => {
+    const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let pending = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pending += decoder.decode(value, { stream: true });
+      let nl = pending.indexOf("\n");
+      while (nl >= 0) {
+        const line = pending.slice(0, nl);
+        pending = pending.slice(nl + 1);
+        if (line.startsWith("AGENTKIT_TURN3 ")) {
+          turn3Id = line.slice("AGENTKIT_TURN3 ".length).trim();
+        } else if (line.startsWith("AGENTKIT_MIDTURN ")) {
+          const [, id, count] = line.split(" ");
+          if (id) turn3Id = id;
+          killedAfterToolEvents = Number(count) || 0;
+          killedMidTurn = true;
+          child.kill("SIGKILL");
+          return;
+        } else {
+          console.log(line);
+        }
+        nl = pending.indexOf("\n");
       }
     }
+  })();
+  const deadline = Date.now() + TURN_TIMEOUT_MS;
+  while (Date.now() < deadline && !childDone && !killedMidTurn)
     await sleep(100);
-  }
+  await watchChild;
   if (!killedMidTurn) child.kill("SIGKILL");
   await child.exited;
   log(
@@ -573,18 +644,44 @@ async function main(): Promise<void> {
     killedMidTurn,
     `exit=${child.exitCode} signal=${child.signalCode}`,
   );
-  poll.close?.();
 
-  // wait out the lease, then a NEW store/runner/service recovers
+  // wait out the lease, then a NEW store/service recovers
   await sleep(LEASE_TTL_MS + 1_500);
-  node = buildNode(dbPath, root, "parent-2");
-  await node.startWorker();
-  const report = await node.taskRunner.recoverWithReport();
+  // Construction-time reconciliation is the native recovery pass: creating
+  // the service parks the killed turn once the dead worker's lease has
+  // expired (manual policy: park, never silently restart). Read the durable
+  // facts on both sides of construction as the recovery report, then resume
+  // the parked turn explicitly.
+  const reopened = await openNativeStore(dbPath);
+  const before = await reopened.port.tasks.getTask(turn3Id);
+  const revived = await attachNativeService(reopened.store, root);
+  const after = await reopened.port.tasks.getTask(turn3Id);
+  const report = {
+    reconciledAt: "service-construction",
+    turnId: turn3Id,
+    beforeRecover: {
+      status: before?.status,
+      attemptCount: before?.attemptCount,
+    },
+    afterRecover: {
+      status: after?.status,
+      attemptCount: after?.attemptCount,
+    },
+    resumed: after?.status === "interrupted",
+  };
   log(`parent: recover() ${JSON.stringify(report)}`);
-  const status3 = await waitTerminal(node.store, turn3Id);
+  if (after?.status === "interrupted")
+    await revived.service.resume(SESSION_ID, turn3Id);
+  node = makeNode(
+    reopened.store,
+    reopened.port,
+    revived.service,
+    revived.connectionId,
+  );
+  const status3 = await waitTerminal(node.port, turn3Id);
   const latency3 = Date.now() - t3start;
-  const task3 = await node.store.tasks.getTask(turn3Id);
-  const events3 = await eventsOf(node.store, turn3Id);
+  const task3 = await node.port.tasks.getTask(turn3Id);
+  const events3 = await eventsOf(node.port, turn3Id);
   const m3 = metricsFrom(
     "turn3",
     status3,
@@ -596,7 +693,7 @@ async function main(): Promise<void> {
   m3.bunTestPass = test3.code === 0;
   all.push(m3);
   turnIds.push({ label: "turn3", id: turn3Id });
-  answers["turn3"] = await lastAnswer(node.store, turn3Id);
+  answers["turn3"] = await lastAnswer(node.port, turn3Id);
   check("turn3: turn completed", status3 === "completed", status3);
   check("turn3: bun test passes afterwards", test3.code === 0);
   check("turn3: >= 2 attempts", m3.attempts >= 2, `attempts=${m3.attempts}`);
@@ -605,8 +702,8 @@ async function main(): Promise<void> {
     m3.attemptIds.length >= 2,
     `attemptIds=${m3.attemptIds.length}`,
   );
-  await structuralChecks(node.store, turnIds);
-  await node.stopWorker();
+  await structuralChecks(node.port, turnIds);
+  await node.stop();
 
   const lerp = readFileSync(join(root, "src/math.ts"), "utf8").includes("lerp");
   log(`lerp present in src/math.ts: ${lerp}`);

@@ -7,7 +7,6 @@ import * as transport from "agentkit/transport-http";
 import * as client from "agentkit/client";
 import * as react from "agentkit/react";
 import * as mcpClient from "agentkit/mcp-client";
-import * as mcpServer from "agentkit/mcp-server";
 
 const entries: readonly object[] = [
   contracts,
@@ -19,6 +18,5 @@ const entries: readonly object[] = [
   client,
   react,
   mcpClient,
-  mcpServer,
 ];
 void entries;

@@ -1,5 +1,5 @@
 use crate::{
-    util::{all, get, id, json, required},
+    util::{all, get, id, json, required, select},
     *,
 };
 use rusqlite::{Connection, params};
@@ -43,9 +43,27 @@ pub struct MessageInput {
     )]
     pub tool_calls: Option<Value>,
     pub model_result_json: Option<String>,
-    #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
+    #[serde(
+        default = "empty_metadata",
+        deserialize_with = "agentkit_contracts::deserialize_preserving"
+    )]
     pub metadata: Value,
+    #[serde(default = "activate_default")]
     pub activate: bool,
+    /// The TypeScript port distinguishes an absent `parentMessageId` (append to
+    /// the active leaf) from an explicit `null` (create another root). JSON
+    /// erases that difference, so the binding sets this flag for the explicit
+    /// root case and `append` then ignores the active leaf.
+    #[serde(default)]
+    pub explicit_root: bool,
+}
+
+fn empty_metadata() -> Value {
+    Value::Object(Default::default())
+}
+
+fn activate_default() -> bool {
+    true
 }
 
 impl Default for MessageInput {
@@ -62,6 +80,7 @@ impl Default for MessageInput {
             model_result_json: None,
             metadata: serde_json::json!({}),
             activate: true,
+            explicit_root: false,
         }
     }
 }
@@ -89,6 +108,10 @@ pub struct MessageRecord {
     pub depth: u32,
     pub branch_index: u32,
     pub active: bool,
+    /// Archived messages remain readable by id for audit but never replay:
+    /// `archive_branch` marks a whole branch and the listing ports hide them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
     pub created_at: ConversationTimestamp,
 }
 
@@ -96,9 +119,17 @@ pub struct MessageRecord {
 #[serde(rename_all = "camelCase")]
 pub struct MessageSearchHit {
     pub message: MessageRecord,
+    /// bm25-derived relevance, HIGHER is better (SQLite's bm25 is a
+    /// "lower is better" rank, mirrored around zero; see `relevance_score`).
+    /// Hits arrive in rank order already — the order,
+    /// not this number, is the ranking contract.
     pub score: usize,
 }
 
+/// Update a message row. The persistent FTS5 `message_search` index is
+/// kept in step by the schema's UPDATE trigger — no write path maintains
+/// it by hand, which is what lets the TypeScript import's direct
+/// INSERT ... ON CONFLICT and the chat-deletion cascade stay indexed too.
 pub(crate) fn save_message(db: &Connection, message: &MessageRecord) -> Result<()> {
     db.execute(
         "UPDATE messages SET record=? WHERE id=?",
@@ -146,6 +177,15 @@ pub(crate) fn project(db: &Connection, input: MessageInput, now: i64) -> Result<
     Ok(message)
 }
 
+/// One chat's messages in insertion order, filtered in SQL (`messages_chat`).
+pub(crate) fn chat_messages(db: &Connection, chat_id: &str) -> Result<Vec<MessageRecord>> {
+    select(
+        db,
+        "SELECT record FROM messages WHERE chat_id=? ORDER BY rowid",
+        [chat_id],
+    )
+}
+
 pub(crate) fn append(db: &Connection, input: MessageInput, now: i64) -> Result<MessageRecord> {
     if !["user", "assistant", "tool", "system"].contains(&input.role.as_str()) {
         return Err(StoreError::InvalidInput("invalid message role".into()));
@@ -156,23 +196,28 @@ pub(crate) fn append(db: &Connection, input: MessageInput, now: i64) -> Result<M
             "chain append requires explicit parent".into(),
         ));
     }
-    let messages: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
-        .into_iter()
-        .filter(|m| m.chat_id == chat.id)
-        .collect();
-    let parent_id = input.parent_message_id.or_else(|| {
-        messages
-            .iter()
-            .filter(|m| m.active)
-            .max_by_key(|m| m.depth)
-            .map(|m| m.id.clone())
-    });
+    let messages = chat_messages(db, &chat.id)?;
+    let parent_id = if input.explicit_root {
+        None
+    } else {
+        input.parent_message_id.or_else(|| {
+            messages
+                .iter()
+                .filter(|m| m.active)
+                .max_by_key(|m| m.depth)
+                .map(|m| m.id.clone())
+        })
+    };
     let parent = parent_id
         .as_ref()
         .map(|id| {
             messages
                 .iter()
                 .find(|m| m.id == *id)
+                // An archived parent does not exist for appends: reviving a
+                // retired branch through a new child is refused like a
+                // missing one.
+                .filter(|m| !m.archived)
                 .ok_or_else(|| StoreError::NotFound(id.clone()))
         })
         .transpose()?;
@@ -201,6 +246,7 @@ pub(crate) fn append(db: &Connection, input: MessageInput, now: i64) -> Result<M
             .max()
             .unwrap_or(0),
         active,
+        archived: false,
         created_at: ConversationTimestamp::from_epoch_millis(now)?,
     };
     if get::<MessageRecord>(db, "messages", "id", &message.id)?.is_some() {
@@ -229,17 +275,24 @@ pub(crate) fn append(db: &Connection, input: MessageInput, now: i64) -> Result<M
 
 pub(crate) fn activate(db: &Connection, message_id: &str) -> Result<Vec<MessageRecord>> {
     let target: MessageRecord = required(db, "messages", "id", message_id)?;
-    let mut messages: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
-        .into_iter()
-        .filter(|m| m.chat_id == target.chat_id)
-        .collect();
+    if target.archived {
+        // An archived branch is not revivable: to the tree it does not exist.
+        return Err(StoreError::NotFound(message_id.to_owned()));
+    }
+    let mut messages = chat_messages(db, &target.chat_id)?;
     let mut leaf = target;
-    while let Some(child) = messages
-        .iter()
-        .filter(|m| m.parent_message_id.as_deref() == Some(&leaf.id))
-        .min_by_key(|m| m.branch_index)
-    {
-        leaf = child.clone();
+    while let Some(child) = {
+        let kids: Vec<&MessageRecord> = messages
+            .iter()
+            .filter(|m| m.parent_message_id.as_deref() == Some(&leaf.id) && !m.archived)
+            .collect();
+        kids.iter()
+            .find(|m| m.active)
+            .or_else(|| kids.iter().min_by_key(|m| m.branch_index))
+            .copied()
+            .cloned()
+    } {
+        leaf = child;
     }
     let mut path = Vec::new();
     let mut cursor = Some(leaf.id);
@@ -252,8 +305,11 @@ pub(crate) fn activate(db: &Connection, message_id: &str) -> Result<Vec<MessageR
         cursor = node.parent_message_id.clone();
     }
     for message in &mut messages {
-        message.active = path.contains(&message.id);
-        save_message(db, message)?;
+        let active = path.contains(&message.id);
+        if message.active != active {
+            message.active = active;
+            save_message(db, message)?;
+        }
     }
     messages.retain(|m| m.active);
     messages.sort_by_key(|m| m.order_key);
@@ -336,6 +392,28 @@ impl SqliteStore {
         .await
     }
 
+    /// Read-modify-write the chat record inside ONE actor job, so a
+    /// concurrent writer cannot slip between the read and the write and
+    /// silently drop this update. A closure error rolls the write back.
+    pub async fn mutate_chat<F, T>(&self, chat_id: &str, now: i64, mutate: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut ChatRecord) -> Result<T> + Send + 'static,
+    {
+        let chat_id = chat_id.to_owned();
+        self.call(move |db| {
+            let mut chat: ChatRecord = required(db, "chats", "id", &chat_id)?;
+            let value = mutate(&mut chat)?;
+            chat.updated_at = ConversationTimestamp::from_epoch_millis(now)?;
+            db.execute(
+                "UPDATE chats SET record=? WHERE id=?",
+                params![json(db, &chat)?, chat_id],
+            )?;
+            Ok(value)
+        })
+        .await
+    }
+
     pub async fn append_message(
         &self,
         input: MessageInput,
@@ -343,7 +421,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<MessageRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             if let Some(proof) = proof {
                 crate::tasks::fence(&transaction, &proof, now)?;
                 if input.run_id.as_deref() != Some(&proof.task_id) {
@@ -365,6 +443,18 @@ impl SqliteStore {
             .await
     }
 
+    /// The newest message a run wrote in this chat, or `None` when the run
+    /// never persisted one. Answers the placeholder seed for a turn.
+    pub async fn last_message_of_run(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+    ) -> Result<Option<MessageRecord>> {
+        let (chat_id, run_id) = (chat_id.to_owned(), run_id.to_owned());
+        self.call(move |db| crate::session_ops::last_message_of_run(db, &chat_id, &run_id))
+            .await
+    }
+
     pub async fn messages(
         &self,
         chat_id: &str,
@@ -372,11 +462,11 @@ impl SqliteStore {
     ) -> Result<Vec<MessageRecord>> {
         let chat_id = chat_id.to_owned();
         self.call(move |db| {
-            let _: ChatRecord = required(db, "chats", "id", &chat_id)?;
-            let mut messages: Vec<MessageRecord> = all::<MessageRecord>(db, "messages")?
-                .into_iter()
-                .filter(|m| m.chat_id == chat_id && (include_inactive || m.active))
-                .collect();
+            // A chat that is gone (or never was) lists no messages; the
+            // reference adapters answer with the empty listing, and callers
+            // legitimately read trees of chats that were just deleted.
+            let mut messages = chat_messages(db, &chat_id)?;
+            messages.retain(|m| include_inactive || m.active);
             messages.sort_by_key(|m| m.order_key);
             Ok(messages)
         })
@@ -386,7 +476,7 @@ impl SqliteStore {
     pub async fn activate_path(&self, message_id: &str) -> Result<Vec<MessageRecord>> {
         let message_id = message_id.to_owned();
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let path = activate(&transaction, &message_id)?;
             transaction.commit()?;
             Ok(path)
@@ -400,33 +490,108 @@ impl SqliteStore {
         chat_id: Option<String>,
         limit: usize,
     ) -> Result<Vec<MessageSearchHit>> {
-        let query = query.trim().to_lowercase();
+        // Early exits with zero database round-trips: an empty or
+        // whitespace-only query (or one that sanitizes to nothing, `"***"`)
+        // has no hit to find and must NOT degrade into a corpus scan, and a
+        // zero limit can never return a hit. Neither even pays an actor job.
+        let Some(match_query) = to_fts_query(query) else {
+            return Ok(Vec::new());
+        };
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         self.call(move |db| {
-            if query.is_empty() || !query.chars().any(char::is_alphanumeric) {
-                return Ok(Vec::new());
-            }
-            let mut hits = Vec::new();
-            for message in all::<MessageRecord>(db, "messages")? {
-                if chat_id.as_ref().is_some_and(|id| *id != message.chat_id)
-                    || message.metadata.get("internal") == Some(&Value::Bool(true))
-                    || message.metadata.get("placeholder") == Some(&Value::Bool(true))
-                {
-                    continue;
-                }
-                let score = search_text(&message.content)
-                    .to_lowercase()
-                    .matches(&query)
-                    .count();
-                if score > 0 {
-                    hits.push(MessageSearchHit { message, score });
-                }
-            }
-            hits.sort_by_key(|hit| std::cmp::Reverse(hit.score));
-            hits.truncate(limit);
-            Ok(hits)
+            // The predicate IS the persistent FTS5 index: MATCH, the
+            // `unicode61 remove_diacritics 2` tokenizer and bm25 ranking
+            // are SQLite's own, exactly as the TypeScript adapters answered
+            // with `message_search MATCH`. A hand-rolled predicate drifts
+            // from the engine — LIKE-style substrings hit inside words the
+            // tokenizer never produces, and a raw-token re-count scores a
+            // diacritic-folded match at zero — so Rust only chooses the
+            // query (`to_fts_query`), never evaluates one.
+            //
+            // The chat/visibility constraints run HERE, at query time, as a
+            // filter over the join back to `messages` — where the adapter
+            // keeps them, because `placeholder` and `internal` are metadata
+            // keys rewritten AFTER indexing (a placeholder becomes a real
+            // answer the moment its run finishes); an index that had decided
+            // membership at insert time would keep every finished answer
+            // permanently unfindable. Inactive branches stay searchable —
+            // the tree ports' own contract — while archived, internal and
+            // placeholder records never surface. `json_type(...) IS NOT
+            // 'true'` is the exact counterpart of the old predicate's
+            // `!= Some(Value::Bool(true))`: only a JSON `true` hides.
+            //
+            // Ordering is (rank, rank_index, id): the bm25 rank, then the
+            // message's position in its chat, then its id — a TOTAL order
+            // (`order_key` is unique per chat, `id` globally), so equal-rank
+            // pages are stable across repeated calls and LIMIT pagination
+            // can neither skip nor repeat a hit.
+            let mut statement = db.prepare(
+                "SELECT messages.record, bm25(message_search) \
+                 FROM message_search \
+                 JOIN messages ON messages.rowid = message_search.rowid \
+                 WHERE message_search MATCH ?1 \
+                   AND (?2 IS NULL OR messages.chat_id = ?2) \
+                   AND json_type(messages.record, '$.archived') IS NOT 'true' \
+                   AND json_type(messages.record, '$.metadata.internal') IS NOT 'true' \
+                   AND json_type(messages.record, '$.metadata.placeholder') IS NOT 'true' \
+                 ORDER BY bm25(message_search), messages.order_key, messages.id \
+                 LIMIT ?3",
+            )?;
+            let rows = statement
+                .query_map(params![match_query, chat_id, limit as i64], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(statement);
+            rows.into_iter()
+                .map(|(record, rank)| {
+                    Ok(MessageSearchHit {
+                        message: serde_json::from_str(&record)?,
+                        score: relevance_score(rank),
+                    })
+                })
+                .collect()
         })
         .await
     }
+}
+
+/// The hit score, derived from SQLite's own bm25 rank rather than a re-count
+/// of the query's raw tokens: bm25 is a "lower is better" REAL mirrored here
+/// around zero at a fixed scale so a better hit scores higher. The ORDER BY
+/// in [`SqliteStore::search_messages`] is the ranking contract; this number
+/// is what bm25 said about the hit (the old substring re-count scored
+/// "resume" over "résumé" at zero and counted "(2)" as a token the index
+/// never held).
+fn relevance_score(rank: f64) -> usize {
+    (-rank * 1_000_000.0).round().clamp(0.0, usize::MAX as f64) as usize
+}
+
+/// The TypeScript `toFtsQuery`, verbatim in behaviour: FTS5's operator
+/// characters never reach the engine from a search box. Quotes, `*` and `^`
+/// are stripped (quotes FIRST, so nothing can break out of the quoting this
+/// adds), parentheses become spaces, and every whitespace token is re-emitted
+/// as a quoted phrase — juxtaposed phrases are FTS5's implicit AND, which is
+/// what a person typing several words means. `None` when nothing survives;
+/// callers answer with no hits.
+fn to_fts_query(query: &str) -> Option<String> {
+    let sanitized = query.replace(['"', '*', '^'], "").replace(['(', ')'], " ");
+    let tokens = sanitized
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return None;
+    }
+    Some(
+        tokens
+            .iter()
+            .map(|token| format!("\"{token}\""))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 fn sort_chats(chats: Vec<ChatRecord>) -> Result<Vec<ChatRecord>> {
@@ -436,21 +601,4 @@ fn sort_chats(chats: Vec<ChatRecord>) -> Result<Vec<ChatRecord>> {
         .collect::<Result<Vec<_>>>()?;
     keyed.sort_by(|(left, _), (right, _)| right.cmp(left));
     Ok(keyed.into_iter().map(|(_, chat)| chat).collect())
-}
-
-fn search_text(content: &Value) -> String {
-    if let Some(text) = content.as_str() {
-        return text.into();
-    }
-    content
-        .as_array()
-        .map(|parts| {
-            parts
-                .iter()
-                .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|p| p.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default()
 }

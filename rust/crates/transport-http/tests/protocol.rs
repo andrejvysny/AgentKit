@@ -371,6 +371,29 @@ async fn slow_body_consumer_reads_only_one_bounded_durable_page() {
     assert_eq!(fake.event_reads.load(Ordering::SeqCst), 1);
 }
 
+#[tokio::test]
+async fn unauthenticated_body_is_rejected_without_being_read() {
+    use tower::ServiceExt;
+    let fake = Arc::new(Fake::default());
+    // A body that never yields: reading it would hang until the read timeout.
+    let body = axum::body::Body::from_stream(futures::stream::pending::<
+        Result<axum::body::Bytes, std::io::Error>,
+    >());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/chats/c/messages")
+        .body(body)
+        .unwrap();
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        router(fake, Config::default()).oneshot(request),
+    )
+    .await
+    .expect("auth failure must not wait for the body")
+    .unwrap();
+    assert_eq!(response.status(), 401);
+}
+
 #[test]
 fn actor_metadata_preserves_arbitrary_objects_and_javascript_numbers() {
     let actor: Actor = serde_json::from_str(r#"{"id":"actor","metadata":{"marker":{"$serde_json::private::Number":"123"},"overflow":1e400,"rounded":9007199254740993}}"#).unwrap();

@@ -17,6 +17,26 @@ pub struct ChatExecutorOptions {
     pub correction: Option<super::correction::CorrectionConfig>,
     pub tool_contributors: Vec<Arc<dyn ToolContributor>>,
     pub tool_guards: Vec<Arc<dyn ToolGuard>>,
+    /// Session workspace `AGENTS.md` / `CLAUDE.md` injection (ADR 0017 part
+    /// 1); absent, the feature is off, mirroring the TS host's
+    /// `deps.projectInstructions`. The binding wires
+    /// [`crate::FileProjectInstructions`].
+    pub project_instructions: Option<Arc<dyn crate::ProjectInstructionsSource>>,
+    /// The TS host's `untrustedProjectInstructions: "skip"`: an untrusted
+    /// workspace skips loading entirely instead of injecting labelled text.
+    pub skip_untrusted_project_instructions: bool,
+    /// Exact-call remembering for approvable refusals (the coding pack's
+    /// shell policy wires this); absent, every approvable call asks.
+    pub standing: Option<Arc<dyn crate::governance::StandingApprovalPolicy>>,
+    /// Delegation guidance appended to every session's resolved system
+    /// prompt while subagents are enabled — the autonomous-delegation
+    /// channel for BOTH Chat and Coding profiles. Consulted per turn so
+    /// `configure_subagents` takes effect without rebuilding the executor.
+    pub delegation_guidance: Option<Arc<dyn crate::DelegationGuidance>>,
+    /// Core run-loop hooks (watchdog observation). Hosts that add hooks
+    /// must keep them observational: a hook failure or timeout degrades to
+    /// the run's warning path, never to a lost turn.
+    pub run_hooks: Option<Arc<dyn agentkit_core::RunHooks>>,
     pub actor: Value,
     pub actor_id: Option<String>,
     pub hook_timeouts: ChatHookTimeouts,
@@ -38,6 +58,11 @@ impl Default for ChatExecutorOptions {
             correction: None,
             tool_contributors: vec![],
             tool_guards: vec![],
+            project_instructions: None,
+            delegation_guidance: None,
+            run_hooks: None,
+            skip_untrusted_project_instructions: false,
+            standing: None,
             actor: Value::Null,
             actor_id: None,
             hook_timeouts: ChatHookTimeouts::default(),
@@ -146,6 +171,7 @@ pub(crate) struct PreparedProvider {
     pub options: ChatExecutorOptions,
     pub context: ExecutionContext,
     pub chat_id: String,
+    pub budget: Option<super::context_budget::ContextBudget>,
 }
 #[async_trait]
 impl ChatProvider for PreparedProvider {
@@ -170,6 +196,11 @@ impl ChatProvider for PreparedProvider {
         Box::pin(futures::stream::once(async move {
             let (messages,warnings)=resolve_attachments(&provider.options,&provider.context,&provider.chat_id,input.messages).await.map_err(core_error)?;
             input.messages=messages;
+            // Provider-declared defaults land BEFORE admission so the
+            // budget clamp is the final word on the output cap: the
+            // admitted request is the transmitted request (P1-F).
+            provider.inner.apply_request_defaults(&mut input);
+            let admission = provider.budget.as_ref().map(|budget| budget.admit(&mut input, provider.context.runtime.id(), provider.inner.allows_implicit_output_limit())).transpose()?;
             if let Some(usage)=&provider.options.usage {
                 let estimate=input.messages.iter().map(|message|message_text(&message.content).encode_utf16().count()).sum::<usize>().div_ceil(4);
                 let request=json!({"runId":input.run_id,"chatId":provider.chat_id,"providerId":provider.inner.id(),"model":input.model,"estimatedPromptTokens":estimate});
@@ -177,7 +208,9 @@ impl ChatProvider for PreparedProvider {
             }
             if cancellation.is_cancelled() {return Err(CoreError::new("cancelled","aborted"));}
             let warnings=futures::stream::iter(warnings.into_iter().map(Ok));
-            Ok(warnings.chain(provider.inner.stream_chat(input,cancellation)))
+            let admitted = futures::stream::iter(admission.into_iter().map(|data| Ok(ProviderEvent::Event { kind: "run.context.admitted".into(), data })));
+            let dispatch = futures::stream::once(async move { Ok(provider.inner.stream_chat(input,cancellation)) }).try_flatten();
+            Ok(warnings.chain(admitted).chain(dispatch))
         }).try_flatten())
     }
 }
@@ -337,9 +370,41 @@ pub(super) async fn stage_registry(
     chat_id: &str,
     static_registry: Arc<agentkit_core::ToolRegistry>,
     bindings: &[Value],
+    approvals: std::collections::HashMap<String, crate::governance::ApprovalGrant>,
 ) -> HostResult<Arc<agentkit_core::ToolRegistry>> {
+    // Every host-served mutation carries a durable execution receipt
+    // (ADR 0020): the fast path wraps static write tools, the staged path
+    // governs them inside `GuardedTool`. There is no receipt-free chat path.
+    let durable = Arc::new(crate::governance::DurableExecution {
+        context: context.clone(),
+        chat_id: chat_id.into(),
+        // Subagent coordination tools are `effect: read` for permission
+        // purposes but still mutate durable state: they need receipts.
+        is_mutating: Some(Arc::new(crate::subagents::is_mutating_subagent_tool)),
+        approvals: Arc::new(approvals),
+        standing: options.standing.clone(),
+    });
+    let contribution = || ToolContributionContext {
+        chat_id: Some(chat_id.into()),
+        run_id: context.task.task_id.clone(),
+        scope_id: Some(context.task.scope_id.clone()),
+        actor: options.actor.clone(),
+        actor_id: options.actor_id.clone(),
+        bindings: bindings.to_vec(),
+        limits: agentkit_core::ToolLimits::default(),
+        cancellation: context.cancellation.clone(),
+        has_primary_binding: bindings
+            .iter()
+            .any(|binding| binding["role"] == "primary" && binding["status"] == "active"),
+        timeout_ms: options.hook_timeouts.contribute_ms,
+        durable: Some(durable.clone()),
+    };
     if options.tool_contributors.is_empty() && options.tool_guards.is_empty() {
-        return Ok(static_registry);
+        return Ok(Arc::new(crate::governance::wrap_static_writes(
+            &static_registry,
+            durable.clone(),
+            &contribution(),
+        )));
     }
     let reads = Arc::new(StaticToolContributor::new(static_registry));
     for name in reads.skipped_write_names() {
@@ -347,25 +412,7 @@ pub(super) async fn stage_registry(
     }
     let mut contributors = options.tool_contributors.clone();
     contributors.insert(0, reads);
-    let staged = stage_tools(
-        &contributors,
-        &options.tool_guards,
-        ToolContributionContext {
-            chat_id: Some(chat_id.into()),
-            run_id: context.task.task_id.clone(),
-            scope_id: Some(context.task.scope_id.clone()),
-            actor: options.actor.clone(),
-            actor_id: options.actor_id.clone(),
-            bindings: bindings.to_vec(),
-            limits: agentkit_core::ToolLimits::default(),
-            cancellation: context.cancellation.clone(),
-            has_primary_binding: bindings
-                .iter()
-                .any(|binding| binding["role"] == "primary" && binding["status"] == "active"),
-            timeout_ms: options.hook_timeouts.contribute_ms,
-        },
-    )
-    .await?;
+    let staged = stage_tools(&contributors, &options.tool_guards, contribution()).await?;
     context.check_cancelled()?;
     for failure in staged.failed {
         context.emit("run.warning",json!({"code":if failure.timed_out {"hook_timeout"} else {"tool_contributor_failed"},"message":format!("Tool contributor {} failed: {}.",failure.namespace,failure.reason)})).await?;

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 rust-version.workspace = true
+publish.workspace = true
 description = "SQLite persistence and execution leases for AgentKit"
 repository = "https://github.com/andrejvysny/AgentKit"
 readme = "../../../README.md"
@@ -14,9 +15,16 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 rusqlite = { version = "0.38", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2.workspace = true
 thiserror = "2"
-tokio = { version = "1", features = ["sync", "rt", "macros"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 uuid = { version = "1", features = ["v4"] }
 
+[features]
+# Off by default: importing a TypeScript adapters-sqlite database is a migration
+# step, not something every consumer pays to compile.
+ts-import = []
+
 [dev-dependencies]
+rusqlite = { version = "0.38", features = ["hooks"] }
 tempfile = "3"

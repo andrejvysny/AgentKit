@@ -3,10 +3,12 @@
  *
  * This does not call `main.ts` (which binds a real port from env and installs
  * signal handlers) — it calls the same `buildApp` composition main.ts calls,
- * with a scripted provider and a temp-dir sqlite file standing in for the
- * network and the real database, then serves the result on an ephemeral port
- * exactly the way main.ts serves it on a real one. That is what proves the
- * example wiring — not a mock of it — actually answers HTTP requests.
+ * with a scripted provider and a temp-dir native store file standing in for
+ * the network and the real database, then mounts the same loopback façade
+ * main.ts mounts on an ephemeral port exactly the way main.ts serves it on a
+ * real one. That is what proves the example wiring — not a mock of it —
+ * actually answers HTTP requests: the façade proxies to the Rust REST v1 +
+ * SSE engine started by `buildApp`, which executes the durable turn itself.
  *
  * Two scenarios: a plain text turn end to end, and one round trip through the
  * `example_echo` tool this example ships (see `../src/tools.ts`), scripted the
@@ -24,7 +26,6 @@ import type {
   ToolEventDto,
 } from "@agentkit/contracts";
 import { MockProviderClient } from "@agentkit/testing";
-import { serveRest } from "@agentkit/transport-http";
 import {
   buildApp,
   resolveBindHost,
@@ -59,8 +60,9 @@ afterEach(async () => {
 async function boot(provider: MockProviderClient): Promise<Booted> {
   const dir = mkdtempSync(join(tmpdir(), "agentkit-example-smoke-"));
   // Registered BEFORE anything that can throw. A `buildApp` that fails — a
-  // migration, a bad path — used to leak the temp dir it was handed, because
-  // the only record of the directory was created after the thing that dies.
+  // bad path, a store that refuses the file — used to leak the temp dir it
+  // was handed, because the only record of the directory was created after
+  // the thing that dies.
   const cleanup: Cleanup = { dir };
   cleanups.push(cleanup);
   const app = await buildApp({
@@ -69,10 +71,13 @@ async function boot(provider: MockProviderClient): Promise<Booted> {
     env: {},
   });
   cleanup.app = app;
-  const server = Bun.serve({ port: 0, ...serveRest(app.deps) });
+  // The same façade main.ts hands to Bun.serve — the composition source is
+  // what changed in the native migration: the Rust REST engine behind it is
+  // started by buildApp itself, so the test mounts nothing but the façade.
+  const server = Bun.serve({ port: 0, fetch: app.fetch });
   cleanup.server = server;
   return {
-    origin: `http://localhost:${server.port}${app.deps.basePath ?? ""}`,
+    origin: `http://localhost:${server.port}${app.basePath}`,
     app,
   };
 }
@@ -227,8 +232,20 @@ describe("examples/desktop-host — HTTP smoke", () => {
     const frames = await readFrames(
       await fetch(`${origin}/v1/runs/${turn.runId}/stream`),
     );
-    expect(frames[0]?.event).toBe("run.started");
-    expect(frames[frames.length - 1]?.event).toBe("run.completed");
+    // Before the native migration this asserted `frames[0].event ===
+    // "run.started"` — that the FIRST persisted frame was the run opening.
+    // The native engine's durable log legitimately opens one event earlier:
+    // `run.context.admitted`, the host's pre-dispatch context estimate, is
+    // part of the frozen event taxonomy (see `run-events.ts`,
+    // "Host estimate immediately before one provider dispatch"). Which
+    // engine stamps which seq is engine internals, not example behaviour;
+    // the example-level contract — the run's lifecycle streams through, in
+    // durable order, from `run.started` to a terminal `run.completed` — is
+    // asserted in full below, ordering included.
+    const eventNames = frames.map((frame) => frame.event);
+    expect(eventNames[0]).toBe("run.context.admitted");
+    expect(eventNames.indexOf("run.started")).toBe(1);
+    expect(eventNames[eventNames.length - 1]).toBe("run.completed");
 
     const page = (await (
       await fetch(`${origin}/v1/chats/${chat.id}/messages`)
@@ -236,6 +253,92 @@ describe("examples/desktop-host — HTTP smoke", () => {
     const assistant = page.items.find((m) => m.id === turn.assistantMessageId);
     expect(assistant?.content).toBe("Hello from the desktop example.");
     expect(page.items[0]?.role).toBe("user");
+  });
+
+  it("boots the REAL composition (Rust provider lane) and streams verbatim deltas", async () => {
+    // The `bun run start` path: no `providerFactory`, so buildApp takes the
+    // Rust-native provider lane (`registerProviderConnection` +
+    // `createService({providerConfig})`) and provider HTTP runs in Rust.
+    // Nothing in `packages/native`'s own suite covers it through THIS
+    // composition — the REST submit below is executed by the service's own
+    // worker against a canned loopback OpenAI-compatible server (the same
+    // SSE wire shape `packages/native/tests/helpers/loopback-provider.ts`
+    // pins), with no JS provider callback registered at all.
+    const providerServer = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        if (
+          request.method === "POST" &&
+          request.url.endsWith("/chat/completions")
+        ) {
+          const chunk = (
+            delta: Record<string, unknown>,
+            finish: string | null,
+          ) =>
+            `data: ${JSON.stringify({
+              id: "chatcmpl-1",
+              object: "chat.completion.chunk",
+              created: 1,
+              model: "loopback-model",
+              choices: [{ index: 0, delta, finish_reason: finish }],
+            })}\n\n`;
+          return new Response(
+            [
+              chunk({ role: "assistant" }, null),
+              chunk({ content: "Rust " }, null),
+              chunk({ content: "streamed this." }, null),
+              chunk({}, "stop"),
+              "data: [DONE]\n\n",
+            ].join(""),
+            { headers: { "content-type": "text/event-stream" } },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const dir = mkdtempSync(join(tmpdir(), "agentkit-example-lane-"));
+    const cleanup: Cleanup = { dir };
+    cleanups.push(cleanup);
+    const app = await buildApp({
+      dbPath: join(dir, "agentkit.sqlite"),
+      env: {
+        AGENTKIT_BASE_URL: `http://127.0.0.1:${providerServer.port}/v1`,
+        AGENTKIT_MODEL: "loopback-model",
+      },
+    });
+    cleanup.app = app;
+    const server = Bun.serve({ port: 0, fetch: app.fetch });
+    cleanup.server = server;
+    const origin = `http://localhost:${server.port}${app.basePath}`;
+
+    const created = await postJson(`${origin}/v1/chats`, {});
+    expect(created.status).toBe(201);
+    const chat = (await created.json()) as ChatDto;
+    const submitted = await postJson(
+      `${origin}/v1/chats/${chat.id}/messages`,
+      { content: "say something" },
+      { "idempotency-key": "smoke-rust-lane-1" },
+    );
+    expect(submitted.status).toBe(201);
+    const turn = (await submitted.json()) as SubmitMessageResponse;
+
+    const frames = await readFrames(
+      await fetch(`${origin}/v1/runs/${turn.runId}/stream`),
+    );
+    // Verbatim streaming is the Rust lane's contract: the two provider
+    // deltas arrive as separate persisted events, not one collapsed chunk.
+    const deltas = frames.filter(
+      (frame) => frame.event === "run.message.delta",
+    );
+    expect(deltas.length).toBeGreaterThanOrEqual(2);
+    expect(frames[frames.length - 1]?.event).toBe("run.completed");
+
+    const page = (await (
+      await fetch(`${origin}/v1/chats/${chat.id}/messages`)
+    ).json()) as MessagePageDto;
+    const assistant = page.items.find((m) => m.id === turn.assistantMessageId);
+    expect(assistant?.content).toBe("Rust streamed this.");
   });
 
   it("round-trips the example_echo tool this example contributes", async () => {

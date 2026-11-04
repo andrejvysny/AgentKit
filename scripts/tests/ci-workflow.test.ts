@@ -110,6 +110,12 @@ describe("routine CI runtime qualification", () => {
     expect(qualification).toContain('--source-digest "$SOURCE_DIGEST"');
   });
 
+  it("gates shipped-composition backend ownership in the lint job", () => {
+    // Review 2026-11-01 §6.6: the structural migration gate must run as a
+    // REQUIRED step, not just exist as a script.
+    expect(commands("lint")).toContain("bun run check:composition");
+  });
+
   it("accepts only success for every required job, including matrix results", () => {
     expect(jobs.qualification?.if).toBe("always()");
     expect(jobs.qualification?.needs).toEqual(required);

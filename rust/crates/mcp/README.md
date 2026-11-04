@@ -63,12 +63,17 @@ server and record the failure itself.
 
 `McpClientManager::new(configs, secrets)` accepts `ServerConfig` declarations and
 an injected `McpSecretResolver`. The serde config has the TypeScript fields
-`alias`, `transport`, `secretRefs`, `enabled`, `toolAliases`, and `resilience`;
-durable host DTO records can be deserialized into this runtime view without
-copying resolved credentials into storage. Secret substitution applies only to
-stdio environment values and HTTP header values. Commands, arguments, and URLs
-are left unchanged. Errors contain fixed messages and machine-readable `code()`
-values, never resolved material or SDK causes.
+`alias`, `transport`, `secretRefs`, `enabled`, `toolAliases`, `readOnly`, and
+`resilience`; durable host DTO records can be deserialized into this runtime
+view without copying resolved credentials into storage. Secret substitution
+applies only to stdio environment values and HTTP header values. Commands,
+arguments, and URLs are left unchanged. Errors contain fixed messages and
+machine-readable `code()` values. A peer's JSON-RPC error message travels on
+`McpClientError::Remote`; because server-echoed text can absorb any value the
+client substituted into the connection's config, every managed session scrubs
+the resolved secret values (case-sensitive replace with `[redacted]`, longest
+first) out of tool-result text, structured content, and error messages before
+they surface to the host.
 
 The default connector uses the official transports. Managed stdio inherits the
 exact curated SDK 1.30.0 environment allowlist beneath declared overrides, skips
@@ -122,9 +127,16 @@ timing options use nonnegative integer milliseconds, positive attempt/deadline
 values, and a finite reconnect factor at least one; invalid native options fail
 configuration validation.
 
-Descriptions and input schemas pass through unchanged. Only
-`annotations.readOnlyHint: true` makes an outbound tool read-only; all others
-are writes. The complete remote content stays in `ToolResult.data`. Model data
+Descriptions and input schemas pass through unchanged. Remote tool
+annotations are DESCRIPTIVE ONLY: `annotations.readOnlyHint` never raises the
+contributed `effect`. Tools are contributed as `effect: "write"` unless the
+host's own `readOnly: true` server setting attests the server is read-only.
+Before any network dispatch, `execute` validates the arguments against the
+tool's recorded input schema with the shared Ajv-compatible compiler
+(invalid arguments fail locally as `mcp_invalid_arguments`) and requires an
+exact-invocation authorization decision from the context's `DispatchGuard`
+(a missing or denying guard fails closed as `mcp_authority_revoked`). The
+complete remote content stays in `ToolResult.data`. Model data
 contains capped UTF-8 text and object-valued structured content; non-text parts
 produce a warning. A remote `isError` result becomes an unsuccessful tool result.
 Transport errors become unsuccessful envelopes with `retryable: false`. Summary

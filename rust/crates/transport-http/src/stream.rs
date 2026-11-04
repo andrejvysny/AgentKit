@@ -84,6 +84,9 @@ pub(crate) async fn response(
     Ok(response)
 }
 
+/// An unknown (or other-run) `Last-Event-ID` replays the run from the start,
+/// matching the TypeScript transport's `resolveStartSeq`. Clients must dedupe
+/// by `eventId`/`seq`.
 async fn resolve_cursor(
     backend: &dyn Backend,
     actor: &Actor,

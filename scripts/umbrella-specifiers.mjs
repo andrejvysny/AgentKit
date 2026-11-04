@@ -17,6 +17,34 @@
  * quietly is worse than one that fails, so a residual specifier is fatal.
  */
 
+import { NATIVE_PLATFORM_TARGETS } from "../rust/scripts/native-platform-targets.mjs";
+
+/**
+ * `@agentkit/native-<platform-key>` are EXTERNAL npm packages (the prebuilt
+ * addons), not umbrella subpaths: they keep their scoped name in the shipped
+ * dist. Matches a literal key or the `native-${` head of a template literal
+ * that builds one (the wrapper loader's version guard does).
+ */
+const PLATFORM_KEYS = NATIVE_PLATFORM_TARGETS.map((t) => t.key).join("|");
+const PLATFORM_SCOPE = new RegExp(
+  `@agentkit/native-(?:(?:${PLATFORM_KEYS})(?![\\w-])|\\$\\{)`,
+  "g",
+);
+const KEPT = "\u0000kept\u0000";
+
+/** Collapses leftover `@agentkit/` text to `agentkit/`, sparing platform packages. */
+export function collapseAgentkitScope(content) {
+  return content
+    .replace(PLATFORM_SCOPE, (match) => match.replace("@", KEPT))
+    .replace(/@agentkit\//g, "agentkit/")
+    .replaceAll(KEPT, "@");
+}
+
+/** True when `@agentkit/` remains in `content` outside the platform packages. */
+export function hasUnexpectedScope(content) {
+  return content.replace(PLATFORM_SCOPE, "").includes("@agentkit/");
+}
+
 /** Quote-delimited `@agentkit/<name>` — the shape the rewrite understands. */
 export const AGENTKIT_SPECIFIER = /(["'])@agentkit\/([a-zA-Z0-9_-]+)\1/g;
 
@@ -44,7 +72,7 @@ export function findResidualSpecifiers(content) {
   const lines = content.split("\n");
   for (let index = 0; index < lines.length; index += 1) {
     const text = lines[index];
-    if (RESIDUAL_SPECIFIER.test(text)) {
+    if (RESIDUAL_SPECIFIER.test(text.replace(PLATFORM_SCOPE, ""))) {
       found.push({ line: index + 1, text: text.trim() });
     }
   }

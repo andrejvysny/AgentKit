@@ -1,4 +1,4 @@
-use crate::{McpClientError, McpConnection, model};
+use crate::{McpClientError, McpConnection, ToolBinding, model};
 use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -18,16 +18,35 @@ pub enum BridgeError {
     Client(#[from] McpClientError),
 }
 
+/// Longest tool name model providers accept.
+const MAX_PROJECTED_NAME: usize = 64;
+
 pub struct McpToolSet {
     alias: String,
     aliases: BTreeMap<String, String>,
     client: Arc<dyn McpConnection>,
+    read_only: bool,
 }
 impl McpToolSet {
     pub fn new(
         alias: &str,
         aliases: BTreeMap<String, String>,
         client: Arc<dyn McpConnection>,
+    ) -> Result<Self, BridgeError> {
+        Self::with_read_only_inner(alias, aliases, client, false)
+    }
+    /// Host-side attestation that this server's tools are read-only. Remote
+    /// annotations never influence `effect`; only this flag does.
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+    fn with_read_only_inner(
+        alias: &str,
+        aliases: BTreeMap<String, String>,
+        client: Arc<dyn McpConnection>,
+        read_only: bool,
     ) -> Result<Self, BridgeError> {
         let alias = alias.trim();
         if !server_alias(alias) {
@@ -47,23 +66,60 @@ impl McpToolSet {
                 return Err(BridgeError::Collision);
             }
         }
+        // The map must stay a set of ONE-STEP renames. If a replacement is
+        // itself a renamed server name (`a -> b` alongside `b -> c`), then
+        // `mcp.<alias>.b` denotes two different server tools depending on which
+        // direction you consult: the projection reaches `a`, while a caller
+        // addressing `b` reaches the rename chain. Dispatch resolves names
+        // through the inverse map, so such a configuration is refused here
+        // rather than routed by whichever map happens to be read first.
+        if !aliases_are_one_step(&normalized) {
+            return Err(BridgeError::Collision);
+        }
         Ok(Self {
             alias: alias.into(),
             aliases: normalized,
             client,
+            read_only,
         })
     }
     /// Validate the complete batch before returning any tool to a host registry.
+    ///
+    /// Every returned handle is pinned to the connection it was listed from
+    /// ([`ToolBinding`]); a handle whose transport has since been replaced or
+    /// reconnected fails at dispatch instead of reaching another generation's
+    /// callback.
     pub async fn contribute(
         &self,
         cancellation: CancellationToken,
     ) -> Result<Vec<Arc<dyn Tool>>, BridgeError> {
+        // Capture the binding on both sides of the listing: a transport that
+        // swapped underneath the list would make a catalogue of two servers'
+        // tools, and no handle projected from it could be trusted.
+        let before = self.client.binding();
         let listed = self.client.list_tools(cancellation).await?;
+        let binding = self.client.binding();
+        if before != binding {
+            return Err(BridgeError::Client(McpClientError::Authority));
+        }
         let mut names = BTreeSet::new();
         let mut canonical = BTreeSet::new();
         let mut result: Vec<Arc<dyn Tool>> = Vec::new();
         for tool in listed {
-            let tool = self.project(tool)?;
+            let remote_name = tool.name.to_string();
+            // One malformed remote name must not hide the server's other tools.
+            let tool = match self.project(tool, binding) {
+                Ok(tool) => tool,
+                Err(BridgeError::Identity) => {
+                    tracing::warn!(
+                        alias = %self.alias,
+                        tool = %remote_name,
+                        "skipping MCP tool with an invalid or over-long name"
+                    );
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if !canonical.insert(tool.definition.capability.clone())
                 || !names.insert(tool.definition.name.clone())
             {
@@ -90,7 +146,11 @@ impl McpToolSet {
         }
         Ok(result)
     }
-    fn project(&self, tool: model::Tool) -> Result<RemoteTool, BridgeError> {
+    fn project(
+        &self,
+        tool: model::Tool,
+        binding: Option<ToolBinding>,
+    ) -> Result<RemoteTool, BridgeError> {
         let original = tool.name.trim();
         if !tool_name(original) {
             return Err(BridgeError::Identity);
@@ -100,16 +160,26 @@ impl McpToolSet {
             .get(original)
             .map(String::as_str)
             .unwrap_or(original);
+        // The route back must land on exactly this tool: if the config renames
+        // ANOTHER server tool onto this effective name, the two are
+        // indistinguishable by canonical id and the whole batch is refused
+        // rather than routed by whichever map is read first.
+        if resolve_original(&self.aliases, effective) != Some(original) {
+            return Err(BridgeError::Collision);
+        }
         let canonical = format!("mcp.{}.{effective}", self.alias);
+        if canonical.replace('.', "__").len() > MAX_PROJECTED_NAME {
+            return Err(BridgeError::Identity);
+        }
+        // Remote annotations are DESCRIPTIVE ONLY: whatever `readOnlyHint` the
+        // server claims, the contributed effect comes solely from the host's
+        // own `readOnly` allowance for this server (AGENTKIT-56). The
+        // annotation text may be surfaced as informational metadata but never
+        // decides `effect`/`capability`.
         let definition = ToolDefinition {
             name: canonical.replace('.', "__"),
             version: "1.0.0".into(),
-            effect: if tool
-                .annotations
-                .as_ref()
-                .and_then(|annotations| annotations.read_only_hint)
-                == Some(true)
-            {
+            effect: if self.read_only {
                 "read".into()
             } else {
                 "write".into()
@@ -123,20 +193,31 @@ impl McpToolSet {
             output_schema: None,
             timeout_ms: None,
         };
+        // Pre-compile the recorded input schema so every dispatch is gated
+        // locally (the server side validates identically in handler.rs). A
+        // schema the contracts compiler rejects cannot validate anything, so
+        // the tool fails closed at execute instead of dispatching unchecked.
+        let validator = agentkit_contracts::compile_tool_schema(&definition.input_schema).ok();
         Ok(RemoteTool {
             definition,
+            validator,
             client: self.client.clone(),
             original: original.into(),
             alias: self.alias.clone(),
+            binding,
         })
     }
 }
 
 struct RemoteTool {
     definition: ToolDefinition,
+    validator: Option<agentkit_contracts::SchemaValidator>,
     client: Arc<dyn McpConnection>,
     original: String,
     alias: String,
+    /// The connection this descriptor was listed from; dispatch is pinned to
+    /// it. `None` only for a client that has no registrations at all.
+    binding: Option<ToolBinding>,
 }
 #[async_trait]
 impl Tool for RemoteTool {
@@ -145,16 +226,51 @@ impl Tool for RemoteTool {
     }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
         let arguments = input.as_object().cloned().unwrap_or_default();
-        match self
-            .client
-            .call_tool_guarded(
-                &self.original,
-                arguments,
-                context.cancellation.clone(),
-                context.dispatch_guard.clone(),
-            )
-            .await
-        {
+        // Mirrors the frozen TS contributor order: validate the exact
+        // arguments against the tool schema first, then require an exact
+        // invocation authorization decision. Nothing leaves this process
+        // unless both gates pass.
+        let candidate = Value::Object(arguments.clone());
+        let valid = self
+            .validator
+            .as_ref()
+            .is_some_and(|validator| validator.is_valid(&candidate));
+        if !valid {
+            return Ok(self.failure(context, McpClientError::InvalidArguments));
+        }
+        // Missing guard fails closed: the client cannot attest authority on
+        // its own, only the host's DispatchGuard can (core::DispatchGuard).
+        if context.dispatch_guard.is_none() {
+            return Ok(self.failure(context, McpClientError::Authority));
+        }
+        // Pinned dispatch: the connection that answers is the one this
+        // descriptor was listed from, never whichever transport the session
+        // happens to hold now. An unbound client (no registrations) keeps the
+        // guarded path.
+        let result = match self.binding {
+            Some(binding) => {
+                self.client
+                    .call_tool_bound(
+                        binding,
+                        &self.original,
+                        arguments,
+                        context.cancellation.clone(),
+                        context.dispatch_guard.clone(),
+                    )
+                    .await
+            }
+            None => {
+                self.client
+                    .call_tool_guarded(
+                        &self.original,
+                        arguments,
+                        context.cancellation.clone(),
+                        context.dispatch_guard.clone(),
+                    )
+                    .await
+            }
+        };
+        match result {
             Ok(result) => Ok(self.outcome(context, result)),
             Err(error) => Ok(self.failure(context, error)),
         }
@@ -220,6 +336,8 @@ impl RemoteTool {
             warnings,
             truncated,
             limits: context.limits,
+
+            model_content: None,
         }
     }
     fn failure(&self, context: ToolContext, error: McpClientError) -> ToolResult {
@@ -240,8 +358,45 @@ impl RemoteTool {
             warnings: vec![message],
             truncated,
             limits: context.limits,
+
+            model_content: None,
         }
     }
+}
+/// The server-side name an effective name addresses, or `None` when that name
+/// is not one this server's projection can produce.
+///
+/// Projection sends `original` to `aliases[original] ?? original`; routing must
+/// invert exactly that, so a name the config has RENAMED (`a` under
+/// `a -> b`) is refused rather than reaching the callback whose canonical
+/// identity is `mcp.<alias>.b`. Authorization and dispatch therefore decide on
+/// the same `(name, alias)` tuple the bridge minted the descriptor from — every
+/// consumer (the crate manager, the napi binding, a host's own router) inverts
+/// through THIS function so no two of them can disagree.
+pub fn resolve_original<'a>(
+    aliases: &'a BTreeMap<String, String>,
+    effective: &'a str,
+) -> Option<&'a str> {
+    if let Some((original, _)) = aliases
+        .iter()
+        .find(|(_, target)| target.as_str() == effective)
+    {
+        return Some(original);
+    }
+    (!aliases.contains_key(effective)).then_some(effective)
+}
+/// The one-step invariant `resolve_original` depends on, exposed for every
+/// projection mirror (the napi binding projects its own descriptor cache):
+/// a replacement must never itself be a renamed-away original (`a -> b`
+/// alongside `b -> c`). Such a map makes `mcp.<alias>.b` denote two tools —
+/// the forward map reaches `a`, an inverse lookup reaches the chain — so it
+/// must be refused wherever descriptors are minted, not merely where the
+/// crate's own [`McpToolSet`] is constructed.
+#[must_use]
+pub fn aliases_are_one_step(aliases: &BTreeMap<String, String>) -> bool {
+    !aliases
+        .iter()
+        .any(|(original, replacement)| original != replacement && aliases.contains_key(replacement))
 }
 pub(crate) fn server_alias(value: &str) -> bool {
     value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)

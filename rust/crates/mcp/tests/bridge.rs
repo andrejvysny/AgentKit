@@ -1,8 +1,31 @@
-use agentkit_core::{ToolContext, ToolLimits, ToolRegistry};
+#[path = "support/interop.rs"]
+mod interop;
+use agentkit_core::{
+    CoreError, DispatchFence, DispatchGuard, ToolContext, ToolLimits, ToolRegistry,
+};
 use agentkit_mcp::{BridgeError, ClientOptions, McpClient, McpClientError, McpToolSet};
+use async_trait::async_trait;
 use serde_json::{Map, json};
 use std::{collections::BTreeMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
+
+/// `RemoteTool::execute` requires an exact-invocation authorization decision;
+/// the bridge tests run under a host that always attests it.
+#[derive(Debug, Default)]
+struct Allow;
+#[async_trait]
+impl DispatchGuard for Allow {
+    async fn check(&self) -> Result<(), CoreError> {
+        Ok(())
+    }
+    fn fence(&self) -> DispatchFence {
+        DispatchFence {
+            task_id: "task".into(),
+            attempt_id: "attempt".into(),
+            fencing_token: 1,
+        }
+    }
+}
 
 async fn client(extra: &[(&str, &str)]) -> Arc<McpClient> {
     let mut environment = BTreeMap::from([("PATH".into(), std::env::var("PATH").unwrap())]);
@@ -20,7 +43,10 @@ async fn client(extra: &[(&str, &str)]) -> Arc<McpClient> {
 }
 fn context(max_bytes: usize) -> ToolContext {
     ToolContext {
+        suspension: None,
         run_id: "run-1".into(),
+        tool_call_id: None,
+        attempt_id: None,
         chat_id: Some("chat-1".into()),
         scope_id: None,
         user_id: None,
@@ -31,12 +57,15 @@ fn context(max_bytes: usize) -> ToolContext {
         },
         cancellation: CancellationToken::new(),
         metadata: Map::new(),
-        dispatch_guard: None,
+        dispatch_guard: Some(Arc::new(Allow)),
     }
 }
 
 #[tokio::test]
 async fn native_tools_register_with_aliases_preserve_content_and_cap_model_text() {
+    if interop::ts_interop_skipped("mcp bridge stdio fixture") {
+        return;
+    }
     let client = client(&[]).await;
     let set = McpToolSet::new(
         "docs",
@@ -51,7 +80,10 @@ async fn native_tools_register_with_aliases_preserve_content_and_cap_model_text(
     }
     let tool = registry.get("mcp__docs__search__query").unwrap();
     assert_eq!(tool.definition().capability, "mcp.docs.search.query");
-    assert_eq!(tool.definition().effect, "read");
+    // The fixture advertises `annotations.readOnlyHint: true`, but remote
+    // annotations are descriptive only: without the host's own `readOnly`
+    // allowance the contributed effect stays `write`.
+    assert_eq!(tool.definition().effect, "write");
     assert_eq!(
         registry
             .get("mcp__docs__write")
@@ -91,6 +123,9 @@ async fn native_tools_register_with_aliases_preserve_content_and_cap_model_text(
 
 #[tokio::test]
 async fn canonical_and_registry_collisions_reject_the_whole_batch() {
+    if interop::ts_interop_skipped("mcp bridge stdio fixture") {
+        return;
+    }
     let client = client(&[("COLLISION", "1")]).await;
     let set = McpToolSet::new("docs", BTreeMap::new(), client.clone()).unwrap();
     assert!(matches!(

@@ -30,6 +30,11 @@ pub trait BudgetCheckpoint: Send + Sync {
 }
 pub struct ExecutionBudget {
     pub limits: BudgetLimits,
+    // Both std mutexes below (`state`, `failure`) recover from poisoning at
+    // every lock site: they guard independent monotonic counters and a
+    // set-once failure slot, so a panic mid-update can only leave a counter
+    // uncharged or the failure unset -- values re-checked on the next access,
+    // with no cross-field invariant to restore.
     state: Mutex<BudgetSnapshot>,
     runtime: Arc<dyn Runtime>,
     checkpoint: Option<Arc<dyn BudgetCheckpoint>>,
@@ -70,7 +75,10 @@ impl ExecutionBudget {
         self
     }
     pub fn snapshot(&self) -> BudgetSnapshot {
-        self.state.lock().expect("budget lock poisoned").clone()
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
     pub fn remaining_ms(&self) -> Option<u64> {
         self.limits.overall_ms.map(|limit| {
@@ -81,10 +89,18 @@ impl ExecutionBudget {
         })
     }
     pub fn fail(&self, error: CoreError) {
-        *self.failure.lock().expect("budget lock poisoned") = Some(error);
+        self.failure
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_or_insert(error);
     }
     pub fn check(&self) -> Result<(), CoreError> {
-        if let Some(error) = self.failure.lock().expect("budget lock poisoned").clone() {
+        if let Some(error) = self
+            .failure
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+        {
             return Err(error);
         }
         if self.remaining_ms() == Some(0) {
@@ -95,17 +111,29 @@ impl ExecutionBudget {
     pub async fn consume(&self, counter: &str) -> Result<(), CoreError> {
         let _serial = self.consume_lock.lock().await;
         self.check()?;
-        let state = self.reserve(counter)?;
+        let state = match self.reserve(counter) {
+            Ok(state) => state,
+            Err(error) => {
+                self.fail(error.clone());
+                return Err(error);
+            }
+        };
         if let Some(checkpoint) = &self.checkpoint {
             if let Err(error) = checkpoint.checkpoint(state).await {
-                *self.failure.lock().expect("budget lock poisoned") = Some(error.clone());
-                return Err(error);
+                let mut failure = self
+                    .failure
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                return Err(failure.get_or_insert(error).clone());
             }
         }
         self.check()
     }
     fn reserve(&self, counter: &str) -> Result<BudgetSnapshot, CoreError> {
-        let mut state = self.state.lock().expect("budget lock poisoned");
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (value, limit) = match counter {
             "providerRequests" => (&mut state.provider_requests, self.limits.provider_requests),
             "toolCalls" => (&mut state.tool_calls, self.limits.tool_calls),

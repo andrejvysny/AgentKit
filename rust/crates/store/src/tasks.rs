@@ -1,16 +1,69 @@
 use crate::{
-    util::{self, all, get, json, required},
+    util::{self, all, get, json, required, select},
     *,
 };
 use rusqlite::{Connection, params};
 use serde_json::{Value, json as object};
 
 mod events;
+
+const DEFAULT_AGING_INTERVAL_MS: i64 = 30_000;
+
+/// Opt-in starvation valve for `claim`: `priority + min(max_bonus,
+/// floor(wait / interval) * bonus)`. Identical to the TS `task-aging.ts`
+/// formula; `bonus == 0` (the default) leaves plain priority order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskAging {
+    pub interval_ms: i64,
+    pub bonus: i64,
+    pub max_bonus: i64,
+}
+
+impl Default for TaskAging {
+    fn default() -> Self {
+        Self {
+            interval_ms: DEFAULT_AGING_INTERVAL_MS,
+            bonus: 0,
+            max_bonus: i64::MAX,
+        }
+    }
+}
+
+impl TaskAging {
+    /// Refuses configurations the formula cannot honour instead of silently
+    /// substituting defaults at claim time.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.bonus < 0 || self.max_bonus < 0 || self.interval_ms <= 0 {
+            return Err(StoreError::InvalidInput(
+                "task aging requires bonus >= 0, max_bonus >= 0, interval_ms > 0".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn effective_priority(&self, priority: i32, enqueued_at: i64, now: i64) -> i64 {
+        let priority = i64::from(priority);
+        if self.bonus == 0 {
+            return priority;
+        }
+        let interval = if self.interval_ms > 0 {
+            self.interval_ms
+        } else {
+            DEFAULT_AGING_INTERVAL_MS
+        };
+        let wait = now.saturating_sub(enqueued_at).max(0);
+        let earned = (wait / interval).saturating_mul(self.bonus);
+        priority.saturating_add(earned.min(self.max_bonus))
+    }
+}
+
 mod lease;
 mod lifecycle;
+mod ports;
 mod retry;
 mod runtime_state;
 pub(crate) use events::append;
+pub(crate) use lifecycle::end_attempt;
 
 pub(crate) fn save(db: &Connection, task: &TaskRecord) -> Result<()> {
     let status = json(db, &task.status)?.trim_matches('"').to_owned();
@@ -54,7 +107,7 @@ pub(crate) fn lifecycle_event(
     Ok(())
 }
 
-fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
+pub(crate) fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
     if get::<TaskRecord>(db, "tasks", "id", &input.task_id)?.is_some() {
         return Err(StoreError::Duplicate(input.task_id));
     }
@@ -63,16 +116,18 @@ fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
             "task id, scope, and kind must be nonempty".into(),
         ));
     }
-    let tasks: Vec<TaskRecord> = all(db, "tasks")?;
-    if input.exclusive_scope
-        && tasks
-            .iter()
-            .any(|t| t.scope_id == input.scope_id && !t.status.is_terminal())
-    {
-        return Err(StoreError::ScopeBusy(input.scope_id));
+    if input.exclusive_scope {
+        let busy: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE scope=? AND status NOT IN ('completed','failed','cancelled'))",
+            [&input.scope_id],
+            |row| row.get(0),
+        )?;
+        if busy {
+            return Err(StoreError::ScopeBusy(input.scope_id));
+        }
     }
     for dependency in input.depends_on.iter().chain(input.parent_task_id.iter()) {
-        if !tasks.iter().any(|task| task.task_id == *dependency) {
+        if get::<TaskRecord>(db, "tasks", "id", dependency)?.is_none() {
             return Err(StoreError::InvalidInput(format!(
                 "unknown dependency: {dependency}"
             )));
@@ -100,6 +155,7 @@ fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
         cancel_requested: false,
         runtime_state: None,
         retry_pending: false,
+        interrupt_requested: false,
     };
     db.execute(
         "INSERT INTO tasks VALUES(?,?,?,?)",
@@ -110,9 +166,15 @@ fn insert(db: &Connection, input: SubmitTask) -> Result<TaskRecord> {
 }
 
 impl SqliteStore {
+    /// Verify that the supplied lease still owns the task at `now`.
+    pub async fn verify_fence(&self, proof: &LeaseFence, now: i64) -> Result<()> {
+        let proof = proof.clone();
+        self.call(move |db| fence(db, &proof, now).map(|_| ()))
+            .await
+    }
     pub async fn submit(&self, input: SubmitTask) -> Result<TaskRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let task = insert(&transaction, input)?;
             transaction.commit()?;
             Ok(task)
@@ -126,7 +188,7 @@ impl SqliteStore {
         messages: Vec<MessageInput>,
     ) -> Result<TaskRecord> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             if let Some(task) = get::<TaskRecord>(&transaction, "tasks", "id", &input.task_id)? {
                 if task.kind != input.kind
                     || task.scope_id != input.scope_id
@@ -168,7 +230,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<Vec<EventRecord>> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             fence(&transaction, &proof, now)?;
             let task: TaskRecord = required(&transaction, "tasks", "id", &proof.task_id)?;
             let records = append(&transaction, &proof.task_id, events, now)?;
@@ -208,7 +270,7 @@ impl SqliteStore {
         now: i64,
     ) -> Result<Vec<EventRecord>> {
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             fence(&transaction, &proof, now)?;
             let records = append(&transaction, &proof.task_id, events, now)?;
             transaction.commit()?;
@@ -222,30 +284,46 @@ impl SqliteStore {
     }
 
     /// Pending retries retain a concurrency slot even between attempt leases.
+    /// A `WaitingApproval` task holds no slot (the approver may never answer)
+    /// but still blocks its own scope.
     pub async fn claim_with_concurrency(
         &self,
         input: ClaimInput,
         concurrency: usize,
     ) -> Result<Option<ClaimedTask>> {
+        let aging = self.aging;
         self.call(move |db| {
+            aging.validate()?;
             util::checked_expiry(input.now, input.ttl_ms)?;
             if input.max_attempts == 0 || concurrency == 0 {
                 return Err(StoreError::InvalidInput(
                     "max_attempts and concurrency must be positive".into(),
                 ));
             }
-            let transaction = db.transaction()?;
-            let mut tasks: Vec<TaskRecord> = all(&transaction, "tasks")?;
+            let transaction = crate::transaction::atomic(db)?;
+            // Only these statuses can occupy a slot, block a scope, or be claimed.
+            let mut tasks: Vec<TaskRecord> = select(
+                &transaction,
+                "SELECT record FROM tasks WHERE status IN ('queued','running','waiting_approval') ORDER BY rowid",
+                [],
+            )?;
             let occupied = tasks
                 .iter()
                 .filter(|task| {
-                    matches!(
-                        task.status,
-                        TaskStatus::Running | TaskStatus::WaitingApproval
-                    ) || task.retry_pending && task.status == TaskStatus::Queued
+                    task.status == TaskStatus::Running
+                        || task.retry_pending && task.status == TaskStatus::Queued
                 })
                 .count();
-            tasks.sort_by_key(|task| (std::cmp::Reverse(task.priority), task.enqueued_at));
+            tasks.sort_by_key(|task| {
+                (
+                    std::cmp::Reverse(aging.effective_priority(
+                        task.priority,
+                        task.enqueued_at,
+                        input.now,
+                    )),
+                    task.enqueued_at,
+                )
+            });
             let mut claimed = None;
             for mut task in tasks
                 .iter()
@@ -331,6 +409,9 @@ fn dependencies(db: &Connection, task: &mut TaskRecord, now: i64) -> Result<bool
 fn start(db: &Connection, mut task: TaskRecord, input: &ClaimInput) -> Result<ClaimedTask> {
     task.status = TaskStatus::Running;
     task.retry_pending = false;
+    // A fresh attempt starts clean: a durable interrupt request belongs to
+    // the attempt that observed it, not to whatever runs next.
+    task.interrupt_requested = false;
     task.attempt_count += 1;
     task.started_at = Some(input.now);
     let attempt = AttemptRecord {

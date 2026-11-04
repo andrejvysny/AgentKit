@@ -23,6 +23,7 @@ fn all_generated_dtos_roundtrip() {
     support::roundtrip::<AiProviderModel>("AiProviderModelSchema");
     support::roundtrip::<AiRunCancelledEvent>("AiRunCancelledEventSchema");
     support::roundtrip::<AiRunCompletedEvent>("AiRunCompletedEventSchema");
+    support::roundtrip::<AiRunContextAdmittedEvent>("AiRunContextAdmittedEventSchema");
     support::roundtrip::<AiRunContextCompactedEvent>("AiRunContextCompactedEventSchema");
     support::roundtrip::<AiRunEventBase>("AiRunEventBaseSchema");
     support::roundtrip::<AiRunEvent>("AiRunEventSchema");

@@ -1,20 +1,45 @@
+// Responses-lane qualification smoke, NATIVE composition.
+//
+// The whole runtime is `@agentkit/native`: `NativeStore.open` +
+// `store.createService({ jsToolAuthority: { configuredMode: "full_auto" },
+// providerConfig: { protocol: "responses", … } })` over a
+// `registerProviderConnection` handle — the Rust provider lane performs the
+// Responses HTTP/SSE call against the loopback mock below (the recipe is
+// `packages/native/tests/provider-lane.test.ts`), the Rust worker executes
+// the turn, the JS tool lane runs the registered tools, and the Rust REST
+// v1 + SSE server (`service.startHttpServer`, as in
+// `examples/desktop-host/src/wiring.ts`) answers the unchanged
+// `createAgentKitClient` calls. The mock provider and every assertion the
+// TypeScript composition made are preserved; where the native engine
+// genuinely does not emit something (the TS-host verification hook —
+// `run.verification` — has no native counterpart, see the drain assertions),
+// the honest native witness replaces it and says so.
+//
+// `recoverOnBoot` retired: native service construction crash-reconciles the
+// store itself, and proposal settlement here is synchronous inside the tool
+// call, so no boot sweep has anything to recover.
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { NodeSqliteAssistantStore } from "agentkit/adapters-sqlite-node";
-import { MemorySecretStore } from "agentkit/adapters-memory";
-import { ResponsesClient } from "agentkit/core";
 import { createAgentKitClient } from "agentkit/client";
 import {
-  TaskService,
-  TurnRunner,
-  defaultClock,
-  defaultIds,
-  recoverOnBoot,
-} from "agentkit/host";
-import { SingleProcessTaskRunner } from "agentkit/runner-local";
-import { createRestHandler } from "agentkit/transport-http";
+  NativeAssistantStore,
+  NativeSessionService,
+  NativeStore,
+} from "@agentkit/native";
 import { proposalFixture, assertProposals } from "./proposals-smoke.mjs";
-import { serveNodeHandler } from "./node-host.mjs";
+
+// The Rust store stamps its own application identity (`AKRS`) and its own
+// evolving schema version; the frozen TypeScript adapter (schema 10) is a
+// separate storage lineage that refuses foreign files and is refused in
+// turn. Asserting native ownership is therefore the durable witness the
+// old `user_version === 10` check was: the file was created and stamped by
+// the engine that owns it, not merely by a pinned migration number.
+const NATIVE_APPLICATION_ID = 0x414b5253;
+/** 32 bytes: the floor the Rust HTTP backend enforces on `bearerToken`. */
+const BEARER_TOKEN = "0123456789abcdef0123456789abcdef";
 
 const secret = "private-encrypted-state";
 const sent = [];
@@ -57,33 +82,60 @@ function responseOutput() {
       ]
     : [message(sent.length === 2 ? "Done" : "After reopen")];
 }
-function provider() {
-  return new ResponsesClient({
-    id: "provider",
-    transport: {
-      identity: {
-        providerId: "provider",
-        protocol: "responses",
-        connectionId: "account",
-        generation: 1,
-      },
-      authKind: "chatgpt-account",
-      async request(input) {
-        sent.push(input);
-        const output = responseOutput();
-        const frame = {
-          type: "response.completed",
-          response: {
-            id: "response",
-            status: "completed",
-            output,
-            usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 },
-          },
-        };
-        return new Response(`data: ${JSON.stringify(frame)}\n\n`);
-      },
-    },
+// The loopback mock became a real HTTP server because the Rust provider
+// lane performs the HTTP/SSE call in Rust: it POSTs `/responses` (SSE,
+// `stream: true`, `store: false`, `include: ["reasoning.encrypted_content"]`)
+// exactly like the production lane, and this server answers with the same
+// `response.completed` frame the old in-process transport returned — the
+// Rust Responses state machine accepts a terminal frame carrying the full
+// output array. The captured `{ path, headers, body }` entries keep the old
+// `sent[i].body.input` assertions verbatim.
+async function startProviderMock() {
+  // `node:http`, not `Bun.serve`: the qualification consumers run this
+  // script under plain `node` (scripts/qualify-package.mjs).
+  const server = createServer((incoming, outgoing) => {
+    if (
+      incoming.method !== "POST" ||
+      new URL(incoming.url, "http://127.0.0.1").pathname !== "/responses"
+    ) {
+      outgoing.writeHead(404);
+      outgoing.end("not found");
+      return;
+    }
+    const chunks = [];
+    incoming.on("data", (chunk) => chunks.push(chunk));
+    incoming.on("end", () => {
+      const headers = {};
+      for (const [key, value] of Object.entries(incoming.headers))
+        headers[key.toLowerCase()] = Array.isArray(value)
+          ? value.join(", ")
+          : value;
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      sent.push({ path: incoming.url, headers, body });
+      const frame = {
+        type: "response.completed",
+        response: {
+          id: "response",
+          status: "completed",
+          output: responseOutput(),
+          usage: { input_tokens: 2, output_tokens: 3, total_tokens: 5 },
+        },
+      };
+      outgoing.writeHead(200, { "content-type": "text/event-stream" });
+      outgoing.end(`data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n`);
+    });
   });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return {
+    baseUrl: `http://127.0.0.1:${server.address().port}`,
+    stop: () =>
+      new Promise((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
+  };
 }
 function tool() {
   return {
@@ -109,70 +161,69 @@ function tool() {
     },
   };
 }
-function createTurns(store, taskRunner, proposals) {
-  return new TurnRunner({
-    store,
-    taskRunner,
-    secrets: new MemorySecretStore(),
-    clock: defaultClock,
-    ids: defaultIds,
-    providerFactory: provider,
-    contributors: [
-      {
-        namespace: "test",
-        contribute: async () => [tool(), ...proposals.tools],
-      },
-    ],
-    context: {
-      listBindings: async () => [],
-      systemPrompt: async () => "Stable prompt",
-    },
-    correction: { maxPasses: 0 },
-    verification: {
-      async verify() {
-        return {
-          status: "pass",
-          checks: [{ id: "fixture", ok: true }],
-          deficiencies: [],
-        };
-      },
-    },
-  });
-}
 async function start(path) {
-  const store = new NodeSqliteAssistantStore(path);
-  await store.providers.upsertProvider({
-    id: "provider",
-    label: "Mock Responses",
-    kind: "responses",
-    baseUrl: "https://api.openai.com/v1",
+  const store = await NativeStore.open(path);
+  const port = new NativeAssistantStore({ store });
+  // The service options carry only the connection id; the mock and the
+  // connection itself are process-global below. The native continuation
+  // scope binds every encrypted state to the provider connection identity
+  // (`connectionId` + `generation`, rust/crates/host/src/chat_history.rs),
+  // so the reopen must reuse the ONE registered connection — a second
+  // registration would fail the resumed turn with
+  // `provider_continuation_scope_mismatch`. The old TypeScript composition
+  // re-created its provider per app because its lane keyed continuations by
+  // provider id alone; reusing one connection is the faithful equivalent of
+  // "the same provider server", not a weakening.
+  // `full_auto` is the native equivalent of the old guard-less composition:
+  // the Rust authority still judges every JS tool call, it just admits.
+  const service = await store.createService({
+    jsToolAuthority: { configuredMode: "full_auto" },
+    providerConfig: {
+      protocol: "responses",
+      providerId: "provider",
+      connectionId,
+      model: "model",
+    },
+  });
+  const proposals = proposalFixture(port, path);
+  // The chat is created through REST after this function returns, so the
+  // tool execution context closes over a late-bound chat id (the proposal
+  // builders stage their proposals against it).
+  const chat = { id: undefined };
+  for (const t of [tool(), ...proposals.tools]) {
+    await service.registerTool(t.definition, (input, request) =>
+      t.execute(
+        {
+          runId: request.runId,
+          ...(chat.id === undefined ? {} : { chatId: chat.id }),
+          bindings: [],
+          limits: { profile: "medium", maxBytes: 256 * 1024, maxItems: 1024 },
+          ...(request.toolCallId === null
+            ? {}
+            : { toolCallId: request.toolCallId }),
+        },
+        input,
+      ),
+    );
+  }
+  const http = await service.startHttpServer({
+    bearerToken: BEARER_TOKEN,
     defaultModel: "model",
-    enabled: true,
   });
-  await store.settings.updateSettings({ defaultProviderId: "provider" });
-  const taskRunner = new SingleProcessTaskRunner({ store, pollMs: 5 });
-  const proposals = proposalFixture(store, path);
-  const turns = createTurns(store, taskRunner, proposals);
-  const tasks = new TaskService({
-    store,
-    taskRunner,
-    clock: defaultClock,
-    ids: defaultIds,
+  const client = createAgentKitClient({
+    baseUrl: http.baseUrl,
+    headers: () => ({ authorization: `Bearer ${BEARER_TOKEN}` }),
   });
-  await recoverOnBoot({ taskRunner, proposals: proposals.service });
-  const worker = await taskRunner.startWorker(turns, { concurrency: 1 });
-  const server = await serveNodeHandler(
-    createRestHandler({ store, turns, tasks, proposals: proposals.service }),
-  );
   return {
-    store,
+    port,
+    service,
     proposals,
-    client: createAgentKitClient({ baseUrl: server.origin }),
+    client,
+    chat,
     async stop() {
-      await server.stop();
-      await worker.stop();
-      await turns.disposeContributors();
-      store.close();
+      await service.stopHttpServer();
+      await service.close();
+      await store.close();
     },
   };
 }
@@ -189,6 +240,7 @@ async function authoritativeRun(client, runId) {
   throw new Error("Authoritative run did not complete within 5 seconds");
 }
 async function submit(app, chatId, content) {
+  app.chat.id = chatId;
   const { result } = await app.client.submitMessage({ chatId }, { content });
   const events = [];
   for await (const event of app.client.streamRun(result.runId, {
@@ -199,19 +251,14 @@ async function submit(app, chatId, content) {
     events.some((event) => event.type === "run.completed"),
     JSON.stringify(events),
   );
-  for (
-    let i = 0;
-    events.some((event) => event.type === "run.tool.requested") && i < 250;
-    i++
-  ) {
-    if (
-      (await app.store.tasks.listEvents(result.runId)).some(
-        (event) => event.type === "run.verification",
-      )
-    )
-      break;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
+  // The old code then polled the store for a `run.verification` event
+  // before draining: that event belonged to the TypeScript host's
+  // verification hook, which the native executor neither runs nor can be
+  // installed through `createService` (rust/crates/host/src/runner.rs emits
+  // it only for a host-configured hook). The native durable log is settled
+  // by `run.completed` itself — which `streamRun` has just proven it
+  // contains — so nothing can still be appended when `drainRun` reads it.
+  // The drained-log assertions below are the native completeness witness.
   const drained = await app.client.drainRun(result.runId, undefined, {
     signal: AbortSignal.timeout(15000),
   });
@@ -223,30 +270,83 @@ async function submit(app, chatId, content) {
   return { runId: result.runId, drained };
 }
 const path = process.argv[2] ?? "responses.sqlite";
-const app = await start(path);
-assert.equal(
-  app.store.database.query("PRAGMA user_version").get().user_version,
-  10,
-);
 if (process.argv[3]) {
+  // The seed branch, stated plainly: the two storage lineages cannot share
+  // one file — the Rust store refuses the TypeScript adapter's file at open
+  // (`foreign_database`) and the adapter refuses the native file; the
+  // native port ships no importer. So the schema-10 continuity a seeded
+  // adapter database used to be fed through directly is verified here at
+  // the file level through the frozen adapter's own read path (never
+  // touched by any native handle), and the full smoke then runs natively
+  // against a sidecar database next to the seed.
   const seed = JSON.parse(readFileSync(process.argv[3], "utf8"));
   assert.equal(seed.schema, 10);
-  assert.equal(
-    (await app.store.conversations.getChat(seed.chatId)).id,
-    seed.chatId,
-  );
-  const messages = await app.store.conversations.listMessages(seed.chatId);
-  for (const saved of seed.messages)
-    assert.ok(
-      messages.some(
-        (message) =>
-          message.id === saved.id && message.content === saved.content,
-      ),
+  const legacy = new NodeSqliteAssistantStore(path);
+  try {
+    assert.equal(
+      legacy.database.query("PRAGMA user_version").get().user_version,
+      10,
     );
+    assert.equal(
+      (await legacy.conversations.getChat(seed.chatId)).id,
+      seed.chatId,
+    );
+    const messages = await legacy.conversations.listMessages(seed.chatId);
+    for (const saved of seed.messages)
+      assert.ok(
+        messages.some(
+          (message) =>
+            message.id === saved.id && message.content === saved.content,
+        ),
+      );
+  } finally {
+    legacy.close();
+  }
+}
+const nativePath = process.argv[3] ? `${path}.native.sqlite` : path;
+// One loopback mock and ONE provider connection serve both apps: the native
+// continuation scope binds encrypted state to the connection identity, so
+// the reopen resumes on the same connection (see start()).
+const provider = await startProviderMock();
+const connectionId = await NativeSessionService.registerProviderConnection(
+  provider.baseUrl,
+  "sk-qualification",
+);
+const app = await start(nativePath);
+{
+  // Native-ownership witness for the old `user_version === 10` check (see
+  // NATIVE_APPLICATION_ID above): read the file the store owns without
+  // taking any write side of it.
+  const file = new DatabaseSync(nativePath, { readOnly: true });
+  try {
+    assert.equal(
+      file.prepare("PRAGMA application_id").get().application_id,
+      NATIVE_APPLICATION_ID,
+    );
+    assert.ok(
+      file.prepare("PRAGMA user_version").get().user_version > 0,
+      "the native store must stamp its schema version",
+    );
+  } finally {
+    file.close();
+  }
 }
 let chatId;
 try {
-  chatId = (await app.client.createChat({})).id;
+  // The chat is opened as a NATIVE SESSION because this host executes JS
+  // write tools: the session carries the durable permission scope (the
+  // execution state the guard consults, the allowance binding for the
+  // proposal fixture). A REST-minted chat would also run its tools — the
+  // guard answers absence with the configured mode since 2026-11-01 — but
+  // a host with write tools should be governed, not merely permitted. The
+  // session id IS the chatId the REST routes accept (submit/stream/drain/
+  // getRun/listMessages all run against it unchanged).
+  chatId = crypto.randomUUID();
+  await app.service.createSession({
+    sessionId: chatId,
+    profileId: "responses-smoke",
+    model: "model",
+  });
   app.proposals.policy.allow({
     chatId,
     toolName: "write_items",
@@ -257,20 +357,34 @@ try {
   const first = await submit(app, chatId, "Find it");
   assert.equal(sent.length, 2);
   assert.equal(executed, 1);
-  await assertProposals(app.proposals, app.store, chatId);
-  assert.ok(first.drained.some((event) => event.type === "run.verification"));
+  await assertProposals(app.proposals, app.port, chatId);
+  // The verification-pass witness (`drained.some(run.verification)`) had no
+  // native counterpart; the honest completeness witness is that the full
+  // durable replay carries the tool lifecycle and its own terminator: the
+  // `lookup` call was staged, ran, and the run settled.
   assert.ok(
-    JSON.stringify(
-      await app.store.continuations.getByRun(first.runId),
-    ).includes(secret),
+    first.drained.some(
+      (event) =>
+        event.type === "run.tool.requested" && event.data.toolName === "lookup",
+    ),
+    JSON.stringify(first.drained.map((event) => event.type)),
+  );
+  assert.ok(
+    first.drained.some((event) => event.type === "run.completed"),
+    JSON.stringify(first.drained.map((event) => event.type)),
+  );
+  assert.ok(
+    JSON.stringify(await app.port.continuations.getByRun(first.runId)).includes(
+      secret,
+    ),
   );
 } finally {
   await app.stop();
 }
-const reopened = await start(path);
+const reopened = await start(nativePath);
 try {
   await submit(reopened, chatId, "Continue");
-  await assertProposals(reopened.proposals, reopened.store, chatId, false);
+  await assertProposals(reopened.proposals, reopened.port, chatId, false);
   assert.equal(sent.length, 3);
   assert.equal(executed, 1);
   const input = sent[2].body.input;
@@ -300,3 +414,5 @@ try {
 } finally {
   await reopened.stop();
 }
+await NativeSessionService.revokeProviderConnection(connectionId);
+await provider.stop();
