@@ -133,7 +133,7 @@ blank page or re-learn fixed bugs.
   OpenPCB's `runCorrectionHarness` semantics. Required a fix to
   `orderMessagesForProvider` (group by tool-call linkage, not record kind) to
   keep a multi-tool-pass run provider-legal.
-- **MCP server package** (2026-09-01), shipped as `@agentkit/mcp-server`,
+- **MCP server package** (2026-09-01), shipped as `@agentkit/mcp-server` (since deleted; superseded by native `startMcpServer`, see [parity.md](rust/parity.md)),
   part of ADR [0013](adr/0013-serving-surfaces.md), unblocked by P7:
   exposes a host's `ToolCatalog` as an MCP server over streamable HTTP.
   Reference: OpenPCB `assistant/backend/mcp/` (constant-time bearer auth,
@@ -252,7 +252,7 @@ itself) creates real pressure for them.
   `Clock` port every other time-dependent decision in this codebase goes
   through (lease expiry, idempotency, ordering) — makes the heartbeat
   interval untestable without a real timer.
-- **`mcp-server`'s unknown-vs-wrong-principal 404s are timing-distinguishable.**
+- **The deleted TS `mcp-server`'s unknown-vs-wrong-principal 404s (re-check against Rust `agentkit-mcp`) are timing-distinguishable.**
   Both cases return the identical 404 body (ADR 0013), but the
   wrong-principal path does a constant-time fingerprint comparison the
   unknown-session path never reaches — a caller that can measure response

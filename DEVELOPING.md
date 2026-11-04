@@ -276,15 +276,19 @@ can never mix an addon version the loader would refuse.
 
 **Scope ownership is the maintainer's decision and a prerequisite.** Nothing
 under the `@agentkit` scope may be published before the npm scope is claimed
-and controlled by the project owner, and no tooling here can publish without
-a `agentkit-native-publication` environment dispatch.
+and controlled by the project owner. The approval gate is the
+`agentkit-native-publication` environment, a REPOSITORY SETTING that no
+workflow or script verifies: configure required reviewers and an
+environment-scoped `NPM_TOKEN` before the first real release (an environment
+GitHub auto-creates on first use has no reviewers and would publish
+unattended).
 
 Runbook (mirrors the `publish.yml` trust model — approval-gated, digest-bound,
 never rebuilds outside the snapshot job):
 
 1. The default branch must carry the candidate commit. Configure the
    `agentkit-native-publication` GitHub environment with required reviewers,
-   and set the `NPM_TOKEN` secret (an automation token for the npm account
+   and set `NPM_TOKEN` as an environment secret (an automation token for the npm account
    that owns the scope). npm provenance needs no secret beyond the workflow's
    OIDC token.
 2. Dispatch `.github/workflows/native-release.yml` with the exact

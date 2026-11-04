@@ -1,6 +1,6 @@
 # ADR 0018 — Coding tool pack: confined file tools, read-only git, sandboxed execution, permission guard
 
-**Status:** accepted, implemented (2026-10-27; milestone M4 of [ADR 0015](0015-unified-agent-runtime.md)).
+**Status:** accepted, implemented (2026-10-27; milestone M4 of [ADR 0015](0015-unified-agent-runtime.md)). **Superseded:** `@agentkit/toolpacks-coding` and the `agentkit/toolpacks-coding` subpath are deleted; native `registerCodingTools` (Rust `rust/crates/toolpacks-coding`) is the sole implementation, see [docs/rust/parity.md](../rust/parity.md).
 **Contract impact:** none. A new optional package, `@agentkit/toolpacks-coding`, and an umbrella subpath
 `agentkit/toolpacks-coding`. It uses only existing ports (`ToolSetContributor`, `ToolGuard`) and contracts
 (`AiToolDefinition`, `AiToolResult`). `CONTRACT_VERSION` and sqlite `SCHEMA_VERSION` are unchanged.

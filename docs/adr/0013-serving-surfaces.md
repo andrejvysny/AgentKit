@@ -1,6 +1,6 @@
 # ADR 0013 — Serving surfaces: `@agentkit/mcp-server`, `@agentkit/client`, `@agentkit/react`
 
-**Status:** accepted, implemented (2026-09-01–2026-09-02)
+**Status:** accepted, implemented (2026-09-01–2026-09-02). **Superseded in part:** `@agentkit/mcp-server` is deleted; the native `startMcpServer` (Rust `agentkit-mcp`) is the sole MCP-server implementation, see [docs/rust/parity.md](../rust/parity.md). `@agentkit/client` and `@agentkit/react` stand.
 **Contract impact:** NONE at the DTO level. These are three new optional
 adapter packages consuming the existing REST v1 and MCP surfaces, not new
 schema. Revises [`docs/non-goals.md`](../non-goals.md)'s "React / UI

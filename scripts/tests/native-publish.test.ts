@@ -15,7 +15,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NATIVE_PLATFORM_TARGETS } from "../../rust/scripts/native-platform-targets.mjs";
 import {
+  compareSemver,
   publishArtifacts,
+  resolveDistTag,
   verifyArtifacts,
 } from "../release/native-publish.mjs";
 
@@ -253,8 +255,33 @@ describe("native publication artifact verification", () => {
     };
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     expect(() => verifyArtifacts(dir, VERSION, COMMIT)).toThrow(
-      "not byte-identical",
+      "members are not identical",
     );
+  });
+
+  it("accepts wrapper tarballs with the same members but different gzip bytes", () => {
+    const dir = fresh();
+    const wrapper = join(dir, `agentkit-native-${VERSION}.tgz`);
+    // Re-gzip the same tar payload with a different header (mtime + name
+    // field, level) the way another runner OS would: raw bytes differ,
+    // members do not. Point one manifest at it.
+    const tar = Bun.gunzipSync(readFileSync(wrapper));
+    const regzipped = Buffer.from(Bun.gzipSync(tar, { level: 1 }));
+    regzipped.writeUInt32LE(0x5f5e100, 4); // gzip MTIME field
+    const altDir = join(dir, "alt-wrapper");
+    mkdirSync(altDir, { recursive: true });
+    const alt = join(altDir, `agentkit-native-${VERSION}.tgz`);
+    writeFileSync(alt, regzipped);
+    expect(sha256(alt)).not.toBe(sha256(wrapper));
+    const manifestPath = join(dir, "artifact-manifest.win32-x64-msvc.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.files.wrapper = {
+      path: `alt-wrapper/agentkit-native-${VERSION}.tgz`,
+      sha256: sha256(alt),
+      bytes: regzipped.byteLength,
+    };
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    expect(() => verifyArtifacts(dir, VERSION, COMMIT)).not.toThrow();
   });
 
   it("refuses version drift in a platform artifact", () => {
@@ -503,6 +530,11 @@ describe("native publication resume semantics", () => {
       join(fakeBin, "npm.js"),
       `const fs = require("node:fs");
 const [,, cmd, target, third] = process.argv;
+if (cmd === "view" && third === "dist-tags.latest") {
+  const latest = JSON.parse(process.env.FAKE_LATEST ?? "{}")[target];
+  if (latest === undefined) { console.error("npm ERR! code E404"); process.exit(1); }
+  console.log(latest); process.exit(0);
+}
 if (cmd === "view") {
   const registry = JSON.parse(process.env.FAKE_REGISTRY ?? "{}");
   const integrity = registry[target];
@@ -511,6 +543,7 @@ if (cmd === "view") {
 }
 if (cmd === "publish") {
   fs.appendFileSync(process.env.PUBLISH_MARKER ?? "/dev/null", process.argv[3] + "\\n");
+  fs.appendFileSync(process.env.PUBLISH_ARGS ?? "/dev/null", process.argv.slice(2).join(" ") + "\\n");
   process.exit(0);
 }
 process.exit(2);
@@ -531,20 +564,27 @@ process.exit(2);
     dir: string,
     registry: Record<string, string>,
     run: () => T,
-  ): { result: T; published: string[] } {
+    latest: Record<string, string> = {},
+  ): { result: T; published: string[]; publishArgs: string[] } {
     const marker = join(dir, "published.log");
+    const argsLog = join(dir, "publish-args.log");
+    const lines = (file: string) =>
+      existsSync(file)
+        ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean)
+        : [];
     const previousToken = process.env.NPM_TOKEN;
     const previousUserconfig = process.env.NPM_CONFIG_USERCONFIG;
     process.env.NPM_TOKEN = "fake-token";
     process.env.FAKE_REGISTRY = JSON.stringify(registry);
+    process.env.FAKE_LATEST = JSON.stringify(latest);
     process.env.PUBLISH_MARKER = marker;
+    process.env.PUBLISH_ARGS = argsLog;
     try {
       const result = run();
       return {
         result,
-        published: existsSync(marker)
-          ? readFileSync(marker, "utf8").trim().split("\n").filter(Boolean)
-          : [],
+        published: lines(marker),
+        publishArgs: lines(argsLog),
       };
     } finally {
       if (previousUserconfig === undefined)
@@ -553,9 +593,16 @@ process.exit(2);
       if (previousToken === undefined) delete process.env.NPM_TOKEN;
       else process.env.NPM_TOKEN = previousToken;
       delete process.env.FAKE_REGISTRY;
+      delete process.env.FAKE_LATEST;
       delete process.env.PUBLISH_MARKER;
+      delete process.env.PUBLISH_ARGS;
     }
   }
+
+  const publishOptions = () => ({
+    npm: join(fakeBin, "npm"),
+    allowUnexecutedTargets: true,
+  });
 
   it("skips only byte-identical registry content and publishes the rest", () => {
     const dir = fresh();
@@ -564,10 +611,7 @@ process.exit(2);
     const { published } = withFakeNpm(
       dir,
       { "@agentkit/native-linux-x64-gnu@9.9.9": integrity },
-      () =>
-        publishArtifacts(dir, VERSION, COMMIT, true, {
-          npm: join(fakeBin, "npm"),
-        }),
+      () => publishArtifacts(dir, VERSION, COMMIT, true, publishOptions()),
     );
     const names = published.map((p) => p.split("/").pop());
     // A partial run resumes: the identical package is skipped, everything
@@ -591,11 +635,83 @@ process.exit(2);
           "@agentkit/native-linux-x64-gnu@9.9.9":
             "sha512-WRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONGWRONG=",
         },
-        () =>
-          publishArtifacts(dir, VERSION, COMMIT, true, {
-            npm: join(fakeBin, "npm"),
-          }),
+        () => publishArtifacts(dir, VERSION, COMMIT, true, publishOptions()),
       ),
     ).toThrow("different bytes");
+  });
+
+  it("publishes a plain release under --tag latest", () => {
+    const dir = fresh();
+    const { publishArgs } = withFakeNpm(
+      dir,
+      {},
+      () => publishArtifacts(dir, VERSION, COMMIT, true, publishOptions()),
+      { agentkit: "9.9.8" },
+    );
+    expect(publishArgs.length).toBe(NATIVE_PLATFORM_TARGETS.length + 2);
+    for (const line of publishArgs) expect(line).toContain("--tag latest");
+  });
+
+  it("refuses to move latest backwards", () => {
+    const dir = fresh();
+    const { publishArgs } = withFakeNpm(
+      dir,
+      {},
+      () => {
+        expect(() =>
+          publishArtifacts(dir, VERSION, COMMIT, true, publishOptions()),
+        ).toThrow("refusing to move latest backwards");
+      },
+      { "@agentkit/native": "10.0.0" },
+    );
+    // Preflight: nothing was published before the refusal.
+    expect(publishArgs).toEqual([]);
+  });
+
+  it("allows an explicit next tag even when latest is newer", () => {
+    const dir = fresh();
+    const { publishArgs } = withFakeNpm(
+      dir,
+      {},
+      () =>
+        publishArtifacts(dir, VERSION, COMMIT, true, {
+          ...publishOptions(),
+          tag: "next",
+        }),
+      { "@agentkit/native": "10.0.0" },
+    );
+    for (const line of publishArgs) expect(line).toContain("--tag next");
+  });
+
+  it("refuses structural-only targets unless explicitly allowed", () => {
+    const dir = fresh();
+    expect(() =>
+      withFakeNpm(dir, {}, () =>
+        publishArtifacts(dir, VERSION, COMMIT, true, {
+          npm: join(fakeBin, "npm"),
+        }),
+      ),
+    ).toThrow("structural-only");
+    const allowed = fresh();
+    const { published } = withFakeNpm(allowed, {}, () =>
+      publishArtifacts(allowed, VERSION, COMMIT, true, publishOptions()),
+    );
+    expect(published.length).toBe(NATIVE_PLATFORM_TARGETS.length + 2);
+  });
+});
+
+describe("npm dist-tag resolution and semver order", () => {
+  it("resolves auto to next for a prerelease and latest otherwise", () => {
+    expect(resolveDistTag("1.2.3")).toBe("latest");
+    expect(resolveDistTag("1.2.3-rc.1", "auto")).toBe("next");
+    expect(resolveDistTag("1.2.3", "next")).toBe("next");
+    expect(() => resolveDistTag("1.2.3", "1.2.3")).toThrow("dist-tag");
+  });
+
+  it("orders versions with prerelease below release", () => {
+    expect(compareSemver("10.0.0", "9.9.9")).toBe(1);
+    expect(compareSemver("1.2.3-rc.1", "1.2.3")).toBe(-1);
+    expect(compareSemver("1.2.3-rc.2", "1.2.3-rc.10")).toBe(-1);
+    expect(compareSemver("1.2.3", "1.2.3")).toBe(0);
   });
 });
