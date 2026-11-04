@@ -244,9 +244,36 @@ impl AdvisorEngine {
         origin: ReviewOrigin,
         cancellation: CancellationToken,
     ) -> crate::HostResult<AdvisorReport> {
-        let reservation = self.reserve(&request.chat_id, &origin).await?;
-        self.review_reserved(request, origin, cancellation, reservation)
+        // Permit BEFORE the window slot: a saturated engine must refuse
+        // without spending budget it will never use.
+        let permit = self.acquire_permit()?;
+        let reservation = self.reserve_gated(&request.chat_id, &origin).await?;
+        self.run_review(request, origin, cancellation, reservation, permit)
             .await
+    }
+
+    fn acquire_permit(&self) -> crate::HostResult<tokio::sync::OwnedSemaphorePermit> {
+        let reviews = self
+            .reviews
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        reviews
+            .try_acquire_owned()
+            .map_err(|_| crate::HostError::Execution("advisor_saturated".into()))
+    }
+
+    /// Kill switch + loop guard (part 1: reviews never review reviews).
+    fn admit(&self, chat_id: &str) -> crate::HostResult<()> {
+        if !self.config().enabled {
+            return Err(crate::HostError::Execution("advisor_disabled".into()));
+        }
+        if is_advisor_chat_id(chat_id) {
+            return Err(crate::HostError::Execution(
+                "advisor may not review an advisor run".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Reserve this chat's next review slot: check the durable rolling-
@@ -261,21 +288,55 @@ impl AdvisorEngine {
         chat_id: &str,
         origin: &ReviewOrigin,
     ) -> crate::HostResult<(String, i64)> {
+        self.admit(chat_id)?;
+        // Cheap pre-check for callers that reserve before detaching (the
+        // watchdog): a saturated pool must not consume a window slot.
+        if self
+            .reviews
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .available_permits()
+            == 0
+        {
+            return Err(crate::HostError::Execution("advisor_saturated".into()));
+        }
+        self.reserve_gated(chat_id, origin).await
+    }
+
+    /// `reserve` minus the saturation pre-check, for callers that already
+    /// hold their permit (`review`).
+    async fn reserve_gated(
+        &self,
+        chat_id: &str,
+        origin: &ReviewOrigin,
+    ) -> crate::HostResult<(String, i64)> {
+        self.admit(chat_id)?;
         let config = self.config();
-        if !config.enabled {
-            return Err(crate::HostError::Execution("advisor_disabled".into()));
-        }
-        if is_advisor_chat_id(chat_id) {
-            // Loop guard, part 1: reviews never review reviews.
-            return Err(crate::HostError::Execution(
-                "advisor may not review an advisor run".into(),
-            ));
-        }
         let gate = {
             let mut budgets = self.budgets.lock().unwrap_or_else(PoisonError::into_inner);
             Arc::clone(budgets.entry(chat_id.to_owned()).or_default())
         };
-        let _gate = gate.lock().await;
+        let outcome = {
+            let _gate = gate.lock().await;
+            self.reserve_locked(chat_id, origin, &config).await
+        };
+        drop(gate);
+        // Prune idle gates (nobody else holds the Arc) so the map does not
+        // grow with every chat ever reviewed.
+        self.budgets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|_, gate| Arc::strong_count(gate) > 1);
+        outcome
+    }
+
+    /// The count→record step; callers hold the chat's budget gate.
+    async fn reserve_locked(
+        &self,
+        chat_id: &str,
+        origin: &ReviewOrigin,
+        config: &AdvisorConfig,
+    ) -> crate::HostResult<(String, i64)> {
         // Unique per attempt (clock + process-local counter): keeps repeat
         // reviews' finding ids from replaying the first attempt's rows.
         static ATTEMPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -285,33 +346,31 @@ impl AdvisorEngine {
             ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         );
         let run_id = advisor_run_chat_id(chat_id, origin, &nonce);
-        if let Ok(count) = self
+        // Count + record in one store job: a failing count must fail
+        // CLOSED, never skip the budget.
+        let reserved = self
             .store
-            .count_advisor_reviews_since(
-                Some(chat_id),
-                Some(origin.source()),
-                started_at - config.window_ms,
-            )
-            .await
-            && count >= i64::from(config.reviews_per_window)
-        {
-            return Err(crate::HostError::Execution(format!(
-                "advisor_rate_limited: {count} reviews already started for this chat within {} ms",
-                config.window_ms
-            )));
-        }
-        self.store
-            .record_advisor_review(
+            .reserve_advisor_review_if_under(
                 &run_id,
                 chat_id,
                 origin.source(),
                 origin.trigger(),
                 started_at,
+                started_at - config.window_ms,
+                i64::from(config.reviews_per_window),
             )
             .await
             .map_err(|error| {
-                crate::HostError::Execution(format!("advisor_attempt_unrecordable: {error}"))
+                crate::HostError::Execution(format!(
+                    "advisor_rate_limited: review budget unavailable: {error}"
+                ))
             })?;
+        if !reserved {
+            return Err(crate::HostError::Execution(format!(
+                "advisor_rate_limited: {} reviews already started for this chat within {} ms",
+                config.reviews_per_window, config.window_ms
+            )));
+        }
         Ok((run_id, started_at))
     }
 
@@ -323,7 +382,20 @@ impl AdvisorEngine {
         request: &ReviewRequest,
         origin: ReviewOrigin,
         cancellation: CancellationToken,
+        reservation: (String, i64),
+    ) -> crate::HostResult<AdvisorReport> {
+        let permit = self.acquire_permit()?;
+        self.run_review(request, origin, cancellation, reservation, permit)
+            .await
+    }
+
+    async fn run_review(
+        &self,
+        request: &ReviewRequest,
+        origin: ReviewOrigin,
+        cancellation: CancellationToken,
         (run_id, _started_at): (String, i64),
+        _permit: tokio::sync::OwnedSemaphorePermit,
     ) -> crate::HostResult<AdvisorReport> {
         let config = self.config();
         if !config.enabled {
@@ -335,14 +407,6 @@ impl AdvisorEngine {
                 "advisor may not review an advisor run".into(),
             ));
         }
-        let reviews = self
-            .reviews
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let _permit = reviews
-            .try_acquire_owned()
-            .map_err(|_| crate::HostError::Execution("advisor_saturated".into()))?;
         let configured = self.model_override.clone().or_else(|| match origin {
             ReviewOrigin::Explicit => config.model.clone(),
             ReviewOrigin::Watchdog { .. } => config.watchdog_model.clone(),
@@ -526,7 +590,11 @@ impl AdvisorEngine {
                 note
             };
             // Durable steer: lands in the live turn at its next tool
-            // boundary, or starts the advising turn on an idle session.
+            // boundary. NEVER on an idle session: a steer there starts a
+            // new turn, and these notes embed model-authored text — a
+            // prompt-injected finding would drive an unattended turn. An
+            // idle session keeps the finding stored (un-escalated) and the
+            // `advisor.finding` event above is its only surfacing.
             // The escalated flag is set ONLY when the steer was accepted:
             // marking it on a failed steer would claim a user-visible
             // surfacing that never happened (and the durable input id
@@ -534,7 +602,7 @@ impl AdvisorEngine {
             // stays queryable and un-escalated).
             let steered = self
                 .session
-                .steer(
+                .steer_live(
                     &request.chat_id,
                     &crate::SteerInput {
                         content: Value::String(note),
@@ -668,6 +736,9 @@ fn parse_report(raw: &str, max_findings: usize) -> Option<AdvisorReport> {
         .trim();
     let start = body.find('{')?;
     let end = body.rfind('}')?;
+    if end < start {
+        return None;
+    }
     let value: Value = serde_json::from_str(&body[start..=end]).ok()?;
     let summary = value["summary"].as_str()?.trim().to_owned();
     if summary.is_empty() {
@@ -745,5 +816,22 @@ fn parse_report(raw: &str, max_findings: usize) -> Option<AdvisorReport> {
 impl From<CoreError> for crate::HostError {
     fn from(error: CoreError) -> Self {
         crate::HostError::Execution(format!("{}: {}", error.code, error.message))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_report;
+
+    #[test]
+    fn closing_brace_before_opening_brace_is_rejected_not_a_panic() {
+        assert!(parse_report("} then {", 5).is_none());
+        assert!(parse_report("see } and later {", 5).is_none());
+    }
+
+    #[test]
+    fn bare_object_still_parses() {
+        let report = parse_report(r#"{"summary":"ok","findings":[]}"#, 5).unwrap();
+        assert_eq!(report.summary, "ok");
     }
 }

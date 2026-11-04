@@ -2073,3 +2073,326 @@ async fn role_provider_and_model_overrides_reach_the_child_session() {
     );
     h.await_all().await;
 }
+
+fn pinned_model_harness_config() -> SubagentConfig {
+    let mut cfg = config();
+    cfg.roles = BTreeMap::from([(
+        "auditor".to_owned(),
+        RoleSpec {
+            id: "auditor".into(),
+            description: "pinned".into(),
+            prompt: "audit only".into(),
+            allowed_tools: vec!["coding:read_file".into()],
+            read_only: true,
+            can_spawn: false,
+            model: Some("role-model".into()),
+            provider_id: None,
+            max_iterations: None,
+            capability: None,
+        },
+    )]);
+    cfg
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_cannot_override_a_role_pinned_model() {
+    let workspace = std::env::temp_dir().join(format!("agentkit-subagent-ws-{}", nonce()));
+    std::fs::create_dir_all(&workspace).unwrap();
+    let h = Harness::build(
+        pinned_model_harness_config(),
+        workspace.to_string_lossy().into_owned(),
+    )
+    .await;
+    let error = h
+        .subagents
+        .spawn(&SpawnRequest {
+            model: Some("expensive-model".into()),
+            ..h.spawn_request("k1", "auditor", "audit")
+        })
+        .await
+        .expect_err("pinned role model");
+    assert!(error.to_string().contains("model_not_allowed"), "{error}");
+    assert!(h.subagents.list("parent").await.unwrap().is_empty());
+    // The pinned model itself (and no model at all) stay allowed.
+    h.subagents
+        .spawn(&SpawnRequest {
+            model: Some("role-model".into()),
+            ..h.spawn_request("k2", "auditor", "audit")
+        })
+        .await
+        .expect("equal model");
+    h.spawn("k3", "auditor", "audit").await;
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_of_a_cancelled_child_obeys_the_fan_out_caps() {
+    let h = Harness::start_with(config(), Some(2), Some(8)).await;
+    h.hold(true);
+    let a = h.spawn("a", "researcher", "one").await;
+    let b = h.spawn("b", "researcher", "two").await;
+    h.subagents.cancel(&a.child_chat_id).await.unwrap();
+    h.subagents.cancel(&b.child_chat_id).await.unwrap();
+    h.hold(false);
+    h.release();
+    for id in [&a.child_chat_id, &b.child_chat_id] {
+        wait_until(
+            || async { h.status(id).await.status == "cancelled" },
+            "wave one cancelled",
+        )
+        .await;
+    }
+    // Second wave fills the cap again; the gate must hold the new children.
+    h.child.released.store(false, Ordering::SeqCst);
+    h.hold(true);
+    h.spawn("c", "researcher", "three").await;
+    h.spawn("d", "researcher", "four").await;
+    let error = h
+        .subagents
+        .resume(&a.child_chat_id, "r1")
+        .await
+        .expect_err("resume past the concurrency cap");
+    assert!(
+        error.to_string().contains("subagent_concurrency_limit"),
+        "{error}"
+    );
+    assert_eq!(h.status(&a.child_chat_id).await.status, "cancelled");
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_rebinds_the_row_to_the_callers_live_parent_task() {
+    let h = Harness::start().await;
+    h.child.fail.store(true, Ordering::SeqCst);
+    let child = h.spawn("k", "reviewer", "doomed").await;
+    wait_until(
+        || async { h.status(&child.child_chat_id).await.status == "failed" },
+        "child failed",
+    )
+    .await;
+    h.child.fail.store(false, Ordering::SeqCst);
+    // A caller whose task is not live in this chat is refused.
+    let error = h
+        .subagents
+        .resume_for_parent(&child.child_chat_id, "r0", Some("no-such-task"))
+        .await
+        .expect_err("foreign parent task");
+    assert!(error.to_string().contains("live turn task"), "{error}");
+    h.store
+        .submit(SubmitTask {
+            task_id: "parent-turn-2".into(),
+            kind: "parent.hold".into(),
+            scope_id: "parent".into(),
+            payload: json!({}),
+            priority: 0,
+            now: h.subagents.now_ms(),
+            available_at: None,
+            depends_on: vec![],
+            parent_task_id: None,
+            exclusive_scope: false,
+        })
+        .await
+        .unwrap();
+    h.subagents
+        .resume_for_parent(&child.child_chat_id, "r1", Some("parent-turn-2"))
+        .await
+        .unwrap();
+    let row = h.store.get_subagent(&child.child_chat_id).await.unwrap();
+    assert_eq!(
+        row.unwrap().parent_task_id.as_deref(),
+        Some("parent-turn-2")
+    );
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_of_a_completed_exclusive_child_leaves_the_workspace_unlocked() {
+    let h = Harness::start().await;
+    let child = h
+        .subagents
+        .spawn(&SpawnRequest {
+            exclusive_workspace: true,
+            ..h.spawn_request("k", "implementer", "write code")
+        })
+        .await
+        .expect("implementer spawn");
+    wait_until(
+        || async { h.status(&child.child_chat_id).await.status == "completed" },
+        "child completed",
+    )
+    .await;
+    let error = h
+        .subagents
+        .resume(&child.child_chat_id, "r")
+        .await
+        .expect_err("completed turns do not resume");
+    assert!(
+        error
+            .to_string()
+            .contains("only interrupted, failed or cancelled"),
+        "{error}"
+    );
+    assert!(
+        h.subagents
+            .leases()
+            .holder(&h.workspace, h.subagents.now_ms())
+            .is_none(),
+        "a refused resume must not leave the parent's writes locked out"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restart_rebuilds_exclusive_leases_from_durable_rows() {
+    let h = Harness::start().await;
+    h.hold(true);
+    let child = h
+        .subagents
+        .spawn(&SpawnRequest {
+            exclusive_workspace: true,
+            ..h.spawn_request("k", "implementer", "write code")
+        })
+        .await
+        .expect("implementer spawn");
+    wait_until(
+        || async { h.status(&child.child_chat_id).await.status == "running" },
+        "child running",
+    )
+    .await;
+    // A restarted process: same durable store, empty lease table.
+    let restarted = SubagentService::new(
+        h.store.clone(),
+        h.service.clone(),
+        Arc::new(SystemRuntime),
+        config().effective(),
+    );
+    assert!(
+        restarted
+            .leases()
+            .holder(&h.workspace, restarted.now_ms())
+            .is_none()
+    );
+    restarted.reap_orphans().await.unwrap();
+    assert_eq!(
+        restarted
+            .leases()
+            .holder(&h.workspace, restarted.now_ms())
+            .as_deref(),
+        Some(child.child_chat_id.as_str()),
+        "the live exclusive writer holds its root again after restart"
+    );
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawn_tool_without_a_call_identity_requires_an_explicit_key() {
+    let h = Harness::start().await;
+    let tools = SubagentContributor::new(h.subagents.clone())
+        .contribute(&contribution_context(Some("parent".into())))
+        .await
+        .unwrap();
+    let spawn = tools
+        .into_iter()
+        .find_map(|contributed| match contributed {
+            ContributedTool::Read(tool) if tool.definition().name == "subagent_spawn" => Some(tool),
+            _ => None,
+        })
+        .expect("spawn tool");
+    let context = agentkit_core::ToolContext {
+        run_id: "parent-turn".into(),
+        tool_call_id: None,
+        attempt_id: None,
+        chat_id: Some("parent".into()),
+        scope_id: Some("parent".into()),
+        user_id: None,
+        bindings: vec![],
+        limits: ToolLimits::default(),
+        cancellation: CancellationToken::new(),
+        dispatch_guard: None,
+        metadata: Default::default(),
+        suspension: None,
+    };
+    let refused = spawn
+        .execute(
+            context.clone(),
+            json!({"role": "reviewer", "prompt": "audit"}),
+        )
+        .await
+        .unwrap();
+    assert!(!refused.ok);
+    assert!(
+        refused
+            .data
+            .as_ref()
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("spawn_key_required")),
+        "{refused:?}"
+    );
+    assert!(h.subagents.list("parent").await.unwrap().is_empty());
+    let accepted = spawn
+        .execute(
+            context,
+            json!({"role": "reviewer", "prompt": "audit", "spawnKey": "explicit"}),
+        )
+        .await
+        .unwrap();
+    assert!(accepted.ok, "{accepted:?}");
+    h.await_all().await;
+}
+
+#[test]
+fn subagent_mutators_are_flagged_for_receipts_but_reads_are_not() {
+    for name in [
+        "subagent_spawn",
+        "subagent_message",
+        "subagent_cancel",
+        "subagent_resume",
+    ] {
+        assert!(is_mutating_subagent_tool(name), "{name}");
+    }
+    for name in ["subagent_list", "subagent_status", "subagent_await"] {
+        assert!(!is_mutating_subagent_tool(name), "{name}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_resumes_revive_the_child_exactly_once() {
+    let h = Harness::start().await;
+    h.child.fail.store(true, Ordering::SeqCst);
+    let child = h
+        .subagents
+        .spawn(&SpawnRequest {
+            exclusive_workspace: true,
+            ..h.spawn_request("k", "implementer", "doomed")
+        })
+        .await
+        .expect("spawn");
+    wait_until(
+        || async { h.status(&child.child_chat_id).await.status == "failed" },
+        "child failed",
+    )
+    .await;
+    h.hold(true);
+    h.child.fail.store(false, Ordering::SeqCst);
+    let (a, b) = tokio::join!(
+        h.subagents.resume(&child.child_chat_id, "ra"),
+        h.subagents.resume(&child.child_chat_id, "rb"),
+    );
+    assert_eq!(
+        usize::from(a.is_ok()) + usize::from(b.is_ok()),
+        1,
+        "exactly one resume wins: {a:?} / {b:?}"
+    );
+    // The loser's guard must not have dropped the winner's lease.
+    assert!(h.subagents.leases().is_held_by(
+        &h.workspace,
+        &child.child_chat_id,
+        h.subagents.now_ms()
+    ));
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}

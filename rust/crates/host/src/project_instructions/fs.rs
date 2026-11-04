@@ -73,50 +73,113 @@ impl ProjectInstructionsSource for FileProjectInstructions {
     }
 }
 
+// `st_dev`/`st_ino` widths differ per platform (i32 vs u64); the casts are
+// the same widening std's `MetadataExt` does, a no-op on some targets.
+#[allow(clippy::unnecessary_cast)]
 #[cfg(unix)]
 fn read_plain_file(
     root: &str,
     name: &str,
     max_bytes: usize,
 ) -> HostResult<Option<ProjectInstructionsText>> {
-    use std::fs::OpenOptions;
+    use std::ffi::CString;
     use std::io::ErrorKind;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use std::mem::MaybeUninit;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
 
     // A symlinked root is the caller's explicit choice: resolve it once.
     let real_root = std::fs::canonicalize(root)
         .map_err(|error| HostError::Execution(format!("Cannot resolve workspace root: {error}")))?;
-    let target = real_root.join(name);
-    let expected = match std::fs::symlink_metadata(&target) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(HostError::Execution(format!(
-                "Cannot inspect instruction file: {error}"
-            )));
-        }
+    let root_c = CString::new(real_root.as_os_str().as_bytes())
+        .map_err(|_| HostError::Execution("Workspace root contains a NUL byte.".into()))?;
+    let name_c = CString::new(name)
+        .map_err(|_| HostError::Execution("Instruction file name contains a NUL byte.".into()))?;
+    // Pin the canonical root as a directory fd: every later lookup is
+    // relative to THIS directory, so a path component swapped for a symlink
+    // after canonicalization cannot redirect the read.
+    // SAFETY: `root_c` is a valid NUL-terminated path that outlives the
+    // call; `open` has no other memory preconditions.
+    let raw_dir = unsafe {
+        libc::open(
+            root_c.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
     };
-    if expected.file_type().is_symlink() {
-        return Err(HostError::Execution(
-            "Instruction file is a symlink.".into(),
-        ));
+    if raw_dir < 0 {
+        return Err(HostError::Execution(format!(
+            "Cannot open workspace root: {}",
+            std::io::Error::last_os_error()
+        )));
     }
-    if !expected.is_file() {
-        return Err(HostError::Execution(
-            "Instruction file is not a regular file.".into(),
-        ));
+    // SAFETY: `raw_dir` is a freshly opened, valid descriptor that nothing
+    // else owns; `OwnedFd` takes over closing it.
+    let dir = unsafe { OwnedFd::from_raw_fd(raw_dir) };
+
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `dir` is an open directory fd, `name_c` is a valid C string,
+    // and `stat` points at writable memory of the exact struct size.
+    let inspected = unsafe {
+        libc::fstatat(
+            dir.as_raw_fd(),
+            name_c.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if inspected != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(HostError::Execution(format!(
+            "Cannot inspect instruction file: {error}"
+        )));
+    }
+    // SAFETY: `fstatat` returned 0, so it filled the whole struct.
+    let expected = unsafe { stat.assume_init() };
+    match expected.st_mode & libc::S_IFMT {
+        libc::S_IFLNK => {
+            return Err(HostError::Execution(
+                "Instruction file is a symlink.".into(),
+            ));
+        }
+        libc::S_IFREG => {}
+        _ => {
+            return Err(HostError::Execution(
+                "Instruction file is not a regular file.".into(),
+            ));
+        }
     }
     // O_NOFOLLOW refuses a swap to a symlink; O_NONBLOCK refuses a FIFO.
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(&target)
-        .map_err(|error| HostError::Execution(format!("Cannot open instruction file: {error}")))?;
+    // SAFETY: `dir` is an open directory fd and `name_c` a valid C string
+    // that outlives the call.
+    let raw_file = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            name_c.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if raw_file < 0 {
+        return Err(HostError::Execution(format!(
+            "Cannot open instruction file: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    // SAFETY: `raw_file` is a freshly opened, valid descriptor that nothing
+    // else owns; `File` takes over closing it.
+    let mut file = unsafe { std::fs::File::from_raw_fd(raw_file) };
     // fstat the OPEN file: same dev/ino or the check raced a replacement.
     let opened = file
         .metadata()
         .map_err(|error| HostError::Execution(format!("Cannot stat instruction file: {error}")))?;
-    if !opened.is_file() || opened.dev() != expected.dev() || opened.ino() != expected.ino() {
+    if !opened.is_file()
+        // Same widening std's own `MetadataExt::dev`/`ino` perform.
+        || opened.dev() != expected.st_dev as u64
+        || opened.ino() != expected.st_ino as u64
+    {
         return Err(HostError::Execution(
             "Instruction file changed during open.".into(),
         ));

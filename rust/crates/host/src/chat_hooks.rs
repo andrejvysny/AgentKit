@@ -378,7 +378,9 @@ pub(super) async fn stage_registry(
     let durable = Arc::new(crate::governance::DurableExecution {
         context: context.clone(),
         chat_id: chat_id.into(),
-        is_mutating: None,
+        // Subagent coordination tools are `effect: read` for permission
+        // purposes but still mutate durable state: they need receipts.
+        is_mutating: Some(Arc::new(crate::subagents::is_mutating_subagent_tool)),
         approvals: Arc::new(approvals),
         standing: options.standing.clone(),
     });

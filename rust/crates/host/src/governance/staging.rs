@@ -456,6 +456,12 @@ impl Tool for GuardedTool {
         // admitted receipt may invoke it, and the store transaction has
         // already ended.
         let mut execution_id = None;
+        // Cancellation is judged BEFORE admission: an Admitted receipt with
+        // no body behind it reads as an uncertain effect on every retry.
+        // Once admitted, the body runs.
+        if context.cancellation.is_cancelled() {
+            return Err(CoreError::new("cancelled", "aborted"));
+        }
         if let Some(durable) = &durable {
             match durable
                 .admit(
@@ -473,9 +479,6 @@ impl Tool for GuardedTool {
                 }
                 crate::governance::Admission::Refused(result) => return Ok(result),
             }
-        }
-        if context.cancellation.is_cancelled() {
-            return Err(CoreError::new("cancelled", "aborted"));
         }
         let result = self.tool.execute(context, input).await;
         // Persist the result before delivery. A body error leaves the receipt

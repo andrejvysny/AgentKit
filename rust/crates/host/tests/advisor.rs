@@ -883,3 +883,121 @@ async fn simultaneous_triggers_cannot_overshoot_the_window_budget() {
         "only the reserved attempt row lands; blocked reservations must not record"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn critical_finding_never_starts_a_turn_on_an_idle_session() {
+    let h = Harness::start(vec![VALID_REPORT.into()], config()).await;
+    h.service
+        .create_session(&CreateSessionInput {
+            session_id: Some("idle".into()),
+            title: None,
+            profile_id: "p1".into(),
+            profile_digest: None,
+            provider_id: None,
+            model: Some("model".into()),
+            workspace: None,
+            context: None,
+            skills: None,
+            turn_kind: None,
+            execution_mode: None,
+            metadata: None,
+        })
+        .await
+        .unwrap();
+    let report = h.review("idle", "focus").await.unwrap();
+    assert_eq!(report.findings.len(), 2);
+    // No unattended turn: nothing queued, nothing pending.
+    assert!(
+        h.store
+            .list_tasks(Some("idle".into()))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let state = h.service.get_state("idle").await.unwrap();
+    assert!(state.active_turn.is_none());
+    assert!(state.pending.is_empty());
+    // The finding is stored, un-escalated, and still announced.
+    let rows = h.store.list_advisor_findings("idle", 50).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| !row.escalated));
+    assert_eq!(h.events.0.lock().unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn saturated_refusal_does_not_consume_a_window_slot() {
+    let mut cfg = config();
+    cfg.max_review_concurrency = 1;
+    cfg.reviews_per_window = 2;
+    let h = Harness::start(vec![VALID_REPORT.into()], cfg).await;
+    h.oracle.hold.store(true, Ordering::SeqCst);
+    let engine = h.engine.clone();
+    let first = tokio::spawn(async move {
+        engine
+            .review(
+                &ReviewRequest {
+                    chat_id: "parent".into(),
+                    focus: "slow".into(),
+                    evidence_hint: None,
+                },
+                ReviewOrigin::Explicit,
+                CancellationToken::new(),
+            )
+            .await
+    });
+    wait_until(
+        || async { !h.oracle.seen().is_empty() },
+        "first review reached the provider",
+    )
+    .await;
+    for _ in 0..3 {
+        let error = h.review("parent", "refused").await.expect_err("saturated");
+        assert!(error.to_string().contains("advisor_saturated"));
+    }
+    h.oracle.released.store(true, Ordering::SeqCst);
+    h.oracle.gate.notify_waiters();
+    first.await.unwrap().unwrap();
+    // One slot spent by the real review; the three refusals spent none.
+    assert_eq!(
+        h.store
+            .count_advisor_reviews_since(Some("parent"), Some("explicit"), 0)
+            .await
+            .unwrap(),
+        1
+    );
+    h.review("parent", "second real review").await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn steer_live_refuses_idle_sessions_and_delivers_to_live_turns() {
+    let h = Harness::start(vec![VALID_REPORT.into()], config()).await;
+    let steer = |id: &str| SteerInput {
+        content: json!("note"),
+        input_id: Some(id.into()),
+        turn_id: None,
+        on_settled: None,
+    };
+    // "parent" holds a live (queued) turn: delivered as a pending steer.
+    let sent = h
+        .service
+        .steer_live("parent", &steer("live-1"))
+        .await
+        .unwrap();
+    assert!(matches!(sent, AgentSendResult::Queued { .. }));
+    // Settle it: the session is now idle, and the steer must NOT start a turn.
+    h.store.cancel_task("parent-turn", 5).await.unwrap();
+    let error = h
+        .service
+        .steer_live("parent", &steer("late-1"))
+        .await
+        .expect_err("idle");
+    assert_eq!(error.code, "chat_idle");
+    let tasks = h.store.list_tasks(Some("parent".into())).await.unwrap();
+    assert!(tasks.iter().all(|task| task.status.is_terminal()));
+    let state = h.service.get_state("parent").await.unwrap();
+    assert!(state.active_turn.is_none());
+    assert!(
+        state.pending.iter().all(|input| input.input_id != "late-1"),
+        "the refused steer must not linger"
+    );
+}

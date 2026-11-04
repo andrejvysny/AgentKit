@@ -19,6 +19,17 @@ pub const SUBAGENT_TOOL_NAMES: [&str; 7] = [
 
 const CAPABILITY: &str = "orchestration";
 
+/// Tools that change durable child state. They keep `effect: "read"` so the
+/// permission modes still admit them, but must carry execution receipts: on
+/// an attempt replay the recorded result is served instead of re-running
+/// the spawn/message/cancel/resume.
+pub fn is_mutating_subagent_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "subagent_spawn" | "subagent_message" | "subagent_cancel" | "subagent_resume"
+    )
+}
+
 fn definition(
     name: &str,
     description: &str,
@@ -189,6 +200,17 @@ impl crate::ToolContributor for SubagentContributor {
                     Box::pin(async move {
                         let (parent_chat_id, parent_task_id) =
                             parent_coordinates(&context).map_err(|error| error.code)?;
+                        // Without a logical call id the derived key would
+                        // collapse every spawn of one role into one child.
+                        if context.tool_call_id.is_none()
+                            && input.get("spawnKey").and_then(Value::as_str).is_none()
+                        {
+                            return Err(
+                                "spawn_key_required: no tool-call identity; pass an explicit \
+                                 spawnKey"
+                                    .into(),
+                            );
+                        }
                         let request = SpawnRequest {
                             parent_chat_id,
                             parent_task_id,
@@ -430,7 +452,7 @@ impl crate::ToolContributor for SubagentContributor {
                                 format!("{parent_task_id}:{}", spawn_key(&context, &input))
                             });
                         let view = service
-                            .resume(child, &resume_key)
+                            .resume_for_parent(child, &resume_key, Some(&parent_task_id))
                             .await
                             .map_err(|error| error.to_string())?;
                         serde_json::to_value(view).map_err(|error| error.to_string())

@@ -498,12 +498,14 @@ pub(crate) async fn resolve_approved_calls(
             // so the resume comparison must use it too. Plain Serde would
             // re-spell `1.0` differently from the canonical `1` and refuse a
             // call the human actually approved.
-            let hash = agentkit_contracts::parse_javascript_json(&call.arguments_json)
-                .ok()
-                .map(|arguments| crate::governance::args_sha256(&arguments));
-            if hash.as_deref() != Some(approved_hash.as_str()) {
+            // An approval raised by the TypeScript port carries the TS
+            // digest of the same arguments; either spelling is this call
+            // (as the durable replay barrier accepts both). Admission spends
+            // the grant against the NATIVE digest.
+            let Some(approved_hash) = matching_args_hash(&call.arguments_json, &approved_hash)
+            else {
                 continue; // this ask was about different arguments
-            }
+            };
             let generation = request.content.get("approvalGeneration");
             let legacy_generation = request.content.get("uncertaintyGeneration");
             let context_hash = request.content.get("contextSha256");
@@ -599,6 +601,18 @@ async fn append_approval_mismatch(
     Ok(())
 }
 
+/// The native digest of `arguments_json` when `approved` names these
+/// arguments under either canonicalizer (native or TypeScript-pipeline).
+fn matching_args_hash(arguments_json: &str, approved: &str) -> Option<String> {
+    let arguments = agentkit_contracts::parse_javascript_json(arguments_json).ok()?;
+    let native = crate::governance::args_sha256(&arguments);
+    if native == approved || crate::governance::ts_args_sha256(&arguments) == approved {
+        Some(native)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -685,6 +699,19 @@ mod tests {
             tool_call_id: None,
             expires_at: None,
         }
+    }
+
+    #[test]
+    fn approval_matches_on_native_or_ts_digest_only() {
+        let args = r#"{"10":1,"9":2}"#;
+        let parsed = agentkit_contracts::parse_javascript_json(args).unwrap();
+        let native = crate::governance::args_sha256(&parsed);
+        let ts = crate::governance::ts_args_sha256(&parsed);
+        assert_ne!(native, ts, "integer-like keys canonicalize differently");
+        assert_eq!(matching_args_hash(args, &native), Some(native.clone()));
+        assert_eq!(matching_args_hash(args, &ts), Some(native.clone()));
+        assert_eq!(matching_args_hash(args, &"0".repeat(64)), None);
+        assert_eq!(matching_args_hash("not json", &native), None);
     }
 
     #[tokio::test]

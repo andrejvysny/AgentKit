@@ -6,6 +6,9 @@ use std::{
 };
 use tokio::task::JoinHandle;
 
+/// Upper bound on one settled observer call (see `HostOptions`).
+const SETTLED_OBSERVER_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Clone)]
 pub struct HostOptions {
     pub lease_ttl_ms: i64,
@@ -376,7 +379,38 @@ impl AgentHost {
                 self.claim_context().await?
             };
             if let Some(context) = context {
-                self.run_claimed(context).await?;
+                let task_id = context.task.task_id.clone();
+                let lease_token = context.fence.lease_token.clone();
+                match self.run_claimed(context).await {
+                    // A settle that kept conflicting with descriptor changes
+                    // is this ONE task's failure, not the worker's. End the
+                    // attempt: park the task Interrupted (resumable, lease
+                    // dropped) so its concurrency slot is not lost until a
+                    // restart, and keep serving the queue.
+                    Err(HostError::Store(
+                        agentkit_store::StoreError::SessionDescriptorChanged(scope),
+                    )) => {
+                        eprintln!(
+                            "agentkit: settle conflict for task {task_id} (session {scope}); \
+                             interrupting it for resume"
+                        );
+                        if let Err(error) = self
+                            .store
+                            .interrupt_task(
+                                &task_id,
+                                "settle_conflict",
+                                Some(lease_token),
+                                self.runtime.now_ms(),
+                            )
+                            .await
+                        {
+                            eprintln!(
+                                "agentkit: could not interrupt conflicted task {task_id}: {error}"
+                            );
+                        }
+                    }
+                    other => other?,
+                }
             } else {
                 tokio::select! {
                     _=stop.cancelled()=>return Ok(()),
@@ -712,11 +746,23 @@ impl AgentHost {
         // never allowed to unwind a finished task.
         if let Ok(Some(record)) = self.store.get_task(&context.task.task_id).await {
             for observer in &self.options.settled_observers {
-                if let Err(error) = observer.observe_settled(&record).await {
-                    eprintln!(
+                // A hung observer must not pin this worker forever.
+                match tokio::time::timeout(
+                    SETTLED_OBSERVER_TIMEOUT,
+                    observer.observe_settled(&record),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => eprintln!(
                         "agentkit: settled observer failed for {}: {error}",
                         record.task_id
-                    );
+                    ),
+                    Err(_) => eprintln!(
+                        "agentkit: settled observer timed out after {}s for {}",
+                        SETTLED_OBSERVER_TIMEOUT.as_secs(),
+                        record.task_id
+                    ),
                 }
             }
         }

@@ -79,3 +79,43 @@ async fn durable_event_failure_does_not_skip_later_usage_metering() {
     assert_eq!(*metered.lock().unwrap(), vec![json!(1), json!(2), json!(3)]);
     assert_eq!(result.unwrap_err().to_string(), "first event failed");
 }
+
+fn entry(role: &str, text: &str, id: Option<&str>) -> Entry {
+    (
+        agentkit_core::ChatMessage::text(role, text),
+        id.map(str::to_owned),
+    )
+}
+
+#[test]
+fn trimming_never_drains_the_leading_compaction_summary() {
+    let filler = "x".repeat(4_000);
+    let entries = vec![
+        entry("system", "sys", None),
+        entry("user", "SUMMARY of compacted history", Some("summary:s1")),
+        entry("user", &filler, Some("m1")),
+        entry("assistant", &filler, Some("m2")),
+        entry("user", &filler, Some("m3")),
+        entry("assistant", &filler, Some("m4")),
+    ];
+    let (trimmed, dropped) = trim_entries(entries, 2_500);
+    assert!(dropped > 0, "the budget forces a trim");
+    let ids: Vec<Option<&str>> = trimmed.iter().map(|entry| entry.1.as_deref()).collect();
+    assert_eq!(ids[0], None, "system stays first");
+    assert_eq!(ids[1], Some("summary:s1"), "summary survives the trim");
+}
+
+#[test]
+fn trimming_without_a_summary_still_drops_the_oldest_turn() {
+    let filler = "x".repeat(4_000);
+    let entries = vec![
+        entry("system", "sys", None),
+        entry("user", &filler, Some("m1")),
+        entry("assistant", &filler, Some("m2")),
+        entry("user", &filler, Some("m3")),
+    ];
+    let (trimmed, dropped) = trim_entries(entries, 1_500);
+    assert_eq!(dropped, 1);
+    let ids: Vec<Option<&str>> = trimmed.iter().map(|entry| entry.1.as_deref()).collect();
+    assert_eq!(ids, vec![None, Some("m3")]);
+}

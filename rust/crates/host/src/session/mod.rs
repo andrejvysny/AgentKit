@@ -694,6 +694,78 @@ impl AgentSessionService {
         .await
     }
 
+    /// A steer that is delivered ONLY to a live turn and can never start
+    /// one: the store admission runs with no staged candidate, so an idle
+    /// session (even one that settles between a caller's check and this
+    /// call) cancels the input and answers `chat_idle`. For machine-authored
+    /// notes (advisor escalation) that must not drive an unattended turn.
+    pub async fn steer_live(
+        &self,
+        session_id: &str,
+        input: &SteerInput,
+    ) -> SessionResult<AgentSendResult> {
+        let (_, descriptor) = self.require_session(session_id).await?;
+        let input_id = input
+            .input_id
+            .clone()
+            .ok_or_else(|| SessionError::invalid_input("inputId is required to steer."))?;
+        if let Some(prior) = self
+            .prior_receipt(session_id, QueueKind::Steer, &input_id, &input.content)
+            .await?
+        {
+            return Ok(prior);
+        }
+        let envelope = json!({"content": input.content});
+        let admission = self
+            .store()
+            .queue_or_stage_turn(QueueOrStage {
+                session_id: session_id.to_owned(),
+                task_kind: session_turn_kind(&descriptor),
+                input: CreateAgentInput {
+                    input_id: input_id.clone(),
+                    session_id: session_id.to_owned(),
+                    kind: AgentInputKind::Steer,
+                    content: envelope.clone(),
+                    content_hash: self.hash_of(QueueKind::Steer, &envelope["content"]),
+                    target_task_id: None,
+                    on_settled: Some(AgentInputSettlePolicy::Cancel),
+                    attempt_id: None,
+                    tool_call_id: None,
+                    expires_at: None,
+                },
+                target_the_live_turn: true,
+                candidate: None,
+                now: self.now_ms(),
+            })
+            .await?;
+        match admission {
+            QueueAdmission::Queued(record) if record.target_task_id.is_some() => {
+                self.receipt_of(record).await
+            }
+            QueueAdmission::Queued(record) => {
+                // No live turn held the scope: nothing will ever consume it.
+                let _ = self
+                    .store()
+                    .transition_input(
+                        record.input_id,
+                        vec![AgentInputStatus::Pending],
+                        AgentInputStatus::Cancelled,
+                        AgentInputPatch::default(),
+                        self.now_ms(),
+                    )
+                    .await;
+                Err(SessionError::new(
+                    "chat_idle",
+                    format!("Session {session_id} has no live turn to steer."),
+                ))
+            }
+            QueueAdmission::Staged(_) => Err(SessionError::new(
+                "chat_idle",
+                "unexpected staged turn from a live-only steer",
+            )),
+        }
+    }
+
     /// Convert the oldest queued input into a turn. Refused with `chat_busy`
     /// while the session has unfinished work; `None` when nothing is queued.
     pub async fn flush_queue(&self, session_id: &str) -> SessionResult<Option<AgentSendResult>> {
@@ -824,12 +896,12 @@ impl AgentSessionService {
     // -- turn lifecycle -------------------------------------------------------
 
     pub async fn cancel(&self, session_id: &str, turn_id: &str) -> SessionResult<()> {
-        let task = self.require_turn(session_id, turn_id).await?;
-        let was_parked = task.status == TaskStatus::WaitingApproval;
+        self.require_turn(session_id, turn_id).await?;
         self.store().cancel_task(turn_id, self.now_ms()).await?;
-        if was_parked {
-            self.cancel_requests(session_id, turn_id).await?;
-        }
+        // Unconditional: a turn can park between any pre-cancel status read
+        // and the cancel itself, and a Pending request left behind keeps a
+        // dead turn answerable. Cancelling zero requests is a no-op.
+        self.cancel_requests(session_id, turn_id).await?;
         // Promptness, not correctness: the durable flag above is what the
         // worker settles on. Rouse an idle worker (queued targets) and the
         // in-flight attempt (heartbeat check now instead of next tick).

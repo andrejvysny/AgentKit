@@ -745,6 +745,12 @@ impl agentkit_core::Tool for ReceiptedTool {
         if let Some(guard) = &context.dispatch_guard {
             guard.check().await?;
         }
+        // Cancellation is judged BEFORE admission: an Admitted receipt with
+        // no body behind it reads as an uncertain effect on every retry.
+        // Once admitted, the body runs.
+        if context.cancellation.is_cancelled() {
+            return Err(CoreError::new("cancelled", "aborted"));
+        }
         let execution_id = match self
             .durable
             .admit(
@@ -760,9 +766,6 @@ impl agentkit_core::Tool for ReceiptedTool {
             Admission::Granted { execution_id } => Some(execution_id),
             Admission::Refused(result) => return Ok(result),
         };
-        if context.cancellation.is_cancelled() {
-            return Err(CoreError::new("cancelled", "aborted"));
-        }
         let result = self.tool.execute(context, input).await;
         if let (Some(id), Ok(tool_result)) = (execution_id.as_deref(), &result) {
             self.durable.complete(id, tool_result).await?;
@@ -770,6 +773,10 @@ impl agentkit_core::Tool for ReceiptedTool {
         result
     }
 }
+
+#[cfg(test)]
+#[path = "durable_execution_tests.rs"]
+mod tests;
 
 /// Wrap the write-effect tools of a static registry in [`ReceiptedTool`],
 /// leaving read tools (and definitions, ordering, and identity) untouched.
@@ -783,7 +790,7 @@ pub(crate) fn wrap_static_writes(
         let Some(tool) = registry.get(&definition.name) else {
             continue;
         };
-        let tool: Arc<dyn agentkit_core::Tool> = if definition.effect == "write" {
+        let tool: Arc<dyn agentkit_core::Tool> = if durable.needs_receipt(&definition) {
             Arc::new(ReceiptedTool {
                 tool,
                 durable: durable.clone(),

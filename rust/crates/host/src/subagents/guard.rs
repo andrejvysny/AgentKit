@@ -2,6 +2,7 @@ use super::service::SubagentService;
 use crate::{HostResult, ToolGuard, ToolGuardContext, ToolGuardVerdict, read_session_descriptor};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 /// The workspace write-lease table. An exclusive implementer child holds
@@ -12,12 +13,16 @@ use std::sync::{Mutex, PoisonError};
 #[derive(Clone, Default)]
 pub struct WorkspaceLeaseRegistry {
     inner: Arc<Mutex<HashMap<String, Lease>>>,
+    /// Source of lease generations: every table write gets a fresh one, so
+    /// a holder can release exactly the lease it took, never a later one.
+    generations: Arc<AtomicU64>,
 }
 
 #[derive(Clone, Debug)]
 struct Lease {
     child_chat_id: String,
     expires_at: i64,
+    generation: u64,
 }
 
 use std::sync::Arc;
@@ -69,9 +74,28 @@ impl WorkspaceLeaseRegistry {
             Lease {
                 child_chat_id: child_chat_id.to_owned(),
                 expires_at: now_ms.saturating_add(ttl_ms),
+                generation: self.generations.fetch_add(1, Ordering::Relaxed) + 1,
             },
         );
         Ok(())
+    }
+
+    /// The generation of the lease `child_chat_id` currently holds.
+    pub fn generation_of(&self, child_chat_id: &str) -> Option<u64> {
+        let table = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        table
+            .values()
+            .find(|lease| lease.child_chat_id == child_chat_id)
+            .map(|lease| lease.generation)
+    }
+
+    /// Release the child's lease only if it is still the one of
+    /// `generation` (a later acquisition by anyone is left alone).
+    pub fn release_generation(&self, child_chat_id: &str, generation: u64) {
+        let mut table = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        table.retain(|_, lease| {
+            !(lease.child_chat_id == child_chat_id && lease.generation == generation)
+        });
     }
 
     pub fn release(&self, child_chat_id: &str) {
