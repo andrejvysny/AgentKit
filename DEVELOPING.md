@@ -319,3 +319,32 @@ scripts/tests/native-release-workflow.test.ts packages/native/tests/distribution
 `node rust/scripts/build-native-release-artifact.mjs --target <host triple>
 --out <tmp>` + `node rust/scripts/check-native-artifact.mjs --manifest …`, and
 the full native qualification chain (`rust.yml`'s `native` job steps).
+
+## Local gates (no hosted CI)
+
+GitHub Actions workflows were removed on 2026-11-04 to save Actions minutes;
+they remain in git history (last present at `f42b761`) if hosted CI or the
+native release pipeline is needed again. Run these gates locally before
+merging to `master`:
+
+```sh
+# Rust workspace
+(cd rust && cargo fmt --all --check \
+  && cargo clippy --workspace --all-targets --all-features -- -D warnings \
+  && cargo test --workspace --all-features)
+node rust/scripts/check-packages.mjs --offline
+
+# Native binding
+(cd packages/native && bun run build:native)
+AGENTKIT_REQUIRE_NATIVE=1 bun test packages/native --timeout 60000
+node rust/scripts/check-native-package.mjs
+
+# TypeScript workspace
+bun run lint && bun run typecheck
+bun run build && bun run build:umbrella && node rust/scripts/check-native-umbrella.mjs
+bun run check:api && bun run check:composition && bun run check:parity
+bun test --timeout 60000
+```
+
+Windows and Linux are no longer covered by any gate; verify on those
+platforms manually before a release.
