@@ -1,0 +1,10 @@
+[package]
+name = "lsp-fixture"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+
+# Standalone workspace: this fixture lives inside the AgentKit crate tree
+# but must never join the outer cargo workspace.
+[workspace]

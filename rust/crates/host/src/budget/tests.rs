@@ -63,6 +63,8 @@ async fn context(store: SqliteStore, clock: Arc<Clock>, new_task: bool) -> Execu
         task: claimed.task,
         attempt_id: claimed.lease.attempt_id.clone(),
         cancellation: CancellationToken::new(),
+        interruption: CancellationToken::new(),
+        suspension: Arc::new(Mutex::new(None)),
         store,
         fence: claimed.lease.fence(),
         runtime: clock,

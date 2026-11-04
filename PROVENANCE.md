@@ -19,18 +19,27 @@ is vendored.
 
 ## Third-party adaptations
 
-`packages/toolpacks-coding` and `packages/host/src/context/compactor.ts` adapt MIT-licensed code. Each adapted file starts with a header naming the upstream
+`packages/toolpacks-coding` (deleted 2026-11-02) and `packages/host/src/context/compactor.ts` adapt
+MIT-licensed code. Each adapted file starts with a header naming the upstream
 repository, path and commit, plus the upstream copyright line. Nothing was copied wholesale; each file is a
 selective, TypeScript-strict rewrite. Neither upstream repository was modified.
+
+`rust/crates/toolpacks-coding` is a Rust port of `packages/toolpacks-coding` and now carries these
+adaptations on its own: its `edit_engine.rs`/`truncate.rs`/`mutation_queue.rs`/`process.rs` descend from
+the Pi-derived files, and `paths.rs`/`search.rs`/`sandbox.rs`/`guard.rs` (role-ceiling table) from the
+OneMind-derived files listed
+below. No upstream was vendored; each Rust module rewrites its TypeScript source, which carried the
+upstream headers. The tables below list the Rust port paths for the deleted TypeScript originals; the
+upstream mappings are unchanged.
 
 ### Pi (`earendil-works/pi`, v1.4.0, commit `4a080252f06caf63a525d7873c5d94d3c23887e0`; Copyright (c) 2025 Mario Zechner; MIT)
 
 | AgentKit file | Upstream path |
 |---|---|
-| `packages/toolpacks-coding/src/edit-engine.ts` | `packages/coding-agent/src/core/tools/edit-diff.ts`, `edit.ts` |
-| `packages/toolpacks-coding/src/truncate.ts` | `packages/coding-agent/src/core/tools/truncate.ts` |
-| `packages/toolpacks-coding/src/mutation-queue.ts` | `packages/coding-agent/src/core/tools/file-mutation-queue.ts` |
-| `packages/toolpacks-coding/src/process.ts` | `packages/coding-agent/src/utils/shell.ts` (`killProcessTree`), `packages/coding-agent/src/core/tools/bash.ts` (timeout, tail truncation, full log) |
+| `rust/crates/toolpacks-coding/src/edit_engine.rs` | `packages/coding-agent/src/core/tools/edit-diff.ts`, `edit.ts` |
+| `rust/crates/toolpacks-coding/src/truncate.rs` | `packages/coding-agent/src/core/tools/truncate.ts` |
+| `rust/crates/toolpacks-coding/src/mutation_queue.rs` | `packages/coding-agent/src/core/tools/file-mutation-queue.ts` |
+| `rust/crates/toolpacks-coding/src/process.rs` | `packages/coding-agent/src/utils/shell.ts` (`killProcessTree`), `packages/coding-agent/src/core/tools/bash.ts` (timeout, tail truncation, full log) |
 | `packages/host/src/context/compactor.ts` (summarization and update prompts, cut-point rule) | `packages/coding-agent/src/core/compaction/compaction.ts` (`SUMMARIZATION_PROMPT`, `UPDATE_SUMMARIZATION_PROMPT`, `findCutPoint`) |
 | `packages/host/src/context/compactor.ts` (system prompt, conversation serialization, file-operation tracking) | `packages/coding-agent/src/core/compaction/utils.ts` (`SUMMARIZATION_SYSTEM_PROMPT`, `serializeConversation`, `extractFileOpsFromMessage`, `formatFileOperations`) |
 | `packages/core/src/context/token-estimator.ts` (chars/4 heuristic; constants only) | `packages/coding-agent/src/core/compaction/compaction.ts` (`estimateTokens`) |
@@ -41,7 +50,7 @@ Commits: `paths.ts` and `search.ts` from `51abbbd` (the last change to those ups
 
 | AgentKit file | Upstream path |
 |---|---|
-| `packages/toolpacks-coding/src/paths.ts` | `src-ts/src/code/exploration.ts` (lines 14-128: `resolveInsideRoot`, sensitive lists, `.env*` handling) |
-| `packages/toolpacks-coding/src/search.ts` | `src-ts/src/code/pi-worker/search.ts` |
-| `packages/toolpacks-coding/src/sandbox.ts` | `src-ts/src/code/pi-worker/shell-isolation.ts` (lines 5-90) |
-| `packages/toolpacks-coding/src/guard.ts` (role ceiling table only) | `src-ts/src/code/tool-authority.ts`, `modules/code/shared/agent-settings.ts` (lines 23-27) |
+| `rust/crates/toolpacks-coding/src/paths.rs` | `src-ts/src/code/exploration.ts` (lines 14-128: `resolveInsideRoot`, sensitive lists, `.env*` handling) |
+| `rust/crates/toolpacks-coding/src/search.rs` | `src-ts/src/code/pi-worker/search.ts` |
+| `rust/crates/toolpacks-coding/src/sandbox.rs` | `src-ts/src/code/pi-worker/shell-isolation.ts` (lines 5-90) |
+| `rust/crates/toolpacks-coding/src/guard.rs` (role ceiling table only) | `src-ts/src/code/tool-authority.ts`, `modules/code/shared/agent-settings.ts` (lines 23-27) |

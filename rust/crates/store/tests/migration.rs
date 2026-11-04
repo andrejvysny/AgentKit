@@ -12,6 +12,23 @@ fn version_one(path: &Path) {
         CREATE TABLE events(task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, seq INTEGER NOT NULL CHECK(seq>=0), event_id TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY(task_id,seq), UNIQUE(task_id,event_id));
         INSERT INTO events SELECT task_id,seq,event_id,record FROM events_v2;
         DROP TABLE events_v2;
+        DROP TABLE tool_executions;
+        DROP TABLE agent_inputs;
+        DROP TABLE provider_connections;
+        DROP TABLE prompt_templates;
+        DROP TABLE connector_connections;
+        DROP TABLE managed_skills;
+        DROP TABLE run_content_records;
+        DROP TABLE uncertainty_barriers;
+        DROP TABLE subagents;
+        DROP TABLE advisor_findings;
+        DROP TABLE advisor_reviews;
+        DROP TRIGGER messages_search_insert;
+        DROP TRIGGER messages_search_delete;
+        DROP TRIGGER messages_search_update;
+        DROP TABLE message_search;
+        DROP VIEW message_search_source;
+        DELETE FROM counters WHERE name='input_order';
         PRAGMA user_version=1;
         COMMIT;").unwrap();
 }
@@ -82,7 +99,7 @@ async fn exact_version_one_migrates_preserving_records_and_live_fencing_authorit
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        2
+        agentkit_store::SCHEMA_VERSION
     );
     drop(db);
     assert_eq!(

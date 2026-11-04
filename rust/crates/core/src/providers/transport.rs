@@ -88,6 +88,7 @@ pub(crate) async fn dispatch(
             401 => "authentication_required",
             403 => "consent_required",
             429 => "usage_limit",
+            503 => "service_unavailable",
             _ => "provider_error",
         }
     };
@@ -95,8 +96,9 @@ pub(crate) async fn dispatch(
 }
 pub(crate) fn classify(code: &str) -> &'static str {
     match code {
-        "subscription_sharing_usage_limit_exceeded" | "subscription_sharing_usage_unavailable" => {
-            "usage_limit"
+        "subscription_sharing_usage_limit_exceeded" => "usage_limit",
+        "subscription_sharing_usage_unavailable" | "subscription_sharing_user_unavailable" => {
+            "service_unavailable"
         }
         "subscription_sharing_invalid_user"
         | "invalid_api_key"

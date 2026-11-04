@@ -2,6 +2,392 @@
 
 ## Unreleased — Unified agent runtime M0–M7
 
+**Breaking: supported platforms are exactly five; everything else fails fast.** `@agentkit/native` ships prebuilt addons for `linux-x64-gnu`, `linux-arm64-gnu`, `darwin-arm64`, `darwin-x64`, and `win32-x64-msvc` only. musl Linux (Alpine), `win32-arm64`, and every other platform are unsupported in this release: `loadBinding()` now throws `@agentkit/native: unsupported platform <key>; supported: …` before touching the generated loader. The `agentkit/mcp-server` and `agentkit/toolpacks-coding` umbrella subpaths are removed (use native `startMcpServer` / `registerCodingTools`). `engines` is aligned across `agentkit`, `@agentkit/native`, and the platform packages to what CI tests: Node `>=20`, Bun `>=1.3.14`.
+
+**Release lane hardening.** Windows rehearsal unpack uses `tar --force-local` (GNU tar read `D:` as a remote host); `native-publish.mjs` passes `env` explicitly to npm children (Bun 1.3.14 does not propagate `process.env` mutations), matches only `E404` for a missing package, publishes with an explicit dist-tag (`dist_tag` input; `auto` = `next` for a prerelease, else `latest`; refuses to move `latest` backwards), compares wrapper tarballs by decompressed member contents instead of raw bytes, and refuses structural-only (cross-built, never executed) targets such as `darwin-x64` on a real publish unless `allow_unexecuted_targets` is set. The umbrella build keeps the external `@agentkit/native-<platform>` package names intact, so the wrapper's installed-addon version guard works from `agentkit/native` too. Actions in `native-release.yml` and `publish.yml` are pinned to commit SHAs; `ci.yml` and `nightly.yml` declare `contents: read`; the publish checkout drops credentials. The `agentkit-native-publication` environment's required reviewers and scoped `NPM_TOKEN` are a repository setting, not something the workflow verifies. Rust: release profile strips symbols with thin LTO, and every crate is `publish = false`.
+
+**macOS: the workspace builds and the process teardown reports clean.** The darwin-only `group_members_other_than` (`rust/crates/toolpacks-coding/src/process.rs`) did not compile under `--all-features` (an untyped `parse()` became ambiguous once another crate added `PartialEq<i32>` impls), so the macOS build of `agentkit-toolpacks-coding` was broken. With it compiling, every macOS teardown reported the driver's own deliberately unreaped zombie leader as a survivor: the darwin tree tracker samples the leader as a descendant, and the final survivor filter used `pid_alive` (a zombie answers `kill(pid, 0)`) instead of `known_alive`, which excludes the known-exited leader. Each command therefore reported uncertain cleanup and quarantined its workspace. Linux was unaffected because its env-marker rescan never marks a zombie. Related test-only portability fixes: the LSP process counter falls back to `ps` where `/proc` does not exist, the prepack test resolves macOS's `/var` symlink, and the native cancellation probe keeps its marker in the shell's argv (bash as `/bin/sh` execs a lone command and drops a `# marker` comment). The imported-receipt fixtures (`rust/crates/host/tests/fixtures/ts_receipts/*.sqlite`) are now committed; the global `*.sqlite` ignore had left `cargo test --workspace` red on every clean checkout. Open: on this Darwin 25.6 host `ps -E` exposes no process environments, so the three env-marker tests still fail locally (Plane AGENTKIT-60).
+
+**Rust task store: opt-in priority aging.** `agentkit_store::TaskAging` and `SqliteStore::with_task_aging` implement the TypeScript `task-aging.ts` formula (`priority + min(maxBonus, floor(wait / interval) * bonus)`, measured against the claim's `now`, off by default). The binding exposes it as `NativeStore.setTaskAging({ agingIntervalMs, agingBonus, agingMaxBonus })`, which must be called before `createService`. The two aging cases that `assistant-store-conformance` used to skip now run and pass. This closes the runner/adapter gap in AGENTKIT-66.
+
+**Subagents, native LSP code intelligence, and the Advisor/Watchdog pair land as one Rust-backed delegation stack.** Three subsystems join the existing execution engine — no second loop, no new persistence path, no TS surface:
+
+- *Subagents* (`rust/crates/host/src/subagents/`): a child session is an ordinary durable turn dispatched through the existing `AgentHost` as a `chat.turn` task, so parent/child execution, messaging, result delivery, cancellation, and restart recovery ride the runner's claim/lease/settle machinery and the store's existing task rows (lineage via `parentTaskId`, dedup via claim keys, orphan reaping as a startup sweep reusing the settle-time observer). `subagent_spawn/list/status/message/await/cancel/resume` ship as the `subagent` namespace through the contributor contract; five built-in roles (general, researcher, explorer, implementer, reviewer) carry per-role model/provider binding, tool ceilings, read-only flags, and turn bounds, hot-reconfigured through `configureSubagents`. Enforcement is engine-side: permission inheritance is a ceiling intersection (a child can never exceed its parent's namespace/tool set), depth and per-parent/global fan-out bound at spawn from durable rows (a crash cannot mint children past the cap), and workspace writes are coordinated through exclusive per-root leases held by the writing child — a parent mutating a leased root is refused with the holder's identity. Autonomy is the system-prompt channel: while enabled, every session turn (Chat and Coding alike) carries the delegation guidance, consulted per turn so configuration takes effect without rebuilding the executor.
+- *LSP* (`rust/crates/lsp/`): a from-scratch async JSON-RPC/LSP client (stdio transport, lifecycle, didOpen/didChange/didClose sync, request cancellation, per-request/init/idle timeouts, crash classification with a restart budget inside a sliding window) plus a workspace-scoped server pool shared across agents — one `rust-analyzer` per root, not per agent. Discovery is honest: installed servers only (`rust-analyzer`, `typescript-language-server`), never installed; a missing server fails the tool call with a typed reason. The six tools — `lsp_definition/references/hover/symbols/implementation/diagnostics` — validate positions against the synced document, drop stale results against a document version counter, and never hand back pre-restart answers. Hardening is part of the contract: every JS-supplied millisecond tunable is clamped into `[1 ms, 1 h]` at both construction paths (an untimed `tokio::time` argument PANICS the host, and `0` silently disarms the guard), the idle-eviction sweep consults an in-flight busy marker so a long request is never killed on its own server, outbound frames are written under the request deadline (a wedged server that stops draining stdin fails the request instead of parking the writer mutex forever and blocking shutdown), and workspace-local `node_modules/.bin` servers run ONLY behind the explicit `allowWorkspaceBinaries: true` opt-in — executing a binary that came with the repository is host code execution and stays an operator decision.
+- *Advisor + Watchdog* (`rust/crates/host/src/advisor/`): one read-only review engine behind two triggers. Explicit `advisor_review(sessionId, focus)` runs an evidence-gathering loop (own provider binding, its own budget, read-only tool set assembled from the host's live registry, max-findings cap) and persists a structured report. The watchdog rides the core run loop as observational `RunHooks` plus settled-task observers: consecutive tool failures, repeated error codes, edit-volume drift, and turn-failure streaks schedule rate-limited background reviews (cooldown, per-window cap, concurrency bound, no review-of-review — the advisor's own turns never feed the watchdog, and trigger counters key off the MAIN agent only). Findings persist in the schema-v10 `advisor_findings` ledger, with a v11 `advisor_reviews` attempt ledger — started reviews, not findings, are the watchdog's rolling-window budget denominator, so zero-finding sweeps cannot drain provider quota. Criticals escalate through the event bridge (`advisor.finding`) and a durable steer into the main agent; the `escalated` flag flips only when the steer is accepted, so a rejected escalation never claims a surfacing that did not happen. Every hook path degrades to a warning, never to a lost turn.
+
+All three reach consumers through `@agentkit/native`: `configureSubagents`/`subagentConfig`/`subagentsList`/`subagentStatus`, `registerLspTools`, `configureAdvisor`/`advisorConfig`/`advisorReview`/`advisorFindings`, each hot after one wire call; unconfigured lanes contribute nothing and change nothing. Evidence: `rust/crates/host/tests/subagents.rs` (32 — spawn/await round-trips, steer-vs-queue messaging, parallel fan-out, depth/fan-out/permission ceilings, model-budget clamps, bare-name namespace-collision refusal, lease coordination including running-lease sustain and honest cancellation on lease loss, lease-key canonicalization across root spellings, `workspace_busy` refusals leaving no ghost row, replayed QUEUED rows re-admitted against a held lease, role provider/model overrides landing in the child descriptor, hot-disable keeping live children inside their ceilings, cancellation, restart recovery of mid-child crashes, idempotent spawn replay including wedged-chat adoption and replay behind a saturated roster, a worker-pool starvation guard that fails if the pool cannot host parents plus in-flight children, guidance-in-every-turn), `rust/crates/lsp/tests/real_servers.rs` (live `rust-analyzer` and `typescript-language-server` against fixture projects — definitions, references, hover, workspace symbols, implementations, diagnostics, stale-version refusal, crash recovery), `rust/crates/host/tests/advisor.rs` (14 — explicit review, watchdog triggers including silence-on-success, the zero-finding window budget, and the simultaneous-trigger reservation that cannot overshoot `reviewsPerWindow`, cooldown/concurrency limits, non-recursion, finding persistence, escalation only on an accepted steer), the store ledger suites (`rust/crates/store/tests/{advisor,subagents}.rs` including the v9→current migration path), and the native suites (`packages/native/tests`, 291 pass) over the rebuilt addon. Full-workspace `cargo test`, `cargo fmt --check`, and clippy `-D warnings` are green.
+
+**Breaking: `@agentkit/mcp-server` and `@agentkit/toolpacks-coding` are deleted; the Rust backend is their sole implementation.** Both TypeScript packages — the streamable-HTTP MCP-server facade and the coding toolpack — leave the workspace with the behavior-parity Rust ports now complete (`rust/crates/mcp`, `rust/crates/toolpacks-coding`, exposed through `@agentkit/native`). Consumers move to the native bindings: `startMcpServer` on the session service's store (bearer auth, Host/Origin guards, principal sessions, prompts/resources extensions, request cancellation — the full guard surface enforced engine-side) and `service.registerCodingTools` (the eleven `coding`-namespace tools, fingerprint-v4 standing approvals, process-group teardown). The `agentkit/mcp-server` and `agentkit/toolpacks-coding` umbrella subpaths, their published entry points, API reports and qualification lanes are removed; `@agentkit/native`'s MCP/coding surfaces are the replacement contract. The TypeScript suites are not lost: uncovered cases were ported to Rust (`rust/crates/mcp/tests/{security,limits,sessions,cancellation,results,…}.rs`, `packages/native/tests/mcp-server-compat.test.ts`) and the coding differential survives as frozen fixtures (`rust/fixtures/coding-fingerprint/*`, `packages/native/tests/fixtures/coding-descriptors.json`) asserted by the crates. No stubs, no delegating shims: deleted, hard.
+
+**Native apply settles are submission-ordered.** `NativeAssistantStore`'s
+apply-path terminal `transition` (`settleApply`) reads the proposal and its
+receipt before the engine's receipt-bound finalize; two competing terminal
+requests on the same proposal could interleave their reads, after which the
+winner was whichever `finalize` reached the store actor's mailbox first —
+under load, napi completion scheduling beat call order and the
+"first-submitted terminal wins, rival refused with
+`invalid_proposal_transition`" conformance case flipped. The reference
+adapters cannot exhibit this (their single write gate makes submission
+order equal execution order). The binding now chains same-proposal settles
+through a self-clearing per-proposal queue, restoring the gate semantics:
+the second request observes the first's committed status and is refused
+deterministically. Surfaced by the full-suite run under
+`AGENTKIT_REQUIRE_NATIVE=1`; pinned by the shared conformance case, 10/10
+repeat runs clean.
+
+**The native npm stack is publishable; the registry lane is built, gated, and awaiting first approval.** The Rust backend's TypeScript surface — the `@agentkit/native` wrapper and the platform addon packages — leaves `private`/`0.1.0-dev` behind as a publication story: all six packages carry publish-ready manifests (`publishConfig.access: public`), the platform matrix is completed to the five triples the binding declares (`native-linux-x64-gnu`, `native-linux-arm64-gnu`, `native-darwin-arm64`, `native-darwin-x64`, `native-win32-x64-msvc`), and the whole stack releases at ONE lockstep version. `rust/scripts/native-platform-targets.mjs` is the single source of truth for triple → package → loader-key; `packages/native/tests/distribution.test.ts` pins every manifest, pin, os/cpu/libc gate, and the committed loader's embedded version against it (a triple without its package now fails the binding suite instead of shipping a consumer-facing "native binding failed to load"). `scripts/release/native-lockstep.mjs` (invoked by `snapshot-release.mjs`) bumps wrapper, platforms, every pin — wrapper→platforms, umbrella→platforms, `@agentkit/core`→wrapper — the loader's version strings, and the `bun.lock` entries atomically, failing closed on any partial bump. `rust/scripts/build-native-release-artifact.mjs` builds one triple's addon with cargo (never relabelling a host build), verifies the compiled container against the triple (ELF/Mach-O/PE machine identity), stages it into its platform package, and packs wrapper + platform tarballs with a sha256 manifest; `rust/scripts/check-native-artifact.mjs` installs them offline in an isolated consumer and drives the full acceptance lifecycle under bun and node when the runner can execute the triple — structural-only and explicitly labelled when it cannot (M2.1 A4). `.github/workflows/native-release.yml` runs that chain per triple from one digest-frozen snapshot of a default-branch commit, and its gated `publish` job (environment with required reviewers, `dry_run` default `true`, npm provenance, verified digests only, never a rebuild) publishes platforms → wrapper → umbrella through `scripts/release/native-publish.mjs`, skipping already-published exact versions so a retry completes a partial run without replacing registry content. Workflow structure is pinned by `scripts/tests/native-release-workflow.test.ts` (matrix mirrors the table; no input interpolation in `run:` scripts; token only on the execute step), the verifier by `scripts/tests/native-publish.test.ts` (eight failure modes), and the snapshot lockstep by the projection test. `agentkit`'s subpath table and the root README now document `agentkit/native`; the npm scope-ownership decision and the first approved dispatch remain maintainer actions (`DEVELOPING.md` "Publishing the npm native stack").
+
+**The release lane is adversarially hardened: manifest-is-proof builder, a secretless PR rehearsal of every release script, and a version-consistent snapshot.** The wrapper TypeScript now builds through the SAME root `bun run build` entry every other gate uses (the declaration rollup resolves workspace dependencies in dependency order; a standalone per-package build previously shipped a `dist/index.d.ts` the frozen public-API gate had never verified), and the wrapper tarball packs IN THE TREE exactly as the packed-package gate packs it — a pruned staging copy cannot host the rollup's workspace re-validation. `build-native-release-artifact.mjs` no longer writes an artifact manifest it has not proven: `assertPackedArtifacts` refuses unless the packed bytes themselves pass — the addon INSIDE the platform tarball must be a binary of the claimed triple (ELF/Mach-O/PE machine identity re-read from the tarball member, never from the file cargo produced), the wrapper's published `dist/index.d.ts` must be byte-identical to the freshly built in-tree rollup (what ships is what `check:api` verifies), versions must be lockstep and semver-shaped, and inside a snapshot they must agree with the version `snapshot-provenance.json` freezes — placeholder or drift fails the build, not the release. The full chain now has a rehearsal that runs BEFORE any dispatch: `.github/workflows/native-release-test.yml` executes the REAL `snapshot-release.mjs`, the REAL per-triple builder (cross-compilation, Windows, `--allow-cross` discipline), the REAL `check-native-artifact.mjs` isolated install, and the REAL `native-publish.mjs verify` on every PR that touches the release machinery — with no secrets, no environment, and no registry path, so the lane never first executes at release time. Its structure (identical matrix, identical toolchain pins, identical script invocations, credential-free) is pinned against `native-release.yml` itself by `scripts/tests/native-release-workflow.test.ts`. `scripts/tests/native-release-artifact.test.ts` (13 tests) drives the manifest gate with honest tarball fixtures — wrong-machine addon, drifted published types, lockstep and semver refusals, provenance disagreement — plus the CLI guards that must fire before any compiler: usage, unknown triple, in-repo `--out`, and the cross-compilation refusal that stops a misrouted matrix row relabelling a host build. The wrapper loader's installed-addon version guard became a THROWN load failure (was a warn-free gap), with `NAPI_RS_ENFORCE_VERSION_CHECK=0` as the single documented escape hatch matching the generated layer's napi-rs convention; `packages/native/tests/loader-version-guard.test.ts` proves the behavior end to end in fully isolated tmp projects (drift rejects with both versions named, garbage hatch values do NOT disable it, `0` does), and `distribution.test.ts` pins the guard's triple coverage so a sixth platform cannot ship unguarded.
+
+**Task admission refuses kinds with no executor.** `AgentHost::submit` and
+every session admission that creates a turn (submit, queue-or-stage, flush
+promotion, and the settle-time promotion batch) now refuse a task kind with
+no registered `TaskExecutor` with the stable `no_executor_for_kind` code
+BEFORE any row lands — whole admissions are rejected, never
+admitted-except-the-missing-one (the store admits a task with its messages
+and input receipt atomically, so no partial batch exists to split; the
+TypeScript reference defers this to claim-time `ExecutorNotFoundError` and
+has no batch-admission API to copy). The runner's claim query filters to
+the registry's kinds, so a queued task of a dead kind is stepped over —
+never claimed, failed, or dead-lettered — and never blocks the runnable
+kinds behind it. `AgentHost::admission_gate()` exposes the registry check
+to the session service (`AgentSessionService::with_gate`), wired at the
+native runtime; ungated wirings keep admitting freely for cross-pool
+deployment. The gate carries the immutable KIND SET, never the executor
+Arcs: the binding's authority hands the session service back to its own
+guards, so cloning the registry into the service's deps closed an Arc
+cycle (service → gate → executors → guard → authority → service) that
+outlived `close()` and kept the store actor's file-lock thread alive — a
+closed binding then refused every reopen with `already_owned`. Pinned by
+the binding suites that reopen after `service.close()`/`store.close()`
+(`smoke`, `management`, `authority`).
+
+**CI gates for the shipped surface were made honest and green.** Four lanes
+failed at the external review and are fixed without weakening anything.
+Public-API inventory: `agentkit/native` is the reviewed 32nd frozen surface
+— `docs/rust/api/manifest.json` gained the `agentkit/native → agentkit--native`
+entry and the report was generated from the real built umbrella dist, so
+`bun run check:api` passes while the gate still rejects unintended drift
+(`AGENTKIT_CHECK_API_GATE=1 bun test scripts/tests/public-api.test.ts`).
+Declaration bundling (`scripts/prepack-bundle-types.mjs`): the workspace
+dependency graph is now built BEFORE discovery, the alias map is recomputed
+per pass after `ensureBuilt`, any TypeScript source entering the
+api-extractor input set is rejected (the fallback that produced the
+undeclared `Type`/`AiContentPartSchema` rollup), the extractor's
+`ExtractorResult.succeeded` — not the always-truthy result object, and not
+an outright `InternalError` throw — decides failure, and the finished
+rollup must typecheck standalone under strict `tsc` with `skipLibCheck`
+off, mirroring the installed-consumer qualification
+(`node rust/scripts/check-native-package.mjs`, `scripts/tests/
+packed-native-types.test.ts`). Pinned by `scripts/tests/
+prepack-bundle-types.test.ts` (one case per defect). Windows qualification:
+`cargo clippy --target x86_64-pc-windows-msvc --all-targets --all-features
+--locked --workspace --exclude agentkit-rust --exclude
+agentkit-toolpacks-coding -- -D warnings` is green — the Unix-only
+`OpenOptions::mode`, `Command::process_group` and POSIX-signal teardown
+calls in the coding pack are cfg-gated, the Unix-only test machinery
+(marker scans, `utimensat`, symlink fixtures, `sleep` survivors) is
+`#[cfg(unix)]`-gated, and sandboxed command execution on Windows refuses
+with an explicit `UNSUPPORTED_PLATFORM_MESSAGE` (roadmap M4) instead of
+faking success, asserted by
+`coding_lane::tests::bounded_execution_refuses_windows_with_an_explicit_error`
+and the toolpack refusal tests. Lint/format: the `provider-lane` formatter
+violation is fixed; `bun run lint` is clean.
+
+**Message search is SQLite's FTS5, not an imitation of it.** The Rust store's
+search predicate diverged from the engine the TypeScript adapters answered
+with: the score was a hand-rolled substring re-count of the raw query tokens
+(`"resume"` scored its `MATCH`-found "résumé" hit at zero), ties broke on
+internal rowid order so equal-rank pages were not stable, an empty query
+scanned the whole message table before answering nothing, and there was no
+durable index at all — every query rebuilt a temporary FTS5 table. Schema
+version 9 adds the adapter's layout one-to-one: a `message_search_source`
+VIEW projecting each message's searchable body, an external-content FTS5
+`message_search` (`unicode61 remove_diacritics 2`) keyed by `messages.rowid`,
+three INSERT/UPDATE/DELETE triggers (so the TypeScript import's direct
+`INSERT ... ON CONFLICT` and the chat-deletion cascade stay indexed with no
+caller discipline), and a guarded backfill for pre-v9 files. `search_messages`
+now answers `message_search MATCH` ranked by bm25, ordered by
+(rank, order_key, id) — a total order, so LIMIT pagination is stable — with
+the chat/`archived`/`internal`/`placeholder` constraints as a query-time
+filter over the join, and empty/whitespace queries and zero limits exit
+before any database round-trip. Evidence:
+`search_tokenization_matches_hand_computed_fts5` (the `LIKE '%serv%'`
+substring class, diacritic folding on both sides, operator characters as
+data, one CJK run per token),
+`search_ranks_by_bm25_not_substring_counts`,
+`search_orders_equal_scores_by_rank_index_then_id`,
+`search_applies_visibility_constraints_at_query_time` (placeholder→answer
+findability), and
+`search_triggers_cover_deletes_rowid_reuse_and_direct_inserts`
+(rowid-reuse safety, raw-INSERT trigger coverage) in
+`rust/crates/store/tests/conversations.rs`, plus
+`imported_messages_are_searchable_through_the_trigger_built_index` in
+`import_ts.rs`.
+
+**The TS importer cannot commit a lossy migration.** External review proved
+three ways the strict importer preserved data on paper but not in fact: an
+unplaceable message (orphan or cycle) routed through the skip path whose
+strict-mode error was swallowed into `Ok(())`, letting an otherwise-valid
+import commit while silently omitting records the destination would then
+declare imported; `tool_executions` — the receipts that let the durable
+execution guard replay a completed effect and refuse re-admission of a
+crash-uncertain one, including on a new run in the same chat — was scanned
+by nobody and dropped, erasing exactly the evidence the barrier needs; and
+imported settings/MCP landed in `agentkit.compat.*` namespaces that only the
+importer and its tests read, so the imported `toolCalling: "off"` never
+reached the staging policy that reads `http/settings`, and per-server MCP
+records never aggregated into the `mcp-config` array the connector reads.
+Skip now propagates (`self.skip::<()>(reason)?`), readiness probes surface
+database errors instead of answering `false`, receipts migrate with
+execution identities, statuses, results and (where the chat cannot be
+proven from the import's own writes) strict refusal / tolerant quarantine
+with a warning, and promotion writes the production documents —
+never overwriting a live write. Evidence: `strict_import_refuses_an_orphan_only_database_and_leaves_it_untouched`,
+`strict_import_refuses_a_cycle_only_database_and_tolerant_names_it`,
+`uncertain_and_completed_executions_survive_the_import_as_barriers`
+(effect-replay contract, chat re-derivation, rowid recency), and the four
+promotion tests (`imported_settings_reach_the_production_settings_document`,
+`imported_mcp_servers_aggregate_into_the_production_config_document`, and
+their no-overwrite pairs) in `rust/crates/store/tests/import_ts.rs`.
+Packaging: the desktop example consumed `@agentkit/native`, which the
+published manifest never exported (qualification failed on the platform
+lane); the export is published as `agentkit/native` and consumed.
+
+**Crash recovery cannot strand a workspace behind unnameable evidence.**
+The native coding lane's approved re-execution after a mid-command SIGKILL
+could settle `completed` without ever running the command: reconciliation
+of the crash's never-upgraded pre-spawn intent published a quarantine
+naming no process (`pids: []`) and no group, and the lift proof demanded a
+process-group probe that record shape can never satisfy. Pre-spawn records
+now anchor their suspect window at publication time (long-lived same-user
+daemons with unreadable `environ` — the perpetual suspects on a busy
+machine — fall outside it while any genuine, necessarily-younger descendant
+stays inside); reconciliation retries the marker scan across churn before
+calling the survivor set UNKNOWN; a never-confirmed group is vacuous for the
+lift proof, whose reliable scan (no marked process, no unreadable suspect)
+is the authority, matching the rule under which reconciliation already
+retired such intents; and the driver's pgid-reporting write got a tight
+initial poll plus retries so a surviving spawner records its group before a
+kill typically can land. A live marked descendant still blocks — quarantine
+lifts only on positive exit. See `docs/rust/parity.md`
+"coding-lane crash-recovery tranche"; pinned by three lockdir tests, the
+revised `unknown_group_resolves_on_positive_marker_exit` contract, and the
+coding-agent crash-adoption acceptance test (deterministic on the loaded
+machine that previously failed it deterministically).
+
+**The migration's structural gate is mechanical, not narrative.**
+`scripts/check-composition-ownership.mjs` (root script `check:composition`,
+required in the CI lint job) rejects backend-implementation imports from
+shipped compositions — `examples/*/src`, the desktop Node entries, and
+`scripts/qualification` drivers — while allowing bindings, public types
+(`import type` always passes), browser clients, and an audited per-file
+allowlist that carries each exception's documented reason (coding-agent CLI
+profile/descriptor helpers, `getPresetByKind` preset metadata, the OAuth
+acceptance harness, the legacy-seed and proposal-conformance drivers kept
+deliberately as differential witnesses). Frozen engine symbols
+(`TurnRunner`, `TaskService`, `SingleProcessTaskRunner`, `createRestHandler`,
+`createCodingToolPack`, `createLockDirWorkspaceCoordinator`) are hard-banned
+even inside allowlisted files; namespace/default and `require()` imports of
+backend packages fail closed. `scripts/tests/composition-ownership.test.ts`
+pins both directions: the clean tree passes and each reintroduction shape is
+rejected. The `docs/rust/parity.md` ledger now states what the code says —
+the `host` row lists the real carve-out instead of "zero production
+consumers", `scripts/live` admits the deliberately-TS coding-pack drivers,
+and a `toolpacks-coding` row records that production coding tools run in
+Rust (`registerCodingTools`) with the TS pack retained as the fingerprint
+differential. The stale wiring claims in the two example READMEs are
+corrected, and `@agentkit/toolpacks-coding` moved to `devDependencies` of
+`examples/coding-agent` (only the acceptance test's foreign-coordinator
+contender still touches it).
+
+**Responses reasoning parity now has binding-level proof.** The two frozen
+client verdicts that previously had only Rust-integration evidence —
+terminal-only reasoning (no delta frames) surviving into the public
+`run.message.completed` as `reasoningContent`, and final reasoning that
+conflicts with the streamed prefix failing `stream_output_mismatch` with no
+completed message — are pinned through the public binding in
+`packages/native/tests/provider-lane.test.ts`. The loopback provider
+helper's `ResponsesCanned` gained `terminalReasoningText` to script the
+final-object reasoning content part.
+
+**Managed content is native end to end.** The store port grew the whole
+managed-content surface — `promptTemplates.publish|list|get|remove|render`,
+`skills.publish|list|get|remove`, `connections.list|get|save|remove` and
+`runContent.resolve|recordResource|listResources` execute in
+`agentkit-store::managed_content` (template tombstones and revision
+immutability, content-hashed skill revisions with frontmatter-subset
+validation and publish-order catalogs, connection create/update CAS with
+normalized cross-account alias uniqueness, immutable account identity,
+`***` credential redaction on every read and the deny-all `secretRefs`
+refusal `mcp_secret_missing`), and the desktop backend now serves the nine
+previously-stubbed managed-content routes from the same engine instead of
+answering "Native managed content services are not configured."
+(`crates/host/tests/managed_content_http.rs`). The TypeScript half landed
+with it: `NativeManagedContent` (`packages/native/src/managed-content.ts`)
+is the typed wrapper over the port path — strict wire shape refused
+client-side with the binding's own stable codes, before the FFI — and the
+`examples/desktop-host` managed-integrations recipe is now that wrapper:
+the `ConnectionService`, `PromptTemplateService`, `SkillService` and
+`createRunContentProvider` imports are gone. MCP OAuth remains the one
+documented gap: `connect`/`reconnect`/`test`/`disconnect`/`action` reach
+the port and are refused `not_implemented` (REST `connectionAction` is
+501), never a fake success. Evidence: 147 engine tests, the binding's
+port tests, `packages/native/tests/managed-content.test.ts` (tombstones,
+CAS refusal, redaction, deny-all, catalog order, connector gate,
+unavailable tolerance, transaction commit/rollback, reopen on a fresh
+`NativeStore.open`, HTTP 201/204 pass-through) and the example suite.
+
+**Session context assembly options are honored, not refused.** The native
+executor no longer refuses `context.policy` and `context.toolResultElision`
+at task staging with `501 not_implemented` — the live compaction recipe
+(`scripts/live/compaction-session.ts`) now gets past staging to its first
+provider request. `policy` drives anchored-history replay exactly as the
+frozen TypeScript lane: `transcript` (the default) replays each prior turn's
+own run records — tool calls, results, steering — and `final_answers` drops
+them, keeping only the visible user/assistant answers; values outside the
+enumeration stay refused by the descriptor grammar. Tool-result elision
+(ADR 0017) is ported whole — default on, newest 2 turns kept, results over
+6000 characters cut to 2000-head + 1000-tail with the frozen marker — and is
+applied to the assembled provider view before compaction, honoring the
+binding's `keepRecentTurns`/`maxChars` overrides (head/tail are fixed in both
+lanes). Evidence: `rust/crates/host` `session_runtime.rs` witnesses for the
+recipe's exact config (admission carries the resolved budget, oversized
+history emits `run.context.compacted`), elision byte-pinned to the frozen TS
+helper's output, and policy shapes pinned to `context-transcript.test.ts`.
+
+**Packed `@agentkit/native` declarations are self-contained.** The shipped
+declarations imported `@agentkit/host` (a devDependency) — invisible inside
+the workspace, `TS2307` for every clean install of the tarball with
+`skipLibCheck` off. `scripts/prepack-bundle-types.mjs` (wired into the
+package's `build` and `prepack`) now rolls `dist/index.d.ts` up with
+api-extractor, inlining the reachable `@agentkit/host` port surface and the
+`@sinclair/typebox` schema types it drags in, and fails the pack if any
+bare specifier or non-runtime workspace import survives; `check-native-package.mjs`
+gained a third consumer mode that compiles
+`rust/scripts/native-package-typed-consumer.ts` against the INSTALLED package
+with strict `tsc`, NodeNext resolution and `skipLibCheck` off, so CI holds
+the exact scenario external review reported.
+
+**Backend runs on Rust by default composition.** The binding grew the whole
+remaining backend surface and every production composition moved onto it.
+`service.startHttpServer()` serves REST v1 + SSE from the Rust
+`agentkit-transport-http` engine (the unchanged client and react suites
+pass against it unmodified); `registerProviderConnection` + `providerConfig`
+install the Rust provider lane (chat-completions and responses protocols,
+API keys never enter JavaScript, continuation replay and revoked-connection
+refusal included); `NativeStore` + `NativeAssistantStore` expose the Rust
+store's complete `AssistantStore` surface through `callStore` and pass the
+shared adapter conformance drivers; `startMcpServer` hosts the crate's
+streamable-HTTP MCP server over registered JS tools and
+`mcpConnect`/`mcpCallTool` run the crate's client manager with host-decided
+effect and deny-all secret resolution. Both examples, the qualification
+smokes and the live scripts compose `@agentkit/native` only; the TypeScript
+backend packages remain frozen, API-compatible libraries with zero
+production consumers (`docs/rust/parity.md` keeps the per-package ledger).
+
+**MCP handles are pinned to the registration that minted them.** Every
+descriptor `mcpConnect` hands out now carries a `handle` (`"<alias>#<n>"`,
+plus a monotonic `registration` in `mcpListServers`), and `mcpCallTool` takes
+it as a fourth argument: after an alias is re-registered under the same name,
+a call presenting a superseded, foreign-alias, or (once re-registered)
+missing handle is refused with `mcp_authority_revoked` before the transport is
+touched, so one generation's descriptor can never authorize another
+generation's callback. Server-side, the advertised catalogue is now derived
+from the resolver's own first-match rule (`advertised_definitions`), so a
+remote client is always shown the callback it will execute. Alias maps are
+validated by one shared gate (`bridge::aliases_are_one_step`, applied both in
+`McpToolSet::new` and in the binding's projection mirror): a rename that lands
+on another tool's own name — which would make one name denote two tools — is
+refused at connect with `mcp_invalid_config`, and a configuration change whose
+new side fails rolls the manager back so the already-connected servers keep
+their transports, descriptors and handles.
+
+**Two engine fixes on the consumer path.** `complete_proposal` finalizes an
+`Applying` proposal behind a pre-existing receipt — the store port records
+the outcome before requesting the terminal transition, and the old early
+return skipped the stamp, so host `ProposalService.apply` over the native
+store never left `applying`; the receipt stays first-committed-wins and the
+stamp lands from the receipt's outcome. And a chat that is not a session now
+answers the permission guard with ABSENCE (configured-mode fallback) instead
+of a guard error, so REST-minted chats run their registered JS tools — a
+non-session chat had been refused "guard error" on every tool call;
+malformed session state stays fail-closed.
+
+**Cancellation now reaches user code, promptly.** The bridge's host-cancel
+path cleared the pending entry before its drop-guard ran, so the
+`cancel` notification the callback router aborts on was never sent — JS
+tool signals never fired on `service.cancel`. The branch now delivers the
+same notification the drop guard sends; `session.cancel` additionally
+rouses the idle worker and the active attempt (`wake_active`, keyed by
+task id) instead of waiting for the next heartbeat tick, and the router
+registers a per-call `AbortController` before entering user code, exposing
+the documented `signal` on `ProviderRequest`/`ToolCallRequest`. Measured
+abort latency after the fix: 4 ms; the binding suite pins the JS-tool
+abort, the ignored late settle, and that a cancelled coding-pack run
+takes its process group down (`packages/native/tests/cancellation.test.ts`).
+
+**Coding fingerprint agrees with the baseline and revalidates at claim.**
+The tokenizer now mirrors JavaScript exactly (the 25-code-point ECMA
+whitespace class, greedy single-space token splitting, ASCII `\w` in
+file-like words) and is pinned against a shared fixture
+(`rust/fixtures/coding-fingerprint/tokenizer.json`) from both sides. The
+standing-approval key is recomputed at claim from the same lossy-decoded
+effective environment the exec path spawns from (`std::env::vars()`
+silently dropped non-UTF-8 pairs), executable identity is revalidated at
+claim, and the hashed envelope carries version 3 so no digest minted
+before these fixes can ever authorize again — persisted shape unchanged,
+old grants inert by non-match. The stat identity module compiles on
+Apple and Windows targets again (flat `st_mtime`, signed `st_dev`,
+Windows CRT-stat documented as conservative identity).
+
+**Project instructions read on Windows.** `FileProjectInstructions`
+refused every read off-POSIX, a regression against the frozen TypeScript
+port; Windows now mirrors the POSIX two-step — reparse-point refusal up
+front, then the opened handle's volume-serial/file-index must match the
+inspected metadata or the read is refused. Other non-POSIX targets keep
+the hard refusal; never an unchecked read.
+
+**Qualification hardening.** CI prebuilds the `http_fixture` example
+(`build:fixture`) before mixed-runtime suites; `prepack-publish-config`
+pins `workspace:` ranges so the packed native manifest installs
+standalone; `rust.yml` runs the shared-fingerprint conformance tests as
+named steps; `contract.test.ts` uses `fileURLToPath` (win32 `URL.pathname`
+yielded `/C:/…`); the missing-addon gate audit found no vacuous passes.
+
+**Native TS binding, first slice.** `rust/crates/napi` (`agentkit-napi`, napi-rs 3.x) and the workspace
+package `@agentkit/native` expose the Rust runtime to Node/Bun over JSON mirrors of the serde wire shapes:
+`NativeStore` (actor-per-instance, `already_owned`/`recovery_unreadable` fail closed) and
+`store.createService()`, which builds the whole Rust pipeline — `AgentHost`, `ChatExecutor`,
+`AgentSessionService` — with JS-contributed tools and providers running under the Rust-side
+`BindingAuthority`/`JsToolGuard`/`BindingPlanPolicy` (plan-mode blocking, per-call approval, and
+approved-plan escalation never consult JS). `SessionService` covers create/send/steer/followUp/answer/
+approve/deny/cancel/interrupt/resume/flushQueue/getState/getExecution/listTurns/exportSession/getUsage;
+`subscribeTurn(taskId, afterSeq)` is a pull-based durable-event follower (`poll(limit, waitMs)`, batches
+capped at 64, durable cursor, backpressure instead of overflow). `service.close()` runs
+`Open → Closing → Closed` — concurrent callers share one completion, outstanding callbacks settle
+honestly, `closeUncertain` records an undrained close — and dropping a JS wrapper never cancels durable
+execution. Provider functions deliver the final result as one chunk; streaming deltas, `AbortSignal`
+mapping, the Node matrix beyond the qualified cells, and prebuilt per-triple packages remain open
+(`docs/rust/native-binding-milestone.md`). The generated loader and `index.d.ts` are committed
+(typecheck needs no Rust build); the platform `.node` is a build artifact. The binding suites skip
+without the binary and hard-fail under `AGENTKIT_REQUIRE_NATIVE=1`; the native CI job builds it, sets
+that flag, runs the packed-consumer gate (`npm pack` → imported under Bun and Node), and gates loader
+freshness with `git diff --exit-code`.
+
+**Coding tool pack ported to Rust.** `rust/crates/toolpacks-coding` is the native port of
+`@agentkit/toolpacks-coding`; the TypeScript package is unchanged and remains the contract of record. Eleven
+`coding`-namespace tools (`read_file`, `list_dir`, `find_files`, `code_search`, `repo_map`, `git_inspect`,
+`edit_file`, `write_file`, `run_command`, `run_tests`, `submit_plan`), the permission guard (role ceilings,
+mode matrix, plan-mode finals), the in-process and lock-dir coordinators, the version ledger, the mutation
+queue, bounded process execution with marked-tree teardown, `sandbox-exec` profile generation, the shell
+command policy with standing-approval keys, and `createCodingToolPack` as a host `ToolContributor`. The host
+`ToolGuardContext` gained the TypeScript port's per-call `arguments`, so the high-risk command guard judges
+the live command; a staging regression test pins that guards see each call's own arguments. 209 tests
+(206 unit + contributor matrix) mirror the TypeScript suite's exact codes, messages, limits and schemas.
+Live macOS `sandbox-exec` execution remains unqualified (Linux CI asserts profiles as text).
+
 **Coding tool pack refuses lost updates.** `@agentkit/toolpacks-coding`:
 
 - `edit_file` and an overwriting `write_file` are checked against the version the session last read (`read_file`
@@ -74,6 +460,33 @@ passes (the compaction summarizer is unchanged). Absent: behaviour and events ar
 - Edits keep each line's original terminator and refuse invalid UTF-8 (`encoding_unsupported`). `read_file` returns
   `sha256`/`totalLines` and reads up to 8 `paths`. `list_dir` honours ignore files, and `code_search` pages with
   `offset`.
+
+**One portable tool-permission authority.** The coding pack's effect/classifier decision — command-execution and
+file-effect capabilities outrank the mode a tool declares for itself — moved to `agentkit-core`
+(`agentkit_core::permission`) and both the coding `ToolGuard` and the native binding's `JsToolGuard` now delegate to
+it, so a JS-contributed tool can no longer self-downgrade into plan or `auto_edit` mode: `run_command` (or an
+unknown capability that declares `effect: "execute"`) requires approval even under `auto_edit`, and a tool that
+declares `effect: "plan"` is decided by the plan-mode policy before the read/write effect rules — matching the
+coding pack's `submit_plan` exactly. The shared decision is dependency-free (no Unix-only crates), so the binding
+no longer pulls the Unix-only coding pack and compiles on Windows.
+
+**Session queue and resume consistency.** Follow-up admission is one store write transaction
+(`SqliteStore::queue_or_stage_turn`): the active-task check, durable input insert, and next-turn staging cannot
+interleave, so two concurrent `followUp` calls can no longer both stage into the same next turn, and a steer whose
+settlement cancels it is never staged (`on_settled: cancel` inputs stay Pending and visible). Fallback promotion at
+turn settle reads the session's own persisted descriptor — never the calling turn's stale cached mode — and
+`resume` deduplicates a restart whose completion already landed, instead of re-running effects.
+
+**Coding tool pack cleanup uncertainty and quarantine durability** (ADR 0020 corrective). Teardown now carries an
+explicit cleanup outcome (`Clean` / `Uncertain` with marked-survivor, environ-denied-suspect, stuck-group and
+unsupported-scan reasons) that every cleanup decision — normal completion, timeout, cancellation, drain, crash
+recovery and the startup sweep — must consume; the discovery view no longer drops the `/proc` scan's suspect set, so
+`survivors = []` beside a live suspect is unknown, never proof of cleanup. Suspects are reported and never killed
+(they may be unrelated). A driver-created quarantine is durable for the in-process coordinator too (a
+`quarantine.json` in the intent journal, fail closed on publication loss), and the durable intent is retained —
+not deleted — until recovery resolves the uncertainty, so a reopened coordinator over the same store denies the next
+modifying lease (`workspace_quarantined`). Zombie processes no longer masquerade as suspects, and group-liveness
+verdicts are confirmed across sustained probes.
 
 **Sessions, context, profiles** ([ADR 0016](docs/adr/0016-durable-agent-sessions.md) §6a–6b,
 [0017](docs/adr/0017-context-assembly-and-compaction.md), [0015](docs/adr/0015-unified-agent-runtime.md) §3).

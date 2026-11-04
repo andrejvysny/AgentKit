@@ -16,12 +16,13 @@ remaining qualification requirements are in [the parity specification](../docs/r
 | `agentkit-contracts` | Portable Serde contracts, offline schema validation, routes and idempotency |
 | `agentkit-core` | Provider protocols, streaming, bounded tool execution and budgets |
 | `agentkit-store` | SQLite actor, atomic state changes, leases, projections and recovery |
-| `agentkit-host` | Durable execution, native run handles, proposal application and optional HTTP backend |
+| `agentkit-host` | Durable execution, agent sessions with steering/human input/plan grants, native run handles, proposal application and optional HTTP backend |
 | `agentkit-connections` | Application namespaces, immutable selection, consent, secret-store and network ports |
 | `agentkit-transport-http` | Axum REST/SSE boundary over an authenticated backend |
 | `agentkit-client` | Native HTTP client, replay decoding and presentation state |
 | `agentkit-mcp` | Official `rmcp` transports with the frozen TypeScript protocol revisions |
 | `agentkit-rust` | Feature-selected integration facade; contracts only by default |
+| `agentkit-napi` | Node-API binding behind `@agentkit/native` (handles, promises, pull-based durable-event subscriptions); see [the binding milestone](../../docs/rust/native-binding-milestone.md) |
 
 The facade's `runtime`, `durable`, `client`, `http`, `mcp`, and `keychain` features
 select integrations explicitly. Contracts also compile for
@@ -128,6 +129,7 @@ surrogates are the documented, approved UTF-8 compatibility exception.
 From the monorepo root:
 
 ```sh
+bun run lint
 bun scripts/export-rust-fixtures.ts --check
 bun test
 bun run typecheck
@@ -139,6 +141,11 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
 cargo check -p agentkit-contracts --target wasm32-unknown-unknown --locked
 ```
+
+Environment: the release-projection and MCP stdio-peer suites spawn a real
+`node` (Node 22 on the CI runners); the workflow qualification gates evaluate
+`needs` results with `jq` and need no runtime. The wasm check requires the
+`wasm32-unknown-unknown` rustup target.
 
 Mocked provider tests, loopback HTTP tests, local native builds, live provider
 qualification, real keychain qualification and remote platform CI are separate

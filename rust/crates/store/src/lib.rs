@@ -1,22 +1,50 @@
 //! Durable storage. Every database mutation runs on one bounded, dedicated worker.
 mod actor;
+mod advisor;
+mod agent_inputs;
+mod context_summaries;
 mod conversations;
 mod data;
+mod deadline;
+mod execution_receipts;
+mod managed_content;
 mod models;
 mod proposals;
+mod provider_catalog;
+mod provider_connections;
 mod schema;
+mod session_ops;
 mod settings_commit;
+mod subagents;
 mod tasks;
 mod timestamp;
+mod transaction;
+#[cfg(feature = "ts-import")]
+mod ts_import;
 mod util;
 
 pub use actor::SqliteStore;
+pub use advisor::*;
+pub use agent_inputs::*;
+pub use context_summaries::*;
 pub use conversations::*;
 pub use data::*;
+pub use execution_receipts::*;
+pub use managed_content::*;
 pub use models::*;
 pub use proposals::*;
+pub use provider_catalog::*;
+pub use provider_connections::{provider_connection_identity, register_provider_connection};
+pub use schema::SCHEMA_VERSION;
+pub use session_ops::*;
 pub use settings_commit::{SettingWrite, SettingsCommit};
+pub use subagents::*;
+pub use tasks::TaskAging;
 pub use timestamp::{ConversationTimestamp, TimestampOutOfRange};
+pub use transaction::StoreTransaction;
+#[cfg(feature = "ts-import")]
+pub use ts_import::*;
+pub use util::id;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -38,6 +66,10 @@ pub enum StoreError {
     Duplicate(String),
     #[error("scope busy: {0}")]
     ScopeBusy(String),
+    /// The settlement committed nothing: the caller may rebuild its plan
+    /// against the current descriptor and retry under the same lease.
+    #[error("session descriptor changed while staging settlement: {0}")]
+    SessionDescriptorChanged(String),
     #[error("lease lost for task {0}")]
     LeaseLost(String),
     #[error("invalid transition: {0}")]
@@ -46,8 +78,18 @@ pub enum StoreError {
     InvalidInput(String),
     #[error("invalid import: {reason}")]
     InvalidImport { reason: String },
+    #[error("recovery evidence unreadable: {0}")]
+    RecoveryUnreadable(String),
     #[error("store worker closed")]
     Closed,
+    #[error("transaction_gate_timeout")]
+    TransactionGateTimeout,
+    #[error("transaction scope expired")]
+    TransactionScopeExpired,
+    /// A store job panicked; its transaction was rolled back and the worker
+    /// kept running.
+    #[error("internal store error: {0}")]
+    Internal(String),
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;

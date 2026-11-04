@@ -383,3 +383,64 @@ async fn dispatch_authority_requires_live_uncancelled_current_attempt() {
         Err(StoreError::LeaseLost(_))
     ));
 }
+
+async fn aging_claim_order(aging: TaskAging, now: i64) -> String {
+    let store = SqliteStore::memory(2).unwrap().with_task_aging(aging);
+    let mut old = task("old", "s-old");
+    old.priority = 0;
+    old.now = 0;
+    let mut young = task("young", "s-young");
+    young.priority = 5;
+    young.now = 90_000;
+    store.submit(old).await.unwrap();
+    store.submit(young).await.unwrap();
+    store.claim(claim(now)).await.unwrap().unwrap().task.task_id
+}
+
+fn aging(bonus: i64, max_bonus: i64) -> TaskAging {
+    TaskAging {
+        interval_ms: 10_000,
+        bonus,
+        max_bonus,
+    }
+}
+
+#[tokio::test]
+async fn aging_off_keeps_priority_order() {
+    assert_eq!(
+        aging_claim_order(TaskAging::default(), 1_000_000).await,
+        "young"
+    );
+}
+
+#[tokio::test]
+async fn aged_old_task_overtakes_younger_higher_priority() {
+    // old waited 10 intervals (+10) and outranks young's 5 (young earned 1).
+    assert_eq!(aging_claim_order(aging(1, i64::MAX), 100_000).await, "old");
+}
+
+#[tokio::test]
+async fn aging_cap_stops_the_climb() {
+    assert_eq!(aging_claim_order(aging(1, 3), 100_000).await, "young");
+}
+
+#[test]
+fn negative_wait_earns_nothing_and_math_saturates() {
+    let a = aging(1, i64::MAX);
+    assert_eq!(a.effective_priority(2, 5_000, 0), 2);
+    let huge = TaskAging {
+        interval_ms: 1,
+        bonus: i64::MAX,
+        max_bonus: i64::MAX,
+    };
+    assert_eq!(
+        huge.effective_priority(i32::MAX, i64::MIN, i64::MAX),
+        i64::MAX
+    );
+    let zero = TaskAging {
+        interval_ms: 0,
+        bonus: 1,
+        max_bonus: i64::MAX,
+    };
+    assert_eq!(zero.effective_priority(0, 0, 60_000), 2);
+}

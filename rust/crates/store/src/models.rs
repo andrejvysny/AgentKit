@@ -76,6 +76,9 @@ pub struct TaskRecord {
     #[serde(default)]
     /// Durable backoff reserves a running scope while no attempt owns a lease.
     pub retry_pending: bool,
+    #[serde(default)]
+    /// Durable request to interrupt the running turn at a safe boundary.
+    pub interrupt_requested: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -142,6 +145,20 @@ pub struct SettleTask {
     pub error: Option<String>,
     pub events: Vec<Value>,
     pub messages: Vec<crate::MessageInput>,
+}
+
+/// Fields a `transition_task` may write alongside the status change,
+/// atomically. Mirrors the TypeScript port's `TaskPatch`: absent fields keep
+/// whatever the store has counted.
+#[derive(Clone, Debug, Default)]
+pub struct TaskTransitionPatch {
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    pub error: Option<String>,
+    pub available_at: Option<i64>,
+    pub priority: Option<i32>,
+    pub poison_count: Option<u32>,
+    pub payload: Option<Value>,
 }
 
 #[derive(Clone, Debug)]

@@ -52,11 +52,41 @@ impl ChatCompletionsProvider {
             if let Some(budget) = &input.budget {
                 budget.consume("providerRequests").await?;
             }
-            let response = tokio::select! {biased;
-                _=cancellation.cancelled()=>return Err(CoreError::new("cancelled","aborted")),
-                response=self.transport.request(&self.identity,"chat/completions",Some(body.clone()),cancellation.clone())=>response?,
+            let response = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(CoreError::new("cancelled", "aborted")),
+                response = self.transport.request(
+                    &self.identity,
+                    "chat/completions",
+                    Some(body.clone()),
+                    cancellation.clone(),
+                ) => response,
+            };
+            // The request never produced a response (DNS, refused connection,
+            // TLS, a fetch double that threw): distinct from a provider that
+            // answered with an error status. The transport codes genuine
+            // network failures as `transport_error`; every other structured
+            // verdict the transport raises (a revoked/rotated connection's
+            // `connection_changed`, an `invalid_input` operation refusal)
+            // IS the classification — the frozen TS client throws those
+            // before the fetch, so collapsing them into `network_error`
+            // here would misreport a revocation as an outage.
+            let response = match response {
+                Ok(response) => response,
+                Err(_) if cancellation.is_cancelled() => {
+                    return Err(CoreError::new("cancelled", "aborted"))
+                }
+                Err(error) if error.code == "transport_error" => {
+                    return Err(CoreError::new("network_error", &error.message))
+                }
+                Err(error) => return Err(error),
             };
             if response.status().is_success() {
+                // A response without a body can never carry an SSE stream; the
+                // event contract distinguishes it from a stream that ends empty.
+                if response.content_length() == Some(0) {
+                    return Err(CoreError::new("empty_body", "Provider returned empty body"));
+                }
                 return Ok(response);
             }
             let status = response.status().as_u16();
@@ -84,56 +114,156 @@ impl ChatCompletionsProvider {
     fn events(&self, input: ChatRequest, cancellation: CancellationToken) -> ProviderStream {
         let provider = self.clone();
         Box::pin(async_stream::try_stream! {
-            let (body,roles)=build_body(&input)?;
+            let (body, roles) = build_body(&input)?;
             yield ProviderEvent::Started;
-            if !roles.is_empty() {yield ProviderEvent::Warning {code:"multimodal_flattened".into(),message:format!("Flattened content parts to text on {} message(s); image parts were dropped.",roles.join(", "))};}
-            let response=provider.send(&input,body,cancellation.clone()).await?;
+            if !roles.is_empty() {
+                yield ProviderEvent::Warning {
+                    code: "multimodal_flattened".into(),
+                    message: format!(
+                        "Flattened content parts to text on {} message(s); image parts were dropped.",
+                        roles.join(", ")
+                    ),
+                };
+            }
+            let response = provider.send(&input, body, cancellation.clone()).await?;
             provider.transport.check_current()?;
-            let mut bytes=response.bytes_stream(); let mut parser=SseDecoder::new(); let mut state=ChatState {call_id:input.runtime.as_ref().map(|runtime|runtime.id("call_")).unwrap_or_else(||format!("call_{}",uuid::Uuid::new_v4())),..ChatState::default()};
-            let mut failure=None;
+            let mut bytes = response.bytes_stream();
+            let mut parser = SseDecoder::new();
+            let mut state = ChatState {
+                call_id: input
+                    .runtime
+                    .as_ref()
+                    .map(|runtime| runtime.id("call_"))
+                    .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4())),
+                ..ChatState::default()
+            };
+            let mut failure = None;
             loop {
-                let next=tokio::select! {biased;
-                    _=cancellation.cancelled()=>{failure=Some(CoreError::new("cancelled","aborted"));None},
-                    next=bytes.next()=>next,
+                let next = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => {
+                        failure = Some(CoreError::new("cancelled", "aborted"));
+                        None
+                    },
+                    next = bytes.next() => next,
                 };
                 provider.transport.check_current()?;
-                let Some(chunk)=next else {break;};
+                let Some(chunk) = next else { break; };
                 match chunk {
-                    Ok(chunk)=>match parser.push(&chunk) {
-                        Ok(frames)=>for frame in frames {
-                            let accepted=provider.transport.check_current().and_then(|()|state.accept(frame));
-                            match accepted {Ok(events)=>for event in events {yield event;},Err(error)=>{failure=Some(error);break;}}
+                    Ok(chunk) => match parser.push(&chunk) {
+                        Ok(frames) => for frame in frames {
+                            let accepted = provider
+                                .transport
+                                .check_current()
+                                .and_then(|()| state.accept(frame));
+                            match accepted {
+                                Ok(events) => for event in events {
+                                    yield event;
+                                },
+                                Err(error) => {
+                                    failure = Some(error);
+                                    break;
+                                },
+                            }
                         },
-                        Err(error)=>{failure=Some(error);break;}
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
                     },
-                    Err(_)=>{failure=Some(CoreError::new("provider_error","Provider stream failed"));break;}
+                    Err(_) => {
+                        failure =
+                            Some(CoreError::new("provider_error", "Provider stream failed"));
+                        break;
+                    }
                 }
-                if failure.is_some() {break;}
+                if failure.is_some() {
+                    break;
+                }
             }
-            if failure.is_none() {match parser.finish() {
-                Ok(frames)=>for frame in frames {
-                            let accepted=provider.transport.check_current().and_then(|()|state.accept(frame));
-                            match accepted {Ok(events)=>for event in events {yield event;},Err(error)=>{failure=Some(error);break;}}
-                        },
-                Err(error)=>failure=Some(error),
-            }}
+            if failure.is_none() {
+                match parser.finish() {
+                    Ok(frames) => for frame in frames {
+                        let accepted = provider
+                            .transport
+                            .check_current()
+                            .and_then(|()| state.accept(frame));
+                        match accepted {
+                            Ok(events) => for event in events {
+                                yield event;
+                            },
+                            Err(error) => {
+                                failure = Some(error);
+                                break;
+                            },
+                        }
+                    },
+                    Err(error) => failure = Some(error),
+                }
+            }
             provider.transport.check_current()?;
-            let complete=failure.is_none()&&(state.finish.is_some()||state.done)&&!(state.dropped>0&&!state.calls.is_empty());
-            if let Some(usage)=&state.usage {yield ProviderEvent::Usage(usage_data(usage,&input.model,&state.call_id,complete)?);}
-            if let Some(error)=failure {Err(error)?;}
-            if !complete {Err(CoreError::new("incomplete_stream","Provider stream ended without a complete response or contained malformed tool frames."))?;}
-            let mut calls=state.assemble();
-            let duplicates=crate::tool_execution::dedupe(&mut calls);
-            if !duplicates.is_empty() {yield ProviderEvent::Warning {code:"duplicate_tool_call_id".into(),message:format!("Provider reused tool call id(s) {} in one turn; the later call(s) were re-keyed so each stays answerable.",duplicates.join(", "))};}
-            if state.finish.as_deref()==Some("tool_calls")&&calls.is_empty() {yield ProviderEvent::Warning {code:"tool_call_unparseable".into(),message:"Provider reported finish_reason=tool_calls but emitted no usable tool call.".into()};}
-            if state.dropped>0&&state.content.is_empty()&&calls.is_empty() {
-                yield ProviderEvent::Warning {code:"sse_parse".into(),message:format!("Dropped {} malformed SSE line(s); response may be incomplete.",state.dropped)};
+            let complete = failure.is_none()
+                && (state.finish.is_some() || state.done)
+                && !(state.dropped > 0 && !state.calls.is_empty());
+            if let Some(usage) = &state.usage {
+                yield ProviderEvent::Usage(
+                    usage_data(usage, &input.model, &state.call_id, complete)?,
+                );
             }
-            let mut data=json!({"content":state.content,"toolCallCount":calls.len(),"toolCalls":calls});
-            if !state.reasoning.is_empty() {data["reasoningContent"]=state.reasoning.into();}
-            if let Some(reason)=state.finish {data["finishReason"]=reason.into();}
-            yield ProviderEvent::Event {kind:"run.message.completed".into(),data};
-            for call in calls {yield ProviderEvent::ToolRequested(call);}
+            if let Some(error) = failure {
+                Err(error)?;
+            }
+            if !complete {
+                Err(CoreError::new(
+                    "incomplete_stream",
+                    "Provider stream ended without a complete response or contained malformed tool frames.",
+                ))?;
+            }
+            let mut calls = state.assemble();
+            let duplicates = crate::tool_execution::dedupe(&mut calls);
+            if !duplicates.is_empty() {
+                yield ProviderEvent::Warning {
+                    code: "duplicate_tool_call_id".into(),
+                    message: format!(
+                        "Provider reused tool call id(s) {} in one turn; the later call(s) were re-keyed so each stays answerable.",
+                        duplicates.join(", ")
+                    ),
+                };
+            }
+            if state.finish.as_deref() == Some("tool_calls") && calls.is_empty() {
+                yield ProviderEvent::Warning {
+                    code: "tool_call_unparseable".into(),
+                    message: "Provider reported finish_reason=tool_calls but emitted no usable tool call."
+                        .into(),
+                };
+            }
+            if state.dropped > 0 && state.content.is_empty() && calls.is_empty() {
+                yield ProviderEvent::Warning {
+                    code: "sse_parse".into(),
+                    message: format!(
+                        "Dropped {} malformed SSE line(s); response may be incomplete.",
+                        state.dropped
+                    ),
+                };
+            }
+            let mut data = json!({
+                "content": state.content,
+                "toolCallCount": calls.len(),
+                "toolCalls": calls,
+            });
+            if !state.reasoning.is_empty() {
+                data["reasoningContent"] = state.reasoning.into();
+            }
+            if let Some(reason) = state.finish {
+                data["finishReason"] = reason.into();
+            }
+            yield ProviderEvent::Event {
+                kind: "run.message.completed".into(),
+                data,
+            };
+            for call in calls {
+                yield ProviderEvent::ToolRequested(call);
+            }
         })
     }
 }
@@ -166,7 +296,19 @@ impl ChatProvider for ChatCompletionsProvider {
         let payload = read_json(response, cancellation).await?;
         self.transport.check_current()?;
         let fetched = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        Ok(payload["data"].as_array().into_iter().flatten().filter_map(|model|Some(json!({"providerId":self.id(),"modelId":model["id"].as_str()?,"displayName":model.get("name").cloned().unwrap_or(Value::Null),"fetchedAt":fetched}))).collect())
+        Ok(payload["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|model| {
+                Some(json!({
+                    "providerId": self.id(),
+                    "modelId": model["id"].as_str()?,
+                    "displayName": model.get("name").cloned().unwrap_or(Value::Null),
+                    "fetchedAt": fetched,
+                }))
+            })
+            .collect())
     }
 }
 fn build_body(input: &ChatRequest) -> Result<(Value, Vec<String>), CoreError> {
@@ -177,7 +319,10 @@ fn build_body(input: &ChatRequest) -> Result<(Value, Vec<String>), CoreError> {
         if dropped && !roles.contains(&message.role) {
             roles.push(message.role.clone());
         }
-        let mut mapped = json!({"role":message.role,"content":content});
+        let mut mapped = json!({
+            "role": message.role,
+            "content": content,
+        });
         if let Some(name) = &message.name {
             mapped["name"] = name.clone().into();
         }
@@ -185,11 +330,31 @@ fn build_body(input: &ChatRequest) -> Result<(Value, Vec<String>), CoreError> {
             mapped["tool_call_id"] = id.clone().into();
         }
         if !message.tool_calls.is_empty() {
-            mapped["tool_calls"]=message.tool_calls.iter().map(|call|json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments_json}})).collect();
+            mapped["tool_calls"] = message
+                .tool_calls
+                .iter()
+                .map(|call| {
+                    json!({
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.name,
+                            "arguments": call.arguments_json,
+                        },
+                    })
+                })
+                .collect();
         }
         messages.push(mapped);
     }
-    let mut body = json!({"model":input.model,"messages":messages,"stream":true,"stream_options":{"include_usage":true}});
+    let mut body = json!({
+        "model": input.model,
+        "messages": messages,
+        "stream": true,
+        "stream_options": {
+            "include_usage": true,
+        },
+    });
     if let Some(value) = input.temperature {
         body["temperature"] = value.into();
     }
@@ -197,7 +362,20 @@ fn build_body(input: &ChatRequest) -> Result<(Value, Vec<String>), CoreError> {
         body["max_tokens"] = value.into();
     }
     if !input.tools.is_empty() {
-        body["tools"]=input.tools.iter().map(|tool|json!({"type":"function","function":{"name":tool.name,"description":tool.description,"parameters":tool.input_schema}})).collect();
+        body["tools"] = input
+            .tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                    },
+                })
+            })
+            .collect();
         body["tool_choice"] = "auto".into();
     }
     Ok((body, roles))
@@ -208,9 +386,10 @@ async fn read_body(
 ) -> Result<String, CoreError> {
     let mut stream = response.bytes_stream();
     let mut bytes = vec![];
-    while let Some(chunk) = tokio::select! {biased;
-        _=cancellation.cancelled()=>return Err(CoreError::new("cancelled","aborted")),
-        next=stream.next()=>next,
+    while let Some(chunk) = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(CoreError::new("cancelled", "aborted")),
+        next = stream.next() => next,
     } {
         let chunk =
             chunk.map_err(|_| CoreError::new("provider_error", "Provider response failed"))?;
@@ -282,12 +461,20 @@ impl ChatState {
             self.content.push_str(content);
             events.push(ProviderEvent::Delta(content.into()));
         }
+        // Reasoning models emit chain-of-thought into a separate field; stream it
+        // incrementally (do NOT merge into the visible answer) so consumers can
+        // follow the thinking while it arrives.
         if let Some(reasoning) = delta
             .get("reasoning_content")
             .or_else(|| delta.get("reasoning"))
             .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
         {
             self.reasoning.push_str(reasoning);
+            events.push(ProviderEvent::Event {
+                kind: "run.message.reasoning-delta".into(),
+                data: json!({"delta": reasoning}),
+            });
         }
         if let Some(calls) = delta["tool_calls"].as_array() {
             for call in calls {
@@ -383,13 +570,51 @@ pub(crate) fn usage_data(
     call_id: &str,
     final_for_call: bool,
 ) -> Result<Value, CoreError> {
-    let mut data = json!({"callId":call_id,"attempt":1,"step":0,"model":model,"source":"stream","finalForCall":final_for_call});
+    let mut data = json!({
+        "callId": call_id,
+        "attempt": 1,
+        "step": 0,
+        "model": model,
+        "source": "stream",
+        "finalForCall": final_for_call,
+    });
     for (source, target) in [
         ("prompt_tokens", "promptTokens"),
         ("completion_tokens", "completionTokens"),
         ("total_tokens", "totalTokens"),
     ] {
         if let Some(value) = usage.get(source) {
+            if value
+                .as_u64()
+                .filter(|value| *value <= 9007199254740991)
+                .is_none()
+            {
+                return Err(CoreError::responses("malformed_usage"));
+            }
+            data[target] = value.clone();
+        }
+    }
+    // Servers send `null` for details they do not track; the event contract is
+    // a number or absent, never null — non-numeric values are omitted exactly
+    // as the TypeScript client does.
+    for (details, key, target) in [
+        (
+            "prompt_tokens_details",
+            "cached_tokens",
+            "cachedPromptTokens",
+        ),
+        (
+            "completion_tokens_details",
+            "reasoning_tokens",
+            "reasoningTokens",
+        ),
+    ] {
+        if let Some(value) = usage
+            .get(details)
+            .and_then(Value::as_object)
+            .and_then(|details| details.get(key))
+            .filter(|value| value.is_number())
+        {
             if value
                 .as_u64()
                 .filter(|value| *value <= 9007199254740991)

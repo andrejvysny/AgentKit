@@ -1,10 +1,41 @@
 import { appendFileSync } from "node:fs";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+
+// The repo installs the Model Context Protocol SDK only under the pinned
+// workspace alias `mcp-sdk-v1` (see the `mcp-sdk-v1:
+// "npm:@modelcontextprotocol/sdk@1.30.0"` devDependency in the
+// packages/mcp-client / packages/mcp-server manifests and bun.lock); the bare
+// `@modelcontextprotocol/sdk` specifier is NOT installed and importing it
+// makes this fixture die before speaking a single MCP frame. Same specifier
+// pattern as packages/mcp-client/tests/fixtures/mcp-peer.mjs.
+//
+// The Rust side collapses any failed stdio connection into the opaque
+// `McpClientError::Connect`, so the only diagnosable trace of a broken
+// fixture is what this process writes to stderr: resolve every SDK import
+// failure into an explicit, actionable message before exiting.
+let Server;
+let StdioServerTransport;
+let CallToolRequestSchema;
+let ListToolsRequestSchema;
+let McpError;
+let ErrorCode;
+try {
+  ({ Server } = await import("mcp-sdk-v1/server/index.js"));
+  ({ StdioServerTransport } = await import("mcp-sdk-v1/server/stdio.js"));
+  ({ CallToolRequestSchema, ListToolsRequestSchema, McpError, ErrorCode } =
+    await import("mcp-sdk-v1/types.js"));
+} catch (error) {
+  console.error(
+    "agentkit stdio MCP fixture (stdio.mjs): cannot load the MCP server SDK " +
+      "from `mcp-sdk-v1` (the workspace alias for " +
+      "npm:@modelcontextprotocol/sdk@1.30.0). This exact error otherwise " +
+      "surfaces to the Rust test only as `McpClientError::Connect`. Run " +
+      "`bun install` at the repository root so the workspace devDependency " +
+      "is present, and make sure a bun binary is on PATH (this fixture is " +
+      "launched as `bun <fixture>`). " +
+      `Underlying error: ${error instanceof Error ? `${error.name}${error.code ? ` (${error.code})` : ""}: ${error.message}` : String(error)}`,
+  );
+  process.exit(1);
+}
 
 const server = new Server(
   { name: "agentkit-native-fixture", version: "1" },
@@ -33,6 +64,12 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) =>
                 properties: { large: { type: "boolean" } },
               },
             },
+            // Server-echoed secret probes for the client-side redaction gate:
+            // the client must scrub the resolved secret it substituted into
+            // this process's environment out of both result text and the
+            // JSON-RPC error message.
+            { name: "echo-secret", inputSchema: { type: "object" } },
+            { name: "fail-secret", inputSchema: { type: "object" } },
           ],
           nextCursor: "next",
         },
@@ -51,6 +88,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ],
       structuredContent: { kind: "echo" },
     };
+  }
+  if (request.params.name === "echo-secret") {
+    return {
+      content: [{ type: "text", text: `echo ${process.env.SECRET}` }],
+    };
+  }
+  if (request.params.name === "fail-secret") {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `upstream rejected ${process.env.SECRET}`,
+    );
   }
   appendFileSync(process.env.MARKER, "once\n");
   process.exit(0);

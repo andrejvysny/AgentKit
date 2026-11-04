@@ -229,6 +229,41 @@ describe("runAgentLoop hooks", () => {
       "deny without reason",
       () => ({ action: "deny" }) as unknown as { action: "allow" },
     ],
+    // Frozen fail-closed table: ONLY `undefined` (no opinion) and
+    // `{action:"allow"}` pass. `null` and `NaN` are garbage, not opinions —
+    // they deny with the fixed gate sentence, like every other shape the
+    // gate cannot read. These rows are the reference the native lane must
+    // reproduce exactly (JSON bridges collapse undefined/null/NaN to one
+    // value; the native table is compared against these expectations).
+    ["null", () => null as unknown as { action: "allow" }],
+    ["NaN", () => Number.NaN as unknown as { action: "allow" }],
+    [
+      "Infinity",
+      () => Number.POSITIVE_INFINITY as unknown as { action: "allow" },
+    ],
+    ["false", () => false as unknown as { action: "allow" }],
+    ["true", () => true as unknown as { action: "allow" }],
+    ["zero", () => 0 as unknown as { action: "allow" }],
+    ["number", () => 42 as unknown as { action: "allow" }],
+    ["empty string", () => "" as unknown as { action: "allow" }],
+    ["array", () => [] as unknown as { action: "allow" }],
+    ["empty object", () => ({}) as unknown as { action: "allow" }],
+    [
+      "numeric action",
+      () => ({ action: 42 }) as unknown as { action: "allow" },
+    ],
+    [
+      "deny with numeric reason",
+      () => ({ action: "deny", reason: 42 }) as unknown as { action: "allow" },
+    ],
+    [
+      "circular decision",
+      () => {
+        const loop: Record<string, unknown> = {};
+        loop["self"] = loop;
+        return loop as unknown as { action: "allow" };
+      },
+    ],
   ];
   for (const [label, beforeToolCall] of gates) {
     it(`beforeToolCall ${label}: tool never runs, guard envelope, run goes on`, async () => {
@@ -258,6 +293,10 @@ describe("runAgentLoop hooks", () => {
       }
       if (label === "deny")
         expect(messageContentToText(tools[0]?.content ?? "")).toContain("nope");
+      else
+        expect(messageContentToText(tools[0]?.content ?? "")).toContain(
+          "A loop hook could not authorize this tool call.",
+        );
     });
   }
 

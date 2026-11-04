@@ -1,7 +1,7 @@
 # AgentKit contracts for Rust
 
-This crate exposes the wire DTOs from `packages/contracts/src`, all 13 run-event
-variants, and the 39 REST v1 operations. The TypeBox schemas remain authoritative.
+This crate exposes the wire DTOs from `packages/contracts/src`, all 18 run-event
+variants, and the 48 REST v1 operations. The TypeBox schemas remain authoritative.
 The embedded schema bundle is compared with the independently exported TypeScript
 fixtures by the parity tests.
 

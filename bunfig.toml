@@ -3,4 +3,6 @@
 linker = "hoisted"
 
 [test]
+# Not honoured by `bun test` (default stays 5 s): scripts and CI pass
+# `--timeout 60000` explicitly.
 timeout = 30000

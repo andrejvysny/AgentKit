@@ -1,0 +1,26 @@
+[package]
+name = "agentkit-lsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "AgentKit native LSP client, language-server lifecycle manager and code-intelligence tools"
+repository = "https://github.com/andrejvysny/AgentKit"
+readme = "README.md"
+
+[dependencies]
+agentkit-contracts = { path = "../contracts", version = "0.1.0" }
+agentkit-core = { path = "../core", version = "0.1.0" }
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+[dev-dependencies]
+tempfile = "=3.27.0"

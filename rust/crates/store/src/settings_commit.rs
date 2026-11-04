@@ -1,5 +1,5 @@
 use crate::{Result, SqliteStore, StoreError, util};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value;
 
 #[derive(Clone, Debug)]
@@ -56,7 +56,10 @@ fn compare_and_write(
     Ok(true)
 }
 
-fn finish(transaction: Transaction<'_>, result: Result<bool>) -> Result<SettingsCommit> {
+fn finish(
+    transaction: crate::transaction::Atomic<'_>,
+    result: Result<bool>,
+) -> Result<SettingsCommit> {
     match result {
         Ok(true) => {
             transaction.commit()?;
@@ -85,7 +88,8 @@ impl SqliteStore {
     ) -> Result<SettingsCommit> {
         let (namespace, key) = (namespace.to_owned(), key.to_owned());
         self.call(move |db| {
-            let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let transaction =
+                crate::transaction::atomic_with_behavior(db, TransactionBehavior::Immediate)?;
             let result = compare_and_write(&transaction, &namespace, &key, expected, writes);
             finish(transaction, result)
         })

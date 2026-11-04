@@ -32,9 +32,20 @@ pub(super) struct ChatSession {
     pub sink: Arc<DurableEvents>,
     pub anchor: String,
     pub system_prompt: Option<String>,
+    /// Set the instant a pass streams its `run.completed` terminal event.
+    /// The core loop appends the final answer's messages and that event to
+    /// the durable sink in ONE transaction (`sink.append_messages`), and the
+    /// same event object flows through the event stream, so seeing it here
+    /// is the authoritative witness that this attempt committed a final
+    /// answer — no post-hoc bounded event scan can disagree, and no
+    /// successful completion can be mistaken for an interrupt (the runner
+    /// only parks while the task row is still `running`, which a committed
+    /// and settled attempt never is).
+    pub answer_committed: bool,
 }
 struct Pass {
     terminal: Terminal,
+    suspended: bool,
     content: String,
     tool_calls: usize,
     failure: Option<ExecutionFailure>,
@@ -44,6 +55,25 @@ impl ChatSession {
     pub async fn execute(mut self) -> HostResult<()> {
         match self.drive().await {
             Ok(pass) => {
+                if self.context.suspension.lock().await.is_some() {
+                    // A parked call is settled by the park itself: the
+                    // anchor stays a placeholder (the answer finalizes it),
+                    // and the attempt and lease already ended. Finalizing
+                    // here would fight the park with a dead fence.
+                    return Ok(());
+                }
+                if self.context.interruption.is_cancelled() {
+                    // The loop stopped at a safe boundary on a durable
+                    // interrupt: no final answer is owed, the anchor stays
+                    // a placeholder, and the runner parks this attempt. If
+                    // the final answer already committed — witnessed
+                    // authoritatively by the terminal event flowing through
+                    // the event stream, atomically with the answer's own
+                    // messages — keep finalizing instead.
+                    if !self.answer_committed {
+                        return Ok(());
+                    }
+                }
                 self.finish(&pass).await?;
                 match pass.terminal {
                     Terminal::Completed => Ok(()),
@@ -82,6 +112,9 @@ impl ChatSession {
                 self.options.max_tool_iterations,
             )
             .await?;
+        if pass.suspended {
+            return Ok(pass);
+        }
         let mut passes = 1;
         if self.can_retry_chat_only(&pass) {
             passes += 1;
@@ -114,6 +147,9 @@ impl ChatSession {
             pass = self
                 .run_pass(messages, Arc::new(ToolRegistry::new()), 1)
                 .await?;
+        }
+        if pass.suspended {
+            return Ok(pass);
         }
         if pass.terminal != Terminal::Cancelled
             && pass.content.trim().is_empty()
@@ -200,6 +236,11 @@ impl ChatSession {
                         calls.insert(id.to_owned());
                     }
                 }
+                Some("run.completed") => {
+                    // Authoritative: appended atomically with the answer's
+                    // messages (see `answer_committed`).
+                    self.answer_committed = true;
+                }
                 Some("run.failed") => {
                     failure = Some(ExecutionFailure {
                         code: event["data"]["errorCode"].as_str().map(str::to_owned),
@@ -225,6 +266,7 @@ impl ChatSession {
         transcript.extend(result.appended_messages);
         Ok(Pass {
             terminal: result.terminal,
+            suspended: result.suspended,
             content,
             tool_calls: calls.len(),
             failure,
@@ -269,6 +311,7 @@ impl ChatSession {
             .update_message(
                 &self.anchor,
                 Some("".into()),
+                None,
                 None,
                 Some(self.context.fence.clone()),
                 self.context.runtime.now_ms(),
@@ -395,6 +438,9 @@ impl ChatSession {
                     self.options.max_tool_iterations,
                 )
                 .await?;
+            if pass.suspended {
+                return Ok(pass);
+            }
             if pass.content.trim().is_empty() {
                 pass.content = superseded;
             }
@@ -470,6 +516,7 @@ impl ChatSession {
                 &self.anchor,
                 Some(pass.content.clone().into()),
                 Some(metadata),
+                None,
                 Some(self.context.fence.clone()),
                 self.context.runtime.now_ms(),
             )

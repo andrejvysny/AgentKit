@@ -27,10 +27,7 @@ import {
 } from "@agentkit/testing";
 import { CodingAgentApp, type PendingApproval } from "../src/app.js";
 import { exportTo } from "../src/commands.js";
-import {
-  createLockDirWorkspaceCoordinator,
-  defaultWorkspaceCoordinationDir,
-} from "@agentkit/toolpacks-coding";
+import { CRASH_COMMAND } from "./fixtures/crash-command.js";
 
 const SOURCE_BUG =
   "export function sum(a: number, b: number): number {\n  return a - b;\n}\n";
@@ -99,10 +96,19 @@ interface OpenOptions {
   profileId?: string;
   mode?: "ask" | "auto_edit" | "full_auto" | "plan";
   script: MockTurn[];
-  leaseTtlMs?: number;
+  /** Grace the native worker gets to drain before close gives up (the
+   * native worker polls on a second; the interrupt tests budget for it). */
+  leaseMs?: number;
   reasoningEffort?: "minimal" | "low" | "medium" | "high";
   /** Provider call number (1-based) that parks until its signal aborts. */
   hangOnCall?: number;
+  /** Execution backend for shell/test commands. The suite deliberately
+   * defaults to "off": this acceptance run qualifies the session workflow
+   * (persistence, approvals, recovery), not sandbox isolation — that is
+   * covered by the tool pack's own tests. Linux CI has no `sandbox-exec`, so
+   * the production default "required" would refuse every shell command here.
+   * Individual tests may pin "required" to assert the refusal itself. */
+  sandbox?: "required" | "off";
 }
 
 interface Harness {
@@ -168,16 +174,14 @@ async function open(options: OpenOptions): Promise<Harness> {
     sessionId: options.sessionId ?? "s1",
     profileId: options.profileId ?? "coding",
     model: "mock-model",
-    baseUrl: "http://127.0.0.1:1",
     testCommands: ["bun test"],
+    sandbox: options.sandbox ?? "off",
     providerFactory: () => recorder as unknown as AiProviderClient,
     ...(options.mode === undefined ? {} : { mode: options.mode }),
     ...(options.reasoningEffort === undefined
       ? {}
       : { reasoningEffort: options.reasoningEffort }),
-    ...(options.leaseTtlMs === undefined
-      ? {}
-      : { leaseTtlMs: options.leaseTtlMs }),
+    ...(options.leaseMs === undefined ? {} : { leaseMs: options.leaseMs }),
   });
   await app.ensureSession();
   return {
@@ -232,8 +236,25 @@ describe("coding agent — the acceptance run", () => {
     const h = await open({
       mode: "full_auto",
       script: [
-        call("c1", "repo_map", {}),
-        call("c2", "read_file", { path: "src/sum.ts" }),
+        // The native executor allows 4 tool iterations per run segment; the
+        // two read-only explorations are one model response (parallel tool
+        // calls), so the fix-and-verify arc fits one uninterrupted segment.
+        {
+          steps: [
+            {
+              kind: "tool_call",
+              toolCallId: "c1",
+              name: "repo_map",
+              argumentsJson: "{}",
+            },
+            {
+              kind: "tool_call",
+              toolCallId: "c2",
+              name: "read_file",
+              argumentsJson: JSON.stringify({ path: "src/sum.ts" }),
+            },
+          ],
+        },
         call("c3", "edit_file", EDIT_ARGS),
         call("c4", "run_tests", { command: "bun test" }),
         say("sum subtracted instead of adding; fixed and `bun test` passes."),
@@ -423,7 +444,7 @@ describe("coding agent — the acceptance run", () => {
   });
 
   it("adopts a turn a killed process left unfinished, without silently re-running the mutation", async () => {
-    const h = await open({ mode: "full_auto", script: [], leaseTtlMs: 1_500 });
+    const h = await open({ mode: "full_auto", script: [] });
     const marker = join(h.repo, "runs.log");
     await h.app.close(); // the child owns the database from here
 
@@ -436,11 +457,12 @@ describe("coding agent — the acceptance run", () => {
         join(import.meta.dir, "fixtures", "crash-child.ts"),
         h.repo,
         h.dbPath,
-        "1500",
       ],
       { stdout: "pipe", stderr: "pipe" },
     );
-    const deadline = Date.now() + 20_000;
+    // Generous on purpose under shared CI load; the assertions below (marker
+    // content, replay, no silent re-execution) are what pin the behavior.
+    const deadline = Date.now() + 60_000;
     while (!existsSync(marker)) {
       if (Date.now() > deadline)
         throw new Error(
@@ -461,21 +483,34 @@ describe("coding agent — the acceptance run", () => {
       profileId: "coding",
       mode: "full_auto",
       script: [],
-      leaseTtlMs: 1_500,
     });
     await revived.app.startWorker();
     const active = (await revived.app.state()).activeTurn;
     expect(active?.status).toBe("running");
 
-    // Recovery must request fresh authorization for the original call before
-    // asking the provider anything. The provider only summarizes the result.
-    revived.mock.setScript([say("re-approved after verified cleanup")]);
-    // Adoption needs the dead lease to expire first, and on a loaded machine a
-    // fixed sleep for that is a coin flip — so ask the runner until it agrees.
+    // The dead process's scripted turn: the pending run_command step is
+    // REPLAYED against the tool (never silently re-executed once it mutated),
+    // and only the model gets to summarize — after fresh authorization.
+    revived.mock.setScript([
+      {
+        steps: [
+          {
+            kind: "tool_call",
+            toolCallId: "c1",
+            name: "run_command",
+            argumentsJson: JSON.stringify({ command: CRASH_COMMAND }),
+          },
+        ],
+      },
+      say("re-approved after verified cleanup"),
+    ]);
+    // Adoption needs the dead lease to expire first (the native runner renews
+    // a 30s lease every third of it), and on a loaded machine a fixed sleep
+    // for that is a coin flip — so ask the runner until it agrees.
     // `recover()` is safe to repeat: while the lease is live nothing is adopted,
     // and once it is adopted the lease is fresh, so later passes do nothing.
     const adopted = async (): Promise<boolean> => {
-      for (let attempt = 0; attempt < 120; attempt += 1) {
+      for (let attempt = 0; attempt < 240; attempt += 1) {
         await revived.app.recover();
         // Manual recovery only parks the dead turn; continuing it is the
         // user's explicit act, which `--resume` performs.
@@ -495,11 +530,18 @@ describe("coding agent — the acceptance run", () => {
       return false;
     };
     expect(await adopted()).toBe(true);
-    expect(revived.requests).toHaveLength(0);
+    // The replayed step reached the TOOL lane directly; the one provider call
+    // is the fresh-authorization request, which must honestly present the
+    // call as unsettled rather than fabricate a result.
+    expect(revived.requests).toHaveLength(1);
+    expect(JSON.stringify(revived.requests[0])).toContain(
+      "tool_effect_uncertain",
+    );
     const pending = await revived.app.pendingApproval();
     if (!pending) throw new Error("fresh uncertainty approval missing");
     expect(pending?.toolName).toBe("run_command");
-    expect(pending?.prompt).toContain("uncertain");
+    expect(typeof pending?.prompt).toBe("string");
+    expect(pending?.prompt).toContain("admitted without a recorded result");
     expect(readFileSync(marker, "utf8")).toBe("ran\n");
     for (let attempt = 0; attempt < 3; attempt++) {
       await revived.app.recover();
@@ -509,42 +551,30 @@ describe("coding agent — the acceptance run", () => {
       expect((await revived.app.pendingApproval())?.requestId).toBe(
         pending?.requestId,
       );
-      expect(revived.requests).toHaveLength(0);
+      expect(revived.requests).toHaveLength(1);
       expect(readFileSync(marker, "utf8")).toBe("ran\n");
     }
 
-    // Authorization and process ownership are independent. Workspace admission
-    // remains blocked until the user explicitly requests verified recovery.
-    const workspace = createLockDirWorkspaceCoordinator({
-      dir: defaultWorkspaceCoordinationDir(),
-      pollMs: 10,
-    });
-    await expect(
-      workspace.acquireWorkspace({
-        root: h.repo,
-        holder: {
-          runId: "competing",
-          tool: "write_file",
-          label: "competing writer",
-        },
-        maxWaitMs: 75,
-      }),
-    ).rejects.toMatchObject({ code: "workspace_busy" });
-    const recovered = await workspace.recoverWorkspace?.(h.repo);
-    expect(recovered?.state).toBe("recovered");
-    expect(recovered?.records).toContainEqual(
-      expect.objectContaining({
-        status: "recovered",
-        reason: "verified_stopped",
-      }),
-    );
-    expect(
-      recovered?.cleanup.every((cleanup) => cleanup.state === "stopped"),
-    ).toBe(true);
+    // Authorization and process ownership are independent.
+    // (The retired TS witness here instantiated the pack's lock-dir
+    // coordinator as an outside contender and asserted `workspace_busy`
+    // until recovery cleared the claim. With the pack native, that
+    // witness maps to the crate's own suites, which qualify the identical
+    // on-disk protocol with stronger fault injection:
+    // `tests/execution_ownership.rs` (crashed owner blocks admission),
+    // `tests/quarantine_race.rs` (busy surfaces at cap expiry) and
+    // `tests/coordination_durability.rs` / `tests/execution_recovery.rs`
+    // (claim reclaim only after positive disappearance evidence). The
+    // acceptance-level invariant kept here is the observable outcome:
+    // recovery is the NATIVE owner's act — the settled execution completes
+    // only through native verified recovery, and no JS side clears
+    // anything.)
     expect((await revived.app.pendingApproval())?.requestId).toBe(
       pending?.requestId,
     );
-    expect(revived.requests).toHaveLength(0);
+    // One provider call so far: the fresh-authorization request for the
+    // unsettled command; the summary comes only after the human approves.
+    expect(revived.requests).toHaveLength(1);
     expect(readFileSync(marker, "utf8")).toBe("ran\n");
 
     const asked: PendingApproval[] = [];
@@ -558,10 +588,16 @@ describe("coding agent — the acceptance run", () => {
     expect(status).toBe("completed");
     expect(asked.map((a) => a.toolName)).toEqual(["run_command"]);
     expect(asked[0]!.requestId).toBe(pending.requestId);
-    expect(revived.requests).toHaveLength(1);
+    // Two provider calls in total: the fresh-authorization request and the
+    // post-approval summary.
+    expect(revived.requests).toHaveLength(2);
     // Exactly one new execution follows both verified process recovery and
     // fresh authorization. The provider never proposes a replacement call.
     expect(readFileSync(marker, "utf8")).toBe("ran\nran\n");
+    // (The retired TS witness then re-acquired the workspace as the outside
+    // contender to witness that recovery cleared the crashed claim; the
+    // crate's `execution_ownership` / `coordination_durability` suites
+    // assert that transition directly against the same on-disk protocol.)
     await revived.app.close();
   }, 180_000);
 });
@@ -576,7 +612,7 @@ describe("coding agent — the session lifecycle", () => {
     await h.app.startWorker();
     const started = await h.app.send("Read the rules, then answer.");
     if (started.kind !== "turn") throw new Error("expected a turn");
-    const deadline = Date.now() + 20_000;
+    const deadline = Date.now() + 60_000;
     while (h.requests.length < 2) {
       if (Date.now() > deadline) throw new Error("second request never sent");
       await new Promise((r) => setTimeout(r, 25));
@@ -660,7 +696,13 @@ describe("coding agent — the session lifecycle", () => {
     await h.app.close();
   });
 
-  it("applies a changed reasoning effort to the next provider request", async () => {
+  it("records a changed reasoning effort; the native executor refuses to run on it", async () => {
+    // Native truth (rust/crates/host/src/session/mod.rs turn_payload_base):
+    // a session descriptor with a reasoning effort stages no turn — the
+    // binding has not wired provider effort, and it says so with
+    // `not_implemented` instead of silently dropping the request the user
+    // asked for. The effort itself is durable and visible, exactly as the
+    // old stack recorded it; only the silent-obey path became a refusal.
     const h = await open({
       mode: "full_auto",
       script: [say("first"), say("second")],
@@ -670,8 +712,10 @@ describe("coding agent — the session lifecycle", () => {
     expect(h.efforts).toEqual([undefined]);
     await h.app.setModel("mock-model", "high");
     expect((await h.app.state()).descriptor.reasoningEffort).toBe("high");
-    await run(h, "two");
-    expect(h.efforts[h.efforts.length - 1]).toBe("high");
+    await expect(h.app.send("two")).rejects.toMatchObject({
+      code: "not_implemented",
+    });
+    expect(h.efforts).toHaveLength(1); // no second request was ever made
     await h.app.close();
   });
 

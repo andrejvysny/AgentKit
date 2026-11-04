@@ -9,7 +9,7 @@ use serde_json::Value;
 agentkit_contracts::impl_json_via_serde!(OutboxRecord);
 
 mod continuation;
-mod continuation_validation;
+pub(crate) mod continuation_validation;
 pub use continuation::*;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -82,7 +82,7 @@ impl SqliteStore {
     ) -> Result<bool> {
         let (namespace, key) = (namespace.to_owned(), key.to_owned());
         self.call(move|db| {
-            let transaction=db.transaction()?;
+            let transaction=crate::transaction::atomic(db)?;
             let current:Option<String>=transaction.query_row("SELECT value FROM settings WHERE namespace=? AND key=?",params![namespace,key],|row|row.get(0)).optional()?;
             let current=current.map(|value|agentkit_contracts::parse_javascript_json(&value)).transpose()?;
             if current!=expected {return Ok(false);}
@@ -95,7 +95,7 @@ impl SqliteStore {
     pub async fn bind_setting(&self, namespace: &str, key: &str, value: Value) -> Result<bool> {
         let (namespace, key) = (namespace.to_owned(), key.to_owned());
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let existing: Option<String> = transaction
                 .query_row(
                     "SELECT value FROM settings WHERE namespace=? AND key=?",
@@ -139,7 +139,7 @@ impl SqliteStore {
                     "max_attempts must be positive".into(),
                 ));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut due: Vec<OutboxRecord> = all::<OutboxRecord>(&transaction, "outbox")?
                 .into_iter()
                 .filter(|r| {
@@ -189,7 +189,7 @@ impl SqliteStore {
     ) -> Result<()> {
         let (record_id, token) = (record_id.to_owned(), token.to_owned());
         self.call(move |db| {
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut record: OutboxRecord = required(&transaction, "outbox", "id", &record_id)?;
             if record.claim_token.as_deref() != Some(&token)
                 || record.claim_until.is_none_or(|expiry| expiry <= now)
@@ -216,6 +216,51 @@ impl SqliteStore {
         self.call(|db| all(db, "outbox")).await
     }
 
+    /// Port-shaped publish: settle a record as published at `at` regardless of
+    /// any in-flight claim window. The claim-token paths (`publish_outbox`)
+    /// remain the guarded lane for claim-aware publishers; this one matches
+    /// the reference adapter's `markPublished`, which stamps the instant the
+    /// caller delivered. A missing record is `NotFound`, never silence.
+    pub async fn mark_outbox_published(&self, record_id: &str, at: i64) -> Result<()> {
+        let record_id = record_id.to_owned();
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            let mut record: OutboxRecord = required(&transaction, "outbox", "id", &record_id)?;
+            record.published_at = Some(at);
+            save(&transaction, &record)?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Port-shaped failure: record the error and reschedule the record for
+    /// its next delivery at `retry_at`. A missing record is `NotFound`.
+    pub async fn mark_outbox_failed(
+        &self,
+        record_id: &str,
+        error: String,
+        retry_at: i64,
+    ) -> Result<()> {
+        let (record_id, error) = (record_id.to_owned(), error);
+        self.call(move |db| {
+            let transaction = crate::transaction::atomic(db)?;
+            let mut record: OutboxRecord = required(&transaction, "outbox", "id", &record_id)?;
+            record.last_error = Some(error);
+            record.available_at = retry_at;
+            // The port's markFailed has no claim token: it releases whatever
+            // claim window the delivery opened, so the record becomes
+            // re-claimable at `retry_at` rather than after the window.
+            record.claim_token = None;
+            record.claim_owner = None;
+            record.claim_until = None;
+            save(&transaction, &record)?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn prune_outbox(&self, before: i64, max_attempts: u32) -> Result<usize> {
         self.call(move |db| {
             if max_attempts == 0 {
@@ -223,7 +268,7 @@ impl SqliteStore {
                     "max_attempts must be positive".into(),
                 ));
             }
-            let transaction = db.transaction()?;
+            let transaction = crate::transaction::atomic(db)?;
             let mut removed = 0;
             for record in all::<OutboxRecord>(&transaction, "outbox")? {
                 if record.published_at.is_some_and(|at| at < before)
@@ -284,6 +329,45 @@ impl SqliteStore {
                 params![namespace, key, json(db, &value)?],
             )?;
             Ok(())
+        })
+        .await
+    }
+
+    /// Atomic read-modify-write of a settings document. The merge closure
+    /// runs on the store worker between the read and the write inside one
+    /// serialized call, so two concurrent partial updates can neither observe
+    /// the same base nor clobber each other's patch (lost-update guard for
+    /// the settings lanes, which all merge into one document).
+    pub async fn update_setting<F>(
+        &self,
+        namespace: &str,
+        key: &str,
+        default: Value,
+        merge: F,
+    ) -> Result<Value>
+    where
+        F: FnOnce(Value) -> Value + Send + 'static,
+    {
+        let (namespace, key) = (namespace.to_owned(), key.to_owned());
+        self.call(move |db| {
+            let current: Option<String> = db
+                .query_row(
+                    "SELECT value FROM settings WHERE namespace=? AND key=?",
+                    params![namespace, key],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let base = current
+                .map(|value| agentkit_contracts::parse_javascript_json(&value))
+                .transpose()?
+                .unwrap_or(default);
+            let next = merge(base);
+            db.execute(
+                "INSERT INTO settings VALUES(?,?,?) \
+                 ON CONFLICT(namespace,key) DO UPDATE SET value=excluded.value",
+                params![namespace, key, json(db, &next)?],
+            )?;
+            Ok(next)
         })
         .await
     }

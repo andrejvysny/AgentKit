@@ -27,6 +27,7 @@ fn message(id: &str, parent: Option<&str>, active: bool) -> MessageRecord {
         order_key: 999,
         depth: 999,
         branch_index: 999,
+        archived: false,
         active,
         created_at: 101.into(),
     }

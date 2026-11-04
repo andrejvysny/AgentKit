@@ -31,6 +31,11 @@ pub struct ServerConfig {
     pub enabled: bool,
     #[serde(default)]
     pub tool_aliases: BTreeMap<String, String>,
+    /// Host-side read-only allowance. Remote tool annotations are descriptive
+    /// only and never raise the contributed `effect`; only this trusted flag
+    /// (default false) marks the server's tools as reads.
+    #[serde(default)]
+    pub read_only: bool,
     #[serde(default)]
     pub resilience: Resilience,
 }
@@ -103,6 +108,16 @@ impl ServerConfig {
             {
                 return Err(McpClientError::Configuration);
             }
+        }
+        // Same one-step-rename rule the bridge enforces (`McpToolSet::new`):
+        // routing inverts this map, so a replacement that is itself renamed
+        // (`a -> b` alongside `b -> c`) would make `mcp.<alias>.b` address two
+        // different server tools. Refuse the ambiguous config up front.
+        if aliases
+            .iter()
+            .any(|(source, target)| source != target && aliases.contains_key(target))
+        {
+            return Err(McpClientError::Configuration);
         }
         self.tool_aliases = aliases;
         Ok(self)

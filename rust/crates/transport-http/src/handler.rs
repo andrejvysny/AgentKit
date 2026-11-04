@@ -1,4 +1,6 @@
-use crate::{Backend, Idempotency, OperationRequest, Problem, StreamOptions, derive_task_id};
+use crate::{
+    Backend, CorsConfig, Idempotency, OperationRequest, Problem, StreamOptions, derive_task_id,
+};
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -10,12 +12,18 @@ use axum::{
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 
+const BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub base_path: String,
     pub max_body_bytes: usize,
     pub max_query_bytes: usize,
     pub streaming: StreamOptions,
+    /// Cross-origin decoration; `None` (the default) means no response
+    /// ever carries a CORS header and `OPTIONS` answers 405 as always —
+    /// see `crate::cors` for the pinned behavior matrix.
+    pub cors: Option<CorsConfig>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -24,6 +32,7 @@ impl Default for Config {
             max_body_bytes: 1_048_576,
             max_query_bytes: 16_384,
             streaming: StreamOptions::default(),
+            cors: None,
         }
     }
 }
@@ -46,9 +55,25 @@ pub fn router(backend: Arc<dyn Backend>, mut config: Config) -> Router {
 
 async fn handle(State(service): State<Service>, request: Request) -> Response {
     let path = request.uri().path().to_owned();
-    match route_request(&service, request).await {
+    // The CORS decoration covers EVERY exit — route responses, 404/405/413
+    // problems, the backend's 401, SSE streams, and host failures —
+    // exactly like the TypeScript transport's `decorate`, because without
+    // it a browser cannot even read the server's own refusals.
+    let matched = service
+        .config
+        .cors
+        .as_ref()
+        .and_then(|cors| cors.matched_origin(request.headers()));
+    let response = match route_request(&service, request).await {
         Ok(response) => response,
         Err(problem) => problem.at(&path).into_response(),
+    };
+    match (service.config.cors.as_ref(), response.into_response()) {
+        (None, response) => response,
+        (Some(cors), mut response) => {
+            cors.decorate(response.headers_mut(), matched.as_deref());
+            response
+        }
     }
 }
 
@@ -65,6 +90,28 @@ async fn route_request(service: &Service, request: Request) -> Result<Response, 
         .iter()
         .filter_map(|route| crate::routes::match_path(route, routed).map(|params| (route, params)))
         .collect();
+    // Preflight: a matched `Origin` on OPTIONS is answered before body
+    // limits, before authentication, and before authorization — a browser
+    // preflight carries no bearer token. An unmatched origin falls
+    // through to the ordinary 405 (no CORS headers beyond `Vary: Origin`),
+    // exactly like the TypeScript transport.
+    if request.method() == axum::http::Method::OPTIONS
+        && let Some(cors) = service.config.cors.as_ref()
+        && let Some(matched) = cors.matched_origin(request.headers())
+    {
+        if matches.is_empty() {
+            // The reference transport answers the 404 CORS-decorated; the
+            // decoration happens once in `handle`, so refuse plainly.
+            return Err(no_route(&request));
+        }
+        let mut allow: Vec<&str> = Vec::new();
+        for (route, _) in &matches {
+            if !allow.contains(&route.method.as_str()) {
+                allow.push(route.method.as_str());
+            }
+        }
+        return Ok(cors.preflight(&matched, &allow));
+    }
     let Some((route, params)) = matches
         .iter()
         .find(|(r, _)| r.method == request.method().as_str())
@@ -95,6 +142,9 @@ async fn route_request(service: &Service, request: Request) -> Result<Response, 
     let query = parse_query(request.uri().query(), service.config.max_query_bytes)?;
     let operation = route.operation.clone();
     let headers = request.headers().clone();
+    // Authenticate before touching the body so an unauthenticated peer can
+    // neither make us buffer it nor hold the connection open.
+    let actor = service.backend.authenticate(&headers).await?;
     if headers
         .get("content-length")
         .and_then(|v| v.to_str().ok())
@@ -110,19 +160,28 @@ async fn route_request(service: &Service, request: Request) -> Result<Response, 
             ),
         ));
     }
-    let bytes = to_bytes(request.into_body(), service.config.max_body_bytes)
-        .await
-        .map_err(|_| {
-            Problem::new(
-                413,
-                "body_too_large",
-                format!(
-                    "Request body exceeds the configured limit of {} bytes.",
-                    service.config.max_body_bytes
-                ),
-            )
-        })?;
-    let actor = service.backend.authenticate(&headers).await?;
+    let bytes = tokio::time::timeout(
+        BODY_READ_TIMEOUT,
+        to_bytes(request.into_body(), service.config.max_body_bytes),
+    )
+    .await
+    .map_err(|_| {
+        Problem::new(
+            408,
+            "request_timeout",
+            "Request body was not received in time.",
+        )
+    })?
+    .map_err(|_| {
+        Problem::new(
+            413,
+            "body_too_large",
+            format!(
+                "Request body exceeds the configured limit of {} bytes.",
+                service.config.max_body_bytes
+            ),
+        )
+    })?;
     let mut input = OperationRequest {
         actor,
         operation,
@@ -189,11 +248,17 @@ fn parse_query(raw: Option<&str>, limit: usize) -> Result<BTreeMap<String, Strin
 }
 
 fn parse_body(operation: &str, bytes: &[u8]) -> Result<Value, Problem> {
-    if crate::validation::body_schema(operation).is_none() {
-        return Ok(Value::Null);
-    }
+    let has_schema = crate::validation::body_schema(operation).is_some();
     if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Ok(serde_json::json!({}));
+        // The TypeScript router hands an empty body to schema-carrying
+        // routes as `{}` and never reads one for the routes without a
+        // schema (their handlers only call `readJsonObject` when they need
+        // it); mirror both.
+        return Ok(if has_schema {
+            serde_json::json!({})
+        } else {
+            Value::Null
+        });
     }
     let text = std::str::from_utf8(bytes).map_err(|error| {
         Problem::new(

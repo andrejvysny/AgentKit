@@ -147,6 +147,28 @@ describe("findCut", () => {
 });
 
 describe("compactSessionContext", () => {
+  it("refuses full-prefix coverage when the complete source does not fit", async () => {
+    const provider = summarizer();
+    const messages: AiChatMessage[] = [
+      { role: "user", content: "old".repeat(20_000) },
+      { role: "assistant", content: "done" },
+      { role: "user", content: "current" },
+    ];
+    const before = structuredClone(messages);
+    const outcome = await compactSessionContext(
+      baseInput(provider, {
+        messages,
+        recordIds: ["a", "b", "c"],
+        keepRecentTokens: 1,
+      }),
+    );
+    expect(outcome).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("complete source"),
+    });
+    expect(provider.requests).toHaveLength(0);
+    expect(messages).toEqual(before);
+  });
   it("summarizes the older turns and keeps the current one", async () => {
     const provider = summarizer();
     const outcome = await compactSessionContext(baseInput(provider));
@@ -328,6 +350,22 @@ describe("applyValidSummary", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
     };
   }
+  it("invalidates a summary when a tool argument changes under the same record ID", async () => {
+    const { messages, recordIds } = transcript();
+    const saved = await record();
+    const edited = messages.map((message) =>
+      message.toolCalls
+        ? {
+            ...message,
+            toolCalls: message.toolCalls.map((call) => ({
+              ...call,
+              argumentsJson: '{"path":"changed.ts"}',
+            })),
+          }
+        : message,
+    );
+    expect(await applyValidSummary(edited, recordIds, saved)).toBeUndefined();
+  });
 
   it("replaces the covered prefix with one user summary message", async () => {
     const { messages, recordIds } = transcript();

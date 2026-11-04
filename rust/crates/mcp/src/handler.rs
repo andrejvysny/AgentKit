@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 pub(crate) struct ScopeLease {
     pub scope: SessionScope,
@@ -55,6 +56,12 @@ impl Drop for ActiveCall {
     }
 }
 
+/// A per-HTTP-request cancellation the server arm when the response body
+/// is abandoned — a client that aborts mid `tools/call` must reach the
+/// running tool and must never let a queued call slip through.
+#[derive(Clone)]
+pub(crate) struct RequestCancellation(pub CancellationToken);
+
 #[derive(Clone)]
 pub(crate) struct NativeHandler {
     backend: Arc<dyn Backend>,
@@ -63,6 +70,7 @@ pub(crate) struct NativeHandler {
     deadline: Duration,
     calls: Arc<Semaphore>,
     page_size: usize,
+    admissions: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl NativeHandler {
@@ -74,6 +82,7 @@ impl NativeHandler {
             deadline: options.max_call_duration,
             calls: Arc::new(Semaphore::new(options.max_concurrent_calls)),
             page_size: options.tool_page_size,
+            admissions: options.call_admissions.clone(),
         }
     }
     fn scope(&self) -> Result<SessionScope, ErrorData> {
@@ -109,17 +118,35 @@ impl NativeHandler {
         T: JsonFields,
     {
         let _cancel_on_return = scope.cancellation.clone().drop_guard();
+        if let Some(admissions) = &self.admissions {
+            // Admitted, not yet dispatched: the caller may now observe this
+            // request queued behind the concurrency permit.
+            admissions();
+        }
         let lease = self.scope.get().ok_or_else(internal)?;
         let _active = lease.begin();
+        let aborted = context
+            .extensions
+            .get::<http::request::Parts>()
+            .and_then(|parts| parts.extensions.get::<RequestCancellation>())
+            .map(|request| request.0.clone());
+        let abort_child = CancellationToken::new();
+        if let Some(token) = aborted {
+            let child = abort_child.clone();
+            tokio::spawn(async move {
+                token.cancelled().await;
+                child.cancel();
+            });
+        }
         let work = async {
             let _permit = self.calls.acquire().await.map_err(|_| internal())?;
             self.ensure_live(context, scope)?;
             operation.await
         };
         let result = tokio::select! {
-            biased;
             _ = scope.cancellation.cancelled() => Err(ErrorData::invalid_request("MCP session closed", None)),
             _ = context.ct.cancelled() => Err(ErrorData::invalid_request("MCP request cancelled", None)),
+            _ = abort_child.cancelled() => Err(ErrorData::invalid_request("MCP request cancelled", None)),
             result = tokio::time::timeout(self.deadline, work) => result.unwrap_or_else(|_| Err(internal())),
         };
         match result {
@@ -186,7 +213,7 @@ impl ServerHandler for NativeHandler {
     ) -> Result<ListToolsResult, ErrorData> {
         let scope = self.scope()?;
         self.bounded(&context, &scope, async {
-            let entries = self.backend.list_tools(&scope).await?;
+            let entries = self.backend.list_tools(&scope).await.map_err(redact)?;
             let entries: Vec<_> = entries
                 .into_iter()
                 .filter(|entry| self.writes_enabled || !entry.writes)
@@ -223,7 +250,7 @@ impl ServerHandler for NativeHandler {
     ) -> Result<CallToolResponse, ErrorData> {
         let scope = self.scope()?;
         self.bounded(&context, &scope, async {
-            let entries = self.backend.list_tools(&scope).await?;
+            let entries = self.backend.list_tools(&scope).await.map_err(redact)?;
             let tool = entries
                 .into_iter()
                 .find(|entry| {
@@ -245,6 +272,7 @@ impl ServerHandler for NativeHandler {
             self.backend
                 .call_tool(&request.name, arguments, &scope)
                 .await
+                .map_err(redact)
         })
         .await
         .map(Into::into)
@@ -260,7 +288,7 @@ impl ServerHandler for NativeHandler {
                 return Err(unavailable());
             }
             let mut result = ListResourcesResult::default();
-            result.resources = self.backend.list_resources(&scope).await?;
+            result.resources = self.backend.list_resources(&scope).await.map_err(redact)?;
             Ok(result)
         })
         .await
@@ -278,14 +306,18 @@ impl ServerHandler for NativeHandler {
             if !self
                 .backend
                 .list_resources(&scope)
-                .await?
+                .await
+                .map_err(redact)?
                 .iter()
                 .any(|resource| resource.uri == request.uri)
             {
                 return Err(ErrorData::invalid_params("Unknown resource", None));
             }
             self.ensure_live(&context, &scope)?;
-            self.backend.read_resource(&request.uri, &scope).await
+            self.backend
+                .read_resource(&request.uri, &scope)
+                .await
+                .map_err(redact)
         })
         .await
         .map(Into::into)
@@ -301,7 +333,7 @@ impl ServerHandler for NativeHandler {
                 return Err(unavailable());
             }
             let mut result = ListPromptsResult::default();
-            result.prompts = self.backend.list_prompts(&scope).await?;
+            result.prompts = self.backend.list_prompts(&scope).await.map_err(redact)?;
             Ok(result)
         })
         .await
@@ -319,7 +351,8 @@ impl ServerHandler for NativeHandler {
             let prompt = self
                 .backend
                 .list_prompts(&scope)
-                .await?
+                .await
+                .map_err(redact)?
                 .into_iter()
                 .find(|prompt| prompt.name == request.name)
                 .ok_or_else(|| ErrorData::invalid_params("Unknown prompt", None))?;
@@ -338,6 +371,7 @@ impl ServerHandler for NativeHandler {
             self.backend
                 .get_prompt(&request.name, arguments, &scope)
                 .await
+                .map_err(redact)
         })
         .await
         .map(Into::into)
@@ -362,6 +396,11 @@ fn wire_value<T: JsonFields>(mut value: T) -> T {
 }
 fn internal() -> ErrorData {
     ErrorData::internal_error("Host MCP operation failed", None)
+}
+/// A backend failure is the host's private detail, not a wire sentence: the
+/// protocol code and structured data stay, the thrown message never travels.
+fn redact(error: ErrorData) -> ErrorData {
+    ErrorData::new(error.code, "Host MCP operation failed", error.data)
 }
 fn unavailable() -> ErrorData {
     ErrorData::new(ErrorCode::METHOD_NOT_FOUND, "Method not found", None)

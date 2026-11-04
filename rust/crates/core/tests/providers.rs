@@ -165,9 +165,11 @@ async fn responses_reconciles_live_prefix_and_terminal_snapshot() {
         .collect()
         .await;
     assert!(events.iter().all(Result::is_ok));
-    assert!(events.iter().any(
-        |event| matches!(event,Ok(ProviderEvent::Completed {content,..}) if content=="answer")
-    ));
+    // Completed surfaces as the public `run.message.completed` event shape
+    // (same as the chat-completions lane) so `reasoningContent` can ride it.
+    assert!(events.iter().any(|event| matches!(event,
+        Ok(ProviderEvent::Event { kind, data })
+            if kind == "run.message.completed" && data["content"] == "answer")));
     let deltas = events
         .iter()
         .filter_map(|event| {
@@ -182,6 +184,206 @@ async fn responses_reconciles_live_prefix_and_terminal_snapshot() {
     let body = &transport.sent.lock().unwrap()[0];
     assert_eq!(body["store"], false);
     assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+}
+#[tokio::test]
+async fn responses_streams_reasoning_deltas() {
+    let stream = sse(&[
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"reason1","type":"reasoning"}}),
+        json!({"type":"response.reasoning_text.delta","output_index":0,"item_id":"reason1","content_index":0,"delta":"thin"}),
+        json!({"type":"response.reasoning_text.delta","output_index":0,"item_id":"reason1","content_index":0,"delta":"king"}),
+        json!({"type":"response.reasoning_text.done","output_index":0,"item_id":"reason1","content_index":0,"text":"thinking"}),
+        json!({"type":"response.output_item.added","output_index":1,"item":{"id":"message1","type":"message","role":"assistant","content":[]}}),
+        json!({"type":"response.output_text.delta","output_index":1,"item_id":"message1","content_index":0,"delta":"answer"}),
+        json!({"type":"response.completed","response":{"status":"completed","output":[
+            {"id":"reason1","type":"reasoning","encrypted_content":"enc"},
+            message()]}}),
+    ]);
+    let transport = Transport::new("responses", vec![(200, stream)]);
+    let provider = ResponsesProvider::new(transport).unwrap();
+    let saved = Arc::new(Saved {
+        states: Mutex::new(vec![]),
+        fail: false,
+    });
+    let mut input = request();
+    input.continuation_scope = Some(ContinuationScope {
+        chat_id: "chat".into(),
+        branch_id: "branch".into(),
+    });
+    input.continuation_store = Some(saved.clone());
+    let events: Vec<_> = provider
+        .stream_chat(input, CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    let reasoning: Vec<String> = events
+        .iter()
+        .filter_map(|event| match event {
+            Ok(ProviderEvent::Event { kind, data }) if kind == "run.message.reasoning-delta" => {
+                Some(data["delta"].as_str().unwrap_or_default().to_owned())
+            }
+            _ => None,
+        })
+        .collect();
+    // Incremental deltas stream verbatim; the snapshot .done frame adds no
+    // duplicate suffix (TypeScript ResponsesReasoning semantics).
+    assert_eq!(reasoning, vec!["thin".to_owned(), "king".to_owned()]);
+    assert_eq!(saved.states.lock().unwrap().len(), 1);
+    assert!(saved.states.lock().unwrap()[0].to_string().contains("enc"));
+}
+#[tokio::test]
+async fn responses_preserves_terminal_only_reasoning_in_completed_event() {
+    // A reasoning item that NEVER streamed (no delta frames) but rides the
+    // final response object must survive into the public completed event —
+    // the frozen `ResponsesReasoning.finish` keeps it, the native lane used
+    // to drop it.
+    let stream = sse(&[
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"reason1","type":"reasoning"}}),
+        json!({"type":"response.output_item.added","output_index":1,"item":{"id":"message1","type":"message","role":"assistant","content":[]}}),
+        json!({"type":"response.output_text.delta","output_index":1,"item_id":"message1","content_index":0,"delta":"answer"}),
+        json!({"type":"response.completed","response":{"status":"completed","output":[
+            {"id":"reason1","type":"reasoning","encrypted_content":"enc",
+             "content":[{"type":"reasoning_text","text":"secret plan"}]},
+            message()]}}),
+    ]);
+    let saved = Arc::new(Saved {
+        states: Mutex::new(vec![]),
+        fail: false,
+    });
+    let mut input = request();
+    input.continuation_scope = Some(ContinuationScope {
+        chat_id: "chat".into(),
+        branch_id: "branch".into(),
+    });
+    input.continuation_store = Some(saved.clone());
+    let provider =
+        ResponsesProvider::new(Transport::new("responses", vec![(200, stream)])).unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(input, CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert!(
+        events.iter().any(|event| matches!(event,
+            Ok(ProviderEvent::Event { kind, data })
+                if kind == "run.message.completed"
+                    && data["reasoningContent"] == "secret plan")),
+        "terminal-only reasoning must ride the completed event: {events:?}"
+    );
+}
+#[tokio::test]
+async fn responses_fails_stream_output_mismatch_when_final_reasoning_conflicts() {
+    // The stream said "thin"; the final object says "different" for the
+    // same part. The frozen client raises `stream_output_mismatch` — the
+    // run must FAIL, not complete on the streamed text.
+    let stream = sse(&[
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"reason1","type":"reasoning"}}),
+        json!({"type":"response.reasoning_text.delta","output_index":0,"item_id":"reason1","content_index":0,"delta":"thin"}),
+        json!({"type":"response.output_item.added","output_index":1,"item":{"id":"message1","type":"message","role":"assistant","content":[]}}),
+        json!({"type":"response.output_text.delta","output_index":1,"item_id":"message1","content_index":0,"delta":"answer"}),
+        json!({"type":"response.completed","response":{"status":"completed","output":[
+            {"id":"reason1","type":"reasoning","encrypted_content":"enc",
+             "content":[{"type":"reasoning_text","text":"different"}]},
+            message()]}}),
+    ]);
+    let provider =
+        ResponsesProvider::new(Transport::new("responses", vec![(200, stream)])).unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Err(error) if error.code == "stream_output_mismatch")),
+        "conflicting final reasoning must fail stream_output_mismatch: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(event,
+            Ok(ProviderEvent::Event { kind, .. }) if kind == "run.message.completed")),
+        "no completion may follow a reasoning conflict: {events:?}"
+    );
+}
+#[tokio::test]
+async fn responses_reconciles_streamed_reasoning_with_extended_final_text() {
+    // The final part EXTENDS the streamed prefix — legal, and the public
+    // reasoningContent is the reconciled final text, not the streamed one.
+    let stream = sse(&[
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"reason1","type":"reasoning"}}),
+        json!({"type":"response.reasoning_text.delta","output_index":0,"item_id":"reason1","content_index":0,"delta":"thin"}),
+        json!({"type":"response.reasoning_text.delta","output_index":0,"item_id":"reason1","content_index":0,"delta":"king"}),
+        json!({"type":"response.output_item.added","output_index":1,"item":{"id":"message1","type":"message","role":"assistant","content":[]}}),
+        json!({"type":"response.output_text.delta","output_index":1,"item_id":"message1","content_index":0,"delta":"answer"}),
+        json!({"type":"response.completed","response":{"status":"completed","output":[
+            {"id":"reason1","type":"reasoning","encrypted_content":"enc",
+             "content":[{"type":"reasoning_text","text":"thinking more"}]},
+            message()]}}),
+    ]);
+    let saved = Arc::new(Saved {
+        states: Mutex::new(vec![]),
+        fail: false,
+    });
+    let mut input = request();
+    input.continuation_scope = Some(ContinuationScope {
+        chat_id: "chat".into(),
+        branch_id: "branch".into(),
+    });
+    input.continuation_store = Some(saved.clone());
+    let provider =
+        ResponsesProvider::new(Transport::new("responses", vec![(200, stream)])).unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(input, CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert!(
+        events.iter().any(|event| matches!(event,
+            Ok(ProviderEvent::Event { kind, data })
+                if kind == "run.message.completed"
+                    && data["reasoningContent"] == "thinking more")),
+        "reconciled final reasoning must replace the streamed prefix: {events:?}"
+    );
+}
+#[tokio::test]
+async fn responses_joins_reasoning_parts_in_first_appearance_order() {
+    // The frozen reference joins with Map iteration order (first insertion,
+    // updates keep their slot): r2 streamed first keeps the front slot even
+    // though r1 sorts before it.
+    let stream = sse(&[
+        json!({"type":"response.output_item.added","output_index":0,"item":{"id":"r1","type":"reasoning"}}),
+        json!({"type":"response.output_item.added","output_index":1,"item":{"id":"r2","type":"reasoning"}}),
+        json!({"type":"response.reasoning_text.delta","output_index":1,"item_id":"r2","content_index":0,"delta":"b"}),
+        json!({"type":"response.reasoning_text.delta","output_index":0,"item_id":"r1","content_index":0,"delta":"a"}),
+        json!({"type":"response.output_item.added","output_index":2,"item":{"id":"message1","type":"message","role":"assistant","content":[]}}),
+        json!({"type":"response.output_text.delta","output_index":2,"item_id":"message1","content_index":0,"delta":"answer"}),
+        json!({"type":"response.completed","response":{"status":"completed","output":[
+            {"id":"r1","type":"reasoning","encrypted_content":"e1","content":[{"type":"reasoning_text","text":"a"}]},
+            {"id":"r2","type":"reasoning","encrypted_content":"e2","content":[{"type":"reasoning_text","text":"b"}]},
+            message()]}}),
+    ]);
+    let saved = Arc::new(Saved {
+        states: Mutex::new(vec![]),
+        fail: false,
+    });
+    let mut input = request();
+    input.continuation_scope = Some(ContinuationScope {
+        chat_id: "chat".into(),
+        branch_id: "branch".into(),
+    });
+    input.continuation_store = Some(saved.clone());
+    let provider =
+        ResponsesProvider::new(Transport::new("responses", vec![(200, stream)])).unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(input, CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok), "{events:?}");
+    assert!(
+        events.iter().any(|event| matches!(event,
+            Ok(ProviderEvent::Event { kind, data })
+                if kind == "run.message.completed"
+                    && data["reasoningContent"] == "ba")),
+        "parts join in first-appearance order: {events:?}"
+    );
 }
 #[tokio::test]
 async fn responses_rejects_mismatched_output_and_unknown_events() {
@@ -481,4 +683,227 @@ async fn multimodal_wire_preserves_absent_detail_newlines_and_silent_host_refs()
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("system"));
     assert!(!warnings[0].contains("assistant"));
+}
+#[tokio::test]
+async fn chat_stream_emits_incremental_reasoning_deltas() {
+    let stream = sse(&[
+        json!({"choices":[{"delta":{"reasoning_content":"th"}}]}),
+        json!({"choices":[{"delta":{"reasoning":"inking","content":"for"}}]}),
+        json!({"choices":[{"delta":{"content":"t"},"finish_reason":"stop"}]}),
+        json!({"choices":[{"delta":{"reasoning_content":""}}]}),
+    ]) + "data: [DONE]\n\n";
+    let provider =
+        ChatCompletionsProvider::new(Transport::new("chat-completions", vec![(200, stream)]))
+            .unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    let sequence: Vec<(String, String)> = events
+        .iter()
+        .filter_map(|event| match event {
+            Ok(ProviderEvent::Delta(delta)) => Some(("run.message.delta".into(), delta.clone())),
+            Ok(ProviderEvent::Event { kind, data }) if kind == "run.message.reasoning-delta" => {
+                Some((
+                    kind.clone(),
+                    data["delta"].as_str().unwrap_or_default().into(),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        sequence,
+        vec![
+            ("run.message.reasoning-delta".to_string(), "th".to_string()),
+            ("run.message.delta".to_string(), "for".to_string()),
+            (
+                "run.message.reasoning-delta".to_string(),
+                "inking".to_string()
+            ),
+            ("run.message.delta".to_string(), "t".to_string()),
+        ]
+    );
+    assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Event {data,..}) if data["content"]=="fort"&&data["reasoningContent"]=="thinking")));
+}
+#[tokio::test]
+async fn chat_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones() {
+    let reported = sse(&[
+        json!({"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}),
+        json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,"prompt_tokens_details":{"cached_tokens":6,"audio_tokens":1},"completion_tokens_details":{"reasoning_tokens":3}}}),
+    ]) + "data: [DONE]\n\n";
+    let provider =
+        ChatCompletionsProvider::new(Transport::new("chat-completions", vec![(200, reported)]))
+            .unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["promptTokens"]==10&&data["cachedPromptTokens"]==6&&data["reasoningTokens"]==3)));
+    let untracked = sse(&[
+        json!({"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}),
+        json!({"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_tokens_details":null,"completion_tokens_details":{"cached_tokens":null,"reasoning_tokens":"3"}}}),
+    ]) + "data: [DONE]\n\n";
+    let provider =
+        ChatCompletionsProvider::new(Transport::new("chat-completions", vec![(200, untracked)]))
+            .unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    // The event contract is a number or absent, never null: servers send `null`
+    // (and sloppy providers strings) for details they do not track.
+    assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["promptTokens"]==1&&data.get("cachedPromptTokens").is_none()&&data.get("reasoningTokens").is_none())));
+}
+struct FailingTransport;
+#[async_trait]
+impl TrustedTransport for FailingTransport {
+    fn identity(&self) -> ConnectionIdentity {
+        ConnectionIdentity {
+            provider_id: "test".into(),
+            protocol: "chat-completions".into(),
+            connection_id: "c".into(),
+            generation: 1,
+        }
+    }
+    fn auth_kind(&self) -> AuthKind {
+        AuthKind::ApiKey
+    }
+    async fn request(
+        &self,
+        _: &ConnectionIdentity,
+        _: &str,
+        _: Option<Value>,
+        _: CancellationToken,
+    ) -> Result<reqwest::Response, CoreError> {
+        Err(CoreError::new(
+            "transport_error",
+            "ECONNREFUSED 127.0.0.1:1",
+        ))
+    }
+}
+#[tokio::test]
+async fn chat_transport_failure_before_any_response_is_network_error() {
+    let provider = ChatCompletionsProvider::new(Arc::new(FailingTransport)).unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    // The request never produced a response: distinct from a provider that
+    // answered with an error status, like the TypeScript client codes it.
+    assert!(events.iter().any(|event|matches!(event,Err(error) if error.code=="network_error"&&error.message.contains("ECONNREFUSED"))));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Ok(ProviderEvent::Event { kind, .. }) if kind == "run.message.completed")));
+}
+#[tokio::test]
+async fn chat_response_without_body_is_empty_body() {
+    let provider = ChatCompletionsProvider::new(Transport::new(
+        "chat-completions",
+        vec![(200, String::new())],
+    ))
+    .unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().any(|event|matches!(event,Err(error) if error.code=="empty_body"&&error.message=="Provider returned empty body")));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Ok(ProviderEvent::Event { kind, .. }) if kind == "run.message.completed")));
+}
+#[tokio::test]
+async fn responses_service_unavailable_is_the_only_retryable_http_error() {
+    for (status, error_code, code, retryable) in [
+        // Unknown body code falls back to the status map (TS responses.ts).
+        (503_u16, "server_error", "service_unavailable", true),
+        (429, "server_error", "usage_limit", false),
+        // Provider-declared codes classify first (TS classifyResponseError):
+        // both subscription-sharing unavailabilities are service_unavailable,
+        // while the limit-exceeded sibling stays usage_limit.
+        (
+            500,
+            "subscription_sharing_user_unavailable",
+            "service_unavailable",
+            true,
+        ),
+        (
+            500,
+            "subscription_sharing_usage_unavailable",
+            "service_unavailable",
+            true,
+        ),
+        (
+            429,
+            "subscription_sharing_usage_limit_exceeded",
+            "usage_limit",
+            false,
+        ),
+    ] {
+        let transport = Transport::new(
+            "responses",
+            vec![(
+                status,
+                json!({"error": {"code": error_code, "message": "try later"}}).to_string(),
+            )],
+        );
+        let provider = ResponsesProvider::new(transport).unwrap();
+        let events: Vec<_> = provider
+            .stream_chat(request(), CancellationToken::new())
+            .collect()
+            .await;
+        assert!(events.iter().any(
+            |event| matches!(event,Err(error) if error.code==code&&error.retryable==retryable)
+        ));
+    }
+}
+#[tokio::test]
+async fn responses_stream_level_failure_shares_the_retryable_taxonomy() {
+    // SSE-level failure events classify through the same table as HTTP bodies
+    // (TS responses-stream.ts attaches the same diagnostic to both).
+    let stream = sse(&[
+        json!({"type":"response.failed","response":{"status":"failed","error":{"code":"subscription_sharing_user_unavailable","message":"busy"}}}),
+    ]);
+    let provider =
+        ResponsesProvider::new(Transport::new("responses", vec![(200, stream)])).unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().any(
+        |event| matches!(event,Err(error) if error.code=="service_unavailable"&&error.retryable)
+    ));
+}
+#[tokio::test]
+async fn responses_usage_maps_detail_counts_and_omits_absent_or_non_numeric_ones() {
+    let added = json!({"type":"response.output_item.added","output_index":0,"item":{"id":"message1","type":"message","role":"assistant","content":[]}});
+    let delta = json!({"type":"response.output_text.delta","output_index":0,"item_id":"message1","content_index":0,"delta":"answer"});
+    let reported = json!({"type":"response.completed","response":{"status":"completed","output":[message()],"usage":{"input_tokens":8,"output_tokens":5,"total_tokens":13,"input_tokens_details":{"cached_tokens":4,"audio_tokens":1},"output_tokens_details":{"reasoning_tokens":2}}}});
+    let provider = ResponsesProvider::new(Transport::new(
+        "responses",
+        vec![(200, sse(&[added.clone(), delta.clone(), reported]))],
+    ))
+    .unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["promptTokens"]==8&&data["completionTokens"]==5&&data["cachedPromptTokens"]==4&&data["reasoningTokens"]==2)));
+    let untracked = json!({"type":"response.completed","response":{"status":"completed","output":[message()],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"input_tokens_details":null,"output_tokens_details":{"reasoning_tokens":"2"}}}});
+    let provider = ResponsesProvider::new(Transport::new(
+        "responses",
+        vec![(200, sse(&[added, delta, untracked]))],
+    ))
+    .unwrap();
+    let events: Vec<_> = provider
+        .stream_chat(request(), CancellationToken::new())
+        .collect()
+        .await;
+    assert!(events.iter().all(Result::is_ok));
+    // Like the chat lane: the event contract is a number or absent, never null.
+    assert!(events.iter().any(|event|matches!(event,Ok(ProviderEvent::Usage(data)) if data["promptTokens"]==1&&data.get("cachedPromptTokens").is_none()&&data.get("reasoningTokens").is_none())));
 }

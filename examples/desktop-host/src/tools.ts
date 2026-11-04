@@ -1,32 +1,44 @@
 /**
- * The one `ToolSetContributor` this example ships: two read-only tools that
- * exist purely to show the round trip — an Ajv-validated `inputSchema`, a
- * synchronous `execute`, and the slim `AiToolResult` envelope every tool
- * returns regardless of what it does. Copy this file's shape for a real tool;
- * the framework validates `inputSchema` for you (`AiToolRegistry`, in
- * `@agentkit/core`) before `execute` ever sees the arguments.
+ * The tools this example ships: two read-only tools that exist purely to show
+ * the round trip — a JSON-Schema `inputSchema`, a `run` function, and the
+ * slim tool-result envelope every tool returns regardless of what it does.
+ * Copy this file's shape for a real tool; the Rust engine validates
+ * `inputSchema` against the descriptor before `run` ever sees the arguments
+ * (`JsToolGuard` in `rust/crates/napi`, mirroring `AiToolRegistry`'s Ajv
+ * validation on the TypeScript side).
+ *
+ * NATIVE COMPOSITION: tools are registered once at boot through
+ * `NativeSessionService.registerTool(definition, run)` — the JS tool lane.
+ * Every call is bridged into this process from Rust, judged by the Rust-side
+ * authority chain, and its result crosses back as the host tool-result JSON.
+ * There is no per-run contributor here any more: registration IS the
+ * contribution (see `wiring.ts` step 4 for how the catalogue the REST route
+ * advertises is built from this exact list).
  */
-import type { AiTool, AiToolExecutionContext } from "@agentkit/core";
 import type {
-  Clock,
-  ToolContributionContext,
-  ToolSetContributor,
-} from "@agentkit/host";
+  ToolDefinitionJson,
+  ToolResultJson,
+  ToolRunFunction,
+} from "@agentkit/native";
+import type { Clock } from "@agentkit/host";
 
-interface EchoInput {
-  text: string;
+/** One tool and its execution, as one unit: both halves go to
+ * `registerTool`, and the catalogue entry the façade serves is the
+ * `definition` — one source of truth, no drift possible. */
+export interface ExampleTool {
+  definition: ToolDefinitionJson;
+  run: ToolRunFunction;
 }
 
 /**
- * Named `example_echo`, not `example.echo`: `AiToolRegistry.register` rejects
- * a dotted tool name — `TOOL_NAME_PATTERN` in `@agentkit/contracts` is
- * `^[a-zA-Z0-9_-]+$` ("no dots or spaces"). `@agentkit/mcp-client` hits the
- * same rule and projects its dotted canonical ids through `__` before
- * registering (see its README's "Tool identity" section); underscore is this
- * framework's flat-name convention. The dotted form still lives in
- * `capability`, which has no such restriction.
+ * Named `example_echo`, not `example.echo`: the descriptor name is validated
+ * against `TOOL_NAME_PATTERN` in `@agentkit/contracts` —
+ * `^[a-zA-Z0-9_-]+$` ("no dots or spaces") — by `registerTool` before the
+ * Rust registry ever sees it. Underscore is this framework's flat-name
+ * convention. The dotted form still lives in `capability`, which has no such
+ * restriction.
  */
-const echoTool: AiTool<EchoInput, { echoed: string }> = {
+const echoTool: ExampleTool = {
   definition: {
     name: "example_echo",
     version: "1.0.0",
@@ -40,23 +52,23 @@ const echoTool: AiTool<EchoInput, { echoed: string }> = {
       additionalProperties: false,
     },
   },
-  async execute(ctx: AiToolExecutionContext, input: EchoInput) {
+  run: (input) => {
+    const text =
+      input !== null && typeof input === "object" && "text" in input
+        ? String(input.text)
+        : "";
     return {
-      ok: true,
-      data: { echoed: input.text },
-      summary: `echoed "${input.text}"`,
+      data: { echoed: text },
+      summary: `echoed "${text}"`,
       sources: [],
       warnings: [],
       truncated: false,
-      limits: ctx.limits,
-    };
+    } satisfies ToolResultJson;
   },
 };
 
 /** Takes `clock` rather than reading `Date.now()` — see `packages/host/src/ports/system.ts`. */
-function createNowTool(
-  clock: Clock,
-): AiTool<Record<string, never>, { now: string }> {
+function createNowTool(clock: Clock): ExampleTool {
   return {
     definition: {
       name: "example_now",
@@ -70,41 +82,26 @@ function createNowTool(
         additionalProperties: false,
       },
     },
-    async execute(ctx: AiToolExecutionContext) {
+    run: () => {
       const now = clock.nowIso();
       return {
-        ok: true,
         data: { now },
         summary: now,
         sources: [],
         warnings: [],
         truncated: false,
-        limits: ctx.limits,
-      };
+      } satisfies ToolResultJson;
     },
   };
 }
 
 /**
- * Tools are contributed per run (see `ToolSetContributor`'s doc comment), not
- * registered once at boot — this contributor has no per-run state to build, so
- * it always returns the same two tools.
- *
- * `namespace` is required and is this contributor's OWN token: it is attribution
- * and reservation, not a prefix — the tools keep the names `example_echo` and
- * `example_now`, and nothing renames them to `example__…`. What it buys is that
- * AgentKit's reserved namespaces (`agentkit`, `chat`, `mcp`) are refused here,
- * and that a second contributor offering an `example_echo` of its own fails
- * staging loudly instead of shadowing this one.
+ * The one set this example registers. Both tools are `effect: "read"`, so
+ * the Rust authority chain admits them without approvals in any mode; a
+ * `write`-effect tool would park on the durable ask unless the host widens
+ * `jsToolAuthority` (see `wiring.ts` step 4 for why this example runs
+ * `full_auto`).
  */
-export function createExampleToolSetContributor(
-  clock: Clock,
-): ToolSetContributor {
-  const tools = [echoTool, createNowTool(clock)] as unknown as AiTool[];
-  return {
-    namespace: "example",
-    async contribute(_ctx: ToolContributionContext): Promise<AiTool[]> {
-      return tools;
-    },
-  };
+export function createExampleTools(clock: Clock): ExampleTool[] {
+  return [echoTool, createNowTool(clock)];
 }

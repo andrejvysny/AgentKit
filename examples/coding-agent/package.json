@@ -18,12 +18,10 @@
     "directory": "examples/coding-agent"
   },
   "dependencies": {
-    "@agentkit/adapters-sqlite": "workspace:*",
     "@agentkit/contracts": "workspace:*",
     "@agentkit/core": "workspace:*",
     "@agentkit/host": "workspace:*",
-    "@agentkit/runner-local": "workspace:*",
-    "@agentkit/toolpacks-coding": "workspace:*"
+    "@agentkit/native": "workspace:*"
   },
   "devDependencies": {
     "@agentkit/testing": "workspace:*",

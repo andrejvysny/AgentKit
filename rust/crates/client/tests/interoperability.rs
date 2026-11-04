@@ -7,6 +7,8 @@ use std::{
     process::{Child, Command, Stdio},
 };
 
+mod support;
+
 struct Service(Child);
 impl Drop for Service {
     fn drop(&mut self) {
@@ -17,6 +19,9 @@ impl Drop for Service {
 
 #[tokio::test]
 async fn rust_client_talks_to_typescript_service_and_replays_same_key() {
+    if support::ts_interop_skipped() {
+        return;
+    }
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ts-service.ts");
     let child = Command::new("bun")
         .arg(script)

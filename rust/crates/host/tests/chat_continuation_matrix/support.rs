@@ -141,6 +141,8 @@ impl Tool for Write {
             model_data: None,
             summary: None,
             status: None,
+
+            model_content: None,
         })
     }
 }

@@ -1,6 +1,7 @@
 //! Durable native execution. Subscribers observe persisted events; dropping a
 //! subscriber does not cancel the task that produced them.
 
+mod advisor;
 mod budget;
 mod chat;
 mod connection_transport;
@@ -12,21 +13,28 @@ mod governance;
 pub mod http;
 mod mcp_configuration;
 mod ports;
+mod project_instructions;
 mod proposals;
 mod retry;
 mod runner;
+mod session;
+mod subagents;
 mod subscription;
 
-pub use budget::{parse_budget_limits, restore_execution_budget};
+pub use advisor::*;
+pub use budget::{RoleTaskOverrides, parse_budget_limits, restore_execution_budget};
 pub use chat::*;
 pub use connection_transport::*;
 pub use emulated_tool_call::{EMULATED_TOOL_CALL_MESSAGE, looks_like_emulated_tool_call};
 pub use governance::*;
 pub use mcp_configuration::*;
 pub use ports::*;
+pub use project_instructions::*;
 pub use proposals::*;
 pub use retry::*;
 pub use runner::*;
+pub use session::*;
+pub use subagents::*;
 pub use subscription::*;
 
 use agentkit_store::{LeaseFence, SqliteStore, StoreError, TaskRecord};
@@ -43,6 +51,14 @@ pub enum HostError {
     Store(#[from] StoreError),
     #[error("task executor not registered: {0}")]
     UnknownKind(String),
+    /// A task admission named a kind this host registered no executor for.
+    /// Admission is refused with this stable code BEFORE any row lands, so
+    /// the queue never holds work this host has promised to run and never
+    /// can; the store-level APIs stay unfiltered for deliberate cross-pool
+    /// seeding, and the runner's claim filter keeps such rows invisible to
+    /// this host either way.
+    #[error("no executor registered for task kind: {0}")]
+    NoExecutorForKind(String),
     #[error("execution cancelled")]
     Cancelled,
     #[error("{0}")]
@@ -56,6 +72,13 @@ pub struct ExecutionContext {
     pub task: TaskRecord,
     pub attempt_id: String,
     pub cancellation: CancellationToken,
+    /// Set when the durable task records an interrupt request; the run stops
+    /// at its next safe boundary and the host parks the turn.
+    pub interruption: CancellationToken,
+    /// Filled by the park sink when a tool asked a human; the runner then
+    /// skips settling because the park already ended the attempt. The mutex
+    /// also serializes lease renewal with the durable park and publication.
+    pub(crate) suspension: Arc<Mutex<Option<agentkit_core::HumanRequestSpec>>>,
     pub(crate) store: SqliteStore,
     pub(crate) fence: LeaseFence,
     pub(crate) runtime: SharedRuntime,

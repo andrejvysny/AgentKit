@@ -225,7 +225,9 @@ Foundation publication requires its own successful `foundation` track run; the
 foundation seed inside a Responses-track run is migration evidence only.
 
 The prepared publication route is `.github/workflows/publish.yml`; it publishes
-GitHub release assets, not an npm registry package. Before any dispatch, obtain
+GitHub release assets, not an npm registry package. The npm registry route for
+the native stack is `.github/workflows/native-release.yml` — see
+"Publishing the npm native stack" below. Before any dispatch, obtain
 explicit approval for the destination, candidate version, source commit, source
 manifest digest, exact tarball SHA-256, qualification run, and retained macOS
 artifact ID. Configure the `agentkit-publication` environment with required
@@ -259,3 +261,61 @@ candidate. This is candidate continuity, not a schema upgrade. The option requir
 `--responses true`; both artifact digests and
 fixture digests are recorded. The fake applier writes a fixture ledger only;
 these checks do not qualify a PCB application or paid provider credentials.
+
+## Publishing the npm native stack
+
+AgentKit's registry story is seven packages published under one approved
+release: `agentkit` (the umbrella — the framework entry point) and the
+`@agentkit/native` wrapper plus its five platform packages
+(`@agentkit/native-{linux-x64-gnu,linux-arm64-gnu,darwin-arm64,darwin-x64,win32-x64-msvc}`).
+The version is lockstep: `scripts/snapshot-release.mjs` bumps the wrapper,
+every platform package, every pin (wrapper→platforms, umbrella→platforms,
+`@agentkit/core`→wrapper), the version strings embedded in the committed
+NAPI loader, and the `bun.lock` entries together, so an installed consumer
+can never mix an addon version the loader would refuse.
+
+**Scope ownership is the maintainer's decision and a prerequisite.** Nothing
+under the `@agentkit` scope may be published before the npm scope is claimed
+and controlled by the project owner. The approval gate is the
+`agentkit-native-publication` environment, a REPOSITORY SETTING that no
+workflow or script verifies: configure required reviewers and an
+environment-scoped `NPM_TOKEN` before the first real release (an environment
+GitHub auto-creates on first use has no reviewers and would publish
+unattended).
+
+Runbook (mirrors the `publish.yml` trust model — approval-gated, digest-bound,
+never rebuilds outside the snapshot job):
+
+1. The default branch must carry the candidate commit. Configure the
+   `agentkit-native-publication` GitHub environment with required reviewers,
+   and set `NPM_TOKEN` as an environment secret (an automation token for the npm account
+   that owns the scope). npm provenance needs no secret beyond the workflow's
+   OIDC token.
+2. Dispatch `.github/workflows/native-release.yml` with the exact
+   `version` (plain semver), `source_commit` (full SHA on the default
+   branch), and `track` matching the intended GitHub-release track. Keep
+   `dry_run: "true"` for the first dispatch of any version.
+3. The `snapshot` job freezes one release snapshot (the same
+   `scripts/snapshot-release.mjs` projection the GitHub-asset flow uses) and
+   packs the umbrella tarball from it. Each `build` job rebuilds that exact
+   snapshot's digest, compiles `agentkit-napi` for its triple, packs the
+   platform tarball, and verifies it — the full acceptance lifecycle when
+   the runner can execute the triple, structural-only (and labeled so)
+   otherwise.
+4. The `publish` job re-verifies the complete artifact set
+   (`scripts/release/native-publish.mjs verify`: digests, versions, the
+   byte-identical wrapper across all five jobs, umbrella pins, source
+   commit) and then publishes — platforms first, then the wrapper, then the
+   umbrella — with npm provenance. Already-published exact versions are
+   skipped, so re-dispatching after a partial failure completes the set
+   without replacing registry content.
+5. Record the published version and provenance statements in the changelog.
+   Consumers then install `agentkit@VERSION` from the registry;
+   `agentkit/native` resolves its addon automatically via os/cpu/libc
+   gating, and installation never invokes cargo.
+
+Local gates before any dispatch: `bun test scripts/tests/native-publish.test.ts
+scripts/tests/native-release-workflow.test.ts packages/native/tests/distribution.test.ts`,
+`node rust/scripts/build-native-release-artifact.mjs --target <host triple>
+--out <tmp>` + `node rust/scripts/check-native-artifact.mjs --manifest …`, and
+the full native qualification chain (`rust.yml`'s `native` job steps).

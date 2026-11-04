@@ -247,6 +247,62 @@ async fn partial_receipt_remains_partial_with_applied_and_skipped_counts() {
     assert_eq!(model["skipped"][0]["reason"], "item no longer exists");
 }
 
+/// Port of the inbound-proposal partial-apply repeat: a partial mutation
+/// finalizes on its receipt and is NEVER repeated — the replay answers
+/// `already_applied` with the per-op failed detail (`skipped`), and the
+/// domain is never dispatched a second time. (TS originals:
+/// `packages/host/tests/inbound-proposal.test.ts` "reports already_applied
+/// with failed-op detail when a partial apply is repeated", itself the port
+/// of `mcp-server/tests/inbound-actors.test.ts` "partial mutation reports
+/// failure and is never repeated", on the inbound actor lane the MCP
+/// handler delegates to.)
+#[tokio::test]
+async fn inbound_actor_partial_apply_replays_already_applied_with_failed_op_detail() {
+    let fixture = fixture_actor(WriteExecutionMode::DirectWhenAuthorized, "session-a").await;
+    *fixture.domain.status.lock().unwrap() = "partial".into();
+    let mut arguments = input();
+    arguments["two_operations"] = json!(true);
+
+    // The inbound actor never inherits chat-level auto-apply consent: the
+    // first call only stages, with zero domain dispatch.
+    let staged = fixture
+        .tool
+        .execute(context(), arguments.clone())
+        .await
+        .unwrap();
+    assert_eq!(staged.data.unwrap()["status"], "pending");
+    assert_eq!(fixture.domain.calls.load(Ordering::SeqCst), 0);
+
+    // Host approval, then apply: the partial outcome commits once.
+    let proposal = fixture.store.proposals(None, None).await.unwrap().remove(0);
+    fixture
+        .service
+        .approve(&proposal.id, &json!({"id": "host-user"}))
+        .await
+        .unwrap();
+    let outcome = fixture
+        .service
+        .apply(&proposal.id, "op-inbound-1", &json!({"id": "host-user"}))
+        .await
+        .unwrap();
+    assert_eq!(outcome.outcome.status, "partial");
+    assert_eq!(fixture.domain.calls.load(Ordering::SeqCst), 1);
+
+    // The repeat on the same inbound action identity is refused as
+    // already_applied, carrying the failed-op detail of the recorded
+    // receipt, and the domain is never invoked again.
+    let repeat = fixture.tool.execute(context(), arguments).await.unwrap();
+    assert!(!repeat.ok);
+    assert_eq!(repeat.status.as_deref(), Some("partial"));
+    let model = repeat.model_data.expect("model projection");
+    assert_eq!(model["status"], "already_applied");
+    assert_eq!(model["appliedCount"], 1);
+    assert_eq!(model["skipped"][0]["id"], "op:1");
+    assert_eq!(model["skipped"][0]["reason"], "item no longer exists");
+    assert_eq!(fixture.domain.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.store.proposals(None, None).await.unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn authorization_denial_and_revision_change_never_apply_or_leak_errors() {
     let fixture = fixture(WriteExecutionMode::DirectWhenAuthorized, false).await;

@@ -27,7 +27,7 @@ fn finite_numbers(value: &Value) -> bool {
     }
 }
 
-pub(super) fn scope(value: &Value) -> Result<()> {
+pub(crate) fn scope(value: &Value) -> Result<()> {
     fields(
         value,
         &[
@@ -99,7 +99,7 @@ pub(super) fn scopes_equal(left: &Value, right: &Value) -> bool {
             == crate::util::safe_integer(&right["generation"])
 }
 
-pub(super) fn stored(db: &Connection, record: &ProviderContinuationRecord) -> Result<()> {
+pub(crate) fn stored(db: &Connection, record: &ProviderContinuationRecord) -> Result<()> {
     state(&record.state)?;
     let binding: Option<(String, String)> = db
         .query_row(

@@ -1,12 +1,15 @@
 /**
  * Architecture invariants for the unified agent runtime (ADR 0015 §1, §5).
  *
- * AgentKit has exactly ONE model/tool loop. These tests pin that by source:
- * every place that calls a provider (`.streamChat(`), invokes a tool or
- * executor (`.execute(`), or drives the loop (`runChat(` / `runAgentLoop(`)
- * is listed below WITH the reason it is allowed. A new call site fails here
- * on purpose — not because it is necessarily wrong, but because a second loop
- * or a tool invocation that bypasses `executeToolSafely` is exactly the drift
+ * AgentKit has exactly ONE model/tool loop, and it lives in Rust
+ * (`agentkit-core` behind `@agentkit/native`). The TypeScript side may only
+ * delegate to a caller-supplied provider client or wrap an admitted
+ * callback. These tests pin that by source: every place that calls a
+ * provider (`.streamChat(`), invokes a tool or executor (`.execute(`), or
+ * drives the loop (`runChat(` / `runAgentLoop(`) is listed below WITH the
+ * reason it is allowed. A new call site fails here on purpose — not because
+ * it is necessarily wrong, but because a second loop in TypeScript or a tool
+ * invocation that bypasses the Rust admission layers is exactly the drift
  * this runtime must not acquire silently. Review it, then add it with its
  * reason.
  *
@@ -22,29 +25,24 @@ const PACKAGES = join(REPO, "packages");
 
 /** Allowed `.streamChat(` call sites → why. */
 const STREAM_CHAT_SITES: Record<string, string> = {
-  "core/src/runs/model-step.ts": "the loop's single provider request",
-  "core/src/runs/bounded-provider.ts":
-    "budget wrapper delegating to the wrapped client",
   "host/src/context/bounded-context-client.ts":
     "context admission wrapper delegating one request to the wrapped client",
+  "host/src/context/compaction-usage.ts":
+    "records observed billing while delegating the same compaction request",
+  "core/src/runs/native-provider.ts":
+    "JavaScript provider callback requested by the Rust loop, without model orchestration",
 };
 
 /** Allowed `.execute(` call sites → why. */
 const EXECUTE_SITES: Record<string, string> = {
-  "core/src/runs/tool-exec.ts":
-    "executeToolSafely: the loop's single tool invocation (2 branches)",
-  "core/src/runs/bounded-run.ts":
-    "budget wrapper delegating to the wrapped tool",
   "host/src/turn/guarded-tool.ts":
     "ToolGuard wrapper delegating after durable execution admission",
   "host/src/tasks/executor-registry.ts":
     "task dispatch to a TaskExecutor (not a tool)",
   "runner-local/src/single-process-task-runner.ts":
     "runner dispatch to a TaskWorker (not a tool)",
-  "mcp-server/src/tool-source.ts":
-    "inbound MCP serving surface (no model loop)",
-  "mcp-server/src/server.ts":
-    "MCP tools/call routed to the tool source (no model loop)",
+  "core/src/runs/native-loop.ts":
+    "JavaScript tool callback after Rust schema, budget, and timeout admission",
 };
 
 /** Allowed `runChat(` / `runAgentLoop(` call sites outside their definitions. */
@@ -108,17 +106,18 @@ describe("architecture: one agent loop (ADR 0015)", () => {
     expect(packageSources().size).toBeGreaterThan(100);
   });
 
-  it("calls a provider only from the loop's model step", () => {
+  it("calls a provider only from wrappers and the native provider bridge", () => {
     const sites = sitesMatching(/\.streamChat\(/g);
     expect([...sites.keys()].sort()).toEqual(
       Object.keys(STREAM_CHAT_SITES).sort(),
     );
-    expect(sites.get("core/src/runs/model-step.ts")).toBe(1);
+    expect(sites.get("core/src/runs/native-provider.ts")).toBe(1);
   });
 
   it("invokes tools and executors only from the allowlisted sites", () => {
     const sites = sitesMatching(/\.execute\(/g);
     expect([...sites.keys()].sort()).toEqual(Object.keys(EXECUTE_SITES).sort());
+    expect(sites.get("core/src/runs/native-loop.ts")).toBe(1);
   });
 
   it("drives the loop only from the runChat facade and TurnRunner", () => {

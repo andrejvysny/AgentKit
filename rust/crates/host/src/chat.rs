@@ -8,9 +8,23 @@ mod correction;
 #[path = "chat_history.rs"]
 mod history;
 pub use correction::CorrectionConfig;
+#[path = "compaction.rs"]
+mod compaction;
+#[path = "compaction_prompts.rs"]
+mod compaction_prompts;
+#[path = "compaction_request.rs"]
+mod compaction_request;
+#[path = "compaction_runner.rs"]
+mod compaction_runner;
+#[path = "chat_context.rs"]
+mod context_budget;
+#[path = "tool_result_elision.rs"]
+mod elision;
 #[path = "chat_hooks.rs"]
 mod hooks;
 pub use hooks::{AttachmentBudgets, ChatExecutorOptions, ChatHookTimeouts};
+#[path = "session_run.rs"]
+mod session_run;
 
 /// A fixed provider binding or an immutable task snapshot determines the account.
 pub struct ChatExecutor {
@@ -33,6 +47,36 @@ impl ChatExecutor {
     pub fn with_provider_factory(mut self, factory: Arc<dyn ChatProviderFactory>) -> Self {
         self.options.provider_factory = Some(factory);
         self
+    }
+    /// Whether this turn may be handed tools at all. Mirrors the TypeScript
+    /// turn-runner: the persisted settings document (`http`/`settings`)
+    /// carries `toolCalling` ("auto" | "on" | "off"; absent = "auto"), and
+    /// "auto" defers to the provider's recorded capabilities
+    /// (`providers.saveCapabilities` document) — staged unless that document
+    /// says `toolCalling: false` outright.
+    async fn stage_tools(&self, context: &ExecutionContext, provider_id: &str) -> HostResult<bool> {
+        let mode = context
+            .store
+            .get_setting("http", "settings")
+            .await?
+            .and_then(|settings| {
+                settings["toolCalling"]
+                    .as_str()
+                    .map(|value| value.to_owned())
+            })
+            .unwrap_or_default();
+        if mode == "off" {
+            return Ok(false);
+        }
+        if mode == "on" {
+            return Ok(true);
+        }
+        Ok(context
+            .store
+            .get_setting(agentkit_store::PROVIDER_CAPABILITIES_NAMESPACE, provider_id)
+            .await?
+            .and_then(|capabilities| capabilities["toolCalling"].as_bool())
+            .unwrap_or(true))
     }
     async fn provider(&self, context: &ExecutionContext) -> HostResult<Arc<dyn ChatProvider>> {
         if let Some(factory) = &self.options.provider_factory {
@@ -97,7 +141,30 @@ impl TaskExecutor for ChatExecutor {
         if chat_id != context.task.scope_id {
             return Err(HostError::Execution("chat scope mismatch".into()));
         }
-        let records = context.store.messages(chat_id, false).await?;
+        // Native execution resolves neither selected content (Skills) nor
+        // provider reasoning effort, so a turn carrying them is refused
+        // rather than dispatched as a prompt-only request that silently
+        // omits the selection — the executor-level mirror of the HTTP
+        // boundary's 501 and of the session service's submit gate.
+        for field in ["contentSelection", "reasoningEffort"] {
+            if context
+                .task
+                .payload
+                .get(field)
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err(HostError::Execution(format!(
+                    "{field}_unsupported: native prompt templates, skills, and provider reasoning effort are not configured."
+                )));
+            }
+        }
+        let loaded = context.store.messages(chat_id, true).await?;
+        // The active chain is what the continuation and the anchor see.
+        let records: Vec<_> = loaded
+            .iter()
+            .filter(|message| message.active)
+            .cloned()
+            .collect();
         let anchor = context.task.payload["assistantMessageId"]
             .as_str()
             .map(str::to_owned)
@@ -122,33 +189,202 @@ impl TaskExecutor for ChatExecutor {
         )
         .await?;
         let resolved = hooks::resolve_context(&self.options, &context, chat_id).await?;
-        let registry = hooks::stage_registry(
+        // A session turn steers at tool boundaries and runs the exact calls
+        // its answered approvals authorized (ADR 0016 §3, ADR 0019 §2).
+        let session = session_run::is_session_turn(&context, chat_id).await?;
+        let (approvals, resume_calls) = if session {
+            // Steer-event reconciliation (ADR 0016 §3): the placement
+            // transaction is the unit of record and the
+            // `run.input.applied` event is its projection, so a crash
+            // between the two is healed here — BEFORE the loop's own
+            // `first_seq` is derived below, keeping the backfilled
+            // announcements strictly ahead of this attempt's sequence in
+            // the log. See `session_run::backfill_applied_steers`.
+            session_run::backfill_applied_steers(&context, chat_id).await?;
+            session_run::resolve_approved_calls(&context, chat_id, &anchor).await?
+        } else {
+            (std::collections::HashMap::new(), vec![])
+        };
+        // `AssistantSettings.toolCalling` gate (TS reference turn-runner.ts):
+        // "off" stages no tools at all; "auto" (the default) follows the
+        // provider's recorded capability — a provider saved as
+        // `toolCalling: false` gets no tools, because handing them over is
+        // the exact request shape that fails; "on" stages regardless of the
+        // probe. With no tools staged the wire carries no `tools` field and
+        // a provider-emitted call resolves as a `tool_missing` failure
+        // (frozen loop behavior) — the tool is never executed.
+        let stage_tools = self.stage_tools(&context, provider.id()).await?;
+        let registry = if stage_tools {
+            hooks::stage_registry(
+                &self.options,
+                &context,
+                chat_id,
+                self.tools.clone(),
+                &resolved.bindings,
+                approvals,
+            )
+            .await?
+        } else {
+            Arc::new(ToolRegistry::new())
+        };
+        // Project instructions (ADR 0017 part 1): the session workspace's
+        // AGENTS.md / CLAUDE.md text is appended to the resolved system
+        // prompt after context resolution and before provider dispatch,
+        // with every read refusal/truncation surfaced as a `run.warning`
+        // event (TS turn-runner parity).
+        let system_prompt = crate::project_instructions::augment_system_prompt(
             &self.options,
             &context,
             chat_id,
-            self.tools.clone(),
-            &resolved.bindings,
+            resolved.system_prompt.clone(),
         )
         .await?;
-        let messages = history::assemble(
+        // Autonomous-delegation channel: while subagents are enabled, every
+        // session turn (Chat and Coding alike) carries the guidance to
+        // delegate when beneficial. Consulted per turn so hot configuration
+        // takes effect without rebuilding the executor.
+        let system_prompt = match &self.options.delegation_guidance {
+            Some(guidance) => match guidance.guidance(chat_id).await {
+                Some(text) if !text.is_empty() => Some(match system_prompt {
+                    Some(existing) if !existing.is_empty() => format!("{existing}\n\n{text}"),
+                    _ => text,
+                }),
+                _ => system_prompt,
+            },
+            None => system_prompt,
+        };
+        // Read the history AFTER the resume pass wrote its records: an
+        // approval-mismatch refusal appended moments ago must be visible to
+        // the model in this same attempt, not only after a restart.
+        let records = context.store.messages(chat_id, true).await?;
+        // What the provider-facing history is built from (ADR 0017 part 1):
+        // the session's anchored-history policy and its tool-result elision,
+        // both from the turn's staged context snapshot. A non-session chat
+        // assembles exactly as it always did.
+        let assembly = context_budget::resolve_context_assembly(&context, chat_id).await?;
+        let receipts = context
+            .store
+            .list_executions_by_chat(chat_id.to_owned())
+            .await
+            .map_err(|error| {
+                HostError::Execution(format!(
+                    "Cannot read durable execution receipts; mutations remain blocked. ({error})"
+                ))
+            })?;
+        let path_snapshot = serde_json::to_value(&records)
+            .map_err(|_| HostError::Execution("context snapshot failed".into()))?;
+        let receipt_snapshot = serde_json::to_value(&receipts)
+            .map_err(|_| HostError::Execution("receipt snapshot failed".into()))?;
+        let mut entries = history::assemble_with_ids(
             records,
             self.options.history_limit,
             &anchor,
-            resolved.system_prompt.clone(),
+            system_prompt.clone(),
+            // Unanswered persisted calls reconcile against durable receipts,
+            // never against an assumed absence (ADR 0020). Receipts are read
+            // per chat: the calls being reconciled were recorded under the
+            // run that owned them, not the run replaying history.
+            &receipts,
+            &context.task.task_id,
+            assembly.policy,
         );
+        // Frozen order (turn-runner.ts:1758): stale tool results are elided in
+        // the assembled view BEFORE summaries/compaction see them, so the
+        // summary is written over the same bytes the provider gets. The
+        // provider-continuation lane replays its durable branch untouched, so
+        // assembly stays exactly as the continuation recorded it.
+        if session
+            && continuation.is_none()
+            && let Some(options) = assembly.elision
+        {
+            elision::elide_stale_tool_results(&mut entries, &options);
+        }
         let runtime: Arc<dyn agentkit_core::Runtime> =
             Arc::new(CoreRuntime(context.runtime.clone()));
+        // Subagent children carry per-role execution bounds on their chat
+        // metadata; non-subagent sessions get defaults (no behavior change).
+        let role_overrides = if session {
+            crate::subagents::task_overrides(&context.store, chat_id).await?
+        } else {
+            crate::budget::RoleTaskOverrides::default()
+        };
         let budget = crate::restore_execution_budget(
             &context,
-            self.options.execution_budgets.clone(),
+            role_overrides.apply(self.options.execution_budgets.clone()),
             runtime.clone(),
         )
         .await?;
+        let context_budget =
+            context_budget::ContextBudget::resolve(&context, chat_id, provider.id(), model).await?;
+        let prepared = Arc::new(hooks::PreparedProvider {
+            budget: context_budget.clone(),
+            inner: provider,
+            options: self.options.clone(),
+            context: context.clone(),
+            chat_id: chat_id.into(),
+        });
+        let messages = if session
+            && continuation.is_none()
+            && let Some(context_budget) = context_budget.clone()
+        {
+            compaction_runner::apply(compaction_runner::Input {
+                context: context.clone(),
+                chat_id: chat_id.into(),
+                model: model.into(),
+                provider: prepared.clone(),
+                request_budget: budget.clone(),
+                context_budget,
+                entries,
+                tools: registry.definitions(),
+                path_snapshot,
+                receipt_snapshot,
+                usage: self.options.usage.clone(),
+                usage_timeout_ms: self.options.hook_timeouts.usage_ms,
+            })
+            .await?
+            .into_iter()
+            .map(|(message, _)| message)
+            .collect()
+        } else {
+            if session && continuation.is_some() {
+                let manual = context.store.get_chat(chat_id).await?.is_some_and(|chat| {
+                    chat.metadata[agentkit_store::COMPACT_REQUESTED_METADATA_KEY].is_string()
+                });
+                let over = context_budget.as_ref().is_some_and(|budget| {
+                    let message_tokens: u64 = entries
+                        .iter()
+                        .map(|entry| context_budget::message_tokens(&entry.0))
+                        .sum();
+                    let tools = registry.definitions();
+                    let tool_tokens = if tools.is_empty() {
+                        0
+                    } else {
+                        serde_json::to_string(&tools)
+                            .unwrap_or_default()
+                            .encode_utf16()
+                            .count() as u64
+                    }
+                    .div_ceil(4);
+                    message_tokens.saturating_add(tool_tokens)
+                        > budget.window.saturating_sub(budget.reserve)
+                });
+                if manual || over {
+                    context.emit("run.warning", json!({"code":"compaction_failed","message":"Context compaction is unavailable for provider continuation; the continuation and request remain unchanged."})).await?;
+                }
+            }
+            entries.into_iter().map(|(message, _)| message).collect()
+        };
         let sink = Arc::new(history::DurableEvents {
             context: context.clone(),
             chat_id: chat_id.into(),
             anchor: anchor.clone(),
-            provider_id: provider.id().into(),
+            provider_id: prepared.id().into(),
+            fenced_tools: registry
+                .definitions()
+                .into_iter()
+                .filter(|definition| definition.effect == "write")
+                .map(|definition| definition.name)
+                .collect(),
             canonical: continuation.is_some(),
             display_metadata: context
                 .store
@@ -183,34 +419,92 @@ impl TaskExecutor for ChatExecutor {
             chat_id: Some(chat_id.into()),
             scope_id: Some(context.task.scope_id.clone()),
             bindings: resolved.bindings,
-            max_tool_iterations: self.options.max_tool_iterations,
+            max_tool_iterations: role_overrides
+                .max_tool_iterations
+                .unwrap_or(self.options.max_tool_iterations),
             max_tool_calls_per_iteration: self.options.max_tool_calls_per_iteration,
             default_tool_timeout_ms: self.options.default_tool_timeout_ms,
             cancellation: context.cancellation.clone(),
             runtime,
             event_sink: Some(sink.clone()),
             dispatch_guard: Some(context.dispatch_guard()),
+            suspender: Some(Arc::new(ParkSink {
+                context: context.clone(),
+            })),
+            interruption: Some(context.interruption.clone()),
+            hooks: self.options.run_hooks.clone(),
+            steering: session.then(|| {
+                Arc::new(session_run::SessionSteering::new(context.clone(), chat_id))
+                    as Arc<dyn agentkit_core::SteeringSource>
+            }),
+            resume_calls,
             ..RunOptions::default()
         };
-        let prepared = hooks::PreparedProvider {
-            inner: provider,
-            options: self.options.clone(),
-            context: context.clone(),
-            chat_id: chat_id.into(),
-        };
         let session = correction::ChatSession {
+            answer_committed: false,
             context: context.clone(),
             options: self.options.clone(),
             base: options,
-            provider: Arc::new(prepared),
+            provider: prepared,
             registry,
             sink,
             anchor,
-            system_prompt: resolved.system_prompt,
+            system_prompt,
         };
         session.execute().await
     }
 }
+/// Parks the turn when a tool asked a human (ADR 0016 §2). The `run.waiting`
+/// event and the pending records are already durable (the event sink wrote
+/// them); this commits the park itself: status, attempt, lease, and the
+/// request record that the answer path will settle.
+struct ParkSink {
+    context: ExecutionContext,
+}
+
+#[async_trait]
+impl agentkit_core::SuspendSink for ParkSink {
+    async fn park(
+        &self,
+        request: &agentkit_core::HumanRequestSpec,
+        tool_call_id: &str,
+    ) -> Result<(), agentkit_core::CoreError> {
+        // The store releases the lease before this future publishes the
+        // suspension. Keep heartbeat renewal outside that transition so a
+        // successful park cannot look like stolen execution authority.
+        let mut suspension = self.context.suspension.lock().await;
+        let now = self.context.runtime.now_ms();
+        let parked = self
+            .context
+            .store
+            .park_turn(agentkit_store::ParkTurn {
+                fence: self.context.fence.clone(),
+                assistant_message: None,
+                events: vec![],
+                request: Some(agentkit_store::CreateAgentInput {
+                    input_id: request.request_id.clone(),
+                    session_id: self.context.task.scope_id.clone(),
+                    kind: agentkit_store::AgentInputKind::HumanRequest,
+                    content: request.content.clone(),
+                    content_hash: request.content_hash.clone(),
+                    target_task_id: Some(self.context.task.task_id.clone()),
+                    on_settled: None,
+                    attempt_id: Some(self.context.attempt_id.clone()),
+                    tool_call_id: Some(tool_call_id.to_owned()),
+                    expires_at: request.expires_at.clone(),
+                }),
+                now,
+            })
+            .await
+            .map_err(|error| agentkit_core::CoreError::new("park_failed", &error.to_string()))?;
+        // Idempotent replay: the deterministic request id parks once; a
+        // second park of the same call finds the task already parked.
+        let _ = parked;
+        *suspension = Some(request.clone());
+        Ok(())
+    }
+}
+
 fn required<'a>(value: &'a Value, key: &str) -> HostResult<&'a str> {
     value[key]
         .as_str()
@@ -265,6 +559,113 @@ impl AgentHost {
         ];
         self.store.submit_turn(task, messages).await?;
         Ok(self.run_handle(&input.task_id))
+    }
+}
+
+#[cfg(test)]
+mod tool_gate_tests {
+    use super::*;
+    use agentkit_core::{ChatRequest, ProviderStream};
+    use agentkit_store::{ClaimInput, SqliteStore, SubmitTask};
+    use tokio_util::sync::CancellationToken;
+
+    struct Clock;
+    impl crate::Runtime for Clock {
+        fn now_ms(&self) -> i64 {
+            1000
+        }
+        fn id(&self) -> String {
+            "test".into()
+        }
+    }
+    struct Noop;
+    #[async_trait]
+    impl ChatProvider for Noop {
+        fn id(&self) -> &str {
+            "noop"
+        }
+        fn stream_chat(&self, _: ChatRequest, _: CancellationToken) -> ProviderStream {
+            Box::pin(futures::stream::empty())
+        }
+    }
+
+    async fn executor_context(store: SqliteStore) -> ExecutionContext {
+        store
+            .submit(SubmitTask {
+                task_id: "run".into(),
+                kind: "chat.turn".into(),
+                scope_id: "chat".into(),
+                payload: json!({}),
+                priority: 0,
+                now: 1000,
+                available_at: None,
+                depends_on: vec![],
+                parent_task_id: None,
+                exclusive_scope: false,
+            })
+            .await
+            .unwrap();
+        let claimed = store
+            .claim(ClaimInput {
+                owner_id: "worker".into(),
+                now: 1000,
+                ttl_ms: 60_000,
+                kinds: vec![],
+                busy_scopes: vec![],
+                max_attempts: 3,
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        ExecutionContext {
+            task: claimed.task,
+            attempt_id: claimed.lease.attempt_id.clone(),
+            cancellation: CancellationToken::new(),
+            interruption: CancellationToken::new(),
+            suspension: Arc::new(Mutex::new(None)),
+            store,
+            fence: claimed.lease.fence(),
+            runtime: Arc::new(Clock),
+            event_gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_calling_setting_and_recorded_capabilities_gate_staging() {
+        let store = SqliteStore::memory(2).unwrap();
+        let context = executor_context(store.clone()).await;
+        let executor = ChatExecutor::new(Arc::new(Noop), Arc::new(ToolRegistry::new()));
+        // No settings document, no capability record: tools stage.
+        assert!(executor.stage_tools(&context, "p").await.unwrap());
+        // "auto" (absent) follows the recorded probe: `toolCalling: false`
+        // stages nothing — handing tools over is the exact request shape
+        // that fails a chat-only provider.
+        store
+            .save_provider_capabilities(
+                "p",
+                json!({"streaming": true, "toolCalling": false, "modelList": true}),
+            )
+            .await
+            .unwrap();
+        assert!(!executor.stage_tools(&context, "p").await.unwrap());
+        // "on" overrides a wrong probe — the whole reason the knob exists.
+        store
+            .set_setting("http", "settings", json!({"toolCalling": "on"}))
+            .await
+            .unwrap();
+        assert!(executor.stage_tools(&context, "p").await.unwrap());
+        // "off" stages nothing for ANY provider, probe or no probe.
+        store
+            .set_setting("http", "settings", json!({"toolCalling": "off"}))
+            .await
+            .unwrap();
+        assert!(!executor.stage_tools(&context, "other").await.unwrap());
+        // "auto" again: an unrecorded provider stages (absence never disables).
+        store
+            .set_setting("http", "settings", json!({"toolCalling": "auto"}))
+            .await
+            .unwrap();
+        assert!(executor.stage_tools(&context, "other").await.unwrap());
     }
 }
 

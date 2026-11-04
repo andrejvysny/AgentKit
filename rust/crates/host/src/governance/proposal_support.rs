@@ -30,6 +30,8 @@ pub(super) fn missing_chat(context: &ToolContext) -> ToolResult {
         warnings: vec!["Tool executed without a chat context; nothing was staged.".into()],
         truncated: false,
         limits: context.limits.clone(),
+
+        model_content: None,
     }
 }
 
@@ -173,5 +175,7 @@ pub(super) fn result(
             .collect(),
         truncated: proposal.truncated,
         limits: context.limits.clone(),
+
+        model_content: None,
     }
 }

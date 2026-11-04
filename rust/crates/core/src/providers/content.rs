@@ -91,6 +91,13 @@ pub(crate) fn parts(
             } else {
                 dropped = true;
             }
+        } else if part["type"] == "audio" && !responses {
+            // Frozen `toOpenAiContentPart`: audio crosses as OpenAI's
+            // `input_audio` with the bytes and format verbatim — it is not
+            // a dropped modality on this lane.
+            output.push(
+                json!({"type":"input_audio","input_audio":{"data":part["data"],"format":part["format"]}}),
+            );
         } else if responses {
             return Err(CoreError::responses("unsupported_modality"));
         } else {

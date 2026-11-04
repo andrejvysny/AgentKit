@@ -19,33 +19,57 @@
  * docs/baseline/live-coding-2026-10-27.md (pasted by hand: coding-session.ts
  * overwrites that file). Exits non-zero on any FAIL.
  *
- * Same stack as coding-session.ts (sqlite store, local runner, coding tool
- * pack in `full_auto`, sandbox required); the helpers are repeated here so that
- * script stays untouched.
+ * NATIVE COMPOSITION (the exact recipe of scripts/live/coding-session.ts and
+ * examples/coding-agent/src/app.ts). Every runtime piece is built ONLY through
+ * `@agentkit/native`:
+ *  - `SqliteAssistantStore` → `NativeStore.open` (one Rust store actor owns the
+ *    file). Reads for waits, metrics and assertions (`tasks.getTask`,
+ *    `tasks.listEvents`, `summaries.listSummaries`) go through
+ *    `NativeAssistantStore`, the same `AssistantStore` port over the native
+ *    store — the event reads stay the `listEvents` path (the coding-session
+ *    precedent), so `summarize` and the seq-contiguity check are untouched.
+ *  - `SingleProcessTaskRunner` + `TurnRunner` + `TaskService` +
+ *    `AgentSessionService` + `ExecutorRegistry` + `createDispatchingWorker` →
+ *    one `store.createService(...)`: the Rust scheduler, worker and session
+ *    service; the worker starts at construction and drains on `service.close()`
+ *    (the old `taskRunner.startWorker` / `handle.stop()` pair).
+ *  - `providers.upsertProvider` + `settings.updateSettings(defaultProviderId)`
+ *    + `OpenAiCompatibleClient.fromConfig` → the Rust provider lane:
+ *    `NativeSessionService.registerProviderConnection(BASE_URL, null)` (this
+ *    local vLLM needs no key, and the key never reaches the database either
+ *    way) plus `createService({providerConfig:{protocol:"chat-completions",
+ *    …}})`. The provider lives in the lane, not the database.
+ *  - `createCodingPermissionGuard({mode:"full_auto"})` + TurnRunner
+ *    `toolGuards` → `createService({jsToolAuthority:{configuredMode:
+ *    "full_auto"}})`: the Rust coding-pack authority judges every JS tool
+ *    call (rust/crates/napi/src/authority.rs).
+ *  - `projectInstructions: fileProjectInstructions()` → built into the binding
+ *    (`FileProjectInstructions`, rust/crates/napi/src/service.rs): the fixture
+ *    already writes AGENTS.md into the workspace root and the session carries
+ *    a workspace descriptor, so the engine's FS project-instructions source
+ *    reads it natively — the same approach coding-session.ts uses.
+ *  - The coding tools run on the native coding lane: `service
+ *    .registerCodingTools` keeps the pack's descriptors, guards, sandbox,
+ *    leases and standing approvals in Rust (the examples/coding-agent
+ *    recipe) — compaction must keep that lane usable across four turns,
+ *    which is exactly what this script exercises.
+ *  - TurnRunner `maxToolIterations: 30` has NO JS surface on the binding:
+ *    session turns run under the engine's internal per-run cap
+ *    (`ChatExecutorOptions::max_tool_iterations`,
+ *    rust/crates/host/src/chat_hooks.rs). The honest native witness for a cap
+ *    hit is the existing "no turn failed" assertion: a capped run ends
+ *    `run.failed` with `Reached maxToolIterations=…` and lands in
+ *    `failedCode`, exactly as a context_overflow would.
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AiRunEvent } from "@agentkit/contracts";
-import { SqliteAssistantStore } from "@agentkit/adapters-sqlite";
-import { OpenAiCompatibleClient } from "@agentkit/core";
 import {
-  AgentSessionService,
-  ChatTurnExecutor,
-  ExecutorRegistry,
-  TaskService,
-  TurnRunner,
-  createDispatchingWorker,
-  defaultClock,
-  defaultIds,
-  type AssistantStore,
-} from "@agentkit/host";
-import { SingleProcessTaskRunner } from "@agentkit/runner-local";
-import {
-  createCodingPermissionGuard,
-  createCodingToolPack,
-} from "@agentkit/toolpacks-coding";
-import { fileProjectInstructions } from "../../packages/runner-local/src/project-instructions.js";
+  NativeAssistantStore,
+  NativeSessionService,
+  NativeStore,
+} from "@agentkit/native";
 
 const BASE_URL =
   process.env["AGENTKIT_LIVE_BASE_URL"] ?? "http://127.0.0.1:8000/v1";
@@ -96,7 +120,7 @@ async function sh(
 }
 
 async function waitTerminal(
-  store: AssistantStore,
+  store: NativeAssistantStore,
   taskId: string,
 ): Promise<string> {
   const deadline = Date.now() + TURN_TIMEOUT_MS;
@@ -106,6 +130,64 @@ async function waitTerminal(
     if (Date.now() > deadline) return `timeout(${task?.status})`;
     await sleep(250);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Native node: one native store file + one native session service over it
+// (the exact composition of scripts/live/coding-session.ts)
+// ---------------------------------------------------------------------------
+
+/** The coding tools are the Rust pack's: descriptors, bodies, guards,
+ * sandbox, leases and standing approvals all execute in Rust on the same
+ * executor lane — the exact recipe of `examples/coding-agent/src/app.ts`.
+ * `sandbox: "off"` preserves this script's historical unsandboxed local-run
+ * behavior (the native default is `"required"`). */
+async function registerCodingTools(
+  service: NativeSessionService,
+  root: string,
+): Promise<void> {
+  await service.registerCodingTools({
+    workspaceRoot: root,
+    sandbox: "off",
+    testCommands: ["bun test"],
+    configuredMode: "full_auto",
+  });
+}
+
+/** `NativeStore.open` + the `AssistantStore` port for reads; then the service
+ * over it: Rust worker + session service, the Rust provider lane, and the
+ * full_auto JS-tool authority the retired `createCodingPermissionGuard`
+ * carried. Constructing the service crash-reconciles and starts the worker —
+ * the old `taskRunner.startWorker(...)` had no counterpart to call. The parts
+ * are returned unfolded: main() drains the worker (the old `handle.stop()`)
+ * before the summary-record assertion reads the still-open store, then tears
+ * the rest down (the old trailing `store.close?.()`). */
+async function openNativeNode(
+  dbPath: string,
+  root: string,
+): Promise<{
+  store: NativeStore;
+  port: NativeAssistantStore;
+  service: NativeSessionService;
+  connectionId: string;
+}> {
+  const store = await NativeStore.open(dbPath);
+  const port = new NativeAssistantStore({ store });
+  const connectionId = await NativeSessionService.registerProviderConnection(
+    BASE_URL,
+    null,
+  );
+  const service = await store.createService({
+    jsToolAuthority: { configuredMode: "full_auto" },
+    providerConfig: {
+      protocol: "chat-completions",
+      providerId: PROVIDER_ID,
+      connectionId,
+      model: MODEL,
+    },
+  });
+  await registerCodingTools(service, root);
+  return { store, port, service, connectionId };
 }
 
 /** A module with enough documentation prose that reading it costs real tokens. */
@@ -299,66 +381,17 @@ async function main(): Promise<void> {
   const pre = await sh(["bun", "test"], root);
   check("fixture: bun test fails before the agent starts", pre.code !== 0);
 
-  const store = new SqliteAssistantStore(dbPath);
-  const taskRunner = new SingleProcessTaskRunner({
-    store,
-    leaseTtlMs: 30_000,
-    heartbeatMs: 1_000,
-    pollMs: 50,
-  });
-  const turnRunner = new TurnRunner({
-    store,
-    taskRunner,
-    providerFactory: (config) => OpenAiCompatibleClient.fromConfig(config),
-    contributors: [
-      createCodingToolPack({ workspace: { root }, testCommands: ["bun test"] }),
-    ],
-    toolGuards: [createCodingPermissionGuard({ mode: "full_auto" })],
-    projectInstructions: fileProjectInstructions(),
-    maxToolIterations: 30,
-    clock: defaultClock,
-    ids: defaultIds,
-  });
-  const tasks = new TaskService({
-    store,
-    taskRunner,
-    ids: defaultIds,
-    clock: defaultClock,
-  });
-  const service = new AgentSessionService({
-    store,
-    turns: turnRunner,
-    tasks,
-    taskRunner,
-    clock: defaultClock,
-    ids: defaultIds,
-  });
-  const registry = new ExecutorRegistry();
-  registry.register(new ChatTurnExecutor(turnRunner));
-  const worker = createDispatchingWorker(registry, {
-    store,
-    clock: defaultClock,
-  });
-  await store.providers.upsertProvider({
-    id: PROVIDER_ID,
-    label: "Local vLLM",
-    kind: "openai-compatible",
-    baseUrl: BASE_URL,
-    defaultModel: MODEL,
-    enabled: true,
-  });
-  await store.settings.updateSettings({ defaultProviderId: PROVIDER_ID });
+  const { store, port, service, connectionId } = await openNativeNode(
+    dbPath,
+    root,
+  );
   await service.createSession({
     sessionId: SESSION_ID,
-    profile: { id: "coding" },
+    profileId: "coding",
     providerId: PROVIDER_ID,
     model: MODEL,
     workspace: { root, trusted: true },
     context: { policy: "transcript", ...WINDOW },
-  });
-  const handle = await taskRunner.startWorker(worker, {
-    concurrency: 1,
-    ownerId: "live",
   });
 
   const summaries: TurnSummary[] = [];
@@ -368,8 +401,8 @@ async function main(): Promise<void> {
     const sent = await service.send(SESSION_ID, { content: prompt });
     if (sent.kind !== "turn") throw new Error("expected a turn");
     log(`${label}: ${sent.turnId} started`);
-    const status = await waitTerminal(store, sent.turnId);
-    const events = (await store.tasks.listEvents(sent.turnId)) as AiRunEvent[];
+    const status = await waitTerminal(port, sent.turnId);
+    const events = (await port.tasks.listEvents(sent.turnId)) as AiRunEvent[];
     const test = await sh(["bun", "test"], root);
     const s = summarize(
       label,
@@ -385,11 +418,14 @@ async function main(): Promise<void> {
       `${label}: ${status} in ${s.latencyS}s, compactions=${s.compacted.length}, maxPrompt=${s.maxPromptTokens}`,
     );
   }
-  await handle.stop();
+  // The old `handle.stop()`: close() drains the Rust worker (the binding
+  // drains on close), while the store stays open for the summary-record
+  // assertion below.
+  await service.close();
 
   const final = await sh(["bun", "test"], root);
   const compactions = summaries.flatMap((s) => s.compacted);
-  const saved = (await store.summaries?.listSummaries(SESSION_ID)) ?? [];
+  const saved = await port.summaries.listSummaries(SESSION_ID);
   check(
     "at least one run.context.compacted",
     compactions.length >= 1,
@@ -432,7 +468,11 @@ async function main(): Promise<void> {
     `\n${failed.length === 0 ? "ALL PASS" : `${failed.length} FAIL`}: ${checks.length - failed.length}/${checks.length} checks passed`,
   );
   console.log(`\n${markdown(result)}`);
-  store.close?.();
+  // The old trailing `store.close?.()`: `close()` drains the Rust worker
+  // (running coding commands included), the store actor is released, and
+  // the provider connection is revoked.
+  await store.close();
+  await NativeSessionService.revokeProviderConnection(connectionId);
   process.exit(failed.length === 0 ? 0 : 1);
 }
 
