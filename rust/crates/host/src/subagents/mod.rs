@@ -20,9 +20,11 @@
 //!   attempt's logical tool call, so an executor retry re-admits the same
 //!   child instead of forking a duplicate execution.
 
+mod budget;
 mod config;
 mod guard;
 mod service;
+mod snapshot;
 mod tools;
 
 pub use config::{
@@ -34,4 +36,5 @@ pub use service::{
     AwaitOutcome, AwaitResult, MessageReceipt, SpawnRequest, SpawnedChild, SubagentService,
     SubagentView, child_identity, task_overrides,
 };
+pub use snapshot::{EffectiveRole, RoleSnapshot, effective_role};
 pub use tools::{SUBAGENT_TOOL_NAMES, SubagentContributor, is_mutating_subagent_tool};

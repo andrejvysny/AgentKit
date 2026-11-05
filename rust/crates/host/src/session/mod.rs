@@ -16,8 +16,10 @@
 
 mod descriptor;
 mod execution_authority;
+mod receipts;
 mod report;
 
+pub use agentkit_store::RECEIPT_RUN_ACTIVE;
 pub use descriptor::{
     CHAT_TURN_TASK_KIND, REASONING_EFFORTS, TURN_CONFIG_KEYS, is_valid_session_turn_kind,
     read_session_descriptor, session_content_selection, session_turn_kind, turn_config,

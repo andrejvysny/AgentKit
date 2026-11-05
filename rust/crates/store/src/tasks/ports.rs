@@ -256,10 +256,11 @@ impl SqliteStore {
     pub async fn list_children(&self, task_id: &str) -> Result<Vec<TaskRecord>> {
         let task_id = task_id.to_owned();
         self.call(move |db| {
-            let mut children: Vec<TaskRecord> = all::<TaskRecord>(db, "tasks")?
-                .into_iter()
-                .filter(|task| task.parent_task_id.as_deref() == Some(task_id.as_str()))
-                .collect();
+            let mut children: Vec<TaskRecord> = select(
+                db,
+                "SELECT record FROM tasks WHERE json_extract(record, '$.parentTaskId')=? ORDER BY rowid",
+                [&task_id],
+            )?;
             children.sort_by_key(|task| (task.enqueued_at, task.task_id.clone()));
             Ok(children)
         })

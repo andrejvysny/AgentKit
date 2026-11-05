@@ -1,5 +1,6 @@
 //! Pack configuration surface. Mirrors `packages/toolpacks-coding/src/types.ts`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::coordination::WorkspaceCoordinator;
@@ -74,6 +75,11 @@ pub struct CodingToolPackOptions {
     /// below the `tool_timeout_ms` limit so the wait ends before the tool is
     /// timed out.
     pub coordination_wait_ms: Option<u64>,
+    /// Base environment for spawned commands; `None` = the host process
+    /// environment. Replaces, not overlays. Pass the same map as
+    /// `StandingApprovalWorkspace::environment` so the grant key and the
+    /// spawn agree.
+    pub environment: Option<HashMap<String, String>>,
 }
 
 impl Default for CodingToolPackOptions {
@@ -94,6 +100,7 @@ impl Default for CodingToolPackOptions {
             permission: None,
             coordinator: None,
             coordination_wait_ms: None,
+            environment: None,
         }
     }
 }

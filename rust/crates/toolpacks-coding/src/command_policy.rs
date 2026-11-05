@@ -400,6 +400,98 @@ fn command_words(raw: &str) -> Vec<SimpleCommand> {
     lexer.commands
 }
 
+/// Bodies of the `$(…)` and backtick substitutions that sit inside a
+/// double-quoted string of `raw` (the shell still executes them; single
+/// quotes do not). Unquoted substitutions are already split into simple
+/// commands by [`command_words`]. Each body is strictly shorter than `raw`,
+/// so a recursive caller terminates. An unterminated substitution yields the
+/// rest of the text, which keeps judging it rather than dropping it.
+fn double_quoted_substitutions(raw: &str) -> Vec<String> {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut bodies = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut index = 0;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch == '\\' && quote != Some('\'') {
+            index += 2;
+            continue;
+        }
+        match quote {
+            Some('\'') if ch == '\'' => quote = None,
+            Some('\'') => {}
+            Some(_) if ch == '"' => quote = None,
+            Some(_) if ch == '$' && chars.get(index + 1) == Some(&'(') => {
+                let (body, next) = paren_body(&chars, index + 2);
+                bodies.push(body);
+                index = next;
+                continue;
+            }
+            Some(_) if ch == '`' => {
+                let (body, next) = backtick_body(&chars, index + 1);
+                bodies.push(body);
+                index = next;
+                continue;
+            }
+            Some(_) => {}
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None => {}
+        }
+        index += 1;
+    }
+    bodies
+}
+
+/// The text from `start` up to the `)` balancing an already-open `(`
+/// (quote- and escape-aware), and the index just past it.
+fn paren_body(chars: &[char], start: usize) -> (String, usize) {
+    let mut depth = 1usize;
+    let mut quote: Option<char> = None;
+    let mut index = start;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch == '\\' && quote != Some('\'') {
+            index += 2;
+            continue;
+        }
+        match quote {
+            Some(open) if ch == open => quote = None,
+            Some(_) => {}
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None if ch == '(' => depth += 1,
+            None if ch == ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return (chars[start..index].iter().collect(), index + 1);
+                }
+            }
+            None => {}
+        }
+        index += 1;
+    }
+    (
+        chars[start.min(chars.len())..].iter().collect(),
+        chars.len(),
+    )
+}
+
+/// The text from `start` up to the next unescaped backtick, and the index
+/// just past it.
+fn backtick_body(chars: &[char], start: usize) -> (String, usize) {
+    let mut index = start;
+    while index < chars.len() {
+        match chars[index] {
+            '\\' => index += 2,
+            '`' => return (chars[start..index].iter().collect(), index + 1),
+            _ => index += 1,
+        }
+    }
+    (
+        chars[start.min(chars.len())..].iter().collect(),
+        chars.len(),
+    )
+}
+
 /// Shell keywords that precede (or stand in for) the real command word.
 const COMMAND_PREFIX_KEYWORDS: &[&str] = &[
     "if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "fi", "done", "esac",
@@ -488,9 +580,16 @@ fn resolve_command_word(words: &[String]) -> Option<&String> {
 /// `timeout`, `xargs`, …) are looked through, so the word they run is judged
 /// by the same rules. The token denylist below only ever sees spelled-out
 /// words, so every such command is treated as high risk instead of guessed
-/// at. Limitation: a substitution nested inside a double-quoted ARGUMENT is
-/// not opened up.
+/// at. A command substitution nested inside a double-quoted argument
+/// (`echo "$($x -rf ~)"`) still runs, so its body is judged by the same
+/// rules, recursively.
 fn has_unresolvable_command_word(raw: &str) -> bool {
+    if double_quoted_substitutions(raw)
+        .iter()
+        .any(|body| has_unresolvable_command_word(body))
+    {
+        return true;
+    }
     let mut case_depth = 0usize;
     let mut in_patterns = false;
     for command in command_words(raw) {
@@ -1781,6 +1880,42 @@ mod tests {
         }
         assert_eq!(classify_shell_command("cargo test"), CommandClass::Eligible);
         assert_eq!(classify_shell_command("bun test"), CommandClass::Eligible);
+    }
+
+    #[test]
+    fn substitutions_inside_double_quoted_arguments_are_judged() {
+        for command in [
+            "echo \"$($x -rf ~)\"",
+            "echo \"`$x -rf ~`\"",
+            "echo \"a $(true; ${x}m -rf ~) b\"",
+            "echo \"$(echo \"$($x -rf ~)\")\"",
+            "echo \"$(eval foo)\"",
+            "printf '%s' \"$($x\"",
+        ] {
+            assert_eq!(
+                classify_shell_command(command),
+                CommandClass::HighRisk,
+                "{command}"
+            );
+        }
+        for command in [
+            "echo \"$(date)\"",
+            "echo \"built at `date`\"",
+            "echo '$($x -rf ~)'",
+            "echo \"\\$($x)\"",
+            "echo \"$((1 + 2))\"",
+            "cargo test --features \"$(cat features.txt)\"",
+        ] {
+            assert_ne!(
+                classify_shell_command(command),
+                CommandClass::HighRisk,
+                "{command}"
+            );
+        }
+        assert_eq!(
+            double_quoted_substitutions("echo \"$(a (b) c)\" `d` \"`e`\""),
+            vec!["a (b) c".to_owned(), "e".to_owned()]
+        );
     }
 
     #[test]

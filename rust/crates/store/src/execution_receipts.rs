@@ -7,9 +7,10 @@
 //! `admitted` without a durable result is the honest representation of an
 //! uncertain effect: it must never be silently re-executed.
 //!
-//! Statuses are exactly `admitted` and `completed`; "uncertain" is derived as
-//! `admitted` without `completed`. Receipt records are separate from model
-//! conversation history and from process quarantine.
+//! Statuses are `admitted`, `completed` and `resolved`; "uncertain" is derived
+//! as `admitted` without `completed`. `resolved` is only ever written by an
+//! explicit operator resolution (`execution_resolution.rs`). Receipt records
+//! are separate from model conversation history and from process quarantine.
 
 use crate::{
     AgentInputKind, AgentInputStatus, SqliteStore, StoreError, agent_inputs::get_input,
@@ -60,6 +61,10 @@ pub struct ExecutionReceiptRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "agentkit_contracts::deserialize_preserving")]
     pub result: Option<serde_json::Value>,
+    /// Audit of an explicit operator resolution of an uncertain receipt;
+    /// absent for receipts the normal execution path completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<ExecutionResolution>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,6 +72,32 @@ pub struct ExecutionReceiptRecord {
 pub enum ExecutionReceiptStatus {
     Admitted,
     Completed,
+    /// Closed by an operator as `not_started` / `acknowledged`: no result
+    /// exists, and the receipt no longer blocks an identical reissue.
+    Resolved,
+}
+
+/// How an operator closed an uncertain (admitted, no result) receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionOutcome {
+    /// The effect happened; the operator supplied its result.
+    Completed,
+    /// The effect never started; reissuing is safe.
+    NotStarted,
+    /// The operator accepts the uncertainty and lets a reissue proceed.
+    Acknowledged,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionResolution {
+    pub outcome: ResolutionOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub resolved_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_by: Option<String>,
 }
 
 /// Which canonicalizer produced a receipt's `argsSha256`. The two ports do
@@ -271,10 +302,21 @@ pub fn read_execution_receipt(
             "a completed receipt must carry a tool-result object",
         ));
     }
+    if record.status == ExecutionReceiptStatus::Resolved
+        && (record.result.is_some()
+            || record
+                .resolution
+                .as_ref()
+                .is_none_or(|resolution| resolution.outcome == ResolutionOutcome::Completed))
+    {
+        return Err(unreadable(
+            "a resolved receipt must carry a non-completed resolution and no result",
+        ));
+    }
     Ok(record)
 }
 
-fn read_row(
+pub(crate) fn read_row(
     row: &(String, String, Option<String>, String),
 ) -> Result<ExecutionReceiptRecord, StoreError> {
     let value = agentkit_contracts::parse_javascript_json(&row.3).map_err(|error| {
@@ -283,7 +325,10 @@ fn read_row(
     read_execution_receipt(value, &row.0, &row.1, Some(row.2.as_deref()))
 }
 
-fn select_run(db: &Connection, run_id: &str) -> Result<Vec<ExecutionReceiptRecord>, StoreError> {
+pub(crate) fn select_run(
+    db: &Connection,
+    run_id: &str,
+) -> Result<Vec<ExecutionReceiptRecord>, StoreError> {
     let mut statement = db.prepare(
         "SELECT execution_id, run_id, approval_request_id, record FROM tool_executions WHERE run_id = ? ORDER BY rowid",
     )?;
@@ -347,7 +392,7 @@ const BARRIER_COLUMNS: &str =
 /// The barrier scan shared by the admission gate and the host guard: rows
 /// scoped to this chat (directly, or through the run's binding), to this
 /// very run, or carrying no attributable identity at all.
-fn select_barriers(
+pub(crate) fn select_barriers(
     db: &Connection,
     chat_id: &str,
     run_id: &str,
@@ -588,6 +633,7 @@ impl SqliteStore {
                 approval_generation: admission.approval_generation.clone(),
                 status: ExecutionReceiptStatus::Admitted,
                 result: None,
+                resolution: None,
             };
             let serialized = json(&transaction, &record)?;
             let inserted = transaction.execute(
@@ -655,6 +701,14 @@ impl SqliteStore {
             if record.status == ExecutionReceiptStatus::Completed {
                 transaction.commit()?;
                 return Ok(());
+            }
+            // A resolved receipt was closed by an operator: a late body
+            // result must not overwrite that decision.
+            if record.status != ExecutionReceiptStatus::Admitted {
+                return Err(StoreError::InvalidTransition(format!(
+                    "execution {} is already {:?}",
+                    record.execution_id, record.status
+                )));
             }
             if !result.is_object() {
                 return Err(StoreError::InvalidInput(

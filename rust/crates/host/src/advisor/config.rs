@@ -10,6 +10,11 @@ pub struct AdvisorConfig {
     /// Model for explicit `advisor_review` calls. `None` uses the bound
     /// provider's default.
     pub model: Option<String>,
+    /// Provider for explicit reviews; `None` shares the service's default
+    /// provider. A provider other than the default requires `model`.
+    pub provider_id: Option<String>,
+    /// Provider for automatic watchdog reviews; same rules as `provider_id`.
+    pub watchdog_provider_id: Option<String>,
     /// Model for automatic watchdog reviews — settable separately so
     /// background vigilance can cost less (or more) than explicit asks.
     pub watchdog_model: Option<String>,
@@ -50,6 +55,8 @@ impl Default for AdvisorConfig {
         Self {
             enabled: false,
             model: None,
+            provider_id: None,
+            watchdog_provider_id: None,
             watchdog_model: None,
             max_iterations: 6,
             max_tool_calls_per_iteration: 4,

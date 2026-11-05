@@ -118,10 +118,11 @@ impl SqliteStore {
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
             let _: ChatRecord = required(&transaction, "chats", "id", &chat_id)?;
-            let tasks: Vec<TaskRecord> = all::<TaskRecord>(&transaction, "tasks")?
-                .into_iter()
-                .filter(|t| t.scope_id == chat_id)
-                .collect();
+            let tasks: Vec<TaskRecord> = select(
+                &transaction,
+                "SELECT record FROM tasks WHERE scope=? ORDER BY rowid",
+                [&chat_id],
+            )?;
             if tasks.iter().any(|task| !task.status.is_terminal()) {
                 return Err(StoreError::ScopeBusy(chat_id));
             }

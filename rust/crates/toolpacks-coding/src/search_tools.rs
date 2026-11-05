@@ -367,6 +367,7 @@ mod tests {
             sandbox_exec_path: String::new(),
             coordinator: default_in_process_coordinator(),
             coordination_wait_ms: 0,
+            environment: None,
         }))
     }
 

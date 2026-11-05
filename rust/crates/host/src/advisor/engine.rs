@@ -128,6 +128,15 @@ pub fn is_advisor_chat_id(chat_id: &str) -> bool {
     chat_id.starts_with(ADVISOR_CHAT_PREFIX)
 }
 
+/// A paid window slot plus the concurrency permit it will run under.
+/// Dropping it without calling `review_reserved` releases the permit; the
+/// slot stays spent (the attempt row is the budget denominator).
+pub struct ReviewReservation {
+    run_id: String,
+    started_at: i64,
+    permit: tokio::sync::OwnedSemaphorePermit,
+}
+
 /// Runs bounded, read-only advisory reviews with the SAME core engine
 /// (`run_chat`) the session executor uses — same provider lane, same
 /// budget mechanics, same cancellation — minus sessions and writes.
@@ -150,6 +159,9 @@ pub struct AdvisorEngine {
     /// collectively overshoot `reviewsPerWindow`.
     budgets: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     model_override: Option<String>,
+    /// Providers an advisor/watchdog `providerId` may name; absent = only
+    /// the default provider is routable.
+    providers: Option<Arc<crate::ProviderRegistry>>,
 }
 
 impl AdvisorEngine {
@@ -178,7 +190,46 @@ impl AdvisorEngine {
             reviews: Arc::new(Mutex::new(reviews)),
             budgets: Arc::new(Mutex::new(HashMap::new())),
             model_override: None,
+            providers: None,
         }
+    }
+
+    pub fn with_providers(mut self, providers: Arc<crate::ProviderRegistry>) -> Self {
+        self.providers = Some(providers);
+        self
+    }
+
+    /// The provider for this review: the config's pin for the origin, else
+    /// the shared default. An unknown pin or a pin without a model fails the
+    /// review loudly — never a silent fallback to the default provider.
+    fn resolve_provider(
+        &self,
+        config: &AdvisorConfig,
+        origin: &ReviewOrigin,
+    ) -> crate::HostResult<Arc<dyn ChatProvider>> {
+        let (pinned, model) = match origin {
+            ReviewOrigin::Explicit => (&config.provider_id, &config.model),
+            ReviewOrigin::Watchdog { .. } => (&config.watchdog_provider_id, &config.watchdog_model),
+        };
+        let Some(id) = pinned.as_deref().filter(|id| !id.is_empty()) else {
+            return Ok(self.provider.clone());
+        };
+        if id == self.provider.id() {
+            return Ok(self.provider.clone());
+        }
+        let provider = self
+            .providers
+            .as_ref()
+            .and_then(|registry| registry.get(id))
+            .ok_or_else(|| {
+                crate::HostError::Execution(format!("advisor_provider_unavailable: {id}"))
+            })?;
+        if model.as_deref().is_none_or(str::is_empty) && self.model_override.is_none() {
+            return Err(crate::HostError::Execution(format!(
+                "advisor_model_required: provider {id} needs an explicit model"
+            )));
+        }
+        Ok(provider)
     }
 
     /// Adopt a host-owned config cell instead of the engine's private one,
@@ -281,30 +332,28 @@ impl AdvisorEngine {
     /// gate. The recorded attempt is the budget denominator — a review that
     /// finds nothing still spent provider requests — and serializing
     /// count→record closes the burst overshoot where simultaneous triggers
-    /// all read the same stale count. Returns `(run_id, started_at)` for
-    /// `review_reserved`. Budget-blocked calls consume nothing.
+    /// all read the same stale count. Returns the reservation (run id, start time and
+    /// concurrency permit) for `review_reserved`. Budget-blocked calls consume nothing.
     pub async fn reserve(
         &self,
         chat_id: &str,
         origin: &ReviewOrigin,
-    ) -> crate::HostResult<(String, i64)> {
+    ) -> crate::HostResult<ReviewReservation> {
         self.admit(chat_id)?;
-        // Cheap pre-check for callers that reserve before detaching (the
-        // watchdog): a saturated pool must not consume a window slot.
-        if self
-            .reviews
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .available_permits()
-            == 0
-        {
-            return Err(crate::HostError::Execution("advisor_saturated".into()));
-        }
-        self.reserve_gated(chat_id, origin).await
+        // Permit BEFORE the window slot, carried in the reservation: a
+        // saturated pool refuses without spending budget, and nothing can
+        // steal the capacity between the check and the review.
+        let permit = self.acquire_permit()?;
+        let (run_id, started_at) = self.reserve_gated(chat_id, origin).await?;
+        Ok(ReviewReservation {
+            run_id,
+            started_at,
+            permit,
+        })
     }
 
-    /// `reserve` minus the saturation pre-check, for callers that already
-    /// hold their permit (`review`).
+    /// `reserve` minus the permit, for callers that already hold theirs
+    /// (`review`).
     async fn reserve_gated(
         &self,
         chat_id: &str,
@@ -382,10 +431,14 @@ impl AdvisorEngine {
         request: &ReviewRequest,
         origin: ReviewOrigin,
         cancellation: CancellationToken,
-        reservation: (String, i64),
+        reservation: ReviewReservation,
     ) -> crate::HostResult<AdvisorReport> {
-        let permit = self.acquire_permit()?;
-        self.run_review(request, origin, cancellation, reservation, permit)
+        let ReviewReservation {
+            run_id,
+            started_at,
+            permit,
+        } = reservation;
+        self.run_review(request, origin, cancellation, (run_id, started_at), permit)
             .await
     }
 
@@ -407,6 +460,7 @@ impl AdvisorEngine {
                 "advisor may not review an advisor run".into(),
             ));
         }
+        let provider = self.resolve_provider(&config, &origin)?;
         let configured = self.model_override.clone().or_else(|| match origin {
             ReviewOrigin::Explicit => config.model.clone(),
             ReviewOrigin::Watchdog { .. } => config.watchdog_model.clone(),
@@ -441,6 +495,7 @@ impl AdvisorEngine {
         ];
         let first = self
             .run_once(
+                &provider,
                 &registry,
                 &model,
                 request_messages.clone(),
@@ -466,7 +521,15 @@ impl AdvisorEngine {
                      \"detail\": string}], \"recommendation\"?: string}]}.",
                 ));
                 let second = self
-                    .run_once(&registry, &model, repair, &config, &run_id, &cancellation)
+                    .run_once(
+                        &provider,
+                        &registry,
+                        &model,
+                        repair,
+                        &config,
+                        &run_id,
+                        &cancellation,
+                    )
                     .await?;
                 match parse_report(&second, config.max_findings) {
                     Some(report) => (second, report),
@@ -627,6 +690,7 @@ impl AdvisorEngine {
     #[allow(clippy::too_many_arguments)]
     async fn run_once(
         &self,
+        provider: &Arc<dyn ChatProvider>,
         registry: &Arc<ToolRegistry>,
         model: &str,
         messages: Vec<ChatMessage>,
@@ -663,7 +727,7 @@ impl AdvisorEngine {
             runtime: self.runtime.clone(),
             ..Default::default()
         };
-        let handle = run_chat(options, self.provider.clone(), registry.clone());
+        let handle = run_chat(options, provider.clone(), registry.clone());
         // Drain the event stream to completion (backpressure on the core
         // channel), then join the result.
         futures::StreamExt::for_each(handle.events, |_event| async {}).await;

@@ -1,6 +1,7 @@
 //! Per-pack environment and the tool wrapper. Mirrors
 //! `packages/toolpacks-coding/src/context.ts`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentkit_core::{CoreError, Tool, ToolContext, ToolDefinition, ToolResult};
@@ -30,6 +31,8 @@ pub struct PackEnv {
     pub coordinator: Arc<dyn WorkspaceCoordinator>,
     /// Longest a mutation waits for a lease before `workspace_busy`.
     pub coordination_wait_ms: u64,
+    /// Base environment for spawned commands; `None` = host process env.
+    pub environment: Option<Arc<HashMap<String, String>>>,
     root: Mutex<Option<Result<String, CodingError>>>,
     scratch: Mutex<Option<Result<String, CodingError>>>,
 }
@@ -48,6 +51,7 @@ pub struct EnvInit {
     pub sandbox_exec_path: String,
     pub coordinator: Arc<dyn WorkspaceCoordinator>,
     pub coordination_wait_ms: u64,
+    pub environment: Option<Arc<HashMap<String, String>>>,
 }
 
 impl PackEnv {
@@ -65,6 +69,7 @@ impl PackEnv {
             sandbox_exec_path: init.sandbox_exec_path,
             coordinator: init.coordinator,
             coordination_wait_ms: init.coordination_wait_ms,
+            environment: init.environment,
             root: Mutex::new(None),
             scratch: Mutex::new(None),
         }

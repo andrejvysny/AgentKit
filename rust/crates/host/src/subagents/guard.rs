@@ -137,6 +137,23 @@ impl WorkspaceLeaseRegistry {
 /// coding tools by name; the namespace check keeps this off other packs.
 const MUTATING_CODING_TOOLS: [&str; 4] = ["edit_file", "write_file", "run_command", "run_tests"];
 
+/// Whether one allow-list admits the call. A bare entry names a NAME, not a
+/// namespace, so it must never admit a same-named tool contributed by
+/// another pack (a rogue `lsp_diagnostics` that shells out would else
+/// inherit a read-only role's grant from the name alone). Bare entries
+/// therefore admit read-effect tools only; anything effect-bearing must be
+/// granted by its qualified name.
+fn tool_set_admits(allowed: &[String], context: &ToolGuardContext) -> bool {
+    if allowed.iter().any(|entry| entry == "*") {
+        return true;
+    }
+    let qualified = format!("{}:{}", context.namespace, context.tool.name);
+    if allowed.iter().any(|entry| entry == &qualified) {
+        return true;
+    }
+    context.tool.effect == "read" && allowed.iter().any(|entry| entry == &context.tool.name)
+}
+
 /// Enforces role ceilings on child sessions and workspace write
 /// coordination between a parent and its exclusive children. On non-subagent
 /// sessions with no lease activity it is a pass-through.
@@ -163,43 +180,28 @@ impl SubagentRoleGuard {
         let Some(row) = self.service.store().get_subagent(child_chat_id).await? else {
             return Ok(None);
         };
-        let Some(role) = config.role(&row.role) else {
-            // A row whose role vanished from configuration is denied every
-            // tool — an unconfigured role has no ceiling to inherit.
-            return Ok(Some(format!(
-                "subagent role {} is no longer configured",
-                row.role
-            )));
+        // Authority is the spawn-time snapshot narrowed by the current
+        // role, so a config edit can restrict a live child but never widen
+        // it; a vanished role or malformed snapshot denies every tool.
+        let role = match self.service.effective_role_of(&row, &config).await? {
+            Ok(role) => role,
+            Err(reason) => return Ok(Some(reason)),
         };
-        let name = if role.allowed_tools.iter().any(|entry| entry == "*") {
+        if role
+            .tool_sets
+            .iter()
+            .all(|set| tool_set_admits(set, context))
+        {
             return Ok(None);
-        } else {
-            let qualified = format!("{}:{}", context.namespace, context.tool.name);
-            if role.allowed_tools.iter().any(|entry| entry == &qualified) {
-                return Ok(None);
-            }
-            let bare = context.tool.name.clone();
-            // A bare allow-list entry names a NAME, not a namespace, so it
-            // must never admit a same-named tool contributed by another
-            // pack (a rogue `lsp_diagnostics` that shells out would else
-            // inherit a read-only role's grant from the name alone). Bare
-            // entries therefore admit read-effect tools only; anything
-            // effect-bearing must be granted by its qualified name.
-            if context.tool.effect == "read"
-                && role.allowed_tools.iter().any(|entry| entry == &bare)
-            {
-                return Ok(None);
-            }
-            bare
-        };
+        }
         // The spawn tools remain available to children whose role may nest
         // (subject to the service's own depth checks at execution time).
         if context.namespace == "subagent" && role.can_spawn {
             return Ok(None);
         }
         Ok(Some(format!(
-            "role_read_only: role {} may not use tool {name}",
-            role.id
+            "role_read_only: role {} may not use tool {}",
+            role.id, context.tool.name
         )))
     }
 

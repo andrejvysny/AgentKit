@@ -119,44 +119,6 @@ pub(crate) fn process_env() -> HashMap<String, String> {
         .collect()
 }
 
-// Environments hosts bound to a workspace root (canonical). The approval
-// resolver fingerprints `StandingApprovalWorkspace::environment` when it is
-// `Some`; binding the SAME map here makes the spawn run under exactly what
-// the grant was keyed against (TS `workspace.environment ?? process.env`).
-static WORKSPACE_ENVIRONMENTS: std::sync::LazyLock<
-    std::sync::Mutex<HashMap<String, HashMap<String, String>>>,
-> = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
-
-/// Bind (`Some`) or unbind (`None`) the environment commands under `root`
-/// spawn with. Call it with the same map as
-/// `StandingApprovalWorkspace::environment`; unbound roots use
-/// [`process_env`], exactly like the approval key does for `None`.
-pub async fn bind_workspace_environment(root: &str, environment: Option<HashMap<String, String>>) {
-    let root = crate::paths::canonical_root(root)
-        .await
-        .unwrap_or_else(|_| root.to_owned());
-    if let Ok(mut bound) = WORKSPACE_ENVIRONMENTS.lock() {
-        match environment {
-            Some(environment) => {
-                bound.insert(root, environment);
-            }
-            None => {
-                bound.remove(&root);
-            }
-        }
-    }
-}
-
-/// The environment a command under `root` spawns with BEFORE sanitizing:
-/// the bound workspace environment if any, else the process environment.
-pub(crate) fn effective_environment(root: &str) -> HashMap<String, String> {
-    WORKSPACE_ENVIRONMENTS
-        .lock()
-        .ok()
-        .and_then(|bound| bound.get(root).cloned())
-        .unwrap_or_else(process_env)
-}
-
 /// Clears the pre-spawn execution intent unless disarmed at handoff to the
 /// driver. Covers every pre-handoff exit: an acquisition error (explicit
 /// `clear`) and the tool future being dropped at any await (`Drop` spawns
@@ -265,7 +227,13 @@ async fn run_shell(
         ));
     }
     let scratch = env.scratch().await?;
-    let base = effective_environment(&root);
+    // Explicit pack environment, else the host's: the same choice the
+    // standing-approval key makes for `StandingApprovalWorkspace::environment`.
+    let base = env
+        .environment
+        .as_deref()
+        .cloned()
+        .unwrap_or_else(process_env);
     let (file, args) = if sandboxed {
         let profile = sandbox_profile(&SandboxPolicy {
             root: root.clone(),
@@ -776,6 +744,7 @@ mod tests {
             sandbox_exec_path: String::new(),
             coordinator: default_in_process_coordinator(),
             coordination_wait_ms: 20_000,
+            environment: None,
         }))
     }
 
@@ -1059,6 +1028,7 @@ mod tests {
             sandbox_exec_path: "/nonexistent/sandbox-exec".to_owned(),
             coordinator: default_in_process_coordinator(),
             coordination_wait_ms: 20_000,
+            environment: None,
         }));
         let r = run(&run_command_tool(&env), json!({ "command": "echo hi" })).await;
         assert!(!r.ok);
@@ -1126,6 +1096,7 @@ mod tests {
             sandbox_exec_path: String::new(),
             coordinator: default_in_process_coordinator(),
             coordination_wait_ms: 20_000,
+            environment: None,
         }));
         let text = run_command_tool(&env).definition().description.clone();
         assert!(text.contains("97.65625 KB"), "{text}");
@@ -1246,30 +1217,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_runs_under_the_environment_bound_for_the_workspace() {
-        let h = TempRoot::new("bound-env").await;
-        let env = env_for(&h.root, SandboxMode::Off, vec![]);
-        let root = env.root().await.unwrap();
-        let tool = run_command_tool(&env);
-        let probe = json!({ "command": "echo \"[${AK_BOUND_ENV:-unset}]\"" });
-        assert_eq!(
-            text(&run(&tool, probe.clone()).await),
-            "[unset]\n[exit code 0]"
-        );
+    async fn spawn_runs_under_exactly_the_pack_environment() {
+        let h = TempRoot::new("pack-env").await;
+        let probe = json!({ "command": "echo \"[${AK_PACK_ENV:-unset}][$HOME]\"" });
+        let host = process_env();
+        let mut env = env_for(&h.root, SandboxMode::Off, vec![]);
+        // No HOME in the map: a replacing env gets the scratch default, an
+        // overlaid one would leak the host's HOME.
+        Arc::get_mut(&mut env).unwrap().environment = Some(Arc::new(HashMap::from([
+            (
+                "PATH".to_owned(),
+                host.get("PATH").cloned().unwrap_or_default(),
+            ),
+            ("AK_PACK_ENV".to_owned(), "from-pack".to_owned()),
+        ])));
+        let out = text(&run(&run_command_tool(&env), probe.clone()).await);
+        assert!(out.starts_with("[from-pack]["), "pack var missing: {out}");
+        if let Some(host_home) = host.get("HOME") {
+            assert!(!out.contains(host_home.as_str()), "host HOME leaked: {out}");
+        }
 
-        let mut bound = process_env();
-        bound.insert("AK_BOUND_ENV".to_owned(), "from-workspace".to_owned());
-        bind_workspace_environment(&root, Some(bound.clone())).await;
-        // The approval key fingerprints this same map; the spawn sees it.
-        assert_eq!(effective_environment(&root), bound);
-        assert_eq!(
-            text(&run(&tool, probe.clone()).await),
-            "[from-workspace]\n[exit code 0]"
-        );
-
-        bind_workspace_environment(&root, None).await;
-        assert_eq!(effective_environment(&root), process_env());
-        assert_eq!(text(&run(&tool, probe).await), "[unset]\n[exit code 0]");
+        let unset = env_for(&h.root, SandboxMode::Off, vec![]);
+        let out = text(&run(&run_command_tool(&unset), probe).await);
+        assert!(out.starts_with("[unset]["), "unexpected pack var: {out}");
     }
 
     #[tokio::test]

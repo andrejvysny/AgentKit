@@ -18,6 +18,8 @@
 //! NODE_OPTIONS startup-file binding, direct-file binding) over the pack's
 //! workspace. There is no TS fallback anywhere on this path.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -38,6 +40,7 @@ use agentkit_toolpacks_coding::{
 use serde_json::Value;
 
 use crate::errors;
+use crate::workspace_binding::{canonical_lane_root, permits, session_binding};
 
 /// Everything the lane needs after registration. Built once by `register`;
 /// read by the contributor, the guard, and the standing resolver.
@@ -45,12 +48,17 @@ struct LaneState {
     pack: Arc<CodingToolPack>,
     guard: Arc<CodingPermissionGuard>,
     standing: StandingApprovalWorkspace,
+    /// Canonical registered root; `None` when it could not be resolved, so
+    /// every session that names a workspace is refused.
+    lane_root: Option<PathBuf>,
+    strict: bool,
 }
 
 /// The one mutable piece of the native coding lane. All three executor
 /// adapters share it; registration is one-shot.
 pub(crate) struct CodingLane {
     authority: Arc<dyn CodingPermissionAuthority>,
+    store: agentkit_store::SqliteStore,
     state: tokio::sync::Mutex<Option<Arc<LaneState>>>,
     /// Set when shutdown begins, before the pack is disposed: no tool may
     /// start executing against a pack that is being torn down.
@@ -73,12 +81,21 @@ struct CodingToolsInput {
     identity: String,
     coordination_dir: Option<String>,
     coordination_wait_ms: Option<u64>,
+    /// Base environment for spawned commands AND the standing-approval key;
+    /// `None` = the host process environment.
+    environment: Option<HashMap<String, String>>,
+    /// Also refuse sessions that carry no descriptor workspace.
+    require_session_workspace: bool,
 }
 
 impl CodingLane {
-    pub(crate) fn new(authority: Arc<dyn CodingPermissionAuthority>) -> Self {
+    pub(crate) fn new(
+        authority: Arc<dyn CodingPermissionAuthority>,
+        store: agentkit_store::SqliteStore,
+    ) -> Self {
         Self {
             authority,
+            store,
             state: tokio::sync::Mutex::new(None),
             disposed: AtomicBool::new(false),
         }
@@ -132,6 +149,7 @@ impl CodingLane {
             // disk (the example's acceptance suite witnesses exactly this).
             coordinator: Some(lockdir_coordinator(input.coordination_dir.as_deref())),
             coordination_wait_ms: input.coordination_wait_ms,
+            environment: input.environment.clone(),
         })
         .await
         .map_err(coding)?;
@@ -141,6 +159,7 @@ impl CodingLane {
             authority: Some(Arc::clone(&self.authority)),
             plan_tool_names: Some(input.plan_tool_names),
         }));
+        let lane_root = canonical_lane_root(std::path::Path::new(&input.workspace_root));
         let standing = StandingApprovalWorkspace {
             root: input.workspace_root,
             // The workspace identity is part of the standing-approval key
@@ -149,11 +168,12 @@ impl CodingLane {
             // `root` field of the envelope already pins it).
             identity: input.identity,
             context: None,
-            // None = the lossy-decoded process environment at claim time —
-            // exactly the view the exec path spawns with (`process_env`),
-            // so a NODE_OPTIONS that enters the EFFECTIVE environment
-            // changes the key (fingerprint v4).
-            environment: None,
+            // The SAME map the pack spawns with, so the key fingerprints
+            // exactly what runs. None = the lossy-decoded process
+            // environment at claim time (`process_env`), so a NODE_OPTIONS
+            // that enters the EFFECTIVE environment changes the key
+            // (fingerprint v4).
+            environment: input.environment,
         };
         let mut state = self.state.lock().await;
         if state.is_some() {
@@ -168,6 +188,8 @@ impl CodingLane {
             pack,
             guard,
             standing,
+            lane_root,
+            strict: input.require_session_workspace,
         }));
         Ok(())
     }
@@ -189,14 +211,26 @@ impl CodingLane {
         self.state.lock().await.as_ref().map(Arc::clone)
     }
 
+    /// Whether this chat may use the registered workspace's tools.
+    async fn permits_chat(&self, lane: &LaneState, chat_id: Option<&str>) -> bool {
+        let binding = session_binding(&self.store, chat_id, lane.lane_root.as_deref()).await;
+        permits(binding, lane.strict)
+    }
+
     /// The advisor's read-only view of the pack: contribute under a
     /// neutral context and keep only the `Read` variants. Unregistered
     /// yields nothing; a contribution failure yields nothing (the advisor
     /// degrades to fewer tools, never to a failed review).
-    pub(crate) async fn contribute_read_tools(&self) -> Vec<Arc<dyn agentkit_core::Tool>> {
+    pub(crate) async fn contribute_read_tools(
+        &self,
+        chat_id: Option<&str>,
+    ) -> Vec<Arc<dyn agentkit_core::Tool>> {
         let Some(lane) = self.state().await else {
             return vec![];
         };
+        if !self.permits_chat(&lane, chat_id).await {
+            return vec![];
+        }
         let context = ToolContributionContext {
             chat_id: None,
             run_id: "advisor-read".into(),
@@ -224,8 +258,10 @@ impl CodingLane {
 }
 
 /// The coding-namespace contributor. Unregistered offers no tools; once
-/// registered it forwards EVERY contribution call to the Rust pack, which
-/// offers its full descriptor set on every run — the guard decides.
+/// registered it forwards contribution calls from sessions bound to the
+/// registered workspace to the Rust pack, which offers its full descriptor
+/// set — the guard decides. A session naming a different workspace gets
+/// nothing (so neither does its subagent child).
 pub(crate) struct CodingLaneContributor {
     lane: Arc<CodingLane>,
 }
@@ -250,8 +286,15 @@ impl ToolContributor for CodingLaneContributor {
             return Ok(vec![]);
         }
         match self.lane.state().await {
-            Some(lane) => lane.pack.contribute(context).await,
-            None => Ok(vec![]),
+            Some(lane)
+                if self
+                    .lane
+                    .permits_chat(&lane, context.chat_id.as_deref())
+                    .await =>
+            {
+                lane.pack.contribute(context).await
+            }
+            _ => Ok(vec![]),
         }
     }
 }
@@ -278,17 +321,28 @@ impl ToolGuard for CodingLaneGuard {
             ));
         }
         match self.lane.state().await {
-            Some(lane) => lane.guard.can_execute(context).await,
+            Some(lane) => {
+                let chat_id = context.contribution.chat_id.as_deref();
+                if context.namespace == CODING_NAMESPACE
+                    && !self.lane.permits_chat(&lane, chat_id).await
+                {
+                    return Ok(ToolGuardVerdict::Refused(
+                        "workspace_not_granted: this session is not bound to the registered workspace"
+                            .to_owned(),
+                    ));
+                }
+                lane.guard.can_execute(context).await
+            }
             None => Ok(ToolGuardVerdict::Allowed),
         }
     }
 }
 
-/// The standing-approval resolver for the native shell tools: every chat's
-/// commands run inside THIS pack's workspace (the pack is the root the exec
-/// path spawns in), so the workspace the key binds is the pack's —
-/// unregistered resolves to `None`, which keeps every approvable call
-/// asking (no remembering without a registered workspace).
+/// The standing-approval resolver for the native shell tools: commands run
+/// inside THIS pack's workspace (the pack is the root the exec path spawns
+/// in), so the workspace the key binds is the pack's — but only for chats
+/// bound to it. Unregistered, or a session of another workspace, resolves
+/// to `None`, which keeps every approvable call asking.
 pub(crate) struct LaneWorkspaceResolver {
     lane: Arc<CodingLane>,
 }
@@ -308,8 +362,12 @@ impl LaneWorkspaceResolver {
 
 #[async_trait::async_trait]
 impl WorkspaceResolver for LaneWorkspaceResolver {
-    async fn resolve(&self, _chat_id: &str) -> Option<StandingApprovalWorkspace> {
-        self.lane.state().await.map(|lane| lane.standing.clone())
+    async fn resolve(&self, chat_id: &str) -> Option<StandingApprovalWorkspace> {
+        let lane = self.lane.state().await?;
+        if !self.lane.permits_chat(&lane, Some(chat_id)).await {
+            return None;
+        }
+        Some(lane.standing.clone())
     }
 }
 
@@ -342,6 +400,8 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
                 | "identity"
                 | "coordinationDir"
                 | "coordinationWaitMs"
+                | "environment"
+                | "requireSessionWorkspace"
         ) {
             return Err(errors::invalid(format!(
                 "unknown coding tools option \"{key}\""
@@ -459,6 +519,8 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
                 .ok_or_else(|| errors::invalid("coordinationWaitMs must be a positive integer"))?,
         ),
     };
+    let environment = parse_environment(object.get("environment"))?;
+    let require_session_workspace = optional_bool(object, "requireSessionWorkspace")?;
     Ok(CodingToolsInput {
         workspace_root,
         sandbox,
@@ -472,7 +534,47 @@ fn parse_coding_options(text: &str) -> Result<CodingToolsInput, napi::Error> {
         identity,
         coordination_dir,
         coordination_wait_ms,
+        environment,
+        require_session_workspace,
     })
+}
+
+const MAX_ENVIRONMENT_ENTRIES: usize = 1024;
+
+/// A spawn environment is exec-ed verbatim, so a malformed entry (`=` in a
+/// name, NUL anywhere) would be silently truncated or rejected by the OS
+/// instead of failing at registration.
+fn parse_environment(
+    value: Option<&Value>,
+) -> Result<Option<HashMap<String, String>>, napi::Error> {
+    let object = match value {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Object(object)) => object,
+        Some(_) => {
+            return Err(errors::invalid(
+                "environment must be an object of strings when present",
+            ));
+        }
+    };
+    if object.len() > MAX_ENVIRONMENT_ENTRIES {
+        return Err(errors::invalid(format!(
+            "environment has more than {MAX_ENVIRONMENT_ENTRIES} entries"
+        )));
+    }
+    let mut parsed = HashMap::with_capacity(object.len());
+    for (name, value) in object {
+        if name.is_empty() || name.contains('=') || name.contains('\0') {
+            return Err(errors::invalid(
+                "environment names must be non-empty and contain no '=' or NUL",
+            ));
+        }
+        let text = value
+            .as_str()
+            .filter(|text| !text.contains('\0'))
+            .ok_or_else(|| errors::invalid("environment values must be strings without NUL"))?;
+        parsed.insert(name.clone(), text.to_owned());
+    }
+    Ok(Some(parsed))
 }
 
 fn optional_bool(object: &serde_json::Map<String, Value>, key: &str) -> Result<bool, napi::Error> {
@@ -606,6 +708,45 @@ mod tests {
     }
 
     #[test]
+    fn environment_option_accepts_a_string_map_and_defaults_to_none() {
+        let input = parse_coding_options(r#"{"workspaceRoot":"/r"}"#).expect("valid options");
+        assert!(input.environment.is_none());
+        let input = parse_coding_options(
+            r#"{"workspaceRoot":"/r","environment":{"PATH":"/bin","EMPTY":""}}"#,
+        )
+        .expect("valid options");
+        let environment = input.environment.expect("environment parsed");
+        assert_eq!(environment.len(), 2);
+        assert_eq!(environment["PATH"], "/bin");
+        assert_eq!(environment["EMPTY"], "");
+    }
+
+    #[test]
+    fn malformed_environment_is_invalid_input() {
+        for bad in [
+            r#""PATH=/bin""#,
+            r#"["A=b"]"#,
+            r#"{"A":1}"#,
+            r#"{"A":null}"#,
+            r#"{"A=B":"x"}"#,
+            r#"{"":"x"}"#,
+            r#"{"A\u0000":"x"}"#,
+            r#"{"A":"x\u0000y"}"#,
+        ] {
+            let text = format!(r#"{{"workspaceRoot":"/r","environment":{bad}}}"#);
+            assert!(register_error(&text).contains("environment"), "{bad}");
+        }
+        let many: Vec<String> = (0..=MAX_ENVIRONMENT_ENTRIES)
+            .map(|index| format!(r#""K{index}":"v""#))
+            .collect();
+        let text = format!(
+            r#"{{"workspaceRoot":"/r","environment":{{{}}}}}"#,
+            many.join(",")
+        );
+        assert!(register_error(&text).contains("1024"));
+    }
+
+    #[test]
     fn configuration_refusals_cross_as_invalid_input() {
         let error = coding(CodingError::new("invalid_configuration", "nope"));
         assert!(error.to_string().contains("invalid_input"));
@@ -614,6 +755,127 @@ mod tests {
         // An unknown origin is redacted to the contract's internal_error
         // but stays inspectable in details.
         assert!(foreign.to_string().contains("workspace_busy"));
+    }
+
+    fn guard_context(chat_id: &str) -> ToolGuardContext {
+        ToolGuardContext {
+            contribution: ToolContributionContext {
+                chat_id: Some(chat_id.to_owned()),
+                run_id: "r".into(),
+                scope_id: None,
+                actor: Value::Null,
+                actor_id: None,
+                bindings: vec![],
+                limits: agentkit_core::ToolLimits::default(),
+                cancellation: agentkit_core::CancellationToken::new(),
+                has_primary_binding: false,
+                timeout_ms: 1_000,
+                durable: None,
+            },
+            namespace: CODING_NAMESPACE.to_owned(),
+            tool: agentkit_core::ToolDefinition {
+                name: "read".into(),
+                version: "1".into(),
+                effect: "read".into(),
+                capability: "coding.read".into(),
+                description: String::new(),
+                input_schema: Value::Null,
+                output_schema: None,
+                timeout_ms: None,
+            },
+            arguments: None,
+        }
+    }
+
+    async fn bound_lane(strict: bool) -> (Arc<CodingLane>, agentkit_store::SqliteStore) {
+        use crate::workspace_binding::tests::{add_session, open_store, scratch};
+        let store = open_store();
+        let root = scratch("coding-lane");
+        let other = scratch("coding-other");
+        add_session(&store, "a", root.to_str()).await;
+        add_session(&store, "b", other.to_str()).await;
+        add_session(&store, "none", None).await;
+        let authority = Arc::new(crate::authority::BindingAuthority::new());
+        let lane = Arc::new(CodingLane::new(authority, store.clone()));
+        let options = serde_json::json!({
+            "workspaceRoot": root, "sandbox": "off", "requireSessionWorkspace": strict,
+            "coordinationDir": scratch("locks"),
+        });
+        lane.register(&options.to_string()).await.expect("register");
+        (lane, store)
+    }
+
+    #[tokio::test]
+    async fn guard_refuses_and_resolver_withholds_for_a_mismatched_session() {
+        let (lane, _store) = bound_lane(false).await;
+        let guard = CodingLaneGuard::new(Arc::clone(&lane));
+        let refused = guard.can_execute(&guard_context("b")).await.unwrap();
+        assert!(
+            matches!(&refused, ToolGuardVerdict::Refused(text) if text.starts_with("workspace_not_granted")),
+        );
+        let resolver = LaneWorkspaceResolver::new(Arc::clone(&lane));
+        assert!(resolver.resolve("b").await.is_none());
+        assert!(resolver.resolve("a").await.is_some());
+        // Unbound sessions keep the service-wide behavior when not strict.
+        assert!(resolver.resolve("none").await.is_some());
+        let contributor = CodingLaneContributor::new(Arc::clone(&lane));
+        assert!(
+            contributor
+                .contribute(&guard_context("b").contribution)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !contributor
+                .contribute(&guard_context("a").contribution)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        lane.dispose().await;
+    }
+
+    #[tokio::test]
+    async fn advisor_read_tools_follow_the_reviewed_session_binding() {
+        use agentkit_host::AdvisorToolSource;
+        let (lane, store) = bound_lane(false).await;
+        let tools = crate::advisor_lane::LaneAdvisorTools {
+            coding: Arc::clone(&lane),
+            lsp: Arc::new(crate::lsp_lane::LspLane::new(store)),
+        };
+        assert!(tools.read_tools("b").await.is_empty());
+        assert!(!tools.read_tools("a").await.is_empty());
+        lane.dispose().await;
+    }
+
+    #[tokio::test]
+    async fn strict_registration_also_withholds_from_unbound_sessions() {
+        let (lane, _store) = bound_lane(true).await;
+        let resolver = LaneWorkspaceResolver::new(Arc::clone(&lane));
+        assert!(resolver.resolve("none").await.is_none());
+        assert!(resolver.resolve("a").await.is_some());
+        let contributor = CodingLaneContributor::new(Arc::clone(&lane));
+        assert!(
+            contributor
+                .contribute(&guard_context("none").contribution)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        lane.dispose().await;
+    }
+
+    #[test]
+    fn require_session_workspace_must_be_a_boolean() {
+        assert!(
+            register_error(r#"{"workspaceRoot":"/r","requireSessionWorkspace":"yes"}"#)
+                .contains("requireSessionWorkspace")
+        );
+        let input =
+            parse_coding_options(r#"{"workspaceRoot":"/r","requireSessionWorkspace":true}"#)
+                .expect("valid");
+        assert!(input.require_session_workspace);
     }
 
     #[test]

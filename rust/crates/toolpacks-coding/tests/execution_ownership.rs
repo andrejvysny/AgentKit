@@ -213,6 +213,7 @@ impl Harness {
             // probes honest about who holds the lease.
             coordinator: Some(default_in_process_coordinator()),
             coordination_wait_ms: Some(500),
+            environment: None,
             permission: None,
         })
         .await

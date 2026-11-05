@@ -969,6 +969,42 @@ async fn saturated_refusal_does_not_consume_a_window_slot() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reservation_holds_its_permit_and_saturated_reserve_spends_no_slot() {
+    let mut cfg = config();
+    cfg.max_review_concurrency = 1;
+    cfg.reviews_per_window = 5;
+    let h = Harness::start(vec![VALID_REPORT.into()], cfg).await;
+    let held = h
+        .engine
+        .reserve("parent", &ReviewOrigin::Explicit)
+        .await
+        .expect("first reserve");
+    let count = || async {
+        h.store
+            .count_advisor_reviews_since(Some("parent"), Some("explicit"), 0)
+            .await
+            .unwrap()
+    };
+    assert_eq!(count().await, 1);
+    // The permit travels inside the reservation, so a second reserve is
+    // refused before it can spend a window slot.
+    let error = h
+        .engine
+        .reserve("parent", &ReviewOrigin::Explicit)
+        .await
+        .err()
+        .expect("saturated");
+    assert!(error.to_string().contains("advisor_saturated"));
+    assert_eq!(count().await, 1);
+    drop(held);
+    h.engine
+        .reserve("parent", &ReviewOrigin::Explicit)
+        .await
+        .expect("permit released with the dropped reservation");
+    assert_eq!(count().await, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn steer_live_refuses_idle_sessions_and_delivers_to_live_turns() {
     let h = Harness::start(vec![VALID_REPORT.into()], config()).await;
     let steer = |id: &str| SteerInput {
@@ -1000,4 +1036,100 @@ async fn steer_live_refuses_idle_sessions_and_delivers_to_live_turns() {
         state.pending.iter().all(|input| input.input_id != "late-1"),
         "the refused steer must not linger"
     );
+}
+
+/// A second advisor provider under its own id, recording into its own oracle.
+struct Alias {
+    id: &'static str,
+    inner: Arc<Oracle>,
+}
+#[async_trait]
+impl ChatProvider for Alias {
+    fn id(&self) -> &str {
+        self.id
+    }
+    fn stream_chat(&self, input: ChatRequest, cancellation: CancellationToken) -> ProviderStream {
+        self.inner.stream_chat(input, cancellation)
+    }
+}
+
+fn routed_engine(h: &Harness, config: AdvisorConfig, other: &Arc<Oracle>) -> AdvisorEngine {
+    let default = h.oracle.clone() as Arc<dyn ChatProvider>;
+    let alias = Arc::new(Alias {
+        id: "provider-b",
+        inner: other.clone(),
+    }) as Arc<dyn ChatProvider>;
+    AdvisorEngine::new(
+        default.clone(),
+        h.store.clone(),
+        Arc::new(agentkit_core::SystemRuntime),
+        config.effective(),
+        Arc::new(StaticToolSource::new(vec![])),
+        None,
+        h.service.clone(),
+    )
+    .with_providers(Arc::new(ProviderRegistry::new([default, alias])))
+}
+
+async fn explicit(engine: &AdvisorEngine) -> HostResult<AdvisorReport> {
+    engine
+        .review(
+            &ReviewRequest {
+                chat_id: "parent".into(),
+                focus: "routing".into(),
+                evidence_hint: None,
+            },
+            ReviewOrigin::Explicit,
+            CancellationToken::new(),
+        )
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn explicit_review_pinned_to_provider_b_reaches_only_b() {
+    let h = Harness::start(vec![VALID_REPORT.into()], config()).await;
+    let other = Oracle::new(vec![VALID_REPORT.into()]);
+    let engine = routed_engine(
+        &h,
+        AdvisorConfig {
+            provider_id: Some("provider-b".into()),
+            ..config()
+        },
+        &other,
+    );
+    explicit(&engine).await.unwrap();
+    assert_eq!(other.seen().len(), 1);
+    assert_eq!(other.seen()[0].model, "advisor-model");
+    assert!(
+        h.oracle.seen().is_empty(),
+        "the default provider is untouched"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn advisor_provider_pin_fails_loudly_when_unknown_or_modelless() {
+    let h = Harness::start(vec![VALID_REPORT.into()], config()).await;
+    let other = Oracle::new(vec![VALID_REPORT.into()]);
+    let unknown = routed_engine(
+        &h,
+        AdvisorConfig {
+            provider_id: Some("nope".into()),
+            ..config()
+        },
+        &other,
+    );
+    let error = explicit(&unknown).await.unwrap_err();
+    assert!(error.to_string().contains("advisor_provider_unavailable"));
+    let modelless = routed_engine(
+        &h,
+        AdvisorConfig {
+            provider_id: Some("provider-b".into()),
+            model: None,
+            ..config()
+        },
+        &other,
+    );
+    let error = explicit(&modelless).await.unwrap_err();
+    assert!(error.to_string().contains("advisor_model_required"));
+    assert!(other.seen().is_empty() && h.oracle.seen().is_empty());
 }

@@ -99,13 +99,16 @@ impl ChatExecutor {
             )
             .await;
         }
-        if context.task.payload["providerId"]
-            .as_str()
-            .is_some_and(|id| id != self.provider.id())
-        {
-            return Err(HostError::Execution("provider_binding_mismatch".into()));
+        match context.task.payload["providerId"].as_str() {
+            None => Ok(self.provider.clone()),
+            Some(id) if id == self.provider.id() => Ok(self.provider.clone()),
+            Some(id) => self
+                .options
+                .providers
+                .as_ref()
+                .and_then(|registry| registry.get(id))
+                .ok_or_else(|| HostError::Execution("provider_binding_mismatch".into())),
         }
-        Ok(self.provider.clone())
     }
 }
 pub(crate) struct CoreRuntime(pub SharedRuntime);

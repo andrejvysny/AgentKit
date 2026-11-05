@@ -15,6 +15,7 @@ mod mcp_configuration;
 mod ports;
 mod project_instructions;
 mod proposals;
+mod provider_registry;
 mod retry;
 mod runner;
 mod session;
@@ -31,6 +32,7 @@ pub use mcp_configuration::*;
 pub use ports::*;
 pub use project_instructions::*;
 pub use proposals::*;
+pub use provider_registry::ProviderRegistry;
 pub use retry::*;
 pub use runner::*;
 pub use session::*;
@@ -63,6 +65,10 @@ pub enum HostError {
     Cancelled,
     #[error("{0}")]
     Execution(String),
+    /// A named durable record does not exist; the message carries the
+    /// stable code (e.g. `subagent_not_found: <id>`).
+    #[error("{0}")]
+    NotFound(String),
 }
 
 pub type HostResult<T> = Result<T, HostError>;

@@ -5,6 +5,7 @@ import {
   createUncertainSideEffectGuard,
   findUncertainCalls,
   type AssistantStore,
+  readToolExecutionRecord,
   type ToolExecutionRecord,
 } from "../src/index.js";
 
@@ -125,6 +126,59 @@ describe("legacy operation binding", () => {
     expect([...uncertain.values()]).toMatchObject([
       { approvalGeneration: "unknown-A", contextSha256: "a".repeat(64) },
     ]);
+  });
+
+  it("an operator-resolved receipt validates and is no longer uncertain", async () => {
+    const receipt: ToolExecutionRecord = {
+      runId: "t1",
+      toolCallId: "c1",
+      toolName: "run_command",
+      argsSha256: await argsSha256Of({ command: "make deploy" }),
+      attemptId: "attempt",
+      executionId: "e1",
+      contextSha256: "a".repeat(64),
+      status: "admitted",
+    };
+    const resolved: ToolExecutionRecord = {
+      ...receipt,
+      status: "resolved",
+      resolution: {
+        outcome: "not_started",
+        note: "checked by hand",
+        resolvedAt: 1,
+        resolvedBy: "operator",
+      },
+    };
+    expect(readToolExecutionRecord(resolved)).toEqual(resolved);
+    expect(
+      (
+        await findUncertainCalls(
+          withReceipts(storeWith({ t1: [] }), [receipt]),
+          ["t1"],
+          isMutating,
+        )
+      ).size,
+    ).toBe(1);
+    expect(
+      (
+        await findUncertainCalls(
+          withReceipts(storeWith({ t1: [] }), [resolved]),
+          ["t1"],
+          isMutating,
+        )
+      ).size,
+    ).toBe(0);
+    // Malformed resolutions stay unreadable, never absence.
+    for (const bad of [
+      { ...resolved, resolution: undefined },
+      {
+        ...resolved,
+        resolution: { ...resolved.resolution, outcome: "completed" },
+      },
+      { ...resolved, resolution: { outcome: "bogus", resolvedAt: 1 } },
+      { ...resolved, result: { ok: true } },
+    ])
+      expect(() => readToolExecutionRecord(bad)).toThrow();
   });
 
   it("same-ID success settles only the matching operation", async () => {

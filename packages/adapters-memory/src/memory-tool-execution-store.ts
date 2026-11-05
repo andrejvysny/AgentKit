@@ -1,4 +1,5 @@
 import {
+  AgentKitHostError,
   RecordNotFoundError,
   readToolExecutionRecord,
   type RunWriteFence,
@@ -89,6 +90,13 @@ export class MemoryToolExecutionStore implements ToolExecutionStore {
           "Execution does not belong to the fenced run.",
         );
       if (record.status === "completed") return;
+      // A receipt an operator resolved stays resolved: overwriting it would
+      // contradict the recorded resolution (mirrors the Rust store guard).
+      if (record.status !== "admitted")
+        throw new AgentKitHostError(
+          "receipt_not_uncertain",
+          "Execution receipt is no longer admitted.",
+        );
       readToolExecutionRecord({
         ...record,
         result: JSON.parse(serialized) as unknown,

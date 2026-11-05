@@ -11,23 +11,29 @@ use agentkit_host::{ContributedTool, HostResult, ToolContributionContext, ToolCo
 use agentkit_lsp::{LspConfig, LspPool, lsp_tools};
 
 use crate::errors;
+use crate::workspace_binding::{canonical_lane_root, permits, session_binding};
 
 /// One-shot registration: the pool and the workspace root are fixed for
 /// the service's life (servers are workspace-scoped; swapping the root
 /// under running turns would hand agents a different workspace than the
 /// coding lane writes).
 pub(crate) struct LspLane {
+    store: agentkit_store::SqliteStore,
     state: tokio::sync::Mutex<Option<Arc<State>>>,
 }
 
 struct State {
     pool: Arc<LspPool>,
     workspace_root: PathBuf,
+    /// Canonical root; `None` refuses every session that names a workspace.
+    lane_root: Option<PathBuf>,
+    strict: bool,
 }
 
 impl LspLane {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(store: agentkit_store::SqliteStore) -> Self {
         Self {
+            store,
             state: tokio::sync::Mutex::new(None),
         }
     }
@@ -69,10 +75,22 @@ impl LspLane {
         // call: the same canonicalization the tools will use.
         LspPool::canonical_root(&workspace_root)
             .map_err(|error| errors::invalid(format!("{}: {}", error.code, error.message)))?;
+        let strict = match value.get("requireSessionWorkspace") {
+            None | Some(serde_json::Value::Null) => false,
+            Some(serde_json::Value::Bool(flag)) => *flag,
+            Some(_) => {
+                return Err(errors::invalid(
+                    "requireSessionWorkspace must be a boolean when present",
+                ));
+            }
+        };
+        let lane_root = canonical_lane_root(&workspace_root);
         let pool = LspPool::new(config);
         *self.state.lock().await = Some(Arc::new(State {
             pool,
             workspace_root,
+            lane_root,
+            strict,
         }));
         Ok(())
     }
@@ -84,12 +102,19 @@ impl LspLane {
         }
     }
 
-    /// The lane's read tools for the advisor source (`lsp_*` are all
-    /// effect-read; the advisor keeps them).
-    pub(crate) async fn read_tools(&self) -> Vec<Arc<dyn agentkit_core::Tool>> {
+    /// The lane's read tools (`lsp_*` are all effect-read) for one chat:
+    /// empty unless the session is bound to the registered workspace.
+    pub(crate) async fn read_tools_for(
+        &self,
+        chat_id: Option<&str>,
+    ) -> Vec<Arc<dyn agentkit_core::Tool>> {
         let Some(state) = self.state.lock().await.clone() else {
             return vec![];
         };
+        let binding = session_binding(&self.store, chat_id, state.lane_root.as_deref()).await;
+        if !permits(binding, state.strict) {
+            return vec![];
+        }
         lsp_tools(Arc::clone(&state.pool), &state.workspace_root)
     }
 }
@@ -111,11 +136,11 @@ impl ToolContributor for LspLaneContributor {
     }
     async fn contribute(
         &self,
-        _context: &ToolContributionContext,
+        context: &ToolContributionContext,
     ) -> HostResult<Vec<ContributedTool>> {
         Ok(self
             .lane
-            .read_tools()
+            .read_tools_for(context.chat_id.as_deref())
             .await
             .into_iter()
             .map(ContributedTool::Read)

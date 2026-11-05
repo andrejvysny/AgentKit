@@ -8,8 +8,8 @@ use agentkit_core::{ChatProvider, RunHooks};
 use agentkit_host::{
     AdvisorConfig, AdvisorContributor, AdvisorEngine, AdvisorEventSink, AdvisorReport,
     AdvisorToolSource, AdvisorTools, AgentSessionService, ContributedTool, HostResult,
-    SharedRuntime, TaskSettledObserver, ToolContributionContext, ToolContributor, Watchdog,
-    WatchdogRunHooks,
+    ProviderRegistry, SharedRuntime, TaskSettledObserver, ToolContributionContext, ToolContributor,
+    Watchdog, WatchdogRunHooks,
 };
 use agentkit_store::TaskRecord;
 use std::sync::Mutex as StdMutex;
@@ -50,9 +50,12 @@ pub(crate) struct LaneAdvisorTools {
 
 #[async_trait::async_trait]
 impl AdvisorToolSource for LaneAdvisorTools {
-    async fn read_tools(&self, _chat_id: &str) -> Vec<Arc<dyn agentkit_core::Tool>> {
-        let mut tools = self.coding.contribute_read_tools().await;
-        tools.extend(self.lsp.read_tools().await);
+    /// Bound to the REVIEWED session: a review of a session that is not
+    /// bound to the registered workspace must not read that workspace (its
+    /// findings would carry the content back to that session).
+    async fn read_tools(&self, chat_id: &str) -> Vec<Arc<dyn agentkit_core::Tool>> {
+        let mut tools = self.coding.contribute_read_tools(Some(chat_id)).await;
+        tools.extend(self.lsp.read_tools_for(Some(chat_id)).await);
         tools
     }
 }
@@ -69,6 +72,9 @@ struct AdvisorState {
 pub(crate) struct AdvisorLane {
     state: StdMutex<Option<Arc<AdvisorState>>>,
     config: Arc<Mutex<AdvisorConfig>>,
+    /// The default provider id and the routable registry, set at bind so
+    /// `configureAdvisor` can refuse an unroutable pin up front.
+    routing: StdMutex<Option<(String, Arc<ProviderRegistry>)>>,
 }
 
 impl AdvisorLane {
@@ -76,13 +82,50 @@ impl AdvisorLane {
         Self {
             state: StdMutex::new(None),
             config: Arc::new(Mutex::new(AdvisorConfig::default())),
+            routing: StdMutex::new(None),
         }
+    }
+
+    /// Configure-time form of the engine's review-time provider checks:
+    /// an unknown pin is `invalid_input`, and a pin onto a non-default
+    /// provider needs its own model (the session's model names the wrong
+    /// provider's catalogue).
+    pub(crate) fn validate(&self, config: &AdvisorConfig) -> Result<(), napi::Error> {
+        let routing = self.routing.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some((default_id, registry)) = routing.as_ref() else {
+            return Ok(());
+        };
+        for (key, pinned, model_key, model) in [
+            ("providerId", &config.provider_id, "model", &config.model),
+            (
+                "watchdogProviderId",
+                &config.watchdog_provider_id,
+                "watchdogModel",
+                &config.watchdog_model,
+            ),
+        ] {
+            let Some(id) = pinned.as_deref().filter(|id| !id.is_empty()) else {
+                continue;
+            };
+            if registry.get(id).is_none() {
+                return Err(errors::invalid(format!(
+                    "{key} \"{id}\" is not a configured provider"
+                )));
+            }
+            if id != default_id && model.as_deref().is_none_or(str::is_empty) {
+                return Err(errors::invalid(format!(
+                    "{key} \"{id}\" differs from the default provider; {model_key} is required"
+                )));
+            }
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn bind(
         &self,
         provider: Arc<dyn ChatProvider>,
+        providers: Arc<ProviderRegistry>,
         store: agentkit_store::SqliteStore,
         runtime: SharedRuntime,
         tools: Arc<dyn AdvisorToolSource>,
@@ -95,6 +138,8 @@ impl AdvisorLane {
                 "the advisor is already configured on this service",
             ));
         }
+        *self.routing.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((provider.id().to_owned(), Arc::clone(&providers)));
         let config = self
             .config
             .lock()
@@ -114,7 +159,8 @@ impl AdvisorLane {
             events,
             session,
         )
-        .with_shared_config(Arc::clone(&self.config));
+        .with_shared_config(Arc::clone(&self.config))
+        .with_providers(providers);
         let watchdog = Watchdog::new(engine.clone(), Arc::clone(&self.config), runtime.clone());
         let hooks = Arc::new(WatchdogRunHooks::new(watchdog.clone(), store.clone()));
         let advisor_tools = AdvisorTools::new(engine.clone(), Arc::clone(&self.config));

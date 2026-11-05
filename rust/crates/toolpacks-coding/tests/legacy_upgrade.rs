@@ -157,6 +157,8 @@ fn downgrade(path: &Path, version: i64) {
          DROP TABLE IF EXISTS subagents;
          DROP TABLE IF EXISTS advisor_findings;
          DROP TABLE IF EXISTS advisor_reviews;
+         DROP INDEX IF EXISTS tasks_status;
+         DROP INDEX IF EXISTS tasks_parent;
          DROP TRIGGER IF EXISTS messages_search_insert;
          DROP TRIGGER IF EXISTS messages_search_delete;
          DROP TRIGGER IF EXISTS messages_search_update;
