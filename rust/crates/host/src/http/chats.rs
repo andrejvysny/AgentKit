@@ -3,6 +3,40 @@ use agentkit_store::ChatRecord;
 use serde_json::json;
 
 impl DesktopBackend {
+    async fn create_chat(&self, input: &OperationRequest, now: i64) -> Result<ChatRecord, Problem> {
+        let title = string(&input.body, "title");
+        let metadata = input.body.get("metadata").cloned().unwrap_or(json!({}));
+        let Some(profile_id) = &self.session_profile else {
+            return self
+                .host
+                .store()
+                .create_chat(&self.host.runtime().id(), title, metadata, now)
+                .await
+                .map_err(store_error);
+        };
+        let service = crate::AgentSessionService::new(crate::AgentSessionServiceDeps {
+            store: self.host.store().clone(),
+            runtime: self.host.runtime().clone(),
+            plan_approval: None,
+            wake: None,
+        });
+        service
+            .create_session_chat(&crate::CreateSessionInput {
+                profile_id: profile_id.clone(),
+                title,
+                metadata: Some(metadata),
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| {
+                if error.code == "invalid_input" {
+                    Problem::new(400, "invalid_request", error.message)
+                } else {
+                    Problem::host("internal_error", error.to_string())
+                }
+            })
+    }
+
     pub(super) async fn chats(
         &self,
         input: &OperationRequest,
@@ -11,20 +45,7 @@ impl DesktopBackend {
         let now = self.host.runtime().now_ms();
         let chat_id = input.params.get("chatId").map(String::as_str).unwrap_or("");
         let output = match input.operation.as_str() {
-            "createChat" => output(
-                201,
-                projections::chat(
-                    store
-                        .create_chat(
-                            &self.host.runtime().id(),
-                            string(&input.body, "title"),
-                            input.body.get("metadata").cloned().unwrap_or(json!({})),
-                            now,
-                        )
-                        .await
-                        .map_err(store_error)?,
-                )?,
-            ),
+            "createChat" => output(201, projections::chat(self.create_chat(input, now).await?)?),
             "listChats" => {
                 let before = input.query.get("before");
                 let rows = store.list_chats(false).await.map_err(store_error)?;

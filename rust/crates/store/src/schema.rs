@@ -14,7 +14,7 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// version 10 adds the durable subagent registry (the host's spawn and
 /// orphan-reaper flows project child-task state onto these rows) and the
 /// advisor findings ledger the explicit/watchdog advice sources append to.
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -163,6 +163,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         if version < 12 {
             migrate_task_indexes(&mut connection)?;
         }
+        if version < 13 {
+            migrate_provider_authority(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -262,6 +265,9 @@ fn schema_sql(version: i64) -> String {
     if version >= 12 {
         sql.push_str(TASK_INDEXES_SCHEMA);
     }
+    if version >= 13 {
+        sql.push_str(PROVIDER_AUTHORITY_SCHEMA);
+    }
     sql
 }
 
@@ -274,6 +280,26 @@ fn schema_sql(version: i64) -> String {
 const CONNECTIONS_SCHEMA: &str = r#"
 CREATE TABLE provider_connections(connection_id TEXT PRIMARY KEY, credential_digest TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation>=1), updated_at INTEGER NOT NULL);
 "#;
+
+// Existing rows deliberately retain NULL authority: their endpoint/account
+// cannot be inferred from a credential digest or from historical chat data.
+const PROVIDER_AUTHORITY_SCHEMA: &str = r#"
+CREATE TABLE provider_namespace(id INTEGER PRIMARY KEY CHECK(id=1), namespace TEXT NOT NULL);
+INSERT INTO provider_namespace VALUES(1,lower(hex(randomblob(32))));
+ALTER TABLE provider_connections ADD COLUMN logical_key TEXT;
+ALTER TABLE provider_connections ADD COLUMN endpoint TEXT;
+ALTER TABLE provider_connections ADD COLUMN account_scope TEXT;
+ALTER TABLE provider_connections ADD COLUMN active INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1));
+CREATE INDEX provider_connections_logical ON provider_connections(logical_key);
+"#;
+
+fn migrate_provider_authority(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(PROVIDER_AUTHORITY_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 13)?;
+    transaction.commit()?;
+    Ok(())
+}
 
 fn migrate_provider_connections(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;

@@ -8,22 +8,16 @@ TypeScript. The wire types are JSON mirrors of the Rust serde shapes
 (contract `0.7.0`, REST `v1`); the binding adds handles, promises, and one
 async iterator, nothing else.
 
-Status: **publishable** (see `docs/rust/native-binding-milestone.md`).
-The wrapper and all five platform packages (`linux-x64-gnu`,
-`linux-arm64-gnu`, `darwin-arm64`, `darwin-x64`, `win32-x64-msvc`) carry
-publish-ready manifests (`publishConfig.access: public`, no `private`), and
-the release lane (`.github/workflows/native-release.yml` +
-`scripts/release/native-publish.mjs`) builds, verifies, and — under a gated
-environment approval with dry-run default — publishes them to npm together
-with the `agentkit` umbrella. Until that first approved publication runs,
-nothing under the `@agentkit` scope is on the registry; the workspace
-consumes the wrapper through relative imports in tests. Historical
-x86_64-linux evidence is recorded in the milestone; the current working tree
-has local macOS arm64 packed-consumer evidence under Node 22.23.3 and Bun
-1.4.0. The Rust core's unix process/lease code compiles for Windows with
-fail-closed fallbacks (signals become no-ops, liveness probes answer
-"alive", quarantines stay blocked) — Windows qualification is CI-policy, not
-local, until the runner records it.
+Status: **unpublished; local qualification only**. The five platform package
+manifests remain available, but hosted GitHub Actions and publication workflows
+are disabled. Current acceptance focuses on macOS ARM64 and x64; x64 execution
+through Rosetta is identified explicitly. Linux and Windows qualification is
+deferred. Windows command execution remains unsupported and fails closed.
+
+Run the [local gates](../../DEVELOPING.md#local-gates-no-hosted-ci) to retain
+source snapshots, commands, logs, strict installed-consumer checks, runtime
+execution, and artifact hashes. No release readiness or full migration parity
+is implied. Publication and scope ownership require separate authorization.
 
 ## Layout
 

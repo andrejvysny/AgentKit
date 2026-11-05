@@ -421,7 +421,8 @@ export interface NativeAdvisorReport {
  * logical connection identity: the same `connectionKey` + same
  * credentials resolve to the same id and generation in every process
  * (credential restoration), and a changed credential rotates the
- * generation under the same identity while the continuation continues.
+ * generation under the same identity. Historical state remains fenced until
+ * explicitly restored for the same trusted account and endpoint.
  * `connectionKey` is non-secret caller material — NEVER pass the API key
  * or anything derived from it. */
 export interface NativeProviderConnectionOptions {
@@ -431,6 +432,19 @@ export interface NativeProviderConnectionOptions {
   /** Path of the file-backed store that persists the connection state —
    * the same file `NativeStore.open` owns. */
   storePath: string;
+  /** Trusted non-secret account identifier supplied by the embedding host.
+   * Account or endpoint changes create a fresh connection identity. */
+  accountScope?: string;
+  /** Explicit continuity transfer after credential rotation. Only settled
+   * compatible state moves; active invocations retain their original fence. */
+  restoreContinuity?: {
+    expectedGeneration: number;
+    previousGeneration: number;
+    confirmUnchangedScope: true;
+    /** Restore compatible settled scopes from a preserved pre-namespace row.
+     * The host explicitly attests that its account and endpoint were unchanged. */
+    legacy?: boolean;
+  };
 }
 
 /** Options for `NativeSessionService.startHttpServer` (mirrors
@@ -460,6 +474,9 @@ export interface NativeHttpServerOptions {
   /** Model label recorded on REST-submitted turns when neither the
    * request nor the stored settings name one. Default `model`. */
   defaultModel?: string;
+  /** Create REST chats as validated agent sessions with this profile, using
+   * one native insertion. Omitted, REST creates ordinary chats. */
+  sessionProfileId?: string;
   /** REQUIRED shared secret; clients must present it as
    * `Authorization: Bearer <token>`. At least 32 bytes. */
   bearerToken: string;

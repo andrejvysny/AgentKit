@@ -25,7 +25,11 @@ import {
 } from "./native-commands.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const temporary = mkdtempSync(join(tmpdir(), "agentkit-umbrella-native-"));
+const retainedOutput = process.env.AGENTKIT_PACKAGE_GATE_OUTPUT;
+if (retainedOutput) mkdirSync(retainedOutput, { recursive: true });
+const temporary = mkdtempSync(
+  join(retainedOutput ?? tmpdir(), "agentkit-umbrella-native-"),
+);
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -75,6 +79,7 @@ try {
   };
   delete env.AGENTKIT_BACKEND;
   delete env.NODE_PATH;
+  delete env.NODE_OPTIONS;
   delete env.NAPI_RS_NATIVE_LIBRARY_PATH;
   delete env.NAPI_RS_FORCE_WASI;
   delete env.NAPI_RS_WASI_FLAVOR;
@@ -140,6 +145,36 @@ try {
       cwd: consumer,
       env: { ...env, AGENTKIT_BACKEND: "native" },
     });
+  // Use the same public facade probe through the umbrella's installed export.
+  // No paths aliases or workspace packages may satisfy these declarations.
+  writeFileSync(
+    join(consumer, "native-package-typed-consumer.ts"),
+    readFileSync(
+      join(root, "rust/scripts/native-package-typed-consumer.ts"),
+      "utf8",
+    ).replaceAll('"@agentkit/native"', '"agentkit/native"'),
+  );
+  cpSync(
+    join(root, "rust/scripts/native-package-consumer.mjs"),
+    join(consumer, "typed-consumer.mjs"),
+  );
+  writeFileSync(
+    join(consumer, "typed-consumer.mjs"),
+    readFileSync(join(consumer, "typed-consumer.mjs"), "utf8").replaceAll(
+      '"@agentkit/native"',
+      '"agentkit/native"',
+    ),
+  );
+  for (const runtime of [node, bun])
+    run(
+      runtime,
+      [
+        "typed-consumer.mjs",
+        "types",
+        join(root, "node_modules/typescript/bin/tsc"),
+      ],
+      { cwd: consumer, env },
+    );
   rmSync(
     join(consumer, "node_modules/@agentkit", `native-${platform.target}`),
     { recursive: true },
@@ -155,5 +190,5 @@ try {
     `umbrella acceptance passed on ${platform.target}; no Rust toolchain reachable\n`,
   );
 } finally {
-  rmSync(temporary, { recursive: true, force: true });
+  if (!retainedOutput) rmSync(temporary, { recursive: true, force: true });
 }

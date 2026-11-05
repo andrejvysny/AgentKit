@@ -42,7 +42,7 @@ impl ChatCompletionsProvider {
             if cancellation.is_cancelled() {
                 return Err(CoreError::new("cancelled", "aborted"));
             }
-            self.transport.check_current()?;
+            self.transport.check_authority().await?;
             if self.transport.identity() != self.identity {
                 return Err(CoreError::new(
                     "connection_changed",
@@ -74,10 +74,10 @@ impl ChatCompletionsProvider {
             let response = match response {
                 Ok(response) => response,
                 Err(_) if cancellation.is_cancelled() => {
-                    return Err(CoreError::new("cancelled", "aborted"))
+                    return Err(CoreError::new("cancelled", "aborted"));
                 }
                 Err(error) if error.code == "transport_error" => {
-                    return Err(CoreError::new("network_error", &error.message))
+                    return Err(CoreError::new("network_error", &error.message));
                 }
                 Err(error) => return Err(error),
             };
@@ -115,8 +115,10 @@ impl ChatCompletionsProvider {
         let provider = self.clone();
         Box::pin(async_stream::try_stream! {
             let (body, roles) = build_body(&input)?;
+            provider.transport.check_authority().await?;
             yield ProviderEvent::Started;
             if !roles.is_empty() {
+                provider.transport.check_authority().await?;
                 yield ProviderEvent::Warning {
                     code: "multimodal_flattened".into(),
                     message: format!(
@@ -126,7 +128,7 @@ impl ChatCompletionsProvider {
                 };
             }
             let response = provider.send(&input, body, cancellation.clone()).await?;
-            provider.transport.check_current()?;
+            provider.transport.check_authority().await?;
             let mut bytes = response.bytes_stream();
             let mut parser = SseDecoder::new();
             let mut state = ChatState {
@@ -147,17 +149,18 @@ impl ChatCompletionsProvider {
                     },
                     next = bytes.next() => next,
                 };
-                provider.transport.check_current()?;
+                provider.transport.check_authority().await?;
                 let Some(chunk) = next else { break; };
                 match chunk {
                     Ok(chunk) => match parser.push(&chunk) {
                         Ok(frames) => for frame in frames {
                             let accepted = provider
                                 .transport
-                                .check_current()
+                                .check_authority().await
                                 .and_then(|()| state.accept(frame));
                             match accepted {
                                 Ok(events) => for event in events {
+                                    provider.transport.check_authority().await?;
                                     yield event;
                                 },
                                 Err(error) => {
@@ -186,10 +189,11 @@ impl ChatCompletionsProvider {
                     Ok(frames) => for frame in frames {
                         let accepted = provider
                             .transport
-                            .check_current()
+                            .check_authority().await
                             .and_then(|()| state.accept(frame));
                         match accepted {
                             Ok(events) => for event in events {
+                                provider.transport.check_authority().await?;
                                 yield event;
                             },
                             Err(error) => {
@@ -201,11 +205,12 @@ impl ChatCompletionsProvider {
                     Err(error) => failure = Some(error),
                 }
             }
-            provider.transport.check_current()?;
+            provider.transport.check_authority().await?;
             let complete = failure.is_none()
                 && (state.finish.is_some() || state.done)
                 && !(state.dropped > 0 && !state.calls.is_empty());
             if let Some(usage) = &state.usage {
+                provider.transport.check_authority().await?;
                 yield ProviderEvent::Usage(
                     usage_data(usage, &input.model, &state.call_id, complete)?,
                 );
@@ -222,6 +227,7 @@ impl ChatCompletionsProvider {
             let mut calls = state.assemble();
             let duplicates = crate::tool_execution::dedupe(&mut calls);
             if !duplicates.is_empty() {
+                provider.transport.check_authority().await?;
                 yield ProviderEvent::Warning {
                     code: "duplicate_tool_call_id".into(),
                     message: format!(
@@ -231,6 +237,7 @@ impl ChatCompletionsProvider {
                 };
             }
             if state.finish.as_deref() == Some("tool_calls") && calls.is_empty() {
+                provider.transport.check_authority().await?;
                 yield ProviderEvent::Warning {
                     code: "tool_call_unparseable".into(),
                     message: "Provider reported finish_reason=tool_calls but emitted no usable tool call."
@@ -238,6 +245,7 @@ impl ChatCompletionsProvider {
                 };
             }
             if state.dropped > 0 && state.content.is_empty() && calls.is_empty() {
+                provider.transport.check_authority().await?;
                 yield ProviderEvent::Warning {
                     code: "sse_parse".into(),
                     message: format!(
@@ -257,11 +265,13 @@ impl ChatCompletionsProvider {
             if let Some(reason) = state.finish {
                 data["finishReason"] = reason.into();
             }
+            provider.transport.check_authority().await?;
             yield ProviderEvent::Event {
                 kind: "run.message.completed".into(),
                 data,
             };
             for call in calls {
+                provider.transport.check_authority().await?;
                 yield ProviderEvent::ToolRequested(call);
             }
         })
@@ -294,7 +304,7 @@ impl ChatProvider for ChatCompletionsProvider {
         )
         .await?;
         let payload = read_json(response, cancellation).await?;
-        self.transport.check_current()?;
+        self.transport.check_authority().await?;
         let fetched = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         Ok(payload["data"]
             .as_array()

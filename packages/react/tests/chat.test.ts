@@ -458,7 +458,9 @@ describe("lifecycle", () => {
     const runId = result.current.activeRunId!;
 
     await hanging.whenBlocking();
-    await waitFor(() => expect(result.current.phase).toBe("streaming"));
+    await waitFor(() =>
+      expect(result.current.messages[1]?.content).toBe("Thinking"),
+    );
     const atUnmount = result.current.messages[1]?.content;
     expect(atUnmount).toBe("Thinking");
     unmount();

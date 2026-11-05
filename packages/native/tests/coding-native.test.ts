@@ -144,6 +144,12 @@ async function openNativeCoding(options: {
   });
   await service.registerCodingTools({
     workspaceRoot: options.workspace,
+    // Keep remembered-approval controls independent of personal startup
+    // configuration while executing the real Bun and Node from PATH.
+    environment: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      HOME: options.workspace,
+    },
     sandbox: "off",
     testCommands: options.testCommands ?? ["bun test"],
     configuredMode: options.codingMode,

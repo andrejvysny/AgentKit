@@ -1527,8 +1527,11 @@ pub async fn run_bounded(spec: RunSpec) -> RunResult {
 /// uncertainty path (live suspect, environ PermissionDenied, unsupported
 /// scan) can be regressed without prctl or racing the real scheduler.
 pub async fn run_bounded_with_discovery(spec: RunSpec, discovery: Option<FindFn>) -> RunResult {
-    run_bounded_inner(spec, discovery, ChildSlot::default()).await
+    run_bounded_inner(spec, discovery, ChildSlot::default(), None).await
 }
+
+pub(crate) type SpawnAuthorization =
+    Arc<dyn Fn() -> BoxFuture<'static, Result<(), CodingError>> + Send + Sync>;
 
 /// The driver's child, kept OUTSIDE the future that runs the pump so a panic
 /// in that future cannot lose the handle: panic recovery takes it from here
@@ -1571,6 +1574,7 @@ async fn run_bounded_inner(
     spec: RunSpec,
     discovery: Option<FindFn>,
     child_slot: ChildSlot,
+    authorization: Option<SpawnAuthorization>,
 ) -> RunResult {
     if let Some(refusal) = platform_refusal() {
         return refusal;
@@ -1601,6 +1605,28 @@ async fn run_bounded_inner(
     // the Windows target (the napi binding depends on it).
     #[cfg(unix)]
     command.process_group(0);
+    if let Some(authorization) = authorization {
+        let checked = tokio::select! { biased;
+            _ = wait_cancel(spec.cancellation.clone()) => Err(CodingError::new("cancelled", "command authority cancelled")),
+            result = tokio::time::timeout_at(deadline_after(spec.timeout_ms), authorization()) => match result {
+                Ok(result) => result,
+                Err(_) => Err(CodingError::new("authorization_timeout", "command authorization did not settle")),
+            },
+        };
+        if let Err(error) = checked {
+            return failed_spawn(&format!(
+                "command_not_started: {}: {}",
+                error.code, error.message
+            ));
+        }
+    }
+    if spec
+        .cancellation
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
+        return failed_spawn("command_not_started: cancelled before process spawn");
+    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => return failed_spawn(&error.to_string()),
@@ -2179,12 +2205,24 @@ pub fn spawn_owned_execution(
 /// a live environ-denied suspect, and the cleanup decision that must
 /// follow — quarantine + retained durable intent, never a "clean" retire.
 pub fn spawn_owned_execution_with_discovery(
+    spec: RunSpec,
+    lease: WorkspaceLease,
+    coordinator: Arc<dyn WorkspaceCoordinator>,
+    root: String,
+    holder: LeaseHolder,
+    discovery: Option<FindFn>,
+) -> OwnedExecution {
+    spawn_owned_execution_authorized(spec, lease, coordinator, root, holder, discovery, None)
+}
+
+pub(crate) fn spawn_owned_execution_authorized(
     mut spec: RunSpec,
     lease: WorkspaceLease,
     coordinator: Arc<dyn WorkspaceCoordinator>,
     root: String,
     holder: LeaseHolder,
     discovery: Option<FindFn>,
+    authorization: Option<SpawnAuthorization>,
 ) -> OwnedExecution {
     let execution_id = spec.execution_id.clone();
     let pgid_slot = Arc::new(AtomicI64::new(0));
@@ -2275,6 +2313,7 @@ pub fn spawn_owned_execution_with_discovery(
         grace_ms: spec.limits.command_kill_grace_ms.min(KILL_GRACE_CAP_MS),
         watcher_stop,
         child_slot: ChildSlot::default(),
+        authorization,
     };
     tokio::spawn(async move {
         // Unregisters on completion (or unwind): the drain loop and tests
@@ -2315,6 +2354,7 @@ struct DriverCtx {
     /// Tells the intent-upgrade watcher to stop before its next write.
     watcher_stop: Arc<AtomicBool>,
     child_slot: ChildSlot,
+    authorization: Option<SpawnAuthorization>,
 }
 
 impl DriverCtx {
@@ -2386,7 +2426,13 @@ async fn drive_owned(
     lease: &mut Option<WorkspaceLease>,
     watcher: &mut Option<tokio::task::JoinHandle<bool>>,
 ) -> OwnedRunOutcome {
-    let run = run_bounded_inner(spec, discovery, ctx.child_slot.clone()).await;
+    let run = run_bounded_inner(
+        spec,
+        discovery,
+        ctx.child_slot.clone(),
+        ctx.authorization.clone(),
+    )
+    .await;
     let stragglers = wait_for_exit(&run.teardown.survivors, SURVIVOR_RECHECK_MS).await;
     // Fold the survivor recheck into the teardown verdict: survivors
     // that positively exited are resolved; survivors that stayed alive

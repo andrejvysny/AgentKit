@@ -1,3 +1,4 @@
+mod support;
 use agentkit_store::*;
 
 fn register(child: &str, parent: &str, parent_task: Option<&str>, now: i64) -> RegisterSubagent {
@@ -363,6 +364,7 @@ async fn a_version_nine_database_upgrades_to_current() {
         "DROP TABLE subagents; DROP TABLE advisor_findings; DROP TABLE advisor_reviews; DROP INDEX tasks_status; DROP INDEX tasks_parent;",
     )
     .unwrap();
+    support::downgrade_provider_authority(&db);
     db.pragma_update(None, "user_version", 9).unwrap();
     drop(db);
     // Reopen migrates 9 -> 10 -> 11 inside open(); the upgrade path is

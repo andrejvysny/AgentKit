@@ -215,6 +215,7 @@ impl CodingToolPack {
     /// left to the crash sweep of the next boot if this process can still
     /// help). Commands of other workspaces are left to their own pack.
     pub async fn shutdown(&self) {
+        self.env.close();
         if let Ok(root) = self.env.root().await {
             crate::process::drain_workspace(&root).await;
         }
@@ -223,6 +224,7 @@ impl CodingToolPack {
     /// Deletes the private scratch directory (TS `dispose`). Drains live
     /// executions first: `dispose` must not leave live children behind.
     pub async fn dispose(&self) {
+        self.env.close();
         if let Ok(root) = self.env.root().await {
             crate::process::drain_workspace(&root).await;
         }

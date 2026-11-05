@@ -1,11 +1,10 @@
-//! Bounded configuration identity for standing shell approvals. Rust port of
-//! `packages/toolpacks-coding/src/command-fingerprint.ts` plus the helper
-//! inputs from `command-script-inputs.ts`. The digest is the standing-approval
+//! Bounded configuration identity for standing shell approvals, originally
+//! ported from the retired TypeScript fingerprint and script-input helpers.
+//! The digest is the standing-approval
 //! key material: an approval survives only while the executable, script,
-//! configuration and environment identity hash unchanged. Every bound or
-//! ambiguity that TypeScript reports as an error (and the caller maps to
-//! "no key, ask again") is reported here the same way — a refusal to key is
-//! always the fail-safe answer.
+//! configuration and environment identity hash unchanged. Version 2 also
+//! binds launcher interpreter chains and the full sanitized environment.
+//! Ambiguous or unsupported startup inputs require fresh approval.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -13,6 +12,8 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::command_policy::{executable_name, shell_words};
+
+mod startup;
 
 const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
@@ -55,8 +56,8 @@ fn fail<T>(message: &str) -> FpResult<T> {
     Err(FingerprintError::Message(message.to_owned()))
 }
 
-/// The environment names whose values bind the key. Everything else a
-/// standing approval saw is irrelevant to what the command executes.
+/// The legacy environment names retained in the frozen baseline material.
+/// Version 2 also binds the entire sanitized environment in `startup`.
 const ENV_NAMES: &[&str] = &[
     "PATH",
     "HOME",
@@ -366,6 +367,7 @@ pub fn direct_script_files(command: &str) -> FpResult<Vec<String>> {
     if words.iter().any(|word| path_override().is_match(word)) {
         return fail("package script PATH override is unsupported");
     }
+    startup::check_script_environment(&words)?;
     let mut files: Vec<String> = Vec::new();
     let push = |files: &mut Vec<String>, word: &str| {
         if !files.iter().any(|seen| seen == word) {
@@ -382,6 +384,9 @@ pub fn direct_script_files(command: &str) -> FpResult<Vec<String>> {
     let entry_name = executable_name(&entry);
     if entry_name == "npx" || entry_name == "bunx" {
         return fail("nested package runner resolution is unsupported");
+    }
+    if matches!(entry_name.as_str(), "npm" | "pnpm" | "yarn" | "corepack") {
+        return fail("nested package manager resolution is unsupported");
     }
     if entry.starts_with('-') || matches!(entry.as_str(), "cd" | "pushd" | "popd") {
         return fail("unsupported package script command resolution");
@@ -568,6 +573,7 @@ struct Executable {
     path: String,
     canonical: String,
     identity: [String; 6],
+    cwd: String,
 }
 
 impl Executable {
@@ -646,6 +652,7 @@ fn executable(
                     path,
                     canonical,
                     identity,
+                    cwd: cwd.to_owned(),
                 }));
             }
             None => continue,
@@ -1032,8 +1039,12 @@ fn ascii_word_split(value: &str) -> Vec<&str> {
 /// long-option prefixes, so an abbreviated selector would make the launched
 /// process read a file this parser did not bind: refuse instead.
 fn selector_abbreviation(token: &str) -> bool {
-    (token.starts_with("--requir") && !token.starts_with("--require"))
-        || (token.starts_with("--impor") && token != "--import" && !token.starts_with("--import="))
+    let head = token.split('=').next().unwrap_or(token);
+    head.starts_with("--")
+        && head.len() > 2
+        && ["--require", "--import", "--loader", "--experimental-loader"]
+            .iter()
+            .any(|selector| selector.starts_with(head) && *selector != head)
 }
 
 /// Startup-file selectors Node honors in `NODE_OPTIONS` that this parser
@@ -1041,7 +1052,7 @@ fn selector_abbreviation(token: &str) -> bool {
 /// A standing approval must never authorize a process whose preloaded file
 /// it cannot name, so these are refusals, not ignored tokens.
 fn unsupported_selector(token: &str) -> bool {
-    token == "-r"
+    token.starts_with("-r")
         || token == "--loader"
         || token.starts_with("--loader=")
         || token == "--experimental-loader"
@@ -1148,11 +1159,16 @@ fn node_option_startup_files(words: &[String], inherited: Option<&str>) -> FpRes
         }
         break;
     }
-    let entry = executable_name(words.get(index).map(String::as_str).unwrap_or(""));
-    if !node_bun_name().is_match(&entry) {
-        return Ok(Vec::new());
+    // Package managers and executable runners can themselves launch Node,
+    // including npm before an `echo` script. Bind selectors conservatively
+    // for every entry instead of guessing runtime from the command's name.
+    if index >= words.len() {
+        return fail("launched process is unresolved");
     }
     for word in &words[index + 1..] {
+        if word.starts_with("--node-options") || word.starts_with("--script-shell") {
+            return fail("package-manager startup configuration is unsupported");
+        }
         if assignment_prefix().is_match(word) && word.starts_with("NODE_OPTIONS=") {
             return fail("NODE_OPTIONS is reassigned after the launched interpreter");
         }
@@ -1263,7 +1279,7 @@ pub(crate) fn fingerprint_document(
         return Ok(None);
     };
     let entries = execution_environment(environment)?;
-    let env: HashMap<String, String> = entries.iter().cloned().collect();
+    let env = crate::exec_tools::sanitized_env(environment, "/standing-approval");
     let tokens = js_split_tokens(command);
     let main = match executable(&tokens[0], cwd, &env)? {
         Some(found) => found,
@@ -1285,9 +1301,8 @@ pub(crate) fn fingerprint_document(
                 break;
             }
         }
-        if runner.is_none() {
-            runner = executable(&runner_name, cwd, &env)?;
-        }
+        // A PATH match does not establish what npm exec will select or
+        // download. Only a resolved local runner receives a standing key.
         match runner {
             Some(found) => executables.push((None, found)),
             None => return Ok(None),
@@ -1298,8 +1313,16 @@ pub(crate) fn fingerprint_document(
     bind_script_entrypoints(root, &dirs, &tokens, &env, &mut executables, &mut state)?;
     bind_explicit_configs(root, cwd, &tokens, &env, &mut state)?;
     bind_node_option_startup_files(root, cwd, &tokens, &env, &mut state)?;
+    let startup = startup::bind(
+        cwd,
+        &dirs,
+        &env,
+        &executables,
+        matches!(tokens[0].as_str(), "npx" | "bunx"),
+        &state,
+    )?;
     let document = format!(
-        "{{\"v\":1,\"executables\":[{}],\"files\":[{}],\"environment\":[{}]}}",
+        "{{\"v\":2,\"executables\":[{}],\"files\":[{}],\"environment\":[{}],\"startup\":{}}}",
         executables
             .iter()
             .map(|(script, found)| found.json(script.as_deref()))
@@ -1310,7 +1333,8 @@ pub(crate) fn fingerprint_document(
             .iter()
             .map(|(name, value)| format!("[{},{}]", json_quote(name), json_quote(value)))
             .collect::<Vec<_>>()
-            .join(",")
+            .join(","),
+        startup
     );
     Ok(Some(document))
 }
@@ -1722,10 +1746,11 @@ mod tests {
         .unwrap();
         assert_ne!(after, after2, "metadata appearance changes the key");
 
-        // Environment names outside ENV_NAMES never bind.
+        // Version 2 binds custom environment inputs, because a launcher can
+        // use them to choose additional startup behavior.
         let mut extended = environment.clone();
         extended.insert("IRRELEVANT_NAME".to_owned(), "x".to_owned());
-        assert_eq!(
+        assert_ne!(
             command_fingerprint(
                 &root.to_string_lossy(),
                 &root.to_string_lossy(),
@@ -1828,7 +1853,23 @@ mod tests {
             ],
         );
         let digest = command_fingerprint(&root_s, &root_s, "npx vitest run", &environment).unwrap();
-        assert!(digest.is_some(), "PATH-resolved runner keys the call");
+        assert!(
+            digest.is_none(),
+            "a PATH match cannot authorize npm exec resolution"
+        );
+        tree(
+            &root,
+            &[(
+                "node_modules/.bin/vitest",
+                "#!/bin/sh\nexit 0\n",
+                Some(0o755),
+            )],
+        );
+        assert!(
+            command_fingerprint(&root_s, &root_s, "npx vitest run", &environment)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -1890,13 +1931,20 @@ mod tests {
         );
         let mut bun_options = environment.clone();
         bun_options.insert("BUN_OPTIONS".to_owned(), "--preload ./evil.js".to_owned());
-        assert_ne!(clean, key(&bun_options), "BUN_OPTIONS binds too");
+        assert!(
+            command_fingerprint(&root_s, &root_s, "bun test", &bun_options).is_err(),
+            "unresolved Bun startup options require a fresh approval"
+        );
         let mut irrelevant = environment.clone();
         irrelevant.insert(
             "SOME_OTHER_NAME".to_owned(),
             "--require ./evil.js".to_owned(),
         );
-        assert_eq!(clean, key(&irrelevant), "only ENV_NAMES bind");
+        assert_ne!(
+            clean,
+            key(&irrelevant),
+            "custom effective environment also binds"
+        );
 
         // (3) P1-D: the SELECTED file is direct input identity. The command
         // and the NODE_OPTIONS value string stay constant; editing the file
@@ -2367,13 +2415,24 @@ mod tests {
             }
             let document =
                 fingerprint_document(&root_s, cwd.to_str().expect("cwd"), &command, &environment);
-            match case["expect"].as_str().expect("expect class") {
+            match case
+                .get("rustV2Expect")
+                .unwrap_or(&case["expect"])
+                .as_str()
+                .expect("expect class")
+            {
                 "digest" => {
                     let document = document
                         .unwrap_or_else(|error| panic!("{name}: unexpected refusal {error:?}"))
                         .unwrap_or_else(|| panic!("{name}: expected a digest"));
                     let mut value: serde_json::Value =
                         serde_json::from_str(&document).expect("Rust preimage parses");
+                    assert_eq!(value["v"], 2, "new startup coverage invalidates v1 grants");
+                    assert!(value.as_object_mut().unwrap().remove("startup").is_some());
+                    // Keep the retired TypeScript material as a regression
+                    // for the unchanged fields; v2 startup inputs have their
+                    // own execution tests rather than rewriting history.
+                    value["v"] = serde_json::json!(1);
                     mask_material(&mut value, &root_s, outside_s.as_deref());
                     assert_eq!(value, case["material"], "frozen material for {name}");
                 }

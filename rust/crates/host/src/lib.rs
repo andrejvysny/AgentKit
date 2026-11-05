@@ -5,6 +5,7 @@ mod advisor;
 mod budget;
 mod chat;
 mod connection_transport;
+mod context_window;
 mod continuation;
 mod dispatch;
 mod emulated_tool_call;

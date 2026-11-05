@@ -6,6 +6,7 @@ mod context_summaries;
 mod conversations;
 mod data;
 mod deadline;
+mod execution_no_start;
 mod execution_receipts;
 mod execution_resolution;
 mod managed_content;
@@ -24,7 +25,7 @@ mod transaction;
 mod ts_import;
 mod util;
 
-pub use actor::SqliteStore;
+pub use actor::{SqliteStore, StoreActorIdentity};
 pub use advisor::*;
 pub use agent_inputs::*;
 pub use context_summaries::*;
@@ -36,7 +37,12 @@ pub use managed_content::*;
 pub use models::*;
 pub use proposals::*;
 pub use provider_catalog::*;
-pub use provider_connections::{provider_connection_identity, register_provider_connection};
+pub use provider_connections::{
+    ProviderContinuityRestore, check_provider_connection, provider_connection_identity,
+    register_provider_connection, register_provider_connection_with_continuity,
+    register_scoped_provider_connection, restore_provider_continuity,
+    revoke_persisted_provider_connection,
+};
 pub use schema::SCHEMA_VERSION;
 pub use session_ops::*;
 pub use settings_commit::{SettingWrite, SettingsCommit};

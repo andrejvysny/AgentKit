@@ -43,10 +43,12 @@ afterAll(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-function buildNative(): void {
+function buildNative(entry: "package" | "root" = "package"): void {
   const build = spawnSync(
     process.execPath,
-    ["run", "--cwd", nativePackage, "build"],
+    entry === "package"
+      ? ["run", "--cwd", nativePackage, "build"]
+      : ["run", "build:native"],
     { cwd: repoRoot, encoding: "utf8" },
   );
   if (build.status !== 0)
@@ -90,6 +92,40 @@ function bareImportsIn(file: string): string[] {
 }
 
 describe("packed @agentkit/native declarations", () => {
+  it(
+    "root and package builds emit identical declarations and frozen API reports",
+    () => {
+      const report = join(
+        repoRoot,
+        "node_modules/.cache/agentkit-api/native.api.md",
+      );
+      const checkApi = (): string => {
+        const result = spawnSync(
+          "node",
+          ["scripts/check-public-api.mjs", "--entry=native"],
+          { cwd: repoRoot, encoding: "utf8" },
+        );
+        if (result.error || result.status !== 0)
+          throw new Error(
+            `native API check failed:\n${result.stdout}\n${result.stderr}`,
+          );
+        return readFileSync(report, "utf8");
+      };
+      buildNative("package");
+      const declarations = readFileSync(
+        join(nativePackage, "dist/index.d.ts"),
+        "utf8",
+      );
+      const api = checkApi();
+      buildNative("root");
+      expect(readFileSync(join(nativePackage, "dist/index.d.ts"), "utf8")).toBe(
+        declarations,
+      );
+      expect(checkApi()).toBe(api);
+    },
+    { timeout: 180_000 },
+  );
+
   it(
     "build to a single self-contained dist entry point",
     () => {

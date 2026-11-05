@@ -691,6 +691,42 @@ impl DurableExecution {
                 )
             })
     }
+
+    pub(super) async fn complete_not_started(
+        &self,
+        execution_id: &str,
+        result: &ToolResult,
+    ) -> Result<(), CoreError> {
+        let serialized = serde_json::to_value(result).map_err(|_| {
+            CoreError::new(
+                "result_unserializable",
+                "The command no-start result cannot be recorded",
+            )
+        })?;
+        let recorded = self
+            .context
+            .store
+            .complete_execution_not_started(
+                self.context.fence.clone(),
+                self.context.attempt_id.clone(),
+                execution_id.to_owned(),
+                serialized,
+            )
+            .await
+            .map_err(|error| {
+                CoreError::new(
+                    "receipt_unavailable",
+                    &format!("Cannot persist command no-start evidence: {error}"),
+                )
+            })?;
+        if !recorded {
+            return Err(CoreError::new(
+                "receipt_conflict",
+                "Command no-start evidence does not match its original admission",
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn receipt_unreadable(error: agentkit_store::StoreError) -> CoreError {
@@ -766,11 +802,14 @@ impl agentkit_core::Tool for ReceiptedTool {
             Admission::Granted { execution_id } => Some(execution_id),
             Admission::Refused(result) => return Ok(result),
         };
-        let result = self.tool.execute(context, input).await;
-        if let (Some(id), Ok(tool_result)) = (execution_id.as_deref(), &result) {
-            self.durable.complete(id, tool_result).await?;
-        }
-        result
+        super::execution_completion::execute_receipted(
+            self.tool.clone(),
+            Some(self.durable.clone()),
+            execution_id,
+            context,
+            input,
+        )
+        .await
     }
 }
 

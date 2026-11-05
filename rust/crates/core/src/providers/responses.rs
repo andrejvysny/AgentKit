@@ -33,6 +33,7 @@ impl ResponsesProvider {
     fn events(&self, input: ChatRequest, cancellation: CancellationToken) -> ProviderStream {
         let provider = self.clone();
         Box::pin(async_stream::try_stream! {
+            provider.transport.check_authority().await?;
             yield ProviderEvent::Started;
             if cancellation.is_cancelled() {
                 Err(CoreError::new("cancelled", "aborted"))?;
@@ -43,6 +44,7 @@ impl ResponsesProvider {
                 provider.transport.auth_kind() == AuthKind::ChatGptAccount,
             )?;
             for message in warnings {
+                provider.transport.check_authority().await?;
                 yield ProviderEvent::Warning { code: "tool_schema_unsupported".into(), message };
             }
             if let Some(budget) = &input.budget {
@@ -56,7 +58,7 @@ impl ResponsesProvider {
                 cancellation.clone(),
             )
             .await?;
-            provider.transport.check_current()?;
+            provider.transport.check_authority().await?;
             let mut bytes = response.bytes_stream();
             let mut decoder = SseDecoder::new();
             let mut state = ResponsesState::default();
@@ -76,7 +78,7 @@ impl ResponsesProvider {
                     },
                     next = bytes.next() => next,
                 };
-                provider.transport.check_current()?;
+                provider.transport.check_authority().await?;
                 let Some(chunk) = next else { break; };
                 let frames = match chunk {
                     Ok(chunk) => decoder.push(&chunk),
@@ -84,7 +86,7 @@ impl ResponsesProvider {
                 };
                 match frames {
                     Ok(frames) => for frame in frames {
-                        if let Err(error) = provider.transport.check_current() {
+                        if let Err(error) = provider.transport.check_authority().await {
                             failure = Some(error);
                             break;
                         }
@@ -95,12 +97,15 @@ impl ResponsesProvider {
                             .map_err(|_| CoreError::responses("malformed_response"));
                         match value.and_then(|value| state.accept(value)) {
                             Ok(delta) => {
+                                provider.transport.check_authority().await?;
                                 yield ProviderEvent::Activity;
                                 if let Some(delta) = delta {
                                     emitted.push_str(&delta);
+                                    provider.transport.check_authority().await?;
                                     yield ProviderEvent::Delta(delta);
                                 }
                                 if let Some(reasoning) = state.take_reasoning_delta() {
+                                    provider.transport.check_authority().await?;
                                     yield ProviderEvent::Event {
                                         kind: "run.message.reasoning-delta".into(),
                                         data: json!({"delta": reasoning}),
@@ -123,7 +128,7 @@ impl ResponsesProvider {
                 match decoder.finish() {
                     Ok(frames) => for frame in frames {
                         if !frame.done {
-                            if let Err(error) = provider.transport.check_current() {
+                            if let Err(error) = provider.transport.check_authority().await {
                                 failure = Some(error);
                                 break;
                             }
@@ -131,12 +136,15 @@ impl ResponsesProvider {
                                 .map_err(|_| CoreError::responses("malformed_response"));
                             match value.and_then(|value| state.accept(value)) {
                                 Ok(delta) => {
+                                    provider.transport.check_authority().await?;
                                     yield ProviderEvent::Activity;
                                     if let Some(delta) = delta {
                                         emitted.push_str(&delta);
+                                        provider.transport.check_authority().await?;
                                         yield ProviderEvent::Delta(delta);
                                     }
                                     if let Some(reasoning) = state.take_reasoning_delta() {
+                                        provider.transport.check_authority().await?;
                                         yield ProviderEvent::Event {
                                             kind: "run.message.reasoning-delta".into(),
                                             data: json!({"delta": reasoning}),
@@ -164,6 +172,7 @@ impl ResponsesProvider {
                 Err(error) => {
                     if let Some(usage) = observed_usage {
                         if let Ok(data) = response_usage(&usage, &input.model, &call_id, false) {
+                            provider.transport.check_authority().await?;
                             yield ProviderEvent::Usage(data);
                         }
                     }
@@ -183,6 +192,7 @@ impl ResponsesProvider {
                 Err(error) => {
                     if let Some(usage) = &result.usage {
                         if let Ok(data) = response_usage(usage, &input.model, &call_id, false) {
+                            provider.transport.check_authority().await?;
                             yield ProviderEvent::Usage(data);
                         }
                     }
@@ -190,12 +200,15 @@ impl ResponsesProvider {
                 }
             }
             if result.content.len() > emitted.len() {
+                provider.transport.check_authority().await?;
                 yield ProviderEvent::Delta(result.content[emitted.len()..].into());
             }
             if let Some(usage) = &result.usage {
+                provider.transport.check_authority().await?;
                 yield ProviderEvent::Usage(response_usage(usage, &input.model, &call_id, true)?);
             }
             for call in &result.calls {
+                provider.transport.check_authority().await?;
                 yield ProviderEvent::ToolRequested(call.clone());
             }
             // Frozen `completionEvents` shape: `reasoningContent` rides on
@@ -215,6 +228,7 @@ impl ResponsesProvider {
                 "tool_calls"
             })
             .into();
+            provider.transport.check_authority().await?;
             yield ProviderEvent::Event {
                 kind: "run.message.completed".into(),
                 data,
@@ -228,7 +242,7 @@ impl ResponsesProvider {
         result: &ResponsesResult,
         cancellation: CancellationToken,
     ) -> Result<Option<Value>, CoreError> {
-        self.transport.check_current()?;
+        self.transport.check_authority().await?;
         let has_reasoning = result.output.iter().any(|item| item["type"] == "reasoning");
         let continuation = make_continuation(
             input,
@@ -256,7 +270,7 @@ impl ResponsesProvider {
         if cancellation.is_cancelled() {
             return Err(CoreError::new("cancelled", "aborted"));
         }
-        self.transport.check_current()?;
+        self.transport.check_authority().await?;
         Ok(continuation)
     }
 }
@@ -290,7 +304,7 @@ impl ChatProvider for ResponsesProvider {
         )
         .await?;
         let payload = read_json(response, cancellation).await?;
-        self.transport.check_current()?;
+        self.transport.check_authority().await?;
         let account = self.transport.auth_kind() == AuthKind::ChatGptAccount;
         let models = payload[if account { "models" } else { "data" }]
             .as_array()

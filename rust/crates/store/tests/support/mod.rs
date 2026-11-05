@@ -2,6 +2,15 @@
 use agentkit_store::*;
 use serde_json::{Value, json};
 
+pub fn downgrade_provider_authority(db: &rusqlite::Connection) {
+    db.execute_batch("DROP INDEX provider_connections_logical;
+        ALTER TABLE provider_connections RENAME TO provider_connections_v13;
+        CREATE TABLE provider_connections(connection_id TEXT PRIMARY KEY, credential_digest TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation>=1), updated_at INTEGER NOT NULL);
+        INSERT INTO provider_connections SELECT connection_id,credential_digest,generation,updated_at FROM provider_connections_v13;
+        DROP TABLE provider_connections_v13;
+        DROP TABLE provider_namespace;").unwrap();
+}
+
 pub fn task(id: &str, scope: &str) -> SubmitTask {
     SubmitTask {
         task_id: id.into(),

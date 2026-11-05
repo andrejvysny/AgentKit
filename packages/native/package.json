@@ -51,7 +51,7 @@
     ]
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node ../../scripts/prepack-bundle-types.mjs",
+    "build": "npx --no-install tsc -p tsconfig.build.json && node ../../scripts/prepack-bundle-types.mjs",
     "build:native": "napi build --platform --release --format esm --manifest-path ../../rust/crates/napi/Cargo.toml --output-dir generated --js index.js --dts index.d.ts",
     "test": "bun test tests",
     "prepack": "node ../../scripts/prepack-bundle-types.mjs && node ../../scripts/prepack-publish-config.mjs apply",

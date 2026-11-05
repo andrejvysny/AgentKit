@@ -23,20 +23,12 @@ pub(crate) async fn effective_session_descriptor(
     let Some(chat) = context.store.get_chat(chat_id).await? else {
         return Ok(None);
     };
-    let Some(mut descriptor) = crate::session::read_session_descriptor(&chat.metadata) else {
+    let Some(descriptor) = crate::session::read_session_descriptor(&chat.metadata) else {
         return Ok(None);
     };
-    if let Some(snapshot) = context.task.payload.get("sessionContext") {
-        if snapshot.is_null() {
-            descriptor.as_object_mut().unwrap().remove("context");
-        } else {
-            descriptor["context"] = snapshot.clone();
-            descriptor =
-                crate::session::read_session_descriptor(&json!({"agentkit.session": descriptor}))
-                    .ok_or_else(|| HostError::Execution("session_context_invalid".into()))?;
-        }
-    }
-    Ok(Some(descriptor))
+    crate::context_window::with_snapshot(descriptor, context.task.payload.get("sessionContext"))
+        .map(Some)
+        .ok_or_else(|| HostError::Execution("session_context_invalid".into()))
 }
 
 /// What the provider-facing history is assembled from (ADR 0017 part 1):
@@ -90,49 +82,13 @@ impl ContextBudget {
         let Some(descriptor) = effective_session_descriptor(context, chat_id).await? else {
             return Ok(None);
         };
-        let override_window = descriptor["context"]["windowTokens"]
-            .as_u64()
-            .filter(|n| *n > 0);
-        let model_window = if override_window.is_none() {
-            // One persisted catalogue, two doors: the provider-store rows
-            // (`providers.replaceModels` → the compat settings namespace)
-            // are canonical; the HTTP management plane commits its own
-            // refresh copy under `http.provider-catalog`. A stored
-            // `contextWindowTokens` must decide the window — the fallback
-            // is only for a model NEITHER document describes.
-            let row_window = |rows: Option<Value>| -> Option<u64> {
-                rows.and_then(|catalog| {
-                    catalog
-                        .as_array()?
-                        .iter()
-                        .find(|item| item["modelId"].as_str() == Some(model))?
-                        .get("contextWindowTokens")?
-                        .as_u64()
-                })
-                .filter(|n| *n > 0)
-            };
-            row_window(
-                context
-                    .store
-                    .get_setting(agentkit_store::PROVIDER_MODELS_NAMESPACE, provider)
-                    .await?,
-            )
-            .or(row_window(
-                context
-                    .store
-                    .get_setting("http.provider-catalog", provider)
-                    .await?,
-            ))
-        } else {
-            None
-        };
-        let (window, source) = if let Some(value) = override_window {
-            (value, "descriptor")
-        } else if let Some(value) = model_window {
-            (value, "model")
-        } else {
-            (32768, "fallback")
-        };
+        let (window, source) = crate::context_window::resolve(
+            &context.store,
+            &descriptor,
+            Some(provider),
+            Some(model),
+        )
+        .await?;
         let reserve = descriptor["context"]["reserveTokens"]
             .as_u64()
             .filter(|n| *n > 0)

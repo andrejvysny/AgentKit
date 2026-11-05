@@ -426,6 +426,14 @@ impl AgentSessionService {
         &self,
         input: &CreateSessionInput,
     ) -> SessionResult<AgentSessionState> {
+        let chat = self.create_session_chat(input).await?;
+        self.get_state(&chat.id).await
+    }
+
+    pub(crate) async fn create_session_chat(
+        &self,
+        input: &CreateSessionInput,
+    ) -> SessionResult<ChatRecord> {
         let mut metadata = match input.metadata.clone().unwrap_or_else(|| json!({})) {
             Value::Object(map) => map,
             _ => {
@@ -505,7 +513,7 @@ impl AgentSessionService {
             .store()
             .create_chat(&session_id, input.title.clone(), metadata, self.now_ms())
             .await?;
-        self.get_state(&chat.id).await
+        Ok(chat)
     }
 
     pub async fn get_state(&self, session_id: &str) -> SessionResult<AgentSessionState> {

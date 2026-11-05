@@ -106,12 +106,60 @@ unchanged; a parser cannot prove all effects of arbitrary scripts or programs.
 
 Standing grants bind bounded executable, environment, runner configuration,
 dependency metadata and direct entry-point identity. They do not hash every
-project source file or prove transitive behavior. See the coding package README
-for the supported fingerprint boundary.
+project source file or prove transitive behavior. The native implementation is
+[`command_fingerprint.rs`](../../rust/crates/toolpacks-coding/src/command_fingerprint.rs).
+
+Native fingerprint format 2 invalidates grants made with the previous material.
+It includes the full sanitized execution environment, resolved launchers and
+their supported shebang interpreter chains, selected direct startup files,
+package scripts and applicable configuration files. This includes npm's own
+`NODE_OPTIONS` preload even when the selected package script only runs `echo`.
+Literal `--require` and `--import` selectors are supported; unresolved paths,
+abbreviated selectors and unsupported loader forms require fresh approval.
+
+npm scripts and resolved local npx runners can receive remembered approval.
+npx/bunx runners must resolve through an ancestor `node_modules/.bin`; a PATH
+match alone does not prove what the package runner will execute or download.
+Nested package-manager scripts, ambiguous shebang options, config-selected
+startup overrides and unsupported environment overrides require fresh approval.
+npm user, builtin and global configuration are bound; literal prefix selection
+also binds its global configuration. Yarn, pnpm and Corepack configuration
+resolution is currently unsupported for remembered approvals. Bun configuration
+accepts only literal `[install].linker` values `"hoisted"`/`"isolated"` and an
+unsigned `[test].timeout`; other entries require fresh approval. These limits
+decline remembered grants; they do not convert a fresh per-call approval or
+Full-auto execution into a standing approval.
 
 Direct preload, configuration and executable inputs are included when supported;
 unresolvable direct inputs decline standing authorization. A remembered grant
-is checked again after acquiring the exclusive lease, before execution intent.
+is checked again after acquiring the exclusive lease, immediately before OS spawn.
+
+Native `run_command` and `run_tests` distinguish a factual pre-spawn refusal from
+an uncertain effect. Their host-owned body and receipt completion outlive a
+dropped harness await. A failed result carrying `command_not_started`,
+`phase: before_spawn` and `started: false` can complete only its exact original
+admission, even after the task lease ended. Admission stores a private digest of
+the run, attempt, lease token and fencing generation; no raw lease token is added
+to the receipt API. The store transition compares that digest and the admitted
+record transactionally. Completed or operator-resolved records cannot be
+overwritten; an identical repeated no-start result is idempotent. Legacy receipts
+without this evidence remain uncertain. No operator recovery API is involved.
+
+This is a trusted native-driver assertion, not an independent SQLite observation
+of OS effects. Tools opt in through the default-false `records_command_start`
+trait method; JavaScript tools do not opt in. Effectful results still require
+normal task fencing, and storage failures retain uncertainty. These checks do
+not freeze files against non-cooperating external editors during execution.
+
+Pack closure cancels commands still waiting for an external workspace lease.
+Native service close then waits for host-owned command receipt completion,
+scoped to the actual SQLite actor rather than task IDs or database path text.
+Host-owned core producers are included through their actual task join; dropping
+the executor scope aborts its producer without changing public `run_chat` drop
+semantics. A native command's detached receipt task remains independently owned.
+This wait precedes returning from close and dropping the service's store clones.
+A bounded-drain timeout or persistence error sets `closeUncertain` and returns
+an error; it never reports an admitted receipt as a settled no-start result.
 
 Qualification combines deterministic admission/result barriers, real process
 ownership tests, SQLite reopening and consumer tests against the exact

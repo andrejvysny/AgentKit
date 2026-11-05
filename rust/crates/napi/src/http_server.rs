@@ -158,6 +158,7 @@ struct ServerOptions {
     max_query_bytes: usize,
     actor_id: String,
     default_model: String,
+    session_profile_id: Option<String>,
     bearer_token: String,
     /// Cross-origin policy mirrored from the TypeScript transport's
     /// `CorsConfig`: absent (default) answers plain HTTP with no CORS
@@ -356,6 +357,7 @@ fn parse_server_options(text: &str) -> Result<ServerOptions> {
             .unwrap_or_else(|| DEFAULT_ACTOR.to_owned()),
         default_model: optional_text(&object, "defaultModel", false)?
             .unwrap_or_else(|| DEFAULT_MODEL.to_owned()),
+        session_profile_id: optional_text(&object, "sessionProfileId", false)?,
         bearer_token,
         cors: parse_cors(&object)?,
         provider_secrets: match object.get("providerSecrets") {
@@ -555,6 +557,11 @@ impl SessionService {
         )
         .await
         .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
+        if let Some(profile_id) = &options.session_profile_id {
+            backend = backend
+                .with_session_profile(profile_id)
+                .map_err(|problem| errors::stable(&problem.code, problem.detail, None))?;
+        }
         if options.provider_secrets.as_deref() == Some("memory") {
             backend = backend.with_provider_secrets(Arc::new(
                 agentkit_connections::MemorySecretStore::default(),

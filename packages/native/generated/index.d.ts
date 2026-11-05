@@ -393,12 +393,11 @@ export declare class SessionService {
    */
   close(): Promise<void>
   /**
-   * True when a `close()` completed without establishing that owned
-   * execution had drained (the worker deadline expired). Durable state
-   * stays authoritative; this flag records what close could not prove.
-   * It describes WORKER DRAIN only — it never claims external JS effects
-   * stopped; the JS wrapper's `pendingCallbacks` is the observability
-   * for dispatched, unsettled callbacks.
+   * True when shutdown could not establish worker drain or durable
+   * completion of owned native command receipts. A deadline or receipt
+   * persistence failure remains uncertain; durable state stays authoritative.
+   * This never proves external JavaScript callback effects stopped; the
+   * wrapper's `pendingCallbacks` reports dispatched, unsettled callbacks.
    */
   get closeUncertain(): boolean
 }
@@ -452,24 +451,9 @@ export declare function isRunCallbackActive(callId: string): boolean
 export declare function pushRunProviderEvent(callId: string, eventJson: string): Promise<boolean>
 
 /**
- * Register a provider connection: `baseUrl` addresses the OpenAI-compatible
- * server (the transport appends `/chat/completions`, `/responses`, or
- * `/models`), and `apiKey` — when present — is presented as
- * `Authorization: Bearer`. The key crosses the boundary exactly here and
- * never again: only the returned connection id may appear in options JSON.
- *
- * Without `optionsJson` the id is a process-local random: correct for a
- * scratch lane, but a Responses continuation bound to it dies with the
- * process. For a lane whose continuation must survive restarts, pass
- * `{connectionKey, storePath}` — the durable LOGICAL identity door
- * (P1-E): the id is derived from the key alone (never from the secret),
- * the store persists the credential fingerprint + generation, and the
- * credential-restoration rules hold: same key + same credential on every
- * restart → the same id AND generation (the continuation keeps working);
- * same key + a different credential → a rotation (new generation under
- * the same identity, stored scopes restamped, continuation continues);
- * a wrong credential is the provider's verdict — an auth error at
- * request time, never a silent identity change.
+ * Identity binds the store namespace, logical key, endpoint and account.
+ * Rotation fences existing work; only explicit confirmed restoration transfers
+ * compatible settled continuation state. API keys stay inside Rust memory.
  */
 export declare function registerProviderConnection(baseUrl: string, apiKey?: string | undefined | null, optionsJson?: string | undefined | null): Promise<string>
 
@@ -483,9 +467,5 @@ export declare function reserveRunProviderRequest(callId: string): Promise<void>
  */
 export declare function resolveCall(callId: string, payload?: string | undefined | null, error?: string | undefined | null): boolean
 
-/**
- * Revoke a connection. Returns false for an unknown or already-revoked id.
- * A run in flight observes the revocation as `connection_changed` at its
- * next request; no further HTTP leaves for that connection afterwards.
- */
+/** Revocation fences existing transports immediately and persists off-thread. */
 export declare function revokeProviderConnection(connectionId: string): Promise<boolean>

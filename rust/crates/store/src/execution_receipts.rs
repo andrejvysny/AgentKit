@@ -635,7 +635,11 @@ impl SqliteStore {
                 result: None,
                 resolution: None,
             };
-            let serialized = json(&transaction, &record)?;
+            let mut serialized_record = serde_json::to_value(&record)?;
+            serialized_record[crate::execution_no_start::AUTHORITY_FIELD] = serde_json::Value::String(
+                crate::execution_no_start::admission_authority(&proof, &record.attempt_id),
+            );
+            let serialized = json(&transaction, &serialized_record)?;
             let inserted = transaction.execute(
                 "INSERT INTO tool_executions(execution_id,run_id,approval_request_id,record) VALUES(?,?,?,?) ON CONFLICT(execution_id) DO NOTHING",
                 params![

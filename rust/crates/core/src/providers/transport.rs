@@ -22,6 +22,11 @@ pub trait TrustedTransport: Send + Sync {
     fn check_current(&self) -> Result<(), CoreError> {
         Ok(())
     }
+    /// Durable transports may perform storage checks here without blocking the
+    /// runtime thread. Delivery and persistence use the same authority fence.
+    async fn check_authority(&self) -> Result<(), CoreError> {
+        self.check_current()
+    }
     fn identity(&self) -> ConnectionIdentity;
     fn auth_kind(&self) -> AuthKind;
     async fn request(
@@ -65,7 +70,7 @@ pub(crate) async fn dispatch(
     body: Option<Value>,
     cancellation: CancellationToken,
 ) -> Result<reqwest::Response, CoreError> {
-    transport.check_current()?;
+    transport.check_authority().await?;
     if transport.identity() != *identity {
         return Err(CoreError::responses("connection_changed"));
     }

@@ -106,10 +106,14 @@ function realBinDir(binary) {
 const npmBinary = findNpmCli(nodeBinary, [...paths, dirname(process.execPath)]);
 
 // Per-run temporary directories, both outside the repository.
-const temporary = mkdtempSync(join(tmpdir(), "agentkit-native-pack-"));
+const retainedOutput = process.env.AGENTKIT_PACKAGE_GATE_OUTPUT;
+if (retainedOutput) mkdirSync(retainedOutput, { recursive: true });
+const temporary = mkdtempSync(
+  join(retainedOutput ?? tmpdir(), "agentkit-native-pack-"),
+);
 process.env.npm_config_cache = join(temporary, "npm-cache");
 const consumerDirectory = mkdtempSync(
-  join(tmpdir(), "agentkit-native-consumer-"),
+  join(retainedOutput ?? tmpdir(), "agentkit-native-consumer-"),
 );
 
 try {
@@ -134,6 +138,14 @@ try {
   }
   const cleanPath = toolchainFreePath([...toolDirectories, ...paths]);
   const toolchainFreeEnvironment = withPath(process.env, cleanPath);
+  for (const name of [
+    "NODE_PATH",
+    "NODE_OPTIONS",
+    "NAPI_RS_NATIVE_LIBRARY_PATH",
+    "NAPI_RS_FORCE_WASI",
+    "NAPI_RS_WASI_FLAVOR",
+  ])
+    delete toolchainFreeEnvironment[name];
 
   // -------------------------------------------------------------------------
   // 1. Build the package artifacts (dist + generated loader and addon).
@@ -157,10 +169,10 @@ try {
         ...paths,
       ].filter(Boolean),
     );
-    run(bunBinary, ["run", "--cwd", "packages/native", "build"], {
+    run(bunBinary, ["run", "--cwd", "packages/native", "build:native"], {
       env: buildEnvironment,
     });
-    run(bunBinary, ["run", "--cwd", "packages/native", "build:native"], {
+    run(bunBinary, ["run", "--cwd", "packages/native", "build"], {
       env: buildEnvironment,
     });
   }
@@ -338,11 +350,12 @@ try {
   const tscEntry = join(repoRoot, "node_modules", "typescript", "bin", "tsc");
   if (!existsSync(tscEntry))
     fail(`workspace typescript compiler missing: ${tscEntry}`);
-  run(nodeBinary, ["consumer.mjs", "types", tscEntry], {
-    cwd: consumerDirectory,
-    env: toolchainFreeEnvironment,
-    timeout: 180_000,
-  });
+  for (const runtime of [nodeBinary, bunBinary])
+    run(runtime, ["consumer.mjs", "types", tscEntry], {
+      cwd: consumerDirectory,
+      env: toolchainFreeEnvironment,
+      timeout: 180_000,
+    });
 
   // The package can be imported without an addon; first use must fail loudly.
   rmSync(
@@ -379,6 +392,8 @@ try {
       "with no reachable toolchain.\n",
   );
 } finally {
-  rmSync(temporary, { recursive: true, force: true });
-  rmSync(consumerDirectory, { recursive: true, force: true });
+  if (!retainedOutput) {
+    rmSync(temporary, { recursive: true, force: true });
+    rmSync(consumerDirectory, { recursive: true, force: true });
+  }
 }

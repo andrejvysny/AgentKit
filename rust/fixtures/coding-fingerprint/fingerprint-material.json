@@ -1161,7 +1161,9 @@
         ],
         "v": 1
       },
-      "name": "npx resolves the local runner"
+      "name": "npx resolves the local runner",
+      "rustV2Expect": "null",
+      "rustV2Reason": "The historical example only installs bin/vitest on PATH; v2 requires an ancestor node_modules/.bin runner to establish npm exec selection without fetching."
     },
     {
       "command": "bun test --config extra.toml",
@@ -3477,7 +3479,9 @@
         ],
         "v": 1
       },
-      "name": "env-wrapped NODE_OPTIONS binds the selected startup file"
+      "name": "env-wrapped NODE_OPTIONS binds the selected startup file",
+      "rustV2Expect": "error",
+      "rustV2Reason": "The unquoted NODE_OPTIONS=--require assignment omits its file; bootstrap.cjs is the command, so v2 refuses this ambiguous startup attribution."
     },
     {
       "command": "bun test",

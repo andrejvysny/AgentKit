@@ -75,10 +75,13 @@ const platformTarball = join(outDir, manifest.files.platform.path);
 
 const paths = pathEntries(process.env.PATH ?? process.env.Path);
 const bunBinary =
+  process.env.AGENTKIT_BUN_BINARY ??
   findRuntime("bun", [...paths, join(home, ".bun/bin")]) ??
   fail("no usable bun binary");
 const nodeBinary =
-  findRuntime("node", [...paths, join(home, ".local/bin")]) ?? process.execPath;
+  process.env.AGENTKIT_NODE_BINARY ??
+  findRuntime("node", [...paths, join(home, ".local/bin")]) ??
+  process.execPath;
 const npmBinary = findNpmCli(nodeBinary, [...paths, dirname(process.execPath)]);
 
 function run(command, arguments_, options = {}) {
