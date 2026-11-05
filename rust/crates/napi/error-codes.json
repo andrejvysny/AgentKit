@@ -41,6 +41,8 @@
     "not_a_directory",
     "not_found",
     "not_implemented",
+    "receipt_not_uncertain",
+    "receipt_run_active",
     "recovery_unreadable",
     "service_closed",
     "service_unavailable",

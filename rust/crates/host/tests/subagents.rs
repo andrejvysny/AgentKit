@@ -99,6 +99,7 @@ fn config() -> SubagentConfig {
             max_await_ms: 15_000,
             lease_ttl_ms: 60_000,
             cancel_orphans: true,
+            max_tree_provider_requests: None,
         },
         roles: Default::default(), // effective() preloads the five built-ins
         delegation_guidance: None,
@@ -807,6 +808,10 @@ async fn resume_refuses_live_turns_and_unknown_children() {
         .await
         .expect_err("unknown child");
     assert!(error.to_string().contains("subagent_not_found"));
+    assert!(matches!(
+        h.subagents.status("sub_missing").await,
+        Err(HostError::NotFound(message)) if message == "subagent_not_found: sub_missing"
+    ));
     h.hold(false);
     h.release();
     h.await_all().await;
@@ -1028,6 +1033,179 @@ async fn role_ceilings_hide_and_refuse_forbidden_tools() {
     let parent_call = guard_context("parent".into(), "coding", "write_file", "write");
     assert!(guard.is_visible(&parent_call).await.unwrap());
     h.await_all().await;
+}
+
+/// Reconfigure one role in place, the way a hot config edit would.
+fn edit_role(h: &Harness, role: &str, edit: impl FnOnce(&mut RoleSpec)) {
+    let mut config = h.subagents.config();
+    edit(config.roles.get_mut(role).expect("role"));
+    h.subagents.configure(config);
+}
+
+async fn allowed(
+    guard: &SubagentRoleGuard,
+    chat: &str,
+    ns: &str,
+    tool: &str,
+    effect: &str,
+) -> bool {
+    matches!(
+        guard
+            .can_execute(&guard_context(chat.to_owned(), ns, tool, effect))
+            .await
+            .unwrap(),
+        ToolGuardVerdict::Allowed
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn widening_a_role_never_widens_a_live_child() {
+    let h = Harness::start().await;
+    let old = h.spawn("old", "reviewer", "review only").await;
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    assert!(!allowed(&guard, &old.child_chat_id, "coding", "write_file", "write").await);
+
+    edit_role(&h, "reviewer", |role| {
+        role.read_only = false;
+        role.can_spawn = true;
+        role.allowed_tools = vec!["*".into()];
+    });
+    assert!(
+        !allowed(&guard, &old.child_chat_id, "coding", "write_file", "write").await,
+        "live child keeps its spawn-time ceiling"
+    );
+    assert!(
+        !allowed(
+            &guard,
+            &old.child_chat_id,
+            "subagent",
+            "subagent_spawn",
+            "write"
+        )
+        .await,
+        "live child may not gain delegation"
+    );
+    // A child spawned AFTER the edit gets the new authority.
+    let fresh = h.spawn("new", "reviewer", "now allowed").await;
+    assert!(
+        allowed(
+            &guard,
+            &fresh.child_chat_id,
+            "coding",
+            "write_file",
+            "write"
+        )
+        .await
+    );
+    let view = h.status(&fresh.child_chat_id).await;
+    assert_eq!(view.role_digest.as_ref().map(String::len), Some(64));
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restricting_or_removing_a_role_applies_to_live_children() {
+    let h = Harness::start().await;
+    let child = h.spawn("k", "reviewer", "review only").await;
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    assert!(
+        allowed(
+            &guard,
+            &child.child_chat_id,
+            "coding",
+            "code_search",
+            "read"
+        )
+        .await
+    );
+
+    edit_role(&h, "reviewer", |role| {
+        role.allowed_tools
+            .retain(|tool| tool != "coding:code_search");
+    });
+    assert!(
+        !allowed(
+            &guard,
+            &child.child_chat_id,
+            "coding",
+            "code_search",
+            "read"
+        )
+        .await,
+        "removed tool is gone immediately"
+    );
+    assert!(allowed(&guard, &child.child_chat_id, "coding", "read_file", "read").await);
+
+    edit_role(&h, "reviewer", |role| role.allowed_tools.clear());
+    assert!(!allowed(&guard, &child.child_chat_id, "coding", "read_file", "read").await);
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unconfigured_custom_role_and_legacy_children_fail_closed_or_follow_config() {
+    let mut cfg = config();
+    cfg.roles = agentkit_host::default_role_specs();
+    cfg.roles.insert(
+        "custom".into(),
+        RoleSpec {
+            id: "custom".into(),
+            allowed_tools: vec!["coding:read_file".into()],
+            ..Default::default()
+        },
+    );
+    let h = Harness::start_with(cfg, None, None).await;
+    let custom = h.spawn("c", "custom", "custom work").await;
+    let guard = SubagentRoleGuard::new(h.subagents.clone());
+    assert!(allowed(&guard, &custom.child_chat_id, "coding", "read_file", "read").await);
+    let mut config = h.subagents.config();
+    config.roles.remove("custom");
+    h.subagents.configure(config);
+    assert!(
+        !allowed(&guard, &custom.child_chat_id, "coding", "read_file", "read").await,
+        "a deleted role denies every tool"
+    );
+
+    // Legacy child: no snapshot in its metadata, so it follows the config.
+    h.service
+        .create_session(&CreateSessionInput {
+            session_id: Some("legacy".into()),
+            title: None,
+            profile_id: "agentkit.subagent".into(),
+            profile_digest: None,
+            provider_id: None,
+            model: Some("model".into()),
+            workspace: None,
+            context: None,
+            skills: None,
+            turn_kind: None,
+            execution_mode: None,
+            metadata: Some(json!({"agentkit.subagent": {"role": "reviewer"}})),
+        })
+        .await
+        .unwrap();
+    h.store
+        .register_subagent_if_under(
+            RegisterSubagent {
+                child_chat_id: "legacy".into(),
+                parent_chat_id: "parent".into(),
+                parent_task_id: Some("parent-turn".into()),
+                role: "reviewer".into(),
+                depth: 1,
+                prompt: "p".into(),
+                model: None,
+                turn_task_id: None,
+                now: 0,
+            },
+            8,
+            8,
+        )
+        .await
+        .unwrap();
+    assert!(allowed(&guard, "legacy", "coding", "read_file", "read").await);
+    edit_role(&h, "reviewer", |role| role.allowed_tools = vec!["*".into()]);
+    assert!(
+        allowed(&guard, "legacy", "coding", "write_file", "write").await,
+        "legacy children keep tracking the live role"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -2074,6 +2252,23 @@ async fn role_provider_and_model_overrides_reach_the_child_session() {
     h.await_all().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_descriptor_carries_the_parent_workspace() {
+    // Workspace-bound lanes (coding, LSP) decide by the descriptor
+    // workspace, so a child must name exactly its parent's.
+    let h = Harness::start().await;
+    let child = h.spawn("k", "implementer", "write").await;
+    let chat = h
+        .store
+        .get_chat(&child.child_chat_id)
+        .await
+        .unwrap()
+        .expect("child chat");
+    let descriptor = read_session_descriptor(&chat.metadata).expect("child descriptor");
+    assert_eq!(descriptor["workspace"]["root"], json!(h.workspace));
+    h.await_all().await;
+}
+
 fn pinned_model_harness_config() -> SubagentConfig {
     let mut cfg = config();
     cfg.roles = BTreeMap::from([(
@@ -2392,6 +2587,260 @@ async fn concurrent_resumes_revive_the_child_exactly_once() {
         &child.child_chat_id,
         h.subagents.now_ms()
     ));
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+fn tree_config(limit: u64) -> SubagentConfig {
+    let mut config = config();
+    config.limits.max_tree_provider_requests = Some(limit);
+    config
+}
+
+async fn recorded_reservation(h: &Harness, child_chat_id: &str) -> u64 {
+    let chat = h.store.get_chat(child_chat_id).await.unwrap().unwrap();
+    chat.metadata["agentkit.subagent"]["limits"]["maxProviderRequests"]
+        .as_u64()
+        .expect("reservation recorded")
+}
+
+fn with_requests(h: &Harness, key: &str, requests: u64) -> SpawnRequest {
+    SpawnRequest {
+        max_provider_requests: Some(requests),
+        ..h.spawn_request(key, "researcher", "work")
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_spawns_cannot_over_reserve_the_tree() {
+    let h = Harness::start_with(tree_config(100), None, None).await;
+    h.hold(true);
+    // Each request wants the whole budget: clamping leaves nothing for the loser.
+    let (a, b) = (with_requests(&h, "a", 100), with_requests(&h, "b", 100));
+    let (first, second) = tokio::join!(h.subagents.spawn(&a), h.subagents.spawn(&b));
+    let (ok, err) = match (first, second) {
+        (Ok(ok), Err(err)) | (Err(err), Ok(ok)) => (ok, err),
+        other => panic!("exactly one spawn must win: {other:?}"),
+    };
+    assert!(
+        err.to_string().contains("subagent_budget_exhausted"),
+        "{err}"
+    );
+    assert_eq!(recorded_reservation(&h, &ok.child_chat_id).await, 100);
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_partial_requests_sum_to_the_limit() {
+    let h = Harness::start_with(tree_config(100), None, None).await;
+    h.hold(true);
+    let (a, b) = (with_requests(&h, "a", 60), with_requests(&h, "b", 60));
+    let (first, second) = tokio::join!(h.subagents.spawn(&a), h.subagents.spawn(&b));
+    let mut reserved = vec![
+        recorded_reservation(&h, &first.unwrap().child_chat_id).await,
+        recorded_reservation(&h, &second.unwrap().child_chat_id).await,
+    ];
+    reserved.sort_unstable();
+    assert_eq!(reserved, vec![40, 60]);
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reservation_is_clamped_to_what_the_tree_has_left() {
+    let h = Harness::start_with(tree_config(100), None, None).await;
+    h.hold(true);
+    let first = h
+        .subagents
+        .spawn(&with_requests(&h, "a", 60))
+        .await
+        .unwrap();
+    let second = h
+        .subagents
+        .spawn(&with_requests(&h, "b", 60))
+        .await
+        .unwrap();
+    assert_eq!(recorded_reservation(&h, &first.child_chat_id).await, 60);
+    assert_eq!(recorded_reservation(&h, &second.child_chat_id).await, 40);
+    let error = h
+        .subagents
+        .spawn(&with_requests(&h, "c", 1))
+        .await
+        .expect_err("tree fully reserved");
+    assert!(error.to_string().contains("subagent_budget_exhausted"));
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn settled_child_returns_its_unused_reservation() {
+    let h = Harness::start_with(tree_config(100), None, None).await;
+    let child = h
+        .subagents
+        .spawn(&with_requests(&h, "a", 60))
+        .await
+        .unwrap();
+    h.await_all().await;
+    let used = h.child.requests.lock().unwrap().len() as u64;
+    assert!(used >= 1);
+    let next = h
+        .subagents
+        .spawn(&with_requests(&h, "b", 100))
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded_reservation(&h, &next.child_chat_id).await,
+        100 - used,
+        "only the settled child's actual requests stay charged"
+    );
+    assert_eq!(recorded_reservation(&h, &child.child_chat_id).await, 60);
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn grandchildren_count_against_the_same_root() {
+    let h = Harness::start_with(tree_config(100), None, None).await;
+    h.hold(true);
+    let child = h
+        .subagents
+        .spawn(&with_requests(&h, "a", 60))
+        .await
+        .unwrap();
+    let child_turn = h.status(&child.child_chat_id).await.turn_task_id.unwrap();
+    let grand = h
+        .subagents
+        .spawn(&SpawnRequest {
+            parent_chat_id: child.child_chat_id.clone(),
+            parent_task_id: child_turn,
+            ..with_requests(&h, "g", 80)
+        })
+        .await
+        .unwrap();
+    assert_eq!(recorded_reservation(&h, &grand.child_chat_id).await, 40);
+    let chat = h
+        .store
+        .get_chat(&grand.child_chat_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(chat.metadata["agentkit.subagent"]["rootChatId"], "parent");
+    let error = h
+        .subagents
+        .spawn(&with_requests(&h, "late", 1))
+        .await
+        .expect_err("root tree exhausted by descendants");
+    assert!(error.to_string().contains("subagent_budget_exhausted"));
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_that_would_exceed_the_tree_budget_is_refused() {
+    let h = Harness::start_with(tree_config(100), None, None).await;
+    h.child.fail.store(true, Ordering::SeqCst);
+    let failed = h
+        .subagents
+        .spawn(&with_requests(&h, "a", 60))
+        .await
+        .unwrap();
+    wait_until(
+        || async { h.status(&failed.child_chat_id).await.status == "failed" },
+        "child failed",
+    )
+    .await;
+    h.child.fail.store(false, Ordering::SeqCst);
+    h.hold(true);
+    h.subagents
+        .spawn(&with_requests(&h, "b", 60))
+        .await
+        .unwrap();
+    let error = h
+        .subagents
+        .resume(&failed.child_chat_id, "r1")
+        .await
+        .expect_err("60 + 60 exceeds 100 once the failed child is active again");
+    assert!(error.to_string().contains("subagent_budget_exhausted"));
+    assert_eq!(h.status(&failed.child_chat_id).await.status, "failed");
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+/// A resumed child's earlier turns stay charged: reservation-only charging
+/// would let a 50-request child spend 50, resume, and spend 50 more while
+/// the tree counted 50.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_keeps_the_earlier_turns_spend_charged() {
+    let h = Harness::start_with(tree_config(100), None, None).await;
+    h.child.fail.store(true, Ordering::SeqCst);
+    let failed = h
+        .subagents
+        .spawn(&with_requests(&h, "a", 50))
+        .await
+        .unwrap();
+    wait_until(
+        || async { h.status(&failed.child_chat_id).await.status == "failed" },
+        "child failed",
+    )
+    .await;
+    h.child.fail.store(false, Ordering::SeqCst);
+    h.hold(true);
+    let other = h
+        .subagents
+        .spawn(&with_requests(&h, "b", 50))
+        .await
+        .unwrap();
+    assert_eq!(recorded_reservation(&h, &other.child_chat_id).await, 50);
+    let error = h
+        .subagents
+        .resume(&failed.child_chat_id, "r1")
+        .await
+        .expect_err("the failed turn's spend plus a fresh 50 exceeds 100");
+    assert!(error.to_string().contains("subagent_budget_exhausted"));
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restarted_service_still_enforces_the_tree_budget() {
+    let h = Harness::start_with(tree_config(100), None, None).await;
+    h.hold(true);
+    h.subagents
+        .spawn(&with_requests(&h, "a", 70))
+        .await
+        .unwrap();
+    let restarted = SubagentService::new(
+        h.store.clone(),
+        h.service.clone(),
+        Arc::new(SystemRuntime),
+        tree_config(100).effective(),
+    );
+    let next = restarted.spawn(&with_requests(&h, "b", 70)).await.unwrap();
+    assert_eq!(recorded_reservation(&h, &next.child_chat_id).await, 30);
+    h.hold(false);
+    h.release();
+    h.await_all().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unset_tree_budget_leaves_reservations_untouched() {
+    let h = Harness::start_with(config(), Some(50), Some(50)).await;
+    h.hold(true);
+    for index in 0..4 {
+        let child = h
+            .subagents
+            .spawn(&with_requests(&h, &format!("k{index}"), 150))
+            .await
+            .unwrap();
+        assert_eq!(recorded_reservation(&h, &child.child_chat_id).await, 150);
+    }
     h.hold(false);
     h.release();
     h.await_all().await;

@@ -222,3 +222,36 @@ for (const corruption of [
     }
   });
 }
+
+it("sqlite: completing an operator-resolved receipt is refused and leaves it unchanged", async () => {
+  const file = path();
+  const store = new SqliteAssistantStore(file);
+  try {
+    const { fence, admission } = await claim(store);
+    expect(await store.toolExecutions!.admit(admission, fence)).toBe(true);
+    const raw = new Database(file);
+    const row = raw
+      .query("SELECT record FROM tool_executions WHERE execution_id = ?")
+      .get("execution") as { record: string };
+    const resolved = {
+      ...(JSON.parse(row.record) as Record<string, unknown>),
+      status: "resolved",
+      resolution: { outcome: "not_started", resolvedAt: 1 },
+    };
+    raw
+      .query("UPDATE tool_executions SET record = ? WHERE execution_id = ?")
+      .run(JSON.stringify(resolved), "execution");
+    raw.close();
+    await expect(
+      store.toolExecutions!.complete(
+        "execution",
+        { ok: true, data: {}, sources: [] } as never,
+        fence,
+      ),
+    ).rejects.toMatchObject({ code: "receipt_not_uncertain" });
+    const [after] = await store.toolExecutions!.listByRun("run");
+    expect(after?.status).toBe("resolved");
+  } finally {
+    store.close();
+  }
+});

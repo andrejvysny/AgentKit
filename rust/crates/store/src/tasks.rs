@@ -250,15 +250,13 @@ impl SqliteStore {
     }
 
     pub async fn list_tasks(&self, scope_id: Option<String>) -> Result<Vec<TaskRecord>> {
-        self.call(move |db| {
-            Ok(all::<TaskRecord>(db, "tasks")?
-                .into_iter()
-                .filter(|task| {
-                    scope_id
-                        .as_ref()
-                        .is_none_or(|scope| *scope == task.scope_id)
-                })
-                .collect())
+        self.call(move |db| match scope_id {
+            Some(scope) => select(
+                db,
+                "SELECT record FROM tasks WHERE scope=? ORDER BY rowid",
+                [&scope],
+            ),
+            None => all::<TaskRecord>(db, "tasks"),
         })
         .await
     }

@@ -50,6 +50,8 @@ mod http_server;
 mod management;
 #[path = "mcp_server.rs"]
 mod mcp_server;
+#[path = "service_receipts.rs"]
+mod receipts;
 
 const MAX_POLL_BATCH: i32 = 64;
 /// Workers for root sessions and their delegating parents; the subagent
@@ -170,67 +172,55 @@ impl SessionService {
         let contributor = Arc::new(JsToolContributor::new(Arc::clone(&bridge)));
         let authority = Arc::new(BindingAuthority::new());
         let coding_authority = Arc::clone(&authority) as Arc<dyn CodingPermissionAuthority>;
-        let lane = Arc::new(CodingLane::new(Arc::clone(&coding_authority)));
+        let lane = Arc::new(CodingLane::new(
+            Arc::clone(&coding_authority),
+            store_handle.clone(),
+        ));
         // The three late-bound lanes: the executor holds their adapters
         // from construction; the configuration calls below fill them.
         // Unconfigured lanes contribute nothing, judge nothing, and hook
         // nothing — existing services behave exactly as before.
         let subagent_lane = Arc::new(SubagentLane::new(options.subagent_max_concurrency));
         let advisor_lane = Arc::new(AdvisorLane::new());
-        let lsp_lane = Arc::new(LspLane::new());
+        let lsp_lane = Arc::new(LspLane::new(store_handle.clone()));
         let lanes_store = store_handle.clone();
         let guard = JsToolGuard::new(
             coding_authority,
             options.configured_mode,
             options.plan.clone(),
         );
+        // The same fence the callback bridge enforces: once `close()` has
+        // begun, no new provider request may leave the process.
+        let fence_bridge = Arc::clone(&bridge);
+        let fence: crate::provider_connection::Fence = Arc::new(move || {
+            if fence_bridge.is_open() {
+                Ok(())
+            } else {
+                Err(agentkit_core::CoreError::new(
+                    "cancelled",
+                    "the binding is closing",
+                ))
+            }
+        });
         let provider: Arc<dyn agentkit_core::ChatProvider> = match &options.provider {
             None => Arc::new(
                 JsProvider::new(Arc::clone(&bridge))
                     .with_account_backed(options.account_backed_provider),
             ),
-            Some(lane) => {
-                // The same fence the callback bridge enforces: once `close()`
-                // has begun, no new provider request may leave the process.
-                let fence_bridge = Arc::clone(&bridge);
-                let fence: crate::provider_connection::Fence = Arc::new(move || {
-                    if fence_bridge.is_open() {
-                        Ok(())
-                    } else {
-                        Err(agentkit_core::CoreError::new(
-                            "cancelled",
-                            "the binding is closing",
-                        ))
-                    }
-                });
-                let transport = crate::provider_connection::BindingTransport::connect(
-                    &lane.provider_id,
-                    lane.protocol.as_str(),
-                    &lane.connection_id,
-                    fence,
-                )
-                .await?;
-                let preset: Arc<dyn agentkit_core::ChatProvider> = match lane.protocol {
-                    ProviderProtocol::ChatCompletions => Arc::new(
-                        agentkit_core::providers::ChatCompletionsProvider::new(transport)
-                            .map_err(errors::core)?,
-                    ),
-                    ProviderProtocol::Responses => Arc::new(
-                        agentkit_core::providers::ResponsesProvider::new(transport)
-                            .map_err(errors::core)?,
-                    ),
-                };
-                Arc::new(crate::provider_connection::ConfiguredProvider::new(
-                    preset,
-                    lane.temperature,
-                    lane.max_tokens,
-                ))
-            }
+            Some(lane) => build_lane_provider(lane, Arc::clone(&fence)).await?,
         };
+        let mut routable = vec![Arc::clone(&provider)];
+        for lane in &options.additional_providers {
+            routable.push(build_lane_provider(lane, Arc::clone(&fence)).await?);
+        }
+        // Immutable for the service lifetime: a durable payload's providerId
+        // must resolve identically before and after a restart.
+        let registry = Arc::new(agentkit_host::ProviderRegistry::new(routable));
         let advisor_provider = Arc::clone(&provider);
         let executor: Arc<dyn TaskExecutor> = Arc::new(
             ChatExecutor::new(provider, Arc::new(ToolRegistry::new())).with_options(
                 ChatExecutorOptions {
+                    providers: Some(Arc::clone(&registry)),
                     tool_contributors: vec![
                         Arc::clone(&contributor) as Arc<dyn ToolContributor>,
                         // The Rust coding toolpack, once registered, joins
@@ -334,14 +324,18 @@ impl SessionService {
         // advisor needs the provider, store, clock, tool source, event
         // bridge, and session service. Both are one-shot; configuration
         // (`configureSubagents`/`configureAdvisor`) is hot afterwards.
-        subagent_lane.bind(agentkit_host::SubagentService::new(
-            lanes_store.clone(),
-            service.clone(),
-            runtime.clone(),
-            agentkit_host::SubagentConfig::default(),
-        ))?;
+        subagent_lane.bind(
+            agentkit_host::SubagentService::new(
+                lanes_store.clone(),
+                service.clone(),
+                runtime.clone(),
+                agentkit_host::SubagentConfig::default(),
+            )
+            .with_routable_providers(registry.ids().map(str::to_owned).collect()),
+        )?;
         advisor_lane.bind(
             advisor_provider,
+            Arc::clone(&registry),
             lanes_store,
             runtime.clone(),
             Arc::new(LaneAdvisorTools {
@@ -420,7 +414,9 @@ impl SessionService {
     /// otherwise), role? ("implementer"|"reviewer"|"supervisor"),
     /// planToolNames? (default ["submit_plan"]), identity? (default the
     /// root; part of the standing-approval key envelope), coordinationDir?
-    /// (default the per-uid shared lock dir), coordinationWaitMs?}`.
+    /// (default the per-uid shared lock dir), coordinationWaitMs?,
+    /// environment? (string map replacing the host env for spawned commands
+    /// and the approval key)}`.
     /// One-shot: a second registration is refused; the descriptor set of a
     /// service is immutable once the worker can claim turns.
     #[napi]
@@ -434,7 +430,8 @@ impl SessionService {
 
     /// Configure the subagent subsystem: `{enabled?, limits?:
     /// {maxDepth?, maxConcurrency?, maxPerParent?, awaitPollMs?,
-    /// maxAwaitMs?, leaseTtlMs?, cancelOrphans?}, roles?:
+    /// maxAwaitMs?, leaseTtlMs?, cancelOrphans?, maxTreeProviderRequests? (positive
+    /// integer <= 1_000_000)}, roles?:
     /// {<id>: {description?, prompt?, allowedTools?, readOnly?,
     /// canSpawn?, model?, providerId?, maxIterations?, capability?}},
     /// delegationGuidance?}`. An omitted `roles` table ships the five
@@ -450,6 +447,15 @@ impl SessionService {
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let config: agentkit_host::SubagentConfig = serde_json::from_str(&config_json)
             .map_err(|error| errors::invalid(format!("invalid subagent config: {error}")))?;
+        if config
+            .limits
+            .max_tree_provider_requests
+            .is_some_and(|limit| !(1..=1_000_000).contains(&limit))
+        {
+            return Err(errors::invalid(
+                "invalid subagent config: maxTreeProviderRequests must be an integer in 1..=1000000",
+            ));
+        }
         core.subagent_lane.configure(config);
         Ok(())
     }
@@ -521,7 +527,8 @@ impl SessionService {
         core.lsp_lane.register(&options_json).await
     }
 
-    /// Configure advisor + watchdog: `{enabled?, model?, watchdogModel?,
+    /// Configure advisor + watchdog: `{enabled?, model?, providerId?,
+    /// watchdogProviderId?, watchdogModel?,
     /// maxIterations?, maxToolCallsPerIteration?, toolTimeoutMs?,
     /// providerRequests?, overallTimeoutMs?, maxFindings?,
     /// maxReviewConcurrency?, cooldownMs?, reviewsPerWindow?, windowMs?,
@@ -538,6 +545,7 @@ impl SessionService {
             .ok_or_else(|| errors::closed("the session service is closed"))?;
         let config: agentkit_host::AdvisorConfig = serde_json::from_str(&config_json)
             .map_err(|error| errors::invalid(format!("invalid advisor config: {error}")))?;
+        core.advisor_lane.validate(&config)?;
         core.advisor_lane.configure(config);
         Ok(())
     }
@@ -648,6 +656,23 @@ impl SessionService {
         let result = core
             .service
             .steer(&session_id, &input)
+            .await
+            .map_err(errors::session)?;
+        Ok(send_result_json(result))
+    }
+
+    /// Steer a LIVE turn only; an idle session answers `chat_idle` instead
+    /// of starting a turn.
+    #[napi]
+    pub async fn steer_live(&self, session_id: String, input_json: String) -> Result<String> {
+        let core_guard = self.core.lock().await;
+        let core = core_guard
+            .as_ref()
+            .ok_or_else(|| errors::closed("the session service is closed"))?;
+        let input = parse_steer(&input_json)?;
+        let result = core
+            .service
+            .steer_live(&session_id, &input)
             .await
             .map_err(errors::session)?;
         Ok(send_result_json(result))
@@ -1015,21 +1040,10 @@ async fn stop_servers(core: &mut Core, grace: Duration) {
 async fn drain_core(mut core: Core, close_timeout: Duration, uncertain: &AtomicBool) -> Result<()> {
     let mut first_error: Option<napi::Error> = None;
     cancel_all(&core.subscriptions);
-    if let Some(worker) = core.worker.take() {
-        // `shutdown` stops admissions itself; the whole wait, including
-        // acquiring the admission lock, is inside the deadline.
-        match tokio::time::timeout(close_timeout, worker.shutdown()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => first_error = Some(errors::host(error)),
-            Err(_) => {
-                // The drain deadline passed; the host exposes no abort for
-                // its worker task, so refuse any further native execution
-                // (the bridge already rejects JS dispatch and provider
-                // requests) and record that drain was not established.
-                uncertain.store(true, Ordering::SeqCst);
-                core.lane.mark_disposed();
-            }
-        }
+    if let Some(worker) = core.worker.take()
+        && let Err(error) = drain_worker(worker, &core.lane, close_timeout, uncertain).await
+    {
+        first_error = Some(error);
     }
     // Native coding commands this process owns get the crate's own
     // teardown (drain + scratch removal) once no new dispatch can
@@ -1046,6 +1060,48 @@ async fn drain_core(mut core: Core, close_timeout: Duration, uncertain: &AtomicB
     match first_error {
         Some(error) => Err(error),
         None => Ok(()),
+    }
+}
+
+/// Upper bound on the hard-stop wait after the graceful deadline.
+const HARD_STOP_WAIT: Duration = Duration::from_secs(5);
+
+/// Graceful drain, then a hard stop. `stop` + `join` instead of `shutdown`
+/// keeps the handle alive past the first deadline so it can be escalated.
+async fn drain_worker(
+    mut worker: agentkit_host::WorkerHandle,
+    lane: &CodingLane,
+    close_timeout: Duration,
+    uncertain: &AtomicBool,
+) -> Result<()> {
+    // The whole wait, including the admission lock, is inside the deadline.
+    let graceful = tokio::time::timeout(close_timeout, async {
+        worker.stop().await;
+        worker.join().await
+    })
+    .await;
+    let Err(_) = graceful else {
+        return graceful.unwrap_or(Ok(())).map_err(errors::host);
+    };
+    // No tool body may start once close() resolves; refuse it first, then
+    // fire runtime-only cancellation (no durable Cancelled) so the turn stays
+    // recoverable like a crashed one.
+    lane.mark_disposed();
+    let second = close_timeout.min(HARD_STOP_WAIT);
+    let hard = tokio::time::timeout(second, async {
+        worker.interrupt_active().await;
+        worker.join().await
+    })
+    .await;
+    match hard {
+        Ok(result) => result.map_err(errors::host),
+        Err(_) => {
+            // Even the hard stop did not drain: record it and make sure
+            // nothing keeps running detached.
+            uncertain.store(true, Ordering::SeqCst);
+            worker.abort();
+            Ok(())
+        }
     }
 }
 
@@ -1495,6 +1551,9 @@ struct ServiceOptions {
     configured_mode: CodingMode,
     plan: PlanConfiguration,
     provider: Option<ProviderLane>,
+    /// Extra routable provider lanes (`additionalProviders`); each is built
+    /// exactly like the primary configured lane.
+    additional_providers: Vec<ProviderLane>,
     /// The JS callback lane's declared parameter capabilities (P: account
     /// parity). `true` means the callback wraps an account-backed client
     /// that REJECTS sampling/output parameters: admission then never
@@ -1552,6 +1611,7 @@ impl Default for ServiceOptions {
                 granted_mode: CodingMode::Ask,
             },
             provider: None,
+            additional_providers: Vec::new(),
             account_backed_provider: false,
             subagent_max_concurrency: agentkit_host::SubagentConfig::default()
                 .limits
@@ -1627,6 +1687,9 @@ fn parse_service_options(text: Option<&str>) -> Result<ServiceOptions> {
     }
     if let Some(value) = object.get("providerConfig") {
         options.provider = Some(parse_provider_config(value)?);
+    }
+    if let Some(value) = object.get("additionalProviders") {
+        options.additional_providers = parse_additional_providers(value, &options.provider)?;
     }
     if let Some(value) = object.get("providerAuthKind") {
         let kind = value
@@ -1729,6 +1792,77 @@ fn parse_provider_config(value: &Value) -> Result<ProviderLane> {
         temperature,
         max_tokens,
     })
+}
+
+/// The JS callback provider's `ChatProvider::id`; the primary's id when no
+/// `providerConfig` lane is installed.
+const JS_PROVIDER_ID: &str = "js";
+const MAX_ADDITIONAL_PROVIDERS: usize = 16;
+
+/// Parse `additionalProviders`: up to 16 lanes of the `providerConfig`
+/// shape, with ids unique and distinct from the primary's. A duplicate would
+/// make routing ambiguous, so it fails construction instead of last-wins.
+fn parse_additional_providers(
+    value: &Value,
+    primary: &Option<ProviderLane>,
+) -> Result<Vec<ProviderLane>> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| errors::invalid("additionalProviders must be an array when present"))?;
+    if items.len() > MAX_ADDITIONAL_PROVIDERS {
+        return Err(errors::invalid(format!(
+            "additionalProviders must hold at most {MAX_ADDITIONAL_PROVIDERS} entries"
+        )));
+    }
+    let primary_id = primary
+        .as_ref()
+        .map_or(JS_PROVIDER_ID, |lane| lane.provider_id.as_str());
+    let mut lanes: Vec<ProviderLane> = Vec::with_capacity(items.len());
+    for item in items {
+        let lane = parse_provider_config(item)?;
+        if lane.provider_id == primary_id
+            || lanes
+                .iter()
+                .any(|seen| seen.provider_id == lane.provider_id)
+        {
+            return Err(errors::invalid(format!(
+                "additionalProviders providerId \"{}\" duplicates another configured provider",
+                lane.provider_id
+            )));
+        }
+        lanes.push(lane);
+    }
+    Ok(lanes)
+}
+
+/// Construct one configured provider lane over its registered connection.
+async fn build_lane_provider(
+    lane: &ProviderLane,
+    fence: crate::provider_connection::Fence,
+) -> Result<Arc<dyn agentkit_core::ChatProvider>> {
+    let transport = crate::provider_connection::BindingTransport::connect(
+        &lane.provider_id,
+        lane.protocol.as_str(),
+        &lane.connection_id,
+        fence,
+    )
+    .await?;
+    let preset: Arc<dyn agentkit_core::ChatProvider> = match lane.protocol {
+        ProviderProtocol::ChatCompletions => Arc::new(
+            agentkit_core::providers::ChatCompletionsProvider::new(transport)
+                .map_err(errors::core)?,
+        ),
+        ProviderProtocol::Responses => Arc::new(
+            agentkit_core::providers::ResponsesProvider::new(transport).map_err(errors::core)?,
+        ),
+    };
+    Ok(Arc::new(
+        crate::provider_connection::ConfiguredProvider::new(
+            preset,
+            lane.temperature,
+            lane.max_tokens,
+        ),
+    ))
 }
 
 fn parse_mode(value: &Value, key: &str) -> Result<CodingMode> {
@@ -2021,5 +2155,76 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(absent.max_tokens, None);
+    }
+
+    fn lane_json(provider_id: &str) -> Value {
+        json!({
+            "protocol": "chat-completions",
+            "providerId": provider_id,
+            "connectionId": format!("conn-{provider_id}"),
+            "model": "m",
+        })
+    }
+
+    fn invalid_input(error: napi::Error) -> String {
+        let payload: Value = serde_json::from_str(&error.reason).unwrap();
+        assert_eq!(payload["code"], "invalid_input", "{error}");
+        error.to_string()
+    }
+
+    #[test]
+    fn additional_providers_parse_beside_either_primary_lane() {
+        let js_primary =
+            options_with(json!({"additionalProviders": [lane_json("a"), lane_json("b")]})).unwrap();
+        assert_eq!(js_primary.additional_providers.len(), 2);
+        let configured_primary = options_with(json!({
+            "providerConfig": lane_json("main"),
+            "additionalProviders": [lane_json("a")],
+        }))
+        .unwrap();
+        assert_eq!(configured_primary.additional_providers[0].provider_id, "a");
+        assert!(
+            options_with(json!({"additionalProviders": []}))
+                .unwrap()
+                .additional_providers
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn additional_providers_refuse_duplicate_primary_oversize_and_bad_shape() {
+        let duplicate =
+            options_with(json!({"additionalProviders": [lane_json("a"), lane_json("a")]}))
+                .err()
+                .expect("duplicate id");
+        assert!(invalid_input(duplicate).contains("duplicates"));
+        let same_as_primary = options_with(json!({
+            "providerConfig": lane_json("main"),
+            "additionalProviders": [lane_json("main")],
+        }))
+        .err()
+        .expect("primary id");
+        assert!(invalid_input(same_as_primary).contains("duplicates"));
+        // The JS bridge primary owns the id "js".
+        let js_id = options_with(json!({"additionalProviders": [lane_json("js")]}))
+            .err()
+            .expect("js id");
+        assert!(invalid_input(js_id).contains("duplicates"));
+        let too_many: Vec<Value> = (0..17).map(|i| lane_json(&format!("p{i}"))).collect();
+        let oversize = options_with(json!({"additionalProviders": too_many}))
+            .err()
+            .expect("17 entries");
+        assert!(invalid_input(oversize).contains("at most 16"));
+        for bad in [
+            json!("a"),
+            json!({}),
+            json!([1]),
+            json!([{"providerId": "a"}]),
+        ] {
+            let error = options_with(json!({"additionalProviders": bad.clone()}))
+                .err()
+                .unwrap_or_else(|| panic!("{bad} accepted"));
+            invalid_input(error);
+        }
     }
 }

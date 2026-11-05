@@ -355,9 +355,21 @@ impl Watchdog {
                     ),
                     evidence_hint: Some(evidence),
                 };
-                let _ = engine
+                if let Err(error) = engine
                     .review_reserved(&request, origin, CancellationToken::new(), reservation)
-                    .await;
+                    .await
+                {
+                    // Code prefix only: the full text may embed provider or
+                    // finding payloads.
+                    let text = error.to_string();
+                    let code = text.split(':').next().unwrap_or_default();
+                    eprintln!("agentkit-host: watchdog review for {trigger_name} failed: {code}");
+                    // These refusals land before any provider request, so the
+                    // trigger may fire again once the cause is fixed.
+                    if matches!(code, "advisor_disabled" | "advisor_model_unconfigured") {
+                        watchdog.retract_fire(&run, &chat, trigger_name, now);
+                    }
+                }
             });
         }
     }

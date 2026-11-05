@@ -19,6 +19,10 @@ pub struct HostOptions {
     pub retry_backoff: RetryBackoff,
     pub concurrency: usize,
     pub poll_interval_ms: u64,
+    /// Period of the running-host sweep that recovers tasks whose lease
+    /// expired after startup (owner process died inside the lease TTL).
+    /// 0 disables the sweep.
+    pub recovery_sweep_interval_ms: u64,
     /// Best-effort observers of durably settled tasks (subagent orphan
     /// reaping, watchdog triggers). A failing observer never unwinds the
     /// settlement — the durable state is already committed; the crash
@@ -38,6 +42,7 @@ impl Default for HostOptions {
             retry_backoff: RetryBackoff::default(),
             concurrency: 2,
             poll_interval_ms: 100,
+            recovery_sweep_interval_ms: 30_000,
             settled_observers: vec![],
         }
     }
@@ -92,6 +97,10 @@ pub struct AgentHost {
     pub(crate) runtime: SharedRuntime,
     executors: Arc<HashMap<String, Arc<dyn TaskExecutor>>>,
     active: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// Runtime-only forced-shutdown signal, never persisted. A run that sees
+    /// it is DROPPED, not cancelled: cancelling would let the run loop write
+    /// a durable `run.cancelled` before the lease is gone.
+    hard_stop: CancellationToken,
     /// Per-active-task cancel wakes. A `session.cancel` writes the durable
     /// `cancel_requested` flag and then pokes this map so the in-flight
     /// attempt runs its lease-heartbeat check immediately instead of waiting
@@ -221,6 +230,7 @@ impl AgentHost {
             options,
             executors: Arc::new(executors),
             active: Arc::new(Mutex::new(HashMap::new())),
+            hard_stop: CancellationToken::new(),
             watches: Arc::new(Mutex::new(HashMap::new())),
             wake: Arc::new(tokio::sync::Notify::new()),
             flush_planner: Arc::new(Mutex::new(None)),
@@ -294,7 +304,44 @@ impl AgentHost {
             .await?)
     }
 
+    /// Recover tasks whose lease has expired, without the startup-only
+    /// `interrupt_queued` step, so it is safe to run while the host serves.
+    ///
+    /// Live local runs heartbeat at ttl/3, so their leases never satisfy
+    /// `expires_at <= now`. A run stalled past its TTL is recovered like a
+    /// dead owner's; fencing already rejects its later writes (`LeaseLost`).
+    pub async fn recover_expired(&self) -> HostResult<Vec<TaskRecord>> {
+        let recovered = self
+            .store
+            .recover(
+                self.runtime.now_ms(),
+                self.options.max_attempts,
+                0,
+                self.options.recovery,
+            )
+            .await?;
+        if !recovered.is_empty() {
+            self.wake.notify_one();
+        }
+        Ok(recovered)
+    }
+
+    async fn sweep_loop(self, stop: CancellationToken) -> HostResult<()> {
+        let period = Duration::from_millis(self.options.recovery_sweep_interval_ms);
+        loop {
+            tokio::select! {
+                _ = stop.cancelled() => return Ok(()),
+                _ = tokio::time::sleep(period) => {}
+            }
+            // A failed sweep is retried on the next tick; the store stays authoritative.
+            if let Err(error) = self.recover_expired().await {
+                eprintln!("lease recovery sweep failed: {error}");
+            }
+        }
+    }
+
     pub async fn cancel(&self, task_id: &str) -> HostResult<()> {
+        let mut orphaned = false;
         let mut frontier = VecDeque::from([task_id.to_owned()]);
         let mut visited = HashSet::new();
         while let Some(current) = frontier.pop_front() {
@@ -305,20 +352,23 @@ impl AgentHost {
                 .cancel_task(&current, self.runtime.now_ms())
                 .await?;
             let token = self.active.lock().await.get(&current).cloned();
-            if let Some(token) = token {
-                token.cancel();
+            match token {
+                Some(token) => token.cancel(),
+                None => orphaned = true,
             }
-            for child in self
-                .store
-                .list_tasks(None)
-                .await?
-                .into_iter()
-                .filter(|task| task.parent_task_id.as_deref() == Some(&current))
-            {
+            for child in self.store.list_children(&current).await? {
                 frontier.push_back(child.task_id);
             }
         }
+        // No local run owns some task: settle an already-expired orphan now.
+        if orphaned {
+            self.recover_expired().await?;
+        }
         Ok(())
+    }
+
+    async fn interrupt_active_runs(&self) {
+        self.hard_stop.cancel();
     }
 
     pub async fn resume(&self, task_id: &str) -> HostResult<TaskRecord> {
@@ -341,6 +391,9 @@ impl AgentHost {
             for _ in 0..host.options.concurrency {
                 workers.spawn(host.clone().worker_loop(stop.clone(), gate.clone()));
             }
+            if host.options.recovery_sweep_interval_ms > 0 {
+                workers.spawn(host.clone().sweep_loop(stop.clone()));
+            }
             let mut failure = None;
             while let Some(result) = workers.join_next().await {
                 let result = result
@@ -362,6 +415,7 @@ impl AgentHost {
             cancellation,
             task,
             admission,
+            host: self.clone(),
         }
     }
 
@@ -432,7 +486,7 @@ impl AgentHost {
     async fn claim_context(&self) -> HostResult<Option<ExecutionContext>> {
         // The store reads an EMPTY kind filter as "any kind", so a host with
         // no executors must not ask at all: there is nothing it may claim.
-        if self.executors.is_empty() {
+        if self.executors.is_empty() || self.hard_stop.is_cancelled() {
             return Ok(None);
         }
         // The claim filter is the queue's starvation guarantee: a queued
@@ -540,6 +594,12 @@ impl AgentHost {
         let outcome = loop {
             tokio::select! {
                 result = &mut execution => break result,
+                // Forced shutdown: drop the execution future unpolled, write
+                // nothing and keep the lease, exactly like a crashed process.
+                // Lease expiry lets `recover` requeue the task (or mark it
+                // Interrupted in manual mode); a durable cancelled terminal
+                // here would make the recovered attempt follow a terminal.
+                _ = self.hard_stop.cancelled() => return Ok(()),
                 _ = heartbeat.tick() => {
                     let renewal = self.heartbeat(&context);
                     tokio::pin!(renewal);
@@ -801,6 +861,7 @@ pub struct WorkerHandle {
     cancellation: CancellationToken,
     task: JoinHandle<HostResult<()>>,
     admission: Arc<Mutex<()>>,
+    host: AgentHost,
 }
 
 impl WorkerHandle {
@@ -808,6 +869,27 @@ impl WorkerHandle {
     pub async fn stop(&self) {
         let _guard = self.admission.lock().await;
         self.cancellation.cancel();
+    }
+
+    /// Waits for the worker without consuming the handle, so a caller can
+    /// bound the wait, escalate with `interrupt_active`, and wait again.
+    pub async fn join(&mut self) -> HostResult<()> {
+        (&mut self.task)
+            .await
+            .map_err(|error| HostError::Execution(error.to_string()))?
+    }
+
+    /// Hard-stops active runs for process shutdown: each run's execution
+    /// future is dropped with NO store write and its lease kept, so the task
+    /// is recovered like a crashed one, never settled `Cancelled`.
+    pub async fn interrupt_active(&self) {
+        self.stop().await;
+        self.host.interrupt_active_runs().await;
+    }
+
+    /// Last resort after a bounded wait: nothing may keep running detached.
+    pub fn abort(&self) {
+        self.task.abort();
     }
 
     /// Stops admissions and waits for admitted attempts to finish.

@@ -516,6 +516,33 @@ suite("close dispatches no new callbacks and always completes", async () => {
   await store.close();
 });
 
+suite("close hard-stops a never-resolving provider within bound", async () => {
+  const store = await NativeStoreCtor.inMemory();
+  const service = await store.createService({ closeTimeoutMs: 300 });
+  let providerCalls = 0;
+  service.setProvider(async () => {
+    providerCalls += 1;
+    return new Promise<never>(() => {});
+  });
+  const created = await service.createSession({
+    profileId: "authority",
+    model: "test-model",
+  });
+  await service.send(created.sessionId as string, {
+    content: { type: "text", text: "hang" },
+  });
+  await waitFor(
+    async () => providerCalls,
+    (count) => count >= 1,
+  );
+  const started = Date.now();
+  await service.close();
+  // First wait (300ms) + bounded hard-stop wait (<=5s): never unbounded.
+  expect(Date.now() - started).toBeLessThan(6_000);
+  expect(service.closeUncertain).toBe(false);
+  await store.close();
+});
+
 suite("concurrent close callers share one completion", async () => {
   const store = await NativeStoreCtor.inMemory();
   const service = await store.createService();

@@ -35,6 +35,7 @@ pub use run_provider::{
 mod service;
 mod store;
 mod tool;
+mod workspace_binding;
 
 /// `cargo test` links this crate outside a Node process, so the three
 /// libnode symbols the napi rlib genuinely references are missing. These

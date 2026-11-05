@@ -138,6 +138,11 @@ export interface NativeServiceOptions {
    * the options may be logged or persisted freely. When absent, the JS
    * `setProvider` callback slot serves turns exactly as before. */
   providerConfig?: NativeProviderConfig;
+  /** Further Rust provider lanes (at most 16; ids unique and different from
+   * the primary's) that durable turns may route to by `providerId`, e.g. a
+   * subagent role or the advisor pinned to another provider. Same shape and
+   * validation as `providerConfig`; fixed for the service lifetime. */
+  additionalProviders?: ReadonlyArray<NativeProviderConfig>;
   /** Declares the JS callback lane's parameter capabilities (mirrors
    * `providerAuthKind` in `rust/crates/napi/src/service.rs`).
    * `"chatgpt-account"` means the callback wraps an account-backed client
@@ -168,6 +173,12 @@ export interface NativeProviderConfig {
 export interface NativeCodingToolsOptions {
   /** The one root every native tool is confined to. REQUIRED, absolute. */
   workspaceRoot: string;
+  /** Default false. Sessions whose descriptor workspace differs from the
+   * registered root never get these tools (nor, for coding, standing
+   * approvals), including their subagent children. Sessions with NO
+   * descriptor workspace keep the service-wide behavior unless this is
+   * true, in which case they get none either. */
+  requireSessionWorkspace?: boolean;
   /** Execution backend for shell/test commands. Default `"required"`:
    * commands run only inside the platform sandbox, and hosts without one
    * refuse (`shell_isolation_unavailable`); `"off"` runs unsandboxed — an
@@ -201,6 +212,12 @@ export interface NativeCodingToolsOptions {
   /** Longest a mutation/command waits for a foreign lease before
    * `workspace_busy`. Default `min(20000, floor(toolTimeoutMs * 0.66))`. */
   coordinationWaitMs?: number;
+  /** Base environment for spawned shell/test commands. REPLACES the host
+   * process environment (it is not overlaid), and is the same map the
+   * standing-approval key fingerprints. Default: the host process
+   * environment. Names are non-empty without `=` or NUL, values are
+   * strings without NUL, at most 1024 entries; otherwise `invalid_input`. */
+  environment?: Readonly<Record<string, string>>;
 }
 
 /** Global fan-out bounds for delegation, enforced from durable rows at
@@ -222,6 +239,10 @@ export interface NativeSubagentLimits {
   /** Cancel still-live children when their parent turn settles
    * (startup sweep + settle observers). Default true. */
   cancelOrphans?: boolean;
+  /** Cap on provider requests reserved by all subagents below one root
+   * session; unset means unlimited. Provider requests only; token and
+   * monetary budgets are not enforced. Integer 1..=1000000. */
+  maxTreeProviderRequests?: number;
 }
 
 /** One delegation role: a ceiling, never a grant (mirrors `RoleSpec`).
@@ -310,6 +331,12 @@ export interface NativeLspConfig {
 export interface NativeLspToolsOptions {
   /** The one workspace root the servers serve. REQUIRED, absolute. */
   workspaceRoot: string;
+  /** Default false. Sessions whose descriptor workspace differs from the
+   * registered root never get these tools (nor, for coding, standing
+   * approvals), including their subagent children. Sessions with NO
+   * descriptor workspace keep the service-wide behavior unless this is
+   * true, in which case they get none either. */
+  requireSessionWorkspace?: boolean;
   config?: NativeLspConfig;
 }
 
@@ -321,6 +348,13 @@ export interface NativeAdvisorConfig {
   enabled?: boolean;
   /** Model for explicit `advisor_review` calls. */
   model?: string | null;
+  /** Provider for explicit reviews; absent shares the service's primary
+   * provider. A different provider requires `model`. Must name the primary
+   * or an `additionalProviders` entry (`invalid_input` otherwise). */
+  providerId?: string | null;
+  /** Provider for automatic watchdog reviews; same rules, needs
+   * `watchdogModel`. */
+  watchdogProviderId?: string | null;
   /** Model for automatic watchdog reviews. */
   watchdogModel?: string | null;
   maxIterations?: number;
@@ -776,6 +810,46 @@ export interface SendInputJson {
   onSettled?: "followUp" | "cancel";
 }
 
+/** How an operator closes an uncertain (admitted, no result) receipt. */
+export type ExecutionResolutionOutcome =
+  | "completed"
+  | "not_started"
+  | "acknowledged";
+
+export interface ExecutionResolutionJson {
+  outcome: ExecutionResolutionOutcome;
+  note?: string;
+  resolvedAt: number;
+  resolvedBy?: string;
+}
+
+/** A durable execution receipt as the host stores it. */
+export interface ExecutionReceiptJson {
+  executionId: string;
+  runId: string;
+  chatId: string;
+  toolCallId: string;
+  toolName: string;
+  argsSha256: string;
+  contextSha256: string;
+  attemptId: string;
+  approvalRequestId?: string;
+  approvalGeneration?: string;
+  status: "admitted" | "completed" | "resolved";
+  result?: Record<string, unknown>;
+  resolution?: ExecutionResolutionJson;
+}
+
+export interface ResolveUncertainExecutionInput {
+  sessionId: string;
+  executionId: string;
+  outcome: ExecutionResolutionOutcome;
+  /** Required for `completed` (string or JSON value); forbidden otherwise. */
+  result?: unknown;
+  note?: string;
+  resolvedBy?: string;
+}
+
 export interface CreateSessionInputJson {
   sessionId?: string;
   title?: string;
@@ -1067,6 +1141,38 @@ export class NativeSessionService extends NativeSessionManagement {
       options,
     );
     return JSON.parse(text) as SendResultJson;
+  }
+
+  /** Steer a LIVE turn only; an idle session rejects with `chat_idle` rather
+   * than starting a turn. */
+  async steerLive(
+    sessionId: string,
+    input: SendInputJson,
+    options?: NativeCallOptions,
+  ): Promise<SendResultJson> {
+    const text = await waitFor(
+      () => lift(() => this.raw.steerLive(sessionId, JSON.stringify(input))),
+      options,
+    );
+    return JSON.parse(text) as SendResultJson;
+  }
+
+  /** Admitted receipts without a result: effects whose outcome is unknown. */
+  async listUncertainExecutions(
+    sessionId: string,
+  ): Promise<ExecutionReceiptJson[]> {
+    const text = await lift(() => this.raw.listUncertainExecutions(sessionId));
+    return JSON.parse(text) as ExecutionReceiptJson[];
+  }
+
+  /** Explicitly close one uncertain receipt; never happens implicitly. */
+  async resolveUncertainExecution(
+    input: ResolveUncertainExecutionInput,
+  ): Promise<ExecutionReceiptJson> {
+    const text = await lift(() =>
+      this.raw.resolveUncertainExecution(JSON.stringify(input)),
+    );
+    return JSON.parse(text) as ExecutionReceiptJson;
   }
 
   async getState(sessionId: string): Promise<Record<string, unknown>> {

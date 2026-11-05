@@ -79,6 +79,10 @@ pub struct SubagentRoleLimits {
     /// When true, a parent turn settling with non-terminal children cancels
     /// them (coopatively, through the session service).
     pub cancel_orphans: bool,
+    /// Optional cap on provider requests reserved by ALL subagents below one
+    /// root session; `None` means unlimited. Provider requests only: token
+    /// and monetary budgets are not enforced.
+    pub max_tree_provider_requests: Option<u64>,
 }
 
 impl Default for SubagentRoleLimits {
@@ -91,6 +95,7 @@ impl Default for SubagentRoleLimits {
             max_await_ms: 600_000,
             lease_ttl_ms: 900_000,
             cancel_orphans: true,
+            max_tree_provider_requests: None,
         }
     }
 }

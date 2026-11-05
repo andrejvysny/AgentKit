@@ -1,5 +1,7 @@
+use super::budget;
 use super::config::{RoleSpec, SubagentConfig};
 use super::guard::WorkspaceLeaseRegistry;
+use super::snapshot::{EffectiveRole, RoleSnapshot, effective_role};
 use crate::{
     AgentSendResult, AgentSessionService, CreateSessionInput, FollowUpInput, HostError, HostResult,
     SendInput, SharedRuntime, SteerInput, WhenBusy, read_session_descriptor,
@@ -52,6 +54,9 @@ pub struct SubagentView {
     pub parent_chat_id: String,
     pub parent_task_id: Option<String>,
     pub role: String,
+    /// Digest of the spawn-time role snapshot; absent on legacy children.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role_digest: Option<String>,
     pub depth: i64,
     pub prompt: String,
     pub model: Option<String>,
@@ -108,6 +113,9 @@ pub struct SubagentService {
     leases: WorkspaceLeaseRegistry,
     /// Serializes the spawn check→insert critical section (see `spawn`).
     spawn_gate: Arc<tokio::sync::Mutex<()>>,
+    /// Provider ids this service's executor can route to; `None` = unknown
+    /// (host-only users), which skips spawn-time validation.
+    routable_providers: Option<Arc<std::collections::BTreeSet<String>>>,
 }
 
 /// Releases a lease taken during `resume` unless disarmed with `keep`, so
@@ -145,7 +153,7 @@ fn sha256_hex(text: &str) -> String {
         .collect()
 }
 
-fn is_terminal_status(status: &str) -> bool {
+pub(super) fn is_terminal_status(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
 }
 
@@ -155,7 +163,7 @@ fn is_terminal_status(status: &str) -> bool {
 /// any legitimate single child turn while staying impossible to mine for
 /// sustained provider drain.
 const SUBAGENT_ITERATIONS_CEILING: u32 = 64;
-const SUBAGENT_PROVIDER_REQUESTS_CEILING: u64 = 200;
+pub(super) const SUBAGENT_PROVIDER_REQUESTS_CEILING: u64 = 200;
 const SUBAGENT_OVERALL_MS_CEILING: u64 = 30 * 60 * 1_000;
 
 /// Deterministic child identity for one logical spawn call. Public so
@@ -193,7 +201,42 @@ impl SubagentService {
             config: Arc::new(Mutex::new(config.effective())),
             leases: WorkspaceLeaseRegistry::default(),
             spawn_gate: Arc::new(tokio::sync::Mutex::new(())),
+            routable_providers: None,
         }
+    }
+
+    /// Inject the routable provider ids once at bind time so a role pinned
+    /// to an unroutable provider fails at spawn, not on the child's turn.
+    pub fn with_routable_providers(mut self, ids: std::collections::BTreeSet<String>) -> Self {
+        self.routable_providers = Some(Arc::new(ids));
+        self
+    }
+
+    /// Refuse a role/provider/model combination the executor cannot honor,
+    /// before any row or session exists. A provider switch needs a model:
+    /// the parent's model name is meaningless on a different provider.
+    fn validate_child_provider(
+        &self,
+        role: &RoleSpec,
+        request: &SpawnRequest,
+        provider_id: Option<&str>,
+        parent_provider: Option<&str>,
+    ) -> HostResult<()> {
+        let (Some(known), Some(provider_id)) = (&self.routable_providers, provider_id) else {
+            return Ok(());
+        };
+        if !known.contains(provider_id) {
+            return Err(HostError::Execution(format!(
+                "subagent_provider_unavailable: {provider_id}"
+            )));
+        }
+        if Some(provider_id) != parent_provider && request.model.is_none() && role.model.is_none() {
+            return Err(HostError::Execution(format!(
+                "subagent_model_required: role {} pins provider {provider_id} without a model",
+                role.id
+            )));
+        }
+        Ok(())
     }
 
     pub fn config(&self) -> SubagentConfig {
@@ -290,20 +333,14 @@ impl SubagentService {
                 limits.max_depth
             )));
         }
-        if parent_row.is_some() {
-            // Only roles allowed to nest may themselves delegate.
-            let parent_role = parent_row
-                .as_ref()
-                .and_then(|row| config.role(&row.role))
-                .cloned()
-                .unwrap_or_else(|| RoleSpec {
-                    id: parent_row
-                        .as_ref()
-                        .map(|row| row.role.clone())
-                        .unwrap_or_default(),
-                    can_spawn: false,
-                    ..Default::default()
-                });
+        if let Some(row) = parent_row.as_ref() {
+            // Only roles allowed to nest may themselves delegate; the
+            // parent's spawn-time snapshot caps what a later config edit
+            // could grant.
+            let parent_role = match self.effective_role_of(row, &config).await? {
+                Ok(effective) => effective,
+                Err(reason) => return Err(HostError::Execution(reason)),
+            };
             if !parent_role.can_spawn {
                 return Err(HostError::Execution(format!(
                     "role {} may not spawn children",
@@ -330,17 +367,17 @@ impl SubagentService {
         // Role-level provider override: a host that pins a role to its own
         // provider must not have that role's model silently run against the
         // parent's provider binding.
-        let provider_id = role.provider_id.clone().or_else(|| {
-            descriptor
-                .get("providerId")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        });
+        let parent_provider = descriptor.get("providerId").and_then(Value::as_str);
+        let provider_id = role
+            .provider_id
+            .clone()
+            .or_else(|| parent_provider.map(str::to_owned));
         let child_model = request
             .model
             .clone()
             .or_else(|| role.model.clone())
             .or_else(|| parent_model.map(str::to_owned));
+        self.validate_child_provider(&role, request, provider_id.as_deref(), parent_provider)?;
         if !role.read_only && workspace.is_none() {
             return Err(HostError::Execution(format!(
                 "workspace_required: role {} writes, but the parent session has no workspace",
@@ -521,11 +558,29 @@ impl SubagentService {
         if let Some(iterations) = iterations {
             role_limits.insert("maxToolIterations".into(), json!(iterations));
         }
-        if let Some(requests) = request.max_provider_requests {
-            role_limits.insert(
-                "maxProviderRequests".into(),
-                json!(requests.clamp(1, SUBAGENT_PROVIDER_REQUESTS_CEILING)),
-            );
+        let requested_requests = request
+            .max_provider_requests
+            .map(|requests| requests.clamp(1, SUBAGENT_PROVIDER_REQUESTS_CEILING));
+        let tree_root =
+            budget::root_of(&self.store, &request.parent_chat_id, limits.max_depth).await?;
+        // Compute→insert is atomic only because this runs under the same
+        // in-process `spawn_gate` as `check_fanout_caps`; the store holds an
+        // exclusive per-file owner lock, so one process owns the database
+        // and no other writer can interleave a reservation.
+        let reserved_requests = match limits.max_tree_provider_requests {
+            Some(tree_limit) => Some(
+                budget::reserve_for_spawn(
+                    &self.store,
+                    &tree_root,
+                    tree_limit,
+                    requested_requests.unwrap_or(SUBAGENT_PROVIDER_REQUESTS_CEILING),
+                )
+                .await?,
+            ),
+            None => requested_requests,
+        };
+        if let Some(requests) = reserved_requests {
+            role_limits.insert("maxProviderRequests".into(), json!(requests));
         }
         if let Some(overall) = request.overall_timeout_ms {
             role_limits.insert(
@@ -533,11 +588,15 @@ impl SubagentService {
                 json!(overall.clamp(1_000, SUBAGENT_OVERALL_MS_CEILING)),
             );
         }
+        let role_snapshot = RoleSnapshot::from_role(&role);
         let subagent_metadata = json!({
             "agentkit.subagent": {
                 "role": role.id,
+                "roleSnapshot": role_snapshot,
+                "roleDigest": role_snapshot.digest(),
                 "parentChatId": request.parent_chat_id,
                 "parentTaskId": request.parent_task_id,
+                "rootChatId": tree_root,
                 "depth": depth + 1,
                 "spawnKey": request.spawn_key,
                 "exclusive": exclusive,
@@ -751,12 +810,34 @@ impl SubagentService {
         Ok(views)
     }
 
+    /// The authority a child may exercise right now: its spawn-time role
+    /// snapshot narrowed by the current configuration. `Err(reason)` is a
+    /// fail-closed denial (role gone, snapshot malformed).
+    pub async fn effective_role_of(
+        &self,
+        row: &SubagentRecord,
+        config: &SubagentConfig,
+    ) -> HostResult<Result<EffectiveRole, String>> {
+        let chat = self.store.get_chat(&row.child_chat_id).await?;
+        let snapshot = match chat
+            .as_ref()
+            .and_then(|chat| chat.metadata.get("agentkit.subagent"))
+            .map(RoleSnapshot::from_metadata)
+            .transpose()
+        {
+            Ok(snapshot) => snapshot.flatten(),
+            Err(reason) => return Ok(Err(reason)),
+        };
+        Ok(effective_role(snapshot.as_ref(), config.role(&row.role))
+            .ok_or_else(|| format!("subagent role {} is no longer configured", row.role)))
+    }
+
     pub async fn status(&self, child_chat_id: &str) -> HostResult<SubagentView> {
         let row = self
             .store
             .get_subagent(child_chat_id)
             .await?
-            .ok_or_else(|| HostError::Execution(format!("subagent_not_found: {child_chat_id}")))?;
+            .ok_or_else(|| HostError::NotFound(format!("subagent_not_found: {child_chat_id}")))?;
         self.refresh(&row).await
     }
 
@@ -1017,12 +1098,21 @@ impl SubagentService {
                     .await
                     .map_err(session_error)?;
                 lease.keep();
+                // The resumed turn may have been re-enqueued under a new
+                // task id; keep the row on the live turn.
+                if let Some(live) = self.live_child_turn(child_chat_id).await? {
+                    self.bind_turn(child_chat_id, &live, parent_task_id).await?;
+                }
             }
             Some(TaskStatus::Failed) | Some(TaskStatus::Cancelled) => {
                 // A resume is a fresh admission: it runs under the same
                 // gate and the same fan-out caps as `spawn`, so a cancelled
                 // roster cannot be revived past the limits.
                 self.check_resume_admission(&view, parent_task_id).await?;
+                if let Some(tree_limit) = self.config().limits.max_tree_provider_requests {
+                    let max_depth = self.config().limits.max_depth;
+                    budget::check_resume(&self.store, child_chat_id, tree_limit, max_depth).await?;
+                }
                 let lease = self.admit_resume_lease(child_chat_id).await?;
                 // Rebind unconditionally and before dispatch: the reaper must
                 // never judge the revived child by the settled original
@@ -1060,30 +1150,26 @@ impl SubagentService {
                     )
                     .await
                     .map_err(session_error)?;
-                // The turn is durably dispatched: from here the lease
-                // belongs to the live child whatever the bookkeeping does.
-                lease.keep();
                 match sent {
                     AgentSendResult::Turn { turn_id, .. } => {
-                        self.store
-                            .set_subagent_turn(child_chat_id, &turn_id)
-                            .await?;
-                        // Rejoin the active ledger while the gate is still
-                        // held, so the next admission counts this child.
-                        let projected = match self.store.get_task(&turn_id).await? {
-                            Some(task) if task.status == TaskStatus::Queued => "queued",
-                            _ => "running",
-                        };
-                        self.store
-                            .reactivate_subagent_for_parent(
-                                child_chat_id,
-                                projected,
-                                self.now_ms(),
-                                parent_task_id,
-                            )
-                            .await?;
+                        // The turn is durably dispatched: from here the
+                        // lease belongs to the live child whatever the
+                        // bookkeeping does.
+                        lease.keep();
+                        if let Some(task) = self.store.get_task(&turn_id).await? {
+                            self.bind_turn(child_chat_id, &task, parent_task_id).await?;
+                        }
                     }
-                    AgentSendResult::Queued { .. } => {}
+                    // The input queued behind a turn that is already live:
+                    // follow that turn so the row is not left frozen. With
+                    // no live turn there is nothing to fence, so the lease
+                    // is dropped rather than held with no owner.
+                    AgentSendResult::Queued { .. } => {
+                        if let Some(live) = self.live_child_turn(child_chat_id).await? {
+                            lease.keep();
+                            self.bind_turn(child_chat_id, &live, parent_task_id).await?;
+                        }
+                    }
                 }
             }
             Some(status) => {
@@ -1098,6 +1184,29 @@ impl SubagentService {
             }
         }
         self.status(child_chat_id).await
+    }
+
+    /// Point the row at `task` and rejoin the active ledger, while the
+    /// caller still holds `spawn_gate`, so the next admission counts this
+    /// child.
+    async fn bind_turn(
+        &self,
+        child_chat_id: &str,
+        task: &TaskRecord,
+        parent_task_id: Option<&str>,
+    ) -> HostResult<()> {
+        self.store
+            .set_subagent_turn(child_chat_id, &task.task_id)
+            .await?;
+        let projected = if task.status == TaskStatus::Queued {
+            "queued"
+        } else {
+            "running"
+        };
+        self.store
+            .reactivate_subagent_for_parent(child_chat_id, projected, self.now_ms(), parent_task_id)
+            .await?;
+        Ok(())
     }
 
     /// The active-roster caps `spawn` enforces, against DURABLE state.
@@ -1552,11 +1661,21 @@ impl SubagentService {
                 Err(_) => 0,
             }
         };
+        let role_digest = self
+            .store
+            .get_chat(&row.child_chat_id)
+            .await?
+            .and_then(|chat| {
+                chat.metadata["agentkit.subagent"]["roleDigest"]
+                    .as_str()
+                    .map(str::to_owned)
+            });
         Ok(SubagentView {
             child_chat_id: row.child_chat_id.clone(),
             parent_chat_id: row.parent_chat_id.clone(),
             parent_task_id: row.parent_task_id.clone(),
             role: row.role.clone(),
+            role_digest,
             depth: row.depth,
             prompt: row.prompt.clone(),
             model: row.model.clone(),
@@ -1599,7 +1718,7 @@ impl SubagentService {
         self.store
             .get_subagent(child_chat_id)
             .await?
-            .ok_or_else(|| HostError::Execution(format!("subagent_not_found: {child_chat_id}")))
+            .ok_or_else(|| HostError::NotFound(format!("subagent_not_found: {child_chat_id}")))
     }
 }
 

@@ -197,6 +197,7 @@ pub fn host(error: agentkit_host::HostError) -> Error {
         H::Execution(sentinel) if sentinel == ADVISOR_NOT_CONFIGURED => {
             return stable("advisor_not_configured", sentinel, None);
         }
+        H::NotFound(message) => return stable("not_found", message, None),
         H::Failure(_) => "failure",
         H::UnknownKind(_) => "unknown_kind",
         H::NoExecutorForKind(_) => "no_executor_for_kind",
@@ -325,6 +326,11 @@ mod tests {
             ADVISOR_NOT_CONFIGURED.into(),
         )));
         assert_eq!(mapped["code"], "advisor_not_configured");
+        let mapped = payload(host(agentkit_host::HostError::NotFound(
+            "subagent_not_found: c1".into(),
+        )));
+        assert_eq!(mapped["code"], "not_found");
+        assert_eq!(mapped["message"], "subagent_not_found: c1");
     }
 
     #[test]

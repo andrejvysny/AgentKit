@@ -14,7 +14,7 @@ pub(crate) const APPLICATION_ID: i64 = 0x414b5253;
 /// version 10 adds the durable subagent registry (the host's spawn and
 /// orphan-reaper flows project child-task state onto these rows) and the
 /// advisor findings ledger the explicit/watchdog advice sources append to.
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 const VERSION: i64 = SCHEMA_VERSION;
 
 /// Exclusive-ownership locks for one database file: the lock beside the
@@ -160,6 +160,9 @@ pub(crate) fn open(path: &Path) -> Result<(Connection, Option<Vec<File>>)> {
         if version < 11 {
             migrate_advisor_reviews(&mut connection)?;
         }
+        if version < 12 {
+            migrate_task_indexes(&mut connection)?;
+        }
     }
     if path != Path::new(":memory:") {
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -255,6 +258,9 @@ fn schema_sql(version: i64) -> String {
     }
     if version >= 11 {
         sql.push_str(REVIEWS_SCHEMA);
+    }
+    if version >= 12 {
+        sql.push_str(TASK_INDEXES_SCHEMA);
     }
     sql
 }
@@ -479,6 +485,23 @@ fn migrate_advisor_reviews(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(REVIEWS_SCHEMA)?;
     transaction.pragma_update(None, "user_version", 11)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Task lookup indexes, additive at schema version 12. `parentTaskId` lives
+/// only inside the record JSON, so the children index is an expression
+/// index; it is partial because most tasks have no parent. Queries must use
+/// the identical expression for SQLite to pick it.
+const TASK_INDEXES_SCHEMA: &str = r#"
+CREATE INDEX tasks_status ON tasks(status);
+CREATE INDEX tasks_parent ON tasks(json_extract(record, '$.parentTaskId')) WHERE json_extract(record, '$.parentTaskId') IS NOT NULL;
+"#;
+
+fn migrate_task_indexes(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(TASK_INDEXES_SCHEMA)?;
+    transaction.pragma_update(None, "user_version", 12)?;
     transaction.commit()?;
     Ok(())
 }

@@ -1363,6 +1363,7 @@ function buildPorts(
           "approvalGeneration",
           "status",
           "result",
+          "resolution",
         ] as const) {
           copy(source, out, key);
         }

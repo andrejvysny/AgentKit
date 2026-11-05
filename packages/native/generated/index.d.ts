@@ -218,6 +218,8 @@ export declare class SessionService {
    * bridge begins Closing.
    */
   stopMcpServer(): Promise<void>
+  listUncertainExecutions(sessionId: string): Promise<string>
+  resolveUncertainExecution(inputJson: string): Promise<string>
   /**
    * Register a JS-executed tool. `definitionJson` is the portable tool
    * definition: `{name, version?, effect?, capability?, description?,
@@ -243,7 +245,9 @@ export declare class SessionService {
    * otherwise), role? ("implementer"|"reviewer"|"supervisor"),
    * planToolNames? (default ["submit_plan"]), identity? (default the
    * root; part of the standing-approval key envelope), coordinationDir?
-   * (default the per-uid shared lock dir), coordinationWaitMs?}`.
+   * (default the per-uid shared lock dir), coordinationWaitMs?,
+   * environment? (string map replacing the host env for spawned commands
+   * and the approval key)}`.
    * One-shot: a second registration is refused; the descriptor set of a
    * service is immutable once the worker can claim turns.
    */
@@ -251,7 +255,8 @@ export declare class SessionService {
   /**
    * Configure the subagent subsystem: `{enabled?, limits?:
    * {maxDepth?, maxConcurrency?, maxPerParent?, awaitPollMs?,
-   * maxAwaitMs?, leaseTtlMs?, cancelOrphans?}, roles?:
+   * maxAwaitMs?, leaseTtlMs?, cancelOrphans?, maxTreeProviderRequests? (positive
+   * integer <= 1_000_000)}, roles?:
    * {<id>: {description?, prompt?, allowedTools?, readOnly?,
    * canSpawn?, model?, providerId?, maxIterations?, capability?}},
    * delegationGuidance?}`. An omitted `roles` table ships the five
@@ -287,7 +292,8 @@ export declare class SessionService {
    */
   registerLspTools(optionsJson: string): Promise<void>
   /**
-   * Configure advisor + watchdog: `{enabled?, model?, watchdogModel?,
+   * Configure advisor + watchdog: `{enabled?, model?, providerId?,
+   * watchdogProviderId?, watchdogModel?,
    * maxIterations?, maxToolCallsPerIteration?, toolTimeoutMs?,
    * providerRequests?, overallTimeoutMs?, maxFindings?,
    * maxReviewConcurrency?, cooldownMs?, reviewsPerWindow?, windowMs?,
@@ -311,6 +317,11 @@ export declare class SessionService {
   send(sessionId: string, inputJson: string): Promise<string>
   followUp(sessionId: string, inputJson: string): Promise<string>
   steer(sessionId: string, inputJson: string): Promise<string>
+  /**
+   * Steer a LIVE turn only; an idle session answers `chat_idle` instead
+   * of starting a turn.
+   */
+  steerLive(sessionId: string, inputJson: string): Promise<string>
   getState(sessionId: string): Promise<string>
   getExecution(sessionId: string): Promise<string | null>
   listTurns(sessionId: string): Promise<string>

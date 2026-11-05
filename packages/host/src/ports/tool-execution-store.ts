@@ -13,13 +13,25 @@ export interface ToolExecutionRecord {
   attemptId: string;
   approvalRequestId?: string;
   approvalGeneration?: string;
-  status: "admitted" | "completed";
+  /** `resolved`: an operator closed an uncertain receipt without a result. */
+  status: "admitted" | "completed" | "resolved";
   result?: AiToolResult<unknown>;
+  /** Audit of an explicit operator resolution; never written by a run. */
+  resolution?: ToolExecutionResolution;
 }
+
+export interface ToolExecutionResolution {
+  outcome: "completed" | "not_started" | "acknowledged";
+  note?: string;
+  resolvedAt: number;
+  resolvedBy?: string;
+}
+
+const RESOLUTION_OUTCOMES = ["completed", "not_started", "acknowledged"];
 
 export type ToolExecutionAdmission = Omit<
   ToolExecutionRecord,
-  "status" | "result"
+  "status" | "result" | "resolution"
 >;
 
 /** Receipts are separate from conversation history and process quarantine. */
@@ -72,9 +84,34 @@ export function readToolExecutionRecord(
       (typeof value[key] !== "string" || value[key] === "")
     )
       return fail();
-  if (value.status !== "admitted" && value.status !== "completed")
+  if (
+    value.status !== "admitted" &&
+    value.status !== "completed" &&
+    value.status !== "resolved"
+  )
     return fail();
   if (value.status === "completed" && !isAiToolResult(value.result))
+    return fail();
+  if (value.resolution !== undefined) {
+    const resolution = value.resolution;
+    if (
+      !object(resolution) ||
+      typeof resolution.outcome !== "string" ||
+      !RESOLUTION_OUTCOMES.includes(resolution.outcome) ||
+      typeof resolution.resolvedAt !== "number" ||
+      (resolution.note !== undefined && typeof resolution.note !== "string") ||
+      (resolution.resolvedBy !== undefined &&
+        typeof resolution.resolvedBy !== "string")
+    )
+      return fail();
+  }
+  // A resolved receipt carries a non-completed resolution and no result.
+  if (
+    value.status === "resolved" &&
+    (value.result !== undefined ||
+      !object(value.resolution) ||
+      value.resolution.outcome === "completed")
+  )
     return fail();
   if (
     expected.executionId !== undefined &&

@@ -739,6 +739,51 @@ interface EndAttemptInput {
 export function endRunProvider(callId: string): boolean;
 
 // @public
+export interface ExecutionReceiptJson {
+    // (undocumented)
+    approvalGeneration?: string;
+    // (undocumented)
+    approvalRequestId?: string;
+    // (undocumented)
+    argsSha256: string;
+    // (undocumented)
+    attemptId: string;
+    // (undocumented)
+    chatId: string;
+    // (undocumented)
+    contextSha256: string;
+    // (undocumented)
+    executionId: string;
+    // (undocumented)
+    resolution?: ExecutionResolutionJson;
+    // (undocumented)
+    result?: Record<string, unknown>;
+    // (undocumented)
+    runId: string;
+    // (undocumented)
+    status: "admitted" | "completed" | "resolved";
+    // (undocumented)
+    toolCallId: string;
+    // (undocumented)
+    toolName: string;
+}
+
+// @public (undocumented)
+export interface ExecutionResolutionJson {
+    // (undocumented)
+    note?: string;
+    // (undocumented)
+    outcome: ExecutionResolutionOutcome;
+    // (undocumented)
+    resolvedAt: number;
+    // (undocumented)
+    resolvedBy?: string;
+}
+
+// @public
+export type ExecutionResolutionOutcome = "completed" | "not_started" | "acknowledged";
+
+// @public
 interface FencedWriteOptions {
     leaseToken?: string;
 }
@@ -955,6 +1000,7 @@ export interface NativeAdvisorConfig {
     model?: string | null;
     // (undocumented)
     overallTimeoutMs?: number | null;
+    providerId?: string | null;
     // (undocumented)
     providerRequests?: number | null;
     reviewsPerWindow?: number;
@@ -965,6 +1011,7 @@ export interface NativeAdvisorConfig {
     triggerRepeatedErrorCode?: number;
     triggerTurnFailures?: number;
     watchdogModel?: string | null;
+    watchdogProviderId?: string | null;
     // (undocumented)
     windowMs?: number;
 }
@@ -1078,9 +1125,11 @@ export interface NativeCodingToolsOptions {
     configuredMode?: "read_only" | "ask" | "auto_edit" | "full_auto" | "plan";
     coordinationDir?: string;
     coordinationWaitMs?: number;
+    environment?: Readonly<Record<string, string>>;
     identity?: string;
     network?: boolean;
     planToolNames?: readonly string[];
+    requireSessionWorkspace?: boolean;
     role?: "implementer" | "reviewer" | "supervisor";
     sandbox?: "required" | "off";
     testCommands?: readonly string[];
@@ -1192,6 +1241,7 @@ export interface NativeLspServerCommand {
 export interface NativeLspToolsOptions {
     // (undocumented)
     config?: NativeLspConfig;
+    requireSessionWorkspace?: boolean;
     workspaceRoot: string;
 }
 
@@ -1374,6 +1424,7 @@ export const NativeRunHandle: {
 
 // @public
 export interface NativeServiceOptions {
+    additionalProviders?: ReadonlyArray<NativeProviderConfig>;
     closeTimeoutMs?: number;
     // (undocumented)
     jsToolAuthority?: {
@@ -1452,11 +1503,13 @@ export class NativeSessionService extends NativeSessionManagement {
     interrupt(sessionId: string, turnId: string): Promise<void>;
     // (undocumented)
     listTurns(sessionId: string): Promise<unknown[]>;
+    listUncertainExecutions(sessionId: string): Promise<ExecutionReceiptJson[]>;
     get pendingCallbacks(): number;
     registerCodingTools(options: NativeCodingToolsOptions): Promise<void>;
     registerLspTools(options: NativeLspToolsOptions): Promise<void>;
     static registerProviderConnection(baseUrl: string, apiKey?: string | null, options?: NativeProviderConnectionOptions): Promise<string>;
     registerTool(definition: ToolDefinitionJson, run: ToolRunFunction): Promise<void>;
+    resolveUncertainExecution(input: ResolveUncertainExecutionInput): Promise<ExecutionReceiptJson>;
     // (undocumented)
     resume(sessionId: string, turnId: string): Promise<void>;
     static revokeProviderConnection(connectionId: string): Promise<boolean>;
@@ -1468,6 +1521,7 @@ export class NativeSessionService extends NativeSessionManagement {
     startMcpServer(options: NativeMcpServerOptions): Promise<NativeMcpServerInfo>;
     // (undocumented)
     steer(sessionId: string, input: SendInputJson, options?: NativeCallOptions): Promise<SendResultJson>;
+    steerLive(sessionId: string, input: SendInputJson, options?: NativeCallOptions): Promise<SendResultJson>;
     stopHttpServer(): Promise<void>;
     stopMcpServer(): Promise<void>;
     readonly store: NativeStore;
@@ -1559,6 +1613,7 @@ export interface NativeSubagentLimits {
     maxConcurrency?: number;
     maxDepth?: number;
     maxPerParent?: number;
+    maxTreeProviderRequests?: number;
 }
 
 // @public
@@ -1904,6 +1959,21 @@ export function reserveRunProviderRequest(callId: string): Promise<void>;
 // @public (undocumented)
 export function resolveCall(callId: string, payload: string | null, error: string | null): boolean;
 
+// @public (undocumented)
+export interface ResolveUncertainExecutionInput {
+    // (undocumented)
+    executionId: string;
+    // (undocumented)
+    note?: string;
+    // (undocumented)
+    outcome: ExecutionResolutionOutcome;
+    // (undocumented)
+    resolvedBy?: string;
+    result?: unknown;
+    // (undocumented)
+    sessionId: string;
+}
+
 // @public
 type RiskLevel = "low" | "medium" | "high" | "destructive";
 
@@ -2035,9 +2105,13 @@ class SessionService {
     listApprovalGrants(sessionId: string): Promise<string>
     // (undocumented)
     listTurns(sessionId: string): Promise<string>
+    // (undocumented)
+    listUncertainExecutions(sessionId: string): Promise<string>
     registerCodingTools(optionsJson: string): Promise<void>
     registerLspTools(optionsJson: string): Promise<void>
     registerTool(definitionJson: string): Promise<void>
+    // (undocumented)
+    resolveUncertainExecution(inputJson: string): Promise<string>
     // (undocumented)
     resume(sessionId: string, turnId: string): Promise<void>
     // (undocumented)
@@ -2052,6 +2126,7 @@ class SessionService {
     startMcpServer(optionsJson: string): Promise<string>
     // (undocumented)
     steer(sessionId: string, inputJson: string): Promise<string>
+    steerLive(sessionId: string, inputJson: string): Promise<string>
     stopHttpServer(): Promise<void>
     stopMcpServer(): Promise<void>
     subagentConfig(): Promise<string>
@@ -2245,7 +2320,7 @@ export interface ToolDefinitionJson {
 }
 
 // @public (undocumented)
-type ToolExecutionAdmission = Omit<ToolExecutionRecord, "status" | "result">;
+type ToolExecutionAdmission = Omit<ToolExecutionRecord, "status" | "result" | "resolution">;
 
 // @public
 interface ToolExecutionRecord {
@@ -2261,16 +2336,28 @@ interface ToolExecutionRecord {
     contextSha256: string;
     // (undocumented)
     executionId: string;
+    resolution?: ToolExecutionResolution;
     // (undocumented)
     result?: AiToolResult<unknown>;
     // (undocumented)
     runId: string;
-    // (undocumented)
-    status: "admitted" | "completed";
+    status: "admitted" | "completed" | "resolved";
     // (undocumented)
     toolCallId: string;
     // (undocumented)
     toolName: string;
+}
+
+// @public (undocumented)
+interface ToolExecutionResolution {
+    // (undocumented)
+    note?: string;
+    // (undocumented)
+    outcome: "completed" | "not_started" | "acknowledged";
+    // (undocumented)
+    resolvedAt: number;
+    // (undocumented)
+    resolvedBy?: string;
 }
 
 // @public

@@ -167,7 +167,9 @@ export async function findUncertainCalls(
           runUncertain.delete(candidateKey);
       }
       const key = operationKey(call);
-      if (receipt.status === "completed") runUncertain.delete(key);
+      // A resolved receipt was closed by an operator: no longer uncertain.
+      if (receipt.status === "completed" || receipt.status === "resolved")
+        runUncertain.delete(key);
       else runUncertain.set(key, call);
     }
     for (const [key, call] of runUncertain) {

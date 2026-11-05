@@ -2286,7 +2286,7 @@ interface ToolCatalogEntry {
 }
 
 // @public (undocumented)
-type ToolExecutionAdmission = Omit<ToolExecutionRecord, "status" | "result">;
+type ToolExecutionAdmission = Omit<ToolExecutionRecord, "status" | "result" | "resolution">;
 
 // @public
 interface ToolExecutionRecord {
@@ -2302,16 +2302,28 @@ interface ToolExecutionRecord {
     contextSha256: string;
     // (undocumented)
     executionId: string;
+    resolution?: ToolExecutionResolution;
     // (undocumented)
     result?: AiToolResult<unknown>;
     // (undocumented)
     runId: string;
-    // (undocumented)
-    status: "admitted" | "completed";
+    status: "admitted" | "completed" | "resolved";
     // (undocumented)
     toolCallId: string;
     // (undocumented)
     toolName: string;
+}
+
+// @public (undocumented)
+interface ToolExecutionResolution {
+    // (undocumented)
+    note?: string;
+    // (undocumented)
+    outcome: "completed" | "not_started" | "acknowledged";
+    // (undocumented)
+    resolvedAt: number;
+    // (undocumented)
+    resolvedBy?: string;
 }
 
 // @public

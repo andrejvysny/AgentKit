@@ -1125,6 +1125,7 @@ mod tests {
                 sandbox_exec_path: String::new(),
                 coordinator: crate::coordination::create_in_process_workspace_coordinator(None),
                 coordination_wait_ms: 5_000,
+                environment: None,
             }));
             Harness {
                 chat: format!("chat-{}", uuid::Uuid::new_v4().simple()),

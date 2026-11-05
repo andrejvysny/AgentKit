@@ -60,12 +60,15 @@ impl SqliteStore {
         self.call(move |db| {
             let transaction = crate::transaction::atomic(db)?;
             let mut count = 0;
-            for mut task in all::<TaskRecord>(&transaction, "tasks")?
+            let candidates: Vec<TaskRecord> = select(
+                &transaction,
+                "SELECT record FROM tasks WHERE status='queued' \
+                 OR json_extract(record, '$.retryPending')=1 ORDER BY rowid",
+                [],
+            )?;
+            for mut task in candidates
                 .into_iter()
-                .filter(|task| {
-                    (task.status == TaskStatus::Queued || task.retry_pending)
-                        && task.enqueued_at < before
-                })
+                .filter(|task| task.enqueued_at < before)
             {
                 task.status = TaskStatus::Interrupted;
                 save(&transaction, &task)?;

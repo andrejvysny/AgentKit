@@ -26,7 +26,7 @@ mod watchdog;
 pub use config::{AdvisorConfig, FindingCategory, FindingSeverity, ReviewRequest};
 pub use engine::{
     AdvisorEngine, AdvisorEventSink, AdvisorReport, AdvisorToolSource, Finding, ReviewOrigin,
-    StaticToolSource, advisor_run_chat_id, is_advisor_chat_id,
+    ReviewReservation, StaticToolSource, advisor_run_chat_id, is_advisor_chat_id,
 };
 pub use tools::{ADVISOR_TOOL_NAMES, AdvisorContributor, AdvisorTools};
 pub use watchdog::{Watchdog, WatchdogRunHooks, WatchdogSignals, explicit_review};

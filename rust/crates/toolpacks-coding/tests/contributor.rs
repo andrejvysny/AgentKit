@@ -59,6 +59,7 @@ fn test_options() -> CodingToolPackOptions {
         sandbox_exec_path: None,
         coordinator: None,
         coordination_wait_ms: None,
+        environment: None,
         permission: None,
     }
 }
@@ -220,6 +221,7 @@ async fn rejects_bad_configuration() {
     // coordinationWaitMs at or above toolTimeoutMs.
     let options = CodingToolPackOptions {
         coordination_wait_ms: Some(30_000),
+        environment: None,
         ..test_options()
     };
     let error = create_coding_tool_pack(options)

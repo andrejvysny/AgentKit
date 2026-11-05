@@ -304,6 +304,10 @@ enum ReceiptDecision {
     /// Admitted-without-result, or evidence that conflicts with the
     /// declaring call (different run's id reuse excluded from matching).
     Uncertain,
+    /// An operator closed an uncertain receipt without a result
+    /// (`not_started` / `acknowledged`): a clear non-success, never a
+    /// fabricated tool output.
+    Resolved(agentkit_store::ResolutionOutcome),
     /// No receipt ever recorded for this (run, call): the body never
     /// started; honest synthetic failure.
     Missing,
@@ -360,6 +364,12 @@ fn resolve_receipt(
             None => ReceiptDecision::Uncertain,
         };
     }
+    if record.status == agentkit_store::ExecutionReceiptStatus::Resolved {
+        return match record.resolution.as_ref() {
+            Some(resolution) => ReceiptDecision::Resolved(resolution.outcome),
+            None => ReceiptDecision::Uncertain,
+        };
+    }
     ReceiptDecision::Uncertain
 }
 fn reconcile(
@@ -390,6 +400,19 @@ fn reconcile(
     }
     result
 }
+fn resolved_text(outcome: agentkit_store::ResolutionOutcome) -> String {
+    match outcome {
+        agentkit_store::ResolutionOutcome::NotStarted => {
+            "an operator confirmed this tool call never started; no result exists".into()
+        }
+        agentkit_store::ResolutionOutcome::Acknowledged => "an operator acknowledged this tool call without a recorded result; its effect remains unconfirmed".into(),
+        // A completed resolution carries a result and replays through the
+        // Completed branch, never through this non-success text.
+        agentkit_store::ResolutionOutcome::Completed => {
+            "an operator resolved this tool call as completed".into()
+        }
+    }
+}
 fn synthetic_result(
     receipts: &[agentkit_store::ExecutionReceiptRecord],
     owner: Option<&String>,
@@ -403,6 +426,9 @@ fn synthetic_result(
                 .into(),
             Some("tool_effect_uncertain"),
         ),
+        ReceiptDecision::Resolved(outcome) => {
+            (resolved_text(outcome), Some("tool_execution_resolved"))
+        }
         ReceiptDecision::Missing => (
             "missing tool result for persisted tool call; reconciled as synthetic failure".into(),
             Some(agentkit_core::TOOL_RESULT_MISSING_CODE),
@@ -670,6 +696,7 @@ mod tests {
             approval_generation: None,
             status,
             result,
+            resolution: None,
         }
     }
 
@@ -845,6 +872,34 @@ mod tests {
         let tool = messages.iter().rfind(|m| m.role == "tool").unwrap();
         let parsed: Value = serde_json::from_str(tool.content.as_str().unwrap()).unwrap();
         assert_eq!(parsed["data"]["errorCode"], json!("tool_effect_uncertain"));
+    }
+
+    #[test]
+    fn operator_resolved_receipt_reconciles_as_a_non_success() {
+        let args = json!({});
+        let records = vec![assistant("a1", "runA", 1, &[("call-1", "mutate", "{}")])];
+        let mut resolved = receipt(
+            "runA",
+            "call-1",
+            "mutate",
+            &args,
+            ExecutionReceiptStatus::Resolved,
+            None,
+        );
+        resolved.resolution = Some(agentkit_store::ExecutionResolution {
+            outcome: agentkit_store::ResolutionOutcome::NotStarted,
+            note: None,
+            resolved_at: 1,
+            resolved_by: None,
+        });
+        let messages = assemble_with(records, &[resolved], "runA");
+        let tool = messages.iter().rfind(|m| m.role == "tool").unwrap();
+        let parsed: Value = serde_json::from_str(tool.content.as_str().unwrap()).unwrap();
+        assert_eq!(parsed["ok"], json!(false));
+        assert_eq!(
+            parsed["data"]["errorCode"],
+            json!("tool_execution_resolved")
+        );
     }
 
     #[test]

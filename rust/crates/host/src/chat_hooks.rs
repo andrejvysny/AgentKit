@@ -13,6 +13,9 @@ pub struct ChatExecutorOptions {
     pub attachments: Option<Arc<dyn AttachmentResolver>>,
     pub usage: Option<Arc<dyn UsageAuthorizer>>,
     pub provider_factory: Option<Arc<dyn ChatProviderFactory>>,
+    /// Extra providers a durable payload's `providerId` may route to besides
+    /// the executor's default; absent keeps the single-provider binding.
+    pub providers: Option<Arc<crate::ProviderRegistry>>,
     pub verification: Option<Arc<dyn VerificationHook>>,
     pub correction: Option<super::correction::CorrectionConfig>,
     pub tool_contributors: Vec<Arc<dyn ToolContributor>>,
@@ -54,6 +57,7 @@ impl Default for ChatExecutorOptions {
             attachments: None,
             usage: None,
             provider_factory: None,
+            providers: None,
             verification: None,
             correction: None,
             tool_contributors: vec![],
