@@ -34,75 +34,64 @@ async function openStore(): Promise<NativeStore> {
 }
 
 // ---------------------------------------------------------------------------
-// N1: a keyed connection id is derived from the key alone; two stores using
-// the same key must not overwrite each other's baseUrl/apiKey.
+// N1: durable store and routing scopes isolate identical logical keys.
 // ---------------------------------------------------------------------------
 
 nativeTest(
-  "keyed provider connections: cross-store clobbering and base URL swaps are refused",
+  "keyed provider connections isolate stores and mint fresh endpoint identities",
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "agentkit-hardening-keys-"));
     const pathA = join(dir, "a.sqlite");
     const pathB = join(dir, "b.sqlite");
     const storeA = await NativeStore.open(pathA);
     const storeB = await NativeStore.open(pathB);
-    const ids: string[] = [];
-    try {
-      const key = "hardening-shared-key";
-      const first = await NativeSessionService.registerProviderConnection(
-        "https://one.test/v1",
-        "sk-a",
-        { connectionKey: key, storePath: pathA },
+    const ids = new Set<string>();
+    const register = async (
+      storePath: string,
+      endpoint: string,
+      secret: string,
+    ) => {
+      const id = await NativeSessionService.registerProviderConnection(
+        endpoint,
+        secret,
+        {
+          connectionKey: "hardening-shared-key",
+          storePath,
+          accountScope: "trusted-account",
+        },
       );
-      ids.push(first);
-      // Another store, same key, different credentials -> conflict.
-      expect(
-        await codeOf(() =>
-          NativeSessionService.registerProviderConnection(
-            "https://one.test/v1",
-            "sk-other",
-            { connectionKey: key, storePath: pathB },
-          ),
-        ),
-      ).toBe("connection_key_conflict");
-      expect(
-        await codeOf(() =>
-          NativeSessionService.registerProviderConnection(
-            "https://elsewhere.test/v1",
-            "sk-a",
-            { connectionKey: key, storePath: pathB },
-          ),
-        ),
-      ).toBe("connection_key_conflict");
-      // Same store, new base URL -> must revoke first.
-      expect(
-        await codeOf(() =>
-          NativeSessionService.registerProviderConnection(
-            "https://two.test/v1",
-            "sk-a",
-            { connectionKey: key, storePath: pathA },
-          ),
-        ),
-      ).toBe("connection_base_url_changed");
-      // Same store, same base URL, rotated key is a legitimate rotation.
-      expect(
-        await NativeSessionService.registerProviderConnection(
-          "https://one.test/v1",
-          "sk-rotated",
-          { connectionKey: key, storePath: pathA },
-        ),
-      ).toBe(first);
-      // After a revoke the base URL may change.
-      expect(await NativeSessionService.revokeProviderConnection(first)).toBe(
+      ids.add(id);
+      return id;
+    };
+    try {
+      const first = await register(pathA, "https://one.test/v1", "sk-a");
+      const independent = await register(
+        pathB,
+        "https://one.test/v1",
+        "sk-other",
+      );
+      expect(independent).not.toBe(first);
+      expect(await register(pathA, "https://one.test/v1", "sk-rotated")).toBe(
+        first,
+      );
+      const changed = await register(
+        pathA,
+        "https://two.test/v1",
+        "sk-rotated",
+      );
+      expect(changed).not.toBe(first);
+      expect(await register(pathB, "https://one.test/v1", "sk-other")).toBe(
+        independent,
+      );
+      expect(await NativeSessionService.revokeProviderConnection(changed)).toBe(
         true,
       );
-      expect(
-        await NativeSessionService.registerProviderConnection(
-          "https://two.test/v1",
-          "sk-a",
-          { connectionKey: key, storePath: pathA },
-        ),
-      ).toBe(first);
+      expect(await register(pathA, "https://two.test/v1", "sk-restored")).toBe(
+        changed,
+      );
+      expect(await register(pathB, "https://one.test/v1", "sk-other")).toBe(
+        independent,
+      );
     } finally {
       for (const id of ids)
         await NativeSessionService.revokeProviderConnection(id);

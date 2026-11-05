@@ -108,6 +108,11 @@ interface TurnOptions {
   connectionKey?: string;
   providerId?: string;
   revokeAndReRegister?: boolean;
+  restoreContinuity?: {
+    expectedGeneration: number;
+    previousGeneration: number;
+    confirmUnchangedScope: true;
+  };
   foreignConnection?: boolean;
 }
 
@@ -186,7 +191,7 @@ nativeTest(
 );
 
 nativeTest(
-  "changed-but-invalid credentials are rejected as an auth error, and the correct credential still continues",
+  "credential rotation blocks continuation before transport until explicitly restored",
   async () => {
     const provider = await startFixtureProvider("sk-continuity");
     const dir = storeDir();
@@ -204,10 +209,7 @@ nativeTest(
       });
       expect(first.status).toBe("completed");
       expect(provider.requests()).toBe(1);
-      // Same logical connection, WRONG credential: registration is not a
-      // probe, so the rejection is the provider's 401 — surfaced as the
-      // stable `authentication_required` code, with zero wire requests
-      // answered.
+      // Rotation cannot silently authorize history under a new credential.
       const wrong = await runTurn({
         storePath,
         baseUrl: provider.baseUrl,
@@ -217,14 +219,14 @@ nativeTest(
         connectionKey,
       });
       expect(wrong.status).toBe("failed");
-      expect(wrong.error ?? "").toInclude("authentication_required");
+      expect(wrong.error ?? "").toInclude(
+        "provider_continuation_scope_mismatch",
+      );
       expect(provider.lines().some((line) => line.startsWith("DENIED "))).toBe(
-        true,
+        false,
       );
       expect(provider.requests()).toBe(1);
-      // The credential restoration rule: presenting the authorized
-      // credential again resumes the SAME continuation — no state was
-      // lost to the failed registration.
+      // Explicit confirmation transfers only settled compatible history.
       const restored = await runTurn({
         storePath,
         baseUrl: provider.baseUrl,
@@ -232,10 +234,15 @@ nativeTest(
         phase: 3,
         chatId,
         connectionKey,
+        restoreContinuity: {
+          expectedGeneration: 3,
+          previousGeneration: 1,
+          confirmUnchangedScope: true,
+        },
       });
       expect(restored.status).toBe("completed");
       expect(provider.requests()).toBe(2);
-      expect(provider.lines().at(-1)).toInclude("REQUEST 3 enc=true");
+      expect(provider.lines().at(-1)).toInclude("REQUEST 2 enc=true");
     } finally {
       provider.kill();
     }
@@ -244,7 +251,7 @@ nativeTest(
 );
 
 nativeTest(
-  "revoking then re-registering the same credentials restores the connection and its continuation",
+  "revocation requires explicit settled-state restoration after re-registration",
   async () => {
     const provider = await startFixtureProvider("sk-continuity");
     const dir = storeDir();
@@ -269,10 +276,13 @@ nativeTest(
         chatId,
         connectionKey,
         revokeAndReRegister: true,
+        restoreContinuity: {
+          expectedGeneration: 2,
+          previousGeneration: 1,
+          confirmUnchangedScope: true,
+        },
       });
-      // Revocation stops HTTP for that connection; the durable binding of
-      // the continuation to the LOGICAL identity survives, so an explicit
-      // re-registration of the same authorized credentials restores it.
+      // Explicit confirmation restores history while the old generation stays fenced.
       expect(again.status).toBe("completed");
       expect(again.connectionId).toBe(first.connectionId);
       expect(provider.requests()).toBe(2);

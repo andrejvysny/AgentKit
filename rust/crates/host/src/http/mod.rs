@@ -25,6 +25,7 @@ pub struct DesktopBackend {
     actor: Actor,
     token: String,
     default_model: String,
+    session_profile: Option<String>,
     pinned_provider_id: Option<String>,
     allow_insecure_http: bool,
     write_gate: Mutex<()>,
@@ -60,6 +61,7 @@ impl DesktopBackend {
             actor,
             token: token.into(),
             default_model: default_model.into(),
+            session_profile: None,
             write_gate: Mutex::new(()),
             pinned_provider_id: None,
             allow_insecure_http: false,
@@ -154,6 +156,19 @@ impl DesktopBackend {
         self.secrets = Some(secrets);
         self
     }
+    /// Create REST chats as validated agent sessions with one durable insert.
+    pub fn with_session_profile(mut self, profile_id: &str) -> Result<Self, Problem> {
+        if profile_id.trim().is_empty() {
+            return Err(Problem::new(
+                400,
+                "invalid_request",
+                "Session profile must not be empty.",
+            ));
+        }
+        self.session_profile = Some(profile_id.to_owned());
+        Ok(self)
+    }
+
     pub fn with_pinned_provider(mut self, id: &str) -> Self {
         self.pinned_provider_id = Some(id.into());
         self

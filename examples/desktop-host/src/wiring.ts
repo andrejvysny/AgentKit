@@ -35,13 +35,10 @@
  *  7. The loopback façade — `app.fetch`. `main.ts` (and the smoke test)
  *     mount it with `Bun.serve`; it adds what the native listeners do not
  *     carry, nothing more: the `/mcp` mount, CORS for the two Vite origins,
- *     the three JS-served routes documented under "TS SLICES KEPT", and
- *     chat-as-session creation (`POST /v1/chats` goes through
- *     `service.createSession` so every chat this host executes carries the
- *     durable session permission state; a descriptor-less chat would also
- *     run tools — the guard falls back to the configured mode for absence
- *     since 2026-11-01 — but a host with JS write tools should be
- *     governed, not merely permitted).
+ *     the three JS-served routes documented under "TS SLICES KEPT".
+ *     Chat creation is proxied unchanged: the native server's
+ *     `sessionProfileId: "desktop-host"` validates and creates each chat as
+ *     an agent session in one durable insertion.
  *     It injects the private bearer token toward the Rust server, so the
  *     external API keeps its token-free loopback contract while the Rust
  *     backend still enforces its own auth floor.
@@ -429,12 +426,6 @@ function json(body: unknown, corsOrigin: string | null): Response {
   return new Response(JSON.stringify(body), { status: 200, headers });
 }
 
-function withCors(headers: Headers, corsOrigin: string | null): Headers {
-  const copy = new Headers(headers);
-  if (corsOrigin !== null) copy.set("access-control-allow-origin", corsOrigin);
-  return copy;
-}
-
 /** The transport's problem+json envelope, kept for the façade's own 404s. */
 function problem(
   status: number,
@@ -566,6 +557,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     basePath: BASE_PATH,
     bearerToken,
     defaultModel: provider.defaultModel,
+    sessionProfileId: "desktop-host",
     // The same two origins the retired TypeScript transport was given:
     // the Rust engine enforces CORS itself for everything it serves, and
     // the façade adds the decoration for its own mount-path routes.
@@ -645,74 +637,6 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<App> {
     }
     if (request.method === "GET" && rest === "/v1/providers") {
       return json(providers, corsOrigin);
-    }
-    if (request.method === "POST" && rest === "/v1/chats") {
-      // A chat created through this host is created as an AGENT SESSION
-      // (`createSession` mints the `chat_` id and the descriptor metadata
-      // in one store write). The binding's tool authority reads the
-      // session's durable execution state to decide a call; a bare
-      // backend-created chat has no descriptor, and that read fails
-      // CLOSED — every JS tool would refuse with a "guard error". Creating
-      // through the session service is the desktop contract: on this host
-      // every chat is a session. The ChatDto the client gets back is the
-      // backend's own projection of the stored row, so the wire shape is
-      // unchanged.
-      //
-      // The wire shape itself is adjudicated by the NATIVE server, not by
-      // a second parser here: the raw bytes are forwarded to the private
-      // backend's own `POST /v1/chats`, so a malformed body, an array body,
-      // a mistyped `title`, or a body over `max_body_bytes` is refused with
-      // the Rust engine's own 400/413 problem+json — mirrored to the client
-      // verbatim — exactly as it is when the backend is called directly.
-      // A request the Rust parser accepts creates a throwaway bare row,
-      // which is retired immediately (the desktop contract above forbids
-      // serving it); the session write then runs against the SAME object
-      // the Rust parser validated.
-      const raw = await request.arrayBuffer();
-      const verdict = await fetch(`${http.baseUrl}/v1/chats`, {
-        method: "POST",
-        headers: {
-          "content-type":
-            request.headers.get("content-type") ?? "application/json",
-          authorization: `Bearer ${bearerToken}`,
-        },
-        body: raw,
-        redirect: "manual",
-      });
-      if (verdict.status !== 201)
-        return new Response(await verdict.arrayBuffer(), {
-          status: verdict.status,
-          headers: withCors(verdict.headers, corsOrigin),
-        });
-      // Accepted: this is the backend's own projection of what the Rust
-      // parser read — the one authoritative parse of the body.
-      const accepted = (await verdict.json()) as Record<string, unknown>;
-      if (typeof accepted.id === "string" && accepted.id !== "")
-        await fetch(`${http.baseUrl}/v1/chats/${accepted.id}`, {
-          method: "DELETE",
-          headers: { authorization: `Bearer ${bearerToken}` },
-        });
-      const created = await service.createSession({
-        profileId: "desktop-host",
-        ...(typeof accepted.title === "string"
-          ? { title: accepted.title }
-          : {}),
-        ...(accepted.metadata !== null &&
-        typeof accepted.metadata === "object" &&
-        !Array.isArray(accepted.metadata)
-          ? { metadata: accepted.metadata as Record<string, unknown> }
-          : {}),
-      });
-      const chatId = created.sessionId;
-      if (typeof chatId !== "string" || chatId === "")
-        throw new Error("createSession returned no sessionId");
-      const chat = await fetch(`${http.baseUrl}/v1/chats/${chatId}`, {
-        headers: { authorization: `Bearer ${bearerToken}` },
-      });
-      return new Response(await chat.arrayBuffer(), {
-        status: 201,
-        headers: withCors(chat.headers, corsOrigin),
-      });
     }
 
     if (rest.startsWith("/v1/")) {

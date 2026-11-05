@@ -1012,12 +1012,11 @@ impl SessionService {
         outcome
     }
 
-    /// True when a `close()` completed without establishing that owned
-    /// execution had drained (the worker deadline expired). Durable state
-    /// stays authoritative; this flag records what close could not prove.
-    /// It describes WORKER DRAIN only — it never claims external JS effects
-    /// stopped; the JS wrapper's `pendingCallbacks` is the observability
-    /// for dispatched, unsettled callbacks.
+    /// True when shutdown could not establish worker drain or durable
+    /// completion of owned native command receipts. A deadline or receipt
+    /// persistence failure remains uncertain; durable state stays authoritative.
+    /// This never proves external JavaScript callback effects stopped; the
+    /// wrapper's `pendingCallbacks` reports dispatched, unsettled callbacks.
     #[napi(getter, catch_unwind)]
     pub fn close_uncertain(&self) -> bool {
         self.uncertain.load(Ordering::SeqCst)
@@ -1052,6 +1051,14 @@ async fn drain_core(mut core: Core, close_timeout: Duration, uncertain: &AtomicB
     // log decides - teardown never claims them.
     core.lane.mark_disposed();
     core.lane.dispose().await;
+    if let Err(error) =
+        agentkit_host::drain_native_command_completions(core.host.store(), close_timeout).await
+    {
+        uncertain.store(true, Ordering::SeqCst);
+        if first_error.is_none() {
+            first_error = Some(errors::core(error));
+        }
+    }
     // Language servers get a clean shutdown (exit + kill fallback)
     // once no new dispatch can start; a dead process's leftovers
     // die with the process, not with us.

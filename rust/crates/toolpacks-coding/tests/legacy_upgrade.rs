@@ -149,6 +149,7 @@ fn downgrade(path: &Path, version: i64) {
          DROP TABLE IF EXISTS tool_executions;
          DROP TABLE IF EXISTS agent_inputs;
          DROP TABLE IF EXISTS provider_connections;
+         DROP TABLE IF EXISTS provider_namespace;
          DROP TABLE IF EXISTS prompt_templates;
          DROP TABLE IF EXISTS connector_connections;
          DROP TABLE IF EXISTS managed_skills;

@@ -237,3 +237,54 @@ async fn continuation_rejects_extra_fields_and_detects_missing_previously_saved_
         matches!(reopened.get_continuation("run").await,Err(StoreError::InvalidInput(message)) if message=="provider_continuation_state_missing")
     );
 }
+
+#[tokio::test]
+async fn credential_rotation_rejects_admitted_scope_and_late_continuation_save() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("store.db");
+    let store = SqliteStore::open(&path, 4).unwrap();
+    let connection =
+        register_scoped_provider_connection(&path, "main", Some("key"), "url", "account", 1000)
+            .unwrap();
+    store
+        .create_chat("chat", None, json!({}), 1000)
+        .await
+        .unwrap();
+    store
+        .submit_turn(
+            task("run", "chat"),
+            vec![message("anchor", "chat", Some("run"))],
+        )
+        .await
+        .unwrap();
+    let lease = store.claim(claim(1000)).await.unwrap().unwrap().lease;
+    let scope = json!({"providerId":"p","protocol":"responses","connectionId":connection.0,"generation":1,"chatId":"chat","branchId":"b","model":"m"});
+    store
+        .bind_run("run", "chat", scope.clone(), lease.fence(), 1001)
+        .await
+        .unwrap();
+    let record = ProviderContinuationRecord {
+        run_id: "run".into(),
+        anchor_message_id: "anchor".into(),
+        state: json!({"version":1,"scope":scope,"messageCount":1,"messageDigest":"a".repeat(64),"inputItems":[]}),
+    };
+    let rotated =
+        register_scoped_provider_connection(&path, "main", Some("new"), "url", "account", 1002)
+            .unwrap();
+    assert_eq!(rotated.1, 2);
+    assert!(
+        matches!(store.put_continuation(record,lease.fence(),1003).await,
+        Err(StoreError::InvalidInput(code)) if code=="provider_continuation_scope_mismatch")
+    );
+    assert!(
+        store
+            .bind_run("run", "chat", scope, lease.fence(), 1003)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        store.get_run_scope("run").await.unwrap().unwrap()["generation"],
+        1
+    );
+    assert!(store.get_continuation("run").await.unwrap().is_none());
+}

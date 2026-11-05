@@ -1,5 +1,9 @@
 # M3 — First Native TypeScript Binding: Design and Backlog
 
+Qualification now uses macOS-only [local gates](../../DEVELOPING.md#local-gates-no-hosted-ci).
+Hosted GitHub Actions were removed. Historical runner rows below are not current
+execution evidence or enabled publication routes.
+
 The historical M3 record below is superseded for current migration status by
 [the 30 October checkpoint](parity.md#migration-checkpoint-30-october-2026).
 The private binding now has lazy loading, twelve additional session-management
@@ -208,14 +212,11 @@ the binding exposes handles, promises, and async iteration — nothing else.
   one lockstep version across wrapper + platforms + umbrella pins + the
   committed loader's embedded checks (`scripts/release/native-lockstep.mjs`,
   pinned by `packages/native/tests/distribution.test.ts`);
-  `.github/workflows/native-release.yml` builds each triple on its own
-  runner (per-triple cargo release build + container-identity check +
-  isolated offline install + acceptance lifecycle where the runner can
-  execute the triple, structural-only and labeled otherwise — M2.1 A4), and
-  the gated `publish` job (environment reviewers, dry-run default, npm
-  provenance, verified digests only — no rebuild) publishes the seven npm
-  packages. The first publication awaits the maintainer steps in
-  `DEVELOPING.md` "Publishing the npm native stack".
+  local `build-native-release-artifact.mjs` and `check-native-artifact.mjs`
+  retain per-triple release builds, container-identity checks, isolated
+  installs and executable lifecycle evidence. A cross-build alone remains
+  structural evidence. Hosted publication is disabled; no publication or
+  release readiness is accepted by these helpers.
 - Browser-safe import: the package's root export must not load the native
   binary at import time (lazy load on first API call) so bundlers keep
   working; the browser story stays the existing transport clients.
@@ -237,7 +238,7 @@ listed unverified and never counted as passed (M2.1 A4 rule):
 | macos-latest · Node 24 + Bun 1.4.0 | same matrix job; macOS links with `rustc-link-arg=-Wl,-undefined,dynamic_lookup` only — the `-tests` key variant was REJECTED by Cargo (no supporting test target) and removed; harness binaries link via the in-crate `#[cfg(test)]` napi stubs | runner-recorded on push |
 | windows-latest | `native-windows` job: workspace clippy/test minus the Unix-only coding pack (`agentkit-toolpacks-coding`, plus the `agentkit-rust` facade that re-exports it) — sandboxed command execution is built on Unix process APIs with no Windows backend, a named roadmap-M4 gap. The binding crate DOES depend on `agentkit-toolpacks-coding` (the coding lane compiles for Windows behind cfg-gated process APIs; runs refuse fail-closed via the runner's platform refusal), so the addon builds and the binding suites run here | runner-recorded on push |
 | Node 20 | — | **untested**, named gap |
-| aarch64 targets, release-profile prebuilds, install-never-cargo | `.github/workflows/native-release.yml` builds all five triples (release profile, per-row `check-native-artifact` gate, packed platform tarball), consuming the same triple table as the packages (`rust/scripts/native-platform-targets.mjs`, pinned by `packages/native/tests/distribution.test.ts`); install never builds Rust - a missing prebuilt fails loudly at first use | lane complete; **first publish pending maintainer approval** |
+| aarch64 targets, release-profile prebuilds, install-never-cargo | Local artifact helpers consume `rust/scripts/native-platform-targets.mjs`, validate binary identity, and install retained tarballs without Cargo. Current qualification scope is macOS; other platforms are deferred. Missing prebuilt addons fail loudly at first use. | local candidate gates; **publication disabled** |
 
 ## The first vertical slice (acceptance scenario)
 

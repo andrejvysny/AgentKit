@@ -20,6 +20,7 @@
  *   connectionKey?: string;       // durable logical connection identity
  *   providerId?: string;          // default "continuity"
  *   revokeAndReRegister?: boolean; // revoke then re-register before the turn
+ *   restoreContinuity?: { expectedGeneration: number; previousGeneration: number; confirmUnchangedScope: true };
  * }
  * ```
  * Prints `RESULT <json>` with `{ connectionId, turnId, status, error }`
@@ -37,6 +38,11 @@ interface Options {
   connectionKey?: string;
   providerId?: string;
   revokeAndReRegister?: boolean;
+  restoreContinuity?: {
+    expectedGeneration: number;
+    previousGeneration: number;
+    confirmUnchangedScope: true;
+  };
   /** Register a second, keyless (process-local) connection instead of the
    * keyed one — the scope-check pin: continuations bound to a durable
    * logical identity must still be REJECTED by any other connection. */
@@ -49,32 +55,29 @@ async function main(): Promise<number> {
   const registration =
     options.connectionKey === undefined || options.foreignConnection === true
       ? undefined
-      : { connectionKey: options.connectionKey, storePath: options.storePath };
+      : {
+          connectionKey: options.connectionKey,
+          storePath: options.storePath,
+          accountScope: "continuity-account",
+        };
   const store = await NativeStore.open(options.storePath);
-  const register = async (): Promise<string> => {
-    const raw = NativeSessionService.registerProviderConnection as (
-      baseUrl: string,
-      apiKey: string | null,
-      options?: unknown,
-    ) => Promise<string>;
-    try {
-      return await raw(options.baseUrl, options.apiKey, registration);
-    } catch (error) {
-      // Pre-fix bindings do not know the third argument; fall back to the
-      // legacy two-argument registration so the reproduction witnesses the
-      // durable-identity defect, not a signature mismatch.
-      if (registration === undefined) throw error;
-      return await NativeSessionService.registerProviderConnection(
-        options.baseUrl,
-        options.apiKey,
-      );
-    }
-  };
-  let connectionId = await register();
+  const register = async (
+    restoreContinuity?: Options["restoreContinuity"],
+  ): Promise<string> =>
+    NativeSessionService.registerProviderConnection(
+      options.baseUrl,
+      options.apiKey,
+      registration === undefined
+        ? undefined
+        : { ...registration, restoreContinuity },
+    );
+  let connectionId = await register(
+    options.revokeAndReRegister ? undefined : options.restoreContinuity,
+  );
   if (options.revokeAndReRegister === true) {
     if (!(await NativeSessionService.revokeProviderConnection(connectionId)))
       return 2;
-    connectionId = await register();
+    connectionId = await register(options.restoreContinuity);
   }
   let service: NativeSessionService | undefined;
   try {

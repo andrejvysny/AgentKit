@@ -218,6 +218,7 @@ impl ChatSession {
             .await?;
         options.max_tool_iterations = iterations;
         let mut handle = agentkit_core::run_chat(options, self.provider.clone(), registry);
+        let mut core_run = crate::governance::OwnedCoreRun::new(&self.context.store, handle.result);
         let mut content = String::new();
         let mut calls = HashSet::new();
         let mut failure = None;
@@ -254,8 +255,8 @@ impl ChatSession {
                 _ => {}
             }
         }
-        let result = handle
-            .result
+        let result = core_run
+            .result()
             .await
             .map_err(|error| HostError::Execution(error.to_string()))?;
         if let Some(state) = result.continuation {

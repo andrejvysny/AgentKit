@@ -30,8 +30,8 @@
  *                                for a clean install — the packed
  *                                `@agentkit/host` import regression that
  *                                external review reproduced. Must run under
- *                                Node (it spawns `process.execPath` for the
- *                                compiler).
+ *                                Node or Bun (it spawns `process.execPath`
+ *                                for the compiler).
  *
  * The public export contains durable task/message projections and input
  * records, not private tool receipt rows. This gate verifies those public

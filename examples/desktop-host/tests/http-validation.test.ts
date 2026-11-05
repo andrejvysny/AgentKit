@@ -126,7 +126,38 @@ describe("examples/desktop-host — façade validation parity with the native se
     }
   });
 
-  it("creates valid chats through the façade and leaves no adjudication rows behind", async () => {
+  it("creates a session through one native request without temporary chat writes", async () => {
+    const { app } = await boot(new MockProviderClient());
+    const original = globalThis.fetch;
+    const mutations: string[] = [];
+    globalThis.fetch = Object.assign(
+      (...args: Parameters<typeof fetch>): ReturnType<typeof fetch> => {
+        const method = args[1]?.method ?? "GET";
+        if (method === "POST" || method === "DELETE") mutations.push(method);
+        return original(...args);
+      },
+      original,
+    );
+    try {
+      const response = await app.fetch(
+        new Request(`http://localhost${app.basePath}/v1/chats`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: "single transaction" }),
+        }),
+      );
+      expect(response.status).toBe(201);
+      expect(mutations).toEqual(["POST"]);
+      const chat = (await response.json()) as {
+        metadata: Record<string, unknown>;
+      };
+      expect(chat.metadata["agentkit.session"]).toBeDefined();
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it("creates valid sessions through the façade without extra rows", async () => {
     const { origin, app } = await boot(new MockProviderClient());
     const valid = await postStatus(
       `${origin}/v1/chats`,
@@ -145,10 +176,8 @@ describe("examples/desktop-host — façade validation parity with the native se
     expect(direct.status).toBe(201);
     const empty = await postStatus(`${origin}/v1/chats`, '{"title":""}');
     expect(empty.status).toBe(201);
-    // Malformed attempts and adjudicated accepts must not leak the throwaway
-    // bare rows the accept path retires: the list shows exactly the chats
-    // somebody asked for (the direct door's chat included — the façade is
-    // not responsible for what the private server was told to create).
+    // Rejected requests never create rows; each valid request creates one
+    // session, including requests through the private native listener.
     for (const refusal of refusals)
       await postStatus(`${origin}/v1/chats`, refusal.body);
     const list = await fetch(`${origin}/v1/chats`);
@@ -163,7 +192,7 @@ describe("examples/desktop-host — façade validation parity with the native se
     );
   });
 
-  it("valid traffic still runs end to end through the adjudicating façade", async () => {
+  it("valid traffic still runs end to end through the native session façade", async () => {
     const provider = new MockProviderClient();
     provider.setScript([
       { steps: [{ kind: "text", content: "adjudicated and running" }] },

@@ -54,6 +54,9 @@
     "lint:fix": "biome check --write .",
     "test:coverage": "bun test --timeout 60000 --coverage",
     "qualify:package": "node scripts/qualify-package.mjs",
+    "qualify:local": "node scripts/qualify-local.mjs",
+    "qualify:cold": "node scripts/qualify-cold-packages.mjs",
+    "check:local-actions": "node scripts/check-local-actions.mjs",
     "check:native-package": "node rust/scripts/check-native-package.mjs",
     "check:api": "node scripts/check-public-api.mjs",
     "check:composition": "node scripts/check-composition-ownership.mjs",
@@ -64,7 +67,7 @@
     "snapshot:release": "node scripts/snapshot-release.mjs",
     "test:coding-agent": "bun test examples/coding-agent",
     "start:coding-agent": "bun run examples/coding-agent/src/main.ts",
-    "build:native": "npx --no-install tsc -p packages/native/tsconfig.build.json",
+    "build:native": "bun run --cwd packages/native build",
     "build:fixture": "cargo build --manifest-path rust/Cargo.toml -p agentkit-host --features http --example http_fixture --locked"
   },
   "devDependencies": {

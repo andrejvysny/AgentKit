@@ -88,12 +88,16 @@ async fn turn_usage(
     store: &agentkit_store::SqliteStore,
     task: &TaskRecord,
 ) -> SessionResult<Value> {
+    let mut last_admission = None;
     let mut requests = 0i64;
     let mut prompt_tokens = 0f64;
     let mut completion_tokens = 0f64;
     let mut total_tokens = 0f64;
     let mut last_prompt_tokens: Option<f64> = None;
     for event in store.events(&task.task_id, None, usize::MAX).await? {
+        if event.event["type"] == "run.context.admitted" {
+            last_admission = Some(event.event["data"].clone());
+        }
         if event.event["type"] != "run.usage" {
             continue;
         }
@@ -120,6 +124,9 @@ async fn turn_usage(
     if let Some(value) = last_prompt_tokens {
         out.insert("lastPromptTokens".into(), value.into());
     }
+    if let Some(admission) = last_admission {
+        out.insert("lastContextAdmission".into(), admission);
+    }
     Ok(Value::Object(out))
 }
 
@@ -139,66 +146,89 @@ pub async fn session_usage(
     let mut prompt_tokens = 0f64;
     let mut completion_tokens = 0f64;
     let mut total_tokens = 0f64;
-    let mut last_prompt_tokens: Option<f64> = None;
     for turn in &turns {
         requests += turn["requests"].as_i64().unwrap_or(0);
         prompt_tokens += turn["promptTokens"].as_f64().unwrap_or(0.0);
         completion_tokens += turn["completionTokens"].as_f64().unwrap_or(0.0);
         total_tokens += turn["totalTokens"].as_f64().unwrap_or(0.0);
-        if let Some(value) = turn["lastPromptTokens"].as_f64() {
-            last_prompt_tokens = Some(value);
-        }
     }
     totals.insert("requests".into(), requests.into());
     totals.insert("promptTokens".into(), prompt_tokens.into());
     totals.insert("completionTokens".into(), completion_tokens.into());
     totals.insert("totalTokens".into(), total_tokens.into());
-    // The newest turn's model wins: `setModel` changes it for future turns
-    // only.
-    let latest = tasks.last();
-    let model_id = latest
-        .and_then(|task| task.payload["model"].as_str())
-        .or_else(|| descriptor["model"].as_str());
-    let provider_id = latest
-        .and_then(|task| task.payload["providerId"].as_str())
-        .or_else(|| descriptor["providerId"].as_str());
-    // The window chain: descriptor override, then the catalog's advertised
-    // window, then the fallback (`resolveContextWindow` with no capabilities).
-    let mut window_tokens = descriptor["context"]["windowTokens"]
-        .as_i64()
-        .filter(|value| *value > 0);
-    let mut window_source = window_tokens.map(|_| "descriptor");
-    if window_tokens.is_none() {
-        let advertised = match provider_id {
-            Some(provider) => store
-                .get_setting("http.provider-catalog", provider)
-                .await?
-                .and_then(|catalog| {
-                    catalog.as_array()?.iter().find(|model| {
-                        model["modelId"].as_str() == model_id && model["modelId"].is_string()
-                    })?["contextWindowTokens"]
-                        .as_i64()
-                        .filter(|value| *value > 0)
-                }),
-            None => None,
-        };
-        if advertised.is_some() {
-            window_tokens = advertised;
-            window_source = Some("model");
-        }
-    }
-    let window_source = window_source.unwrap_or("fallback");
-    let window_tokens = window_tokens.unwrap_or(FALLBACK_CONTEXT_WINDOW_TOKENS);
+    // Executing/parked work wins over later queued future settings. Reports
+    // retain actual admission after settlement, even if the catalogue changes.
+    let latest = tasks
+        .iter()
+        .rev()
+        .find(|task| {
+            matches!(
+                task.status,
+                agentkit_store::TaskStatus::Running
+                    | agentkit_store::TaskStatus::WaitingApproval
+                    | agentkit_store::TaskStatus::Interrupted
+            )
+        })
+        .or_else(|| tasks.last());
+    let selected = latest.and_then(|task| turns.iter().find(|turn| turn["turnId"] == task.task_id));
+    let admission = selected
+        .and_then(|turn| turn.get("lastContextAdmission"))
+        .cloned();
+    let (window_tokens, window_source) =
+        report_window(store, descriptor, latest, admission.as_ref()).await?;
+    let last_prompt_tokens = selected.and_then(|turn| turn["lastPromptTokens"].as_f64());
     let mut out = Map::new();
     out.insert("sessionId".into(), session_id.into());
     out.insert("turns".into(), turns.into());
     out.insert("totals".into(), Value::Object(totals));
-    out.insert("contextWindowTokens".into(), window_tokens.into());
-    out.insert("contextWindowSource".into(), window_source.into());
+    out.insert("contextWindowTokens".into(), window_tokens);
+    out.insert("contextWindowSource".into(), window_source);
+    if let Some(task) = latest {
+        out.insert("contextTurnId".into(), task.task_id.clone().into());
+    }
+    if let Some(admission) = admission {
+        out.insert("contextAdmission".into(), admission);
+    }
     if let Some(value) = last_prompt_tokens {
         out.insert("lastPromptTokens".into(), value.into());
     }
     Ok(Value::Object(out))
+}
+
+async fn report_window(
+    store: &agentkit_store::SqliteStore,
+    descriptor: &Value,
+    task: Option<&TaskRecord>,
+    admission: Option<&Value>,
+) -> SessionResult<(Value, Value)> {
+    if let Some(admission) = admission {
+        return Ok((
+            admission["windowTokens"].clone(),
+            admission["windowSource"].clone(),
+        ));
+    }
+    let Some(task) = task.filter(|task| task.payload.get("sessionContext").is_some()) else {
+        return Ok((Value::Null, "unknown".into()));
+    };
+    let effective = crate::context_window::with_snapshot(
+        descriptor.clone(),
+        task.payload.get("sessionContext"),
+    )
+    .ok_or_else(|| {
+        super::SessionError::new(
+            "session_context_invalid",
+            "The turn's admitted context snapshot is unreadable.",
+        )
+    })?;
+    let model = task.payload["model"]
+        .as_str()
+        .or_else(|| descriptor["model"].as_str());
+    let provider = task.payload["providerId"]
+        .as_str()
+        .or_else(|| descriptor["providerId"].as_str());
+    let (window, source) =
+        crate::context_window::resolve(store, &effective, provider, model).await?;
+    Ok((window.into(), source.into()))
 }
 
 /// A JSON-serializable history: active-path messages, turns, inputs. No

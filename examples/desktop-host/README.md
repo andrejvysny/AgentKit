@@ -188,8 +188,8 @@ with a temp-dir native store file and a scripted `MockProviderClient` (over
 the binding's JS provider lane) standing in for the real database and the
 network, then mounts the same loopback façade `main.ts` gives `Bun.serve` on
 an ephemeral port (`:0`) — and drives it over real HTTP end to end, through
-the Rust REST v1 + SSE engine: create a chat (which the façade creates as an
-agent session), submit a message with an `Idempotency-Key`, follow the SSE
+the Rust REST v1 + SSE engine: create a chat (which the native server validates and creates as an
+agent session in one insertion), submit a message with an `Idempotency-Key`, follow the SSE
 stream to `run.completed`, read the answer back, and (separately) round-trip
 the `example_echo` tool. It cleans up its temp directory and server on every
 run.

@@ -103,3 +103,80 @@ fn in_memory_store_connections_enforce_foreign_keys_too() {
             .unwrap_err(),
     );
 }
+
+#[test]
+fn provider_authority_migration_preserves_legacy_and_requires_explicit_restoration() {
+    use crate::provider_connections::*;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("legacy.db");
+    let legacy_id = provider_connection_identity("legacy");
+    {
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(&super::schema_sql(12)).unwrap();
+        db.pragma_update(None, "application_id", super::APPLICATION_ID)
+            .unwrap();
+        db.pragma_update(None, "user_version", 12).unwrap();
+        db.execute(
+            "INSERT INTO provider_connections VALUES(?,'digest',1,1000)",
+            [&legacy_id],
+        )
+        .unwrap();
+        db.execute("INSERT INTO chats VALUES('chat','{}')", [])
+            .unwrap();
+        db.execute(
+            "INSERT INTO tasks VALUES('settled','chat','completed','{}')",
+            [],
+        )
+        .unwrap();
+        let scope = serde_json::json!({"providerId":"p","protocol":"responses","connectionId":legacy_id,"generation":1,"chatId":"chat","branchId":"b","model":"m"});
+        db.execute(
+            "INSERT INTO run_bindings VALUES('settled','chat',?,0)",
+            [scope.to_string()],
+        )
+        .unwrap();
+    }
+    drop(crate::SqliteStore::open(&path, 4).unwrap());
+    assert!(check_provider_connection(&path, &legacy_id, 1).is_err());
+    let new = register_provider_connection_with_continuity(
+        &path,
+        "legacy",
+        Some("new"),
+        "url",
+        "account",
+        1001,
+        Some(ProviderContinuityRestore {
+            expected_generation: 1,
+            previous_generation: 1,
+            legacy: true,
+        }),
+    )
+    .unwrap();
+    let db = Connection::open(&path).unwrap();
+    let scope: String = db
+        .query_row(
+            "SELECT scope FROM run_bindings WHERE run_id='settled'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&scope).unwrap()["connectionId"],
+        new.0
+    );
+    let legacy: String = db
+        .query_row(
+            "SELECT credential_digest FROM provider_connections WHERE connection_id=?",
+            [&legacy_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(legacy, "digest");
+    assert!(check_provider_connection(&path, &legacy_id, 1).is_err());
+    drop(db);
+    drop(crate::SqliteStore::open(&path, 4).unwrap());
+    assert_eq!(
+        register_scoped_provider_connection(&path, "legacy", Some("new"), "url", "account", 1002)
+            .unwrap(),
+        new
+    );
+}

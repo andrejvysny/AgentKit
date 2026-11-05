@@ -4,7 +4,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -78,6 +78,22 @@ pub struct SqliteStore {
     pub(crate) gate_timeout: Duration,
     pub(crate) aging: crate::TaskAging,
 }
+
+/// Opaque identity that does not keep a SQLite actor or its file lock alive.
+#[derive(Clone)]
+pub struct StoreActorIdentity {
+    worker: Weak<Worker>,
+}
+
+impl StoreActorIdentity {
+    pub fn matches(&self, store: &SqliteStore) -> bool {
+        Weak::ptr_eq(&self.worker, &Arc::downgrade(&store.worker))
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.worker.strong_count() != 0
+    }
+}
 impl std::fmt::Debug for SqliteStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -86,6 +102,17 @@ impl std::fmt::Debug for SqliteStore {
     }
 }
 impl SqliteStore {
+    /// True only for handles sharing the same live SQLite actor.
+    pub fn same_actor(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.worker, &other.worker)
+    }
+
+    pub fn actor_identity(&self) -> StoreActorIdentity {
+        StoreActorIdentity {
+            worker: Arc::downgrade(&self.worker),
+        }
+    }
+
     /// `capacity` is reserved: the actor queue is unbounded today, so the
     /// value is only validated (must be positive) and kept for API stability.
     pub fn open(path: impl AsRef<Path>, capacity: usize) -> Result<Self> {

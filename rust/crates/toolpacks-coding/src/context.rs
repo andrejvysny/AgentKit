@@ -35,6 +35,7 @@ pub struct PackEnv {
     pub environment: Option<Arc<HashMap<String, String>>>,
     root: Mutex<Option<Result<String, CodingError>>>,
     scratch: Mutex<Option<Result<String, CodingError>>>,
+    closed: agentkit_core::CancellationToken,
 }
 
 #[derive(Clone)]
@@ -72,6 +73,7 @@ impl PackEnv {
             environment: init.environment,
             root: Mutex::new(None),
             scratch: Mutex::new(None),
+            closed: agentkit_core::CancellationToken::new(),
         }
     }
 
@@ -102,6 +104,7 @@ impl PackEnv {
     }
 
     pub async fn dispose(&self) {
+        self.close();
         let dir = {
             let mut cached = self.scratch.lock().await;
 
@@ -110,6 +113,18 @@ impl PackEnv {
         if let Some(Ok(dir)) = dir {
             let _ = tokio::fs::remove_dir_all(&dir).await;
         }
+    }
+
+    pub(crate) fn close(&self) {
+        self.closed.cancel();
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.is_cancelled()
+    }
+
+    pub(crate) async fn closed(&self) {
+        self.closed.cancelled().await;
     }
 }
 
@@ -247,6 +262,12 @@ impl Tool for WrappedTool {
 
     fn effect_context(&self) -> Option<Value> {
         self.effect_context.clone()
+    }
+
+    fn records_command_start(&self) -> bool {
+        self.effect_context.is_some()
+            && self.definition.capability == "process.exec"
+            && matches!(self.definition.name.as_str(), "run_command" | "run_tests")
     }
 
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {

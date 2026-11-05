@@ -226,6 +226,12 @@ pub trait Tool: Send + Sync {
     fn effect_context(&self) -> Option<Value> {
         None
     }
+    /// Trusted native commands opt in only when they can distinguish a
+    /// refusal before OS spawn from an uncertain effect. Host completion
+    /// may retain this proof after the awaiting caller is dropped.
+    fn records_command_start(&self) -> bool {
+        false
+    }
     /// Numeric inputs follow JavaScript binary64 semantics. Overflow remains a
     /// numeric node; `agentkit_contracts::javascript_number` reads its infinity.
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError>;

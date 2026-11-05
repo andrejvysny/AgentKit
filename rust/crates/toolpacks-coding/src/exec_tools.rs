@@ -20,7 +20,7 @@ use crate::context::{Outcome, PackEnv, ToolEffect, ToolSpec, define_tool_with_ef
 use crate::coordination::{AcquireWorkspaceInput, LeaseHolder};
 use crate::errors::CodingError;
 use crate::paths::{ConfineOptions, PathAccess, confine};
-use crate::process::{RunSpec, spawn_owned_execution, startup_recovery};
+use crate::process::{RunSpec, spawn_owned_execution_authorized, startup_recovery};
 use crate::sandbox::{
     SandboxEnvironment, SandboxPolicy, sandbox_available, sandbox_profile, toolchain_paths,
 };
@@ -189,11 +189,52 @@ struct ShellRequest {
     timeout_sec: u64,
 }
 
+#[path = "command_authority.rs"]
+mod command_authority;
+use command_authority::spawn_authorization;
+
 async fn run_shell(
     env: Arc<PackEnv>,
     ctx: ToolContext,
     request: ShellRequest,
 ) -> Result<Outcome, CodingError> {
+    let mut handed_to_driver = false;
+    match run_shell_inner(env, ctx, request, &mut handed_to_driver).await {
+        Err(error) if !handed_to_driver => Ok(command_not_started(&format!(
+            "{}: {}",
+            error.code, error.message,
+        ))),
+        outcome => outcome,
+    }
+}
+
+fn command_not_started(message: &str) -> Outcome {
+    Outcome {
+        ok: false,
+        text: slice_utf16(message, 500),
+        summary: Some("command did not start; fresh authorization required".into()),
+        truncated: false,
+        warnings: vec![],
+        details: Some(json!({
+            "errorCode": "command_not_started", "errorMessage": message,
+            "started": false, "phase": "before_spawn", "retryable": false,
+            "freshApprovalRequired": true,
+        })),
+    }
+}
+
+async fn run_shell_inner(
+    env: Arc<PackEnv>,
+    ctx: ToolContext,
+    request: ShellRequest,
+    handed_to_driver: &mut bool,
+) -> Result<Outcome, CodingError> {
+    if env.is_closed() {
+        return Err(CodingError::new(
+            "command_not_started",
+            "coding pack is closed",
+        ));
+    }
     let sandboxed = env.sandbox == SandboxMode::Required;
     if sandboxed
         && !sandbox_available(&SandboxEnvironment {
@@ -258,6 +299,15 @@ async fn run_shell(
             vec!["-c".to_owned(), request.command.clone()],
         )
     };
+    let authorization = spawn_authorization(
+        env.clone(),
+        ctx.clone(),
+        root.clone(),
+        cwd.path.clone(),
+        request.command.clone(),
+        base.clone(),
+        scratch.clone(),
+    );
     // Every command may write, so every command takes the exclusive lease; it
     // is held from before spawn until the process tree has been torn down
     // (and, if survivors remain, until they are gone or a short re-check
@@ -317,16 +367,17 @@ async fn run_shell(
         intent_guard.clear().await;
         return Err(error);
     }
-    let acquired = env
-        .coordinator
-        .acquire_workspace(AcquireWorkspaceInput {
-            root: root.clone(),
-            holder: holder.clone(),
-            cancellation: Some(ctx.cancellation.clone()),
-            max_wait_ms: Some(env.coordination_wait_ms),
-            execution_id: Some(execution_id.clone()),
-        })
-        .await;
+    let acquiring = env.coordinator.acquire_workspace(AcquireWorkspaceInput {
+        root: root.clone(),
+        holder: holder.clone(),
+        cancellation: Some(ctx.cancellation.clone()),
+        max_wait_ms: Some(env.coordination_wait_ms),
+        execution_id: Some(execution_id.clone()),
+    });
+    let acquired = tokio::select! { biased;
+        _ = env.closed() => Err(CodingError::new("cancelled", "coding pack closed before command spawn")),
+        result = acquiring => result,
+    };
     let lease = match acquired {
         Ok(lease) => lease,
         Err(error) => {
@@ -351,7 +402,8 @@ async fn run_shell(
     // From here the driver owns the intent (it clears it on clean cleanup
     // or keeps it beside the quarantine).
     intent_guard.disarm();
-    let execution = spawn_owned_execution(
+    *handed_to_driver = true;
+    let execution = spawn_owned_execution_authorized(
         RunSpec {
             file,
             args,
@@ -370,6 +422,8 @@ async fn run_shell(
         Arc::clone(&env.coordinator),
         root.clone(),
         holder,
+        None,
+        Some(authorization),
     );
     let outcome = execution.await_result().await;
     let run = outcome.run;
@@ -378,6 +432,9 @@ async fn run_shell(
         return Err(error);
     }
     if let Some(spawn_error) = &run.spawn_error {
+        if spawn_error.starts_with("command_not_started:") {
+            return Ok(command_not_started(spawn_error));
+        }
         return Err(CodingError::new(
             "spawn_failed",
             slice_utf16(spawn_error, 500),
@@ -680,6 +737,10 @@ pub fn run_tests_tool(env: &Arc<PackEnv>) -> Arc<dyn Tool> {
         },
     )
 }
+
+#[cfg(all(test, unix))]
+#[path = "exec_lease_tests.rs"]
+mod lease_tests;
 
 #[cfg(test)]
 mod tests {

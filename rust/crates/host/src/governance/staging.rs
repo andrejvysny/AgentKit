@@ -12,6 +12,9 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[path = "execution_recheck.rs"]
+mod execution_recheck;
+
 #[derive(Clone)]
 pub struct ToolContributionContext {
     pub chat_id: Option<String>,
@@ -145,6 +148,9 @@ impl Tool for DirectWriteTool {
     }
     fn effect_context(&self) -> Option<Value> {
         self.inner.effect_context()
+    }
+    fn records_command_start(&self) -> bool {
+        self.inner.records_command_start()
     }
     async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
         self.inner.execute(context, input).await
@@ -350,7 +356,11 @@ impl Tool for GuardedTool {
     fn definition(&self) -> &ToolDefinition {
         self.tool.definition()
     }
-    async fn execute(&self, context: ToolContext, input: Value) -> Result<ToolResult, CoreError> {
+    async fn execute(
+        &self,
+        mut context: ToolContext,
+        input: Value,
+    ) -> Result<ToolResult, CoreError> {
         let staged = &self.snapshot.contribution;
         if context.chat_id != staged.chat_id
             || context.run_id != staged.run_id
@@ -435,15 +445,16 @@ impl Tool for GuardedTool {
                 uncertainty_generation: Some(generation.clone()),
             });
         }
+        let mut standing_digest = None;
         if !approvable.is_empty()
             && let Some(result) = self
                 .resolve_approval(
                     &context,
-                    definition,
                     &input,
                     &approvable,
                     uncertainty.as_ref(),
                     effect_context.as_ref(),
+                    &mut standing_digest,
                 )
                 .await?
         {
@@ -480,16 +491,24 @@ impl Tool for GuardedTool {
                 crate::governance::Admission::Refused(result) => return Ok(result),
             }
         }
-        let result = self.tool.execute(context, input).await;
-        // Persist the result before delivery. A body error leaves the receipt
-        // admitted: whether the external effect landed is unknown, and the
-        // retry path must refuse it as uncertain rather than re-execute.
-        if let (Some(durable), Some(id)) = (&durable, execution_id.as_deref())
-            && let Ok(tool_result) = &result
-        {
-            durable.complete(id, tool_result).await?;
+        if definition.capability == "process.exec" {
+            context.dispatch_guard = Some(Arc::new(execution_recheck::ExecutionRecheck {
+                original: context.dispatch_guard.clone(),
+                guards: self.guards.clone(),
+                snapshot: call,
+                approvals: approvable,
+                standing_digest,
+                cancellation: context.cancellation.clone(),
+            }));
         }
-        result
+        super::execution_completion::execute_receipted(
+            self.tool.clone(),
+            durable,
+            execution_id,
+            context,
+            input,
+        )
+        .await
     }
 }
 
@@ -503,12 +522,13 @@ impl GuardedTool {
     async fn resolve_approval(
         &self,
         context: &ToolContext,
-        definition: &agentkit_core::ToolDefinition,
         input: &Value,
         approvable: &[ApprovalAsk],
         uncertainty: Option<&(ToolResult, String)>,
         effect_context: Option<&Value>,
+        selected_standing_digest: &mut Option<String>,
     ) -> Result<Option<ToolResult>, CoreError> {
+        let definition = self.tool.definition();
         let durable = self.snapshot.contribution.durable.clone();
         let args = crate::governance::args_sha256(input);
         let context_hash = durable.as_ref().map(|durable| {
@@ -599,6 +619,7 @@ impl GuardedTool {
             if let Some((digest, _)) = &standing_key
                 && has_active_standing_grant(durable, definition, digest).await?
             {
+                *selected_standing_digest = Some(digest.clone());
                 return Ok(None);
             }
         }

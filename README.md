@@ -12,21 +12,21 @@ breakdown and an ASCII diagram.
 
 > **Not published to npm (yet).** The `@agentkit` npm scope is not yet
 > verified/owned — nothing under this scope may be published until scope
-> ownership is confirmed by the project owner. The publish mechanism is
-> complete and CI-gated: `.github/workflows/native-release.yml` +
-> `scripts/release/native-publish.mjs` build, verify, and — only under an
-> approved `agentkit-native-publication` environment dispatch — publish
-> `agentkit`, `@agentkit/native`, and the five prebuilt platform packages as
-> one lockstep version. See
-> [`DEVELOPING.md`](DEVELOPING.md)'s "Publishing the npm native stack".
+> ownership is confirmed by the project owner. Hosted workflows were removed;
+> qualification now uses [local source-bound gates](DEVELOPING.md#local-gates-no-hosted-ci).
+> `bun run qualify:local /absolute/new/outside-directory` retains candidate
+> artifacts and evidence without publishing. Current qualification is macOS only;
+> other operating systems are deferred. Missing configured runtime execution
+> remains blocked. Native migration parity and release readiness are not accepted.
+> Publication requires separate authorization and an available reviewed route;
+> earlier workflow instructions are historical.
 
 ## Installing
 
 Consumers install AgentKit as **one package**, `agentkit`, with subpath
 imports. Today that means an exact qualified release tarball (produced and
-verified per [`DEVELOPING.md`](DEVELOPING.md)); the registry lane becomes
-the default channel the moment the gated npm publish runs for the first
-time:
+verified per [`DEVELOPING.md`](DEVELOPING.md)). Registry publication remains
+separate work requiring explicit authorization:
 
 ```sh
 npm install /absolute/path/agentkit-VERSION.tgz   # qualified artifact (current)
@@ -35,7 +35,7 @@ npm install /absolute/path/agentkit-VERSION.tgz   # qualified artifact (current)
 
 `npm install` / `bun install` then works with subpath imports
 (`agentkit/core`, `agentkit/host`, `agentkit/adapters-sqlite`, `agentkit/native`, …) backed by
-a committed `dist/` — no build step for the consumer. `agentkit/native` runs
+a packed `dist/` — no build step for the consumer. `agentkit/native` runs
 the whole backend on the Rust runtime through the Node-API binding and pulls
 the prebuilt addon for your platform (`linux-x64-gnu`, `linux-arm64-gnu`,
 `darwin-arm64`, `darwin-x64`, `win32-x64-msvc`) via os/cpu/libc-gated
@@ -43,6 +43,11 @@ optional dependencies — installation never builds Rust code. See
 [`packages/agentkit/README.md`](packages/agentkit/README.md) for the full
 subpath table and [`DEVELOPING.md`](DEVELOPING.md) for local-iteration
 workflows and the release ritual.
+
+For unpublished native candidates, install the retained matching platform
+tarball alongside the umbrella tarball. Optional dependencies cannot download
+an unpublished platform package from the registry. Qualification verifies this
+isolated installation without a Rust toolchain.
 
 ## Packages
 
@@ -168,8 +173,9 @@ exception, Bun-only by construction (`bun:sqlite`) — see its
 bun run build && bun run smoke:node
 ```
 
-CI runs the same thing in a separate `node-smoke` job, preceded by a grep
-that fails on any `bun:` import in any of those nine dists.
+The former hosted `node-smoke` job ran this check. Current acceptance uses
+the [local gates](DEVELOPING.md#local-gates-no-hosted-ci), including installed
+native and umbrella consumers.
 
 ## License
 

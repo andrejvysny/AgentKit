@@ -15,6 +15,7 @@ fn version_one(path: &Path) {
         DROP TABLE tool_executions;
         DROP TABLE agent_inputs;
         DROP TABLE provider_connections;
+        DROP TABLE provider_namespace;
         DROP TABLE prompt_templates;
         DROP TABLE connector_connections;
         DROP TABLE managed_skills;
